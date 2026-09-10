@@ -31,6 +31,7 @@ projectiles and knows nothing about this object:
   drag/pull effect this version does not produce.
 """
 
+import math
 import sys
 
 from gui.mods.offline_lan_0922 import turret_detachment
@@ -119,6 +120,7 @@ class DetachedTurretPresentation(object):
             'launch': launch,
             'attitude': attitude,
             'clearance': _turret_clearance(turret),
+            'height_limits': _turret_height_limits(turret),
             'space_id': int(getattr(self._avatar, 'spaceID', 0)),
         }
 
@@ -167,6 +169,7 @@ class DetachedTurretPresentation(object):
                 'vehicle_id': vehicle_id,
                 'flight': flight,
                 'attitude': plan['attitude'],
+                'height_limits': plan['height_limits'],
                 'spin': impulse['spin'],
                 'started': float(now),
                 'matrix': None,
@@ -232,7 +235,7 @@ class DetachedTurretPresentation(object):
             elapsed = max(0.0, float(now) - turret['started'])
             position, attitude = turret_detachment.pose_at(
                 turret['flight'], turret['attitude'], turret['spin'],
-                elapsed)
+                elapsed, height_limits=turret['height_limits'])
             matrix = turret['matrix']
             matrix.setRotateYPR(
                 (attitude[0], attitude[1], attitude[2]))
@@ -358,10 +361,18 @@ def _turret_clearance(turret):
     without a readable box keeps a bounded default instead of guessing a
     shape.
     """
-    tester = getattr(turret, 'hitTester', None)
-    bounds = getattr(tester, 'bbox', None)
+    limits = _turret_height_limits(turret)
+    return max(0.0, -limits[0]) if limits is not None else 0.0
+
+
+def _turret_height_limits(turret):
+    """Freeze the local ring/roof support heights before the wreck swap."""
+    bounds = getattr(getattr(turret, 'hitTester', None), 'bbox', None)
     try:
-        minimum = bounds[0]
-        return max(0.0, -float(minimum[1]))
-    except (IndexError, TypeError, ValueError):
-        return 0.0
+        low, high = float(bounds[0][1]), float(bounds[1][1])
+        if low > high or any(math.isnan(value) or math.isinf(value)
+                             for value in (low, high)):
+            return None
+        return (low, high)
+    except (IndexError, TypeError, ValueError, OverflowError):
+        return None

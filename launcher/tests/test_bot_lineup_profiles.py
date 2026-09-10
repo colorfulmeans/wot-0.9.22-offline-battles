@@ -122,6 +122,20 @@ class BotLineupProfilesTests(unittest.TestCase):
                 "nation": "germany", "vehicle": "G81_Pz_IV_AusfH",
             }))
 
+    def test_unlisted_credit_vehicle_is_playable_but_not_a_bot_choice(self):
+        retired = {
+            "nation": "germany", "vehicle": "G98_Waffentrager_E100",
+            "tags": ("AT-SPG", "secret"),
+            "credits": 6100000, "gold": 0, "notInShop": True,
+        }
+        self.assertTrue(bot_lineup_profiles.vehicle_choice_is_playable(retired))
+        self.assertFalse(bot_lineup_profiles.vehicle_choice_is_eligible(retired))
+        premium = dict(retired, vehicle="G98_Waffentrager_E100_P",
+                       credits=0, gold=30000)
+        self.assertTrue(bot_lineup_profiles.vehicle_choice_is_eligible(premium))
+        standard = dict(retired, vehicle="Regular", notInShop=False)
+        self.assertTrue(bot_lineup_profiles.vehicle_choice_is_eligible(standard))
+
     def test_automatic_profile_has_no_overrides(self):
         self.assertEqual([], bot_lineup_profiles.assignments_for(
             bot_lineup_profiles.empty_store(),

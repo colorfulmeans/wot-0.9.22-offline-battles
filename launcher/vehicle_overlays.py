@@ -775,19 +775,20 @@ def list_vehicle_choices(game_root):
                 status["path"], nation)
         label = _vehicle_label(record, translators[nation])
         choice = dict((key, record[key]) for key in (
-            "nation", "vehicle", "member", "tags", "vehicleClass", "level"))
+            "nation", "vehicle", "member", "tags", "vehicleClass", "level",
+            "credits", "gold", "notInShop"))
         choice["label"] = label
         choices.append(choice)
     return choices
 
 
 def list_gold_vehicles(game_root):
-    """List gold and reward vehicles the client can add to a save.
+    """List gold, reward and unlisted credit vehicles for a player save.
 
-    Include zero-credit ``notInShop`` rewards such as White Tiger without
-    adding the free starter tech-tree vehicles. Keep hidden rewards, but apply
-    the same standard-battle and resource exclusions as vehicle_records.
-    The launcher already mirrors those rules for Bot lineup choices.
+    Include retained credit vehicles and zero-credit rewards without adding
+    ordinary tech-tree purchases or free starters. Apply player availability
+    rules here: a vehicle withheld from Bot lineups can still be experienced
+    by a player if the client has the resources to build it.
     """
     status, package_path = _require_target(game_root)
     try:
@@ -805,9 +806,8 @@ def list_gold_vehicles(game_root):
     translators = {}
     vehicles = []
     for record in roster:
-        is_reward = record["credits"] == 0 and record["notInShop"]
-        if ((record["gold"] <= 0 and not is_reward) or
-                not bot_lineup_profiles.vehicle_choice_is_eligible(record)):
+        if ((record["gold"] <= 0 and not record["notInShop"]) or
+                not bot_lineup_profiles.vehicle_choice_is_playable(record)):
             continue
         nation = record["nation"]
         if nation not in translators:

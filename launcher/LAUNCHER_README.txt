@@ -36,6 +36,12 @@ then clicks START BATTLE. The room settings can be changed there without
 restarting the game or LAN server. LEAVE closes the room and returns you to
 the garage.
 
+The save's Add to garage list includes gold vehicles, rewards and retained
+credit vehicles the stock shop no longer offers. These unlisted credit
+vehicles remain available for players to experience, but are excluded from
+both automatic and explicitly selected Bot lineups. Entries with missing
+required resources still cannot be added to a save.
+
 On the 0.9.22 client the garage works offline. Every vehicle is owned and every
 module in its own tech tree is unlocked, each vehicle arrives with its top
 modules and three consumables, and every item costs nothing. Change modules,

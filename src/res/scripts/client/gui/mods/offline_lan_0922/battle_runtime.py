@@ -3102,7 +3102,9 @@ class BattleRuntime(object):
             # separate later phase and never throttles this prewarm.
             lineup_ready = self._prepare_bot_vehicle_assignments(descriptor)
             if (self._start_message.get('bot_lineup') or
-                    self._start_message.get('bot_excluded_vehicles')) and \
+                    self._start_message.get('bot_excluded_vehicles') or
+                    vehicle_configuration.is_player_only_vehicle(
+                        descriptor.type.name)) and \
                     not lineup_ready:
                 raise RuntimeError(
                     'the configured Bot roster is not available in this client')
@@ -4579,7 +4581,8 @@ class BattleRuntime(object):
     @staticmethod
     def _vehicle_excluded(entry):
         name = _field(entry, 'name')
-        if vehicle_blacklist.is_unusable(name):
+        if (vehicle_blacklist.is_unusable(name) or
+                vehicle_configuration.is_player_only_vehicle(name)):
             return True
         return not vehicle_configuration.is_standard_battle_vehicle(entry)
 
@@ -4756,7 +4759,9 @@ class BattleRuntime(object):
                 lineup_random, requirements)
             automatic_candidates = [
                 candidate for candidate in candidates
-                if candidate['name'] not in excluded_names]
+                if not vehicle_configuration.is_player_only_vehicle(
+                    candidate['name']) and
+                candidate['name'] not in excluded_names]
 
             assignments = {}
             for team in (1, 2):
@@ -4764,10 +4769,12 @@ class BattleRuntime(object):
                 picked = bot_planner.remaining_match_template(
                     template, humans_by_team[team])
                 # Human tier/class reservations may mirror their exact tank.
-                # Apply profile exclusions after removing human slots so that
-                # those reservations cannot put an edited tank back in a Bot.
+                # Apply player-only and profile exclusions after removing
+                # human slots so they cannot return through the mirror.
                 picked = [entry for entry in picked
-                          if entry['name'] not in excluded_names]
+                          if not vehicle_configuration.is_player_only_vehicle(
+                              entry['name']) and
+                          entry['name'] not in excluded_names]
                 # Apply the bot-only quota after removing human slots. A human
                 # SPG must not force mirrored artillery onto the opposing bots.
                 # Explicit lineup overrides below retain the host's choices.
@@ -4807,7 +4814,7 @@ class BattleRuntime(object):
                     return False
                 if (team, slot) in bot_slots:
                     assignments[(team, slot)] = vehicle
-            if excluded_names and set(assignments) != bot_slots:
+            if set(assignments) != bot_slots:
                 self._bot_vehicle_assignments = {}
                 return False
             self._bot_vehicle_assignments = assignments

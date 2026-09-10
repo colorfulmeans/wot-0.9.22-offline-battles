@@ -22,6 +22,7 @@ import windows_server  # noqa: E402
 from gui.mods.offline_lan_0922 import vehicle_blacklist  # noqa: E402
 from gui.mods.offline_lan_0922 import descriptor_donation  # noqa: E402
 from gui.mods.offline_lan_0922 import vehicle_configuration  # noqa: E402
+from gui.mods.offline_lan_0922 import price_catalogue  # noqa: E402
 from gui.mods.offline_lan_0922.ai import planner as bot_planner  # noqa: E402
 from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime  # noqa: E402
 
@@ -196,6 +197,24 @@ class BotLineupIntegrationTests(unittest.TestCase):
                                  battle._bot_vehicle_assignments.values())
                 assignments.append(battle._bot_vehicle_assignments)
             self.assertEqual(assignments[0], assignments[1])
+
+    def test_player_only_vehicle_cannot_return_through_human_mirroring(self):
+        name = 'germany:G98_Waffentrager_E100'
+        for mode in bot_planner.BOT_TIER_MODES:
+            for worker in (False, True):
+                battle, descriptor = self._profile_exclusion_runtime(
+                    worker, mode, [])
+                descriptor.type.name = name
+                battle._config['vehicle'] = name
+                battle._start_message['players'][0]['vehicle'] = name
+                self.assertTrue(
+                    battle._prepare_bot_vehicle_assignments(descriptor))
+                self.assertEqual(7, len(battle._bot_vehicle_assignments))
+                self.assertNotIn(name, battle._bot_vehicle_assignments.values())
+                battle._start_message['bot_lineup'] = [
+                    {'team': 2, 'slot': 0, 'vehicle': name}]
+                self.assertFalse(
+                    battle._prepare_bot_vehicle_assignments(descriptor))
 
     def test_profile_exclusions_allow_only_slots_with_an_explicit_vehicle(self):
         battle, descriptor = self._profile_exclusion_runtime(
@@ -391,6 +410,8 @@ class BotLineupIntegrationTests(unittest.TestCase):
         ('uk:GB70_FV4202_105', ('mediumTank', 'secret'), False),
         # Real models remain usable, including the retained hidden vehicles.
         ('uk:GB70_N_FV4202_105', ('mediumTank', 'HD'), True),
+        ('china:Ch22_113', ('heavyTank', 'secret'), True),
+        ('china:Ch22_113P', ('heavyTank',), True),
         ('germany:G85_Auf_Panther', ('lightTank', 'secret'), True),
         ('ussr:R75_SU122_54', ('AT-SPG', 'secret'), True),
         ('ussr:R96_Object_430B', ('mediumTank', 'secret'), True),
@@ -418,8 +439,11 @@ class BotLineupIntegrationTests(unittest.TestCase):
         if not vehicle_overlays._vehicle_is_selectable(name, tags):
             return False
         nation, vehicle = name.split(':', 1)
+        credits, gold, not_in_shop = price_catalogue.VEHICLE_PRICES.get(
+            name, (0, 0, False))
         return bool(bot_lineup_profiles.eligible_vehicle_choices([{
             'nation': nation, 'vehicle': vehicle, 'tags': list(tags),
+            'credits': credits, 'gold': gold, 'notInShop': not_in_shop,
         }]))
 
     def test_launcher_and_server_share_the_mod_exclusion_rule(self):
@@ -456,8 +480,11 @@ class BotLineupIntegrationTests(unittest.TestCase):
                 vehicle_configuration.is_standard_battle_vehicle(entry) and
                 not vehicle_blacklist.is_unusable(name))
             self.assertEqual(expected, admitted, name)
+            price = price_catalogue.VEHICLE_PRICES.get(name, (0, 0, False))
+            bot_admitted = admitted and not (price[0] > 0 and
+                                             price[1] == 0 and price[2])
             self.assertEqual(
-                admitted, self._launcher_admits(name, tags), name)
+                bot_admitted, self._launcher_admits(name, tags), name)
             runtime = types.SimpleNamespace(
                 nations=types.SimpleNamespace(
                     AVAILABLE_NAMES=('all',), INDICES={'all': 0}),
@@ -465,12 +492,12 @@ class BotLineupIntegrationTests(unittest.TestCase):
                     getList=lambda unused_nation_id: {1: entry})))
             self.assertEqual(admitted, bool(
                 descriptor_donation.vehicle_catalog(runtime)), name)
-            self.assertEqual(admitted, not BattleRuntime._vehicle_excluded(
+            self.assertEqual(bot_admitted, not BattleRuntime._vehicle_excluded(
                 entry), name)
             server_names = server_runtime._bot_lineup_allowed_names([{
                 'name': name, 'level': 5, 'tags': list(tags),
             }])
-            self.assertEqual(admitted, name in server_names, name)
+            self.assertEqual(bot_admitted, name in server_names, name)
 
     def test_the_helper_rule_withholds_nothing_without_the_secret_tag(self):
         # ``secret`` is what separates a stock placeholder from a shipped
@@ -492,17 +519,21 @@ class BotLineupIntegrationTests(unittest.TestCase):
                     name)
                 self.assertEqual(
                     expected,
-                    bot_lineup_profiles.vehicle_choice_is_eligible({
+                    bot_lineup_profiles.vehicle_choice_is_playable({
                         'nation': nation, 'vehicle': vehicle,
                         'tags': list(tags)}),
                     name)
+                price = price_catalogue.VEHICLE_PRICES.get(
+                    name, (0, 0, False))
+                bot_expected = expected and not (
+                    price[0] > 0 and price[1] == 0 and price[2])
                 self.assertEqual(
-                    expected,
+                    bot_expected,
                     name in server_runtime._bot_lineup_allowed_names([{
                         'name': name, 'level': 2, 'tags': list(tags)}]),
                     name)
                 self.assertEqual(
-                    expected, self._launcher_admits(name, tags), name)
+                    bot_expected, self._launcher_admits(name, tags), name)
 
     def test_missing_exact_vehicle_is_rejected_by_hidden_worker(self):
         lineup = [{

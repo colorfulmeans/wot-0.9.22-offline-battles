@@ -2466,6 +2466,13 @@ here:
   never-fed filter, and it drives nothing but the drag effect this version
   does not produce.
 
+The presentation freezes the turret hit tester's local minimum and maximum Y
+before the wreck swap. Once the arc lands and pitch/roll settle to half turns,
+the rest height uses the downward-facing bound: an inverted turret is supported
+by its roof instead of retaining its upright ring clearance. This corrects the
+orientation-dependent gap on the measured landing surface; it adds no worker
+collision body and does not establish slope contact or native rigid-body parity.
+
 The handshake order is load-bearing. `SynchronousDetachment._onDirectTick`
 runs synchronously inside `createEntity` and, while
 `isTurretDetachmentConfirmationNeeded` is true, calls `transferInputs` ->

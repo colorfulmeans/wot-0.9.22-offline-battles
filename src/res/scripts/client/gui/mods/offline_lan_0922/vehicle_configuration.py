@@ -22,6 +22,18 @@ NON_BATTLE_ENTITY_NAMES = frozenset(('germany:Env_Artillery',))
 CATALOGUE_VISIBILITY_TAG = 'secret'
 
 
+def is_player_only_vehicle(name):
+    """Keep unlisted credit vehicles available to players, outside Bot pools.
+
+    This is offline balance policy, separate from resource availability and
+    the premium flag. The pinned price catalogue identifies the retained
+    credit variants without conflating them with their gold replacements.
+    """
+    from gui.mods.offline_lan_0922 import price_catalogue
+    price = price_catalogue.VEHICLE_PRICES.get(str(name or ''))
+    return bool(price and price[0] > 0 and price[1] == 0 and price[2])
+
+
 def is_clone_of_a_standard_vehicle(name, tags):
     """Return whether this entry republishes a real tank at a fake level.
 

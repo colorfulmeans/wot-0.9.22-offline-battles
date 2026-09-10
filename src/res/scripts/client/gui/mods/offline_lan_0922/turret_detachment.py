@@ -303,7 +303,7 @@ def _snap_half_turn(angle):
     return turns * _HALF_TURN
 
 
-def pose_at(flight, launch_attitude, spin, elapsed):
+def pose_at(flight, launch_attitude, spin, elapsed, height_limits=None):
     """Return the pose to write this frame, flight or rest.
 
     ``elapsed`` past the frozen duration always yields the identical rest
@@ -313,9 +313,18 @@ def pose_at(flight, launch_attitude, spin, elapsed):
     elapsed = max(0.0, _finite(elapsed))
     duration = float(flight['duration'])
     if elapsed >= duration:
-        return (
-            tuple(flight['rest']),
-            rest_attitude(launch_attitude, spin, duration))
+        attitude = rest_attitude(launch_attitude, spin, duration)
+        position = tuple(flight['rest'])
+        if flight.get('landed') and height_limits is not None:
+            # Settled pitch and roll are exact half turns. Only the local Y
+            # bounds contribute to vertical support: when inverted the roof,
+            # not the ring, rests on the measured surface. Reusing upright
+            # clearance left asymmetric turrets floating or buried.
+            up = math.cos(attitude[1]) * math.cos(attitude[2])
+            support = min(_finite(value) * up for value in height_limits)
+            position = (position[0], float(flight['contact'][1]) - support,
+                        position[2])
+        return position, attitude
     yaw, pitch, roll = (_finite(value) for value in launch_attitude)
     spin = _vector3(spin)
     segment = flight['segments'][0]

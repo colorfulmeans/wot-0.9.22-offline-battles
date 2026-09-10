@@ -4,6 +4,7 @@ from pathlib import Path
 import math
 import sys
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -173,6 +174,18 @@ class FlightResolutionTest(unittest.TestCase):
 
 
 class PoseTest(unittest.TestCase):
+
+    def test_landed_height_supports_the_roof_after_a_half_turn(self):
+        flight = turret_detachment.resolve_flight(
+            (0.0, 6.0, 0.0), (0.0, 5.0, 0.0), _flat_ground(2.0),
+            clearance=1.8)
+        for pitch, roll, expected_y in (
+                (0.0, 0.0, 3.8), (math.pi, 0.0, 2.3),
+                (0.0, math.pi, 2.3), (math.pi, math.pi, 3.8)):
+            position, unused_attitude = turret_detachment.pose_at(
+                flight, (0.0, pitch, roll), (0.0, 0.0, 0.0), 60.0,
+                height_limits=(-1.8, 0.3))
+            self.assertAlmostEqual(expected_y, position[1])
 
     def test_a_landed_turret_never_moves_again(self):
         flight = turret_detachment.resolve_flight(
@@ -415,6 +428,22 @@ class DetachedTurretPresentationTest(unittest.TestCase):
         presentation = self._presentation()
         plan = presentation.prepare(_Vehicle())
         self.assertAlmostEqual(plan['clearance'], 0.8)
+
+    def test_inverted_turret_does_not_float_at_its_upright_clearance(self):
+        bigworld = _BigWorld()
+        presentation = self._presentation(bigworld)
+        vehicle = _Vehicle(node=_Node(
+            _Vector(12.0, 4.5, -30.0), (0.0, math.pi, 0.0)))
+        vehicle.typeDescriptor.turret.hitTester.bbox = (
+            (-1.2, -1.8, -1.2), (1.2, 0.3, 1.2), 3.0)
+        plan = presentation.prepare(vehicle)
+        with mock.patch.object(turret_detachment, 'launch_impulse',
+                               return_value={'velocity': (0.0, 6.0, 0.0),
+                                             'spin': (0.0, 0.0, 0.0)}):
+            self.assertTrue(presentation.launch(plan, 77, 10.0))
+        presentation.advance(60.0)
+        self.assertAlmostEqual(
+            0.3, bigworld.entities[901].model.matrix.translation.y)
 
     def test_a_descriptor_without_an_exploded_turret_is_skipped(self):
         presentation = self._presentation()

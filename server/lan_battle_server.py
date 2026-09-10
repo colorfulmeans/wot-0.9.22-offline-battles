@@ -60,6 +60,7 @@ from gui.mods.offline_lan_0922 import player_critical_mechanics
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
 from gui.mods.offline_lan_0922 import vehicle_physics
+from gui.mods.offline_lan_0922 import vehicle_configuration
 from gui.mods.offline_lan_0922.ai import planner as bot_planner
 from gui.mods.offline_lan_0922.ai.maps import get_tactical_map
 from gui.mods.offline_lan_0922.ai.maps_0922_extra import (
@@ -929,6 +930,7 @@ def _bot_lineup_allowed_names(catalog):
         if isinstance(row, dict) and row.get("name") and
         not excluded_tags.intersection(row.get("tags") or ()) and
         row.get("name") not in excluded_names and
+        not vehicle_configuration.is_player_only_vehicle(row.get("name")) and
         not ("secret" in (row.get("tags") or ()) and
              (row.get("name") in hidden_names or
               row.get("name").endswith(hidden_suffixes))))

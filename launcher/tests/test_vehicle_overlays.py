@@ -734,7 +734,9 @@ class VehicleOverlayTest(unittest.TestCase):
         ms1 = next(choice for choice in choices
                    if choice["vehicle"] == "R11_MS-1")
 
-        self.assertNotIn("gold", ms1)
+        self.assertEqual(0, ms1["gold"])
+        self.assertEqual(0, ms1["credits"])
+        self.assertFalse(ms1["notInShop"])
 
         with zipfile.ZipFile(os.path.join(
                     self.game, *vehicle_overlays.SOURCE_PACKAGE.split("/")), "r") as archive:
@@ -760,7 +762,7 @@ class VehicleOverlayTest(unittest.TestCase):
         self.assertEqual(8, rows[0]["level"])
         self.assertTrue(rows[0]["notInShop"])
 
-    def test_the_gold_shop_includes_zero_price_rewards_but_not_starter_tanks(self):
+    def test_save_additions_include_unlisted_credit_tanks_and_rewards(self):
         def record(vehicle, credits, gold, not_in_shop, level):
             return dict(nation="germany", vehicle=vehicle,
                         tags=("heavyTank", "secret", "unrecoverable"),
@@ -777,9 +779,17 @@ class VehicleOverlayTest(unittest.TestCase):
         with mock.patch.object(vehicle_overlays, "_vehicle_roster_from_archive",
                                return_value=records):
             rows = vehicle_overlays.list_gold_vehicles(self.game)
-        self.assertEqual(["germany:G04_PzVI_Tiger_IA"],
+        self.assertEqual(["germany:G04_PzVI_Tiger_IA",
+                          "germany:HiddenCreditTank"],
                          [row["name"] for row in rows])
         self.assertEqual(0, rows[0]["gold"])
+
+    def test_vehicle_browser_keeps_shop_metadata_for_bot_eligibility(self):
+        choices = vehicle_overlays.list_vehicle_choices(self.game)
+        hidden = next(row for row in choices if row["vehicle"] == "R12_Test")
+        self.assertEqual(0, hidden["credits"])
+        self.assertEqual(12500, hidden["gold"])
+        self.assertTrue(hidden["notInShop"])
 
     def test_the_gold_shop_excludes_unavailable_save_vehicles(self):
         unavailable = [

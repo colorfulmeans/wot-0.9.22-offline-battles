@@ -39,8 +39,9 @@ _BALANCE_LABELS = {
 }
 
 _SHOP_HELP = (
-    "Add a gold or reward vehicle to this save for free. It arrives on the "
-    "next game startup. Owned or queued vehicles cannot be added twice. "
+    "Add a gold, reward or retired credit vehicle to this save for free. "
+    "It arrives on the next game startup. Owned or queued vehicles cannot "
+    "be added twice. "
     "Close the game before adding vehicles.")
 
 LAUNCHER_VERSION = "0.7.5"
@@ -198,14 +199,15 @@ _CHINESE = {
     "A balance must be a whole number.": "余额必须是整数。",
     "Garage vehicles": "车库坦克",
     "Add to garage": "添加到车库",
-    "Gold and reward vehicle": "金币及奖励坦克",
+    "Gold, reward and retired vehicle": "金币、奖励及停售坦克",
     "queued": "待添加",
     "%s - tier %d": "%s - %d级",
     "%s - tier %d (%s)": "%s - %d级（%s）",
-    "Add a gold or reward vehicle to this save for free. It arrives on the "
-    "next game startup. Owned or queued vehicles cannot be added twice. "
+    "Add a gold, reward or retired credit vehicle to this save for free. "
+    "It arrives on the next game startup. Owned or queued vehicles cannot "
+    "be added twice. "
     "Close the game before adding vehicles.":
-        "免费向此存档添加金币或奖励坦克，下次进入游戏时放入车库。已拥有或待添加的坦克不能重复添加；操作前请关闭游戏。",
+        "免费向此存档添加金币、奖励或停售银币坦克，下次进入游戏时放入车库。已拥有或待添加的坦克不能重复添加；操作前请关闭游戏。",
     "Added %s to the queue. It arrives on the next game startup.":
         "已将 %s 加入待添加列表，下次进入游戏时放入车库。",
     "The vehicle could not be added: %s": "添加失败：%s",
@@ -1011,7 +1013,7 @@ class LauncherWindow(object):
             "Edit this save's balances and battle earnings. Before the first "
             "game, these are its starting funds. Close the game before editing."))
         self.shop_panel.config(text=self._t("Garage vehicles"))
-        self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
+        self.gold_vehicle_label.config(text=self._t("Gold, reward and retired vehicle"))
         self.buy_gold_vehicle_button.config(text=self._t("Add to garage"))
         self.shop_help_label.config(text=self._t(_SHOP_HELP))
         self._refresh_save_slots()
