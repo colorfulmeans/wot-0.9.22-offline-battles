@@ -8197,18 +8197,13 @@ class BotRuntime(object):
         state['y'] = float(ground)
         return True
 
-    def _resolve_human_ram_receipts(self, players, now, step=None,
-                                    processed_pairs=None,
-                                    contacted_bot_ids=None):
-        """Recompute client-observed contact against its canonical bot body.
+    def _resolve_human_ram_receipts(self, players, now):
+        """Recompute HP from a client-observed historical contact.
 
-        Contact responders share the caller's per-slice set when provided, so
-        one Bot pays at most once even if several hulls respond in that slice.
+        Only the current-body solver applies motion. Receipt retry, armour
+        readiness and packet delay must not control a Bot's physical mass.
         """
         reports = []
-        owns_contacted_bot_ids = contacted_bot_ids is None
-        if owns_contacted_bot_ids:
-            contacted_bot_ids = set()
         receipt_players = {}
         for raw in players or ():
             if not isinstance(raw, dict) or raw.get('id') is None:
@@ -8256,13 +8251,8 @@ class BotRuntime(object):
                         player_id, 0)):
                     continue
                 key = (player_id, seq)
-                pair = (
-                    min(bot_id, HUMAN_TARGET_ID_BASE + player_id),
-                    max(bot_id, HUMAN_TARGET_ID_BASE + player_id))
                 cached = self._human_ram_report_cache.get(key)
                 if cached is not None:
-                    if processed_pairs is not None:
-                        processed_pairs.add(pair)
                     reports.extend(dict(report) for report in cached)
                     break
                 # Missing history is temporary when replaceable snapshots
@@ -8423,29 +8413,11 @@ class BotRuntime(object):
                                             bool(bot_vx or bot_vy or bot_vz),
                                             bool(player_vx or player_vy or
                                                  player_vz)))
-                                response = tank_collision.resolve_tank(
-                                    bot, (player,), now=None)
-                                if step is not None:
-                                    before_response = (
-                                        _number(current.get('speed')),
-                                        _number(current.get('push_x')),
-                                        _number(current.get('push_z')))
-                                    self._apply_tank_contact_response(
-                                        current, response, step,
-                                        advance_push=False,
-                                        apply_correction=False)
-                                    after_response = (
-                                        _number(current.get('speed')),
-                                        _number(current.get('push_x')),
-                                        _number(current.get('push_z')))
-                                    if any(abs(after - before) > 0.0001
-                                           for before, after in zip(
-                                               before_response,
-                                               after_response)):
-                                        # This pair is excluded from the main
-                                        # current-pose solver, but shares its
-                                        # one-lease-per-slice collector.
-                                        contacted_bot_ids.add(bot_id)
+                                # A receipt owns historical HP only. Motion is
+                                # resolved from the current, frozen pair every
+                                # physics slice below. Replaying an old impulse
+                                # here would accelerate a hull a second time,
+                                # possibly after the vehicles have separated.
                                 event = {
                                     'self_id': bot['id'],
                                     'other_id': player['id'],
@@ -8473,17 +8445,12 @@ class BotRuntime(object):
                                         'player_id': player_id, 'seq': seq,
                                     }) or [self._terminal_human_ram_report(
                                         bot_id, player_id, seq)]
-                if processed_pairs is not None:
-                    processed_pairs.add(pair)
                 frozen = [dict(report) for report in receipt_reports]
                 self._human_ram_report_cache[key] = frozen
                 reports.extend(dict(report) for report in frozen)
                 # One unresolved transaction per player preserves ledger
                 # order even when transport retries or snapshots coalesce.
                 break
-        if owns_contacted_bot_ids and step is not None:
-            for bot_id in sorted(contacted_bot_ids):
-                self._record_traffic_wait_contact(bot_id, step)
         return reports
 
     def _record_traffic_wait_contact(self, bot_id, elapsed):
@@ -8570,11 +8537,12 @@ class BotRuntime(object):
                 'network_id': int(raw['id']), 'alive': alive,
                 'team': int(raw.get('team', 0)),
                 'vehicle': str(raw.get('vehicle') or ''),
-                # The human client owns its own contact impulse; taking it
-                # here too would make an enemy pair shake.  A friendly bot is
-                # the exception: it owns the velocity response so the local
-                # player does not inherit the teammate's lateral momentum.
-                'impulse': False,
+                # Each integrator applies only its own inverse-mass share.
+                # The visible client responds for the human; this worker must
+                # also respond for the Bot on every physical contact, even
+                # without an armour/HP receipt. Otherwise a live Bot keeps
+                # driving into the player without losing any momentum.
+                'impulse': True,
                 # A dead human hull has no integrator at all: the visible
                 # client stops its drive step on death and this worker never
                 # owned the player pose.  Keep it as world geometry instead of
@@ -8602,11 +8570,8 @@ class BotRuntime(object):
                 'position': (tank['x'], tank['y'], tank['z'])}
         collision_index = tank_collision.build_spatial_index(
             collision_bodies, maximum_radius * 2.0 + 4.0)
-        receipt_pairs = set()
         contacted_bot_ids = set()
-        reports = self._resolve_human_ram_receipts(
-            players, now, step=step, processed_pairs=receipt_pairs,
-            contacted_bot_ids=contacted_bot_ids)
+        reports = self._resolve_human_ram_receipts(players, now)
         previous_ram_contacts = self._ram_contacts
         current_ram_contacts = set()
         frame_ram_armors = {}
@@ -8647,8 +8612,9 @@ class BotRuntime(object):
                 if tank_id == own['id'] or tank_id not in by_id:
                     continue
                 pair = (min(own['id'], tank_id), max(own['id'], tank_id))
-                if pair in receipt_pairs:
-                    continue
+                # Historical receipts settle HP, never current motion.
+                # Keep the physical pair even when its receipt arrived in
+                # this slice so a sustained push still slows the Bot.
                 other = by_id[tank_id]
                 # The spatial bucket is deliberately conservative. Apply the
                 # resolver's existing circle exclusion using radii computed
@@ -8672,17 +8638,6 @@ class BotRuntime(object):
                     else:
                         self._apply_wreck_contact_response(state, idle, step)
                 continue
-            if not state_alive:
-                # ``impulse`` false says the visible client owns the player's
-                # half of the pair and the Bot's half arrives as a ram
-                # receipt.  No receipt is ever produced for a wreck, so this
-                # solver is the only owner of the wreck's half; leaving the
-                # flag alone let a player's shove reach the hull as bare
-                # separation with its track resistance never consulted.
-                others = [dict(other, impulse=True)
-                          if (other.get('kind') == 'player' and
-                              not other.get('impulse', True)) else other
-                          for other in others]
             if not state_alive and not (
                     state.get('push_x', 0.0) or state.get('push_z', 0.0) or
                     any(other.get('alive', True) or other['vx'] or

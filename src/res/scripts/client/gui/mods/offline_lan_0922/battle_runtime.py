@@ -19256,12 +19256,10 @@ class BattleRuntime(object):
                     'presentation_time_us'),
                 'alive': alive,
                 'team': int(_number(state.get('team'))),
-                # Apply the local body's reciprocal e=0 response for every
-                # live Bot.  The authority receipt applies the Bot's half at
-                # the same presented contact and skips that pair in its
-                # current-frame detector.  Leaving teammates as correction-
-                # only keeps the player at full speed after a ram, so it
-                # immediately catches and damages the same Bot again.
+                # Each integrator applies its own reciprocal mass share.
+                # The worker resolves the Bot's current contact every slice;
+                # historical armour receipts settle HP only. Team membership
+                # never makes either hull exempt from the physical response.
                 'impulse': True,
                 # A Bot wreck is shoved by the authority worker, so it keeps a
                 # real inverse mass here and the local hull only takes its own

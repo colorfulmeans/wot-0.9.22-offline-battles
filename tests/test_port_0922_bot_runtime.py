@@ -14353,7 +14353,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(results[20][1], results[30][1], places=12)
         self.assertAlmostEqual(results[30][1], results[60][1], places=12)
 
-    def test_current_human_contact_waits_for_receipt_impulse(self):
+    def test_current_human_contact_applies_both_mass_shares_without_receipt(self):
         descriptor = _combat_descriptor()
         descriptor.physics['weight'] = 25000.0
         runtime = self.module.BotRuntime(
@@ -14386,18 +14386,62 @@ class BotRuntimeTests(unittest.TestCase):
         player['team'] = 2
         runtime._resolve_tank_contacts([player], None, .04)
 
-        self.assertEqual(10.0, friendly_speed)
-        self.assertEqual(10.0, state['speed'])
+        # Both equal-mass live hulls meet at the centre-of-mass velocity.
+        # Armour evidence and team membership have no say in momentum.
+        self.assertAlmostEqual(5.0, friendly_speed)
+        self.assertAlmostEqual(5.0, state['speed'])
 
-        # A wreck has one established immovable-body response regardless of
-        # team. Live human velocity and HP wait for a historical receipt.
+        # The current human-wreck adapter is immovable: it stops the Bot
+        # rather than letting its engine ignore an infinite-mass obstacle.
         player['alive'] = False
         for team in (1, 2):
             state.update(x=0.0, y=0.0, z=0.0, yaw=math.pi / 2.0,
                          speed=10.0, push_x=0.0, push_z=0.0)
             player['team'] = team
             runtime._resolve_tank_contacts([player], None, .04)
-            self.assertEqual(10.0, state['speed'])
+            self.assertAlmostEqual(0.0, state['speed'])
+
+    def test_human_contact_momentum_tracks_the_complete_mass_ratio(self):
+        # This is the worker adapter, not only the engine-free formula. A
+        # ten-tonne Bot must shed almost all speed against a 180-tonne player.
+        descriptor = _combat_descriptor()
+        descriptor.physics['weight'] = 10000.0
+        for human_mass in (10000.0, 25000.0, 180000.0):
+            with self.subTest(human_mass=human_mass):
+                runtime = self.module.BotRuntime(
+                    1, descriptor_resolver=lambda unused: descriptor,
+                    adapter_factory=lambda *unused, **kwargs: _FixedAdapter(
+                        self._stationary_command()),
+                    direction_probe=lambda *unused: {
+                        'clear': True, 'slope': 0.0},
+                    ground_probe=lambda *unused: 0.0,
+                    physics_ground_probe=lambda *unused: 0.0,
+                    spawn_resolver=_spawn_resolver, baked_graph=_graph())
+                runtime.battle_start(dict(self.start, bots=[
+                    {'id': 11, 'team': 2, 'slot': 0, 'name': 'Light'},
+                ]))
+                runtime._clear = lambda *unused: True
+                bot = runtime.states[11]
+                bot.update(x=0.0, y=0.0, z=0.0, yaw=math.pi / 2.0,
+                           speed=10.0, push_x=0.0, push_z=0.0)
+                human = _admit_player({
+                    'id': 2, 'team': 1, 'vehicle': 'ussr:R11_MS-1',
+                    'x': 6.5, 'y': 0.0, 'z': 0.0,
+                    'yaw': math.pi / 2.0, 'speed': 0.0, 'alive': True,
+                }, mass=human_mass)
+
+                reports = runtime._resolve_tank_contacts(
+                    [human], 1.0, 0.04)
+
+                expected = 10000.0 * 10.0 / (10000.0 + human_mass)
+                self.assertAlmostEqual(expected, bot['speed'])
+                self.assertEqual([], reports)
+                # Continued compression owns another current response; it
+                # never waits for a new once-per-impact armour receipt.
+                bot.update(x=0.0, z=0.0, speed=10.0,
+                           push_x=0.0, push_z=0.0)
+                runtime._resolve_tank_contacts([human], 1.04, 0.04)
+                self.assertAlmostEqual(expected, bot['speed'])
 
     def test_tank_separation_does_not_push_bots_through_world_geometry(self):
         descriptor = _combat_descriptor()
@@ -14690,7 +14734,7 @@ class BotRuntimeTests(unittest.TestCase):
         })
 
         reports = runtime._resolve_human_ram_receipts(
-            [player], 10.0, step=0.04)
+            [player], 10.0)
 
         self.assertEqual(1, len(reports))
         self.assertGreater(reports[0]['damage_to_bot'], 0)
@@ -14757,10 +14801,10 @@ class BotRuntimeTests(unittest.TestCase):
         player = _admit_player(player)
 
         first = runtime._resolve_human_ram_receipts(
-            [player], 10.0, step=.04)
+            [player], 10.0)
         push_after_first = (current['push_x'], current['push_z'])
         repeated = runtime._resolve_human_ram_receipts(
-            [player], 10.1, step=.04)
+            [player], 10.1)
         push_after_retry = (current['push_x'], current['push_z'])
         acknowledged = dict(player, ram_contact_resolved_seq=7)
         after_ack = runtime._resolve_human_ram_receipts(
@@ -14788,7 +14832,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertGreater(first[0]['damage_to_target'], 0)
         self.assertEqual(first, repeated)
         self.assertEqual(push_after_first, push_after_retry)
-        self.assertEqual({11: 0.04}, runtime._contact_lease_elapsed)
+        self.assertEqual({}, runtime._contact_lease_elapsed)
+        self.assertEqual((0.0, 0.0), push_after_first)
         self.assertEqual([], after_ack)
         self.assertEqual(1, len(replayed_distant))
         self.assertGreater(replayed_distant[0]['damage_to_target'], 0)
