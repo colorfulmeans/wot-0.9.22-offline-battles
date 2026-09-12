@@ -1,5 +1,8 @@
 import math
 import unittest
+import random
+import struct
+from unittest import mock
 
 from test_port_0922_turret_obstacles import descriptor, pose
 from gui.mods.offline_lan_0922 import rigid_turret as physics
@@ -26,6 +29,37 @@ def floor(start, end):
 
 
 class RigidTurretTests(unittest.TestCase):
+    def test_binary32_sloping_scenery_cannot_lose_contact_and_fall_underground(self):
+        f32 = lambda v: struct.unpack('f', struct.pack('f', v))[0]
+        slope = .13
+        def ground(start, end):
+            start, end = tuple(map(f32, start)), tuple(map(f32, end))
+            a = start[1]-3-slope*(start[0]-400)
+            b = end[1]-3-slope*(end[0]-400)
+            if a >= 0 and b <= 0 and a != b:
+                fraction = a/(a-b)
+                return (tuple(f32(start[i]+(end[i]-start[i])*fraction) for i in range(3)),
+                        (-slope/math.sqrt(1+slope*slope), 1/math.sqrt(1+slope*slope), 0))
+            return None
+        for seed in range(12):
+            rng = random.Random(seed)
+            value = body((400, 8, 200), (-1.8, 10, -1.6),
+                         tuple(rng.uniform(-3, 3) for _ in range(3)))
+            for unused in range(200):
+                physics.advance(value, .04, [], ground)
+            lowest = min(p[1]-3-slope*(p[0]-400) for p in value.points())
+            self.assertGreaterEqual(lowest, -.025, 'lost contact at seed %d' % seed)
+            self.assertLess(lowest, .025)
+
+    def test_far_vehicles_do_not_enter_the_iterative_contact_solver(self):
+        value = body((0, 20, 0), (1, 0, 1))
+        vehicles = [dict(boxes=geometry.vehicle_support_boxes(
+            descriptor(), pose(x=100+i*10), attached=False),
+            mass=50000., velocity=(0., 0., 0.)) for i in range(29)]
+        with mock.patch.object(physics, 'vehicle_contact', wraps=physics.vehicle_contact) as contact:
+            physics.advance(value, .04, vehicles, floor)
+        self.assertEqual(0, contact.call_count)
+        self.assertAlmostEqual(.04, value.com[0])
     def test_mass_and_inertia_use_both_actual_components(self):
         props = physics.properties(components())
         self.assertEqual(5000, props['mass'])

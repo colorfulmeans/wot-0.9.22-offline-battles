@@ -2542,6 +2542,37 @@ without local collision queries. A failed asynchronous attempt retains its
 identity until safe native retirement; retries have a bounded cadence and
 never allocate a second unresolved entity for the same actor.
 
+The `20260913-062334-85d112e438d5` Windows report tested
+`github-34719995064-1` and exposed a missed numerical/performance case. Its
+worker fell from 64.25 FPS before the first detached turret to 1.01 FPS in
+the last window, with a 4,340.903 ms critical-update maximum. A turret first
+lost terrain support and later reached Y = -107,613; synchronous elapsed-time
+catch-up then amplified the slow callbacks. At 06:23:23 the server terminated
+the battle after a 5.05-second worker heartbeat timeout. The visible client
+still reported 84.51 FPS in its last window. These logs establish worker
+starvation and session termination, not a diagnosed native process crash.
+
+The old fixed 1e-6 scenery-ray skin was smaller than native binary32 coordinate
+resolution on sloping ground. Twelve deterministic throws with binary32 ray
+endpoints/hits reproduced penetration in the prior code; all twelve retain
+terrain contact with a coordinate-scaled four-ULP skin. This is numerical
+query tolerance, not a new rest-height or material constant. Per-pose corner
+and world-inverse-inertia caches, explicit three-component vector operations,
+and conservative swept vehicle bounds remove repeated work; the bounds are
+refreshed after contacts change a trajectory. The existing live destruction
+filter is prepared once per body envelope, with the original query outside
+that envelope. Every native hit still supplies its point and normal.
+
+Worker turret updates consume at most the existing 40 ms motion slice per
+body per callback and retain remaining simulation-time debt for subsequent
+callbacks. Other bodies and the network callback can run between slices;
+no heartbeat timeout was extended. Query failure still rolls back body pose,
+momentum acknowledgements and vehicle response together. The 10 ms contact
+substeps and eight solver passes remain unchanged. Regression fixtures cover
+binary32 slopes, skipped far-body contact work, prepared-filter bounds,
+multi-body catch-up fairness and failure retries. They do not establish
+Windows native frame pacing; the next exact-client playtest must do that.
+
 The handshake order is load-bearing. `SynchronousDetachment._onDirectTick`
 runs synchronously inside `createEntity` and, while
 `isTurretDetachmentConfirmationNeeded` is true, calls `transferInputs` ->
@@ -3260,3 +3291,33 @@ still forbids avoidance steering beside a parallel hull; a hull across the
 approach may require a detour, but the Bot must reach the same target and stop.
 These are copied-driver checks, not a claim that Windows crowd timing matches
 retail.
+
+The same report showed that adding linear contact friction did not constrain
+kinematic traverse: a hull could rotate into its neighbour, then use overlap
+separation to move that neighbour without spending drive force. Both the
+visible player and worker Bot now sweep the commanded angle to the first
+legal OBB contact and clear blocked turn speed. Corner sampling is bounded by
+half the existing penetration slop and the first blocked interval is refined;
+testing only the final angle would miss an intermediate collision. Existing
+overlap may decrease, and translating clear immediately releases the turn.
+No player/Bot identity changes this rule. This is a constraint on kinematic
+traverse, not recovered retail chassis torque/inertia dynamics. Translation
+still uses the descriptor mass, engine power and track-force contact law.
+
+Rotation blockage feeds the existing bounded traffic lease. Recovery checks
+live hull rotation as well as scenery, keeping a clear reverse straight when
+its turn arc is occupied; a clear forward sweep can release a tank whose rear
+and both pivots are blocked. It cannot create clearance through a free pivot.
+The friendly head-on coordinator also checks swept hull poses. If both lateral
+exits are denied, the original 1.5-second hold is followed by at most one
+6-second backing attempt: the higher-ID Bot reverses with terrain and full
+rear-hull checks, while the other advances straight. This is a navigation
+choice using the existing 0.72 recovery throttle, not extra physical force.
+Backing continues across velocity sign changes, releases on separation or an
+explicit hold, and cannot renew its deadline without a new physical encounter.
+It resolves the Great Wall gate fixture without changing its 30-second exit
+requirement or 5-second blocked/broadside limits.
+Both adapter turn signs, repeated side hugs, corner escape and intermediate
+angle collisions have regression coverage. Existing crowded-departure gates
+are retained without another extension or lowered departure requirement.
+Continuous stacked-hull/debris crushing HP remains unimplemented.

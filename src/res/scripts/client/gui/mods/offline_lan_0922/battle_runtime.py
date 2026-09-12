@@ -5011,6 +5011,27 @@ class BattleRuntime(object):
             return None
         return _xyz(collision[0]), _xyz(collision[1])
 
+    def _rigid_turret_scenery_query(self, body, dt):
+        # Reuse the reviewed suspension sweep filter for every corner inside
+        # this body's motion envelope. Each hit still resolves its live native
+        # identity, including destruction accepted during the callback.
+        reach = body.radius + rigid_turret.query_skin(body.points())
+        x, unused_y, z = body.com
+        end_x, end_z = x+body.velocity[0]*dt, z+body.velocity[2]*dt
+        bounds = (min(x, end_x)-reach, min(z, end_z)-reach,
+                  max(x, end_x)+reach, max(z, end_z)+reach)
+        prepared = self._prepared_ground_filter((bounds[:2], bounds[2:]))
+        if prepared is None:
+            return self._collide_rigid_turret
+        ground_filter = None if prepared is _EMPTY_GROUND_FILTER else prepared
+        def collide(start, end):
+            if not all(bounds[0] <= p[0] <= bounds[2] and
+                       bounds[1] <= p[2] <= bounds[3] for p in (start, end)):
+                return self._collide_rigid_turret(start, end)
+            hit = self._collide_down(self._vector(start), self._vector(end), ground_filter)
+            return (_xyz(hit[0]), _xyz(hit[1])) if hit is not None else None
+        return collide
+
     def _collide_down(self, start, end, ground_filter):
         """Vertical probe that skips the skin of an already broken item."""
         if ground_filter is None:
@@ -21048,6 +21069,15 @@ class BattleRuntime(object):
             candidate_yaw -= 2.0 * math.pi
         while candidate_yaw < -math.pi:
             candidate_yaw += 2.0 * math.pi
+        if abs(_angle_delta(candidate_yaw, yaw)) > 1.0e-9:
+            shape = self._collision_shape(entity.typeDescriptor)
+            allowed = tank_collision.rotation_fraction(
+                position, yaw, candidate_yaw, shape,
+                self._contact_tanks(position, shape))
+            if allowed < 1.0:
+                candidate_yaw = yaw + _angle_delta(yaw, candidate_yaw)*allowed
+                self._local_turn_speed = 0.0
+                contact_path = contact_path or 'tank_turn_contact'
         if self._arena_rotation_is_clear(
                 entity, position, yaw, candidate_yaw):
             yaw_changed = abs(_angle_delta(yaw, candidate_yaw)) > 1.0e-8
@@ -24653,11 +24683,14 @@ class BattleRuntime(object):
         return (_distance_2d(origin, row['flight']['rest']) <=
                 spotting.VEHICLE_AOI_RADIUS or self._spg_aiming_view_active())
 
+    @timed('turret.update')
     def _advance_turret_support(self, server_ms):
         if server_ms < self._turret_support_next_ms:
             return
         self._turret_support_next_ms = (server_ms + 1000.0 *
             rigid_turret.turret_detachment.FLIGHT_STEP_SECONDS)
+        if not self._detached_turret_rows:
+            return
         vehicles = []
         players = self._authority_players()
         states = dict(('player:%d' % raw['id'], raw) for raw in players)
@@ -24692,6 +24725,12 @@ class BattleRuntime(object):
             if entity is None:
                 continue
             previous_ms = self._turret_sim_times.get(key, row['created_time_ms'])
+            # One existing 40-ms motion slice per body/callback. Retain the
+            # remainder on its simulation clock and service it next callback;
+            # a late frame must not synchronously expand into seconds of native
+            # queries and starve the worker heartbeat. Never discard elapsed time.
+            motion_ms = min(server_ms, previous_ms + 1000.0 *
+                            rigid_turret.turret_detachment.FLIGHT_STEP_SECONDS)
             body = self._turret_bodies.get(key)
             rollback = None
             vehicle_rollback = [(vehicle, dict(vehicle['state']),
@@ -24713,13 +24752,19 @@ class BattleRuntime(object):
                         body.momentum(impulse[:3], impulse[3:])
                         acknowledgements[player_key] = [player_key] + checkpoint[1:]
                 body.acks = list(acknowledgements.values())
-                rigid_turret.advance(body, (server_ms-previous_ms)/1000.0, vehicles,
-                                     self._collide_rigid_turret, self._apply_turret_bot_response)
+                elapsed = (motion_ms-previous_ms)/1000.0
+                collide = self._rigid_turret_scenery_query(body, elapsed)
+                rigid_turret.advance(body, elapsed, vehicles,
+                                     collide, self._apply_turret_bot_response)
+                if body.sleeping:
+                    motion_ms = server_ms
+                if motion_ms < server_ms:
+                    self._turret_support_next_ms = server_ms
                 frame = body.frame()
-                self._turret_sim_times[key] = server_ms
                 if frame == getattr(body, '_last_published_frame', None):
+                    self._turret_sim_times[key] = motion_ms
                     continue
-                update = rigid_turret.revision(row, body, server_ms)
+                update = rigid_turret.revision(row, body, motion_ms)
                 body._last_published_frame = frame
             except Exception as error:
                 # Native scenery queries can fail halfway through a slice.
@@ -24739,7 +24784,7 @@ class BattleRuntime(object):
                     vehicle['boxes'], vehicle['velocity'] = saved_boxes, saved_velocity
                 self._warn_optional_failure('detached turret rigid body', error)
                 continue
-            self._turret_sim_times[key] = server_ms
+            self._turret_sim_times[key] = motion_ms
             self._detached_turret_proposals[key] = update
             if (row['flight'].get('body', {}).get('grounded') != body.grounded or
                     row.get('motion_seq', 0) % 50 == 0):

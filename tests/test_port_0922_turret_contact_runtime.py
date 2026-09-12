@@ -1,6 +1,7 @@
 import math
 import types
 import unittest
+from unittest import mock
 from test_port_0922_battle_runtime import BattleRuntime, _runtime, _Vehicle, _Vector
 from test_port_0922_turret_obstacles import descriptor, row
 from gui.mods.offline_lan_0922 import rigid_turret
@@ -84,4 +85,47 @@ class TurretRuntimeContactTests(unittest.TestCase):
         battle._collide_rigid_turret = lambda a,b: None
         battle._advance_turret_support(1080)
         self.assertAlmostEqual(1., battle._turret_bodies['bot:17'].velocity[0])
+        self.assertAlmostEqual(.04, battle._turret_bodies['bot:17'].position[0])
+        self.assertEqual(1040, battle._turret_sim_times['bot:17'])
+        battle._advance_turret_support(1080)
         self.assertAlmostEqual(.08, battle._turret_bodies['bot:17'].position[0])
+
+    def test_late_callback_preserves_debt_without_starving_other_bodies(self):
+        runtime, battle = self.setup_body()
+        accepted = row()
+        accepted['flight']['origin'] = (0., 10., 0.)
+        accepted['flight']['segments'][0]['origin'] = (0., 10., 0.)
+        battle._detached_turret_rows['bot:17'] = accepted
+        battle._detached_turret_rows['bot:18'] = dict(accepted, actor_id=18)
+        battle._records['bot:18'] = dict(battle._records['bot:17'], engine_id=118, network_id=18)
+        runtime.bigworld.entities[118] = _Vehicle(
+            118, runtime.bigworld.entities[117].typeDescriptor, _Vector(), (0, 0, 0), {'health': 0})
+        battle._authority_players = lambda: []
+        calls = []
+        battle._collide_rigid_turret = lambda a, b: calls.append((a, b))
+        battle._advance_turret_support(6000)
+        self.assertEqual(1040, battle._turret_sim_times['bot:17'])
+        self.assertEqual(1040, battle._turret_sim_times['bot:18'])
+        self.assertLessEqual(len(calls), 2*16*4)
+        for unused in range(124):
+            battle._advance_turret_support(6000)
+        self.assertEqual(6000, battle._turret_sim_times['bot:17'])
+        self.assertEqual(6000, battle._detached_turret_proposals['bot:17']['motion_time_ms'])
+        self.assertEqual(6000, battle._turret_sim_times['bot:18'])
+
+    def test_scenery_sweep_reuses_live_filter_and_checks_outside_its_bounds(self):
+        runtime, battle = self.setup_body()
+        td = runtime.bigworld.entities[117].typeDescriptor
+        body = rigid_turret.Body(rigid_turret.geometry.turret_components(td),
+                                dict(position=(400, 8, 200), attitude=(0, 0, 0)))
+        live_filter = object()
+        battle._prepared_ground_filter = mock.Mock(return_value=live_filter)
+        battle._collide_down = mock.Mock(return_value=(_Vector(400, 3, 200), _Vector(0, 1, 0)))
+        fallback = battle._collide_rigid_turret = mock.Mock(return_value=None)
+        query = battle._rigid_turret_scenery_query(body, .04)
+        for unused in range(64):
+            self.assertEqual(((400., 3., 200.), (0., 1., 0.)), query((400, 8, 200), (400, 2, 200)))
+        self.assertEqual(1, battle._prepared_ground_filter.call_count)
+        self.assertIs(live_filter, battle._collide_down.call_args.args[2])
+        query((800, 8, 200), (800, 2, 200))
+        fallback.assert_called_once()

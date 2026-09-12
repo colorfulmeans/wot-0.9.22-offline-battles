@@ -723,6 +723,16 @@ class LocalDriver(object):
 						state['recovery_side'] = direction = mirrored
 						recovery_yaw = float(yaw) + direction * RECOVERY_YAW_OFFSET
 					else:
+						# A side hug can forbid both pivots while a teammate
+						# closes the rear. Use the same bounded recovery drive
+						# forwards only if terrain and the complete hull sweep
+						# are clear; rotation must not create space for free.
+						if (self._clear(direction_clear, float(yaw), escape_distance) and
+								self._reverse_blocked_by_vehicle(
+									position, float(yaw)+math.pi, neighbours,
+									own_half_length, own_half_width) is None):
+							return {'throttle': 0.72, 'turn': 0.0,
+								'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
 						# Neither rotation fits and the rear is denied. Hold the
 						# pose instead of grinding the corners, and publish the
 						# hull that owns the escape so the queue can clear it.
@@ -751,11 +761,13 @@ class LocalDriver(object):
 			# manoeuvre parks the hull across the passage and blocks the whole
 			# column behind it. Keep the escape and drop the turn.
 			for fraction in RECOVERY_SWEEP_FRACTIONS:
-				if not self._clear(
+				if ((pose_clear is not None and not pose_clear(
+						float(yaw) + direction * RECOVERY_YAW_OFFSET * fraction)) or
+						not self._clear(
 						direction_clear,
 						float(yaw) + math.pi +
 						direction * RECOVERY_YAW_OFFSET * fraction,
-						escape_distance):
+						escape_distance)):
 					recovery_turn = 0.0
 					recovery_target = float(yaw)
 					break

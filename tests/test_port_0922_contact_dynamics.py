@@ -6,6 +6,38 @@ from gui.mods.offline_lan_0922 import vehicle_physics as drive
 
 
 class GroundContactTests(unittest.TestCase):
+    def test_side_hug_cannot_be_bypassed_by_repeated_traverse(self):
+        shape = (1.5, 3.5, -.8, 2.)
+        for actor in (1, 1000001):
+            for direction in (-1., 1.):
+                peer = _tank(actor, 3., 0.)
+                yaw = 0.
+                for unused in range(120):
+                    delta = direction*.02
+                    fraction = contact.rotation_fraction((0., 0., 0.), yaw, yaw+delta, shape, [peer])
+                    yaw += delta*fraction
+                self.assertLess(abs(yaw), .003)
+                self.assertEqual(3., peer['x'])
+                # The contact may open through ordinary translation, after
+                # which the same command can turn. There is no sticky lease.
+                peer['x'] = 10.
+                self.assertEqual(1., contact.rotation_fraction((0., 0., 0.), yaw, yaw+.02, shape, [peer]))
+
+    def test_turn_can_leave_an_existing_corner_contact(self):
+        shape = (1.5, 3.5, -.8, 2.)
+        peer = _tank(2, 2.99, 5.)
+        self.assertEqual(1., contact.rotation_fraction((0., 0., 0.), 0., -.2, shape, [peer]))
+        self.assertLess(contact.rotation_fraction((0., 0., 0.), 0., .2, shape, [peer]), .02)
+        peer['y'] = 8.
+        self.assertEqual(1., contact.rotation_fraction((0., 0., 0.), 0., .2, shape, [peer]))
+
+    def test_turn_sweep_checks_between_clear_endpoint_poses(self):
+        shape = (1.5, 3.5, -.8, 2.)
+        peer = _tank(2, 5., 0.)
+        for yaw in (0., math.pi/2):
+            self.assertIsNone(contact.obb_contact(0., 0., yaw, shape, 5., 0., 0., shape))
+        self.assertLess(contact.rotation_fraction((0., 0., 0.), 0., math.pi/2, shape, [peer]), 1.)
+
     def test_stationary_side_holds_for_either_identity_and_frame_rate(self):
         for dt in (1./15, 1./30, 1./60):
             for owner in (1, 1000001):
@@ -82,6 +114,34 @@ class GroundContactTests(unittest.TestCase):
         self.assertEqual(3, driver._reverse_blocked_by_vehicle((0.,0.,0.),0.,[front,rear],3.5,1.5))
         side = dict(front, position=(2.99,0.,1.))
         self.assertIsNone(driver._reverse_blocked_by_vehicle((0.,0.,0.),0.,[side],3.5,1.5))
+
+    def test_reverse_keeps_a_clear_escape_straight_when_its_turn_arc_is_occupied(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        for position in ((2.99, 0., 1.), (0., 0., 6.99)):
+            driver = LocalDriver()
+            driver._state(1, 0, (0., 0., 0.)).update(recovery_time=.5, recovery_side=1.)
+            peer = dict(id=2, position=position, yaw=0., half_length=3.5, half_width=1.5)
+            order = driver.drive(1, 0, (0., 0., 0.), 0., 0., .04,
+                                 (0., 0., 100.), [peer], lambda *a: True,
+                                 half_width=1.5, pose_clear=lambda yaw: False)
+            self.assertEqual('reverse_turn', order['recovery_mode'])
+            self.assertLess(order['throttle'], 0.)
+            self.assertEqual(0., order['turn'])
+
+    def test_forward_escape_checks_the_complete_hull_path(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        side = dict(id=2, position=(2.99, 0., -1.), yaw=0., half_length=3.5, half_width=1.5)
+        rear = dict(side, id=3, position=(0., 0., -8.))
+        front = dict(side, id=4, position=(0., 0., 8.))
+        for peers, mode in (([side, rear], 'forward_escape'), ([side, rear, front], 'blocked')):
+            driver = LocalDriver()
+            driver._state(1, 0, (0., 0., 0.)).update(recovery_time=.5, recovery_side=1.)
+            order = driver.drive(1, 0, (0., 0., 0.), 0., 0., .04,
+                                 (0., 0., 100.), peers, lambda *a: True,
+                                 half_width=1.5, pose_clear=lambda yaw: False)
+            self.assertEqual(mode, order['recovery_mode'])
+            self.assertEqual(0., order['turn'])
+            self.assertEqual(.72 if mode == 'forward_escape' else 0., order['throttle'])
 
     def test_contact_oscillation_cannot_renew_driver_wait_forever(self):
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver

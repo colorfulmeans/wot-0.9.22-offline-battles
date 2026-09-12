@@ -18,11 +18,31 @@ EPSILON = 1.0e-6
 STEP = turret_detachment.FLIGHT_STEP_SECONDS / 4.0
 SOLVER_PASSES = 8
 ZERO = (0.0, 0.0, 0.0)
-add = geometry._add
-sub = geometry._subtract
-scale = geometry._scale
-dot = geometry._dot
-cross = geometry.destructibles_sensor._vector_cross
+def add(a, b):
+    return a[0]+b[0], a[1]+b[1], a[2]+b[2]
+
+
+def sub(a, b):
+    return a[0]-b[0], a[1]-b[1], a[2]-b[2]
+
+
+def scale(a, factor):
+    return a[0]*factor, a[1]*factor, a[2]*factor
+
+
+def dot(a, b):
+    return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]
+
+
+def cross(a, b):
+    return a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]
+
+
+def query_skin(points):
+    # Math.Vector3/native scenery use binary32 world coordinates. Four ULPs
+    # at the current coordinate scale survive that conversion; a fixed 1e-6
+    # ray can collapse to a point or start below a sloping contact at map scale.
+    return max(EPSILON, max(abs(c) for p in points for c in p) * 2.0**-21)
 
 
 def length(v):
@@ -41,11 +61,13 @@ def matrix(attitude):
 
 
 def mul(m, v):
-    return tuple(sum(m[3*i+j] * v[j] for j in range(3)) for i in range(3))
+    x, y, z = v
+    return (m[0]*x+m[1]*y+m[2]*z, m[3]*x+m[4]*y+m[5]*z,
+            m[6]*x+m[7]*y+m[8]*z)
 
 
 def transpose(m):
-    return tuple(m[3*j+i] for i in range(3) for j in range(3))
+    return m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]
 
 
 def inverse(m):
@@ -164,6 +186,8 @@ class Body(object):
         self.quiet_time = 0.0
         self.support_points = []
         self._box_cache = None
+        self._point_cache = None
+        self._inertia_cache = None
         self._local_points = tuple(corner
             for unused_name, unused_component, offset, bounds in components
             for corner in geometry._corners(bounds, offset))
@@ -198,13 +222,24 @@ class Body(object):
         return self._box_cache[1]
 
     def points(self):
+        key = self.com, self.rotation
+        if self._point_cache is not None and self._point_cache[0] == key:
+            return self._point_cache[1]
         position = self.position
-        return tuple(add(position, mul(self.rotation, corner))
-                     for corner in self._local_points)
+        points = tuple(add(position, mul(self.rotation, corner))
+                       for corner in self._local_points)
+        self._point_cache = key, points
+        return points
 
     def inverse_inertia(self, value):
-        return mul(self.rotation, mul(self.props['inverse_inertia'],
-                                      mul(transpose(self.rotation), value)))
+        if self._inertia_cache is None or self._inertia_cache[0] != self.rotation:
+            rotation, inertia = self.rotation, self.props['inverse_inertia']
+            transposed = transpose(rotation)
+            columns = [mul(rotation, mul(inertia, mul(transposed, axis)))
+                       for axis in ((1, 0, 0), (0, 1, 0), (0, 0, 1))]
+            world = tuple(columns[j][i] for i in range(3) for j in range(3))
+            self._inertia_cache = rotation, world
+        return mul(self._inertia_cache[1], value)
 
     def point_velocity(self, point):
         return add(self.velocity, cross(self.angular, sub(point, self.com)))
@@ -292,18 +327,23 @@ def scenery_step(body, dt, collide):
     before = body.points()
     body.integrate(dt)
     after = body.points()
+    skin = query_skin(before + after)
     contacts = []
     for start, end in zip(before, after):
         # The tiny skin only keeps an exact touching surface in the ray. It
         # is numerical tolerance, never a suspension height or upward lift.
-        hit = collide(add(start, (0, EPSILON, 0)), sub(end, (0, EPSILON, 0)))
+        # Extend along motion as well as up: a horizontal wall contact needs
+        # a nonzero ray after the same binary32 conversion as a floor contact.
+        direction = unit(sub(end, start))
+        hit = collide(add(sub(start, scale(direction, skin)), (0, skin, 0)),
+                      sub(add(end, scale(direction, skin)), (0, skin, 0)))
         if hit is None:
             continue
         point, normal = tuple(hit[0]), unit(tuple(hit[1]))
         if length(normal) <= EPSILON:
             continue
-        penetration = max(0.0, -dot(sub(end, point), normal))
-        if dot(sub(end, start), normal) > EPSILON:
+        penetration = max(0.0, skin-dot(sub(end, point), normal))
+        if dot(sub(end, start), normal) > skin:
             continue
         contacts.append((point, normal, penetration))
     was_grounded = body.grounded
@@ -408,15 +448,43 @@ def translate(body, displacement, collide):
     return actual
 
 
+def nearby_vehicles(body, dt, vehicles):
+    """Conservative swept-sphere broad phase with cached vehicle bounds."""
+    end = add(body.com, add(scale(body.velocity, dt), (0, -0.5*9.81*dt*dt, 0)))
+    lows = tuple(min(body.com[i], end[i])-body.radius for i in range(3))
+    highs = tuple(max(body.com[i], end[i])+body.radius for i in range(3))
+    # Include the ballistic apex even when both endpoints lie below it.
+    apex = body.velocity[1]/9.81
+    if 0.0 < apex < dt:
+        highs = (highs[0], body.com[1]+0.5*body.velocity[1]*apex+body.radius, highs[2])
+    result = []
+    for vehicle in vehicles:
+        boxes = vehicle['boxes']
+        cached = vehicle.get('_rigid_bounds')
+        if cached is None or cached[0] is not boxes:
+            bounds = [(tuple(c[i]-sum(abs(v[i]) for v in axes) for i in range(3)),
+                       tuple(c[i]+sum(abs(v[i]) for v in axes) for i in range(3)))
+                      for c, axes in boxes]
+            cached = (boxes, tuple(min(b[0][i] for b in bounds) for i in range(3)),
+                      tuple(max(b[1][i] for b in bounds) for i in range(3)))
+            vehicle['_rigid_bounds'] = cached
+        if all(lows[i] <= cached[2][i] and highs[i] >= cached[1][i] for i in range(3)):
+            result.append(vehicle)
+    return result
+
+
 def advance(body, dt, vehicles, collide, apply_vehicle=None):
     """Advance elapsed time with substeps and mass-aware vehicle contacts."""
     remaining = max(0.0, dt)
+    all_vehicles = vehicles
+    vehicles = nearby_vehicles(body, remaining, all_vehicles)
     if body.sleeping:
         # A sleeping body still checks its actual supporting scenery and
         # nearby moving vehicles. Destroyed support cannot leave it airborne.
         support = body.support_points
-        stable = len(support) >= 3 and all(collide(add(p, (0, EPSILON, 0)),
-                                                  sub(p, (0, EPSILON, 0))) is not None
+        skin = query_skin(body.points())
+        stable = len(support) >= 3 and all(collide(add(p, (0, skin, 0)),
+                                                  sub(p, (0, skin, 0))) is not None
                                                 for p in support)
         touched = any(vehicle_contact(body, v['boxes'], v['mass'], v['velocity']) is not None
                       for v in vehicles)
@@ -425,6 +493,7 @@ def advance(body, dt, vehicles, collide, apply_vehicle=None):
         body.sleeping = False
     while remaining > 1e-9:
         step = min(STEP, remaining)
+        vehicles = nearby_vehicles(body, step, all_vehicles)
         had_support = body.grounded
         scenery_step(body, step, collide)
         for unused_pass in range(SOLVER_PASSES):
@@ -455,6 +524,9 @@ def advance(body, dt, vehicles, collide, apply_vehicle=None):
                     touched = True
             if not touched:
                 break
+            # A correction or an earlier contact can change the trajectory.
+            # Recheck cached bounds before the next constraint sweep.
+            vehicles = nearby_vehicles(body, 0.0, all_vehicles)
         remaining -= step
     # Gravity over one solver slice bounds the contact integrator's residual
     # energy. Sleep only below that numerical floor and over a support polygon;

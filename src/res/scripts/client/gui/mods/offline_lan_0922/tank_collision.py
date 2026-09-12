@@ -451,6 +451,57 @@ def obb_contact(x_a, z_a, yaw_a, shape_a,
     return best_x, best_z, best_overlap
 
 
+def rotation_fraction(position, yaw, candidate_yaw, shape, others):
+    """Project kinematic traverse onto the first legal chassis contact.
+
+    Translation and its mass/track-force response run separately. Traverse
+    cannot bypass that response by turning a corner into the other hull and
+    asking positional separation to move it for free. Existing overlap may
+    decrease; neither player nor Bot identity changes this geometry rule.
+    Sample the whole swept angle at less than half the existing penetration
+    slop per corner, then refine the first blocked interval. End poses alone
+    miss a hull swept through during a late callback.
+    """
+    delta = (candidate_yaw-yaw+math.pi) % (2.0*math.pi)-math.pi
+    radius = math.hypot(shape[0], shape[1])
+    travel = abs(delta)*radius
+    if travel <= 1e-9:
+        return 1.0
+    samples = max(1, int(math.ceil(travel/(POSITION_SLOP*0.5))))
+    fraction = 1.0
+    for other in others:
+        where = other.get('position')
+        if where is None:
+            where = (other['x'], other.get('y', 0.0), other['z'])
+        other_shape = _tank_shape(other)
+        reach = radius+math.hypot(other_shape[0], other_shape[1])
+        if ((position[0]-where[0])**2+(position[2]-where[2])**2 > reach*reach or
+                not vertical_overlap(position[1], shape, where[1], other_shape)):
+            continue
+        other_yaw = other.get('yaw', 0.0)
+        def depth(at):
+            hit = obb_contact(position[0], position[2], yaw+delta*at, shape,
+                              where[0], where[2], other_yaw, other_shape)
+            return hit[2] if hit is not None else 0.0
+        allowed = max(POSITION_SLOP, depth(0.0))
+        low = 0.0
+        for index in range(1, samples+1):
+            high = min(fraction, index/float(samples))
+            if depth(high) > allowed+1e-9:
+                while (high-low)*travel > 1e-6:
+                    middle = (low+high)*0.5
+                    if depth(middle) > allowed+1e-9:
+                        high = middle
+                    else:
+                        low = middle
+                fraction = low
+                break
+            low = high
+            if high >= fraction:
+                break
+    return fraction
+
+
 def obb_impact_contact(x_a, z_a, yaw_a, shape_a, velocity_a,
                        x_b, z_b, yaw_b, shape_b, velocity_b):
     """Return the first horizontal impact face for an overlapping OBB pair.

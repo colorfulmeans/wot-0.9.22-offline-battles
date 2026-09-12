@@ -8709,7 +8709,8 @@ class BotRuntime(object):
             if not state_alive:
                 self._apply_wreck_contact_response(state, result, step)
                 continue
-            if (any(abs(value) > 0.0001
+            if (state.pop('_rotation_contact_blocked', False) or
+                    any(abs(value) > 0.0001
                     for value in result['delta_velocity']) or
                     any(abs(value) > 0.0001
                         for value in result['correction'])):
@@ -11183,8 +11184,13 @@ class BotRuntime(object):
 
             def sample_pose_clear(sample_yaw):
                 # Whether this hull may rotate where it stands is a question
-                # about a rectangle, not about a heading. Answer it from the
+                # about a swept rectangle. Check live hulls before the
                 # shipped graph the navigator already owns.
+                if tank_collision.rotation_fraction(
+                        position, state['yaw'], sample_yaw,
+                        state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
+                        self._neighbours_for(state, neighbours)) < 1.0:
+                    return False
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
                 if not callable(pose_probe):
@@ -11331,7 +11337,7 @@ class BotRuntime(object):
                 command = timed_call(
                     self._combat_diagnostics, 'bot.traffic',
                     self._traffic_coordinator.adjust,
-                    state['id'], traffic_bodies[state['id']], command,
+                    state['id'], dict(traffic_bodies[state['id']], pose_clear=sample_pose_clear), command,
                     decision_state['neighbours'], now, sample_clear)
                 if reposition_expired:
                     # Resume the ordinary strategic movement on this frame,
@@ -11869,6 +11875,17 @@ class BotRuntime(object):
                     candidate_hull_yaw -= math.pi * 2.0
                 while candidate_hull_yaw < -math.pi:
                     candidate_hull_yaw += math.pi * 2.0
+                if abs(_angle_delta(candidate_hull_yaw, old_hull_yaw)) > 1.0e-9:
+                    allowed = tank_collision.rotation_fraction(
+                        position, old_hull_yaw, candidate_hull_yaw,
+                        state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
+                        self._neighbours_for(state, neighbours))
+                    if allowed < 1.0:
+                        candidate_hull_yaw = old_hull_yaw + _angle_delta(
+                            candidate_hull_yaw, old_hull_yaw)*allowed
+                        turn_speed = 0.0
+                        state['rotation_dir'] = 0
+                        state['_rotation_contact_blocked'] = True
                 if (not self._baked_pose_progress_clear(
                         state, position, old_hull_yaw,
                         position, candidate_hull_yaw) or
