@@ -403,7 +403,7 @@ class LanClientQueueTests(unittest.TestCase):
         # keeps the state it already admitted for them.
         expected = {
             'id', 'x', 'y', 'z', 'yaw', 'pitch', 'roll',
-            'aim_yaw', 'gun_pitch', 'speed',
+            'aim_yaw', 'gun_pitch', 'speed', 'push_x', 'push_z', 'contact_push_acks',
             'movement_dir', 'rotation_dir', 'fire_seq', 'shell_index',
             'next_shell_index', 'ammo_remaining', 'ammo_reload_pending',
             'reload_time', 'reload_duration', 'clip', 'clip_size',

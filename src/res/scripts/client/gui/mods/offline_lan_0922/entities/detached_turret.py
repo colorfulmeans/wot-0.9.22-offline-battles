@@ -169,10 +169,17 @@ class DetachedTurretPresentation(object):
                        'next_retry': float(now)}
             self._canonical_attempts[key] = attempt
         elif attempt['row'] != row:
-            # One accepted actor owns one immutable throw for this round.
-            return False
+            if row.get('motion_seq', 0) <= attempt['row'].get('motion_seq', 0):
+                return False
+            attempt['row'] = copy.deepcopy(row)
         for turret in self._turrets:
             if turret.get('canonical_key') == key:
+                if row.get('motion_seq', 0) > turret.get('motion_seq', 0):
+                    turret.update(flight=copy.deepcopy(row['flight']),
+                                  attitude=tuple(row['attitude']), spin=tuple(row['spin']),
+                                  started=float(now) - max(0.0, float(elapsed)),
+                                  settled=False, impacted=False,
+                                  motion_seq=row['motion_seq'])
                 return True
         self._retire_entities()
         if (self.has_vehicle(plan['entity_id']) or

@@ -32,7 +32,8 @@ from gui.mods.offline_lan_0922.entities.bigworld_binding import \
     BigWorldVehicleBinding
 from gui.mods.offline_lan_0922.entities.detached_turret import (
     DetachedTurretObstacles, DetachedTurretPresentation, freeze_obstacle_plan)
-from gui.mods.offline_lan_0922 import turret_obstacle_schema
+from gui.mods.offline_lan_0922 import turret_obstacle_schema, tank_contact_ledger
+from gui.mods.offline_lan_0922.entities import turret_obstacles
 from gui.mods.offline_lan_0922.entities.native_remote_vehicle import \
     NativeRemoteVehicleFactory, present_shot_impulse, set_draw_visibility
 from gui.mods.offline_lan_0922.entities.remote_vehicle import (
@@ -1533,6 +1534,8 @@ class _LANInputSender(object):
             'pitch': getattr(self.owner, '_local_pitch', 0.0),
             'roll': getattr(self.owner, '_local_roll', 0.0),
             'ram_contacts': ram_contacts,
+            'tank_pushes': list(getattr(
+                self.owner, '_local_contact_pushes', {}).values()),
             'destructible_contacts': destructible_contacts,
         }
         up_cosine = getattr(self.owner, '_local_surface_up_cosine', None)
@@ -1644,6 +1647,9 @@ class BattleRuntime(object):
         self._detached_turret_obstacles = None
         self._detached_turret_rows = {}
         self._detached_turret_proposals = {}
+        self._turret_sim_times = {}
+        self._turret_support_next_ms = 0
+        self._turret_visual_revisions = {}
         self._detached_turret_geometry = set()
         self._detached_turret_retry = {}
         self._next_turret_publish = 0.0
@@ -1721,6 +1727,8 @@ class BattleRuntime(object):
         self._local_push_z = 0.0
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
+        self._local_contact_pushes = {}
+        self._local_contact_log_time = 0.0
         self._local_ram_seq = 0
         self._local_ram_receipt = None
         self._local_ram_receipts = collections.OrderedDict()
@@ -2007,6 +2015,9 @@ class BattleRuntime(object):
         self._start_message = dict(message or {})
         self._detached_turret_rows = {}
         self._detached_turret_proposals = {}
+        self._turret_sim_times = {}
+        self._turret_support_next_ms = 0
+        self._turret_visual_revisions = {}
         self._detached_turret_geometry = set()
         self._detached_turret_retry = {}
         self._next_turret_publish = 0.0
@@ -2050,6 +2061,8 @@ class BattleRuntime(object):
         self._local_push_z = 0.0
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
+        self._local_contact_pushes = {}
+        self._local_contact_log_time = 0.0
         self._local_ram_seq = 0
         self._local_ram_receipt = None
         self._local_ram_receipts = collections.OrderedDict()
@@ -18044,6 +18057,8 @@ class BattleRuntime(object):
             'x': position[0], 'y': position[1], 'z': position[2],
             'yaw': yaw, 'pitch': pitch, 'roll': roll,
         }
+        if self.client is not None:
+            pose['actor_key'] = 'player:%d' % self.client.player_id
         body = self._local_siege_body_matrix
         obstacles = getattr(self, '_detached_turret_obstacles', None)
         if (obstacles is None or
@@ -19213,6 +19228,7 @@ class BattleRuntime(object):
                 dx, dz = position[0] - x, position[2] - z
                 if dx * dx + dz * dz > reach * reach:
                     continue
+            physical_state = state
             if record.get('kind') == 'bot':
                 if isinstance(presented_pose, dict):
                     state = dict(state)
@@ -19245,6 +19261,22 @@ class BattleRuntime(object):
                     player_effective, state.get('critical') or {})
                 if player_effective is not None else
                 self._ram_profile(descriptor))
+            physical_velocity = None
+            if record.get('kind') == 'bot':
+                physical_yaw = _number(physical_state.get('yaw'))
+                physical_speed = (_number(physical_state.get('speed'))
+                                  if alive else 0.0)
+                pending = tank_contact_ledger.pending(
+                    self._local_contact_pushes, int(record['network_id']),
+                    physical_state.get('contact_push_acks'),
+                    int(getattr(self.client, 'player_id', 0)))
+                pending = (pending[0] / max(_number(mass, 25000.0), 1.0),
+                           pending[1] / max(_number(mass, 25000.0), 1.0))
+                physical_velocity = (
+                    math.sin(physical_yaw) * physical_speed +
+                    _number(physical_state.get('push_x')) + pending[0],
+                    math.cos(physical_yaw) * physical_speed +
+                    _number(physical_state.get('push_z')) + pending[1])
             result.append({
                 'id': 1000000 + int(record.get('engine_id', 0)),
                 'network_id': int(record.get('network_id', 0)),
@@ -19256,11 +19288,11 @@ class BattleRuntime(object):
                     'presentation_time_us'),
                 'alive': alive,
                 'team': int(_number(state.get('team'))),
-                # Each integrator applies its own reciprocal mass share.
-                # The worker resolves the Bot's current contact every slice;
-                # historical armour receipts settle HP only. Team membership
-                # never makes either hull exempt from the physical response.
+                # The human reports contact momentum; the worker applies
+                # the Bot's reciprocal share using its canonical mass.
+                # Historical armour receipts settle HP independently.
                 'impulse': True,
+                'physical_velocity': physical_velocity,
                 # A Bot wreck is shoved by the authority worker, so it keeps a
                 # real inverse mass here and the local hull only takes its own
                 # share of the separation.  A dead human hull has no
@@ -19304,13 +19336,34 @@ class BattleRuntime(object):
         others = self._contact_tanks(position, own['shape'])
         self._poll_local_ram_contact_episodes(entity, own, others)
         now = self._clock()
+        physical_others = []
+        for other in others:
+            physical = dict(other)
+            if physical.get('physical_velocity') is not None:
+                physical['vx'], physical['vz'] = physical['physical_velocity']
+            physical_others.append(physical)
         contact = tank_collision.resolve_tank(
-            own, others, now=now,
+            own, physical_others, now=now,
             ram_cooldowns=self._local_ram_cooldowns,
             active_ram_contacts=self._local_ram_contacts)
         self._local_ram_cooldowns = contact['cooldowns']
         self._local_ram_contacts = contact['contacts']
+        by_id = dict((other['id'], other) for other in others)
+        for other_id, delta in contact.get('responses', ()):
+            other = by_id[other_id]
+            if other.get('kind') == 'bot':
+                tank_contact_ledger.record(
+                    self._local_contact_pushes, other['network_id'],
+                    (delta[0] * other['mass'], delta[1] * other['mass']))
         delta_x, delta_z = contact['delta_velocity']
+        if ((delta_x or delta_z) and now >= self._local_contact_log_time):
+            self._local_contact_log_time = now + 2.0
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] CONTACT local mass=%.3f '
+                'velocity=(%.4f,%.4f) delta=(%.4f,%.4f) peers=%s\n' % (
+                    own_mass, own['vx'], own['vz'], delta_x, delta_z,
+                    [(o['network_id'], o['mass'], o['vx'], o['vz'])
+                     for o in physical_others]))
         forward_impulse = (delta_x * math.sin(yaw) +
                            delta_z * math.cos(yaw))
         applied_forward = 0.0
@@ -19351,11 +19404,6 @@ class BattleRuntime(object):
         # 60 Hz tick removed about 6.3 m/s2 at 1 m/s in every direction, seven
         # times a tank's own rolling drag, and never actually reached zero.
         #
-        # Both halves of a human/Bot contact still share one impulse; only the
-        # residual decay differs, because a live Bot keeps the reviewed
-        # exponential for now (see bot_runtime: the residual push is currently
-        # the only escape from a terrain wedge in the spawn departure guards).
-        # A shoved wreck already uses this law on the authority side.
         if self._local_physics is None:
             # Every drive step installs the descriptor's physics before this
             # runs; a bare harness without one keeps the push unchanged
@@ -24481,13 +24529,17 @@ class BattleRuntime(object):
             if row is None:
                 continue
             key = turret_obstacle_schema.row_key(row)
-            if key in self._detached_turret_rows:
+            previous = self._detached_turret_rows.get(key)
+            if previous is not None and row.get('motion_seq', 0) <= previous.get('motion_seq', 0):
                 continue
-            if len(self._detached_turret_rows) >= \
+            if previous is None and len(self._detached_turret_rows) >= \
                     turret_obstacle_schema.MAX_ACTIVE_TURRETS:
                 break
             self._detached_turret_rows[key] = row
-            self._detached_turret_proposals.pop(key, None)
+            pending = self._detached_turret_proposals.get(key)
+            if pending is None or pending.get('motion_seq', 0) <= row.get('motion_seq', 0):
+                self._detached_turret_proposals.pop(key, None)
+            self._detached_turret_geometry.discard(key)
             changed = True
         return changed
 
@@ -24515,6 +24567,55 @@ class BattleRuntime(object):
             return False
         return (_distance_2d(origin, row['flight']['rest']) <=
                 spotting.VEHICLE_AOI_RADIUS or self._spg_aiming_view_active())
+
+    def _advance_turret_support(self, server_ms):
+        # Match the existing ballistic step budget; sweep the entire elapsed
+        # interval when a render callback is late.
+        if server_ms < self._turret_support_next_ms:
+            return
+        self._turret_support_next_ms = (server_ms + 1000.0 *
+            turret_obstacles.turret_detachment.FLIGHT_STEP_SECONDS)
+        bodies = []
+        states = dict(('player:%d' % raw['id'], raw) for raw in self._authority_players())
+        if self._bots is not None:
+            states.update(('bot:%d' % key, state) for key, state in self._bots.states.items())
+        for key, state in states.items():
+            record = self._records.get(key)
+            entity = self._server_entity(record['engine_id']) if record else None
+            if entity is None:
+                continue
+            pose = BotRuntime._turret_state_pose(state)
+            pose.update(aim_yaw=state.get('aim_yaw', pose['yaw']), gun_pitch=state.get('gun_pitch', 0.0))
+            try:
+                boxes = turret_obstacles.vehicle_support_boxes(
+                    entity.typeDescriptor, pose, not bool(getattr(entity, 'isTurretDetached', False)))
+            except (AttributeError, IndexError, TypeError, ValueError):
+                continue
+            bodies.append((key, boxes))
+        for key, accepted in self._detached_turret_rows.items():
+            row = self._detached_turret_proposals.get(key, accepted)
+            record = self._records.get(key)
+            entity = self._server_entity(record['engine_id']) if record else None
+            if entity is None:
+                continue
+            previous_ms = self._turret_sim_times.get(key, row['created_time_ms'])
+            self._turret_sim_times[key] = server_ms
+            try:
+                components = turret_obstacles.turret_components(entity.typeDescriptor)
+            except (AttributeError, IndexError, TypeError, ValueError):
+                continue
+            update = self._run_optional_feature(
+                'detached turret support', turret_obstacles.update_vehicle_support,
+                (row, components,
+                 bodies, previous_ms, server_ms, self._collide_detached_turret), disable=False)
+            if update is not None:
+                self._detached_turret_proposals[key] = update
+                if update.get('support_key') != row.get('support_key'):
+                    sys.stdout.write(
+                        '[Offline LAN 0.9.22] TURRET SUPPORT source=%s '
+                        'support=%s seq=%d rest=%s\n' % (
+                            key, update.get('support_key'), update['motion_seq'],
+                            update['flight']['rest']))
 
     def _advance_detached_turrets(self, now):
         if self._worker_mode:
@@ -24547,6 +24648,8 @@ class BattleRuntime(object):
         server_ms = self._turret_server_time_ms(now)
         if server_ms < 0:
             return 0
+        if self._worker_mode and self._detached_turret_rows:
+            self._advance_turret_support(server_ms)
         for key, row in self._detached_turret_rows.items():
             record = self._records.get(key)
             if record is None or not record.get('ready'):
@@ -24567,7 +24670,8 @@ class BattleRuntime(object):
             if (self._worker_mode or self._detached_turrets is None or
                     not bool(getattr(entity, 'isTurretDetached', False)) or
                     not self._turret_obstacle_in_view(row) or
-                    self._detached_turrets.has_vehicle(record['engine_id'])):
+                    (self._detached_turrets.has_vehicle(record['engine_id']) and
+                     self._turret_visual_revisions.get(key, 0) >= row.get('motion_seq', 0))):
                 continue
             retry_key = 'visual:' + key
             if now < self._detached_turret_retry.get(retry_key, 0.0):
@@ -24579,10 +24683,12 @@ class BattleRuntime(object):
                 (entity, row), disable=False)
             if isinstance(plan, dict):
                 elapsed = max(0.0, (server_ms - row['created_time_ms']) / 1000.0)
-                self._run_optional_feature(
+                launched = self._run_optional_feature(
                     'detached turret create',
                     self._detached_turrets.launch_canonical,
                     (plan, row, now, elapsed), disable=False)
+                if launched:
+                    self._turret_visual_revisions[key] = row.get('motion_seq', 0)
         if self._detached_turrets is None:
             return 0
         return self._detached_turrets.advance(now)
@@ -25627,6 +25733,9 @@ class BattleRuntime(object):
         self._detached_turret_obstacles = None
         self._detached_turret_rows = {}
         self._detached_turret_proposals = {}
+        self._turret_sim_times = {}
+        self._turret_support_next_ms = 0
+        self._turret_visual_revisions = {}
         self._detached_turret_geometry = set()
         self._detached_turret_retry = {}
         self._next_turret_publish = 0.0

@@ -749,6 +749,7 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
     delta_velocity_x = 0.0
     delta_velocity_z = 0.0
     ram_events = []
+    responses = []
     ram_diagnostics = []
     cooldowns = dict(ram_cooldowns or {})
     previous_contacts = set(active_ram_contacts or ())
@@ -822,6 +823,7 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
         if _tank_value(other, 'impulse', True):
             delta_velocity_x += response[2]
             delta_velocity_z += response[3]
+            responses.append((other_id, (response[6], response[7])))
 
         # Friendly hulls remain solid and receive the normal separation and
         # velocity response above, but only enemy contact can cause HP loss.
@@ -929,6 +931,7 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
     return {
         'correction': (correction_x, correction_z),
         'delta_velocity': (delta_velocity_x, delta_velocity_z),
+        'responses': tuple(responses),
         'ram_events': tuple(ram_events),
         'ram_diagnostics': tuple(ram_diagnostics),
         'cooldowns': cooldowns,

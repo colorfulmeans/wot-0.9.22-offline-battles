@@ -2524,10 +2524,19 @@ here:
   the admitted terminal pose, then proposes the frozen flight, attitude and
   spin. The server accepts a record only for a confirmed ammo-rack wreck
   from the current worker and authority epoch, stamps its creation time and
-  keeps the first record immutable. Snapshots and late joins replay that
-  cumulative ledger; malformed rows do not reject a valid motion checkpoint.
+  retains the initial throw. Monotonic `motion_seq` revisions from the same
+  worker can stop it on a vehicle or resume its fall after support leaves.
+  Snapshots and late joins replay the newest accepted revision; malformed
+  rows do not reject a valid motion checkpoint.
   Final deaths can still publish their records after the battle result.
-- **Landed turrets are static obstacles.** After the accepted landing time,
+- **Turrets can rest on vehicles.** The worker sweeps the falling component
+  boxes against the current chassis, hull, and attached turret/gun boxes.
+  A vertical SAT interval establishes support on pitched and rolled vehicles.
+  A supported turret retains its X/Z while the supporting vehicle can drive
+  out from under it; loss of support resumes the existing gravity law.
+  Revisions update the existing native entity and collision geometry together.
+  Supported turrets are not anchored navigation blockers for their carrier.
+  After the accepted landing time,
   shells query the separate descriptor turret and gun hit testers in the
   accepted rest frame. The nearest turret caps scenery queries before they
   can destroy props beyond it, and also occludes HE blast rays. Historic
@@ -2539,8 +2548,9 @@ here:
   contact face instead of trapping a tank that the turret landed on. Final
   rest height supports every rotated turret/gun corner. There is no substitute
   geometry when a descriptor or hit tester is missing, and a flight with no
-  ground contact creates no obstacle. This implements static blocking only;
-  the retail cell body can additionally be pushed, roll and damage tanks.
+  ground or vehicle contact creates no obstacle. This implements blocking
+  and vehicle support; free rolling, full rigid-body shove response and
+  continuous crushing damage remain unimplemented.
   The stock visual remains outside local dynamic collision so it cannot
   compete with these shared queries. `isCollidingWithWorld` remains false
   to avoid reading the never-fed filter's native velocity for drag effects.
@@ -3237,3 +3247,16 @@ layout); they are not a newly verified complete #1513 resource set. Exact
 Windows #1513 acceptance must still check font availability, Chinese glyphs,
 notification rendering and panel clipping at supported resolutions, in both
 launcher languages. A Chinese stock garage alone does not validate GUI.Text.
+
+Human/Bot contact momentum is separate from the armour-damage receipt ledger.
+The visible integrator reports cumulative opposite momentum from its own
+mass-weighted contact, and the worker divides only the unseen increment by
+the canonical Bot mass. Its acknowledgement travels atomically with Bot
+road speed and residual push, including combat-containment and takeover paths.
+The visible contact solver includes only the unacknowledged momentum in its
+peer velocity and does not differentiate positional separation into kinetic
+velocity. Input/snapshot coalescing therefore preserves physical impulses
+without replaying them or waiting for a native armour plate. The existing ram
+HP formula and existing track-resistance laws are unchanged. These contracts
+have pure-data coverage; native collision feel and turret contact timing still
+require acceptance on the exact Windows client.

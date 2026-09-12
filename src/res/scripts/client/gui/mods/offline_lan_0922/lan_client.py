@@ -2047,7 +2047,7 @@ class LANClient(object):
                    next_shell_index=None,
                    shell_change_pending=None,
                    pose_time_us=None,
-                   ram_contacts=None,
+                   ram_contacts=None, tank_pushes=None,
                    destructible_contacts=None,
                    siege_enabled=None,
                    pitch=None, roll=None,
@@ -2165,6 +2165,8 @@ class LANClient(object):
                     'shell_change_pending' not in message):
                 return False
             message['gun_checkpoint'] = parsed_checkpoint
+        if tank_pushes is not None:
+            message['tank_pushes'] = tank_pushes
         if isinstance(ram_contacts, list):
             message['ram_contacts'] = [
                 dict(value) for value in ram_contacts[
@@ -3164,7 +3166,7 @@ class LANClient(object):
         message['authority_epoch'] = self.authority_epoch
 
     def _adopt_detached_turrets(self, message):
-        """Retain immutable server records until the accepted round changes."""
+        """Retain the newest server revision until the accepted round changes."""
         round_id = message.get('round_id')
         if self._detached_turret_round_id != round_id:
             self._detached_turret_round_id = round_id
@@ -3176,9 +3178,11 @@ class LANClient(object):
                 if row is None:
                     continue
                 key = turret_obstacle_schema.row_key(row)
-                if (key not in self._detached_turrets and
-                        len(self._detached_turrets) <
-                        turret_obstacle_schema.MAX_ACTIVE_TURRETS):
+                previous = self._detached_turrets.get(key)
+                if ((previous is None and len(self._detached_turrets) <
+                     turret_obstacle_schema.MAX_ACTIVE_TURRETS) or
+                        (previous is not None and row.get('motion_seq', 0) >
+                         previous.get('motion_seq', 0))):
                     self._detached_turrets[key] = row
         if 'detached_turrets' not in message and not self._detached_turrets:
             return message

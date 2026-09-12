@@ -7,6 +7,7 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
 
 import copy
 import math
+from gui.mods.offline_lan_0922 import tank_contact_ledger
 import json
 import random
 import sys
@@ -3715,8 +3716,9 @@ class BotRuntime(object):
             1 if movement > 0.01 else (-1 if movement < -0.01 else 0))
         state['rotation_dir'] = (
             1 if rotation > 0.01 else (-1 if rotation < -0.01 else 0))
-        state['push_x'] = 0.0
-        state['push_z'] = 0.0
+        state['push_x'] = _number(raw.get('push_x'))
+        state['push_z'] = _number(raw.get('push_z'))
+        state['contact_push_acks'] = copy.deepcopy(raw.get('contact_push_acks', []))
         state['vertical_speed'] = 0.0
         state['airborne'] = False
         self._reset_bot_suspension_state(state, reset_grounded=True)
@@ -8497,6 +8499,41 @@ class BotRuntime(object):
         """Apply current 0.8.2 chassis OBB response and report rams."""
         if self.native_motion:
             return []
+        # Apply the reciprocal share of the visible client's exact contact
+        # even when its post-separation pose no longer overlaps this Bot.
+        # Armour proof and damage receipts never gate physical momentum.
+        for raw in players or ():
+            if not isinstance(raw, dict) or raw.get('id') is None:
+                continue
+            player_id = int(raw['id'])
+            try:
+                checkpoints = tank_contact_ledger.normalize(raw.get('tank_pushes', []))
+            except (ValueError, TypeError, OverflowError):
+                continue
+            for bot_id, row in checkpoints.items():
+                state = self.states.get(bot_id)
+                if state is None:
+                    continue
+                acknowledgements = state.setdefault('contact_push_acks', [])
+                previous = next((entry for entry in acknowledgements
+                                 if entry[0] == player_id), None)
+                if previous is not None and row[1] <= previous[1]:
+                    continue
+                momentum = tank_contact_ledger.unseen(row, previous)
+                mass = max(float(state['mass']), 1.0)
+                delta = (momentum[0] / mass, momentum[1] / mass)
+                self._apply_tank_contact_response(
+                    state, {'delta_velocity': delta, 'correction': (0.0, 0.0)},
+                    0.0, advance_push=False, apply_correction=False)
+                if previous is not None:
+                    acknowledgements.remove(previous)
+                acknowledgements.append([player_id, row[1], row[2], row[3]])
+                if now >= state.get('_contact_log_time', 0.0):
+                    state['_contact_log_time'] = now + 2.0
+                    sys.stdout.write(
+                        '[Offline LAN 0.9.22] CONTACT worker player=%d '
+                        'bot=%d seq=%d mass=%.3f delta=(%.4f,%.4f)\n' % (
+                            player_id, bot_id, row[1], mass, delta[0], delta[1]))
         tanks = []
         for state in self._ordered_states():
             alive = bool(state.get('alive', True))
@@ -8537,12 +8574,11 @@ class BotRuntime(object):
                 'network_id': int(raw['id']), 'alive': alive,
                 'team': int(raw.get('team', 0)),
                 'vehicle': str(raw.get('vehicle') or ''),
-                # Each integrator applies only its own inverse-mass share.
-                # The visible client responds for the human; this worker must
-                # also respond for the Bot on every physical contact, even
-                # without an armour/HP receipt. Otherwise a live Bot keeps
-                # driving into the player without losing any momentum.
-                'impulse': True,
+                # Current senders report the human's contact momentum above.
+                # Apply that reciprocal Bot share once, not a second impulse
+                # from the post-separation player pose. Bare law-test callers
+                # without that transport still resolve an ordinary pair.
+                'impulse': 'tank_pushes' not in raw,
                 # A dead human hull has no integrator at all: the visible
                 # client stops its drive step on death and this worker never
                 # owned the player pose.  Keep it as world geometry instead of
@@ -8693,6 +8729,8 @@ class BotRuntime(object):
             pose.update(x=position[0], y=position[1], z=position[2])
         if yaw is not None:
             pose['yaw'] = yaw
+        if 'id' in state:
+            pose['actor_key'] = 'bot:%d' % state['id']
         chassis = dict(pose)
         chassis['pitch'] = state.get(
             'terrain_pitch', pose['pitch'] - state.get('suspension_pitch', 0.0))

@@ -52,7 +52,7 @@ from gui.mods.offline_lan_0922.battle_achievements import (
     ACHIEVEMENT_CONDITIONS, AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES,
     award_battle_achievements)
 from gui.mods.offline_lan_0922 import bot_gunnery
-from gui.mods.offline_lan_0922 import bot_state_codec
+from gui.mods.offline_lan_0922 import bot_state_codec, tank_contact_ledger
 from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import effective_params as effective_params_wire
 from gui.mods.offline_lan_0922 import equipment_mechanics
@@ -321,7 +321,7 @@ MODERN_INPUT_FIELDS = frozenset((
     "forward", "turn", "speed", "aim_yaw", "gun_pitch",
     "x", "y", "z", "yaw", "pitch", "roll", "pose_time_us",
     "fire_seq", "shell_index", "next_shell_index",
-    "shell_change_pending", "gun_checkpoint", "ram_contacts",
+    "shell_change_pending", "gun_checkpoint", "ram_contacts", "tank_pushes",
     "ram_contact", "destructible_contacts", "siege_enabled",
     "up_cosine",
 ))
@@ -2094,6 +2094,7 @@ class Player(_EndpointSendMixin):
     stun_attacker_kind: str = ""
     stun_attacker_id: int = 0
     client_position: bool = False
+    tank_pushes: dict = field(default_factory=dict)
     ram_contact_seq: int = 0
     ram_contact_resolved_seq: int = 0
     ram_contact: dict = field(default_factory=dict)
@@ -3372,6 +3373,7 @@ class BattleState:
             player.ram_contact_seq = 0
             player.ram_contact_resolved_seq = 0
             player.ram_contact = {}
+            player.tank_pushes.clear()
             player.ram_contacts.clear()
             player.ram_contact_rejections.clear()
             player.destructible_contact_seq = 0
@@ -5920,6 +5922,10 @@ class BattleState:
             "gun_pitch": round(_clamp(_finite_float(raw.get("gun_pitch")), -1.2, 1.2), 5),
             "speed": round(_clamp(
                 _finite_float(raw.get("speed")), -80.0, 80.0), 4),
+            "push_x": _finite_float(raw.get("push_x")),
+            "push_z": _finite_float(raw.get("push_z")),
+            "contact_push_acks": list(tank_contact_ledger.normalize(
+                raw.get("contact_push_acks", [])).values()),
             "movement_dir": (1 if movement > 0.01 else
                              (-1 if movement < -0.01 else 0)),
             "rotation_dir": (1 if rotation > 0.01 else
@@ -6330,6 +6336,11 @@ class BattleState:
         for name in ("shot_yaw", "shot_pitch"):
             if name in raw:
                 result[name] = raw[name]
+        # Contact acknowledgements and velocity must advance atomically even
+        # when an unrelated combat ledger is contained.
+        result['push_x'] = raw.get('push_x', 0.0)
+        result['push_z'] = raw.get('push_z', 0.0)
+        result['contact_push_acks'] = copy.deepcopy(raw.get('contact_push_acks', []))
         result.update({
             "id": int(identity["id"]),
             "team": int(identity["team"]),
@@ -6428,9 +6439,10 @@ class BattleState:
             if row is None:
                 continue
             key = turret_obstacle_schema.row_key(row)
-            if (key in self.detached_turrets or
-                    len(self.detached_turrets) >=
-                    turret_obstacle_schema.MAX_ACTIVE_TURRETS):
+            previous = self.detached_turrets.get(key)
+            if ((previous is not None and row.get("motion_seq", 0) <= previous.get("motion_seq", 0)) or
+                    (previous is None and len(self.detached_turrets) >=
+                     turret_obstacle_schema.MAX_ACTIVE_TURRETS)):
                 continue
             if row["actor_kind"] == "bot":
                 actor = self.bot_states.get(row["actor_id"])
@@ -6446,7 +6458,14 @@ class BattleState:
                     actor.critical.get("ammo_rack_death", False))
             if not confirmed:
                 continue
-            row["created_time_ms"] = self._server_time_ms()
+            now_ms = self._server_time_ms()
+            if "motion_time_ms" in row:
+                if (previous is None or row["motion_time_ms"] > now_ms + 1000 or
+                        row["motion_time_ms"] < previous["created_time_ms"]):
+                    continue
+                row["created_time_ms"] = row["motion_time_ms"]
+            else:
+                row["created_time_ms"] = now_ms
             self.detached_turrets[key] = row
 
     def update_bot_states(self, player_id, message):
@@ -10637,6 +10656,11 @@ class BattleState:
             # A bad optional contact must not reject the ordered control frame
             # and leave every subsequent input stuck behind a sequence gap.
             return "", ""
+        if "tank_pushes" in message:
+            try:
+                tank_contact_ledger.normalize(message["tank_pushes"])
+            except (ValueError, TypeError, OverflowError):
+                return "envelope_contacts", "tank_pushes"
         raw_ram_contacts = message.get("ram_contacts", [])
         if (not isinstance(raw_ram_contacts, list) or
                 len(raw_ram_contacts) > 16):
@@ -10939,6 +10963,17 @@ class BattleState:
                     if (HUMAN_RAM_TIMELINE_CAPABILITY in
                             player.capabilities):
                         self._record_player_pose_sample(player, message)
+                if "tank_pushes" in message:
+                    try:
+                        checkpoints = tank_contact_ledger.normalize(message["tank_pushes"])
+                    except (ValueError, TypeError, OverflowError):
+                        checkpoints = {}
+                    for bot_id, row in checkpoints.items():
+                        if bot_id not in self.bot_states:
+                            continue
+                        previous = player.tank_pushes.get(bot_id)
+                        if previous is None or row[1] > previous[1]:
+                            player.tank_pushes[bot_id] = row
                 raw_contacts = None
                 if (RAM_CONTACT_LEDGER_CAPABILITY in player.capabilities and
                         "ram_contacts" in message):
@@ -13737,6 +13772,7 @@ class BattleState:
             "equipment_intent_seq": int(player.equipment_intent_seq),
             "equipment_intent_result": dict(
                 player.equipment_intent_result),
+            "tank_pushes": list(player.tank_pushes.values()),
             "ram_contact_admitted_seq": player.ram_contact_seq,
             "ram_contact_resolved_seq": player.ram_contact_resolved_seq,
             "destructible_contact_admitted_seq":

@@ -315,7 +315,8 @@ def pose_at(flight, launch_attitude, spin, elapsed):
     if elapsed >= duration:
         return (
             tuple(flight['rest']),
-            rest_attitude(launch_attitude, spin, duration))
+            tuple(flight.get('rest_attitude') or
+                  rest_attitude(launch_attitude, spin, duration)))
     yaw, pitch, roll = (_finite(value) for value in launch_attitude)
     spin = _vector3(spin)
     segment = flight['segments'][0]

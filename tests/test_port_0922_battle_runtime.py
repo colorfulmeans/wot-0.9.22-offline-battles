@@ -8773,6 +8773,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         friendly_push = battle._local_push_z
 
         state['team'] = 2
+        battle._local_contact_pushes.clear()
         battle._local_speed = 0.0
         battle._local_push_x = 0.0
         battle._local_push_z = 0.0

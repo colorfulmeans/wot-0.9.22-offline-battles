@@ -6567,7 +6567,7 @@ class BotRuntimeTests(unittest.TestCase):
     def test_publication_edge_revision_is_monotonic_across_reverted_edges(self):
         continuous = set((
             'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
-            'gun_pitch', 'speed', 'movement_dir', 'rotation_dir',
+            'gun_pitch', 'speed', 'push_x', 'push_z', 'movement_dir', 'rotation_dir',
             'reload_time', 'burst_time_left', 'siege_time_left_ms',
             'combat_fire_elapsed', 'combat_fire_timer'))
         represented = set(('critical', 'equipment_states', 'ammo_remaining',
