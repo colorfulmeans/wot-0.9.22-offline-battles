@@ -164,6 +164,32 @@ class TurretObstacleTests(unittest.TestCase):
         self.assertTrue(obstacles.sweep_blocks(pose(x=1.25), pose(x=1.1), descriptor(), 4000))
         self.assertTrue(obstacles.sweep_blocks(pose(x=1.25), pose(x=-3), descriptor(), 4000))
 
+    def test_overhead_overlap_can_be_shed_by_horizontal_driving(self):
+        # The hull roof is at 1.5 and the turret underside at 1.4. The
+        # shallowest exit points into the ground, so the old solver rejected
+        # every horizontal input after this landing.
+        for x, z in ((0.1, 0.0), (-0.1, 0.0),
+                     (0.0, 0.1), (0.0, -0.1)):
+            with self.subTest(x=x, z=z):
+                obstacles = self.obstacle(row(rest=(0, 2.4, 0)))
+                self.assertFalse(obstacles.sweep_blocks(
+                    pose(), pose(x=x, z=z), descriptor(), 4000))
+
+    def test_overhead_escape_cannot_climb_deeper_into_the_turret(self):
+        obstacles = self.obstacle(row(rest=(0, 2.4, 0)))
+        self.assertTrue(obstacles.sweep_blocks(
+            pose(), pose(x=0.1, y=1.1), descriptor(), 4000))
+        self.assertTrue(obstacles.sweep_blocks(
+            pose(), pose(x=0.1, roll=0.3), descriptor(), 4000))
+
+    def test_overhead_escape_still_collides_with_another_turret(self):
+        obstacles = self.obstacle(row(rest=(0, 2.4, 0)))
+        other = row(rest=(3, 1, 0))
+        other['actor_id'] = 18
+        self.assertTrue(obstacles.add('bot:18', other, descriptor()))
+        self.assertTrue(obstacles.sweep_blocks(
+            pose(), pose(x=6), descriptor(), 4000))
+
     def test_hydraulic_body_and_chassis_use_separate_frames(self):
         td = descriptor()
         td.chassis.hitTester = BoxTester((-0.1, -0.1, -2), (0.1, 0.1, 2))

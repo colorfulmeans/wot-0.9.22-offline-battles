@@ -242,10 +242,32 @@ def _leaves_overlap(initial, final, sweeps, obstacle):
     if not candidates:
         return False
     initial_gap, normal = max(candidates, key=lambda value: value[0])
-    if _box_gap(final, obstacle, normal) <= initial_gap + _CONTACT_EPSILON:
+    if _box_gap(final, obstacle, normal) > initial_gap + _CONTACT_EPSILON:
+        return all(_box_gap(sweep, obstacle, normal) >=
+                   initial_gap - _CONTACT_EPSILON for sweep in sweeps)
+
+    # A turret can become solid while a hull is already below it. Its
+    # shallowest separating face then points down into the ground. Requiring
+    # improvement on that face alone vetoes every horizontal escape, even a
+    # one-centimetre retreat that never increases penetration.
+    #
+    # Admit tangential escape only from this overhead contact, preserving its
+    # entire vertical support and an outward horizontal face throughout the
+    # sweep. New contacts still block in sweep_blocks, and a turn that deepens
+    # the overhead overlap remains blocked.
+    if (normal[1] >= 0.0 or
+            abs(normal[1]) <= max(abs(normal[0]), abs(normal[2])) or
+            any(_box_gap(sweep, obstacle, normal) <
+                initial_gap - _CONTACT_EPSILON for sweep in sweeps)):
         return False
-    return all(_box_gap(sweep, obstacle, normal) >=
-               initial_gap - _CONTACT_EPSILON for sweep in sweeps)
+    for gap, axis in candidates:
+        if abs(axis[1]) > _CONTACT_EPSILON:
+            continue
+        if (_box_gap(final, obstacle, axis) > gap + _CONTACT_EPSILON and
+                all(_box_gap(sweep, obstacle, axis) >=
+                    gap - _CONTACT_EPSILON for sweep in sweeps)):
+            return True
+    return False
 
 
 class DetachedTurretObstacles(object):
