@@ -7,6 +7,7 @@ steering, so it is safe to exercise outside the BigWorld client.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
+from gui.mods.offline_lan_0922 import tank_collision
 
 import math
 
@@ -185,6 +186,8 @@ class LocalDriver(object):
 		if state is None:
 			return False
 		state['traffic_waiting'] = True
+		if state.get('traffic_origin') is None:
+			state['traffic_origin'] = state['last_position']
 		if elapsed is None:
 			elapsed = state.get('last_step', 0.0)
 		state['traffic_wait_time'] += max(0.0, float(elapsed))
@@ -380,6 +383,18 @@ class LocalDriver(object):
 				other_width = float(
 					neighbour.get('half_width', half_width) or half_width)
 			try:
+				contact = tank_collision.obb_contact(
+					position[0], position[2], yaw, (half_width, half_length),
+					other[0], other[2], other_yaw, (other_width, other_length))
+				if contact is not None:
+					back_x, back_z = -math.sin(yaw), -math.cos(yaw)
+					outward = back_x*contact[0] + back_z*contact[1]
+					away = back_x*(position[0]-other[0]) + back_z*(position[2]-other[2])
+					if outward >= -1.0e-9 and away > 1.0e-9:
+						# The sweep includes the current hull. Its front/side
+						# contact is not a new rear obstacle when every point
+						# moves out of that overlap. Other peers still veto.
+						continue
 				if self._obb_overlap(
 						sweep, float(yaw), sweep_length, half_width,
 						other, other_yaw, other_length, other_width):
@@ -560,7 +575,17 @@ class LocalDriver(object):
 		"""
 		state = self._state(bot_id, team_slot, position)
 		step = max(0.0, float(dt))
-		if not state.pop('traffic_waiting', False):
+		traffic = state.pop('traffic_waiting', False)
+		origin = state.get('traffic_origin')
+		departed = origin is not None and math.hypot(
+			position[0]-origin[0], position[2]-origin[1]) >= half_length
+		free_progress = (not traffic and abs(float(speed)) > 0.0 and
+			math.hypot(position[0]-state['last_position'][0],
+			           position[2]-state['last_position'][1]) >= 0.08)
+		if departed or free_progress or not movement_intent:
+			state['traffic_wait_time'] = 0.0
+			state['traffic_origin'] = None
+		elif not traffic and origin is None:
 			state['traffic_wait_time'] = 0.0
 		state['last_step'] = step
 		state['clock'] += step
@@ -639,10 +664,19 @@ class LocalDriver(object):
 
 		timing_phase = state['recovery_timing_phase']
 		threshold = self.stuck_seconds + timing_phase * 0.42
+		# SAT separation can shuffle a blocked hull by centimetres while
+		# its engine makes no departure. Bound the complete contact pocket,
+		# not each tiny oscillation or one missed contact callback. Leaving
+		# by the descriptor half-length starts a fresh episode.
+		if (state.get('traffic_origin') is not None and
+				state['traffic_wait_time'] > TRAFFIC_WAIT_LEASE_SECONDS + threshold):
+			state['stuck_time'] = max(state['stuck_time'], threshold)
 		if state['recovery_time'] > 0.0:
 			state['recovery_time'] = max(0.0, state['recovery_time'] - step)
 			if state['recovery_time'] == 0.0:
 				state['recovery_count'] += 1
+				if state.get('traffic_origin') is not None:
+					state['traffic_wait_time'] = TRAFFIC_WAIT_LEASE_SECONDS
 				state['recovery_side'] = 0.0
 				state['stuck_time'] = 0.0
 				state['heading_progress_yaw'] = None

@@ -159,7 +159,7 @@ class TrafficCoordinator(object):
             if (ahead <= 0.0 or second_ahead <= 0.0 or lateral >= width or
                     (contact_time is None and gap > width * 0.5)):
                 return None
-            return {'mode': 'head_on', 'axis': first_axis,
+            return {'mode': 'head_on', 'axis': first_axis, 'until': now + YIELD_SECONDS,
                     'targets': {first['id']: first['yaw'] + HEAD_ON_OFFSET,
                                 second['id']: second['yaw'] + HEAD_ON_OFFSET}}
         if contact_time is None:
@@ -230,30 +230,25 @@ class TrafficCoordinator(object):
                 continue
             if result.get('traffic_mode') == 'yield':
                 continue
+            # A frozen avoidance heading cannot own a crowded junction
+            # forever. After the same bounded crossing lease, let the
+            # driver's normal route/recovery command run until this pair
+            # really separates; do not immediately renew the episode.
+            if now >= lease['until']:
+                continue
             target = lease['targets'][bot_id]
             try:
                 clear = bool(direction_clear(target))
             except Exception:
                 clear = False
             if not clear:
-                # A passage narrower than the offset blocks both hulls' swing.
-                # Holding both of them for as long as the lease exists is a
-                # deadlock: neither footprint can separate laterally and
-                # neither centre can pass the other, so nothing ever clears
-                # the lease. Hold the pair only long enough to keep it from
-                # steering into the wall, then keep exactly one hull waiting
-                # and return the other to its own command, so the blockage is
-                # resolved by physical contact and ordinary recovery.
-                if lease.get('blocked_until') is None:
-                    lease['blocked_until'] = now + YIELD_SECONDS
-                if (now >= lease['blocked_until'] and
-                        bot_id != max(lease['targets'])):
-                    continue
+                # Do not swing into a blocked passage during the finite
+                # yield lease. Its deadline above returns both hulls to their
+                # route and ordinary recovery, even if contact persists.
                 result.update(throttle=0.0, turn=0.0, target_yaw=body['yaw'],
                               traffic_mode='head_on_blocked')
                 self._held[bot_id] = now
                 continue
-            lease['blocked_until'] = None
             delta = (target - body['yaw'] + math.pi) % (2.0 * math.pi) - math.pi
             result.update(turn=max(-1.0, min(1.0, delta / 0.58)),
                           target_yaw=target, traffic_mode='head_on')

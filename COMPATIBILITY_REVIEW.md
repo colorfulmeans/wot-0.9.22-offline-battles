@@ -2497,63 +2497,41 @@ unused.
 Three deliberate divergences, each because the retail owner does not exist
 here:
 
-- **The arc is invented.** `DetachedTurret`'s `velocity`,
-  `angularVelocity` and `applyForceToCOM` are cell-side, and the client's
-  `WGTurretFilter` takes network input only -- the pinned executable's
-  `PyWGEntityFilter` table exposes `transferInput` and
-  `transferInputAsVehicle` and no script input at all. `turret_detachment`
-  therefore freezes one ballistic arc per detachment, walked against
-  `wg_collideSegment` to its landing, and the compound is driven from it the
-  same way every LAN remote compound is driven. The impulse is a **product
-  number**. Two shipped values bound it and the chosen speed lands inside
-  them: `_TurretDetachmentEffects._MAX_COLLISION_ENERGY` is 98.1 in
-  `0.5 * v ** 2` units, exactly a 10 m free fall, and `_MIN_COLLISION_SPEED`
-  is 3.5 m/s below which stock plays no impact at all. The reported landing
-  energy itself is exact: `__normalizeEnergy` requires `0.5 * speed ** 2`.
-  Real calibration needs a replay measurement. `wg_collideSegment` reports a
-  point and no surface normal, so a contact reached while the turret is still
-  rising is classified as a wall rather than the ground: the fall continues
-  and the sideways motion stops, which keeps a turret from resting inside a
-  building facade and from reporting a ground material for a vertical
-  surface. That is containment for a missing normal, not an invented
-  restitution coefficient, and it is bounded to three deflections.
-- **The worker freezes the whole flight.** `critical.ammo_rack_death`
-  rides the combat event and `F_AMMO_RACK_DEATH` rides the positional Bot
-  row. The worker derives the impulse from round and actor identity, resolves
-  the launch ring from `chassis.hullPosition + hull.turretPositions[0]` and
-  the admitted terminal pose, then proposes the frozen flight, attitude and
-  spin. The server accepts a record only for a confirmed ammo-rack wreck
-  from the current worker and authority epoch, stamps its creation time and
-  retains the initial throw. Monotonic `motion_seq` revisions from the same
-  worker can stop it on a vehicle or resume its fall after support leaves.
-  Snapshots and late joins replay the newest accepted revision; malformed
-  rows do not reject a valid motion checkpoint.
-  Final deaths can still publish their records after the battle result.
-- **Turrets can rest on vehicles.** The worker sweeps the falling component
-  boxes against the current chassis, hull, and attached turret/gun boxes.
-  A vertical SAT interval establishes support on pitched and rolled vehicles.
-  A supported turret retains its X/Z while the supporting vehicle can drive
-  out from under it; loss of support resumes the existing gravity law.
-  Revisions update the existing native entity and collision geometry together.
-  Supported turrets are not anchored navigation blockers for their carrier.
-  After the accepted landing time,
-  shells query the separate descriptor turret and gun hit testers in the
-  accepted rest frame. The nearest turret caps scenery queries before they
-  can destroy props beyond it, and also occludes HE blast rays. Historic
-  projectile chords test the landing time at the actual hit fraction.
-  Vehicle translation, rotation, suspension and contact displacement sweep
-  the actual chassis and hull boxes against the separate turret/gun boxes.
-  Navigation receives those two component footprints and invalidates old
-  routes when they land. Initial overlap can retreat through its shallowest
-  contact face instead of trapping a tank that the turret landed on. Final
-  rest height supports every rotated turret/gun corner. There is no substitute
-  geometry when a descriptor or hit tester is missing, and a flight with no
-  ground or vehicle contact creates no obstacle. This implements blocking
-  and vehicle support; free rolling, full rigid-body shove response and
-  continuous crushing damage remain unimplemented.
-  The stock visual remains outside local dynamic collision so it cannot
-  compete with these shared queries. `isCollidingWithWorld` remains false
-  to avoid reading the never-fed filter's native velocity for drag effects.
+- **Launch remains a product choice; subsequent motion is worker physics.**
+  `DetachedTurret`'s velocity, angularVelocity and applyForceToCOM are cell-side;
+  the client WGTurretFilter cannot be fed by Python. The initial seeded throw
+  keeps the existing product launch speed and stock specific-energy units
+  (`0.5 * speed ** 2`). Subsequent `rigid_turret` frames use mounted turret and
+  gun weights, component bounds, compound centre of mass and box inertia.
+  This is a compound-box solver, not recovered retail cell code. Scenery
+  impact is inelastic with a maximum-dissipation no-slip constraint; the port
+  does not assert a recovered steel/material friction or restitution value.
+  The earlier statement that wg_collideSegment returns no normal was wrong:
+  the same #1513 query already used by suspension returns hit[0] and hit[1].
+  The new worker adapter preserves both point and normal, including the
+  existing destroyed-skin filter and query flag 128.
+- **One authority publishes motion and acknowledgements.** The server accepts
+  only a confirmed ammo-rack wreck from the current worker/round/epoch.
+  Monotonic motion_seq revisions carry pose, linear and angular velocity,
+  contact/sleep state, impact serial, and cumulative contact acknowledgements
+  atomically. A player's own integrator sends cumulative opposite linear and
+  angular momentum; coalescing/reordering cannot repeat an acknowledged shove.
+  Bots and scenery contacts are integrated by the worker. A resting body sleeps
+  only with its centre of mass over a real support polygon; support removal
+  resumes gravity. Final deaths still publish through the terminal tail.
+- **Contact no longer lifts every overlap to a roof.** Actual component SAT
+  faces, inverse masses and contact-point inertia replace vertical-only
+  support correction. A ground turret hit from the side retains a horizontal
+  entry face even when a delayed pose overlaps deeply. Geometric recovery is
+  scenery-swept and never converted into launch velocity. A roof can support a
+  falling turret, and its carrier can drive away. Movable body revisions bypass
+  the old immovable movement/navigation gate, so the native visual cannot trap
+  a tank through a competing collision owner. Exact turret/gun hit testers
+  still own shell queries in the accepted frame; missing component geometry
+  never becomes a generic obstacle. Native presentation reuses one entity and
+  emits touchdown once per new impact serial. Continuous crushing HP for
+  stacked hulls or turret debris remains unimplemented. Exact Windows #1513
+  acceptance is still needed for frame pacing, native presentation and feel.
 
 The server admits at most twelve detached turrets per round, matching the
 32-bit client's resident model budget. Every accepted record can be displayed
@@ -3256,7 +3234,29 @@ road speed and residual push, including combat-containment and takeover paths.
 The visible contact solver includes only the unacknowledged momentum in its
 peer velocity and does not differentiate positional separation into kinetic
 velocity. Input/snapshot coalescing therefore preserves physical impulses
-without replaying them or waiting for a native armour plate. The existing ram
-HP formula and existing track-resistance laws are unchanged. These contracts
+without replaying them or waiting for a native armour plate. The ram HP formula remains unchanged. Static contact first tests the
+receiver's own track force budget before assigning positional mobility;
+engine power enters through the existing longitudinal integrator's incoming
+speed. Both owners bleed residual velocity before displacement using the
+same descriptor-derived longitudinal/lateral track laws. Bot driving intent
+comes from the existing movement_dir field, including zero-speed throttle.
+Hull contact uses the audited CONTACT_FRICTION_VEHICLES value 0.3, and an
+unordered-pair worker sweep avoids cancelling frozen momentum once for every
+neighbour. Stock Avatar collision presentation receives forwarding views with
+the integrated velocities because the unfed native filters report zero; this
+presentation call never fabricates an armour proof. These contracts
 have pure-data coverage; native collision feel and turret contact timing still
 require acceptance on the exact Windows client.
+
+Crowded spawn regression now observes one minute instead of thirty seconds:
+finite side grip and hull friction reduce queue throughput. It retains every
+vehicle's departure requirement and the existing parking/recovery episode
+bounds. Final Himmelsdorf occupancy is checked against the actual initial hull
+OBB rather than an eight-metre circle. The driver permits a straight reverse
+out of an existing front/side overlap while preserving new rear blockers;
+contact jitter cannot indefinitely renew the brief waiting lease. Navigation
+and head-on coordination use that bounded lease too. The short-target check
+still forbids avoidance steering beside a parallel hull; a hull across the
+approach may require a detour, but the Bot must reach the same target and stop.
+These are copied-driver checks, not a claim that Windows crowd timing matches
+retail.

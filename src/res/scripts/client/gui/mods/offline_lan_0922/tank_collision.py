@@ -532,17 +532,15 @@ def planar_closing_speed(velocity_a, velocity_b, normal):
 
 
 def pair_response(contact, inverse_a, inverse_b, velocity_a, velocity_b,
-                  slop=POSITION_SLOP, percent=POSITION_PERCENT):
+                  slop=POSITION_SLOP, percent=POSITION_PERCENT,
+                  friction_inverse=None):
     """Return inverse-mass corrections and e=0 impulses for both bodies.
 
     Exact #1513 ``physics_shared.updateCommonConf`` publishes the retail
     solver's hull-to-hull Coulomb coefficient as
     ``wg_setupPhysicsParam('CONTACT_FRICTION_VEHICLES', 0.3)``, so a real
-    contact also carries a tangential impulse this pure normal response does
-    not.  Adding it strands one Bot in the Himmelsdorf and Airfield 24 FPS
-    spawn guards, whose local traffic solution currently depends on hulls
-    sliding across each other without along-face drag; that wedge has to be
-    understood before the term can land.  ``USE_PSEUDO_CONTACTS`` True and
+    contact also carries a tangential impulse limited by that normal load.
+    ``USE_PSEUDO_CONTACTS`` True and
     ``CONTACT_PENETRATION`` 0.1 from the same function are the
     positional-correction class implemented above. That Python function does
     not configure ``RESTITUTION``; this does not establish the native default
@@ -576,8 +574,113 @@ def pair_response(contact, inverse_a, inverse_b, velocity_a, velocity_b,
         delta_a_z = normal_z * impulse * inverse_a
         delta_b_x = -normal_x * impulse * inverse_b
         delta_b_z = -normal_z * impulse * inverse_b
+        tangent_x, tangent_z = -normal_z, normal_x
+        tangent_a, tangent_b = friction_inverse or (inverse_a, inverse_b)
+        tangent_sum = tangent_a + tangent_b
+        relative_tangent = ((velocity_a[0] - velocity_b[0]) * tangent_x +
+                            (velocity_a[1] - velocity_b[1]) * tangent_z)
+        if abs(relative_tangent) <= 1.0e-9:
+            relative_tangent = 0.0
+        tangent_impulse = max(-0.3 * impulse, min(
+            0.3 * impulse, -relative_tangent / tangent_sum)) if tangent_sum else 0.0
+        delta_a_x += tangent_x * tangent_impulse * tangent_a
+        delta_a_z += tangent_z * tangent_impulse * tangent_a
+        delta_b_x -= tangent_x * tangent_impulse * tangent_b
+        delta_b_z -= tangent_z * tangent_impulse * tangent_b
     return (correction_a_x, correction_a_z, delta_a_x, delta_a_z,
             correction_b_x, correction_b_z, delta_b_x, delta_b_z)
+
+
+def grounded_inverse_masses(contact, first, second, inverse_a, inverse_b, dt):
+    """A stationary track can hold an impulse before position recovery.
+
+    Test the impulse required to stop the moving neighbour against the same
+    descriptor-derived track budget the motion integrators use. A held hull
+    has zero mobility for this contact only; it is never made infinite-mass
+    because of its player/Bot identity. Once the load exceeds that budget,
+    both real inverse masses participate. Engine power enters through the
+    incoming speed produced by longitudinal_step over this very slice.
+    """
+    if dt <= 0.0 or not inverse_a or not inverse_b:
+        return inverse_a, inverse_b
+    nx, nz = contact[:2]
+    va = first.get('vx', 0.0)*nx + first.get('vz', 0.0)*nz
+    vb = second.get('vx', 0.0)*nx + second.get('vz', 0.0)*nz
+    if va >= vb:
+        return inverse_a, inverse_b
+
+    def holds(body, speed, inverse, moving_inverse):
+        grip = body.get('contact_decel')
+        if grip is None or abs(speed) > 1.0e-9:
+            return False
+        yaw = body.get('yaw', 0.0)
+        impulse_speed = (vb-va) * inverse/moving_inverse
+        forward = abs(nx*math.sin(yaw) + nz*math.cos(yaw))
+        side = abs(nx*math.cos(yaw) - nz*math.sin(yaw))
+        return (impulse_speed*forward <= grip[0]*dt and
+                impulse_speed*side <= grip[1]*dt)
+
+    if holds(first, va, inverse_a, inverse_b):
+        return 0.0, inverse_b
+    if holds(second, vb, inverse_b, inverse_a):
+        return inverse_a, 0.0
+    return inverse_a, inverse_b
+
+
+def resolve_pairs(tanks, dt):
+    """Resolve an authority's simultaneous contacts once per unordered pair.
+
+    Each later constraint sees the velocities already changed by earlier
+    ones. Summing independently solved contacts against frozen velocities
+    can cancel the same momentum several times in a crowded spawn and lets
+    each side apply a different hull-friction impulse. This shared sweep is
+    reciprocal and dissipative for every integrated pair.
+    """
+    bodies = [dict(tank) for tank in sorted(tanks, key=lambda t: t['id'])]
+    results = dict((b['id'], {'correction': (0.0, 0.0),
+                              'delta_velocity': (0.0, 0.0)}) for b in bodies)
+    shapes = dict((b['id'], _tank_shape(b)) for b in bodies)
+    radii = dict((key, math.hypot(*value[:2])) for key, value in shapes.items())
+    pairs = []
+    for index, a in enumerate(bodies):
+        for b in bodies[index+1:]:
+            if a.get('kind') == b.get('kind') == 'player':
+                continue
+            if not (a.get('alive', True) or b.get('alive', True) or
+                    a['vx'] or a['vz'] or b['vx'] or b['vz']):
+                continue
+            shape_a, shape_b = shapes[a['id']], shapes[b['id']]
+            reach = radii[a['id']]+radii[b['id']]+CONTACT_BROADPHASE_PADDING
+            if (a['x']-b['x'])**2 + (a['z']-b['z'])**2 <= reach*reach:
+                pairs.append((a, b, shape_a, shape_b))
+    for unused_pass in range(4):
+        for a, b, shape_a, shape_b in pairs:
+            if not vertical_overlap(a.get('y'), shape_a, b.get('y'), shape_b):
+                continue
+            hit = obb_contact(a['x'], a['z'], a['yaw'], shape_a,
+                              b['x'], b['z'], b['yaw'], shape_b)
+            hit = _owner_oriented_contact(hit, a['x']-b['x'], a['z']-b['z'], a['id'], b['id'])
+            if hit is None:
+                continue
+            ia = 0.0 if a.get('immovable') else 1.0/max(a['mass'], 1.0)
+            ib = 0.0 if b.get('immovable') else 1.0/max(b['mass'], 1.0)
+            mobility_a, mobility_b = grounded_inverse_masses(hit, a, b, ia, ib, dt)
+            response = pair_response(hit, mobility_a, mobility_b,
+                                     (a['vx'], a['vz']), (b['vx'], b['vz']),
+                                     friction_inverse=(ia, ib))
+            apply_impulse = a.get('impulse', True) and b.get('impulse', True)
+            for body, offset in ((a, 0), (b, 4)):
+                dx, dz, dvx, dvz = response[offset:offset+4]
+                result = results[body['id']]
+                result['correction'] = (result['correction'][0]+dx, result['correction'][1]+dz)
+                body['x'] += dx
+                body['z'] += dz
+                if apply_impulse:
+                    result['delta_velocity'] = (result['delta_velocity'][0]+dvx,
+                                                result['delta_velocity'][1]+dvz)
+                    body['vx'] += dvx
+                    body['vz'] += dvz
+    return results
 
 
 def _owner_oriented_contact(contact, center_dx, center_dz,
@@ -695,7 +798,7 @@ def _same_team(first, second):
 
 
 def resolve_tank(tank, others, now=None, ram_cooldowns=None,
-                 active_ram_contacts=None, contact_armor_probe=None):
+                 active_ram_contacts=None, contact_armor_probe=None, dt=0.0):
     """Resolve one hull against other hulls using only plain data.
 
     A body with ``alive`` false is a wreck: it blocks, separates and can be
@@ -810,10 +913,13 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
             x, z, yaw, own_shape, (velocity_x, velocity_z),
             other_x, other_z, other_yaw, other_shape,
             (other_velocity_x, other_velocity_z))
+        mobility_self, mobility_other = grounded_inverse_masses(
+            contact, tank, other, inverse_self, inverse_other, dt)
         response = pair_response(
-            contact, inverse_self, inverse_other,
+            contact, mobility_self, mobility_other,
             (velocity_x, velocity_z),
-            (other_velocity_x, other_velocity_z))
+            (other_velocity_x, other_velocity_z),
+            friction_inverse=(inverse_self, inverse_other))
         correction_x += response[0]
         correction_z += response[1]
         # One owner per contact velocity.  When both sides cancel the same

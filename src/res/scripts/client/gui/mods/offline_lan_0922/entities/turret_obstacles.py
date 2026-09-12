@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Collision and worker-owned vehicle support for detached turret poses.
+"""Geometry for accepted worker-owned detached turret poses.
 
 The native turret and gun hit testers remain separate. Their descriptor boxes
-bound vehicle contact and navigation; shells still use the exact hit testers.
+bound compound-body vehicle contact; shells still use the exact hit testers.
 Every query uses the accepted rest pose and server clock, never a local arc.
 """
 
@@ -305,133 +305,6 @@ def vehicle_support_boxes(descriptor, pose, attached=True):
     return tuple(boxes)
 
 
-def vertical_contact_interval(box, support):
-    """Exact translations along world Y for which two convex boxes overlap.
-
-    Intersect SAT slabs along all face/edge axes. Unlike an AABB roof, the
-    upper endpoint lies on the rotated support, including a sloping hull.
-    """
-    generators = box[1] + support[1]
-    delta = _subtract(box[0], support[0])
-    low, high = -float('inf'), float('inf')
-    for i, left in enumerate(generators):
-        for right in generators[i + 1:]:
-            axis = destructibles_sensor._vector_cross(left, right)
-            radius = sum(abs(_dot(part, axis)) for part in generators)
-            separation = _dot(delta, axis)
-            if abs(axis[1]) < 1e-10:
-                if abs(separation) > radius + _CONTACT_EPSILON:
-                    return None
-                continue
-            a = (-radius - separation) / axis[1]
-            b = (radius - separation) / axis[1]
-            low, high = max(low, min(a, b)), min(high, max(a, b))
-            if low > high:
-                return None
-    return None if math.isinf(high) else (low, high)
-
-
-def update_vehicle_support(row, components, bodies, previous_ms, now_ms, collide):
-    """Stop a descending throw on a current vehicle, or drop it when shed.
-
-    Only the worker calls this. The result is a revision of the same wreck,
-    used by both collision and presentation. No native rigid-body API or
-    guessed turret dimensions are involved.
-    """
-    created = row['created_time_ms']
-    elapsed = max(0.0, (now_ms - created) / 1000.0)
-    previous = max(0.0, (previous_ms - created) / 1000.0)
-    flight = row['flight']
-    start = turret_detachment.pose_at(flight, row['attitude'], row['spin'], previous)
-    end = turret_detachment.pose_at(flight, row['attitude'], row['spin'], elapsed)
-    held = row.get('support_key')
-    landed = elapsed >= flight['duration']
-    # Ascending throws must not catch their own source hull.
-    if not held and not landed and end[0][1] > start[0][1]:
-        return None
-    sweeps = tuple(sweep
-                   for unused_name, unused_component, offset, bounds in components
-                   for sweep in _component_sweeps(bounds, offset, start, end))
-    def near(box, support):
-        return all(abs(box[0][i] - support[0][i]) <=
-                   sum(abs(axis[i]) for axis in box[1] + support[1]) + _CONTACT_EPSILON
-                   for i in range(3))
-    contact_bodies = []
-    for key, boxes in bodies:
-        if not held:
-            hit = any(near(sweep, support) and
-                      destructibles_sensor._boxes_intersect(sweep, support)
-                      for sweep in sweeps for support in boxes)
-            if not hit:
-                continue
-        contact_bodies.append((key, boxes))
-    if not contact_bodies and not held:
-        return None
-    # Find the first occupied part of this tick's arc rather than letting a
-    # fast descending turret pass through a roof between disjoint endpoints.
-    contact_time = elapsed
-    if not held and not landed and previous < elapsed:
-        low, high = previous, elapsed
-        for unused in range(18):
-            mid = (low + high) * 0.5
-            middle = turret_detachment.pose_at(flight, row['attitude'], row['spin'], mid)
-            hit = any(destructibles_sensor._boxes_intersect(sweep, support)
-                      for unused_name, unused_component, offset, bounds in components
-                      for sweep in _component_sweeps(bounds, offset, start, middle)
-                      for unused_key, boxes in contact_bodies for support in boxes)
-            if hit:
-                high = mid
-            else:
-                low = mid
-        contact_time = high
-        end = turret_detachment.pose_at(flight, row['attitude'], row['spin'], contact_time)
-    lifting = []
-    for key, boxes in contact_bodies:
-        for unused_name, unused_component, offset, bounds in components:
-            box = _world_box(bounds, offset, *end)
-            for support in boxes:
-                interval = vertical_contact_interval(box, support)
-                if interval is None:
-                    continue
-                # A held turret follows the roof vertically while its X/Z
-                # stays free: driving out from underneath sheds it.
-                if held == key or interval[0] <= _CONTACT_EPSILON <= interval[1] + _CONTACT_EPSILON:
-                    lifting.append((interval[1], key))
-    result = copy.deepcopy(row)
-    if lifting:
-        lift, support_key = max(lifting)
-        rest = (end[0][0], end[0][1] + lift, end[0][2])
-        if (held == support_key and
-                max(abs(rest[i] - flight['rest'][i]) for i in range(3)) < 1e-6):
-            return None
-        result['attitude'] = tuple(end[1])
-        result['spin'] = (0.0, 0.0, 0.0)
-        result['support_key'] = support_key
-        result['flight'] = {
-            'origin': rest, 'velocity': (0.0, 0.0, 0.0),
-            'segments': [{'origin': rest, 'velocity': (0.0, 0.0, 0.0),
-                          'start': 0.0, 'duration': 0.0}],
-            'duration': 0.0, 'rest': rest, 'contact': rest,
-            'impact_velocity': (0.0, 0.0, 0.0), 'energy': 0.0,
-            'landed': True, 'rest_attitude': tuple(end[1]),
-        }
-    elif held:
-        # The supporting vehicle has left. Resume the existing gravity law
-        # from this rest pose; never leave a permanent floating obstacle.
-        resumed = turret_detachment.resolve_flight(
-            end[0], (0.0, 0.0, 0.0), collide, clearance=0.0)
-        resumed = rest_on_component_bounds(resumed, end[1], (0.0, 0.0, 0.0), components)
-        result['attitude'], result['spin'] = end[1], (0.0, 0.0, 0.0)
-        result['flight'] = resumed
-        result['support_key'] = None
-    else:
-        return None
-    result['motion_seq'] = row.get('motion_seq', 0) + 1
-    result['motion_time_ms'] = int(now_ms)
-    result['created_time_ms'] = int(now_ms)
-    return result
-
-
 class DetachedTurretObstacles(object):
     """Own the newest server-accepted geometry for one battle round."""
 
@@ -448,7 +321,7 @@ class DetachedTurretObstacles(object):
         if previous is not None and row.get('motion_seq', 0) <= previous['row'].get('motion_seq', 0):
             return False
         flight = row['flight']
-        if not flight.get('landed'):
+        if not flight.get('landed') and 'body' not in flight:
             self._turrets.pop(key, None)
             return previous is not None
         components = turret_components(descriptor)
@@ -483,7 +356,7 @@ class DetachedTurretObstacles(object):
             'target_bounds': _boxes_world_bounds(boxes),
             'hulls': tuple(hulls),
             'settles_at_ms': (_finite(row['created_time_ms']) +
-                              1000.0 * _finite(flight['duration'])),
+                              (0.0 if 'body' in flight else 1000.0 * _finite(flight['duration']))),
         }
         return True
 
@@ -560,6 +433,10 @@ class DetachedTurretObstacles(object):
             moving_radius = max(math.sqrt(_dot(corner, corner))
                                 for corner in _corners(bounds, offset))
             for turret in ready:
+                if 'body' in turret['row']['flight']:
+                    # A dynamic body is resolved by the mass/impulse owner,
+                    # never by a speculative yes/no static-wall guard.
+                    continue
                 if (start_pose.get('actor_key') is not None and
                         turret['row'].get('support_key') == start_pose['actor_key']):
                     continue
@@ -579,7 +456,7 @@ class DetachedTurretObstacles(object):
 
     def navigation_hulls(self, server_time_ms):
         return tuple(hull for turret in self._ready(server_time_ms)
-                     if not turret['row'].get('support_key')
+                     if not turret['row'].get('support_key') and 'body' not in turret['row']['flight']
                      for hull in turret['hulls'])
 
     def clear(self):

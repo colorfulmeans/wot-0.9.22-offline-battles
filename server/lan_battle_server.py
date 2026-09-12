@@ -52,7 +52,7 @@ from gui.mods.offline_lan_0922.battle_achievements import (
     ACHIEVEMENT_CONDITIONS, AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES,
     award_battle_achievements)
 from gui.mods.offline_lan_0922 import bot_gunnery
-from gui.mods.offline_lan_0922 import bot_state_codec, tank_contact_ledger
+from gui.mods.offline_lan_0922 import bot_state_codec, tank_contact_ledger, turret_contact_ledger
 from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import effective_params as effective_params_wire
 from gui.mods.offline_lan_0922 import equipment_mechanics
@@ -321,7 +321,7 @@ MODERN_INPUT_FIELDS = frozenset((
     "forward", "turn", "speed", "aim_yaw", "gun_pitch",
     "x", "y", "z", "yaw", "pitch", "roll", "pose_time_us",
     "fire_seq", "shell_index", "next_shell_index",
-    "shell_change_pending", "gun_checkpoint", "ram_contacts", "tank_pushes",
+    "shell_change_pending", "gun_checkpoint", "ram_contacts", "tank_pushes", "turret_pushes",
     "ram_contact", "destructible_contacts", "siege_enabled",
     "up_cosine",
 ))
@@ -2095,6 +2095,7 @@ class Player(_EndpointSendMixin):
     stun_attacker_id: int = 0
     client_position: bool = False
     tank_pushes: dict = field(default_factory=dict)
+    turret_pushes: dict = field(default_factory=dict)
     ram_contact_seq: int = 0
     ram_contact_resolved_seq: int = 0
     ram_contact: dict = field(default_factory=dict)
@@ -3374,6 +3375,7 @@ class BattleState:
             player.ram_contact_resolved_seq = 0
             player.ram_contact = {}
             player.tank_pushes.clear()
+            player.turret_pushes.clear()
             player.ram_contacts.clear()
             player.ram_contact_rejections.clear()
             player.destructible_contact_seq = 0
@@ -10661,6 +10663,11 @@ class BattleState:
                 tank_contact_ledger.normalize(message["tank_pushes"])
             except (ValueError, TypeError, OverflowError):
                 return "envelope_contacts", "tank_pushes"
+        if "turret_pushes" in message:
+            try:
+                turret_contact_ledger.normalize(message["turret_pushes"])
+            except (ValueError, TypeError, OverflowError):
+                return "envelope_contacts", "turret_pushes"
         raw_ram_contacts = message.get("ram_contacts", [])
         if (not isinstance(raw_ram_contacts, list) or
                 len(raw_ram_contacts) > 16):
@@ -10974,6 +10981,17 @@ class BattleState:
                         previous = player.tank_pushes.get(bot_id)
                         if previous is None or row[1] > previous[1]:
                             player.tank_pushes[bot_id] = row
+                if "turret_pushes" in message:
+                    try:
+                        checkpoints = turret_contact_ledger.normalize(message["turret_pushes"])
+                    except (ValueError, TypeError, OverflowError):
+                        checkpoints = {}
+                    for key, row in checkpoints.items():
+                        if key not in self.detached_turrets:
+                            continue
+                        previous = player.turret_pushes.get(key)
+                        if previous is None or row[1] > previous[1]:
+                            player.turret_pushes[key] = row
                 raw_contacts = None
                 if (RAM_CONTACT_LEDGER_CAPABILITY in player.capabilities and
                         "ram_contacts" in message):
@@ -13773,6 +13791,7 @@ class BattleState:
             "equipment_intent_result": dict(
                 player.equipment_intent_result),
             "tank_pushes": list(player.tank_pushes.values()),
+            "turret_pushes": list(player.turret_pushes.values()),
             "ram_contact_admitted_seq": player.ram_contact_seq,
             "ram_contact_resolved_seq": player.ram_contact_resolved_seq,
             "destructible_contact_admitted_seq":

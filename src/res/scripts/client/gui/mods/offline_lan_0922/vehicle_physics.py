@@ -419,6 +419,14 @@ def descriptor_mass(td):
 	return _DEFAULTS['mass']
 
 
+def descriptor_contact_params(td):
+	'''Read just the mounted mass and track resistance needed by contacts.'''
+	physics = getattr(td, 'physics', None) or {}
+	return {'mass': descriptor_mass(td),
+		'specificFriction': float(physics.get('specificFriction', _DEFAULTS['specificFriction'])),
+		'terrainResist': tuple(physics.get('terrainResistance', _DEFAULTS['terrainResist']))}
+
+
 @observed('physics.derive_params')
 def derive_params(td, factors=None):
 	'''Real per-vehicle parameter set from a VehicleDescr. Every consumer

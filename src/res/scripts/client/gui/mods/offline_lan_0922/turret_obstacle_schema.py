@@ -3,6 +3,7 @@
 import math
 
 from gui.mods.offline_lan_0922 import turret_detachment
+from gui.mods.offline_lan_0922 import turret_contact_ledger
 
 
 MAX_ACTIVE_TURRETS = 12
@@ -84,6 +85,28 @@ def _flight(value):
     }
     if 'rest_attitude' in value:
         result['rest_attitude'] = _vector(value['rest_attitude'], MAX_ANGULAR_COMPONENT)
+    if 'body' in value:
+        body = value['body']
+        if not isinstance(body, dict):
+            raise ValueError('invalid detached rigid body')
+        if not all(isinstance(body.get(k), bool) for k in ('grounded', 'sleeping')):
+            raise ValueError('invalid detached contact state')
+        frame = dict((k, _vector(body[k], bound)) for k, bound in (
+            ('position', MAX_POSITION), ('attitude', MAX_ANGULAR_COMPONENT),
+            ('centre', MAX_POSITION), ('velocity', MAX_VELOCITY),
+            ('angular_velocity', MAX_ANGULAR_COMPONENT)))
+        frame.update(grounded=body['grounded'], sleeping=body['sleeping'],
+                     impact_serial=_integer(body['impact_serial'], 0, MAX_ACTOR_ID),
+                     acks=list(turret_contact_ledger.normalize(body['acks']).values()), impact=None)
+        if body.get('impact') is not None:
+            impact = body['impact']
+            frame['impact'] = {
+                'point': _vector(impact['point'], MAX_POSITION),
+                'normal': _vector(impact['normal'], 1.0),
+                'velocity': _vector(impact['velocity'], MAX_VELOCITY),
+                'energy': _number(impact['energy'], 0.0, MAX_ENERGY),
+            }
+        result['body'] = frame
     return result
 
 

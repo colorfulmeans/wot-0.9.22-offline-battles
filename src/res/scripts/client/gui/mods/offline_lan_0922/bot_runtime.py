@@ -7758,7 +7758,9 @@ class BotRuntime(object):
         driver_state = getattr(driver, 'states', {}).get(int(bot_id), {})
         movement_intent = bool(
             (throttle_override is None or float(throttle_override) > 0.0)
-            and not driver_state.get('traffic_waiting', False)
+            and not (driver_state.get('traffic_waiting', False) and
+                     driver_state.get('traffic_wait_time', 0.0) <=
+                     ai_driver.TRAFFIC_WAIT_LEASE_SECONDS)
             and int(bot_id) not in self._artillery_intents
             and int(bot_id) not in self._artillery_reproofs)
         if direct_target:
@@ -7909,6 +7911,7 @@ class BotRuntime(object):
             raise ValueError('player collision descriptor is unavailable')
         cached = {
             'mass': snapshot['physics']['mass'],
+            'physics': snapshot['physics'],
             'shape': _collision_shape(descriptor),
             'ram_profile': snapshot['ramming'],
         }
@@ -8034,6 +8037,8 @@ class BotRuntime(object):
                   applied_forward * math.sin(yaw))
         push_z = (state.get('push_z', 0.0) + delta_z -
                   applied_forward * math.cos(yaw))
+        if advance_push:
+            push_x, push_z = self._bleed_contact_push(state, push_x, push_z, step)
         correction_x, correction_z = (result['correction'] if
                                       apply_correction else (0.0, 0.0))
         move_x = correction_x + (push_x * step if advance_push else 0.0)
@@ -8084,28 +8089,14 @@ class BotRuntime(object):
             state['push_x'] = push_x
             state['push_z'] = push_z
             return
-        if state.get('alive', True):
-            # A live hull keeps the reviewed residual decay. Replacing it with
-            # the track budget below is the physically correct law, but a
-            # residual push is also today's only escape from a terrain wedge:
-            # with dry friction the Himmelsdorf and Airfield 24 FPS spawn
-            # guards each strand one Bot whose separation the world probe
-            # vetoes. That belongs to the wedge recovery, not to this change.
-            decay = 0.90 ** (max(0.0, float(step)) * 60.0)
-            state['push_x'] = push_x * decay
-            state['push_z'] = push_z * decay
-            return
-        state['push_x'], state['push_z'] = self._bleed_contact_push(
-            state, push_x, push_z, step)
+        state['push_x'], state['push_z'] = push_x, push_z
 
     def _bleed_contact_push(self, state, push_x, push_z, step):
-        """Spend one slice of this wreck's own track budget on its push.
+        """Spend the same anisotropic track budget used by the human driver.
 
-        A destroyed hull has no drivetrain, so both of its axes resist with
-        the held track laws: the parked perch limit along the hull and the
-        fall-line hold across it. Dry friction removes a fixed amount of
-        speed per second and stops the hull dead, which is what keeps a
-        shoved wreck from creeping for the rest of the round.
+        A powered track rolls longitudinally; a parked or destroyed hull
+        holds on both axes. Apply this before displacement so an absorbed
+        impulse cannot creep the hull sideways for one frame.
         """
         try:
             params = self._physics_params_for(int(state['id']))
@@ -8115,7 +8106,8 @@ class BotRuntime(object):
             return push_x, push_z
         return vehicle_physics.contact_push_step(
             params, push_x, push_z, _number(state.get('yaw')), step,
-            rolling=False,
+            rolling=bool(state.get('alive', True) and (
+                state.get('speed') or state.get('movement_dir'))),
             normal_y=(math.cos(_number(state.get('pitch'))) *
                       math.cos(_number(state.get('roll')))))
 
@@ -8539,7 +8531,13 @@ class BotRuntime(object):
             alive = bool(state.get('alive', True))
             yaw = state['yaw']
             speed = state['speed'] if alive else 0.0
+            params = self._physics_params_for(int(state['id']))
+            grip = (vehicle_physics.contact_push_decel(
+                params, alive and bool(speed or state.get('movement_dir')),
+                normal_y=math.cos(state.get('pitch', 0.0))*math.cos(state.get('roll', 0.0)))
+                    if params else None)
             tanks.append({
+                'contact_decel': grip,
                 'id': int(state['id']), 'kind': 'bot',
                 'network_id': int(state['id']), 'alive': alive,
                 'team': int(state.get('team', 0)),
@@ -8587,12 +8585,16 @@ class BotRuntime(object):
                 'x': raw.get('x', 0.0), 'y': raw.get('y', 0.0),
                 'z': raw.get('z', 0.0), 'yaw': yaw,
                 'mass': profile['mass'], 'shape': profile['shape'],
+                'contact_decel': vehicle_physics.contact_push_decel(
+                    profile['physics'], bool(speed or raw.get('forward')),
+                    normal_y=math.cos(raw.get('pitch', 0.0))*math.cos(raw.get('roll', 0.0))),
                 'ram_profile': profile['ram_profile'],
                 'vx': math.sin(yaw) * speed,
                 'vz': math.cos(yaw) * speed,
             })
 
         by_id = dict((tank['id'], tank) for tank in tanks)
+        physical_results = tank_collision.resolve_pairs(tanks, step)
         collision_bodies = {}
         collision_radii = {}
         maximum_radius = 4.0
@@ -8699,7 +8701,8 @@ class BotRuntime(object):
                 # damage episode or consume an armour probe.
                 resolve_kwargs = {'now': None}
             result = tank_collision.resolve_tank(
-                own, others, **resolve_kwargs)
+                own, others, dt=step, **resolve_kwargs)
+            result.update(physical_results[own['id']])
             if state_alive:
                 self._ram_cooldowns = result['cooldowns']
                 current_ram_contacts.update(result['contacts'])

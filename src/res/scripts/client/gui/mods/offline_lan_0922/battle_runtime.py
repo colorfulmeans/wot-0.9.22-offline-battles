@@ -33,6 +33,8 @@ from gui.mods.offline_lan_0922.entities.bigworld_binding import \
 from gui.mods.offline_lan_0922.entities.detached_turret import (
     DetachedTurretObstacles, DetachedTurretPresentation, freeze_obstacle_plan)
 from gui.mods.offline_lan_0922 import turret_obstacle_schema, tank_contact_ledger
+from gui.mods.offline_lan_0922 import rigid_turret, turret_contact_ledger
+from gui.mods.offline_lan_0922.collision_feedback import CollisionFeedback
 from gui.mods.offline_lan_0922.entities import turret_obstacles
 from gui.mods.offline_lan_0922.entities.native_remote_vehicle import \
     NativeRemoteVehicleFactory, present_shot_impulse, set_draw_visibility
@@ -1536,6 +1538,8 @@ class _LANInputSender(object):
             'ram_contacts': ram_contacts,
             'tank_pushes': list(getattr(
                 self.owner, '_local_contact_pushes', {}).values()),
+            'turret_pushes': list(getattr(
+                self.owner, '_local_turret_pushes', {}).values()),
             'destructible_contacts': destructible_contacts,
         }
         up_cosine = getattr(self.owner, '_local_surface_up_cosine', None)
@@ -1648,6 +1652,7 @@ class BattleRuntime(object):
         self._detached_turret_rows = {}
         self._detached_turret_proposals = {}
         self._turret_sim_times = {}
+        self._turret_bodies = {}
         self._turret_support_next_ms = 0
         self._turret_visual_revisions = {}
         self._detached_turret_geometry = set()
@@ -1728,6 +1733,8 @@ class BattleRuntime(object):
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
         self._local_contact_pushes = {}
+        self._local_turret_pushes = {}
+        self._collision_feedback = CollisionFeedback()
         self._local_contact_log_time = 0.0
         self._local_ram_seq = 0
         self._local_ram_receipt = None
@@ -2016,6 +2023,7 @@ class BattleRuntime(object):
         self._detached_turret_rows = {}
         self._detached_turret_proposals = {}
         self._turret_sim_times = {}
+        self._turret_bodies = {}
         self._turret_support_next_ms = 0
         self._turret_visual_revisions = {}
         self._detached_turret_geometry = set()
@@ -2062,6 +2070,8 @@ class BattleRuntime(object):
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
         self._local_contact_pushes = {}
+        self._local_turret_pushes = {}
+        self._collision_feedback = CollisionFeedback()
         self._local_contact_log_time = 0.0
         self._local_ram_seq = 0
         self._local_ram_receipt = None
@@ -4993,6 +5003,13 @@ class BattleRuntime(object):
             return None
         point = collision[0]
         return (float(point.x), float(point.y), float(point.z))
+
+    def _collide_rigid_turret(self, start, end):
+        ground_filter = self._ground_filter(float(start[0]), float(start[2]))
+        collision = self._collide_down(self._vector(start), self._vector(end), ground_filter)
+        if collision is None:
+            return None
+        return _xyz(collision[0]), _xyz(collision[1])
 
     def _collide_down(self, start, end, ground_filter):
         """Vertical probe that skips the skin of an already broken item."""
@@ -18514,6 +18531,7 @@ class BattleRuntime(object):
                 avatar, veh_a, veh_b, hit_point, contact_time)
             if avatar is owner._avatar:
                 try:
+                    owner._collision_feedback.observed(veh_a, veh_b, contact_time)
                     owner._observe_native_ram_contact(
                         veh_a, veh_b, hit_point, contact_time)
                 except Exception as error:
@@ -19277,7 +19295,14 @@ class BattleRuntime(object):
                     _number(physical_state.get('push_x')) + pending[0],
                     math.cos(physical_yaw) * physical_speed +
                     _number(physical_state.get('push_z')) + pending[1])
+            params = (player_effective['physics'] if player_effective is not None else
+                      (vehicle_physics.descriptor_contact_params(descriptor) if descriptor is not None else None))
+            grip = (vehicle_physics.contact_push_decel(
+                params, bool(alive and (speed or state.get('movement_dir') or state.get('forward'))),
+                normal_y=math.cos(_number(state.get('pitch')))*math.cos(_number(state.get('roll'))))
+                    if params else None)
             result.append({
+                'contact_decel': grip,
                 'id': 1000000 + int(record.get('engine_id', 0)),
                 'network_id': int(record.get('network_id', 0)),
                 'engine_id': int(record.get('engine_id', 0)),
@@ -19326,6 +19351,10 @@ class BattleRuntime(object):
             'x': position[0], 'y': position[1], 'z': position[2],
             'yaw': yaw, 'pitch': self._local_pitch,
             'roll': self._local_roll, 'mass': own_mass,
+            'contact_decel': (vehicle_physics.contact_push_decel(
+                self._local_physics, bool(self._local_speed or getattr(self._sender, 'forward', 0)),
+                normal_y=math.cos(self._local_pitch)*math.cos(self._local_roll))
+                              if self._local_physics else None),
             'shape': self._collision_shape(entity.typeDescriptor),
             'ram_profile': self._ram_profile(
                 entity.typeDescriptor, local=True),
@@ -19345,12 +19374,16 @@ class BattleRuntime(object):
         contact = tank_collision.resolve_tank(
             own, physical_others, now=now,
             ram_cooldowns=self._local_ram_cooldowns,
-            active_ram_contacts=self._local_ram_contacts)
+            active_ram_contacts=self._local_ram_contacts, dt=dt)
         self._local_ram_cooldowns = contact['cooldowns']
         self._local_ram_contacts = contact['contacts']
         by_id = dict((other['id'], other) for other in others)
         for other_id, delta in contact.get('responses', ()):
             other = by_id[other_id]
+            physical = next(value for value in physical_others if value['id'] == other_id)
+            self._run_optional_feature(
+                'vehicle collision feedback', self._present_tank_collision,
+                (entity, own, physical, now), disable=False)
             if other.get('kind') == 'bot':
                 tank_contact_ledger.record(
                     self._local_contact_pushes, other['network_id'],
@@ -19377,6 +19410,11 @@ class BattleRuntime(object):
                   applied_forward * math.sin(yaw))
         push_z = (self._local_push_z + delta_z -
                   applied_forward * math.cos(yaw))
+        if self._local_physics is not None:
+            push_x, push_z = vehicle_physics.contact_push_step(
+                self._local_physics, push_x, push_z, yaw, dt,
+                rolling=bool(self._local_speed or getattr(self._sender, 'forward', 0)),
+                normal_y=math.cos(self._local_pitch)*math.cos(self._local_roll))
         correction_x, correction_z = contact['correction']
         move_x = correction_x + push_x * dt
         move_z = correction_z + push_z * dt
@@ -19397,28 +19435,75 @@ class BattleRuntime(object):
                 push_z = 0.0
             else:
                 position = candidate
-        # The hull resists an outside shove with the tracks it is standing
-        # on, not with a fixed exponential: rolling drag along the hull while
-        # the drivetrain turns, the parked perch hold when it does not, and
-        # the fall-line hold across the tracks either way.  The old 0.90 per
-        # 60 Hz tick removed about 6.3 m/s2 at 1 m/s in every direction, seven
-        # times a tank's own rolling drag, and never actually reached zero.
-        #
-        if self._local_physics is None:
-            # Every drive step installs the descriptor's physics before this
-            # runs; a bare harness without one keeps the push unchanged
-            # rather than inventing a resistance for an unknown hull.
-            self._local_push_x, self._local_push_z = push_x, push_z
-        else:
-            rolling = bool(
-                abs(self._local_speed) > 0.05 or
-                abs(_number(getattr(self._sender, 'forward', 0.0))) > 0.0)
-            self._local_push_x, self._local_push_z = (
-                vehicle_physics.contact_push_step(
-                    self._local_physics, push_x, push_z, yaw, dt,
-                    rolling=rolling,
-                    normal_y=(math.cos(self._local_pitch) *
-                              math.cos(self._local_roll))))
+        self._local_push_x, self._local_push_z = push_x, push_z
+        return self._resolve_local_turret_contacts(entity, position, yaw, dt)
+
+    def _present_tank_collision(self, entity, own, other, now):
+        hook = self._native_ram_contact_hook
+        remote = other.get('_vehicle')
+        if hook is None or remote is None or self._avatar is None:
+            return False
+        point = self._ram_obb_overlap_point(own, other)
+        if point is None:
+            return False
+        low = max(own['y']+own['shape'][2], other['y']+other['shape'][2])
+        high = min(own['y']+own['shape'][3], other['y']+other['shape'][3])
+        # Call only stock presentation. The observed native callback remains
+        # the separate owner of an armour proof; synthetic OBB contact is not
+        # evidence of any particular armour plate or an HP event.
+        return self._collision_feedback.present(
+            self._avatar, hook[2], entity, remote,
+            (own['vx'], own.get('vy', 0.0), own['vz']),
+            (other['vx'], other.get('vy', 0.0), other['vz']),
+            (point[0], (low+high)*0.5, point[1]), now, self._vector)
+
+    def _resolve_local_turret_contacts(self, entity, position, yaw, dt):
+        if not self._local_physics or not self._detached_turret_rows or self.client is None:
+            return position
+        mass = float(self._local_physics['mass'])
+        player_key = 'player:%d' % self.client.player_id
+        for key, row in self._detached_turret_rows.items():
+            frame = row['flight'].get('body')
+            if frame is None:
+                continue
+            record = self._records.get(key)
+            source = self._server_entity(record['engine_id']) if record else None
+            if source is None:
+                continue
+            try:
+                body = rigid_turret.Body(turret_obstacles.turret_components(source.typeDescriptor), frame)
+                shape = self._collision_shape(entity.typeDescriptor)
+                if _distance_2d(position, body.com) > body.radius + math.hypot(*shape[:2]):
+                    continue
+                pending = turret_contact_ledger.pending(self._local_turret_pushes, key, body.acks, player_key)
+                body.momentum(pending[:3], pending[3:])
+                pose = self._local_turret_pose(position, yaw, self._local_pitch, self._local_roll)
+                boxes = turret_obstacles.vehicle_support_boxes(entity.typeDescriptor, pose)
+                velocity = (math.sin(yaw)*self._local_speed+self._local_push_x,
+                            0.0, math.cos(yaw)*self._local_speed+self._local_push_z)
+                hit = rigid_turret.vehicle_contact(body, boxes, mass, velocity, horizontal=True)
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+                self._warn_optional_failure('local detached turret contact', error)
+                continue
+            if hit is None:
+                continue
+            turret_contact_ledger.record(self._local_turret_pushes, key,
+                                          hit['momentum'], hit['angular_momentum'])
+            delta_x, delta_z = hit['delta'][0], hit['delta'][2]
+            forward = delta_x*math.sin(yaw)+delta_z*math.cos(yaw)
+            applied = 0.0
+            if forward*self._local_speed < 0.0:
+                applied = math.copysign(min(abs(forward), abs(self._local_speed)), forward)
+                self._local_speed += applied
+            self._local_push_x += delta_x-applied*math.sin(yaw)
+            self._local_push_z += delta_z-applied*math.cos(yaw)
+            correction = hit['vehicle_correction']
+            candidate = (position[0]+correction[0], position[1], position[2]+correction[2])
+            distance = math.hypot(correction[0], correction[2])
+            if distance > 0.0001 and self._motion_is_clear(
+                    entity, position, math.atan2(correction[0], correction[2]),
+                    distance/max(dt, 1.0/120.0), dt, hull_yaw=yaw):
+                position = candidate
         return position
 
     def local_ram_contact(self):
@@ -24569,14 +24654,13 @@ class BattleRuntime(object):
                 spotting.VEHICLE_AOI_RADIUS or self._spg_aiming_view_active())
 
     def _advance_turret_support(self, server_ms):
-        # Match the existing ballistic step budget; sweep the entire elapsed
-        # interval when a render callback is late.
         if server_ms < self._turret_support_next_ms:
             return
         self._turret_support_next_ms = (server_ms + 1000.0 *
-            turret_obstacles.turret_detachment.FLIGHT_STEP_SECONDS)
-        bodies = []
-        states = dict(('player:%d' % raw['id'], raw) for raw in self._authority_players())
+            rigid_turret.turret_detachment.FLIGHT_STEP_SECONDS)
+        vehicles = []
+        players = self._authority_players()
+        states = dict(('player:%d' % raw['id'], raw) for raw in players)
         if self._bots is not None:
             states.update(('bot:%d' % key, state) for key, state in self._bots.states.items())
         for key, state in states.items():
@@ -24588,10 +24672,19 @@ class BattleRuntime(object):
             pose.update(aim_yaw=state.get('aim_yaw', pose['yaw']), gun_pitch=state.get('gun_pitch', 0.0))
             try:
                 boxes = turret_obstacles.vehicle_support_boxes(
-                    entity.typeDescriptor, pose, not bool(getattr(entity, 'isTurretDetached', False)))
-            except (AttributeError, IndexError, TypeError, ValueError):
+                    entity.typeDescriptor, pose,
+                    key not in self._detached_turret_rows and
+                    not bool(getattr(entity, 'isTurretDetached', False)))
+                mass = float(entity.typeDescriptor.physics['weight'])
+                if mass <= 0.0:
+                    raise ValueError('vehicle collision mass is unavailable')
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError):
                 continue
-            bodies.append((key, boxes))
+            yaw, speed = pose['yaw'], float(state.get('speed', 0.0))
+            vehicles.append(dict(key=key, state=state, boxes=boxes, mass=mass,
+                                 human=key.startswith('player:'), alive=state.get('alive', True),
+                                 velocity=(math.sin(yaw)*speed+state.get('push_x', 0.0),
+                                           0.0, math.cos(yaw)*speed+state.get('push_z', 0.0))))
         for key, accepted in self._detached_turret_rows.items():
             row = self._detached_turret_proposals.get(key, accepted)
             record = self._records.get(key)
@@ -24599,23 +24692,76 @@ class BattleRuntime(object):
             if entity is None:
                 continue
             previous_ms = self._turret_sim_times.get(key, row['created_time_ms'])
-            self._turret_sim_times[key] = server_ms
+            body = self._turret_bodies.get(key)
+            rollback = None
+            vehicle_rollback = [(vehicle, dict(vehicle['state']),
+                                 vehicle['boxes'], vehicle['velocity']) for vehicle in vehicles]
             try:
-                components = turret_obstacles.turret_components(entity.typeDescriptor)
-            except (AttributeError, IndexError, TypeError, ValueError):
+                if body is None:
+                    components = turret_obstacles.turret_components(entity.typeDescriptor)
+                    body = rigid_turret.Body(components, rigid_turret.frame_at(row, 0.0))
+                    self._turret_bodies[key] = body
+                rollback = (body.frame(), list(body.support_points),
+                            getattr(body, '_last_published_frame', None))
+                acknowledgements = dict((r[0], r) for r in body.acks)
+                for player in players:
+                    player_key = 'player:%d' % player['id']
+                    checkpoint = turret_contact_ledger.normalize(player.get('turret_pushes', [])).get(key)
+                    old = acknowledgements.get(player_key)
+                    impulse = turret_contact_ledger.unseen(checkpoint, old)
+                    if checkpoint is not None and (old is None or checkpoint[1] > old[1]):
+                        body.momentum(impulse[:3], impulse[3:])
+                        acknowledgements[player_key] = [player_key] + checkpoint[1:]
+                body.acks = list(acknowledgements.values())
+                rigid_turret.advance(body, (server_ms-previous_ms)/1000.0, vehicles,
+                                     self._collide_rigid_turret, self._apply_turret_bot_response)
+                frame = body.frame()
+                self._turret_sim_times[key] = server_ms
+                if frame == getattr(body, '_last_published_frame', None):
+                    continue
+                update = rigid_turret.revision(row, body, server_ms)
+                body._last_published_frame = frame
+            except Exception as error:
+                # Native scenery queries can fail halfway through a slice.
+                # Restore this actor and its receipt cursor together, so a
+                # retry cannot integrate the interval or impulse twice.
+                if rollback is not None:
+                    restored = rigid_turret.Body(body.components, rollback[0])
+                    restored.support_points = rollback[1]
+                    restored._last_published_frame = rollback[2]
+                    self._turret_bodies[key] = restored
+                for vehicle, saved_state, saved_boxes, saved_velocity in vehicle_rollback:
+                    for name in ('x', 'z', 'speed', 'push_x', 'push_z'):
+                        if name in saved_state:
+                            vehicle['state'][name] = saved_state[name]
+                        else:
+                            vehicle['state'].pop(name, None)
+                    vehicle['boxes'], vehicle['velocity'] = saved_boxes, saved_velocity
+                self._warn_optional_failure('detached turret rigid body', error)
                 continue
-            update = self._run_optional_feature(
-                'detached turret support', turret_obstacles.update_vehicle_support,
-                (row, components,
-                 bodies, previous_ms, server_ms, self._collide_detached_turret), disable=False)
-            if update is not None:
-                self._detached_turret_proposals[key] = update
-                if update.get('support_key') != row.get('support_key'):
-                    sys.stdout.write(
-                        '[Offline LAN 0.9.22] TURRET SUPPORT source=%s '
-                        'support=%s seq=%d rest=%s\n' % (
-                            key, update.get('support_key'), update['motion_seq'],
-                            update['flight']['rest']))
+            self._turret_sim_times[key] = server_ms
+            self._detached_turret_proposals[key] = update
+            if (row['flight'].get('body', {}).get('grounded') != body.grounded or
+                    row.get('motion_seq', 0) % 50 == 0):
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] TURRET BODY source=%s mass=%.3f '
+                    'grounded=%s seq=%d pos=%s velocity=%s angular=%s\n' % (
+                        key, body.props['mass'], body.grounded, update['motion_seq'],
+                        body.position, body.velocity, body.angular))
+
+    def _apply_turret_bot_response(self, vehicle, hit, step):
+        state = vehicle['state']
+        before = (state['x'], state.get('y', 0.0), state['z'])
+        self._bots._apply_tank_contact_response(state, {
+            'delta_velocity': (hit['delta'][0], hit['delta'][2]),
+            'correction': (hit['vehicle_correction'][0], hit['vehicle_correction'][2]),
+        }, step, advance_push=False)
+        moved = (state['x']-before[0], 0.0, state['z']-before[2])
+        vehicle['boxes'] = tuple((rigid_turret.add(center, moved), axes)
+                                 for center, axes in vehicle['boxes'])
+        yaw, speed = state['yaw'], state['speed']
+        vehicle['velocity'] = (math.sin(yaw)*speed+state.get('push_x', 0.0),
+                               0.0, math.cos(yaw)*speed+state.get('push_z', 0.0))
 
     def _advance_detached_turrets(self, now):
         if self._worker_mode:
@@ -24657,7 +24803,7 @@ class BattleRuntime(object):
             entity = self._server_entity(record['engine_id'])
             if entity is None:
                 continue
-            if not row['flight']['landed']:
+            if not row['flight']['landed'] and 'body' not in row['flight']:
                 self._detached_turret_geometry.add(key)
             if key not in self._detached_turret_geometry:
                 descriptor = getattr(entity, 'typeDescriptor', None)
@@ -24674,7 +24820,8 @@ class BattleRuntime(object):
                      self._turret_visual_revisions.get(key, 0) >= row.get('motion_seq', 0))):
                 continue
             retry_key = 'visual:' + key
-            if now < self._detached_turret_retry.get(retry_key, 0.0):
+            resident = self._detached_turrets.has_vehicle(record['engine_id'])
+            if not resident and now < self._detached_turret_retry.get(retry_key, 0.0):
                 continue
             self._detached_turret_retry[retry_key] = now + 0.25
             plan = self._run_optional_feature(
@@ -25521,6 +25668,9 @@ class BattleRuntime(object):
         if self._detached_turret_obstacles is not None:
             self._detached_turret_obstacles.clear()
         self._detached_turret_rows.clear()
+        self._turret_bodies.clear()
+        self._local_turret_pushes.clear()
+        self._collision_feedback.clear()
         self._detached_turret_proposals.clear()
         self._detached_turret_geometry.clear()
         self._detached_turret_retry.clear()
@@ -25734,6 +25884,7 @@ class BattleRuntime(object):
         self._detached_turret_rows = {}
         self._detached_turret_proposals = {}
         self._turret_sim_times = {}
+        self._turret_bodies = {}
         self._turret_support_next_ms = 0
         self._turret_visual_revisions = {}
         self._detached_turret_geometry = set()

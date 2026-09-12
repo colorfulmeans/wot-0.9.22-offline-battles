@@ -118,34 +118,21 @@ class TrafficTests(unittest.TestCase):
             self.assertEqual(own['yaw'], result['target_yaw'])
         self.assertEqual(before, (first, second))
 
-    def test_blocked_head_on_hold_releases_one_hull_instead_of_deadlocking(self):
-        """A passage narrower than the offset must not stop both hulls forever.
-
-        Neither footprint can separate laterally and neither centre can pass
-        the other while both are held, so the lease never clears. Exactly one
-        hull keeps waiting; the other returns to its own command and the
-        blockage is resolved by contact and ordinary recovery.
-        """
-        first, second = body(1, 0.0, 0.0, speed=0.0), body(2, 0.0, 7.5, math.pi, 0.0)
+    def test_head_on_lease_cannot_mask_route_recovery_forever(self):
+        first = body(1, 0., 0., speed=0.)
+        second = body(2, 0., 7.5, math.pi, 0.)
         for own, other in ((first, second), (second, first)):
-            result = self.adjust(own, other, clear=False)
-            self.assertEqual((0.0, 0.0), (result['throttle'], result['turn']))
-        later = YIELD_SECONDS + 0.1
-        self.assertEqual(
-            command(first['yaw']),
-            self.adjust(first, second, later, clear=False))
-        held = self.adjust(second, first, later, clear=False)
-        self.assertEqual(0.0, held['throttle'])
-        self.assertEqual('head_on_blocked', held['traffic_mode'])
-
-    def test_reopened_head_on_swing_restores_the_full_hold(self):
-        """Room to swing is a new situation, not a spent hold."""
-        first, second = body(1, 0.0, 0.0, speed=0.0), body(2, 0.0, 7.5, math.pi, 0.0)
-        self.adjust(first, second, clear=False)
-        opened = self.adjust(first, second, YIELD_SECONDS + 0.1, clear=True)
-        self.assertEqual('head_on', opened['traffic_mode'])
-        blocked = self.adjust(first, second, YIELD_SECONDS + 0.2, clear=False)
-        self.assertEqual('head_on_blocked', blocked['traffic_mode'])
+            held = self.adjust(own, other, clear=False)
+            self.assertEqual(0., held['throttle'])
+        for now in (YIELD_SECONDS+.1, YIELD_SECONDS+4.):
+            for own, other in ((first, second), (second, first)):
+                self.assertEqual(command(own['yaw']), self.adjust(own, other, now, clear=False))
+                self.assertEqual(command(own['yaw']), self.adjust(own, other, now, clear=True))
+        # Physical separation is required before another avoidance episode.
+        first['position'] = (20., 0., 0.)
+        self.adjust(first, second, 10.)
+        first['position'] = (0., 0., 0.)
+        self.assertEqual('head_on', self.adjust(first, second, 10.1)['traffic_mode'])
 
     def _hold_then_meet(self, hold_first):
         waiting = body(9, 0.0, -4.0)

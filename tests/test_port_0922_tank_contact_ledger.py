@@ -64,7 +64,8 @@ class WorkerContactLedgerTests(unittest.TestCase):
         state.update(x=0, y=0, z=0, yaw=0, speed=0, push_x=0, push_z=0)
         runtime.states.pop(12)
         runtime._player_collision_profile = lambda raw: {
-            'mass': 100000, 'shape': tank_collision.DEFAULT_SHAPE, 'ram_profile': {}}
+            'mass': 100000, 'shape': tank_collision.DEFAULT_SHAPE, 'ram_profile': {},
+            'physics': runtime._physics_params_for(11)}
         human = {'id': 1, 'x': 100, 'y': 0, 'z': 100, 'yaw': 0,
                  'tank_pushes': [[11, 1, 0, 4 * state['mass']]], 'team': 1}
         runtime._resolve_tank_contacts([human], 1.0, .1)

@@ -18,17 +18,12 @@ switches to ``turret_touchdown_*`` / ``flamingOnGround`` when
 the vehicle's own marks and damage decals.
 
 The vehicle's detachment flag removes the source turret/gun collision on
-every peer. A server-accepted frozen flight separately owns the landed
-obstacle: the same rest pose supplies exact shell hit tests, static vehicle
-contact boxes and late visible admission. Presentation never reruns a local
-arc for an accepted record.
-
-The client-created entity remains outside stock dynamic collision, because
-the canonical obstacle is the room's collision owner. Its stock
-``ProjectileAwareEntities`` membership remains intact for cleanup. Native
-``isCollidingWithWorld`` stays false: the unfed WGTurretFilter cannot supply
-the drag-effect velocity. Landed obstacles do not push, roll, or crush tanks;
-movement is resolved as contact with a fixed accepted volume.
+all peers. Worker-published compound-body revisions own its pose, momentum and
+contacts, while the stock client entity owns the models and effects. Revisions
+reuse that entity; touchdown is keyed by impact serial. The visual remains
+outside local native dynamic collision so it cannot compete with the worker.
+Stock ProjectileAwareEntities membership remains intact for cleanup.
+Continuous crushing HP is not implemented by this presentation adapter.
 """
 
 import copy
@@ -175,10 +170,14 @@ class DetachedTurretPresentation(object):
         for turret in self._turrets:
             if turret.get('canonical_key') == key:
                 if row.get('motion_seq', 0) > turret.get('motion_seq', 0):
+                    previous_body = turret['flight'].get('body', {})
+                    next_body = row['flight'].get('body', {})
+                    new_impact = (next_body.get('impact_serial', 0) >
+                                  previous_body.get('impact_serial', 0))
                     turret.update(flight=copy.deepcopy(row['flight']),
                                   attitude=tuple(row['attitude']), spin=tuple(row['spin']),
                                   started=float(now) - max(0.0, float(elapsed)),
-                                  settled=False, impacted=False,
+                                  settled=False, impacted=turret['impacted'] and not new_impact,
                                   motion_seq=row['motion_seq'])
                 return True
         self._retire_entities()
@@ -326,8 +325,13 @@ class DetachedTurretPresentation(object):
                 self._note('detached turret pose write failed', error)
                 continue
             written += 1
-            if elapsed >= float(turret['flight']['duration']):
+            body = turret['flight'].get('body')
+            landed = bool(body.get('impact')) if body else elapsed >= float(turret['flight']['duration'])
+            if body:
+                turret['settled'] = body['sleeping']
+            elif landed:
                 turret['settled'] = True
+            if landed:
                 if not turret['impacted']:
                     turret['impacted'] = True
                     self._report_impact(entity, turret['flight'])
@@ -382,7 +386,7 @@ class DetachedTurretPresentation(object):
         try:
             collision(
                 float(flight['energy']), self._vector(flight['contact']),
-                self._math.Vector3(0.0, 1.0, 0.0))
+                self._vector((flight.get('body', {}).get('impact') or {}).get('normal', (0.0, 1.0, 0.0))))
         except Exception as error:
             # A missing terrain material or effect must not stop the arc that
             # has already been published.

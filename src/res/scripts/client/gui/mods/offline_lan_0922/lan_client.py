@@ -2047,7 +2047,7 @@ class LANClient(object):
                    next_shell_index=None,
                    shell_change_pending=None,
                    pose_time_us=None,
-                   ram_contacts=None, tank_pushes=None,
+                   ram_contacts=None, tank_pushes=None, turret_pushes=None,
                    destructible_contacts=None,
                    siege_enabled=None,
                    pitch=None, roll=None,
@@ -2167,6 +2167,8 @@ class LANClient(object):
             message['gun_checkpoint'] = parsed_checkpoint
         if tank_pushes is not None:
             message['tank_pushes'] = tank_pushes
+        if turret_pushes is not None:
+            message['turret_pushes'] = turret_pushes
         if isinstance(ram_contacts, list):
             message['ram_contacts'] = [
                 dict(value) for value in ram_contacts[

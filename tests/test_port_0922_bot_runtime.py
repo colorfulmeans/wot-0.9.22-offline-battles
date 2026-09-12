@@ -13511,8 +13511,11 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual((1.0, 2.0, 3.0), (state['x'], state['y'], state['z']))
         self.assertEqual((0.0, 0.0), (state['push_x'], state['push_z']))
         before, after, descriptor = clear.call_args.args
-        self.assertAlmostEqual(1.2, after['x'])
-        self.assertAlmostEqual(2.9, after['z'])
+        push = self.module.vehicle_physics.contact_push_step(
+            self.runtime._physics_params_for(11), 2., -1., .4, .1,
+            normal_y=math.cos(.2)*math.cos(-.1))
+        self.assertAlmostEqual(1.+push[0]*.1, after['x'])
+        self.assertAlmostEqual(3.+push[1]*.1, after['z'])
         self.assertEqual((0.4, 0.2, -0.1), (before['yaw'], before['pitch'], before['roll']))
         self.assertIs(self.runtime._descriptors[11], descriptor)
         clear.return_value = True
@@ -14309,10 +14312,12 @@ class BotRuntimeTests(unittest.TestCase):
         try:
             self.assertEqual([], runtime._resolve_tank_contacts([], 1.0, 0.1))
             self.assertEqual([], calls)
-            self.assertAlmostEqual(0.2, state['x'])
-            self.assertAlmostEqual(-0.1, state['z'])
-            self.assertAlmostEqual(2.0 * 0.9 ** 6, state['push_x'])
-            self.assertAlmostEqual(-1.0 * 0.9 ** 6, state['push_z'])
+            grip = self.module.vehicle_physics.contact_push_decel(
+                runtime._physics_params_for(11), False)
+            self.assertAlmostEqual((2.0-grip[1]*.1)*.1, state['x'])
+            self.assertAlmostEqual((-1.0+grip[0]*.1)*.1, state['z'])
+            self.assertAlmostEqual(2.0-grip[1]*.1, state['push_x'])
+            self.assertAlmostEqual(-1.0+grip[0]*.1, state['push_z'])
             self.assertFalse(runtime._ram_contacts)
             # Broad phase uses each mounted hull's size, including a wreck;
             # it must never assume that all tanks fit a default-size circle.
@@ -14345,9 +14350,11 @@ class BotRuntimeTests(unittest.TestCase):
 
         results = dict((frame_rate, run_for_one_second(frame_rate))
                        for frame_rate in (20, 30, 60))
-        expected = 10.0 * 0.90 ** 60
+        grip = self.module.vehicle_physics.contact_push_decel(
+            self.module.vehicle_physics.derive_params({}), False)[1]
+        expected = max(0.0, 10.0-grip)
 
-        self.assertAlmostEqual(9.0, results[60][0], places=12)
+        self.assertAlmostEqual(10.0-grip/60., results[60][0], places=12)
         for unused_frame_rate, (unused_first, final_push) in results.items():
             self.assertAlmostEqual(expected, final_push, places=12)
         self.assertAlmostEqual(results[20][1], results[30][1], places=12)
@@ -14899,9 +14906,10 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, len([
             report for report in reports if report['type'] == 'bot_ram']))
         # One e=0 response gives the stationary 25t bot half of the 16m/s
-        # normal velocity, followed by the existing time-based push damping.
+        # normal velocity, followed by one slice of parked track resistance.
         # The same-frame current detector must not apply that impulse twice.
-        expected_push = 8.0 * (0.90 ** (0.04 * 60.0))
+        expected_push = 8.0 - self.module.vehicle_physics.contact_push_decel(
+            runtime._physics_params_for(11), False)[0]*.04
         self.assertAlmostEqual(expected_push, current['push_z'], places=5)
         self.assertNotEqual((0.0, 6.5), (current['x'], current['z']))
         self.assertEqual({11: 0.04, 12: 0.04},
