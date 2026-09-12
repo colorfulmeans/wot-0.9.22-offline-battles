@@ -175,6 +175,18 @@ class TurretObstacleTests(unittest.TestCase):
                 self.assertFalse(obstacles.sweep_blocks(
                     pose(), pose(x=x, z=z), descriptor(), 4000))
 
+    def test_overhead_escape_survives_an_unchanged_suspension_guard(self):
+        obstacles = self.obstacle(row(rest=(0, 2.4, 0)))
+        after = pose(x=0.1)
+        self.assertFalse(obstacles.sweep_blocks(
+            pose(), after, descriptor(), 4000))
+        # Bot vertical integration rechecks this pose after the horizontal
+        # move. A blocked no-op zeros speed and prevents the next escape step.
+        self.assertFalse(obstacles.sweep_blocks(
+            after, after, descriptor(), 4000))
+        self.assertFalse(obstacles.sweep_blocks(
+            after, pose(x=0.2), descriptor(), 4000))
+
     def test_overhead_escape_cannot_climb_deeper_into_the_turret(self):
         obstacles = self.obstacle(row(rest=(0, 2.4, 0)))
         self.assertTrue(obstacles.sweep_blocks(

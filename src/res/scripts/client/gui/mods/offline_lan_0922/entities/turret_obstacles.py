@@ -260,6 +260,12 @@ def _leaves_overlap(initial, final, sweeps, obstacle):
             any(_box_gap(sweep, obstacle, normal) <
                 initial_gap - _CONTACT_EPSILON for sweep in sweeps)):
         return False
+    # Suspension and final-pose guards may recheck the unchanged pose after
+    # the horizontal slice. Holding an existing overhead overlap cannot make
+    # it worse; vetoing that no-op would reset the drivetrain before it can
+    # take the next outward step.
+    if final == initial:
+        return True
     for gap, axis in candidates:
         if abs(axis[1]) > _CONTACT_EPSILON:
             continue
