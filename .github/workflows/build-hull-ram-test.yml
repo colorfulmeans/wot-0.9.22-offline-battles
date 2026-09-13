@@ -1,0 +1,103 @@
+name: Build hull RAM test package
+
+on:
+  push:
+    branches:
+      - fix/hull-ram-contact-armor
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-server:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11.9"
+          architecture: "x64"
+      - name: Install pinned Windows server packager
+        run: python -m pip install -r server/requirements-windows-build.txt
+      - name: Build Windows LAN server
+        shell: pwsh
+        run: pwsh -NoProfile -File server/build_windows_server.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hull-ram-server-input
+          path: dist/server/WoT-0.9.22-LAN-Server.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  client-payload:
+    needs: windows-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Run client test suite
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Run launcher test suite
+        working-directory: launcher
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - uses: actions/download-artifact@v4
+        with:
+          name: hull-ram-server-input
+          path: dist/server
+      - name: Build Python 2.7 0.9.22 client package
+        run: >-
+          docker run --rm --platform linux/amd64 -v "$PWD:/work"
+          -e WOT_OFFLINE_BUILD_IDENTITY="hull-ram-test-${{ github.run_id }}-${{ github.run_attempt }}"
+          -w /work python:2.7.18
+          python build_wotmod.py
+      - name: Validate 0.9.22 client package
+        run: >-
+          python tools/validate_wotmod.py
+          dist/org.colorfulmeans.offline_lan_0922_*.wotmod
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hull-ram-launcher-input
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-launcher:
+    needs: client-payload
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11.9"
+          architecture: "x64"
+      - name: Install pinned Windows packager
+        run: python -m pip install -r server/requirements-windows-build.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: hull-ram-launcher-input
+          path: dist
+      - name: Test launcher on Windows
+        working-directory: launcher
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Build launcher distribution
+        shell: pwsh
+        run: pwsh -NoProfile -File launcher/build_launcher.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wot-0.9.22-offline-battles-hull-ram-test-${{ github.run_number }}
+          path: launcher/dist/wot-0.9.22-offline-battles/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
