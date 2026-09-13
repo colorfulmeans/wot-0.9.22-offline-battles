@@ -93,14 +93,32 @@ jobs:
       - name: Build launcher distribution
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wot-offline-battles-launcher-windows-${{ github.run_number }}
+          # Upload the runnable folder; Actions supplies the only outer ZIP.
+          path: launcher/dist/WoT-Offline-Battles-Launcher/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Extract the actual download once
+        uses: actions/download-artifact@v4
+        with:
+          name: wot-offline-battles-launcher-windows-${{ github.run_number }}
+          path: ${{ runner.temp }}/launcher-download
       - name: Verify payload, fake-client install, and bundled servers
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $appName = "WoT-Offline-Battles-Launcher"
-          $appRoot = Join-Path $PWD "launcher\dist\$appName"
+          $appRoot = Join-Path $env:RUNNER_TEMP "launcher-download"
           $launcher = Join-Path $appRoot "$appName.exe"
           $payload = Join-Path $appRoot "_internal"
+          if (-not (Test-Path -LiteralPath $launcher) -or
+                  (Get-ChildItem -LiteralPath $appRoot -Filter *.zip)) {
+              throw "Launcher download must run after one ZIP extraction"
+          }
+          Write-Host "Downloaded launcher is runnable after one ZIP extraction"
           $fakeRoot = Join-Path $env:RUNNER_TEMP "WoT 假客户端"
           $fake082 = Join-Path $fakeRoot "0.8.2"
           $fake0922 = Join-Path $fakeRoot "0.9.22 #1513"
@@ -194,10 +212,3 @@ jobs:
                   Start-Sleep -Seconds 2
               }
           }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wot-offline-battles-launcher-windows-${{ github.run_number }}
-          path: launcher/dist/WoT-Offline-Battles-Launcher-Windows.zip
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30

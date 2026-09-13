@@ -7,7 +7,8 @@ Tanks, and stops that server when the game closes. Its bundled client and
 server payloads are only for the exact #1513 client described below; it does
 not install or start earlier client lines.
 
-1. Start WoT-Offline-Battles-Launcher.exe from this folder. Keep the folder
+1. Extract the downloaded ZIP once, then start WoT-Offline-Battles-Launcher.exe
+   from the extracted folder. Keep the folder
    together; the launcher needs the files beside it.
 2. Select your World of Tanks folder. The list holds the folders you used
    before, plus any game the launcher finds in the usual install locations.

@@ -8,6 +8,37 @@ import test_port_0922_bot_runtime as bots
 
 
 class PlayerRotationContactTests(unittest.TestCase):
+    def test_motor_contact_uses_full_descriptor_and_publishes_the_bot_response(self):
+        runtime = local._runtime()
+        battle = local.BattleRuntime(runtime)
+        battle.client = local._Client()
+        battle._avatar = runtime.bigworld.avatar
+        own_descriptor, peer_descriptor = local._Descriptor(), local._Descriptor()
+        own_descriptor.physics.update(weight=100000., enginePower=2000.*735.49875)
+        peer_descriptor.physics.update(weight=10000., enginePower=300.*735.49875)
+        entity = local._Vehicle(10, own_descriptor, local._Vector(), (0, 0, 0), {'health': 500})
+        peer = local._Vehicle(11, peer_descriptor, local._Vector(), (0, 0, 0), {'health': 500})
+        runtime.bigworld.entities.update({10: entity, 11: peer})
+        shape = battle._collision_shape(own_descriptor)
+        battle._records['bot:11'] = dict(engine_id=11, network_id=11, kind='bot', ready=True,
+            state=dict(id=11, x=2.*shape[0], y=0., z=0., yaw=0., speed=0., team=2,
+                       alive=True, rotation_dir=1, movement_dir=0, collision_shape=shape))
+        battle._local_physics = local.vehicle_physics.derive_params(own_descriptor)
+        battle._sender = types.SimpleNamespace(forward=0.)
+        battle._local_drive_turn = 1.
+        battle._motion_is_clear = lambda *args, **kw: True
+        battle._baked_pose_safe = lambda *args: True
+        candidates = battle._contact_tanks((0., 0., 0.), shape, .04)
+        self.assertGreater(candidates[0]['traverse_torque'], 0.)
+        battle._records['bot:11']['state']['rotation_dir'] = 0
+        battle._resolve_local_tank_contacts(entity, (0., 0., 0.), 0., .04)
+        sent = battle._local_contact_pushes[11][:]
+        self.assertGreater(sent[2], 0.)
+        self.assertEqual(0., sent[3])
+        battle._records['bot:11']['state']['x'] = 100.
+        battle._resolve_local_tank_contacts(entity, (0., 0., 0.), 0., .04)
+        self.assertEqual(sent, battle._local_contact_pushes[11])
+
     def test_side_contact_limits_both_turn_signs_and_releases_after_separation(self):
         for direction in (-1., 1.):
             with self.subTest(direction=direction):
@@ -49,6 +80,14 @@ class BotRotationContactTests(unittest.TestCase):
     setUp = bots.BotRuntimeTests.setUp
     tearDown = bots.BotRuntimeTests.tearDown
 
+    def test_traffic_keeps_supplied_neighbour_coordinates_for_both_wire_shapes(self):
+        runtime = self.module.BotRuntime(1)
+        bodies, unused_index = runtime._traffic_snapshot([
+            dict(id=1000001, position=(20., 3., -12.), team=2),
+            dict(id=1000002, x=-18., y=2., z=35., team=2)])
+        self.assertEqual((20., 3., -12.), bodies[1000001]['position'])
+        self.assertEqual((-18., 2., 35.), bodies[1000002]['position'])
+
     def test_player_side_contact_limits_both_bot_turn_signs_and_releases(self):
         for direction in (-1., 1.):
             with self.subTest(direction=direction):
@@ -75,6 +114,7 @@ class BotRotationContactTests(unittest.TestCase):
                     self.assertGreater(stopped*direction, 0.)
                     self.assertLess(abs(stopped), .011/shape[1])
                     self.assertEqual(0., runtime._turn_speeds[11])
+                    self.assertEqual(direction, state['rotation_dir'])
                     peer['x'] = 100.
                     runtime.update(.04, 1.04, neighbours=[peer])
                 self.assertAlmostEqual(.08*direction, state['yaw']-stopped)

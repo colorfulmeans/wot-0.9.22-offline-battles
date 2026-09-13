@@ -1851,6 +1851,30 @@ def engine_force(p, v, throttle, slope_pitch=0.0):
 	return f * throttle
 
 
+def contact_traverse(p, half_width, speed, turn, dt, drive_intent=0.0,
+                     slope_pitch=0.0):
+	'''Return free traverse speed and the available track couple in N m.
+
+	Opposed track forces act at the chassis half-width. Reuse the reviewed
+	engine power/traction law at the faster track speed, so driving and turning
+	do not each claim full power. This is the planar chassis approximation;
+	it does not claim a recovered retail steering transmission model.'''
+	if not turn or dt <= 0.0:
+		return 0.0, 0.0
+	omega = _traverse_step(p, 0.0, turn, speed, dt, drive_intent=drive_intent)
+	track_speed = abs(speed)+abs(omega)*half_width
+	force = abs(engine_force(p, track_speed, turn, slope_pitch))
+	if drive_intent:
+		drive_force = abs(engine_force(p, speed, drive_intent, slope_pitch))
+		power = p['powerW']*POWER_FACTOR*p.get('nativePowerRatio', 1.0)
+		unused_power = max(0.0, power-drive_force*abs(speed))
+		force *= unused_power/power if power > 0.0 else 0.0
+		traction = (longitudinal_slope_grip(slope_pitch)*p['mass']*GRAVITY*
+		             max(.1, math.cos(slope_pitch)))
+		force = min(force, max(0.0, traction-drive_force))
+	return omega, force*half_width
+
+
 def rolling_resist_force(p, terrainIdx=0, steering=False):
 	'''Rolling drag = mu * N. The descriptor bakes mu*9.81 into
 	specificFriction; the WG sim applies mu against the 1.25 g normal force,
@@ -2115,6 +2139,10 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 
 @observed('physics.traverse')
 def traverse_step(p, omega, steer_dir, v, dt, terrainIdx=0, drive_intent=0.0):
+	return _traverse_step(p, omega, steer_dir, v, dt, terrainIdx, drive_intent)
+
+
+def _traverse_step(p, omega, steer_dir, v, dt, terrainIdx=0, drive_intent=0.0):
 	'''One integration step of hull rotation speed (rad/s). WG 0.8.2: driving
 	speed does NOT slow the traverse (SPEED_AFFECT_ROT_DECREASE = 0.0) and the
 	rate ramps to full in ANG_ACCELERATION_TIME (50 ms). Medium/soft ground

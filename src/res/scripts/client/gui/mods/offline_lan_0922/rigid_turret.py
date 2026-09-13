@@ -9,6 +9,7 @@ vertical 'lift to roof' operation.
 """
 import copy
 import math
+import time
 
 from gui.mods.offline_lan_0922 import shot_geometry
 from gui.mods.offline_lan_0922 import turret_detachment
@@ -17,6 +18,9 @@ from gui.mods.offline_lan_0922.entities import turret_obstacles as geometry
 EPSILON = 1.0e-6
 STEP = turret_detachment.FLIGHT_STEP_SECONDS / 4.0
 SOLVER_PASSES = 8
+# A soft CPU budget, not a physics timestep. Every body receives at least one
+# exact substep; cheap flight can consume all elapsed time within this share.
+UPDATE_BUDGET_SECONDS = turret_detachment.FLIGHT_STEP_SECONDS / 10.0
 ZERO = (0.0, 0.0, 0.0)
 def add(a, b):
     return a[0]+b[0], a[1]+b[1], a[2]+b[2]
@@ -302,6 +306,123 @@ def render_pose(frame, elapsed):
     return position, angles(rotation)
 
 
+def interpolate_rotation(first, second, alpha):
+    """Shortest SO(3) arc, including the Euler pitch/roll singularities."""
+    def quaternion(m):
+        trace = m[0]+m[4]+m[8]
+        if trace > 0.0:
+            s = 2.0*math.sqrt(trace+1.0)
+            return ((m[7]-m[5])/s, (m[2]-m[6])/s, (m[3]-m[1])/s, s*.25)
+        i = max(range(3), key=lambda j: m[4*j])
+        j, k = (i+1)%3, (i+2)%3
+        s = 2.0*math.sqrt(max(0.0, 1.0+m[4*i]-m[4*j]-m[4*k]))
+        q = [0.0]*4
+        q[i], q[j], q[k] = s*.25, (m[3*i+j]+m[3*j+i])/s, (m[3*i+k]+m[3*k+i])/s
+        q[3] = (m[3*k+j]-m[3*j+k])/s
+        return tuple(q)
+    a, b = quaternion(first), quaternion(second)
+    cosine = sum(x*y for x, y in zip(a, b))
+    if cosine < 0.0:
+        b = tuple(-v for v in b)
+        cosine = -cosine
+    angle = math.acos(min(1.0, cosine))
+    if angle <= EPSILON:
+        q = tuple(x+(y-x)*alpha for x, y in zip(a, b))
+    else:
+        q = tuple((x*math.sin((1.0-alpha)*angle)+y*math.sin(alpha*angle))/math.sin(angle)
+                  for x, y in zip(a, b))
+    size = math.sqrt(sum(v*v for v in q))
+    x, y, z, w = (v/size for v in q)
+    return (1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w),
+            2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w),
+            2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y))
+
+
+class PresentationBuffer(object):
+    """Confirmed body samples with a monotonic, adaptive render cursor.
+
+    No simulation runs here. A 40-ms extrapolation cap used to expire before
+    slow-worker packets even arrived, causing high-FPS freeze/jump playback.
+    Buffer complete accepted poses instead, using the vehicle presentation's
+    existing delay floor/decay and convergence law. Collision stays canonical.
+    """
+    def __init__(self):
+        self.samples = []
+        self.cursor = None
+        self.last_render = None
+        self.arrival = None
+        self.anchor = 0.0
+        self.delay = 0.0
+
+    def push(self, row, now, age):
+        from gui.mods.offline_lan_0922 import snapshot_sync
+        frame = row['flight'].get('body')
+        if frame is None:
+            return
+        source = float(row.get('motion_time_ms', row['created_time_ms']))/1000.0
+        if self.samples and source < self.samples[-1][0]:
+            return
+        waking = bool(self.samples and self.samples[-1][1]['sleeping'])
+        interval = (max(source-self.samples[-1][0], now-self.arrival)
+                    if self.samples else 0.0)
+        floor = snapshot_sync.MIN_TIMED_DELAY_US/1000000.0
+        initial = snapshot_sync.INITIAL_TIMED_DELAY_US/1000000.0
+        if waking:
+            # A sleeping body publishes no unchanged poses. Ten seconds of
+            # rest is not ten seconds of network jitter: retain its confirmed
+            # still pose as the left endpoint of one normal wake transition.
+            # Advancing time while that pose is unchanged cannot cause a snap.
+            hold = max(self.samples[-1][0], source-max(floor, self.delay))
+            self.samples = [(hold, self.samples[-1][1])]
+            self.cursor = max(self.cursor, hold)
+            self.last_render = float(now)
+            interval = turret_detachment.FLIGHT_STEP_SECONDS
+        self.delay = max(floor, self.delay-interval*snapshot_sync.TIMED_DELAY_DECAY_RATIO,
+                         max(0.0, age)+interval, initial if not self.samples else 0.0)
+        if self.samples and source == self.samples[-1][0]:
+            self.samples.pop()
+        self.samples.append((source, copy.deepcopy(frame)))
+        self.samples = self.samples[-64:]
+        self.arrival, self.anchor = float(now), source+max(0.0, age)
+        if self.cursor is None:
+            self.cursor = source
+
+    def pose(self, now):
+        newest = self.samples[-1][0]
+        first_render = self.last_render is None
+        dt = max(0.0, float(now)-(self.last_render if self.last_render is not None else now))
+        self.last_render = float(now)
+        target = self.anchor+max(0.0, now-self.arrival)-self.delay
+        if first_render:
+            # Prerequisite loading can outlast several packets. Adopt the
+            # current buffered pose on first appearance, not the launch pose.
+            self.cursor = max(self.samples[0][0], min(newest, target))
+        error = max(0.0, target-self.cursor)
+        maximum = self.cursor+dt*(1.0+min(1.0, error*error))
+        self.cursor = max(self.samples[0][0], min(newest, maximum, max(self.cursor, target)))
+        while len(self.samples) > 2 and self.samples[1][0] <= self.cursor:
+            self.samples.pop(0)
+        left, right = self.samples[0], self.samples[-1]
+        for candidate in self.samples[1:]:
+            if candidate[0] >= self.cursor:
+                right = candidate
+                break
+            left = candidate
+        span = right[0]-left[0]
+        alpha = max(0.0, min(1.0, (self.cursor-left[0])/span)) if span > 0.0 else 1.0
+        a, b = left[1], right[1]
+        ra, rb = matrix(a['attitude']), matrix(b['attitude'])
+        rotation = interpolate_rotation(ra, rb, alpha)
+        ca = add(tuple(a['position']), mul(ra, tuple(a['centre'])))
+        cb = add(tuple(b['position']), mul(rb, tuple(b['centre'])))
+        com = add(ca, scale(sub(cb, ca), alpha))
+        centre = tuple(b['centre'])
+        # Impacts/sleep become visible at their sample time, never on receipt
+        # while the body is still visibly airborne in the history buffer.
+        event = b if alpha >= 1.0 else a
+        return sub(com, mul(rotation, centre)), angles(rotation), event
+
+
 def revision(row, body, now_ms):
     result = copy.deepcopy(row)
     frame = body.frame()
@@ -354,10 +475,15 @@ def scenery_step(body, dt, collide):
     initial_velocity = body.velocity
     # Resolve position independently, along the real scenery normal.
     correction = ZERO
-    for point, normal, depth in contacts:
-        remaining = depth-dot(correction, normal)
-        if remaining > 0.0:
-            correction = add(correction, scale(normal, remaining))
+    for unused_pass in range(SOLVER_PASSES):
+        changed = False
+        for point, normal, depth in contacts:
+            remaining = depth-dot(correction, normal)
+            if remaining > EPSILON:
+                correction = add(correction, scale(normal, remaining))
+                changed = True
+        if not changed:
+            break
     body.com = add(body.com, correction)
     for unused in range(SOLVER_PASSES):
         for point, normal, unused_depth in contacts:
@@ -437,12 +563,23 @@ def vehicle_contact(body, boxes, mass, velocity, horizontal=False):
 def translate(body, displacement, collide):
     """Contact recovery may move debris only through free scenery."""
     fraction = 1.0
-    for point in body.points():
-        hit = collide(point, add(point, displacement))
-        if hit is None or dot(displacement, hit[1]) >= -EPSILON:
+    points = body.points()
+    skin = query_skin(points + tuple(add(p, displacement) for p in points))
+    direction = unit(displacement)
+    for point in points:
+        # This path used to omit the native binary32 skin used by flight.
+        # A resting corner a few ULPs below a slope then missed the ground
+        # entirely during a horizontal shove, leaving subsequent rays buried.
+        hit = collide(add(sub(point, scale(direction, skin)), (0, skin, 0)),
+                      sub(add(add(point, displacement), scale(direction, skin)), (0, skin, 0)))
+        if hit is None:
             continue
-        fraction = min(fraction, turret_detachment._segment_fraction(
-            point, add(point, displacement), hit[0]))
+        normal = unit(tuple(hit[1]))
+        closing = -dot(displacement, normal)
+        if closing <= EPSILON:
+            continue
+        clearance = dot(sub(point, tuple(hit[0])), normal)-skin
+        fraction = min(fraction, max(0.0, clearance/closing))
     actual = scale(displacement, fraction)
     body.com = add(body.com, actual)
     return actual
@@ -473,9 +610,11 @@ def nearby_vehicles(body, dt, vehicles):
     return result
 
 
-def advance(body, dt, vehicles, collide, apply_vehicle=None):
+def advance(body, dt, vehicles, collide, apply_vehicle=None, budget=None, clock=None):
     """Advance elapsed time with substeps and mass-aware vehicle contacts."""
     remaining = max(0.0, dt)
+    clock = clock or time.time
+    deadline = clock()+budget if budget is not None else None
     all_vehicles = vehicles
     vehicles = nearby_vehicles(body, remaining, all_vehicles)
     if body.sleeping:
@@ -489,9 +628,11 @@ def advance(body, dt, vehicles, collide, apply_vehicle=None):
         touched = any(vehicle_contact(body, v['boxes'], v['mass'], v['velocity']) is not None
                       for v in vehicles)
         if stable and not touched:
-            return
+            return remaining
         body.sleeping = False
     while remaining > 1e-9:
+        if remaining < dt and deadline is not None and clock() >= deadline:
+            break
         step = min(STEP, remaining)
         vehicles = nearby_vehicles(body, step, all_vehicles)
         had_support = body.grounded
@@ -535,3 +676,6 @@ def advance(body, dt, vehicles, collide, apply_vehicle=None):
             body.kinetic_energy() < 0.5*body.props['mass']*(9.81*STEP)**2):
         body.velocity, body.angular = ZERO, ZERO
         body.sleeping = True
+    # The loop's sub-nanosecond termination tolerance is already consumed.
+    # Do not publish 5999 ms for a body that reached exactly 6000 ms.
+    return dt if remaining <= 1e-9 else dt-remaining

@@ -29,6 +29,38 @@ def floor(start, end):
 
 
 class RigidTurretTests(unittest.TestCase):
+    def test_quantized_resting_corner_cannot_be_shoved_under_a_slope(self):
+        f32 = lambda v: struct.unpack('f', struct.pack('f', v))[0]
+        def ground(start, end):
+            start, end = tuple(map(f32, start)), tuple(map(f32, end))
+            a = start[1]-3-.13*(start[0]-400)
+            b = end[1]-3-.13*(end[0]-400)
+            if a >= 0 and b <= 0 and a != b:
+                fraction = a/(a-b)
+                return (tuple(f32(start[i]+(end[i]-start[i])*fraction) for i in range(3)),
+                        physics.unit((-.13, 1., 0.)))
+        value = body((400., 0., 200.))
+        height = 3-min(p[1]-.13*(p[0]-400) for p in value.points())
+        # A sub-ULP start below the surface is legitimate after native output
+        # conversion. The old unskinned recovery swept .7 m through the slope.
+        value.com = physics.add(value.com, (0., height-1e-6, 0.))
+        moved = physics.translate(value, (.7, 0., 0.), ground)
+        self.assertLess(moved[0], .01)
+        for unused in range(200):
+            physics.advance(value, .04, [], ground)
+        self.assertGreaterEqual(min(p[1]-3-.13*(p[0]-400) for p in value.points()), -.025)
+
+    def test_budget_preserves_exact_substeps_and_remaining_time(self):
+        value = body((0., 10., 0.), (1., 0., 0.))
+        clock = iter((0., .001, .002, .003, .004)).__next__
+        elapsed = physics.advance(value, .2, [], lambda *a: None, budget=.004, clock=clock)
+        self.assertAlmostEqual(.04, elapsed)
+        self.assertAlmostEqual(.04, value.position[0])
+        elapsed += physics.advance(value, .2-elapsed, [], lambda *a: None, budget=.004, clock=lambda: 0.)
+        self.assertAlmostEqual(.2, elapsed)
+        self.assertAlmostEqual(.2, value.position[0])
+        self.assertAlmostEqual(10.-.5*9.81*.2**2, value.com[1])
+
     def test_binary32_sloping_scenery_cannot_lose_contact_and_fall_underground(self):
         f32 = lambda v: struct.unpack('f', struct.pack('f', v))[0]
         slope = .13
@@ -135,6 +167,88 @@ class RigidTurretTests(unittest.TestCase):
         physics.scenery_step(value, .01, wall)
         self.assertLessEqual(max(p[0] for p in value.points()), 1e-5)
         self.assertLess(value.position[1], 5.001)
+
+
+class TurretPresentationTests(unittest.TestCase):
+    def test_slow_packets_still_move_at_each_high_fps_render_frame(self):
+        from test_port_0922_turret_obstacles import row
+        buffer = physics.PresentationBuffer()
+        positions, cursors = [], []
+        next_packet = 0.
+        for index in range(301):
+            now = index/100.
+            if now+1e-8 >= next_packet:
+                source = now-.06
+                frame = body((source, 10., 0.), (1., 0., 0.))
+                accepted = physics.revision(row(), frame, int((source+1.)*1000))
+                buffer.push(accepted, now, .06)
+                next_packet += .12
+            position, unused_attitude, unused_event = buffer.pose(now)
+            positions.append(position[0])
+            cursors.append(buffer.cursor)
+        self.assertEqual(sorted(cursors), cursors)
+        steps = [b-a for a, b in zip(positions[60:-1], positions[61:])]
+        self.assertTrue(all(0. < step < .011 for step in steps), steps)
+        self.assertLess(buffer.cursor, buffer.samples[-1][0])
+        self.assertLess(len(buffer.samples), 10)
+
+    def test_rotation_interpolation_crosses_pi_and_pitch_singularity_without_a_flip(self):
+        for first, second in (((3.1, 0., 0.), (-3.1, 0., 0.)),
+                              ((.2, 1.56, .4), (.2, 1.58, .4))):
+            a, b = physics.matrix(first), physics.matrix(second)
+            middle = physics.interpolate_rotation(a, b, .5)
+            self.assertLess(sum((x-y)**2 for x, y in zip(a, middle)), .02)
+            for alpha, expected in ((0., a), (1., b)):
+                for x, y in zip(physics.interpolate_rotation(a, b, alpha), expected):
+                    self.assertAlmostEqual(x, y)
+
+    def test_landing_and_sleep_follow_playback_and_newer_motion_wakes_same_entity(self):
+        from test_port_0922_turret_obstacles import row, descriptor, _BigWorld, _Math, _Vehicle
+        from gui.mods.offline_lan_0922.entities.detached_turret import DetachedTurretPresentation
+        world = _BigWorld()
+        from test_port_0922_turret_detachment import _Avatar
+        presentation = DetachedTurretPresentation(world, _Math(), _Avatar(), lambda *a: None)
+        source = _Vehicle()
+        source.typeDescriptor = descriptor()
+        value = body((0., 3., 0.))
+        first = physics.revision(row(), value, 1000)
+        plan = presentation.prepare_canonical(source, first)
+        self.assertTrue(presentation.launch_canonical(plan, first, 1., 0.))
+        presentation.advance(1.)
+        value.com = physics.add(value.com, (0., -2., 0.))
+        value.grounded = value.sleeping = True
+        value.impact_serial = 1
+        value.impact = dict(point=(0., 0., 0.), normal=(0., 1., 0.), velocity=(0., -1., 0.), energy=.5)
+        second = physics.revision(first, value, 1120)
+        self.assertTrue(presentation.launch_canonical(plan, second, 1.12, 0.))
+        presentation.advance(1.12)
+        turret = presentation._turrets[0]
+        self.assertFalse(turret['settled'])
+        self.assertEqual(0, turret.get('presented_impact_serial', 0))
+        for i in range(13, 41):
+            presentation.advance(1.+i/100.)
+        self.assertTrue(turret['settled'])
+        self.assertEqual(1, turret['presented_impact_serial'])
+        entity_id = turret['id']
+        value.sleeping = False
+        value.com = physics.add(value.com, (.1, 0., 0.))
+        third = physics.revision(second, value, 11400)
+        self.assertTrue(presentation.launch_canonical(plan, third, 11.4, 0.))
+        self.assertFalse(turret['settled'])
+        presentation.advance(11.41)
+        self.assertLess(turret['pose_buffer'].delay, .2)
+        self.assertEqual(entity_id, presentation._turrets[0]['id'])
+        self.assertEqual(1, turret['presented_impact_serial'])
+
+    def test_late_native_model_load_adopts_current_history_without_replaying_launch(self):
+        from test_port_0922_turret_obstacles import row
+        buffer = physics.PresentationBuffer()
+        for i in range(50):
+            now = 1.+i*.04
+            value = body((now, 10., 0.), (1., 0., 0.))
+            buffer.push(physics.revision(row(), value, int(now*1000)), now, 0.)
+        position, unused_angle, unused_event = buffer.pose(now)
+        self.assertGreater(position[0], now-.15)
 
 
 class RigidTurretLifecycleTests(unittest.TestCase):

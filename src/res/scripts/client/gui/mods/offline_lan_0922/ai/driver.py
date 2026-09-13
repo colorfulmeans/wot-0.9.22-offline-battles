@@ -99,7 +99,7 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		turn, throttle, recovery_mode, has_target=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn',
-			'pivot_recovery'):
+			'pivot_recovery', 'forward_escape', 'contact_escape'):
 		return float(turn), float(throttle), False
 	limited = not (float(minimum_yaw) <= -math.pi + 0.1 and
 	               float(maximum_yaw) >= math.pi - 0.1)
@@ -390,10 +390,14 @@ class LocalDriver(object):
 					back_x, back_z = -math.sin(yaw), -math.cos(yaw)
 					outward = back_x*contact[0] + back_z*contact[1]
 					away = back_x*(position[0]-other[0]) + back_z*(position[2]-other[2])
-					if outward >= -1.0e-9 and away > 1.0e-9:
+					if outward >= -1.0e-9 and away >= -1.0e-9:
 						# The sweep includes the current hull. Its front/side
 						# contact is not a new rear obstacle when every point
-						# moves out of that overlap. Other peers still veto.
+						# moves out or tangentially along that face. Centre
+						# distance may stay constant in an exactly parallel
+						# side hug; neither direction may be denied for that.
+						# At an offset prefer the nearer end of the overlap.
+						# Other peers still veto the complete swept corridor.
 						continue
 				if self._obb_overlap(
 						sweep, float(yaw), sweep_length, half_width,

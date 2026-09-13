@@ -417,6 +417,14 @@ def _contact_ram_inputs(tank, contact_armor=None):
 def obb_contact(x_a, z_a, yaw_a, shape_a,
                 x_b, z_b, yaw_b, shape_b):
     """Return ``(nx, nz, penetration)``, with the normal pointing B -> A."""
+    result = _obb_overlap(x_a, z_a, yaw_a, shape_a,
+                          x_b, z_b, yaw_b, shape_b)
+    return result if result[2] > 0.0 else None
+
+
+def _obb_overlap(x_a, z_a, yaw_a, shape_a,
+                 x_b, z_b, yaw_b, shape_b):
+    """Signed SAT depth, including separation for conservative arc pruning."""
     axes_a = _axes(yaw_a)
     axes_b = _axes(yaw_b)
     delta_x = x_a - x_b
@@ -439,8 +447,6 @@ def obb_contact(x_a, z_a, yaw_a, shape_a,
                 axis_x * axes_b[1][0] + axis_z * axes_b[1][1]))
         signed_distance = delta_x * axis_x + delta_z * axis_z
         overlap = radius_a + radius_b - abs(signed_distance)
-        if overlap <= 0.0:
-            return None
         if best_overlap is None or overlap < best_overlap:
             if signed_distance < 0.0:
                 axis_x = -axis_x
@@ -480,26 +486,109 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others):
             continue
         other_yaw = other.get('yaw', 0.0)
         def depth(at):
-            hit = obb_contact(position[0], position[2], yaw+delta*at, shape,
+            hit = _obb_overlap(position[0], position[2], yaw+delta*at, shape,
                               where[0], where[2], other_yaw, other_shape)
-            return hit[2] if hit is not None else 0.0
+            return hit[2]
         allowed = max(POSITION_SLOP, depth(0.0))
-        low = 0.0
-        for index in range(1, samples+1):
-            high = min(fraction, index/float(samples))
-            if depth(high) > allowed+1e-9:
-                while (high-low)*travel > 1e-6:
-                    middle = (low+high)*0.5
-                    if depth(middle) > allowed+1e-9:
-                        high = middle
-                    else:
-                        low = middle
-                fraction = low
-                break
-            low = high
-            if high >= fraction:
-                break
+        # Each SAT projection changes by at most this distance per radian.
+        # Reject whole clear intervals using that bound, preserving every
+        # sample and the first-contact refinement of the former dense scan.
+        # Planning a large recovery turn beside a hull no longer performs
+        # hundreds of redundant trigonometric/SAT queries each callback.
+        lipschitz = reach + math.hypot(position[0]-where[0], position[2]-where[2])
+        def first_blocked(lo, hi, dl, dh):
+            span = (hi-lo)*fraction/float(samples)
+            if max(dl, dh)+lipschitz*abs(delta)*span*.5 <= allowed+1e-9:
+                return None
+            if hi-lo == 1:
+                return (lo, hi) if dh > allowed+1e-9 else None
+            mid = (lo+hi)//2
+            dm = depth(mid*fraction/float(samples))
+            return (first_blocked(lo, mid, dl, dm) or
+                    first_blocked(mid, hi, dm, dh))
+        blocked = first_blocked(0, samples, depth(0.0), depth(fraction))
+        if blocked is not None:
+            low, high = (i*fraction/float(samples) for i in blocked)
+            while (high-low)*travel > 1e-6:
+                middle = (low+high)*.5
+                if depth(middle) > allowed+1e-9:
+                    high = middle
+                else:
+                    low = middle
+            fraction = low
     return fraction
+
+
+def traverse_impulses(tanks, dt, anchor=None):
+    """Spend track torque at an occupied corner instead of a free yaw shove.
+
+    The chassis remains a constrained planar box, not the retail cell body.
+    Its box inertia and the descriptor's traction-limited engine torque bound
+    the contact impulse. Actual yaw still sweeps the free space: a held peer
+    permits no corner penetration; a movable peer opens space under force.
+    Ground reactions use the same track budget as translational contacts.
+    Callers transport the reciprocal linear momentum through the usual ledger.
+    """
+    bodies = sorted(tanks, key=lambda b: b['id'])
+    result = dict((b['id'], (0.0, 0.0)) for b in bodies)
+    if dt <= 0.0:
+        return result
+    for a in bodies:
+        omega = a.get('traverse_speed', 0.0)
+        budget = a.get('traverse_torque', 0.0)*dt
+        if not omega or budget <= 0.0 or not a.get('alive', True):
+            continue
+        shape = _tank_shape(a)
+        inertia = a['mass']*(shape[0]**2+shape[1]**2)/3.0
+        # Traversing at a free-space target speed must not create an unlimited
+        # angular impulse anew on every blocked frame.
+        omega = math.copysign(min(abs(omega), budget/inertia), omega)
+        axes = _axes(a['yaw'])
+        for b in bodies:
+            if (a['id'] == b['id'] or not a.get('impulse', True) or
+                    not b.get('impulse', True) or budget <= 0.0 or
+                    (anchor is not None and anchor not in (a['id'], b['id']))):
+                continue
+            other_shape = _tank_shape(b)
+            reach = math.hypot(*shape[:2])+math.hypot(*other_shape[:2])+POSITION_SLOP
+            if ((a['x']-b['x'])**2+(a['z']-b['z'])**2 > reach*reach or
+                    not vertical_overlap(a.get('y'), shape, b.get('y'), other_shape)):
+                continue
+            nx, nz, depth = _obb_overlap(a['x'], a['z'], a['yaw'], shape,
+                                         b['x'], b['z'], b['yaw'], other_shape)
+            if depth < -POSITION_SLOP:
+                continue
+            corners = [(axes[0][0]*x+axes[1][0]*z,
+                        axes[0][1]*x+axes[1][1]*z)
+                       for x in (-shape[0], shape[0])
+                       for z in (-shape[1], shape[1])]
+            # A face has two extreme corners. Only the one moving into the
+            # peer loads the drive, and a corner moving away releases it.
+            support = min(x*nx+z*nz for x, z in corners)
+            arms = [z*nx-x*nz for x, z in corners
+                    if x*nx+z*nz <= support+POSITION_SLOP]
+            arm = min(arms, key=lambda r: r*omega)
+            if arm*omega >= -1e-9:
+                continue
+            ia = 0.0 if a.get('immovable') else 1.0/a['mass']
+            ib = 0.0 if b.get('immovable') else 1.0/b['mass']
+            impulse = min(budget/abs(arm), -arm*omega/(ia+ib+arm*arm/inertia))
+            budget -= impulse*abs(arm)
+            for body, inverse, sign in ((a, ia, 1.0), (b, ib, -1.0)):
+                grip = body.get('contact_decel')
+                yaw = body['yaw']
+                vx, vz = result[body['id']]
+                normal_speed = ((body.get('vx', 0.0)+vx)*nx+
+                                (body.get('vz', 0.0)+vz)*nz)
+                forward = abs(nx*math.sin(yaw)+nz*math.cos(yaw))
+                side = abs(nx*math.cos(yaw)-nz*math.sin(yaw))
+                held = (grip is not None and abs(normal_speed) <= 1e-9 and
+                        impulse*inverse*forward <= grip[0]*dt and
+                        impulse*inverse*side <= grip[1]*dt)
+                if not held:
+                    result[body['id']] = (vx+nx*sign*impulse*inverse,
+                                           vz+nz*sign*impulse*inverse)
+    return result
 
 
 def obb_impact_contact(x_a, z_a, yaw_a, shape_a, velocity_a,

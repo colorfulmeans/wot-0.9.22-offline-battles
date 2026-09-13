@@ -2563,15 +2563,29 @@ refreshed after contacts change a trajectory. The existing live destruction
 filter is prepared once per body envelope, with the original query outside
 that envelope. Every native hit still supplies its point and normal.
 
-Worker turret updates consume at most the existing 40 ms motion slice per
-body per callback and retain remaining simulation-time debt for subsequent
-callbacks. Other bodies and the network callback can run between slices;
-no heartbeat timeout was extended. Query failure still rolls back body pose,
+The subsequent `074651-0dd0f1dc4f20` playtest retained 73-104 visible FPS while
+the hidden worker reached 10.85 FPS. A fixed 40 ms slice per callback therefore
+slowed simulation time even when a body could afford more work. Updates now
+consume real elapsed time within a shared 4 ms soft CPU budget, measured with
+the existing profiling clock. Every body gets at least one 10 ms substep;
+unconsumed time remains debt, now included in body diagnostics. The initial
+proposal freezes that body directly instead of synchronously pre-casting an
+entire throw that the body immediately supersedes. Query failure rolls back body pose,
 momentum acknowledgements and vehicle response together. The 10 ms contact
 substeps and eight solver passes remain unchanged. Regression fixtures cover
 binary32 slopes, skipped far-body contact work, prepared-filter bounds,
 multi-body catch-up fairness and failure retries. They do not establish
 Windows native frame pacing; the next exact-client playtest must do that.
+
+The same report includes another turret falling below terrain after a shove.
+A binary32 sloping-ground fixture reproduces the unskinned translation path
+pushing a resting corner into the ground. Contact recovery now uses the same
+coordinate-scaled ray skin as flight; intersecting scenery normals are solved
+iteratively. Visible turrets retain confirmed body samples and interpolate
+COM/orientation with a monotonic adaptive cursor instead of freezing when a
+40 ms extrapolation expires before the next packet. The buffer reuses vehicle
+presentation delay constants, applies impact/sleep events at playback time,
+and never supplies authoritative collision or a second physics simulation.
 
 The handshake order is load-bearing. `SynchronousDetachment._onDirectTick`
 runs synchronously inside `createEntity` and, while
@@ -3300,9 +3314,16 @@ legal OBB contact and clear blocked turn speed. Corner sampling is bounded by
 half the existing penetration slop and the first blocked interval is refined;
 testing only the final angle would miss an intermediate collision. Existing
 overlap may decrease, and translating clear immediately releases the turn.
-No player/Bot identity changes this rule. This is a constraint on kinematic
-traverse, not recovered retail chassis torque/inertia dynamics. Translation
-still uses the descriptor mass, engine power and track-force contact law.
+No player/Bot identity changes this rule. Blocked yaw now retains its motor
+command and spends a traction/power-limited track couple at the occupied
+corner. Planar box inertia limits that impulse; the existing track resistance
+can hold it, or both real masses receive the reciprocal response. Player/Bot
+momentum uses the existing acknowledged transport, without a second worker
+impulse for the same human contact. Driving consumes engine power and track
+traction before the remaining budget can load a turn. This is a constrained
+planar chassis approximation, not recovered retail cell angular dynamics.
+Conservative SAT interval bounds prune clear portions of recovery arcs while
+retaining the previous corner spacing and first-contact refinement.
 
 Rotation blockage feeds the existing bounded traffic lease. Recovery checks
 live hull rotation as well as scenery, keeping a clear reverse straight when
@@ -3320,4 +3341,11 @@ requirement or 5-second blocked/broadside limits.
 Both adapter turn signs, repeated side hugs, corner escape and intermediate
 angle collisions have regression coverage. Existing crowded-departure gates
 are retained without another extension or lowered departure requirement.
+Hostile hull contact overrides a tactical firing hold while preserving target
+and fire intent: the driver continues forward/reverse recovery, and limited
+gun traverse cannot reset that escape to throttle zero. Tangential scraping
+along an existing face is permitted when centre distance initially stays
+constant; an offset contact prefers the nearer end. Other rear blockers and
+world hazards still veto. Supplied neighbour positions retain their tuple or
+XYZ wire coordinates in the traffic snapshot instead of defaulting to origin.
 Continuous stacked-hull/debris crushing HP remains unimplemented.

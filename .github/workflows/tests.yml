@@ -286,12 +286,29 @@ jobs:
       - name: Build the desktop launcher
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wot-offline-battles-launcher
+          # Upload the runnable folder; Actions supplies the only outer ZIP.
+          path: launcher/dist/WoT-Offline-Battles-Launcher/
+          if-no-files-found: error
+      - name: Extract the actual download once
+        uses: actions/download-artifact@v4
+        with:
+          name: wot-offline-battles-launcher
+          path: ${{ runner.temp }}/launcher-download
       - name: Verify that the bundled servers run from the launcher
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $launcher = Join-Path $PWD ("launcher\dist\WoT-Offline-Battles-Launcher\" +
-              "WoT-Offline-Battles-Launcher.exe")
+          $download = Join-Path $env:RUNNER_TEMP "launcher-download"
+          $launcher = Join-Path $download "WoT-Offline-Battles-Launcher.exe"
+          if (-not (Test-Path -LiteralPath $launcher) -or
+                  -not (Test-Path -LiteralPath (Join-Path $download "_internal\client\0.9.22.zip")) -or
+                  (Get-ChildItem -LiteralPath $download -Filter *.zip)) {
+              throw "Launcher download must run after one ZIP extraction"
+          }
+          Write-Host "Downloaded launcher is runnable after one ZIP extraction"
           foreach ($port in @("0.9.22")) {
               $process = Start-Process -FilePath $launcher `
                   -ArgumentList "--serve", $port -PassThru
@@ -328,8 +345,3 @@ jobs:
                   Start-Sleep -Seconds 2
               }
           }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wot-offline-battles-launcher
-          path: launcher/dist/WoT-Offline-Battles-Launcher-Windows.zip
-          if-no-files-found: error

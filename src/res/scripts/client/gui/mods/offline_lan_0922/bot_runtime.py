@@ -5847,7 +5847,7 @@ class BotRuntime(object):
             if not isinstance(raw, dict) or raw.get('id') is None:
                 continue
             body = dict(raw)
-            body['position'] = _position(raw)
+            body['position'] = _boundary_point(raw.get('position', raw))
             bodies[raw['id']] = body
         for bot_id, raw in self.states.items():
             yaw = raw.get('yaw', 0.0)
@@ -8536,7 +8536,13 @@ class BotRuntime(object):
                 params, alive and bool(speed or state.get('movement_dir')),
                 normal_y=math.cos(state.get('pitch', 0.0))*math.cos(state.get('roll', 0.0)))
                     if params else None)
+            traverse = (vehicle_physics.contact_traverse(
+                params, state.get('half_width', 1.7), speed,
+                state.get('rotation_dir', 0) if alive else 0, step,
+                state.get('movement_dir', 0), state.get('pitch', 0.0))
+                        if params else (0.0, 0.0))
             tanks.append({
+                'traverse_speed': traverse[0], 'traverse_torque': traverse[1],
                 'contact_decel': grip,
                 'id': int(state['id']), 'kind': 'bot',
                 'network_id': int(state['id']), 'alive': alive,
@@ -8595,6 +8601,10 @@ class BotRuntime(object):
 
         by_id = dict((tank['id'], tank) for tank in tanks)
         physical_results = tank_collision.resolve_pairs(tanks, step)
+        for actor, delta in tank_collision.traverse_impulses(tanks, step).items():
+            result = physical_results[actor]
+            result['delta_velocity'] = tuple(result['delta_velocity'][i]+delta[i]
+                                              for i in range(2))
         collision_bodies = {}
         collision_radii = {}
         maximum_radius = 4.0
@@ -11283,6 +11293,8 @@ class BotRuntime(object):
                         state, previous_command, physics_params)
                 decision_state = {
                     'id': state['id'],
+                    'team': state.get('team', 0),
+                    'collision_shape': state.get('collision_shape'),
                     'slot': int(state.get('slot', 0)),
                     'position': position,
                     'yaw': state['yaw'],
@@ -11884,7 +11896,8 @@ class BotRuntime(object):
                         candidate_hull_yaw = old_hull_yaw + _angle_delta(
                             candidate_hull_yaw, old_hull_yaw)*allowed
                         turn_speed = 0.0
-                        state['rotation_dir'] = 0
+                        # Preserve the motor command. The contact solver must
+                        # spend this track torque even when actual yaw is held.
                         state['_rotation_contact_blocked'] = True
                 if (not self._baked_pose_progress_clear(
                         state, position, old_hull_yaw,

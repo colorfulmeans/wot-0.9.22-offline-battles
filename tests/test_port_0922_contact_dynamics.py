@@ -1,11 +1,80 @@
 """Sustained hull contact must spend track force, not positional teleporting."""
 import math
 import unittest
+from unittest import mock
 from test_port_0922_tank_collision import _tank, tank_collision as contact
 from gui.mods.offline_lan_0922 import vehicle_physics as drive
 
 
 class GroundContactTests(unittest.TestCase):
+    def test_turning_a_pinned_hull_spends_mass_and_engine_power_for_either_owner(self):
+        for dt in (1./15, 1./30, 1./60):
+            for actor in (1, 1000001):
+                for mass, power, peer_mass, moves in (
+                        (20000., 300., 100000., False),
+                        (100000., 2000., 10000., True),
+                        (100000., 20., 10000., False)):
+                    for sign in (-1., 1.):
+                        params = dict(drive._DEFAULTS, mass=mass, powerW=power*735.49875)
+                        a, b = _tank(actor, 0., 0., mass=mass), _tank(3, 3., 0., mass=peer_mass)
+                        a['traverse_speed'], a['traverse_torque'] = drive.contact_traverse(
+                            params, 1.5, 0., sign, dt)
+                        for value in (a, b):
+                            value['contact_decel'] = drive.contact_push_decel(
+                                dict(params, mass=value['mass']), False)
+                        delta = contact.traverse_impulses([a, b], dt)[3]
+                        pushed = drive.contact_push_step(dict(params, mass=peer_mass),
+                                                          delta[0], delta[1], 0., dt)
+                        self.assertEqual(moves, pushed[0] > 0.)
+                        self.assertEqual(0., pushed[1])
+
+    def test_turn_reaction_is_reciprocal_and_cannot_send_multiple_full_torque_budgets(self):
+        a = _tank(1, 0., 0., mass=50000.)
+        a.update(traverse_speed=.6, traverse_torque=300000.)
+        peers = [_tank(2, 3., 0., mass=10000.), _tank(3, -3., 0., mass=10000.)]
+        result = contact.traverse_impulses([a]+peers, .04)
+        self.assertAlmostEqual(0., sum(t['mass']*result[t['id']][0] for t in [a]+peers))
+        spent = sum(abs(result[b['id']][0])*b['mass']*3.5 for b in peers)
+        self.assertGreater(spent, 0.)
+        self.assertLessEqual(spent, a['traverse_torque']*.04+1e-8)
+        a['traverse_torque'] = 0.
+        self.assertTrue(all(v == (0., 0.) for v in contact.traverse_impulses([a]+peers, .04).values()))
+
+    def test_clear_recovery_arc_is_pruned_without_losing_an_interior_contact(self):
+        shape = (1.5, 3.5, -.8, 2.)
+        peer = _tank(2, 0., 7.6)
+        with mock.patch.object(contact, '_obb_overlap', wraps=contact._obb_overlap) as sat:
+            self.assertEqual(1., contact.rotation_fraction((0., 0., 0.), 0., .85, shape, [peer]))
+        self.assertLess(sat.call_count, 100)
+        peer['x'], peer['z'] = 5., 0.
+        self.assertLess(contact.rotation_fraction((0., 0., 0.), 0., math.pi/2, shape, [peer]), 1.)
+
+    def test_hostile_side_contact_overrides_firing_hold_and_preserves_combat_target(self):
+        from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+        from gui.mods.offline_lan_0922.ai.driver import combat_hull_aim
+        adapter = BotAdapter('test', 1)
+        peer = dict(id=2, team=2, position=(2.99, 0., 0.), shape=(1.5, 3.5, -.8, 2.),
+                    half_width=1.5, half_length=3.5, alive=True)
+        state = dict(id=1, slot=0, team=1, position=(0., 0., 0.), yaw=0., speed=0.,
+                     dt=.1, half_width=1.5, half_length=3.5, neighbours=[peer], pose_clear=lambda yaw: False)
+        strategic = dict(target_id=2, aim_position=(3., 0., 0.), move_position=(0., 0., 0.),
+                         face_position=(3., 0., 0.), combat_mode='engage', fire_allowed=True, throttle_override=0.)
+        commands = [adapter.decide_with_order(state, strategic, lambda *args: True) for _ in range(40)]
+        self.assertTrue(all(c['movement_intent'] and c['fire_allowed'] and c['target_id'] == 2 for c in commands))
+        self.assertTrue(any(c['throttle'] > 0. for c in commands))
+        self.assertTrue(any(c['throttle'] < 0. for c in commands))
+        for command in commands:
+            turn, throttle, aiming = combat_hull_aim(0., math.pi/2, -.1, .1,
+                command['turn'], command['throttle'], command['recovery_mode'])
+            self.assertFalse(aiming)
+            self.assertEqual(command['throttle'], throttle)
+        peer['position'] = (3.1, 0., 0.)
+        self.assertTrue(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
+        peer['position'] = (10., 0., 0.)
+        self.assertFalse(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
+        peer.update(position=(2.99, 0., 0.), team=1)
+        self.assertFalse(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
+
     def test_side_hug_cannot_be_bypassed_by_repeated_traverse(self):
         shape = (1.5, 3.5, -.8, 2.)
         for actor in (1, 1000001):

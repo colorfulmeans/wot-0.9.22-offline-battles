@@ -19224,7 +19224,7 @@ class BattleRuntime(object):
             (previous & (overlapping | closing_gaps)) | newly_armed)
         return bool(newly_armed)
 
-    def _contact_tanks(self, position, own_shape):
+    def _contact_tanks(self, position, own_shape, dt=0.0):
         """Build only bodies that can contact this presented player pose.
 
         Use the solver's conservative chassis-radius bound before projecting
@@ -19322,7 +19322,16 @@ class BattleRuntime(object):
                 params, bool(alive and (speed or state.get('movement_dir') or state.get('forward'))),
                 normal_y=math.cos(_number(state.get('pitch')))*math.cos(_number(state.get('roll'))))
                     if params else None)
+            traverse = (0.0, 0.0)
+            motor_turn = state.get('rotation_dir', state.get('turn', 0)) if alive else 0
+            if descriptor is not None and motor_turn and dt > 0.0:
+                drive_params = (player_effective['physics'] if player_effective is not None
+                                else vehicle_physics.derive_params(descriptor))
+                traverse = vehicle_physics.contact_traverse(
+                    drive_params, shape[0], speed, motor_turn, dt,
+                    state.get('movement_dir', state.get('forward', 0)), _number(state.get('pitch')))
             result.append({
+                'traverse_speed': traverse[0], 'traverse_torque': traverse[1],
                 'contact_decel': grip,
                 'id': 1000000 + int(record.get('engine_id', 0)),
                 'network_id': int(record.get('network_id', 0)),
@@ -19383,7 +19392,12 @@ class BattleRuntime(object):
             'vy': self._local_vertical_speed,
             'vz': math.cos(yaw) * self._local_speed + self._local_push_z,
         }
-        others = self._contact_tanks(position, own['shape'])
+        others = self._contact_tanks(position, own['shape'], dt)
+        if self._local_physics is not None:
+            own['traverse_speed'], own['traverse_torque'] = vehicle_physics.contact_traverse(
+                self._local_physics, own['shape'][0], self._local_speed,
+                getattr(self, '_local_drive_turn', 0.0), dt,
+                getattr(self, '_local_drive_throttle', 0.0), self._local_pitch)
         self._poll_local_ram_contact_episodes(entity, own, others)
         now = self._clock()
         physical_others = []
@@ -19396,6 +19410,16 @@ class BattleRuntime(object):
             own, physical_others, now=now,
             ram_cooldowns=self._local_ram_cooldowns,
             active_ram_contacts=self._local_ram_contacts, dt=dt)
+        angular = tank_collision.traverse_impulses([own]+physical_others, dt, anchor=own['id'])
+        contact['delta_velocity'] = tuple(contact['delta_velocity'][i]+angular[own['id']][i]
+                                          for i in range(2))
+        responses = dict(contact.get('responses', ()))
+        for other in physical_others:
+            delta = angular[other['id']]
+            if delta != (0.0, 0.0):
+                previous = responses.get(other['id'], (0.0, 0.0))
+                responses[other['id']] = tuple(previous[i]+delta[i] for i in range(2))
+        contact['responses'] = sorted(responses.items())
         self._local_ram_cooldowns = contact['cooldowns']
         self._local_ram_contacts = contact['contacts']
         by_id = dict((other['id'], other) for other in others)
@@ -21057,6 +21081,7 @@ class BattleRuntime(object):
             turn = 0.0
             self._local_turn_speed = 0.0
         self._local_drive_turn = turn
+        self._local_drive_throttle = throttle
         if not siege_drive_locked:
             self._local_turn_speed = vehicle_physics.traverse_step(
                 self._local_physics, self._local_turn_speed,
@@ -24725,12 +24750,11 @@ class BattleRuntime(object):
             if entity is None:
                 continue
             previous_ms = self._turret_sim_times.get(key, row['created_time_ms'])
-            # One existing 40-ms motion slice per body/callback. Retain the
-            # remainder on its simulation clock and service it next callback;
-            # a late frame must not synchronously expand into seconds of native
-            # queries and starve the worker heartbeat. Never discard elapsed time.
-            motion_ms = min(server_ms, previous_ms + 1000.0 *
-                            rigid_turret.turret_detachment.FLIGHT_STEP_SECONDS)
+            # Service real elapsed time, bounded by measured work rather than
+            # one 40-ms slice. At 10 worker FPS that old cap ran flight at 40%
+            # speed even when its queries were cheap. Preserve any CPU-limited
+            # remainder and give every active body a fair share this callback.
+            motion_ms = server_ms
             body = self._turret_bodies.get(key)
             rollback = None
             vehicle_rollback = [(vehicle, dict(vehicle['state']),
@@ -24752,10 +24776,14 @@ class BattleRuntime(object):
                         body.momentum(impulse[:3], impulse[3:])
                         acknowledgements[player_key] = [player_key] + checkpoint[1:]
                 body.acks = list(acknowledgements.values())
-                elapsed = (motion_ms-previous_ms)/1000.0
-                collide = self._rigid_turret_scenery_query(body, elapsed)
-                rigid_turret.advance(body, elapsed, vehicles,
-                                     collide, self._apply_turret_bot_response)
+                elapsed = max(0.0, (motion_ms-previous_ms)/1000.0)
+                collide = self._rigid_turret_scenery_query(
+                    body, min(elapsed, rigid_turret.turret_detachment.FLIGHT_STEP_SECONDS))
+                consumed = rigid_turret.advance(
+                    body, elapsed, vehicles, collide, self._apply_turret_bot_response,
+                    budget=rigid_turret.UPDATE_BUDGET_SECONDS/len(self._detached_turret_rows),
+                    clock=_PROFILE_CLOCK)
+                motion_ms = min(server_ms, previous_ms+1000.0*consumed)
                 if body.sleeping:
                     motion_ms = server_ms
                 if motion_ms < server_ms:
@@ -24790,9 +24818,9 @@ class BattleRuntime(object):
                     row.get('motion_seq', 0) % 50 == 0):
                 sys.stdout.write(
                     '[Offline LAN 0.9.22] TURRET BODY source=%s mass=%.3f '
-                    'grounded=%s seq=%d pos=%s velocity=%s angular=%s\n' % (
+                    'grounded=%s seq=%d pos=%s velocity=%s angular=%s debt_ms=%.1f\n' % (
                         key, body.props['mass'], body.grounded, update['motion_seq'],
-                        body.position, body.velocity, body.angular))
+                        body.position, body.velocity, body.angular, server_ms-motion_ms))
 
     def _apply_turret_bot_response(self, vehicle, hit, step):
         state = vehicle['state']

@@ -7,6 +7,7 @@ for visibility, collision probes, and applying commands to any client entity.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
+from gui.mods.offline_lan_0922 import tank_collision
 
 import math
 
@@ -43,6 +44,7 @@ class BotAdapter(object):
                                       baked_routes=baked_routes)
         self.driver = LocalDriver()
         self.navigation_target = navigation_target
+        self._contact_peers = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
         return self.director.register(bot_id, team, descriptor, display_name)
@@ -50,6 +52,36 @@ class BotAdapter(object):
     def forget(self, bot_id):
         self.driver.forget(bot_id)
         self.director.agents.pop(int(bot_id), None)
+        self._contact_peers.pop(int(bot_id), None)
+
+    def _enemy_contact(self, bot_id, state, position):
+        """Keep driving out of a real hostile hull contact across small gaps."""
+        team = state.get('team')
+        if team is None:
+            team = self.director.agents.get(bot_id, {}).get('team')
+        if team is None:
+            return False
+        shape = state.get('collision_shape') or (
+            state.get('half_width', 1.7), state.get('half_length', 3.5),
+            tank_collision.DEFAULT_SHAPE[2], tank_collision.DEFAULT_SHAPE[3])
+        previous = self._contact_peers.get(bot_id)
+        for peer in state.get('neighbours', ()):
+            if peer.get('team', team) == team or not peer.get('alive', True):
+                continue
+            where = _position(peer.get('position', peer))
+            other_shape = tank_collision._tank_shape(peer)
+            if not tank_collision.vertical_overlap(position[1], shape, where[1], other_shape):
+                continue
+            gap = tank_collision._obb_overlap(
+                position[0], position[2], state.get('yaw', 0.0), shape,
+                where[0], where[2], peer.get('yaw', 0.0), other_shape)[2]
+            margin = (tank_collision.CONTACT_BROADPHASE_PADDING
+                      if peer.get('id') == previous else tank_collision.POSITION_SLOP)
+            if gap >= -margin:
+                self._contact_peers[bot_id] = peer.get('id')
+                return True
+        self._contact_peers.pop(bot_id, None)
+        return False
 
     def decide(self, state, direction_clear):
         """Return a deterministic, serializable command for one bot.
@@ -105,13 +137,25 @@ class BotAdapter(object):
             self.driver.resolve_order_positions(
                 position, aim_position, move_position, face_position))
         target = move_position
-        if callable(self.navigation_target):
+        contact_escape = self._enemy_contact(bot_id, state, position)
+        if contact_escape:
+            # A tactical firing hold is not a decision to surrender when an
+            # enemy pins the hull. Keep the target/fire order while the normal
+            # driver tries forward travel and its bounded reverse recovery.
+            yaw = float(state.get('yaw', 0.0))
+            distance = 2.0*float(state.get('half_length', 3.5))+WAYPOINT_ARRIVAL_RADIUS
+            target = (position[0]+math.sin(yaw)*distance, position[1],
+                      position[2]+math.cos(yaw)*distance)
+        elif callable(self.navigation_target):
             target = _position(self.navigation_target(
                 bot_id, position, target, strategic, state), target)
         stop_at_target = bool(state.get(
             'navigation_stop_at_target',
             strategic.get('combat_mode') not in ('route', 'advance')))
         throttle_override = strategic.get('throttle_override')
+        if contact_escape:
+            throttle_override = None
+            stop_at_target = False
         movement_intent = not (
             throttle_override is not None and
             float(throttle_override) <= 0.0)
@@ -153,6 +197,8 @@ class BotAdapter(object):
         # their stable 12-30 degree hull angle while the turret keeps tracking
         # ``aim_position``.  Local recovery directions still outrank it.
         recovery_mode = local.get('recovery_mode', 'drive')
+        if contact_escape and recovery_mode in ('drive', 'arrived', 'avoid'):
+            recovery_mode = 'contact_escape'
         target_yaw = float(local['target_yaw'])
         turn = float(local['turn'])
         dx = float(face_position[0]) - float(position[0])

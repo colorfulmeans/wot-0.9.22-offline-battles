@@ -78,19 +78,25 @@ class TurretObstacleTests(unittest.TestCase):
             vehicle, _POSE, 7, lambda *args: called.append(args)))
         self.assertEqual(called, [])
 
-    def test_proposal_supports_the_final_rotated_gun_and_turret(self):
+    def test_proposal_starts_one_body_without_precomputing_a_superseded_arc(self):
         vehicle = _Vehicle()
         vehicle.typeDescriptor = descriptor()
         vehicle.typeDescriptor.gun.hitTester = BoxTester((-0.2, -0.2, 0), (0.2, 3, 1))
-        proposed = detached_turret.freeze_obstacle_plan(vehicle, _POSE, 555, _flat_ground())
+        vehicle.typeDescriptor.turret.weight = 4000.
+        vehicle.typeDescriptor.gun.weight = 1000.
+        def unexpected_query(*args):
+            self.fail('death callback must not pre-cast the rigid body flight')
+        proposed = detached_turret.freeze_obstacle_plan(vehicle, _POSE, 555, unexpected_query)
         self.assertIsNotNone(proposed)
         flight = proposed['flight']
-        attitude = detached_turret.turret_detachment.rest_attitude(
-            proposed['attitude'], proposed['spin'], flight['duration'])
-        ys = [flight['rest'][1] + shot_geometry.transform_vehicle_vector(corner, *attitude)[1]
-              for _, _, offset, bounds in turret_obstacles.turret_components(vehicle.typeDescriptor)
-              for corner in turret_obstacles._corners(bounds, offset)]
-        self.assertAlmostEqual(min(ys), flight['contact'][1])
+        self.assertFalse(flight['landed'])
+        self.assertIsNone(flight['contact'])
+        self.assertEqual(flight['origin'], flight['body']['position'])
+        self.assertGreater(flight['body']['velocity'][1], 0.)
+        self.assertGreater(flight['body']['centre'][2], 0.)
+        from gui.mods.offline_lan_0922 import turret_obstacle_schema
+        self.assertIsNotNone(turret_obstacle_schema.normalize_proposal(
+            dict(proposed, actor_kind='bot', actor_id=17)))
 
     def test_landing_clock_and_historical_chord_hit_time(self):
         obstacles = self.obstacle()

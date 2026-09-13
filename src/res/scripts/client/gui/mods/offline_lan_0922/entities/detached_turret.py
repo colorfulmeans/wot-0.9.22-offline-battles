@@ -179,6 +179,7 @@ class DetachedTurretPresentation(object):
                                   started=float(now) - max(0.0, float(elapsed)),
                                   settled=False, impacted=turret['impacted'] and not new_impact,
                                   motion_seq=row['motion_seq'])
+                    self._buffer_canonical(turret, row, now, elapsed)
                 return True
         self._retire_entities()
         if (self.has_vehicle(plan['entity_id']) or
@@ -187,9 +188,23 @@ class DetachedTurretPresentation(object):
                 float(now) < attempt['next_retry']):
             return False
         attempt['next_retry'] = float(now) + CANONICAL_CREATE_RETRY_SECONDS
-        return self._launch_frozen(
+        launched = self._launch_frozen(
             plan, row['flight'], row['spin'], float(now) - max(0.0, float(elapsed)),
             float(now), canonical_key=key)
+        if launched:
+            turret = next(t for t in self._turrets if t.get('canonical_key') == key)
+            turret['motion_seq'] = row.get('motion_seq', 0)
+            self._buffer_canonical(turret, row, now, elapsed)
+        return launched
+
+    @staticmethod
+    def _buffer_canonical(turret, row, now, elapsed):
+        if 'body' not in row['flight']:
+            return
+        from gui.mods.offline_lan_0922 import rigid_turret
+        if turret.get('pose_buffer') is None:
+            turret['pose_buffer'] = rigid_turret.PresentationBuffer()
+        turret['pose_buffer'].push(row, float(now), float(elapsed))
 
     def launch(self, plan, seed, now):
         """Create the stock entity and start driving its compound.
@@ -311,9 +326,13 @@ class DetachedTurretPresentation(object):
                         turret['vehicle_id'], turret['id'],
                         max(0, int((float(now) - turret['started']) * 1000))))
             elapsed = max(0.0, float(now) - turret['started'])
-            position, attitude = turret_detachment.pose_at(
-                turret['flight'], turret['attitude'], turret['spin'],
-                elapsed)
+            pose_buffer = turret.get('pose_buffer')
+            if pose_buffer is not None:
+                position, attitude, body = pose_buffer.pose(float(now))
+            else:
+                position, attitude = turret_detachment.pose_at(
+                    turret['flight'], turret['attitude'], turret['spin'], elapsed)
+                body = turret['flight'].get('body')
             matrix = turret['matrix']
             try:
                 matrix.setRotateYPR(
@@ -325,14 +344,20 @@ class DetachedTurretPresentation(object):
                 self._note('detached turret pose write failed', error)
                 continue
             written += 1
-            body = turret['flight'].get('body')
             landed = bool(body.get('impact')) if body else elapsed >= float(turret['flight']['duration'])
             if body:
-                turret['settled'] = body['sleeping']
+                turret['settled'] = body['sleeping'] and (
+                    pose_buffer is None or pose_buffer.cursor >= pose_buffer.samples[-1][0])
             elif landed:
                 turret['settled'] = True
             if landed:
-                if not turret['impacted']:
+                if body and body['impact_serial'] > turret.get('presented_impact_serial', 0):
+                    turret['presented_impact_serial'] = body['impact_serial']
+                    impact = body['impact']
+                    flight = dict(turret['flight'], body=body, landed=True,
+                                  contact=impact['point'], energy=impact['energy'])
+                    self._report_impact(entity, flight)
+                elif not body and not turret['impacted']:
                     turret['impacted'] = True
                     self._report_impact(entity, turret['flight'])
         return written
@@ -561,12 +586,7 @@ def detachment_plan(entity, pose):
 
 
 def freeze_obstacle_plan(entity, pose, seed, collide):
-    """Resolve one worker proposal using this vehicle's exact loaded geometry.
-
-    The server supplies actor identity and creation time only after admission.
-    Both collision and presentation consume the returned frozen flight; the
-    final rest Y supports the complete rotated turret/gun underside.
-    """
+    """Freeze the initial body; worker substeps own all subsequent contacts."""
     plan = detachment_plan(entity, pose)
     if plan is None:
         return None
@@ -577,12 +597,16 @@ def freeze_obstacle_plan(entity, pose, seed, collide):
                for unused_name, component, unused_offset, unused_bounds in components):
             return None
         impulse = turret_detachment.launch_impulse(seed)
-        flight = turret_detachment.resolve_flight(
-            plan['launch'], impulse['velocity'], collide,
-            clearance=plan['clearance'])
-        flight = rest_on_component_bounds(
-            flight, plan['attitude'], impulse['spin'], components)
+        from gui.mods.offline_lan_0922 import rigid_turret
+        spin = impulse['spin']
+        body = rigid_turret.Body(components, dict(
+            position=plan['launch'], attitude=plan['attitude'],
+            velocity=impulse['velocity'], angular_velocity=(spin[1], spin[0], spin[2])))
+        # Pre-casting a second, complete throw here was immediately superseded
+        # by the rigid body. It blocked the death callback and made the first
+        # visible arc switch ownership as soon as the first body row arrived.
+        flight = rigid_turret.revision({}, body, 0)['flight']
     except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         return None
     return {'flight': flight, 'attitude': plan['attitude'],
-            'spin': impulse['spin']}
+            'spin': (0.0, 0.0, 0.0)}

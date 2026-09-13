@@ -83,10 +83,11 @@ class TurretRuntimeContactTests(unittest.TestCase):
         self.assertEqual(0., battle._turret_bodies['bot:17'].velocity[0])
         self.assertNotIn('bot:17', battle._turret_sim_times)
         battle._collide_rigid_turret = lambda a,b: None
-        battle._advance_turret_support(1080)
+        with mock.patch('gui.mods.offline_lan_0922.battle_runtime._PROFILE_CLOCK', return_value=0.):
+            battle._advance_turret_support(1080)
         self.assertAlmostEqual(1., battle._turret_bodies['bot:17'].velocity[0])
-        self.assertAlmostEqual(.04, battle._turret_bodies['bot:17'].position[0])
-        self.assertEqual(1040, battle._turret_sim_times['bot:17'])
+        self.assertAlmostEqual(.08, battle._turret_bodies['bot:17'].position[0])
+        self.assertEqual(1080, battle._turret_sim_times['bot:17'])
         battle._advance_turret_support(1080)
         self.assertAlmostEqual(.08, battle._turret_bodies['bot:17'].position[0])
 
@@ -103,15 +104,32 @@ class TurretRuntimeContactTests(unittest.TestCase):
         battle._authority_players = lambda: []
         calls = []
         battle._collide_rigid_turret = lambda a, b: calls.append((a, b))
-        battle._advance_turret_support(6000)
-        self.assertEqual(1040, battle._turret_sim_times['bot:17'])
-        self.assertEqual(1040, battle._turret_sim_times['bot:18'])
-        self.assertLessEqual(len(calls), 2*16*4)
-        for unused in range(124):
+        timer = [0.]
+        def measured_cost():
+            timer[0] += .0011
+            return timer[0]
+        with mock.patch('gui.mods.offline_lan_0922.battle_runtime._PROFILE_CLOCK', side_effect=measured_cost):
+            battle._advance_turret_support(6000)
+            self.assertAlmostEqual(1020, battle._turret_sim_times['bot:17'])
+            self.assertAlmostEqual(1020, battle._turret_sim_times['bot:18'])
+            self.assertLessEqual(len(calls), 2*16*2)
+        # Once the work is cheap, both clocks consume the retained interval
+        # without another 125 callbacks of artificially slowed flight.
+        with mock.patch('gui.mods.offline_lan_0922.battle_runtime._PROFILE_CLOCK', return_value=0.):
             battle._advance_turret_support(6000)
         self.assertEqual(6000, battle._turret_sim_times['bot:17'])
         self.assertEqual(6000, battle._detached_turret_proposals['bot:17']['motion_time_ms'])
         self.assertEqual(6000, battle._turret_sim_times['bot:18'])
+
+    def test_ten_hz_worker_advances_the_whole_interval_when_queries_fit_budget(self):
+        runtime, battle = self.setup_body()
+        battle._detached_turret_rows['bot:17'] = row()
+        battle._authority_players = lambda: []
+        with mock.patch('gui.mods.offline_lan_0922.battle_runtime._PROFILE_CLOCK', return_value=0.):
+            for server_ms in range(1100, 1601, 100):
+                battle._advance_turret_support(server_ms)
+                self.assertEqual(server_ms, battle._turret_sim_times['bot:17'])
+        self.assertAlmostEqual(1.-9.81*.6, battle._turret_bodies['bot:17'].velocity[1])
 
     def test_scenery_sweep_reuses_live_filter_and_checks_outside_its_bounds(self):
         runtime, battle = self.setup_body()
