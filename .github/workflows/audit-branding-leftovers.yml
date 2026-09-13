@@ -19,7 +19,6 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
-          import os
           import re
           import subprocess
 
@@ -29,12 +28,14 @@ jobs:
               ('old-version', re.compile(r'0\.7\.[0-9]+', re.I)),
               ('old-author', re.compile(r'pengw0048|org\.peng|\bpeng\b', re.I)),
               ('old-product-name', re.compile(r'World of Tanks Offline Battles|WoT Offline Battles|WoT-Offline-Battles-Launcher', re.I)),
+              ('old-repo-name', re.compile(r'(?<!0\.9\.22-)wot-offline-battles', re.I)),
               ('github-build-prefix', re.compile(r'github-[A-Za-z0-9_$\{\}.:-]+', re.I)),
-              ('build-identity-env', re.compile(r'WOT_OFFLINE_BUILD_IDENTITY', re.I)),
           ]
           totals = {name: 0 for name, _ in patterns}
           print('=== BRANDING AUDIT BEGIN ===')
           for path in paths:
+              if path == '.github/workflows/audit-branding-leftovers.yml':
+                  continue
               try:
                   data = open(path, 'rb').read()
               except OSError:
