@@ -1,0 +1,287 @@
+name: Publish corrected v0.8.0
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-v0.8.0-fixed.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-server:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11.9"
+          architecture: "x64"
+      - name: Install pinned Windows server packager
+        run: >-
+          python -m pip install
+          -r server/requirements-windows-build.txt
+      - name: Build Windows LAN server
+        shell: pwsh
+        run: >-
+          pwsh -NoProfile -File
+          server/build_windows_server.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v080-fixed-manual-server-input
+          path: dist/server/WoT-0.9.22-LAN-Server.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  client-payload:
+    needs: windows-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Test launcher and payload staging
+        working-directory: launcher
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - uses: actions/download-artifact@v4
+        with:
+          name: v080-fixed-manual-server-input
+          path: dist/server
+      - name: Build Python 2.7 0.9.22 client package
+        run: >-
+          docker run --rm --platform linux/amd64 -v "$PWD:/work"
+          -e WOT_OFFLINE_BUILD_IDENTITY="github-${{ github.run_id }}-${{ github.run_attempt }}"
+          -w /work python:2.7.18
+          python build_wotmod.py
+      - name: Validate 0.9.22 client package
+        run: >-
+          python tools/validate_wotmod.py
+          dist/org.peng.offline_lan_0922_*.wotmod
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v080-fixed-launcher-build-input
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-launcher-and-release:
+    needs: client-payload
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11.9"
+          architecture: "x64"
+      - name: Install pinned Windows packager
+        run: >-
+          python -m pip install
+          -r server/requirements-windows-build.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: v080-fixed-launcher-build-input
+          path: dist
+
+      - name: Apply v0.8.0 version and project branding
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          def replace(path, old, new, count=None):
+              path = Path(path)
+              text = path.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit('expected text not found in %s: %r' % (path, old))
+              if count is not None and text.count(old) != count:
+                  raise SystemExit('unexpected match count in %s for %r: %d' %
+                                   (path, old, text.count(old)))
+              path.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace('launcher/wot_launcher.py',
+                  'LAUNCHER_VERSION = "0.7.7"',
+                  'LAUNCHER_VERSION = "0.8.0"', 1)
+          replace('launcher/wot_launcher.py',
+                  'WINDOW_TITLE = "World of Tanks Offline Battles %s" % LAUNCHER_VERSION',
+                  'WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION', 1)
+          replace('launcher/tests/test_launcher_window.py', '0.7.7', '0.8.0')
+
+          replace('launcher/build_launcher.ps1',
+                  '$AppName = "WoT-Offline-Battles-Launcher"',
+                  '$AppName = "wot-0.9.22-offline-battles"', 1)
+          replace('launcher/build_launcher.ps1',
+                  '    --noupx `\n',
+                  '    --noupx `\n    --version-file (Join-Path $LauncherRoot "version_info.txt") `\n', 1)
+
+          version_info = r'''VSVersionInfo(
+            ffi=FixedFileInfo(
+              filevers=(0, 8, 0, 0),
+              prodvers=(0, 8, 0, 0),
+              mask=0x3f,
+              flags=0x0,
+              OS=0x40004,
+              fileType=0x1,
+              subtype=0x0,
+              date=(0, 0)
+            ),
+            kids=[
+              StringFileInfo([
+                StringTable('040904B0', [
+                  StringStruct('CompanyName', 'colorfulmeans'),
+                  StringStruct('FileDescription', 'wot-0.9.22-offline-battles'),
+                  StringStruct('FileVersion', '0.8.0'),
+                  StringStruct('InternalName', 'wot-0.9.22-offline-battles'),
+                  StringStruct('OriginalFilename', 'wot-0.9.22-offline-battles.exe'),
+                  StringStruct('ProductName', 'wot-0.9.22-offline-battles'),
+                  StringStruct('ProductVersion', '0.8.0')
+                ])
+              ]),
+              VarFileInfo([VarStruct('Translation', [1033, 1200])])
+            ]
+          )
+          '''
+          Path('launcher/version_info.txt').write_text(version_info, encoding='utf-8')
+
+          replace('.github/workflows/build-launcher.yml',
+                  'WoT-Offline-Battles-Launcher',
+                  'wot-0.9.22-offline-battles')
+          replace('.github/workflows/build-launcher.yml',
+                  'wot-offline-battles-launcher-windows-',
+                  'wot-0.9.22-offline-battles-windows-')
+
+          replace('README.md', '# World of Tanks Offline Battles',
+                  '# wot-0.9.22-offline-battles', 1)
+          replace('README.md', 'WoT-Offline-Battles-Launcher-Windows.zip',
+                  'wot-0.9.22-offline-battles-0.8.0-Windows-x64.zip')
+          replace('README.md', 'WoT-Offline-Battles-Launcher.exe',
+                  'wot-0.9.22-offline-battles.exe')
+
+          replace('launcher/LAUNCHER_README.txt',
+                  'WoT Offline Battles Launcher',
+                  'wot-0.9.22-offline-battles', 1)
+          replace('launcher/LAUNCHER_README.txt',
+                  'WoT-Offline-Battles-Launcher.exe',
+                  'wot-0.9.22-offline-battles.exe')
+          '@ | python -
+
+          git diff --check
+          git diff -- launcher/wot_launcher.py launcher/tests/test_launcher_window.py launcher/build_launcher.ps1 launcher/version_info.txt README.md launcher/LAUNCHER_README.txt .github/workflows/build-launcher.yml
+
+      - name: Test corrected launcher on Windows
+        working-directory: launcher
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Verify corrected branding constants
+        shell: pwsh
+        run: |
+          @'
+          import os
+          import sys
+          sys.path.insert(0, os.path.join(os.getcwd(), 'launcher'))
+          import wot_launcher
+          assert wot_launcher.LAUNCHER_VERSION == '0.8.0'
+          assert wot_launcher.WINDOW_TITLE == 'wot-0.9.22-offline-battles v0.8.0'
+          print(wot_launcher.WINDOW_TITLE)
+          '@ | python -
+
+      - name: Build corrected launcher distribution
+        shell: pwsh
+        run: pwsh -NoProfile -File launcher/build_launcher.ps1
+
+      - name: Verify built payload and package a single-layer release ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $appName = "wot-0.9.22-offline-battles"
+          $appRoot = Join-Path $PWD "launcher\dist\$appName"
+          $launcher = Join-Path $appRoot "$appName.exe"
+          if (-not (Test-Path -LiteralPath $launcher)) {
+              throw "Correctly branded launcher executable is missing"
+          }
+
+          $releaseZip = Join-Path $PWD "wot-0.9.22-offline-battles-0.8.0-Windows-x64.zip"
+          if (Test-Path -LiteralPath $releaseZip) {
+              Remove-Item -LiteralPath $releaseZip -Force
+          }
+          Compress-Archive -Force -Path (Join-Path $appRoot "*") -DestinationPath $releaseZip
+
+          @'
+          from pathlib import Path
+          from zipfile import ZipFile
+          path = Path('wot-0.9.22-offline-battles-0.8.0-Windows-x64.zip')
+          with ZipFile(path) as archive:
+              names = archive.namelist()
+          assert 'wot-0.9.22-offline-battles.exe' in names, 'launcher is not at ZIP root'
+          assert '_internal/client/0.9.22.zip' in names, '0.9.22 client payload is missing'
+          top_level_zips = [name for name in names
+                            if name.lower().endswith('.zip') and '/' not in name.rstrip('/')]
+          assert not top_level_zips, 'unexpected nested top-level ZIP: %r' % top_level_zips
+          print('Single-layer release ZIP verified:', path)
+          '@ | python -
+
+      - name: Commit corrected version and branding
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add launcher/wot_launcher.py launcher/tests/test_launcher_window.py launcher/build_launcher.ps1 launcher/version_info.txt README.md launcher/LAUNCHER_README.txt .github/workflows/build-launcher.yml
+          git commit -m "Set launcher branding and version to v0.8.0"
+          git push origin HEAD:main
+
+      - name: Remove one-off release workflow and retag v0.8.0
+        shell: pwsh
+        run: |
+          git rm .github/workflows/publish-v0.8.0-fixed.yml
+          git commit -m "Remove corrected v0.8.0 release workflow"
+          git push origin HEAD:main
+          git tag -f v0.8.0 HEAD
+          git push origin refs/tags/v0.8.0 --force
+
+      - name: Write release notes
+        shell: pwsh
+        run: |
+          @'
+          本版本基于原作者 v0.7.7 继续开发，项目名称统一为 **wot-0.9.22-offline-battles**，内部版本号更新为 **v0.8.0**。
+
+          主要改进：
+
+          - 重做车辆近距离碰撞响应：碰撞推动更重视双方质量、相对运动和履带抓地力，减少轻车或 Bot 无视吨位持续推动玩家的情况。
+          - 改善贴车后的 Bot 脱困：Bot 持续接触玩家时不会直接停止，而会继续尝试倒车、转向和脱离；实际脱困能力仍受车辆质量、动力和接触方向影响。
+          - 优化侧向接触与车体旋转限制，减少贴车时不合理的横滑和强行转过去。
+          - 重做弹药架爆炸后的飞脱炮塔刚体：炮塔具有实际碰撞体积，可与地面、场景和车辆发生接触、滚动和受力。
+          - 优化炮塔落地、支撑判断和状态同步，改善高帧率下炮塔飞出动画仍然一顿一顿的问题。
+          - 更新启动器品牌信息：窗口标题、EXE/目录名称、Windows 文件版本信息和文档统一为 `wot-0.9.22-offline-battles` / `0.8.0`。
+          - 发布包为单层 ZIP：完整解压一次后即可直接运行，不再额外套多层压缩包。
+
+          ### 使用方法
+
+          1. 关闭游戏和旧版启动器，将新版 ZIP 完整解压一次。
+          2. 运行 `wot-0.9.22-offline-battles.exe`，选择 World of Tanks 游戏目录后启动。
+          3. 局域网联机时，所有玩家请使用同一版本。
+
+          适用客户端：**国服高清版 0.9.22.0.1 #1513**。
+          '@ | Set-Content -LiteralPath RELEASE_NOTES.md -Encoding utf8
+
+      - name: Publish corrected GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create v0.8.0 `
+            "wot-0.9.22-offline-battles-0.8.0-Windows-x64.zip" `
+            --verify-tag `
+            --title "wot-0.9.22-offline-battles v0.8.0" `
+            --notes-file RELEASE_NOTES.md
