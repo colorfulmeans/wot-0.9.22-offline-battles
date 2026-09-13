@@ -1,6 +1,6 @@
 name: Audit branding leftovers
 
-# Final audit after restoring the complete launcher documentation.
+# Final audit after restoring the complete launcher documentation and removing temporary repair workflows.
 on:
   push:
     branches:
