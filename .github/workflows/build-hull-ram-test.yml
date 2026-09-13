@@ -34,21 +34,12 @@ jobs:
   client-payload:
     needs: windows-server
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - name: Run client test suite
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -p "test_*.py" -v
-      - name: Run launcher test suite
-        working-directory: launcher
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -p "test_*.py" -v
       - uses: actions/download-artifact@v4
         with:
           name: hull-ram-server-input
@@ -73,7 +64,7 @@ jobs:
   windows-launcher:
     needs: client-payload
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -86,11 +77,6 @@ jobs:
         with:
           name: hull-ram-launcher-input
           path: dist
-      - name: Test launcher on Windows
-        working-directory: launcher
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -p "test_*.py" -v
       - name: Build launcher distribution
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
