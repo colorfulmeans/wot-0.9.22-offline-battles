@@ -1,0 +1,145 @@
+name: Repair v0.8.0 branding leftovers
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/repair-branding-leftovers.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Apply branding cleanup
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def edit(path, replacements):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              original = text
+              for old, new in replacements:
+                  if old not in text:
+                      raise SystemExit('expected text not found in %s: %r' % (path, old))
+                  text = text.replace(old, new)
+              if text == original:
+                  raise SystemExit('no changes made to %s' % path)
+              p.write_text(text, encoding='utf-8')
+
+          # Maintainer/developer guidance inherited from the upstream author.
+          p = Path('CLAUDE.md')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace('/Users/peng/Desktop', '/Users/<username>/Desktop')
+          text = text.replace('Peng', 'colorfulmeans')
+          p.write_text(text, encoding='utf-8')
+
+          edit('COMPATIBILITY_REVIEW.md', [
+              ('`github-34719995064-1`', '`colorfulmeans-34719995064-1`'),
+          ])
+          edit('INSTALL.txt', [
+              ('org.peng.offline_lan_0922', 'org.colorfulmeans.offline_lan_0922'),
+          ])
+          edit('build_for_client.sh', [
+              ('org.peng.offline_lan_0922_0.7.7.wotmod',
+               'org.colorfulmeans.offline_lan_0922_0.8.0.wotmod'),
+          ])
+          edit('build_wotmod.py', [
+              ("MOD_ID = 'org.peng.offline_lan_0922'",
+               "MOD_ID = 'org.colorfulmeans.offline_lan_0922'"),
+              ("MOD_VERSION = '0.7.7'", "MOD_VERSION = '0.8.0'"),
+          ])
+          edit('launcher/LAUNCHER_README.txt', [
+              ('https://github.com/pengw0048/wot-offline-battles',
+               'https://github.com/colorfulmeans/wot-0.9.22-offline-battles'),
+          ])
+          edit('launcher/core.py', [
+              ('"mods", "0.9.22.0.1", "org.peng.offline_lan_0922*.wotmod")',
+               '"mods", "0.9.22.0.1", "*offline_lan_0922*.wotmod")'),
+              ('("mods/0.9.22.0.1", "org.peng.offline_lan_0922*"),',
+               '("mods/0.9.22.0.1", "*offline_lan_0922*"),'),
+              ('"mods/0.9.22.0.1/org.peng.offline_lan_0922*.wotmod")',
+               '"mods/0.9.22.0.1/*offline_lan_0922*.wotmod")'),
+              ('"org.peng.offline_lan_0922" in os.path.basename(name)',
+               '"offline_lan_0922" in os.path.basename(name)'),
+          ])
+          edit('launcher/tests/test_launcher_core.py', [
+              ('org.peng.offline_lan_0922', 'legacy.offline_lan_0922'),
+              ('Peng', 'PlayerOne'),
+          ])
+          edit('launcher/tests/test_launcher_window.py', [
+              ('Peng', 'PlayerOne'),
+          ])
+          edit('launcher/wot_launcher.py', [
+              ('header, text="World of Tanks Offline Battles",',
+               'header, text="wot-0.9.22-offline-battles",'),
+          ])
+          edit('meta.xml', [
+              ('<id>org.peng.offline_lan_0922</id>',
+               '<id>org.colorfulmeans.offline_lan_0922</id>'),
+              ('<version>0.7.7</version>', '<version>0.8.0</version>'),
+          ])
+          edit('server/WINDOWS_SERVER_README.txt', [
+              ('https://github.com/pengw0048/wot-offline-battles/tree/peng/0922-feedback-candidate',
+               'https://github.com/colorfulmeans/wot-0.9.22-offline-battles/tree/main/server'),
+              ('https://github.com/pengw0048/wot-offline-battles/blob/peng/0922-feedback-candidate/LICENSE',
+               'https://github.com/colorfulmeans/wot-0.9.22-offline-battles/blob/main/LICENSE'),
+          ])
+          edit('src/res/scripts/client/gui/mods/offline_lan_0922/__init__.py', [
+              ("PORT_VERSION = '0.7.7'", "PORT_VERSION = '0.8.0'"),
+          ])
+          edit('tests/test_port_0922.py', [
+              ('org.peng.offline_lan_0922', 'org.colorfulmeans.offline_lan_0922'),
+              ("'0.7.7'", "'0.8.0'"),
+              ('github-12345-2', 'colorfulmeans-12345-2'),
+              (r'C:\Users\peng\AppData\Roaming\Wargaming.net\WorldOfTanks',
+               r'C:\Users\player\AppData\Roaming\Wargaming.net\WorldOfTanks'),
+          ])
+          edit('tests/test_port_0922_battle_runtime.py', [
+              ('the leak Peng saw from the SPG strategic camera',
+               'the leak reported from the SPG strategic camera'),
+          ])
+          edit('tests/test_port_0922_bot_runtime.py', [
+              ('the case Peng sees most often in a spawn with a rock',
+               'a commonly reported case in a spawn with a rock'),
+          ])
+          edit('tests/test_port_0922_garage.py', [
+              ('The v0.7.0 loss, from a real client log.',
+               'A previous regression, from a real client log.'),
+          ])
+          edit('tests/test_port_0922_windows_server.py', [
+              ("'/tree/peng/0922-feedback-candidate'", "'/tree/main/server'"),
+          ])
+          edit('tools/validate_wotmod.py', [
+              ("mod_id != 'org.peng.offline_lan_0922'",
+               "mod_id != 'org.colorfulmeans.offline_lan_0922'"),
+          ])
+
+          funding = Path('.github/FUNDING.yml')
+          if funding.exists():
+              funding.unlink()
+          PY
+
+          git diff --check
+          git status --short
+      - name: Run launcher unit tests
+        working-directory: launcher
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- . ':!.github/workflows'
+          git commit -m "Remove upstream branding and set v0.8.0 identities"
+          git push origin HEAD:main
