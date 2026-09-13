@@ -53,13 +53,13 @@ jobs:
       - name: Build Python 2.7 0.9.22 client package
         run: >-
           docker run --rm --platform linux/amd64 -v "$PWD:/work"
-          -e WOT_OFFLINE_BUILD_IDENTITY="github-${{ github.run_id }}-${{ github.run_attempt }}"
+          -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
           -w /work python:2.7.18
           python build_wotmod.py
       - name: Validate 0.9.22 client package
         run: >-
           python tools/validate_wotmod.py
-          dist/org.peng.offline_lan_0922_*.wotmod
+          dist/org.colorfulmeans.offline_lan_0922_*.wotmod
       - uses: actions/upload-artifact@v4
         with:
           name: launcher-build-input
