@@ -46,8 +46,15 @@ jobs:
               names = archive.namelist()
           if 'WoT-Offline-Battles-Launcher.exe' not in names:
               raise SystemExit('launcher is not at the ZIP root')
-          if any(name.lower().endswith('.zip') for name in names):
-              raise SystemExit('release archive unexpectedly contains a nested ZIP')
+          top_level_zips = [
+              name for name in names
+              if name.lower().endswith('.zip') and '/' not in name.rstrip('/')
+          ]
+          if top_level_zips:
+              raise SystemExit(
+                  'release archive contains a nested top-level ZIP: %r' % top_level_zips)
+          if '_internal/client/0.9.22.zip' not in names:
+              raise SystemExit('bundled 0.9.22 client payload is missing')
           print('Single-layer release ZIP verified:', output)
           PY
 
