@@ -1,4 +1,4 @@
-# World of Tanks Offline Battles
+# wot-0.9.22-offline-battles
 
 Play standard battles with bots in the Chinese HD Windows client
 `0.9.22.0.1 #1513`, alone or with friends on a LAN.
@@ -9,8 +9,8 @@ and battle logic, a small LAN server and a launcher.
 
 ## Play
 
-1. Download `WoT-Offline-Battles-Launcher-Windows.zip` from the releases,
-   unpack it, and start `WoT-Offline-Battles-Launcher.exe`.
+1. Download `wot-0.9.22-offline-battles-0.8.0-Windows-x64.zip` from the releases,
+   unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
 3. Select a mode:

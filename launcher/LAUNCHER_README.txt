@@ -1,4 +1,4 @@
-WoT Offline Battles Launcher
+wot-0.9.22-offline-battles
 ================================
 
 The launcher prepares one battle before the game starts. It installs the mod,
@@ -7,7 +7,7 @@ Tanks, and stops that server when the game closes. Its bundled client and
 server payloads are only for the exact #1513 client described below; it does
 not install or start earlier client lines.
 
-1. Extract the downloaded ZIP once, then start WoT-Offline-Battles-Launcher.exe
+1. Extract the downloaded ZIP once, then start wot-0.9.22-offline-battles.exe
    from the extracted folder. Keep the folder
    together; the launcher needs the files beside it.
 2. Select your World of Tanks folder. The list holds the folders you used

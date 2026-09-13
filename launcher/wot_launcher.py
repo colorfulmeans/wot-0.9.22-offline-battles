@@ -43,8 +43,8 @@ _SHOP_HELP = (
     "next game startup. Owned or queued vehicles cannot be added twice. "
     "Close the game before adding vehicles.")
 
-LAUNCHER_VERSION = "0.7.7"
-WINDOW_TITLE = "World of Tanks Offline Battles %s" % LAUNCHER_VERSION
+LAUNCHER_VERSION = "0.8.0"
+WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
     core.worker_startup_exit_hint(0xc0000135):
