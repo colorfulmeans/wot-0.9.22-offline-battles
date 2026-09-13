@@ -7,7 +7,7 @@ no payload, installer or runtime for any earlier client line.
 Close the game, then extract the contents of this folder directly into the
 directory that contains WorldOfTanks.exe. It contains:
 
-  mods\0.9.22.0.1\org.peng.offline_lan_0922_<version>.wotmod
+  mods\0.9.22.0.1\org.colorfulmeans.offline_lan_0922_<version>.wotmod
   mods\configs\offline_lan_0922\config.json
   mods\configs\offline_lan_0922\navgraphs\
   mods\configs\offline_lan_0922\foliage\
@@ -17,7 +17,7 @@ directory that contains WorldOfTanks.exe. It contains:
   tools\AUTHORITY_WORKER_PROBE.md
   tools\authority_worker_probe_supervisor.py
 
-Move every older org.peng.offline_lan_0922*.wotmod out of
+Move every older org.colorfulmeans.offline_lan_0922*.wotmod out of
 mods\0.9.22.0.1 before copying this version. Start the LAN server on one PC,
 then edit mods\configs\offline_lan_0922\server_endpoint.json when the server is
 not 127.0.0.1:28782. That user-owned file is never shipped in this package.
@@ -166,7 +166,7 @@ Troubleshooting
 - No connection: check the server address, the host firewall and that the
   server window is still open.
 - `unsupported compression type`: an older wotmod is still present. Keep only
-  the org.peng.offline_lan_0922 wotmod from this package.
+  the org.colorfulmeans.offline_lan_0922 wotmod from this package.
 - The client keeps its own files. Your saved address, account state, garage and
   configuration survive a reinstall.
 - If a crash leaves this mod stuck at login, close the game, rename

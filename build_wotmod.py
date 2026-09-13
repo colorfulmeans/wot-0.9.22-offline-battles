@@ -29,8 +29,8 @@ if _SCHEMA_ROOT not in sys.path:
 import navigation_graph_schema as _navigation_schema
 
 
-MOD_ID = 'org.peng.offline_lan_0922'
-MOD_VERSION = '0.7.7'
+MOD_ID = 'org.colorfulmeans.offline_lan_0922'
+MOD_VERSION = '0.8.0'
 BUILD_IDENTITY_ENV = 'WOT_OFFLINE_BUILD_IDENTITY'
 BUILD_IDENTITY_FILENAME = 'build_identity.json'
 BUILD_IDENTITY_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$')

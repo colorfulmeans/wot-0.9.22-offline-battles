@@ -85,7 +85,7 @@ class GameRootTest(unittest.TestCase):
     def test_another_0_9_22_build_uses_the_compatible_port(self):
         self._write("version.xml", "<version> v.0.9.22.0.1 #0789 </version>")
         self._write(
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_0.6.1.wotmod")
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_0.6.1.wotmod")
         self.assertEqual(core.PORT_0_9_22, core.detect_port(self.root))
 
     def test_another_0_9_22_patch_uses_the_compatible_port(self):
@@ -95,12 +95,12 @@ class GameRootTest(unittest.TestCase):
     def test_unsupported_client_reports_no_port(self):
         self._write("version.xml", "<version> v.1.0.0 #1 </version>")
         self._write(
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_0.6.1.wotmod")
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_0.6.1.wotmod")
         self.assertIsNone(core.detect_port(self.root))
 
     def test_an_installed_0_9_22_package_is_a_trusted_version_fallback(self):
         self._write(
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_0.6.1.wotmod")
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_0.6.1.wotmod")
         self.assertIsNone(core.detect_port(self.root))
         status = core.inspect_game_root(self.root)
         self.assertEqual(core.PORT_0_9_22, status["client"])
@@ -111,7 +111,7 @@ class GameRootTest(unittest.TestCase):
             "version.xml",
             "<broken><version>v.0.9.22.0.1 #1513</version>")
         self._write(
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_0.6.1.wotmod")
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_0.6.1.wotmod")
         self.assertIsNone(core.detect_port(self.root))
         status = core.inspect_game_root(self.root)
         self.assertEqual(core.PORT_0_9_22, status["client"])
@@ -253,10 +253,10 @@ class SettingsFileTest(unittest.TestCase):
         with open(config_path, "w") as stream:
             json.dump({"schema": 1, "name": "Player", "max_health": 90}, stream)
         core.write_settings(self.root, core.PORT_0_9_22, core.MODE_SINGLE,
-                            core.LOCAL_HOST, core.DEFAULT_SERVER_PORT, "Peng")
+                            core.LOCAL_HOST, core.DEFAULT_SERVER_PORT, "PlayerOne")
         config = self._read(os.path.join(
             "mods", "configs", "offline_lan_0922", "config.json"))
-        self.assertEqual(config["name"], "Peng")
+        self.assertEqual(config["name"], "PlayerOne")
         self.assertEqual(config["max_health"], 90)
 
     def test_0_9_22_name_updates_a_windows_read_only_config(self):
@@ -282,11 +282,11 @@ class SettingsFileTest(unittest.TestCase):
         with mock.patch("core.os.replace", side_effect=windows_replace):
             core.write_settings(
                 self.root, core.PORT_0_9_22, core.MODE_SINGLE,
-                core.LOCAL_HOST, core.DEFAULT_SERVER_PORT, "Peng")
+                core.LOCAL_HOST, core.DEFAULT_SERVER_PORT, "PlayerOne")
 
         config = self._read(os.path.join(
             "mods", "configs", "offline_lan_0922", "config.json"))
-        self.assertEqual(config["name"], "Peng")
+        self.assertEqual(config["name"], "PlayerOne")
         self.assertEqual(config["max_health"], 90)
         self.assertEqual(len(config_replace_attempts), 2)
         self.assertFalse(os.path.exists(config_path + ".tmp"))
@@ -745,7 +745,7 @@ class ClientInstallTest(unittest.TestCase):
 
     def _stage_0_9_22(self, content="new", build_identity="test-build-a"):
         members = {
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_9.9.9.wotmod": content,
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_9.9.9.wotmod": content,
             "mods/0.9.22.0.1/offline_instance_guard_native.pyd": content,
             "mods/configs/offline_lan_0922/config.json": content,
             core.BUILD_IDENTITY_RELATIVE_PATH_0922: json.dumps({
@@ -790,14 +790,14 @@ class ClientInstallTest(unittest.TestCase):
     def test_0_9_22_install_replaces_old_packages_and_data(self):
         self._stage_0_9_22()
         self._write(self.game,
-                    "mods/0.9.22.0.1/org.peng.offline_lan_0922_0.1.0.wotmod",
+                    "mods/0.9.22.0.1/legacy.offline_lan_0922_0.1.0.wotmod",
                     "stale")
         core.install_client_mod(self.game, core.PORT_0_9_22, self.payload)
         self.assertFalse(os.path.exists(os.path.join(
             self.game, "mods", "0.9.22.0.1",
-            "org.peng.offline_lan_0922_0.1.0.wotmod")))
+            "legacy.offline_lan_0922_0.1.0.wotmod")))
         self.assertEqual("new", self._read(
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_9.9.9.wotmod"))
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_9.9.9.wotmod"))
 
     def test_0_9_22_install_removes_stale_baked_data(self):
         self._stage_0_9_22()
@@ -836,12 +836,12 @@ class ClientInstallTest(unittest.TestCase):
 
         core.write_settings(
             self.game, core.PORT_0_9_22, core.MODE_SINGLE, "127.0.0.1",
-            28782, "Peng", "career-2")
+            28782, "PlayerOne", "career-2")
 
         config = json.loads(
             self._read("mods/configs/offline_lan_0922/config.json"))
         self.assertEqual("career-2", config["save_slot"])
-        self.assertEqual("Peng", config["name"])
+        self.assertEqual("PlayerOne", config["name"])
 
     def test_a_launch_without_a_save_leaves_the_configured_one_alone(self):
         self._stage_0_9_22()
@@ -863,7 +863,7 @@ class ClientInstallTest(unittest.TestCase):
         with self.assertRaises(core.LauncherError):
             core.write_settings(
                 self.game, core.PORT_0_9_22, core.MODE_SINGLE, "127.0.0.1",
-                28782, "Peng", "../escape")
+                28782, "PlayerOne", "../escape")
 
         config = json.loads(
             self._read("mods/configs/offline_lan_0922/config.json"))
@@ -1246,7 +1246,7 @@ class ClientInstallTest(unittest.TestCase):
 
     def test_same_semantic_version_with_a_new_build_identity_reinstalls(self):
         package = (
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_9.9.9.wotmod")
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_9.9.9.wotmod")
         self._stage_0_9_22(content="first", build_identity="test-build-a")
         core.install_client_mod(self.game, core.PORT_0_9_22, self.payload)
         self._stage_0_9_22(content="second", build_identity="test-build-b")
@@ -1313,14 +1313,14 @@ class ClientInstallTest(unittest.TestCase):
         self._archive(core.PORT_0_9_22, members)
         self._write(
             self.game,
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_old.wotmod",
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_old.wotmod",
             "previous")
 
         self.assertRaises(core.LauncherError, core.install_client_mod,
                           self.game, core.PORT_0_9_22, self.payload)
 
         self.assertEqual("previous", self._read(
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_old.wotmod"))
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_old.wotmod"))
 
     def test_a_malformed_0_9_22_manifest_archive_is_rejected(self):
         archive_path = self._stage_0_9_22()
@@ -1337,7 +1337,7 @@ class ClientInstallTest(unittest.TestCase):
 
     def test_a_malformed_build_identity_is_soft_and_forces_reinstall(self):
         package = (
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_9.9.9.wotmod")
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_9.9.9.wotmod")
         self._stage_0_9_22(content="first", build_identity="test-build-a")
         core.install_client_mod(self.game, core.PORT_0_9_22, self.payload)
         archive_path = self._stage_0_9_22()
@@ -1426,7 +1426,7 @@ class ClientInstallTest(unittest.TestCase):
     def test_an_invalid_archive_does_not_remove_the_previous_mod(self):
         self._archive(core.PORT_0_9_22, {"../escape.txt": "no"})
         previous = (
-            "mods/0.9.22.0.1/org.peng.offline_lan_0922_old.wotmod")
+            "mods/0.9.22.0.1/legacy.offline_lan_0922_old.wotmod")
         self._write(self.game, previous, "previous")
 
         self.assertRaises(core.LauncherError, core.install_client_mod,
@@ -1561,7 +1561,7 @@ class PayloadStagingTest(unittest.TestCase):
                                "WoT-0.9.22-LAN-Client-abc1234")
         relative_paths = [
             os.path.join(overlay, "mods", "0.9.22.0.1",
-                         "org.peng.offline_lan_0922_0.6.1.wotmod"),
+                         "legacy.offline_lan_0922_0.6.1.wotmod"),
             os.path.join(overlay, "mods", "configs", "offline_lan_0922",
                          "config.json"),
             os.path.join(overlay, "mods", "configs", "offline_lan_0922",
@@ -1587,7 +1587,7 @@ class PayloadStagingTest(unittest.TestCase):
         stage_payload.stage_clients(target, source)
         expected = {
             "0.9.22": ("mods/0.9.22.0.1/"
-                       "org.peng.offline_lan_0922_0.6.1.wotmod",
+                       "legacy.offline_lan_0922_0.6.1.wotmod",
                        "mods/configs/offline_lan_0922/config.json",
                        core.BUILD_IDENTITY_RELATIVE_PATH_0922,
                        "offline_worker_starter.exe",
@@ -1636,10 +1636,10 @@ class PayloadStagingTest(unittest.TestCase):
                 "%shelper.json" % prefix)] = "secret"
         paths[os.path.join(
             overlay, "mods/0.9.22.0.1",
-            "org.peng.offline_lan_0922_0.6.1.wotmod")] = "x"
+            "legacy.offline_lan_0922_0.6.1.wotmod")] = "x"
         paths[os.path.join(
             overlay, "mods/0.9.22.0.1",
-            "org.peng.offline_lan_0922_0.6.1.wotmod.sha256")] = "secret"
+            "legacy.offline_lan_0922_0.6.1.wotmod.sha256")] = "secret"
         paths[os.path.join(
             overlay, "mods/configs/offline_lan_0922/config.json")] = "x"
         paths[os.path.join(

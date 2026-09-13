@@ -13651,7 +13651,7 @@ class BotRuntimeTests(unittest.TestCase):
         direction probe, which ranks a driving direction fifteen to twenty
         metres ahead. A rock or wall inside that corridor cancelled the
         separation entirely, so two hulls wedged near an obstacle could never
-        push apart - the case Peng sees most often in a spawn with a rock.
+        push apart - a commonly reported case in a spawn with a rock.
         """
         requested = []
 

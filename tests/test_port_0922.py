@@ -241,7 +241,7 @@ class WotmodValidatorTests(unittest.TestCase):
             for index in range(1, len(parts) + 1):
                 directories.add('/'.join(parts[:index]) + '/')
         meta = (
-            '<root><id>org.peng.offline_lan_0922</id>'
+            '<root><id>org.colorfulmeans.offline_lan_0922</id>'
             '<version>0.6.1</version></root>')
         with zipfile.ZipFile(path, 'w', compression) as archive:
             if include_directories:
@@ -349,11 +349,11 @@ class PortSourceTests(unittest.TestCase):
         build_script = (PORT_ROOT / 'build_for_client.sh').read_text(
             encoding='utf-8')
 
-        self.assertEqual('0.7.7', packager.MOD_VERSION)
+        self.assertEqual('0.8.0', packager.MOD_VERSION)
         self.assertEqual(packager.MOD_VERSION, package.PORT_VERSION)
         self.assertEqual(packager.MOD_VERSION, meta_version)
         self.assertIn(
-            'org.peng.offline_lan_0922_%s.wotmod' % packager.MOD_VERSION,
+            'org.colorfulmeans.offline_lan_0922_%s.wotmod' % packager.MOD_VERSION,
             build_script)
 
     def test_port_sources_are_python_2_compatible_syntax(self):
@@ -474,7 +474,7 @@ class PortSourceTests(unittest.TestCase):
                 config_path.parent / packager.BUILD_IDENTITY_FILENAME
             ).read_text(encoding='utf-8'))
             self.assertEqual(1, identity['schema'])
-            self.assertEqual('0.7.7', identity['semanticVersion'])
+            self.assertEqual('0.8.0', identity['semanticVersion'])
             self.assertRegex(
                 identity['buildIdentity'],
                 r'^local-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
@@ -566,9 +566,9 @@ class PortSourceTests(unittest.TestCase):
         spec.loader.exec_module(packager)
 
         self.assertEqual(
-            'github-12345-2',
+            'colorfulmeans-12345-2',
             packager._generated_build_identity({
-                packager.BUILD_IDENTITY_ENV: 'github-12345-2'}))
+                packager.BUILD_IDENTITY_ENV: 'colorfulmeans-12345-2'}))
         self.assertEqual(
             'local-19700101T000000Z-abcdef012345',
             packager._generated_build_identity(
@@ -5636,7 +5636,7 @@ class OfflineCompatibilityTests(unittest.TestCase):
                 filename = base64.b32encode(('%s;%s;%s' % (
                     server, account_name, class_name)).encode('ascii'))
                 cache_path = ntpath.join(
-                    r'C:\Users\peng\AppData\Roaming\Wargaming.net\WorldOfTanks',
+                    r'C:\Users\player\AppData\Roaming\Wargaming.net\WorldOfTanks',
                     'dossier_cache', filename.decode('ascii') + '.dat')
                 self.assertLess(len(cache_path), 260)
 

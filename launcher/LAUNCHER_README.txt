@@ -125,7 +125,7 @@ This launcher is part of wot-offline-battles and is distributed under GNU GPL
 version 3, without warranty. LICENSE and THIRD_PARTY_NOTICES.md are included
 beside this file. The corresponding source is available at:
 
-https://github.com/pengw0048/wot-offline-battles
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles
 
 The executable bundles CPython 3.11.9, distributed under the Python Software
 Foundation License Version 2 and the licenses/notices for software incorporated

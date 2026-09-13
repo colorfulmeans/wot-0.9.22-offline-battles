@@ -2543,7 +2543,7 @@ identity until safe native retirement; retries have a bounded cadence and
 never allocate a second unresolved entity for the same actor.
 
 The `20260913-062334-85d112e438d5` Windows report tested
-`github-34719995064-1` and exposed a missed numerical/performance case. Its
+`colorfulmeans-34719995064-1` and exposed a missed numerical/performance case. Its
 worker fell from 64.25 FPS before the first detached turret to 1.01 FPS in
 the last window, with a 4,340.903 ms critical-update maximum. A turret first
 lost terrain support and later reached Y = -107,613; synchronous elapsed-time

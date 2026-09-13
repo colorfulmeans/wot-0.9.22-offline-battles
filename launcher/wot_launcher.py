@@ -542,7 +542,7 @@ class LauncherWindow(object):
         header = tk.Frame(frame)
         header.grid(row=0, column=0, sticky="we", pady=(0, 8))
         tk.Label(
-            header, text="World of Tanks Offline Battles",
+            header, text="wot-0.9.22-offline-battles",
             font=("TkDefaultFont", 11, "bold")).pack(side="left")
         language_controls = tk.Frame(header)
         language_controls.pack(side="right")

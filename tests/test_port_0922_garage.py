@@ -2559,7 +2559,7 @@ class GarageSaveDurabilityTests(unittest.TestCase):
         return store, snapshot
 
     def test_a_researched_guns_own_rounds_do_not_refuse_the_save(self):
-        """The v0.7.0 loss, from a real client log.
+        """A previous regression, from a real client log.
 
         Installing a researched gun loads the rounds that gun fires.  Rounds
         are never researched in #1513, so nothing ever put them in the

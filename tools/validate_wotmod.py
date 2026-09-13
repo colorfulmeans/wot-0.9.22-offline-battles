@@ -77,7 +77,7 @@ def validate(path, expected_members=None):
         root = ET.fromstring(archive.read('meta.xml'))
         mod_id = (root.findtext('id') or '').strip()
         version = (root.findtext('version') or '').strip()
-        if mod_id != 'org.peng.offline_lan_0922':
+        if mod_id != 'org.colorfulmeans.offline_lan_0922':
             raise ValueError('unexpected mod id: %r' % mod_id)
         if not version:
             raise ValueError('meta.xml has no version')

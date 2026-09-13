@@ -25619,7 +25619,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         every non-damaged vehicle and drives it from ``filter.movementInfo``.
         It reads no compound draw flag, so ``Vehicle.show(False)`` and
         ``changeVisibility(False)`` left a hidden tank drawing a trail of
-        track marks - the leak Peng saw from the SPG strategic camera, which
+        track marks - the leak reported from the SPG strategic camera, which
         looks straight down at ground he is not allowed to see.
         """
         vehicle = _Vehicle(

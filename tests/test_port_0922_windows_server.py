@@ -377,7 +377,7 @@ class WindowsServerLauncherTests(unittest.TestCase):
 
         for required in (
                 'GNU GPL',
-                '/tree/peng/0922-feedback-candidate',
+                '/tree/main/server',
                 'any remote address/profile',
                 'trusted-LAN server',
                 'CPython 3.11.9',
