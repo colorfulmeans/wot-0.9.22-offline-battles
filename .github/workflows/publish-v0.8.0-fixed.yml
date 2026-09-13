@@ -152,13 +152,6 @@ jobs:
           '''
           Path('launcher/version_info.txt').write_text(version_info, encoding='utf-8')
 
-          replace('.github/workflows/build-launcher.yml',
-                  'WoT-Offline-Battles-Launcher',
-                  'wot-0.9.22-offline-battles')
-          replace('.github/workflows/build-launcher.yml',
-                  'wot-offline-battles-launcher-windows-',
-                  'wot-0.9.22-offline-battles-windows-')
-
           replace('README.md', '# World of Tanks Offline Battles',
                   '# wot-0.9.22-offline-battles', 1)
           replace('README.md', 'WoT-Offline-Battles-Launcher-Windows.zip',
@@ -175,7 +168,7 @@ jobs:
           '@ | python -
 
           git diff --check
-          git diff -- launcher/wot_launcher.py launcher/tests/test_launcher_window.py launcher/build_launcher.ps1 launcher/version_info.txt README.md launcher/LAUNCHER_README.txt .github/workflows/build-launcher.yml
+          git diff -- launcher/wot_launcher.py launcher/tests/test_launcher_window.py launcher/build_launcher.ps1 launcher/version_info.txt README.md launcher/LAUNCHER_README.txt
 
       - name: Test corrected launcher on Windows
         working-directory: launcher
@@ -236,16 +229,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add launcher/wot_launcher.py launcher/tests/test_launcher_window.py launcher/build_launcher.ps1 launcher/version_info.txt README.md launcher/LAUNCHER_README.txt .github/workflows/build-launcher.yml
+          git add launcher/wot_launcher.py launcher/tests/test_launcher_window.py launcher/build_launcher.ps1 launcher/version_info.txt README.md launcher/LAUNCHER_README.txt
           git commit -m "Set launcher branding and version to v0.8.0"
           git push origin HEAD:main
 
-      - name: Remove one-off release workflow and retag v0.8.0
+      - name: Retag v0.8.0
         shell: pwsh
         run: |
-          git rm .github/workflows/publish-v0.8.0-fixed.yml
-          git commit -m "Remove corrected v0.8.0 release workflow"
-          git push origin HEAD:main
           git tag -f v0.8.0 HEAD
           git push origin refs/tags/v0.8.0 --force
 
