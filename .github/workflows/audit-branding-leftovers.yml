@@ -1,5 +1,6 @@
 name: Audit branding leftovers
 
+# Final audit after restoring the complete launcher documentation.
 on:
   push:
     branches:
@@ -58,4 +59,6 @@ jobs:
           for name in sorted(totals):
               print('%s=%d' % (name, totals[name]))
           print('=== BRANDING AUDIT END ===')
+          if any(totals.values()):
+              raise SystemExit('branding leftovers remain')
           PY
