@@ -47,13 +47,13 @@ jobs:
       - name: Build Python 2.7 0.9.22 LAN client
         run: >-
           docker run --rm --platform linux/amd64 -v "$PWD:/work"
-          -e WOT_OFFLINE_BUILD_IDENTITY="github-${{ github.run_id }}-${{ github.run_attempt }}"
+          -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
           -w /work python:2.7.18
           python build_wotmod.py
       - name: Validate 0.9.22 wotmod package
         run: >-
           python tools/validate_wotmod.py
-          dist/org.peng.offline_lan_0922_*.wotmod
+          dist/org.colorfulmeans.offline_lan_0922_*.wotmod
       - uses: actions/upload-artifact@v4
         with:
           name: wot-0.9.22-lan-client
@@ -288,21 +288,21 @@ jobs:
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: wot-offline-battles-launcher
+          name: wot-0.9.22-offline-battles-launcher
           # Upload the runnable folder; Actions supplies the only outer ZIP.
-          path: launcher/dist/WoT-Offline-Battles-Launcher/
+          path: launcher/dist/wot-0.9.22-offline-battles/
           if-no-files-found: error
       - name: Extract the actual download once
         uses: actions/download-artifact@v4
         with:
-          name: wot-offline-battles-launcher
+          name: wot-0.9.22-offline-battles-launcher
           path: ${{ runner.temp }}/launcher-download
       - name: Verify that the bundled servers run from the launcher
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $download = Join-Path $env:RUNNER_TEMP "launcher-download"
-          $launcher = Join-Path $download "WoT-Offline-Battles-Launcher.exe"
+          $launcher = Join-Path $download "wot-0.9.22-offline-battles.exe"
           if (-not (Test-Path -LiteralPath $launcher) -or
                   -not (Test-Path -LiteralPath (Join-Path $download "_internal\client\0.9.22.zip")) -or
                   (Get-ChildItem -LiteralPath $download -Filter *.zip)) {
