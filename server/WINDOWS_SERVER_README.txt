@@ -35,7 +35,7 @@ other server instance and try again.
 License, source, and bundled runtimes
 =====================================
 
-This test-candidate server is part of wot-offline-battles and is distributed
+This test-candidate server is part of wot-0.9.22-offline-battles and is distributed
 under GNU GPL version 3, without warranty. Corresponding source and the
 complete project license are available at:
 
