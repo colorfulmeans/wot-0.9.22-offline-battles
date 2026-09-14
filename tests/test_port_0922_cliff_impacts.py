@@ -80,6 +80,7 @@ class CliffAndImpactTests(unittest.TestCase):
         for reason in ('solid_lane', 'upper_lane', 'raised_wall'):
             with self.subTest(reason=reason):
                 battle, entity = self.battle()
+                battle._local_airborne = True
                 battle._clock = lambda: 10.0
                 trace = dict(hit=(0, 1, 3), normal=(0, 0, -1), reason=reason)
                 battle._apply_world_contact_impact(entity, trace, 20.0, 0.0)
@@ -157,7 +158,7 @@ class CliffAndImpactTests(unittest.TestCase):
 
     def test_bot_world_contact_changes_hp_and_consumes_only_realised_witness(self):
         runtime = bot_runtime.BotRuntime(1)
-        state = dict(id=11, yaw=0.0, vertical_speed=0.0,
+        state = dict(id=11, yaw=0.0, vertical_speed=0.0, airborne=True,
                      health=500, max_health=500, alive=True,
                      _world_contact_trace=dict(hit=(0, 1, 3), normal=(0, 0, -1)))
         damage = runtime._apply_world_contact_impact(state, 20.0, 10.0)

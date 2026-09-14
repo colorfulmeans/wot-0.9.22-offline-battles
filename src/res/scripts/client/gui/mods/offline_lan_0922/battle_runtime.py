@@ -20012,6 +20012,9 @@ class BattleRuntime(object):
         params = self._local_suspension_params
         if not isinstance(params, dict):
             return ()
+        if math.cos(self._local_pitch) * math.cos(self._local_roll) <= 0.1:
+            self._local_spring_ground_memory = None
+            return (None,) * len(params['springs'])
         if probe_height is None:
             probe_height = position[1]
         probe_height = float(probe_height)
@@ -20042,6 +20045,11 @@ class BattleRuntime(object):
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=spring_maximum_y,
                 prepared_filter=prepared_filter)
+            value = vehicle_physics.suspension_footprint_support(
+                params, point, value, memory[index], yaw,
+                lambda px, pz, low, high: self._suspension_ground_y(
+                    px, pz, low, high, flat_maximum_y=high,
+                    prepared_filter=prepared_filter), support_gradient)
             value, memory[index] = vehicle_physics.retained_ground_contact(
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
@@ -20051,9 +20059,10 @@ class BattleRuntime(object):
 
     def _local_suspension_pseudo_ground_samples(
             self, position, yaw, probe_height=None,
-            support_gradient=None, sweep_drop=0.0):
+            support_gradient=None, sweep_drop=0.0, params=None):
         """Sample every track/belly constraint once for this physics tick."""
-        params = self._local_suspension_params
+        if params is None:
+            params = self._local_suspension_params
         if not isinstance(params, dict):
             return ()
         if probe_height is None:
@@ -20080,6 +20089,20 @@ class BattleRuntime(object):
             maximum_y = (
                 point_height + rise +
                 vehicle_physics.CONTACT_PENETRATION)
+            if contact.get('kind') == 'rigid':
+                future_pitch, future_roll = params.get(
+                    'contact_sweep_pose', (self._local_pitch, self._local_roll))
+                future_height = probe_height + vehicle_physics.suspension_point_offset(
+                    contact, future_pitch, future_roll)[1]
+                minimum_y = min(minimum_y, future_height - sweep_drop -
+                                vehicle_physics.CONTACT_PENETRATION)
+                maximum_y = max(maximum_y, probe_height +
+                                vehicle_physics.CONTACT_PENETRATION)
+                previous_height = vehicle_physics.suspension_plane_height(
+                    params.get('contact_reference_plane'), x, z)
+                if previous_height is not None:
+                    maximum_y = max(maximum_y, previous_height +
+                                    vehicle_physics.CONTACT_PENETRATION)
             flat_maximum_y = (
                 point_height + vehicle_physics.CONTACT_PENETRATION
                 if contact.get('kind') == 'track' else None)
@@ -20087,9 +20110,12 @@ class BattleRuntime(object):
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=flat_maximum_y,
                 prepared_filter=prepared_filter)
-            value, memory[index] = vehicle_physics.retained_ground_contact(
-                point, value, memory[index],
-                params['contact_memory_distance'], support_gradient)
+            if contact.get('kind') == 'rigid':
+                memory[index] = None
+            else:
+                value, memory[index] = vehicle_physics.retained_ground_contact(
+                    point, value, memory[index],
+                    params['contact_memory_distance'], support_gradient)
             result.append(value)
         self._local_pseudo_ground_memory = memory
         return tuple(result)
@@ -20244,6 +20270,10 @@ class BattleRuntime(object):
         of a possible escape direction or an arena boundary.
         """
         if not isinstance(trace, dict) or 'hit' not in trace:
+            return 0.0
+        # Ordinary driving into buildings only blocks motion. HP belongs to
+        # airborne/falling impacts, including side and roof contacts.
+        if not self._local_airborne:
             return 0.0
         velocity = (math.sin(yaw) * speed, self._local_vertical_speed,
                     math.cos(yaw) * speed)
@@ -20495,6 +20525,13 @@ class BattleRuntime(object):
             position, motion_pose, previous_plane)
         sweep_drop = vehicle_physics.suspension_vertical_sweep_drop(
             self._local_vertical_speed + support_speed_delta, dt)
+        params = vehicle_physics.suspension_pose_params(
+            params, self._local_pitch, self._local_roll,
+            self._local_suspension_pitch_velocity,
+            self._local_suspension_roll_velocity, dt,
+            self._entity_turret_yaw(entity))
+        if params is not self._local_suspension_params:
+            params['contact_reference_plane'] = previous_plane
         timings = self._local_frame_stages
         ground_started = _PROFILE_CLOCK() if timings is not None else 0.0
         ground = self._local_suspension_ground_samples(
@@ -20502,7 +20539,8 @@ class BattleRuntime(object):
             support_gradient=support_gradient, sweep_drop=sweep_drop)
         pseudo_ground = self._local_suspension_pseudo_ground_samples(
             position, yaw, probe_height=probe_height,
-            support_gradient=support_gradient, sweep_drop=sweep_drop)
+            support_gradient=support_gradient, sweep_drop=sweep_drop,
+            params=params)
         if timings is not None:
             timings['local_ground'] = timings.get('local_ground', 0.0) + max(
                 0.0, _PROFILE_CLOCK() - ground_started)
@@ -20591,6 +20629,7 @@ class BattleRuntime(object):
             abs(float(solved['roll']) - previous_roll) > 1.2)
         extra_rise = (
             armed_before and bool(solved.get('contact_count')) and
+            not solved.get('rigid_contact_count') and
             tank_collision.support_rise_is_obstacle(
                 position[1], solved['height'], 0.6))
         raised_support = bool(

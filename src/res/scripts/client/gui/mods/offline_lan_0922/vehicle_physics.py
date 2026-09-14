@@ -722,7 +722,7 @@ def derive_suspension_params(descriptor):
 	hull = _required_value(descriptor, 'hull', 'vehicle hull descriptor')
 	unused_chassis_min, unused_chassis_max, chassis_size = _bbox(
 		chassis, 'chassis')
-	hull_minimum, unused_hull_max, unused_hull_size = _bbox(hull, 'hull')
+	hull_minimum, hull_maximum, unused_hull_size = _bbox(hull, 'hull')
 	width, chassis_height, chassis_length = chassis_size
 	hull_position = _required_value(
 		chassis, 'hullPosition', 'selected chassis hullPosition')
@@ -860,6 +860,34 @@ def derive_suspension_params(descriptor):
 			raise ValueError(
 				'hullInertiaFactors must contain three positive values')
 	wheel_radius = _suspension_wheel_radius(chassis, config, step_z)
+	# Track and belly points describe an upright tank only. Keep the mounted
+	# hull and turret envelope for side/roof contacts after it tips over.
+	rigid_contacts = []
+	for x in (hull_minimum[0], hull_maximum[0]):
+		for y in (hull_minimum[1], hull_maximum[1]):
+			for z in (hull_minimum[2], hull_maximum[2]):
+				rigid_contacts.append(dict(
+					kind='rigid', side=None, x=float(x) + float(hull_position[0]),
+					y=float(y) + float(hull_position[1]),
+					z=float(z) + float(hull_position[2]),
+					penetration=ALLOWED_PENETRATION))
+	turret_contacts = []
+	turret_origin = None
+	try:
+		turret = _value(descriptor, 'turret')
+		turret_minimum, turret_maximum, unused_size = _bbox(turret, 'turret')
+		mount = _value(hull, 'turretPositions')[_value(
+			descriptor, 'activeTurretPosition', 0)]
+		turret_origin = tuple(float(hull_position[i]) + float(mount[i])
+			for i in range(3))
+		for x in (turret_minimum[0], turret_maximum[0]):
+			for y in (turret_minimum[1], turret_maximum[1]):
+				for z in (turret_minimum[2], turret_maximum[2]):
+					turret_contacts.append((float(x), float(y), float(z)))
+	except (AttributeError, IndexError, TypeError, ValueError):
+		# Descriptor-only authority fixtures may omit the independently mounted
+		# turret. The validated hull envelope remains available in that case.
+		pass
 	pitch_inertia = max(
 		1.0, mass * (body_height ** 2 + chassis_length ** 2) /
 		12.0 * inertia_factors[0])
@@ -877,9 +905,73 @@ def derive_suspension_params(descriptor):
 		'roll_inertia': roll_inertia,
 		'springs': tuple(springs),
 		'pseudo_contacts': tuple(pseudo_contacts),
+		'rigid_contacts': tuple(rigid_contacts),
+		'turret_contacts': tuple(turret_contacts),
+		'turret_origin': turret_origin,
+		'footprint_half_length': max(0.15, min(0.45, wheel_radius)),
+		'footprint_half_width': max(0.1, width * 0.06),
 		'fixed_step': SERVER_PHYSICS_STEP,
 		'constraint_iterations': SERVER_PHYSICS_CONSTRAINT_ITERATIONS,
 	}
+
+
+def suspension_pose_params(params, pitch, roll, pitch_velocity=0.0,
+		roll_velocity=0.0, dt=0.0, turret_yaw=0.0):
+	'''Add rigid body contacts only while tipping; ordinary driving stays cheap.'''
+	next_pitch = pitch + pitch_velocity * max(0.0, float(dt))
+	next_roll = roll + roll_velocity * max(0.0, float(dt))
+	if min(math.cos(pitch) * math.cos(roll),
+			math.cos(next_pitch) * math.cos(next_roll)) >= 0.9:
+		return params
+	result = dict(params)
+	contacts = list(params.get('rigid_contacts', ()))
+	origin = params.get('turret_origin')
+	if origin is not None:
+		sine, cosine = math.sin(turret_yaw), math.cos(turret_yaw)
+		for x, y, z in params.get('turret_contacts', ()):
+			contacts.append(dict(kind='rigid', side=None,
+				x=origin[0] + cosine * x + sine * z, y=origin[1] + y,
+				z=origin[2] - sine * x + cosine * z,
+				penetration=ALLOWED_PENETRATION))
+	result['pseudo_contacts'] = params.get('pseudo_contacts', ()) + tuple(contacts)
+	result['contact_sweep_pose'] = (next_pitch, next_roll)
+	return result
+
+
+def suspension_footprint_support(params, point, ground, memory, yaw, query,
+		support_gradient=None):
+	'''Recheck the actual wheel footprint before dropping to a lower deck layer.
+
+	A rail/sleeper gap can return a lower beam instead of a miss. Remembered
+	geometry alone must not fill it: at least one fresh ray within the wheel's
+	physical footprint must still find the former support layer.
+	'''
+	if memory is None:
+		return ground
+	x, z = point
+	dx, dz = x - memory[0], z - memory[1]
+	if dx * dx + dz * dz > params['contact_memory_distance'] ** 2:
+		return ground
+	expected = memory[2]
+	if support_gradient is not None:
+		expected += support_gradient[0] * dx + support_gradient[1] * dz
+	if ground is not None and ground >= expected - 0.12:
+		return ground
+	sine, cosine = math.sin(yaw), math.cos(yaw)
+	length = params.get('footprint_half_length', 0.3)
+	width = params.get('footprint_half_width', 0.15)
+	for side, forward in ((0.0, 0.0), (0.0, -length), (0.0, length),
+			(-width, 0.0), (width, 0.0)):
+		px, pz = x + cosine * side + sine * forward, z - sine * side + cosine * forward
+		layer = expected
+		if support_gradient is not None:
+			layer += support_gradient[0] * (px - x) + support_gradient[1] * (pz - z)
+		value = query(px, pz, layer - 0.12, layer + 0.12)
+		if value is not None and abs(float(value) - layer) <= 0.13:
+			# Evaluate the same proved plane under this carrier, not the slope's
+			# higher neighbouring point (which would create artificial stair steps).
+			return float(value) + expected - layer
+	return ground
 
 
 def _suspension_rotation(pitch, roll):
@@ -1768,6 +1860,9 @@ def damper_suspension_step(params, state, ground_heights, dt,
 				abs(result['roll_velocity']) < FREEZE_ANG_VEL_EPSILON):
 			result['roll_velocity'] = 0.0
 	result['contact_count'] = contact_count
+	result['rigid_contact_count'] = sum(1 for key in contact_keys
+		if key[0] == 'pseudo' and
+		pseudo_contacts[key[1]].get('kind') == 'rigid')
 	result['airborne'] = contact_count == 0
 	result['left_flying'] = not bool(left_contact_keys)
 	result['right_flying'] = not bool(right_contact_keys)

@@ -5898,6 +5898,10 @@ class BotRuntime(object):
                                    probe_height=None,
                                    support_gradient=None, sweep_drop=0.0):
         """Sample the five damper positions on each track exactly once."""
+        if math.cos(_number(state.get('terrain_pitch', state.get('pitch')))) * \
+                math.cos(_number(state.get('roll'))) <= 0.1:
+            state['_spring_ground_memory'] = None
+            return (None,) * len(params['springs'])
         position = _position(state)
         body_height = (position[1] if probe_height is None else
                        float(probe_height))
@@ -5931,6 +5935,10 @@ class BotRuntime(object):
                 vehicle_physics.CONTACT_PENETRATION)
             ground = self._suspension_ground_value(
                 x, z, minimum_y, maximum_y, spring_maximum_y)
+            ground = vehicle_physics.suspension_footprint_support(
+                params, point, ground, memory[index], yaw,
+                lambda px, pz, low, high: self._suspension_ground_value(
+                    px, pz, low, high, high), support_gradient)
             ground, memory[index] = \
                 vehicle_physics.retained_ground_contact(
                     point, ground, memory[index],
@@ -5972,15 +5980,32 @@ class BotRuntime(object):
             maximum_y = (
                 point_height + rise +
                 vehicle_physics.CONTACT_PENETRATION)
+            if contact.get('kind') == 'rigid':
+                future_pitch, future_roll = params.get(
+                    'contact_sweep_pose', (pitch, roll))
+                future_height = body_height + vehicle_physics.suspension_point_offset(
+                    contact, future_pitch, future_roll)[1]
+                minimum_y = min(minimum_y, future_height - sweep_drop -
+                                vehicle_physics.CONTACT_PENETRATION)
+                maximum_y = max(maximum_y, body_height +
+                                vehicle_physics.CONTACT_PENETRATION)
+                previous_height = vehicle_physics.suspension_plane_height(
+                    params.get('contact_reference_plane'), x, z)
+                if previous_height is not None:
+                    maximum_y = max(maximum_y, previous_height +
+                                    vehicle_physics.CONTACT_PENETRATION)
             flat_maximum_y = (
                 point_height + vehicle_physics.CONTACT_PENETRATION
                 if contact.get('kind') == 'track' else None)
             ground = self._suspension_ground_value(
                 x, z, minimum_y, maximum_y, flat_maximum_y)
-            ground, memory[index] = \
-                vehicle_physics.retained_ground_contact(
-                    point, ground, memory[index],
-                    params['contact_memory_distance'], support_gradient)
+            if contact.get('kind') == 'rigid':
+                memory[index] = None
+            else:
+                ground, memory[index] = \
+                    vehicle_physics.retained_ground_contact(
+                        point, ground, memory[index],
+                        params['contact_memory_distance'], support_gradient)
             result.append(ground)
         state['_pseudo_ground_memory'] = memory
         return tuple(result)
@@ -6549,6 +6574,8 @@ class BotRuntime(object):
         trace = state.pop('_world_contact_trace', None)
         if not isinstance(trace, dict) or 'hit' not in trace:
             return 0
+        if not state.get('airborne', False):
+            return 0
         yaw = _number(state.get('yaw'))
         impact = vehicle_physics.world_impact_speed(
             (math.sin(yaw) * speed, _number(state.get('vertical_speed')),
@@ -6693,6 +6720,14 @@ class BotRuntime(object):
             position, motion_pose, previous_plane)
         sweep_drop = vehicle_physics.suspension_vertical_sweep_drop(
             _number(state.get('vertical_speed')), step)
+        params = vehicle_physics.suspension_pose_params(
+            params, _number(state.get('terrain_pitch', state.get('pitch'))),
+            _number(state.get('roll')),
+            _number(state.get('suspension_pitch_velocity')),
+            _number(state.get('suspension_roll_velocity')), step,
+            _number(state.get('turret_yaw')))
+        if 'contact_sweep_pose' in params:
+            params['contact_reference_plane'] = previous_plane
         ground = self._suspension_ground_samples(
             state, params, probe_height, support_gradient, sweep_drop)
         pseudo_ground = self._suspension_pseudo_ground_samples(
@@ -6783,6 +6818,7 @@ class BotRuntime(object):
             abs(solved['roll'] - physics_state['roll']) > 1.2)
         raised_support = bool(
             grounded_before and solved.get('contact_count') and
+            not solved.get('rigid_contact_count') and
             self._suspension_rise_exceeds_base(
                 state.get('y'), solved['height']))
         if raised_support:

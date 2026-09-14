@@ -6477,6 +6477,29 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 self.assertEqual(
                     {}, destructibles_sensor.g_offh_destr_instances)
 
+    def test_native_float32_rounding_keeps_the_same_unnamed_destructible(self):
+        filename, area, bigworld, math_module = self._streamed_fragile_fixture()
+        bigworld.wg_getChunkDestrFilenames = lambda *unused: ()
+        # The error report differs by one quantized millimetre after native
+        # chunk-local translation is added back to the compiled world pose.
+        bigworld.wg_getDestructibleMatrix.return_value = _ItemMatrix(
+            _Vector(0.0, 0.0, 5.001))
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area,
+                'BigWorld': bigworld, 'Math': math_module}):
+            instance = destructibles_sensor._stream_baked_shot_instance_1513(1, (22, 0))
+        self.assertIsNotNone(instance)
+        self.assertEqual(filename, instance['filename'])
+        self.assertIn((22, 0), destructibles_sensor.g_offh_destr_instances)
+        self.assertFalse(destructibles_sensor._destructible_isolated_1513(22, 0))
+
+    def test_rounding_recovery_cannot_select_a_different_wire_or_transform(self):
+        unused_filename, area, bigworld, math_module = self._streamed_fragile_fixture()
+        for wire, shift in (((22, 1), 0.001), ((22, 0), 0.02)):
+            with self.subTest(wire=wire, shift=shift):
+                signature, instance = destructibles_sensor._catalog_instance_for_matrix_1513(
+                    _ItemMatrix(_Vector(0, 0, 5 + shift)), _Vector(), math_module, wire)
+                self.assertIsNone(instance)
+
     def test_v4_signature_transform_exception_is_slot_local(self):
         unused_filename, area, bigworld, math_module = (
             self._streamed_fragile_fixture())

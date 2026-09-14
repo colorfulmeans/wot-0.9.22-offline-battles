@@ -1025,7 +1025,7 @@ def _resolve_catalog_tree_name_1513(bigworld, area, space_id, chunk_id,
 			'native.destructible.item_matrix',
 			bigworld.wg_getDestructibleMatrix, space_id, chunk_id, item_index))
 		signature, unused_located = _catalog_instance_for_matrix_1513(
-			matrix, chunk.translation, Math)
+			matrix, chunk.translation, Math, (chunk_id, item_index))
 		if signature != record['signature']:
 			raise ValueError('tree matrix disagrees with authored slot')
 	except Exception as error:
@@ -2002,7 +2002,7 @@ def _catalog_kind_for_type_1513(area_destructibles, destr_type):
 
 
 def _catalog_instance_for_matrix_1513(matrix, chunk_translation,
-		math_module):
+		math_module, identity=None):
 	if (_destructible_catalog is None or
 			not _destructible_catalog.get('has_instance_index')):
 		return None, None
@@ -2011,7 +2011,22 @@ def _catalog_instance_for_matrix_1513(matrix, chunk_translation,
 		_destructible_catalog['quantization'])
 	if signature in _destructible_catalog['ambiguous_instances']:
 		return signature, None
-	return signature, _destructible_catalog['instances'].get(signature)
+	located = _destructible_catalog['instances'].get(signature)
+	if located is not None or identity is None:
+		return signature, located
+	# Compiled transforms and native float32 chunk-local transforms can land
+	# on opposite sides of one millimetre quantization boundary. The live wire
+	# selects exactly one authored item; this is not a nearest-object search.
+	baked = (_destructible_catalog.get('baked_instances', {}).get(identity) or
+		_destructible_catalog.get('tree_instances', {}).get(identity))
+	if baked is None:
+		return signature, None
+	canonical = baked['signature']
+	if (canonical not in _destructible_catalog['ambiguous_instances'] and
+			len(signature) == len(canonical) == 12 and
+			all(abs(left - right) <= 1 for left, right in zip(signature, canonical))):
+		return canonical, _destructible_catalog['instances'].get(canonical)
+	return signature, None
 
 
 def _box_face_axes(half_axes):
@@ -2270,7 +2285,7 @@ def _stream_baked_shot_instance_1513(spaceID, identity):
 		return None
 	try:
 		signature, located = _catalog_instance_for_matrix_1513(
-			matrix, chunk_translation, Math)
+			matrix, chunk_translation, Math, identity)
 	except Exception as error:
 		_isolate_destructible_1513(
 			('falling_matrix_signature' if baked['kind'] == 'falling' else
@@ -2558,7 +2573,7 @@ def _confirmed_unresolved_obstacle_1513(spaceID, identity, vehicle_box=None):
 			'native.destructible.item_matrix',
 			BigWorld.wg_getDestructibleMatrix, spaceID, chunk_id, item_index))
 		signature, unused_located = _catalog_instance_for_matrix_1513(
-			matrix, chunk_translation, Math)
+			matrix, chunk_translation, Math, identity)
 	except Exception:
 		# A placement query that cannot answer is not evidence of a wall.
 		report_skip('native_placement_query_failed')
@@ -5489,7 +5504,7 @@ def _fell_trees_near(
 							try:
 								_signature, _located = (
 									_catalog_instance_for_matrix_1513(
-										_initial_matrix, _cm_t, Math))
+										_initial_matrix, _cm_t, Math, (int(cid), int(_ti))))
 							except Exception as error:
 								_isolate_destructible_1513(
 									'falling_initial_matrix', cid, _ti,
@@ -5500,7 +5515,7 @@ def _fell_trees_near(
 							try:
 								_signature, _located = (
 									_catalog_instance_for_matrix_1513(
-										_m, _cm_t, Math))
+										_m, _cm_t, Math, (int(cid), int(_ti))))
 							except Exception as error:
 								_isolate_destructible_1513(
 									'native_matrix_signature', cid, _ti,
