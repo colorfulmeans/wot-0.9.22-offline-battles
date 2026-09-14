@@ -3448,3 +3448,12 @@ retention is now 2.5 seconds (two polling cycles plus callback margin); source
 anchor invalidation and current-family re-leading remain active, and final
 native trajectory proof is unchanged. The prior expiry regression now checks
 that a result survives the next tactical poll and still expires thereafter.
+
+A further complete-cycle regression showed that the two-second generic target
+lease could drop an acquired SPG contact while chassis alignment invalidated
+and requeued its high arc. SPGs now retain an already acquired, still visible
+and in-range aim target while no replacement firing lane exists. This does not
+acquire unseen/never-shootable contacts, grant fire, or consume a focus slot.
+A shootable alternative, loss of visibility/range or an unrecoverable weapon
+still releases the hold. This retention is confined to artillery's existing
+rear-anchor behavior; ordinary tank route leases are unchanged.

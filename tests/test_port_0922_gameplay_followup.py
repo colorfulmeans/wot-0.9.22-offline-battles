@@ -873,3 +873,35 @@ class PresentedCollisionTests(unittest.TestCase):
                       'collision_shape': shape}}
         bodies = battle._contact_tanks((0.0, 0.0, 0.0), shape)
         self.assertEqual([11], [body['network_id'] for body in bodies])
+
+class ArtilleryTargetLeaseTests(unittest.TestCase):
+    def test_acquired_spg_target_survives_proof_gap_but_cannot_fire_without_lane(self):
+        import test_port_0922_server_bot_ai as fixture
+        planner = fixture.BotPlanner()
+        route = fixture._route('rear', [(0, 0, True)])
+        manifest = [fixture._bot(11, 1, 0, route)]
+        states = [fixture._state(11, 1, 0, 0)]
+        players = [{'id': 2, 'team': 2, 'alive': True},
+                   {'id': 3, 'team': 2, 'alive': True}]
+        known = planner.known_targets(states, players)
+
+        def orders(now, contacts):
+            planner.report_contacts(contacts, known, now)
+            return planner.build_orders(manifest, states, players, now)['orders'][0]
+
+        blocked = fixture._contact(2, 0, 200, [])
+        first = orders(1.0, [blocked])
+        self.assertIsNone(first['target_id'])
+        acquired = orders(2.0, [fixture._contact(2, 0, 200, [11])])
+        self.assertEqual(2, acquired['target_id'])
+        self.assertTrue(acquired['fire_allowed'])
+        pending = orders(12.0, [blocked])
+        self.assertEqual(2, pending['target_id'])
+        self.assertFalse(pending['fire_allowed'])
+        alternative = orders(13.0, [blocked, fixture._contact(3, 0, 210, [11])])
+        self.assertEqual(3, alternative['target_id'])
+        self.assertTrue(alternative['fire_allowed'])
+        hidden = orders(14.0, [dict(blocked, visible=False),
+            dict(fixture._contact(3, 0, 210, []), visible=False)])
+        self.assertIsNone(hidden['target_id'])
+        self.assertFalse(hidden['fire_allowed'])
