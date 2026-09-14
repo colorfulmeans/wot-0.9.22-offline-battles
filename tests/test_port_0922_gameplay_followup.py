@@ -553,6 +553,132 @@ class AimProgressTests(unittest.TestCase):
         self.assertEqual(1, len(launches))
         self.assertEqual(1, launches[0]['fire_seq'])
 
+    def test_spg_high_arc_on_cross_slope_survives_planning_refresh_and_launches(self):
+        descriptor = bot_fixture._combat_descriptor(
+            gun_speed=0.15, turret_speed=0.25, dispersion=0.01,
+            turret_yaw_limits=(-0.1, 0.1))
+        descriptor.gun.shots = ({
+            'shell': {'effectsIndex': 0}, 'speed': 425.0,
+            'gravity': 143.0, 'maxDistance': 10000.0},)
+        descriptor.gun.pitchLimits = {'absolute': (-1.55, 0.15)}
+        descriptor.activeTurretPosition = 0
+        descriptor.turret['gunPosition'] = (0.0, 0.0, 1.0)
+        descriptor.gun.hitTester = bot_fixture._HitTester1513(
+            (-0.1, -0.1, 0.0), (0.1, 0.1, 5.0))
+
+        def muzzle(source, gun, *unused):
+            from gui.mods.offline_lan_0922 import shot_geometry
+            return shot_geometry.barrel_world_point(
+                gun, (source['x'], source['y'], source['z']),
+                source['yaw'], source.get('pitch', 0.0), source.get('roll', 0.0),
+                source.get('turret_yaw', 0.0), source.get('gun_pitch', 0.0))
+
+        command = {
+            'target_yaw': 0.0, 'throttle': 0.0, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': True,
+            'target_id': self.fixture.module.HUMAN_TARGET_ID_BASE + 2,
+            'fire_range': 1400.0, 'combat_mode': 'artillery_hold',
+            'aim_position': (0.0, 0.0, 200.0),
+            'face_position': (0.0, 0.0, 200.0),
+            'move_position': (0.0, 0.0, 0.0),
+            'recovery_mode': 'arrived', 'movement_intent': False,
+        }
+        now = [0.0]
+        controller = ArtilleryController(origin_resolver=lambda source, gun:
+            runtime._exact_shot_origin(source, gun, 0))
+
+        def firing_lane(source, target):
+            ready, solution = controller.request(
+                source, target, descriptor, 0, now[0])
+            return bool(ready and solution is not None)
+
+        def exact_launch(source, target, gun, shell, sequence,
+                         yaw, pitch, flight, stamp):
+            ready, receipt = controller.request_launch(
+                source, target, gun, shell, sequence,
+                runtime._exact_shot_origin(source, gun, shell),
+                yaw, pitch, flight, stamp)
+            return receipt if ready else None
+
+        runtime = self.fixture.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: descriptor,
+            direct_launch_origin_probe=muzzle,
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            visibility_probe=lambda *unused: True,
+            firing_lane_probe=firing_lane,
+            ballistic_solution_probe=controller.solution,
+            artillery_launch_probe=exact_launch,
+            artillery_launch_cancel=controller.cancel_launch,
+            artillery_friendly_lane_probe=lambda *unused: {'clear': True},
+            ground_probe=lambda x, z, *unused: 0.03 * x,
+            physics_ground_probe=lambda x, z, *unused: 0.03 * x,
+            spawn_resolver=bot_fixture._spawn_resolver,
+            baked_graph=bot_fixture._flat_open_graph())
+        manifest = bot_fixture.bot_state_rows.bots(
+            runtime.battle_start(self.fixture.start)[0])
+        state = runtime.states[11]
+        state.update(x=0.0, y=0.0, z=0.0, yaw=0.0, pitch=0.0, roll=0.0,
+                     aim_yaw=0.0, turret_yaw=0.0, gun_pitch=0.0,
+                     profile={'class_tag': 'SPG'})
+        runtime._gun_states[11].elapsed = 100.0
+        player = bot_fixture._admit_player({
+            'id': 2, 'team': 1, 'alive': True,
+            'x': 0.0, 'y': 0.0, 'z': 200.0})
+        # Keep an allied observer in the same real visibility pipeline.
+        observer = bot_fixture._admit_player({
+            'id': 3, 'team': 2, 'alive': True,
+            'x': 30.0, 'y': 0.0, 'z': 150.0})
+        manifest[0]['profile'] = dict(state['profile'], class_tag='SPG',
+                                     fire_range=1400.0, desired_range=650.0,
+                                     dominant_role='artillery')
+        # A predeployed rear anchor isolates gun control from route travel.
+        manifest[0]['route'] = {'id': 'rear', 'waypoints': [
+            {'x': 0.0, 'y': 0.0, 'z': 0.0, 'hold': True}]}
+        planner = bot_fixture.BotPlanner()
+        planner_states = [dict(state, world_pose=True)]
+        launches = []
+        orders_seen = []
+        def wall(first, second):
+            return ((0.0, 5.0, 50.0) if first[2] <= 50.0 <= second[2]
+                    and max(first[1], second[1]) < 10.0 else None)
+
+        for frame in range(1, 1441):
+            now[0] = frame / 24.0
+            self.assertLessEqual(controller.advance(
+                now[0], 4, wall), 4)
+            messages = runtime.update(
+                1.0 / 24.0, now[0], players=[player, observer])
+            for message in messages:
+                launches.extend(message.get('launches', ()))
+                if message.get('type') == 'bot_state':
+                    planner_states = [
+                        BattleState._sanitize_bot_state(row, manifest[0], None)
+                        for row in bot_fixture.bot_state_rows.bots(message)]
+                elif message.get('type') == 'bot_observation':
+                    planner.report_contacts(message['contacts'],
+                        planner.known_targets(planner_states, [player, observer]), now[0])
+            orders = planner.build_orders(
+                manifest, planner_states, [player, observer], now[0])
+            orders_seen.extend(orders['orders'])
+            runtime._apply_orders({
+                'bot_orders': orders['orders'],
+                'bot_order_revision': frame})
+            if launches:
+                break
+        self.assertTrue(launches, 'SPG planner launch stalled: state=%r aim=%r intent=%r orders=%r' % (
+            {key: state.get(key) for key in (
+                'target_id', 'gun_pitch', 'gun_aligned', 'fire_seq',
+                'speed', 'clip', 'shell_index')},
+            runtime._ballistic_solution_cache.get(11),
+            runtime._artillery_intents.get(11), orders_seen[-1:]))
+        self.assertTrue(any(order.get('fire_allowed') for order in orders_seen))
+        self.assertEqual(1, state['fire_seq'])
+        self.assertGreater(abs(state['yaw']), 0.01)
+        self.assertLess(state['gun_pitch'], -0.1)
+        self.assertEqual(1, len(launches))
+        self.assertEqual(1, launches[0]['fire_seq'])
+
+
     def test_limited_td_on_a_side_slope_turns_hull_until_physical_gun_can_fire(self):
         descriptor = bot_fixture._combat_descriptor(
             turret_yaw_limits=(-0.02, 0.02), dispersion=0.01)
@@ -595,8 +721,8 @@ class AimProgressTests(unittest.TestCase):
             'shell_index': 0, 'fire_allowed': True,
             'target_id': self.fixture.module.HUMAN_TARGET_ID_BASE + 2,
             'fire_range': 500.0, 'combat_mode': 'engage',
-            'aim_position': (0.0, 20.0, 60.0),
-            'face_position': (0.0, 20.0, 60.0),
+            'aim_position': (0.0, 30.0, 60.0),
+            'face_position': (0.0, 30.0, 60.0),
             'move_position': (0.0, 0.0, 0.0),
             'recovery_mode': 'arrived', 'movement_intent': False,
         }
@@ -641,12 +767,12 @@ class AimProgressTests(unittest.TestCase):
         for frame in range(1, 49):
             runtime.update(1.0 / 24.0, frame / 24.0, players=[])
         initial_yaw = state['yaw']
-        initial_direction = driver.barrel_direction(0.0, -math.atan2(21.0, 60.0))
+        initial_direction = driver.barrel_direction(0.0, -math.atan2(31.0, 60.0))
         local_yaw, unused_pitch = shot_geometry.world_direction_to_local_gun_angles(
             initial_direction, state['yaw'], state['pitch'], state['roll'])
         self.assertGreater(abs(local_yaw), 0.08)
         player = bot_fixture._admit_player({
-            'id': 2, 'team': 1, 'alive': True, 'x': 0.0, 'y': 20.0, 'z': 60.0})
+            'id': 2, 'team': 1, 'alive': True, 'x': 0.0, 'y': 30.0, 'z': 60.0})
         launches, yaws = [], []
         modes = set()
         for frame in range(1, 1441):

@@ -3431,3 +3431,11 @@ human contact bodies also use the interpolated presentation pose, just as Bots
 already did, without rewriting the accepted network state. Regression fixtures
 check a point contained in both tilted bodies, an overhead non-contact, all
 eight vertical corners, and the local presentation-to-contact boundary.
+
+The SPG hull controller also retains the same last admitted world aim as the
+gun while its strategic refresh is pending. Reverting just the hull to a
+direct compass ray on a cross slope can turn against a high-arc gun, repeatedly
+invalidate the family job and cause visible oscillation. The retained aim is
+signature-bound and cannot supply a missing launch proof. The regression
+includes a low-path wall, a cross slope, a limited gun and real server/local
+planning through the high-arc launch.

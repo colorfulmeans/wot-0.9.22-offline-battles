@@ -11645,10 +11645,21 @@ class BotRuntime(object):
                 cached_aim = self._ballistic_solution_cache.get(state['id'])
                 aim_signature = self._ballistic_solution_signature(
                     state, target, descriptor, state.get('shell_index', 0))
-                if (cached_aim is not None and cached_aim[0] == aim_signature and
-                        isinstance(cached_aim[2], dict)):
-                    desired_aim_yaw = cached_aim[2]['yaw']
-                    aim_pitch = cached_aim[2]['pitch']
+                aim_solution = (
+                    cached_aim[2] if cached_aim is not None and
+                    cached_aim[0] == aim_signature else None)
+                if not isinstance(aim_solution, dict):
+                    retained_aim = self._spg_aim_solutions.get(state['id'])
+                    if (retained_aim is not None and
+                            retained_aim[0] == aim_signature):
+                        # The gun keeps this world arc while planning refreshes.
+                        # Hull aiming must keep the same direction too; using a
+                        # flat direct ray here turns the chassis back against
+                        # the high-arc gun and restarts its proof again.
+                        aim_solution = retained_aim[1]
+                if isinstance(aim_solution, dict):
+                    desired_aim_yaw = aim_solution['yaw']
+                    aim_pitch = aim_solution['pitch']
                 local_aim = self._local_gun_angles_for_world(
                     state, desired_aim_yaw, aim_pitch)
                 hull_aim_yaw = (state['yaw'] + local_aim[0]
