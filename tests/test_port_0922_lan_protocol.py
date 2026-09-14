@@ -689,6 +689,8 @@ class LanProtocolTests(unittest.TestCase):
             'kills', 'spotted',
             'capture_points', 'dropped_capture_points',
             'potential_damage_received', 'hits_received',
+            'piercings_received', 'no_damage_direct_hits_received',
+            'explosion_hits_received',
             'damaging_hits_received', 'deflected_hits_received',
             'crits_received_mask', 'hits_with_damage',
             'sniper_damage_dealt', 'deflection_streak',
