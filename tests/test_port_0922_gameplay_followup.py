@@ -613,7 +613,7 @@ class AimProgressTests(unittest.TestCase):
 
         runtime = self.fixture.module.BotRuntime(
             1, descriptor_resolver=lambda unused: descriptor,
-            adapter_factory=lambda *args, **kwargs: bot_fixture._FixedAdapter(command),
+            player_descriptor_resolver=lambda unused: bot_fixture._combat_descriptor(),
             direct_launch_origin_probe=muzzle,
             direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
             visibility_probe=lambda *unused: True,
@@ -632,12 +632,25 @@ class AimProgressTests(unittest.TestCase):
                      aim_yaw=0.0, turret_yaw=0.0, gun_pitch=0.0,
                      profile={'class_tag': 'AT-SPG'})
         runtime._gun_states[11].elapsed = 100.0
+        runtime._apply_orders({
+            'bot_order_revision': 1, 'bot_orders': [dict(
+                command, id=11, team=2, target_kind='human', target_id=2,
+                throttle_override=0.0)]})
+        # Establish the actual ground attitude before acquiring a target.
+        # Otherwise an early shot can leave while the hull is still flat.
+        for frame in range(1, 49):
+            runtime.update(1.0 / 24.0, frame / 24.0, players=[])
+        initial_yaw = state['yaw']
+        initial_direction = driver.barrel_direction(0.0, -math.atan2(21.0, 60.0))
+        local_yaw, unused_pitch = shot_geometry.world_direction_to_local_gun_angles(
+            initial_direction, state['yaw'], state['pitch'], state['roll'])
+        self.assertGreater(abs(local_yaw), 0.08)
         player = bot_fixture._admit_player({
             'id': 2, 'team': 1, 'alive': True, 'x': 0.0, 'y': 20.0, 'z': 60.0})
         launches, yaws = [], []
         modes = set()
         for frame in range(1, 1441):
-            messages = runtime.update(1.0 / 24.0, frame / 24.0, players=[player])
+            messages = runtime.update(1.0 / 24.0, 2.0 + frame / 24.0, players=[player])
             yaws.append(state['yaw'])
             modes.add(state.get('siege_state'))
             for message in messages:
@@ -649,7 +662,7 @@ class AimProgressTests(unittest.TestCase):
                 'yaw', 'pitch', 'roll', 'gun_pitch', 'turret_yaw', 'gun_aligned',
                 'siege_state', 'speed', 'hull_aiming')},
             runtime._ballistic_solution_cache.get(11)))
-        self.assertGreater(abs(state['yaw']), 0.02)
+        self.assertGreater(abs(state['yaw'] - initial_yaw), 1.0e-6)
         self.assertLess(max(yaws) - min(yaws), 1.0)
         if hydraulic:
             self.assertIn(self.fixture.module.siege_mechanics.SWITCHING_ON, modes)
