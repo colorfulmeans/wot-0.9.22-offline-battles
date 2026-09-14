@@ -4872,12 +4872,14 @@ class BattleRuntime(object):
                 # those reservations cannot put an edited tank back in a Bot.
                 picked = [entry for entry in picked
                           if entry['name'] not in excluded_names]
-                # Apply the bot-only quota after removing human slots. A human
-                # SPG must not force mirrored artillery onto the opposing bots.
-                # Explicit lineup overrides below retain the host's choices.
+                # Restore automatic SPGs while counting human artillery in
+                # the per-team quota. Explicit host overrides remain intact.
+                human_spgs = sum(bot_planner.vehicle_match_class(entry) == 'SPG'
+                                 for entry in humans_by_team[team])
                 picked = bot_planner.select_bot_lineup(
                     picked or automatic_candidates, len(team_bots),
-                    spg_limit=0, fallback_candidates=automatic_candidates)
+                    spg_limit=max(0, 3 - human_spgs),
+                    fallback_candidates=automatic_candidates)
                 picked = list(picked[:len(team_bots)])
                 lineup_random.shuffle(picked)
                 picked.sort(key=self._vehicle_class_order)
@@ -10711,6 +10713,17 @@ class BattleRuntime(object):
                     raise RuntimeError(
                         '#1513 VEHICLE_HIT_FLAGS are unavailable')
                 explosion = bool(event.get('splash'))
+                if not explosion and damage > 0 and int(event.get('shot_result', 2)) != 2:
+                    attacker_entity = self._server_entity(
+                        attacker_record.get('engine_id'))
+                    descriptor = getattr(attacker_entity, 'typeDescriptor', None)
+                    tags = _field(_field(descriptor, 'type', None), 'tags', ())
+                    he_type = getattr(self._runtime.constants,
+                                      'SHELL_TYPES_INDICES', {}).get('HIGH_EXPLOSIVE')
+                    # Only the voice RPC treats a damaging SPG HE direct hit
+                    # as an explosion. Damage, decals and penetration stats
+                    # retain the accepted projectile result.
+                    explosion = 'SPG' in (tags or ()) and shell_type == he_type
                 if explosion:
                     flags = int(flags_type.ATTACK_IS_EXTERNAL_EXPLOSION)
                     if damage > 0:
@@ -23228,11 +23241,11 @@ class BattleRuntime(object):
             if pose is None:
                 return
             if record.get('ready'):
-                if (record.get('kind') == 'bot' and
-                        event.get('presentation_time_us') is not None):
+                if record.get('kind') == 'bot':
                     record['presented_pose'] = dict(pose)
-                    record['presentation_time_us'] = int(
-                        event.get('presentation_time_us'))
+                    stamp = event.get('presentation_time_us')
+                    record['presentation_time_us'] = (
+                        int(stamp) if stamp is not None else None)
                 self._apply_record_pose(record, pose)
                 return
         state = dict(record.get('state') or {})
@@ -23241,11 +23254,11 @@ class BattleRuntime(object):
         record['state'] = state
         if pose is not None:
             record['pending_pose'] = dict(pose)
-            if (record.get('kind') == 'bot' and
-                    event.get('presentation_time_us') is not None):
+            if record.get('kind') == 'bot':
                 record['presented_pose'] = dict(pose)
-                record['presentation_time_us'] = int(
-                    event.get('presentation_time_us'))
+                stamp = event.get('presentation_time_us')
+                record['presentation_time_us'] = (
+                    int(stamp) if stamp is not None else None)
         self._materialize_record(record)
 
     def _materialize_record(self, record):

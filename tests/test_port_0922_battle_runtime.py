@@ -28733,6 +28733,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         record = {'engine_id': 11, 'state': dict(initial),
                   'kind': 'bot', 'network_id': 2, 'local': False,
                   'ready': True}
+        record['presented_pose'] = dict(initial)
+        record['presentation_time_us'] = 1000000
         battle._records = {'bot:2': record}
         entity = _Vehicle(11, _Descriptor(), _Vector(), (0, 0, 0),
                           {'health': 500})
@@ -28765,6 +28767,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
         collision_pose = record['projectile_collision_pose']
         self.assertEqual((0.0005, 0.0, 0.0), tuple(
             collision_pose[axis] for axis in ('x', 'y', 'z')))
+        # Player hull collision consumes presented_pose, independently of
+        # projectile_collision_pose. A wreck sample has no live timestamp.
+        self.assertEqual(0.0005, record['presented_pose']['x'])
+        self.assertIsNone(record['presentation_time_us'])
         self.assertEqual((0.0002, 0.0003),
                          (collision_pose['pitch'], collision_pose['roll']))
         self.assertIs(record, battle._records['bot:2'])

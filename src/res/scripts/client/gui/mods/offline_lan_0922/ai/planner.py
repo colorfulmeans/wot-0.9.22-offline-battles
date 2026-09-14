@@ -52,10 +52,10 @@ def vehicle_in_battle_tier_band(player_tier, candidate_tier):
 		return False
 
 
-def select_bot_lineup(pool, count, spg_limit=0, fallback_candidates=()):
+def select_bot_lineup(pool, count, spg_limit=3, fallback_candidates=()):
 	"""Fill a team while enforcing an exact SPG cap.
 
-	Automatic bots default to zero artillery. ``AT-SPG`` is a tank destroyer
+	Automatic bots allow up to three artillery. ``AT-SPG`` is a tank destroyer
 	in the legacy tags and does not consume the artillery quota.
 	"""
 	count = max(0, int(count))

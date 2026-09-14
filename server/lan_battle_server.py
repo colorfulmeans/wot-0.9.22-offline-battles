@@ -2221,6 +2221,7 @@ class BattleState:
         self.team_size = max(team1_size, team2_size)
         self.players: Dict[int, Player] = {}
         self.simulation_worker: Optional[SimulationWorker] = None
+        self.worker_ping_pending = {}
         self.worker_failure_reason = ""
         self.next_id = 1
         self.tick = 0
@@ -4007,6 +4008,55 @@ class BattleState:
             }
             message.update(self._authority_fields())
             return message
+
+    def request_worker_ping(self, player, message):
+        """Relay one bounded probe; only the native main loop may answer it."""
+        with self.lock:
+            seq = message.get('seq')
+            stamp = message.get('client_time')
+            if (self.players.get(player.player_id) is not player or
+                    isinstance(seq, bool) or not isinstance(seq, int) or
+                    not 0 < seq <= 2147483647 or
+                    isinstance(stamp, bool) or
+                    not isinstance(stamp, (int, float)) or
+                    not math.isfinite(stamp) or stamp <= 0):
+                return False
+            worker = self.simulation_worker
+            if worker is None or not worker.connected:
+                return False
+            self.worker_ping_pending[player.player_id] = (
+                seq, stamp, self.round_id, self.authority_epoch, worker)
+            # Remove departed players; one outstanding probe per live player.
+            for player_id in list(self.worker_ping_pending):
+                if player_id not in self.players:
+                    self.worker_ping_pending.pop(player_id, None)
+            return worker.offer_reliable({
+                'type': 'worker_ping', 'player_id': player.player_id,
+                'seq': seq, 'round_id': self.round_id,
+                'authority_epoch': self.authority_epoch})
+
+    def resolve_worker_ping(self, worker, message):
+        with self.lock:
+            player_id = message.get('player_id')
+            if isinstance(player_id, bool) or not isinstance(player_id, int):
+                return False
+            pending = self.worker_ping_pending.get(player_id)
+            if pending is None:
+                return False
+            seq, stamp, round_id, epoch, owner = pending
+            if (worker is not owner or worker is not self.simulation_worker or
+                    not worker.connected or message.get('seq') != seq or
+                    message.get('round_id') != round_id or
+                    message.get('authority_epoch') != epoch or
+                    self.round_id != round_id or self.authority_epoch != epoch):
+                return False
+            self.worker_ping_pending.pop(player_id, None)
+            player = self.players.get(player_id)
+            if player is None or not player.connected:
+                return False
+            return player.offer_reliable({
+                'type': 'worker_pong', 'seq': seq, 'client_time': stamp,
+                'round_id': round_id, 'authority_epoch': epoch})
 
     @staticmethod
     def _sanitize_destructible(message):
@@ -8887,6 +8937,7 @@ class BattleState:
         if enemy_hit and proposal["splash"]:
             self._increment_interaction(
                 shooter, victim, "explosion_hits")
+            self._statistics_row(*victim)["explosion_hits_received"] += 1
         crits_mask = _crits_mask(critical_before, admitted_critical)
         crits = _popcount(crits_mask)
         if enemy_hit and crits_mask:
@@ -8906,6 +8957,10 @@ class BattleState:
             row["shots_hit"] += 1
             victim_row = self._statistics_row(*victim)
             victim_row["hits_received"] += 1
+            if proposal["shot_result"] == 2:
+                victim_row["piercings_received"] += 1
+            if applied <= 0:
+                victim_row["no_damage_direct_hits_received"] += 1
             victim_row["potential_damage_received"] += max(
                 0, int(proposal["potential_damage"]))
             if applied > 0 or crits:
@@ -9665,6 +9720,11 @@ class BattleState:
             "dropped_capture_points": max(0, int(
                 row.get("dropped_capture_points", 0))),
             "hits_received": max(0, int(row.get("hits_received", 0))),
+            "piercings_received": max(0, int(row.get("piercings_received", 0))),
+            "no_damage_direct_hits_received": max(0, int(
+                row.get("no_damage_direct_hits_received", 0))),
+            "explosion_hits_received": max(0, int(
+                row.get("explosion_hits_received", 0))),
             "potential_damage_received": max(0, int(
                 row.get("potential_damage_received", 0))),
             "crits_received": _popcount(row.get("crits_received_mask", 0)),
@@ -12357,6 +12417,8 @@ class BattleState:
                 # conditions read them, so they are canonical round state
                 # rather than presentation-only counters.
                 "potential_damage_received": 0, "hits_received": 0,
+                "piercings_received": 0, "no_damage_direct_hits_received": 0,
+                "explosion_hits_received": 0,
                 "damaging_hits_received": 0, "deflected_hits_received": 0,
                 "crits_received_mask": 0, "hits_with_damage": 0,
                 "sniper_damage_dealt": 0,
@@ -14063,6 +14125,8 @@ class ClientHandler(socketserver.BaseRequestHandler):
                 not server.state._message_round_matches(message)):
             return False
         authority_id = SIMULATION_WORKER_AUTHORITY_ID
+        if message_type == "worker_pong":
+            return server.state.resolve_worker_ping(worker, message)
         if message_type == "simulation_progress":
             accepted = server.state.update_simulation_progress(worker, message)
         elif message_type == "player_environment":
@@ -14791,6 +14855,8 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "mode": message.get("mode"),
                                     "bot_tier_mode": server.state.bot_tier_mode,
                                 })
+                        elif message_type == "worker_ping":
+                            server.state.request_worker_ping(player, message)
                         elif message_type == "ping":
                             player.send({
                                 "type": "pong",

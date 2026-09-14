@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - fix/0922-cliff-gravity-hull-damage
+      - fix/0922-battle-followup-20260914
 
 permissions:
   contents: read

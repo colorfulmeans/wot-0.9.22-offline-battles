@@ -592,6 +592,17 @@ class AuthorityWorkerLANClient(LANClient):
         if not isinstance(message, dict):
             return
         kind = message.get('type')
+        if kind == 'worker_ping':
+            # _handle_message is drained by BigWorld's main-thread poll,
+            # after any native simulation work that delayed this callback.
+            player_id = _exact_int(message.get('player_id'))
+            seq = _exact_int(message.get('seq'))
+            if player_id is not None and player_id > 0 and seq is not None and seq > 0:
+                self._send({
+                    'type': 'worker_pong', 'player_id': player_id, 'seq': seq,
+                    'round_id': message.get('round_id'),
+                    'authority_epoch': message.get('authority_epoch')})
+            return
         trusted_player_static = None
         if kind == 'welcome':
             self._handle_worker_welcome(message)

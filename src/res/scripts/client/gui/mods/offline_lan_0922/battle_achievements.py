@@ -47,6 +47,8 @@ RECEIPT_STAT_NAMES = (
     "damage_blocked", "assist_track", "assist_radio", "assist_stun",
     "kills", "spotted", "capture_points", "dropped_capture_points",
     "hits_received", "potential_damage_received", "crits_received",
+    "piercings_received", "no_damage_direct_hits_received",
+    "explosion_hits_received",
 )
 
 # The #1513 table holds 62 entries across every game mode this build ever

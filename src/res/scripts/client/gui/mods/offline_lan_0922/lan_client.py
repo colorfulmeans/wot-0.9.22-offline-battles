@@ -1584,6 +1584,10 @@ class LANClient(object):
         self.last_error = None
         self.rtt_ms = None
         self.minimum_rtt_ms = None
+        self.worker_rtt_ms = None
+        self._worker_ping_started = None
+        self._worker_pong_time = None
+        self._worker_ping_scope = None
         self.combat_phase = 'loading'
         self.combat_deadline = None
         self.combat_end_deadline = None
@@ -1651,6 +1655,10 @@ class LANClient(object):
             self.server_time_ms = None
             self.rtt_ms = None
             self.minimum_rtt_ms = None
+            self.worker_rtt_ms = None
+            self._worker_ping_started = None
+            self._worker_pong_time = None
+            self._worker_ping_scope = None
             self._input_seq = 0
             self._input_seq_round = None
             self._landing_observation_seq = 0
@@ -3934,6 +3942,18 @@ class LANClient(object):
                 'seq': self._ping_seq,
                 'client_time': now,
             })
+            scope = (self.round_id, self.authority_epoch)
+            if self._worker_ping_scope != scope:
+                self._worker_ping_scope = scope
+                self.worker_rtt_ms = None
+                self._worker_ping_started = None
+                self._worker_pong_time = None
+            if (self.round_id is not None and
+                    self.player_id != WORKER_AUTHORITY_ID):
+                if self._worker_ping_started is None:
+                    self._worker_ping_started = now
+                self._send({'type': 'worker_ping', 'seq': self._ping_seq,
+                            'client_time': now})
         if self.last_error is not None:
             self._notify('error', {'message': self.last_error})
             self.last_error = None
@@ -3998,6 +4018,22 @@ class LANClient(object):
         self._combat_timing_round_id = round_id
         self._combat_timing_tick = server_tick
         return True
+
+    def worker_ping_display(self, now=None):
+        now = _monotonic_time() if now is None else float(now)
+        if not self.connected:
+            return 999, True
+        reference = self._worker_pong_time
+        if reference is None:
+            reference = self._worker_ping_started
+        if reference is None:
+            return 0, False
+        age = max(0.0, now - reference)
+        stale = age > max(2.0, PING_INTERVAL * 2.0)
+        sample = self.worker_rtt_ms
+        if sample is None or stale:
+            sample = age * 1000.0
+        return int(round(max(0.0, min(sample, 999.0)))), stale
 
     def _report_snapshot_stall(self, now):
         """Say out loud that the replica is drawing a frozen world.
@@ -5156,6 +5192,19 @@ class LANClient(object):
             if 'server_time_ms' in message:
                 self.server_time_ms = _projectile_int_range(
                     message.get('server_time_ms'), 0, MAX_PROJECTILE_ID)
+        elif kind == 'worker_pong':
+            if ((message.get('round_id'), message.get('authority_epoch')) !=
+                    (self.round_id, self.authority_epoch)):
+                return
+            client_time = _finite_float(message.get('client_time'), 0.0)
+            received_time = _finite_float(
+                message.get('_client_received_time'), _monotonic_time())
+            if client_time <= 0.0 or received_time < client_time:
+                return
+            sample = (received_time - client_time) * 1000.0
+            self.worker_rtt_ms = (sample if self.worker_rtt_ms is None else
+                                  self.worker_rtt_ms * 0.5 + sample * 0.5)
+            self._worker_pong_time = received_time
         elif kind == 'pong':
             client_time = _finite_float(message.get('client_time'), 0.0)
             if client_time > 0.0:
