@@ -387,7 +387,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         return {
             'shooter_kind': 'player', 'shooter_id': 1, 'team': 1,
             'projectile_id': '1:p:1:1', 'shot_seq': 1,
-            'shell_index': 0,
+            'shell_index': 0, 'is_he': False,
         }
 
     def test_stale_destroyed_snapshot_damages_repaired_canonical_module(self):
@@ -1058,7 +1058,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         record = {
             'shooter_kind': 'player', 'shooter_id': 1, 'team': 1,
             'projectile_id': '1:p:1:1', 'shot_seq': 1,
-            'shell_index': 0,
+            'shell_index': 0, 'is_he': False,
         }
 
         state._apply_projectile_effect(record, proposal)
@@ -1109,7 +1109,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         record = {
             'shooter_kind': 'player', 'shooter_id': 1, 'team': 1,
             'projectile_id': '1:p:1:1', 'shot_seq': 1,
-            'shell_index': 0,
+            'shell_index': 0, 'is_he': False,
         }
 
         state._apply_projectile_effect(record, proposal)

@@ -57,7 +57,7 @@ class ServerCaptureTests(unittest.TestCase):
         record = {
             'projectile_id': '%d:b:11:1' % state.round_id,
             'shooter_kind': 'bot', 'shooter_id': 11,
-            'shot_seq': 1, 'shell_index': 0, 'team': 1,
+            'shot_seq': 1, 'shell_index': 0, 'team': 1, 'is_he': False,
         }
         raw = {
             'target_kind': 'player', 'target_id': player.player_id,

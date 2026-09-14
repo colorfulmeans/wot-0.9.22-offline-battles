@@ -8679,6 +8679,8 @@ class BotRuntime(object):
                 'ram_profile': profile['ram_profile'],
                 'vx': math.sin(yaw) * speed,
                 'vz': math.cos(yaw) * speed,
+                'pitch': raw.get('pitch', 0.0),
+                'roll': raw.get('roll', 0.0),
             })
 
         by_id = dict((tank['id'], tank) for tank in tanks)
@@ -11632,8 +11634,27 @@ class BotRuntime(object):
                 gun_yaw_limits = ai_driver.gun_yaw_limits(descriptor)
                 self._gun_yaw_limits[state['id']] = gun_yaw_limits
             minimum_yaw, maximum_yaw, unused_limited = gun_yaw_limits
+            hull_aim_yaw = desired_aim_yaw
+            if unused_limited and target is not None:
+                # The physical gun uses the stabilised hull basis, including
+                # pitch/roll and hydraulic correction. A flat compass bearing
+                # can be inside the nominal yaw interval while the actual local
+                # gun direction is still beyond its stop.
+                aim_pitch = -math.atan2(
+                    aim_position[1] + 1.0 - state['y'], max(0.5, aim_distance))
+                cached_aim = self._ballistic_solution_cache.get(state['id'])
+                aim_signature = self._ballistic_solution_signature(
+                    state, target, descriptor, state.get('shell_index', 0))
+                if (cached_aim is not None and cached_aim[0] == aim_signature and
+                        isinstance(cached_aim[2], dict)):
+                    desired_aim_yaw = cached_aim[2]['yaw']
+                    aim_pitch = cached_aim[2]['pitch']
+                local_aim = self._local_gun_angles_for_world(
+                    state, desired_aim_yaw, aim_pitch)
+                hull_aim_yaw = (state['yaw'] + local_aim[0]
+                                if local_aim is not None else desired_aim_yaw)
             turn, throttle, hull_aiming = ai_driver.combat_hull_aim(
-                state['yaw'], desired_aim_yaw, minimum_yaw, maximum_yaw,
+                state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
                 target is not None and
                 command.get('combat_mode') != 'base_defense')

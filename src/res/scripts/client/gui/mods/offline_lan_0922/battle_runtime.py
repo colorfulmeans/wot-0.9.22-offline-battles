@@ -19293,10 +19293,9 @@ class BattleRuntime(object):
                     not record.get('ready')):
                 continue
             state = record.get('state') or {}
-            presented_pose = None
+            presented_pose = record.get('presented_pose')
             if record.get('kind') == 'bot':
                 state = bot_states.get(record.get('network_id'), state)
-                presented_pose = record.get('presented_pose')
             pose = presented_pose if isinstance(presented_pose, dict) else {}
             x = _number(pose.get('x', state.get('x')))
             y = _number(pose.get('y', state.get('y')))
@@ -19311,7 +19310,10 @@ class BattleRuntime(object):
                 record.get('network_id') in self._local_ram_episode_contacts)
             if not active_episode:
                 if not tank_collision.vertical_overlap(
-                        position[1], own_shape, y, shape):
+                        position[1], own_shape, y, shape,
+                        pitch_a=self._local_pitch, roll_a=self._local_roll,
+                        pitch_b=_number(pose.get('pitch', state.get('pitch'))),
+                        roll_b=_number(pose.get('roll', state.get('roll')))):
                     continue
                 radius = math.sqrt(shape[0] * shape[0] + shape[1] * shape[1])
                 reach = (own_radius + radius +
@@ -19320,10 +19322,10 @@ class BattleRuntime(object):
                 if dx * dx + dz * dz > reach * reach:
                     continue
             physical_state = state
+            if isinstance(presented_pose, dict):
+                state = dict(state)
+                state.update(presented_pose)
             if record.get('kind') == 'bot':
-                if isinstance(presented_pose, dict):
-                    state = dict(state)
-                    state.update(presented_pose)
                 presentation_time_us = record.get('presentation_time_us')
                 revision = self._ram_bot_revision_at(
                     record.get('network_id'), presentation_time_us)
@@ -23245,11 +23247,10 @@ class BattleRuntime(object):
             if pose is None:
                 return
             if record.get('ready'):
-                if record.get('kind') == 'bot':
-                    record['presented_pose'] = dict(pose)
-                    stamp = event.get('presentation_time_us')
-                    record['presentation_time_us'] = (
-                        int(stamp) if stamp is not None else None)
+                record['presented_pose'] = dict(pose)
+                stamp = event.get('presentation_time_us')
+                record['presentation_time_us'] = (
+                    int(stamp) if stamp is not None else None)
                 self._apply_record_pose(record, pose)
                 return
         state = dict(record.get('state') or {})
@@ -23258,11 +23259,10 @@ class BattleRuntime(object):
         record['state'] = state
         if pose is not None:
             record['pending_pose'] = dict(pose)
-            if record.get('kind') == 'bot':
-                record['presented_pose'] = dict(pose)
-                stamp = event.get('presentation_time_us')
-                record['presentation_time_us'] = (
-                    int(stamp) if stamp is not None else None)
+            record['presented_pose'] = dict(pose)
+            stamp = event.get('presentation_time_us')
+            record['presentation_time_us'] = (
+                int(stamp) if stamp is not None else None)
         self._materialize_record(record)
 
     def _materialize_record(self, record):

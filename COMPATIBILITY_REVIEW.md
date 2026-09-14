@@ -3416,3 +3416,18 @@ could not open attachments. The four latest PNGs are visible directly in the
 conversation. Engine-free regressions and CI packaging are not native Windows
 battle validation; live collision and remaining hydraulic/limited-turret
 behavior require further evidence.
+
+Limited-traverse Bot hull aiming now evaluates the gun direction in the same
+stabilized pitch/roll basis as gun slew, reusing a matching ballistic solution
+for lead and elevation. A flat compass bearing alone can lie inside the yaw
+interval while the physical gun remains beyond its stop on a cross slope.
+Normal route/recovery ownership and actual gun limits remain intact.
+
+Tank contact height culling projects the oriented descriptor body onto world Y.
+The previous unrotated interval could reject a nose-to-hull overlap on a slope
+before the contact solver ran. Local candidate culling and both contact solver
+owners consume pitch/roll; native armor proof still owns any ram HP. Remote
+human contact bodies also use the interpolated presentation pose, just as Bots
+already did, without rewriting the accepted network state. Regression fixtures
+check a point contained in both tilted bodies, an overhead non-contact, all
+eight vertical corners, and the local presentation-to-contact boundary.

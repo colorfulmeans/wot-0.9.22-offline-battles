@@ -552,3 +552,185 @@ class AimProgressTests(unittest.TestCase):
         self.assertLess(state['gun_pitch'], -0.1)
         self.assertEqual(1, len(launches))
         self.assertEqual(1, launches[0]['fire_seq'])
+
+    def test_limited_td_on_a_side_slope_turns_hull_until_physical_gun_can_fire(self):
+        descriptor = bot_fixture._combat_descriptor(
+            turret_yaw_limits=(-0.02, 0.02), dispersion=0.01)
+        descriptor.activeTurretPosition = 0
+        descriptor.turret['gunPosition'] = (0.0, 0.0, 0.0)
+        descriptor.gun.hitTester = bot_fixture._HitTester1513(
+            (-0.1, -0.1, 0.0), (0.1, 0.1, 4.0))
+        descriptor.gun.pitchLimits = {'absolute': (-0.8, 0.3)}
+        self._run_td_firing_case(descriptor, False)
+
+    def test_hydraulic_fixed_gun_enters_siege_and_reaches_a_physical_launch(self):
+        travel = bot_fixture._combat_descriptor(
+            turret_yaw_limits=(-0.005, 0.005), dispersion=0.01)
+        siege = bot_fixture._combat_descriptor(
+            turret_yaw_limits=(-0.005, 0.005), dispersion=0.01)
+        for enabled, descriptor in ((False, travel), (True, siege)):
+            descriptor.activeTurretPosition = 0
+            descriptor.turret['gunPosition'] = (0.0, 0.0, 0.0)
+            descriptor.gun.hitTester = bot_fixture._HitTester1513(
+                (-0.1, -0.1, 0.0), (0.1, 0.1, 4.0))
+            descriptor.type = types.SimpleNamespace(
+                name='sweden:S11_Strv_103B',
+                hullAimingParams={'pitch': {
+                    'isAvailable': True, 'isEnabled': enabled,
+                    'wheelCorrectionCenterZ': 0.0,
+                    'wheelsCorrectionSpeed': 0.2,
+                    'wheelsCorrectionAngles': {'pitchMin': -0.5, 'pitchMax': 0.3}}})
+            descriptor.gun.pitchLimits = {'absolute': (-0.01, 0.01)}
+            descriptor.gun.staticPitch = 0.0
+            descriptor.gun.staticTurretYaw = 0.0
+        composite = types.SimpleNamespace(
+            hasSiegeMode=True, defaultVehicleDescr=travel, siegeVehicleDescr=siege)
+        self._run_td_firing_case(composite, True)
+
+    def _run_td_firing_case(self, descriptor, hydraulic):
+        # An observed elevated target on a transverse ground slope. The compass
+        # bearing is zero, but the physical gun's local yaw is outside its arc.
+        command = {
+            'target_yaw': 0.0, 'throttle': 0.0, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': True,
+            'target_id': self.fixture.module.HUMAN_TARGET_ID_BASE + 2,
+            'fire_range': 500.0, 'combat_mode': 'engage',
+            'aim_position': (0.0, 20.0, 60.0),
+            'face_position': (0.0, 20.0, 60.0),
+            'move_position': (0.0, 0.0, 0.0),
+            'recovery_mode': 'arrived', 'movement_intent': False,
+        }
+        from gui.mods.offline_lan_0922 import shot_geometry
+
+        def muzzle(source, gun, *unused):
+            return shot_geometry.barrel_world_point(
+                gun, (source['x'], source['y'], source['z']),
+                source['yaw'], source.get('pitch', 0.0), source.get('roll', 0.0),
+                source.get('turret_yaw', 0.0), source.get('gun_pitch', 0.0))
+
+        def ground(x, z, *unused):
+            return 0.4 * x
+
+        runtime = self.fixture.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: descriptor,
+            adapter_factory=lambda *args, **kwargs: bot_fixture._FixedAdapter(command),
+            direct_launch_origin_probe=muzzle,
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            visibility_probe=lambda *unused: True,
+            firing_lane_probe=lambda *unused: True,
+            friendly_lane_probe=lambda *unused: {'clear': True},
+            ground_probe=ground, physics_ground_probe=ground,
+            spawn_resolver=bot_fixture._spawn_resolver,
+            baked_graph=bot_fixture._flat_open_graph())
+        start = dict(self.fixture.start)
+        if hydraulic:
+            start['bots'] = [dict(bot_fixture.bot_state_rows.bots(start)[0],
+                                  vehicle='sweden:S11_Strv_103B')]
+        runtime.battle_start(start)
+        state = runtime.states[11]
+        state.update(x=0.0, y=0.0, z=0.0, yaw=0.0,
+                     aim_yaw=0.0, turret_yaw=0.0, gun_pitch=0.0,
+                     profile={'class_tag': 'AT-SPG'})
+        runtime._gun_states[11].elapsed = 100.0
+        player = bot_fixture._admit_player({
+            'id': 2, 'team': 1, 'alive': True, 'x': 0.0, 'y': 20.0, 'z': 60.0})
+        launches, yaws = [], []
+        modes = set()
+        for frame in range(1, 1441):
+            messages = runtime.update(1.0 / 24.0, frame / 24.0, players=[player])
+            yaws.append(state['yaw'])
+            modes.add(state.get('siege_state'))
+            for message in messages:
+                launches.extend(message.get('launches', ()))
+            if launches:
+                break
+        self.assertTrue(launches, 'TD stalled: state=%r aim=%r' % (
+            {key: state.get(key) for key in (
+                'yaw', 'pitch', 'roll', 'gun_pitch', 'turret_yaw', 'gun_aligned',
+                'siege_state', 'speed', 'hull_aiming')},
+            runtime._ballistic_solution_cache.get(11)))
+        self.assertGreater(abs(state['yaw']), 0.02)
+        self.assertLess(max(yaws) - min(yaws), 1.0)
+        if hydraulic:
+            self.assertIn(self.fixture.module.siege_mechanics.SWITCHING_ON, modes)
+            self.assertIn(self.fixture.module.siege_mechanics.ENABLED, modes)
+
+
+class PresentedCollisionTests(unittest.TestCase):
+    def test_oriented_height_culling_keeps_a_real_sloped_hull_overlap(self):
+        from gui.mods.offline_lan_0922 import tank_collision as collision
+        shape = (1.5, 3.5, -0.8, 2.0)
+        first = {'id': 1, 'kind': 'bot', 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                 'yaw': 0.0, 'pitch': -0.6, 'roll': 0.0, 'shape': shape,
+                 'mass': 25000.0, 'vx': 0.0, 'vz': 0.0}
+        second = dict(first, id=2, y=3.0, z=2.7, pitch=0.0)
+        contact_point = (0.0, 2.4, 2.5)
+        self.assertTrue(collision.body_contains_point(first, contact_point))
+        self.assertTrue(collision.body_contains_point(second, contact_point))
+        for owner in ('single', 'pairs'):
+            with self.subTest(owner=owner):
+                result = (collision.resolve_tank(first, [second], dt=0.1)
+                          if owner == 'single' else
+                          collision.resolve_pairs([first, second], 0.1)[1])
+                self.assertNotEqual((0.0, 0.0), result['correction'])
+        above = dict(second, y=10.0)
+        self.assertEqual((0.0, 0.0),
+            collision.resolve_tank(first, [above], dt=0.1)['correction'])
+
+    def test_height_interval_contains_all_pitched_and_rolled_corners(self):
+        from gui.mods.offline_lan_0922 import tank_collision as collision
+        shape = (1.6, 3.4, -0.3, 2.1)
+        for pitch, roll in ((0.0, 0.0), (-0.6, 0.3), (0.4, -0.5), (0.0, 2.0)):
+            axes = collision.pose_axes(0.8, pitch, roll)
+            corners = [5.0 + sum(point[i] * axes[i][1] for i in range(3))
+                       for point in ((x, y, z) for x in (-shape[0], shape[0])
+                                     for y in shape[2:]
+                                     for z in (-shape[1], shape[1]))]
+            low, high = collision.vertical_interval(5.0, shape, pitch, roll)
+            self.assertAlmostEqual(min(corners), low)
+            self.assertAlmostEqual(max(corners), high)
+
+    def test_remote_player_contacts_follow_presented_pose_without_changing_wire_state(self):
+        import test_port_0922_battle_runtime as fixture
+        from gui.mods.offline_lan_0922 import tank_collision as collision
+        runtime = fixture._runtime()
+        battle = fixture.BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        descriptor = fixture._Descriptor()
+        runtime.bigworld.entities[12] = fixture._Vehicle(
+            12, descriptor, fixture._Vector(), (0, 0, 0), {'health': 500})
+        state = {'id': 2, 'x': 0.0, 'y': 0.0, 'z': 100.0, 'yaw': 0.0,
+                 'speed': 5.0, 'team': 2, 'alive': True,
+                 'effective_params': fixture._effective_params_snapshot()}
+        record = {'engine_id': 12, 'network_id': 2, 'kind': 'player',
+                  'ready': True, 'state': state}
+        battle._records['player:2'] = record
+        pose = {'x': 0.0, 'y': 0.0, 'z': 1.0, 'yaw': 0.4,
+                'pitch': 0.1, 'roll': 0.2}
+        with mock.patch.object(battle, '_apply_record_pose'):
+            battle._update_entity({'entity': 'player:2', 'kind': 'player',
+                'interpolated': True, 'pose': pose, 'presentation_time_us': 100})
+        bodies = battle._contact_tanks(
+            (0.0, 0.0, 0.0), collision.chassis_shape(descriptor), 0.1)
+        self.assertEqual(1, len(bodies))
+        self.assertEqual((1.0, 0.4, 0.1, 0.2),
+            tuple(bodies[0][key] for key in ('z', 'yaw', 'pitch', 'roll')))
+        self.assertEqual(100.0, state['z'])
+
+    def test_local_candidate_filter_keeps_contact_on_a_pitched_nose(self):
+        import test_port_0922_battle_runtime as fixture
+        from gui.mods.offline_lan_0922 import tank_collision as collision
+        runtime = fixture._runtime()
+        battle = fixture.BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._local_pitch = -0.6
+        shape = (1.5, 3.5, -0.8, 2.0)
+        runtime.bigworld.entities[11] = fixture._Vehicle(
+            11, fixture._Descriptor(), fixture._Vector(), (0, 0, 0), {'health': 500})
+        battle._records['bot:11'] = {
+            'engine_id': 11, 'network_id': 11, 'kind': 'bot', 'ready': True,
+            'state': {'id': 11, 'x': 0.0, 'y': 3.0, 'z': 2.7,
+                      'yaw': 0.0, 'speed': 0.0, 'team': 2,
+                      'collision_shape': shape}}
+        bodies = battle._contact_tanks((0.0, 0.0, 0.0), shape)
+        self.assertEqual([11], [body['network_id'] for body in bodies])
