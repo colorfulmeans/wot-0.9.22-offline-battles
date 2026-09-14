@@ -5938,7 +5938,10 @@ class BotRuntime(object):
             ground = vehicle_physics.suspension_footprint_support(
                 params, point, ground, memory[index], yaw,
                 lambda px, pz, low, high: self._suspension_ground_value(
-                    px, pz, low, high, high), support_gradient)
+                    px, pz, low, high, high), support_gradient,
+                point_height=spring_height, spring=spring,
+                reference_height=vehicle_physics.suspension_plane_height(
+                    None if state.get('airborne') else state.get('_suspension_ground_plane'), x, z))
             ground, memory[index] = \
                 vehicle_physics.retained_ground_contact(
                     point, ground, memory[index],
@@ -6904,6 +6907,14 @@ class BotRuntime(object):
         elif not before_airborne and state['airborne']:
             self._turn_speeds[bot_id] = 0.0
             state['rotation_dir'] = 0
+        yaw, pitch, roll, direction = vehicle_physics.canonical_body_rotation(
+            _number(state.get('yaw')), state['terrain_pitch'], state['roll'])
+        state['yaw'], state['terrain_pitch'], state['roll'] = yaw, pitch, roll
+        state['pitch'] = pitch + _number(state.get('suspension_pitch'))
+        if direction < 0.0:
+            state['speed'] = -_number(state.get('speed'))
+            state['suspension_pitch_velocity'] *= direction
+            state['last_drive_pitch'] = -_number(state.get('last_drive_pitch'))
         return False
 
     @timed('bot.vertical')

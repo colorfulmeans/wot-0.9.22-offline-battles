@@ -811,6 +811,8 @@ def derive_suspension_params(descriptor):
 			stiffness * sprung_mass)
 		springs.append({
 			'side': side, 'x': x, 'z': z,
+			'footprint_front': min(step_z * 0.5, chassis_length * 0.5 - z),
+			'footprint_rear': min(step_z * 0.5, chassis_length * 0.5 + z),
 			'mass': sprung_mass, 'stiffness': stiffness,
 			'damping': damping,
 			'rest_length': rest_length,
@@ -915,6 +917,36 @@ def derive_suspension_params(descriptor):
 	}
 
 
+def canonical_body_rotation(yaw, pitch, roll):
+	'''Keep the rendered nose and the horizontal drive axis in one YPR chart.
+
+	(Y, P, R) and (Y + pi, pi - P, R + pi) describe the same rotation.
+	After a forward tumble the latter chart is required: cos(P) must be
+	nonnegative for sin(Y)/cos(Y) to point towards the rendered nose. The
+	returned sign also transports longitudinal speed and pitch rate without
+	changing world momentum or angular motion at the chart boundary.
+	'''
+	period = 2.0 * math.pi
+	yaw, pitch, roll = float(yaw), float(pitch), float(roll)
+	if not -math.pi <= pitch <= math.pi:
+		pitch = (pitch + math.pi) % period - math.pi
+	direction = 1.0
+	if pitch > math.pi * 0.5:
+		pitch = math.pi - pitch
+		direction = -1.0
+	elif pitch < -math.pi * 0.5:
+		pitch = -math.pi - pitch
+		direction = -1.0
+	if direction < 0.0:
+		yaw += math.pi
+		roll += math.pi
+	if not -math.pi <= yaw <= math.pi:
+		yaw = (yaw + math.pi) % period - math.pi
+	if not -math.pi <= roll <= math.pi:
+		roll = (roll + math.pi) % period - math.pi
+	return yaw, pitch, roll, direction
+
+
 def suspension_pose_params(params, pitch, roll, pitch_velocity=0.0,
 		roll_velocity=0.0, dt=0.0, turret_yaw=0.0):
 	'''Add rigid body contacts only while tipping; ordinary driving stays cheap.'''
@@ -939,38 +971,61 @@ def suspension_pose_params(params, pitch, roll, pitch_velocity=0.0,
 
 
 def suspension_footprint_support(params, point, ground, memory, yaw, query,
-		support_gradient=None):
-	'''Recheck the actual wheel footprint before dropping to a lower deck layer.
+		support_gradient=None, point_height=None, spring=None, reference_height=None):
+	'''Find fresh support across the continuous track, including rail entries.
 
-	A rail/sleeper gap can return a lower beam instead of a miss. Remembered
-	geometry alone must not fill it: at least one fresh ray within the wheel's
-	physical footprint must still find the former support layer.
+	The old recovery required a wheel to have already touched exactly the
+	deck's height. It could neither acquire a slightly higher rail at the
+	entrance nor recover after one lower beam replaced that wheel's memory.
+	Only real, upward-facing geometry inside the track footprint can support
+	it; the old plane never supplies a height by itself.
 	'''
-	if memory is None:
-		return ground
 	x, z = point
-	dx, dz = x - memory[0], z - memory[1]
-	if dx * dx + dz * dz > params['contact_memory_distance'] ** 2:
-		return ground
-	expected = memory[2]
-	if support_gradient is not None:
-		expected += support_gradient[0] * dx + support_gradient[1] * dz
-	if ground is not None and ground >= expected - 0.12:
+	expected = None
+	if memory is not None:
+		dx, dz = x - memory[0], z - memory[1]
+		if dx * dx + dz * dz <= params['contact_memory_distance'] ** 2:
+			expected = memory[2]
+			if support_gradient is not None:
+				expected += support_gradient[0] * dx + support_gradient[1] * dz
+	if reference_height is not None:
+		# A beam hit must not permanently become this carrier's preferred
+		# layer while the other carriers still hold the tank on the bridge.
+		expected = max(float(reference_height) - 0.12,
+			expected if expected is not None else float(reference_height))
+	if expected is None or (ground is not None and ground >= expected - 0.12):
 		return ground
 	sine, cosine = math.sin(yaw), math.cos(yaw)
-	length = params.get('footprint_half_length', 0.3)
+	spring = spring or {}
+	front = spring.get('footprint_front', params.get('footprint_half_length', 0.3))
+	rear = spring.get('footprint_rear', params.get('footprint_half_length', 0.3))
 	width = params.get('footprint_half_width', 0.15)
-	for side, forward in ((0.0, 0.0), (0.0, -length), (0.0, length),
-			(-width, 0.0), (width, 0.0)):
-		px, pz = x + cosine * side + sine * forward, z - sine * side + cosine * forward
-		layer = expected
-		if support_gradient is not None:
-			layer += support_gradient[0] * (px - x) + support_gradient[1] * (pz - z)
-		value = query(px, pz, layer - 0.12, layer + 0.12)
-		if value is not None and abs(float(value) - layer) <= 0.13:
-			# Evaluate the same proved plane under this carrier, not the slope's
-			# higher neighbouring point (which would create artificial stair steps).
-			return float(value) + expected - layer
+	# A bounded track-scale step may be mounted, but an overhead roof cannot.
+	rise = min(0.35, params['clearance'])
+	ceiling = expected + rise
+	if point_height is not None:
+		ceiling = min(ceiling, float(point_height) + rise)
+	# Centre first also recovers a thin flat deck rejected by the ordinary
+	# damper compression band. The extra columns run only on a missing/lower
+	# carrier; ordinary flat-ground frames still use 22 native queries.
+	for side in (0.0, -width, width, -width * 0.5, width * 0.5):
+		# Carriers sit close to the outside edge. Clamp that edge without
+		# shortening the inboard patch that rests on the ends of sleepers.
+		if 'x' in spring:
+			side = max(-params['width'] * 0.5 - spring['x'],
+				min(params['width'] * 0.5 - spring['x'], side))
+		for forward in (0.0, -rear, front, -rear * 0.5, front * 0.5):
+			px = x + cosine * side + sine * forward
+			pz = z - sine * side + cosine * forward
+			delta = 0.0
+			if support_gradient is not None:
+				delta = support_gradient[0] * (px - x) + support_gradient[1] * (pz - z)
+			low, high = expected - 0.12 + delta, ceiling + delta
+			if high < low:
+				continue
+			value = query(px, pz, low, high)
+			if value is not None and low - 0.01 <= float(value) <= high + 0.01:
+				return float(value) - delta
 	return ground
 
 

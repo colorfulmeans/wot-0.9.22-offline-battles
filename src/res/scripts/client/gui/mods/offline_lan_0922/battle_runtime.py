@@ -1762,6 +1762,7 @@ class BattleRuntime(object):
         self._local_suspension_failed_this_tick = False
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
+        self._local_suspension_probe_trace = ()
         self._local_frame_stages = None
         self._local_pitch = 0.0
         self._local_roll = 0.0
@@ -17129,6 +17130,10 @@ class BattleRuntime(object):
                     json.dumps(self._local_ground_plane)))
         trace = contact or getattr(self, '_local_world_collision_trace', None)
         if trace and trace.get('reason'):
+            trace = dict(trace)
+            trace['spring_columns'] = 'x,z,minimum,maximum,direct,support'
+            trace['spring_probes'] = getattr(
+                self, '_local_suspension_probe_trace', ())
             sys.stdout.write('[Offline LAN 0.9.22] LOCAL HARD CONTACT %s\n' %
                              json.dumps(trace))
         return True
@@ -18876,6 +18881,13 @@ class BattleRuntime(object):
             bot_pose = (
                 bot_position[0], bot_position[1], bot_position[2],
                 float(getattr(bot_matrix, 'yaw', 0.0)), 0.0, 0.0)
+        # A contact can be observed between the suspension solve and final
+        # pose publication. Serialize the equivalent principal attitude here
+        # too, so a completed tumble never sends +/- pi as an upright pitch.
+        own_pose = tuple(own_pose[:3]) + vehicle_physics.canonical_body_rotation(
+            own_pose[3], own_pose[4], own_pose[5])[:3]
+        bot_pose = tuple(bot_pose[:3]) + vehicle_physics.canonical_body_rotation(
+            bot_pose[3], bot_pose[4], bot_pose[5])[:3]
         if player_ram_profile is None:
             player_ram_profile = self._ram_profile(
                 local_vehicle.typeDescriptor, local=True)
@@ -20010,6 +20022,7 @@ class BattleRuntime(object):
             support_gradient=None, sweep_drop=0.0):
         """Sample every real damper once for this copied-physics tick."""
         params = self._local_suspension_params
+        self._local_suspension_probe_trace = ()
         if not isinstance(params, dict):
             return ()
         if math.cos(self._local_pitch) * math.cos(self._local_roll) <= 0.1:
@@ -20025,6 +20038,7 @@ class BattleRuntime(object):
         if not isinstance(memory, list) or len(memory) != len(points):
             memory = [None] * len(points)
         result = []
+        probe_trace = []
         for index, point in enumerate(points):
             x, z = point
             spring = params['springs'][index]
@@ -20045,16 +20059,22 @@ class BattleRuntime(object):
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=spring_maximum_y,
                 prepared_filter=prepared_filter)
+            direct = value
             value = vehicle_physics.suspension_footprint_support(
                 params, point, value, memory[index], yaw,
                 lambda px, pz, low, high: self._suspension_ground_y(
                     px, pz, low, high, flat_maximum_y=high,
-                    prepared_filter=prepared_filter), support_gradient)
+                    prepared_filter=prepared_filter), support_gradient,
+                point_height=spring_height, spring=spring,
+                reference_height=vehicle_physics.suspension_plane_height(
+                    None if self._local_airborne else self._local_ground_plane, x, z))
             value, memory[index] = vehicle_physics.retained_ground_contact(
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
+            probe_trace.append((x, z, minimum_y, maximum_y, direct, value))
             result.append(value)
         self._local_spring_ground_memory = memory
+        self._local_suspension_probe_trace = tuple(probe_trace)
         return tuple(result)
 
     def _local_suspension_pseudo_ground_samples(
@@ -21002,6 +21022,17 @@ class BattleRuntime(object):
             self._input_accumulator %= NETWORK_INPUT_SECONDS
             self._sender.send_current()
 
+    def _canonicalize_local_attitude(self, yaw):
+        yaw, self._local_pitch, self._local_roll, direction = \
+            vehicle_physics.canonical_body_rotation(
+                yaw, self._local_pitch, self._local_roll)
+        if direction < 0.0:
+            self._local_speed *= direction
+            self._local_suspension_pitch_velocity *= direction
+            self._local_drive_pitch_history = None
+            self._local_smooth_drive_pitch = 0.0
+        return yaw
+
     def _drive_local_step(self, dt):
         if self._sender is None or self._server is None:
             return
@@ -21035,7 +21066,8 @@ class BattleRuntime(object):
         dt = max(0.0, min(float(dt), 0.1))
         position = self._local_position
         tick_pose = position
-        yaw = self._local_yaw
+        yaw = self._canonicalize_local_attitude(self._local_yaw)
+        self._local_yaw = yaw
         turret_tick_pose = None
         turret_suspension_snapshot = None
         if getattr(self, '_detached_turret_obstacles', None) is not None:
@@ -21255,6 +21287,7 @@ class BattleRuntime(object):
         finally:
             self._local_support_tick_pose = None
             self._local_support_motion_pose = None
+        yaw = self._canonicalize_local_attitude(yaw)
         slide_motion_applied = bool(getattr(
             self, '_local_suspension_slide_motion_this_tick', False))
         suspension_active = bool(
@@ -21329,6 +21362,7 @@ class BattleRuntime(object):
                 self._local_motion_kinds = 'detached_turret'
                 self._local_motion_status = 'hard'
                 contact_path = 'detached_turret'
+        yaw = self._canonicalize_local_attitude(yaw)
         self._report_local_contact_tick(
             contact_path, previous_speed, slope_pitch,
             position[1] - tick_pose[1])
