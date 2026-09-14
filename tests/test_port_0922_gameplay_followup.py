@@ -284,17 +284,28 @@ class AimProgressTests(unittest.TestCase):
         player = bot_fixture._admit_player({
             'id': 2, 'team': 1, 'alive': True,
             'x': 0.0, 'y': 0.0, 'z': 560.0})
+        # The target is beyond the SPG's own 445 m spotting cap. Exercise
+        # a real allied human observer instead of granting omniscient sight.
+        observer = bot_fixture._admit_player({
+            'id': 3, 'team': 2, 'alive': True,
+            'x': 30.0, 'y': 0.0, 'z': 500.0})
         launches = []
         for frame in range(1, 721):
             now[0] = frame / 24.0
             self.assertLessEqual(controller.advance(
                 now[0], 4, lambda *unused: None), 4)
-            messages = runtime.update(1.0 / 24.0, now[0], players=[player])
+            messages = runtime.update(
+                1.0 / 24.0, now[0], players=[player, observer])
             for message in messages:
                 launches.extend(message.get('launches', ()))
             if launches:
                 break
-        self.assertTrue(launches, 'SPG never crossed planning, aiming and final proof')
+        self.assertTrue(launches, 'SPG launch stalled: state=%r aim=%r intent=%r' % (
+            {key: state.get(key) for key in (
+                'target_id', 'gun_pitch', 'gun_aligned', 'fire_seq',
+                'speed', 'clip', 'shell_index')},
+            runtime._ballistic_solution_cache.get(11),
+            runtime._artillery_intents.get(11)))
         self.assertEqual(1, state['fire_seq'])
         self.assertLess(state['gun_pitch'], -0.1)
         self.assertEqual(1, len(launches))
