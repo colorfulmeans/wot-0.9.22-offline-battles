@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.8.1** — [更新说明](docs/releases/v0.8.1.md).
+Current release: **v0.8.2** — [更新说明](docs/releases/v0.8.2.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.8.1-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.8.2-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -177,9 +177,11 @@ whose profile changed after it started must be restarted first.
   Minimap requests choose passable ground inside the cell; following Bots
   leave room behind the player. Native menu, marker and sound presentation
   still needs acceptance on the supported Windows client.
-- Automatically generated Bot lineups contain no self-propelled artillery.
-  Player vehicles and manually assigned Bot lineups remain unrestricted;
-  tank destroyers are not artillery and remain in the automatic pool.
+- Automatically generated lineups allow up to three self-propelled artillery
+  per team, counting human artillery toward that quota. The available vehicle
+  pool and roster size determine whether artillery is selected. Manually
+  assigned Bot lineups retain the host's choices; tank destroyers do not count
+  toward the artillery quota.
 - Bot competence is a spectrum, not a tier. Each Bot gets one rating that
   sets the crew level its vehicle is trained to, how long that gunner takes
   to react, how patiently it waits for the aiming circle, how far off centre

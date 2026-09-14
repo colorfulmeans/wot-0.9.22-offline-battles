@@ -350,7 +350,7 @@ class PortSourceTests(unittest.TestCase):
         build_script = (PORT_ROOT / 'build_for_client.sh').read_text(
             encoding='utf-8')
 
-        self.assertEqual('0.8.1', packager.MOD_VERSION)
+        self.assertEqual('0.8.2', packager.MOD_VERSION)
         self.assertEqual(packager.MOD_VERSION, package.PORT_VERSION)
         self.assertEqual(packager.MOD_VERSION, meta_version)
         self.assertIn(
@@ -367,10 +367,10 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual([packager.MOD_VERSION], values, filename)
         for directory in ('launcher', 'server'):
             source = (PORT_ROOT / directory / 'version_info.txt').read_text()
-            self.assertIn("StringStruct('FileVersion', '0.8.1')", source)
-            self.assertIn("StringStruct('ProductVersion', '0.8.1')", source)
-            self.assertIn('filevers=(0, 8, 1, 0)', source)
-            self.assertIn('prodvers=(0, 8, 1, 0)', source)
+            self.assertIn("StringStruct('FileVersion', '0.8.2')", source)
+            self.assertIn("StringStruct('ProductVersion', '0.8.2')", source)
+            self.assertIn('filevers=(0, 8, 2, 0)', source)
+            self.assertIn('prodvers=(0, 8, 2, 0)', source)
 
     def test_port_sources_are_python_2_compatible_syntax(self):
         source_root = PORT_ROOT / 'src'
@@ -490,7 +490,7 @@ class PortSourceTests(unittest.TestCase):
                 config_path.parent / packager.BUILD_IDENTITY_FILENAME
             ).read_text(encoding='utf-8'))
             self.assertEqual(1, identity['schema'])
-            self.assertEqual('0.8.1', identity['semanticVersion'])
+            self.assertEqual('0.8.2', identity['semanticVersion'])
             self.assertRegex(
                 identity['buildIdentity'],
                 r'^local-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
