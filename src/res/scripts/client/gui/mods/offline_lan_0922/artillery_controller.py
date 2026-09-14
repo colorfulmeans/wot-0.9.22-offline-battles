@@ -138,6 +138,25 @@ class ArtilleryController(object):
             int(target_id or 0), int(shell_index),
         )
 
+    def _settled_planning_key(self, slot, key):
+        """Keep advisory family work through bounded suspension settling.
+
+        A strategic result never authorizes a launch. The current muzzle and
+        angles still receive an independent complete exact-path proof.
+        Compare to the retained anchor, so slow cumulative travel cannot keep
+        an arbitrarily old family alive by moving a little each frame.
+        """
+        previous = self._planning_keys.get(slot)
+        if previous is None or previous[:4] != key[:4]:
+            return key
+        moved = sum((key[4][index] - previous[4][index]) ** 2
+                    for index in range(3))
+        turned = max(abs((key[5][index] - previous[5][index] + math.pi) %
+                         (2.0 * math.pi) - math.pi) for index in range(3))
+        if moved <= 0.05 ** 2 and turned <= 0.001:
+            return previous
+        return key
+
     def _replace_planning_key(self, slot, key):
         previous = self._planning_keys.get(slot)
         if previous == key:
@@ -238,6 +257,7 @@ class ArtilleryController(object):
         except (TypeError, ValueError, OverflowError):
             self._replace_planning_key(slot, None)
             return True, None
+        key = self._settled_planning_key(slot, key)
         self._replace_planning_key(slot, key)
         candidates = self._candidates(
             source, target, descriptor, shell_index)
@@ -255,6 +275,7 @@ class ArtilleryController(object):
             slot = self._planning_slot(source, target, shell_index)
         except (TypeError, ValueError, OverflowError):
             return False, None
+        key = self._settled_planning_key(slot, key)
         if self._planning_keys.get(slot) != key:
             return False, None
         return self.queue.result(key, float(now))

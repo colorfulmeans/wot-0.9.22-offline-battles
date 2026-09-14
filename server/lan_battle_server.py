@@ -8954,13 +8954,20 @@ class BattleState:
                 self.support_targets.setdefault(shooter, set()).add(victim)
         enemy_hit = (
             int(record["team"]) != int(proposal["target_team"]))
-        if enemy_hit and proposal["splash"]:
+        crits_mask = _crits_mask(critical_before, admitted_critical)
+        crits = _popcount(crits_mask)
+        # A direct, non-penetrating HE hit can still damage its primary
+        # target through the explosion.  "splash" identifies secondary
+        # targets in the projectile protocol, not all blast damage.
+        explosion_damage = (
+            proposal["splash"] or
+            (record["is_he"] and proposal["shot_result"] != 2 and
+             (applied > 0 or crits > 0)))
+        if enemy_hit and explosion_damage:
             self._statistics_row(*shooter)["explosion_hits"] += 1
             self._increment_interaction(
                 shooter, victim, "explosion_hits")
             self._statistics_row(*victim)["explosion_hits_received"] += 1
-        crits_mask = _crits_mask(critical_before, admitted_critical)
-        crits = _popcount(crits_mask)
         if enemy_hit and crits_mask:
             victim_state = self._statistics_row(*victim)
             victim_state["crits_received_mask"] |= crits_mask
@@ -9735,6 +9742,7 @@ class BattleState:
                 row.get("damage_assisted_radio", 0))),
             "assist_stun": max(0, int(
                 row.get("damage_assisted_stun", 0))),
+            "damaged": max(0, int(row.get("damaged", 0))),
             "kills": max(0, int(row.get("kills", 0))),
             "spotted": max(0, int(row.get("spotted", 0))),
             "capture_points": max(0, int(
@@ -12445,7 +12453,7 @@ class BattleState:
                 "damage_dealt": 0, "damage_received": 0,
                 "damage_blocked": 0, "damage_assisted_track": 0,
                 "damage_assisted_radio": 0, "damage_assisted_stun": 0,
-                "kills": 0, "spotted": 0,
+                "damaged": 0, "kills": 0, "spotted": 0,
                 "capture_points": 0, "dropped_capture_points": 0,
                 # Battle-result fidelity fields.  #1513 shows every one of
                 # these on the results screen and Wargaming's achievement
@@ -12639,7 +12647,9 @@ class BattleState:
         if not attacker_row["team"] and attacker_team in (1, 2):
             attacker_row["team"] = attacker_team
         attacker_row["damage_dealt"] += damage
-        self.damaged_targets.setdefault(attacker, set()).add(target)
+        damaged = self.damaged_targets.setdefault(attacker, set())
+        damaged.add(target)
+        attacker_row["damaged"] = len(damaged)
         # Fire Support counts distinct enemies this actor actually hurt; a
         # ricochet or non-penetration never reaches here.
         self.support_targets.setdefault(attacker, set()).add(target)

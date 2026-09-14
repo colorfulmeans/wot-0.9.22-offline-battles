@@ -3385,3 +3385,34 @@ Continuous stacked-hull/debris crushing HP remains unimplemented.
 These tests prove source logic and queue/adapter contracts. Exact Windows
 #1513 rendering, native destruction, frame pacing and combat remain gameplay
 acceptance boundaries.
+
+### 2026-09-14 repeated gameplay report and reference ammo screenshots
+
+The next follow-up maps the accepted distinct enemy-damage set to native
+`damaged` in both personal and public vehicle results, alongside `kills`.
+Primary non-penetrating HE damage now contributes to explosion-hit statistics;
+the protocol's secondary-target `splash` flag is not the complete blast taxonomy.
+The launch ledger's admitted HE identity owns this classification. Direct-hit
+counts, accepted HP, replay idempotence and existing secondary-hit semantics
+remain independent.
+
+The four user-provided current-client screenshots define presentation only.
+Damage, both installed GunShot penetration endpoints, muzzle velocity and HE
+radius come from this #1513 vehicle's mounted ammunition. Chinese labels,
+inline units, comma-separated integer speed and distance notes follow those
+references. Stock extra rows, including HE stun duration, remain present.
+Native GunShot access remains attribute-only; NoLegacyStuff is not bypassed.
+
+Strategic artillery family work retains its original anchor while source
+settling remains within 5 cm and 0.001 radians, matching the existing Bot
+intent motion envelope. Cumulative movement is measured from that retained
+anchor. This advisory cache cannot authorize fire: the exact final native
+muzzle, dispersed angles and every trajectory chord still receive their own
+unchanged proof. Tests now include settling while the high arc is queued and a
+real server-planner/local-driver path with a pose-dependent barrel endpoint.
+
+The uploaded report ZIP could not be inspected because this session's runtime
+could not open attachments. The four latest PNGs are visible directly in the
+conversation. Engine-free regressions and CI packaging are not native Windows
+battle validation; live collision and remaining hydraulic/limited-turret
+behavior require further evidence.
