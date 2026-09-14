@@ -54,6 +54,7 @@ from gui.mods.offline_lan_0922.projectile_runtime import (
     projectile_range_distance, trajectory_position)
 from gui.mods.offline_lan_0922.snapshot_sync import SnapshotSync
 from gui.mods.offline_lan_0922.spawn_planner import SpawnPlanner
+from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.worker_diagnostics import (
     WorkerCombatDiagnostics, timed, call as timed_call)
 from gui.mods.offline_lan_0922 import (
@@ -1763,6 +1764,7 @@ class BattleRuntime(object):
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
         self._local_suspension_probe_trace = ()
+        self._suspension_ground_probe_layers = ()
         self._local_frame_stages = None
         self._local_pitch = 0.0
         self._local_roll = 0.0
@@ -4992,8 +4994,8 @@ class BattleRuntime(object):
     def _collide_detached_turret(self, start, end):
         """Segment query used to walk a detached turret's arc to the ground.
 
-        Flag 128 is the same terrain-and-static mask every motion probe in
-        this port uses, and the same per-column broken-skin filter.  The
+        Use the vehicle collision flags and the per-column broken-skin
+        filter, including vehicle-only bridge collision surfaces. The
         cosmetic arc must not rest on a fence skin the room has already
         accepted as broken.
         """
@@ -5037,9 +5039,9 @@ class BattleRuntime(object):
         """Vertical probe that skips the skin of an already broken item."""
         if ground_filter is None:
             return self._runtime.bigworld.wg_collideSegment(
-                self._avatar.spaceID, start, end, 128)
+                self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS)
         return self._runtime.bigworld.wg_collideSegment(
-            self._avatar.spaceID, start, end, 128, ground_filter)
+            self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS, ground_filter)
 
     def _ground_y(self, x, z, hint=0.0, allow_wide=False):
         """Find upward-facing support below rejected overhead surfaces.
@@ -5098,6 +5100,7 @@ class BattleRuntime(object):
         layers while preserving the local broken-destructible filter on every
         native query.
         """
+        self._suspension_ground_probe_layers = ()
         minimum_y = float(minimum_y)
         maximum_y = float(maximum_y)
         if maximum_y < minimum_y:
@@ -5136,9 +5139,17 @@ class BattleRuntime(object):
                 raise RuntimeError(
                     'native suspension ground hit is malformed')
             normal_y /= normal_length
-            if (minimum_y - 0.01 <= height <= maximum_y + 0.01 and
-                    vehicle_physics.suspension_support_allowed(
-                        height, normal_y, flat_maximum_y)):
+            if not minimum_y - 0.01 <= height <= maximum_y + 0.01:
+                verdict = 'outside_band'
+            elif normal_y <= 0.5:
+                verdict = 'underside_or_wall'
+            elif not vehicle_physics.suspension_support_allowed(
+                    height, normal_y, flat_maximum_y):
+                verdict = 'above_flat_limit'
+            else:
+                verdict = 'support'
+            self._suspension_ground_probe_layers += ((height, normal_y, verdict),)
+            if verdict == 'support':
                 return height
             next_y = height - 0.02
             if next_y <= minimum_y + 0.01 or next_y >= start_y:
@@ -5321,7 +5332,8 @@ class BattleRuntime(object):
                     ground = self._runtime.bigworld.wg_collideSegment(
                         self._avatar.spaceID,
                         self._vector((nx, previous_y + probe_up, nz)),
-                        self._vector((nx, previous_y - probe_down, nz)), 128)
+                        self._vector((nx, previous_y - probe_down, nz)),
+                        VEHICLE_SKIP_FLAGS)
                 except Exception:
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': 99.0}
@@ -5354,7 +5366,8 @@ class BattleRuntime(object):
                     nz + lateral_z * offset))
                 try:
                     collision = self._runtime.bigworld.wg_collideSegment(
-                        self._avatar.spaceID, ray_start, ray_end, 128)
+                        self._avatar.spaceID, ray_start, ray_end,
+                        VEHICLE_SKIP_FLAGS)
                 except Exception:
                     collision = True
                 if collision is not None:
@@ -5481,7 +5494,8 @@ class BattleRuntime(object):
                 ray_end = self._vector((ex, y + height, ez))
                 try:
                     collision = self._runtime.bigworld.wg_collideSegment(
-                        self._avatar.spaceID, ray_start, ray_end, 128)
+                        self._avatar.spaceID, ray_start, ray_end,
+                        VEHICLE_SKIP_FLAGS)
                 except Exception:
                     return False
                 if collision is None:
@@ -5523,7 +5537,8 @@ class BattleRuntime(object):
                 float(end[1]) + 0.9,
                 float(end[2]) + lateral_z * offset))
             if self._runtime.bigworld.wg_collideSegment(
-                    self._avatar.spaceID, ray_start, ray_end, 128) is not None:
+                    self._avatar.spaceID, ray_start, ray_end,
+                    VEHICLE_SKIP_FLAGS) is not None:
                 return True
         return False
 
@@ -17131,7 +17146,10 @@ class BattleRuntime(object):
         trace = contact or getattr(self, '_local_world_collision_trace', None)
         if trace and trace.get('reason'):
             trace = dict(trace)
-            trace['spring_columns'] = 'x,z,minimum,maximum,direct,support'
+            trace['motion_skip_flags'] = VEHICLE_SKIP_FLAGS
+            trace['spring_columns'] = (
+                'x,z,minimum,maximum,direct,support,flat_maximum,layers')
+            trace['spring_layer_columns'] = 'height,normal_y,verdict'
             trace['spring_probes'] = getattr(
                 self, '_local_suspension_probe_trace', ())
             sys.stdout.write('[Offline LAN 0.9.22] LOCAL HARD CONTACT %s\n' %
@@ -20060,6 +20078,7 @@ class BattleRuntime(object):
                 flat_maximum_y=spring_maximum_y,
                 prepared_filter=prepared_filter)
             direct = value
+            layers = self._suspension_ground_probe_layers
             value = vehicle_physics.suspension_footprint_support(
                 params, point, value, memory[index], yaw,
                 lambda px, pz, low, high: self._suspension_ground_y(
@@ -20071,7 +20090,8 @@ class BattleRuntime(object):
             value, memory[index] = vehicle_physics.retained_ground_contact(
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
-            probe_trace.append((x, z, minimum_y, maximum_y, direct, value))
+            probe_trace.append((x, z, minimum_y, maximum_y, direct, value,
+                                spring_maximum_y, layers))
             result.append(value)
         self._local_spring_ground_memory = memory
         self._local_suspension_probe_trace = tuple(probe_trace)

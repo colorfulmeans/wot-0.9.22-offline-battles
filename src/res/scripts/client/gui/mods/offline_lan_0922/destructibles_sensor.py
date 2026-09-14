@@ -5,6 +5,8 @@ The three sensor bodies below are dedented copies from ``offline_battle.py``.
 Only their former closure dependencies are supplied at module scope.
 """
 
+from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
+
 from gui.mods.offline_lan_0922.worker_diagnostics import (
     observed, observed_call, observed_ray,
     current as current_combat, count as combat_count)
@@ -3414,7 +3416,7 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			recast_budget[0] = int(recast_budget[0]) - 1
 		current_hit = observed_ray(
 			'native.destructible.ray', BigWorld.wg_collideSegment,
-			spaceID, next_start, segment_end, 128)
+			spaceID, next_start, segment_end, VEHICLE_SKIP_FLAGS)
 		if current_hit is None:
 			return 'kinetic' if kinetic_contact else True
 		current_start = next_start

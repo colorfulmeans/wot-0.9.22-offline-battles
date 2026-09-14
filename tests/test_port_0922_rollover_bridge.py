@@ -207,7 +207,7 @@ class RolloverBridgeTests(unittest.TestCase):
                 yaw = -1.95
                 sine, cosine = math.sin(yaw), math.cos(yaw)
                 def native(unused_space, start, end, mask, *filters):
-                    self.assertEqual(128, mask)
+                    self.assertEqual(0x10 | 0x40, mask)
                     x, z = cosine * start.x - sine * start.z, sine * start.x + cosine * start.z
                     layers = [(30.0, -1.0)]  # overhead underside is never support
                     if z < 0:

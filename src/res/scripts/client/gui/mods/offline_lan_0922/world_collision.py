@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Dedented 0.8.2 horizontal world-collision law."""
 
+from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
+
 from gui.mods.offline_lan_0922.worker_diagnostics import (
     observed, observed_ray)
 
@@ -44,10 +46,10 @@ def _collide_horizontal(spaceID, start, end,
 	if broken_filter is None:
 		return observed_ray(
 			'native.motion.ray', BigWorld.wg_collideSegment,
-			spaceID, start, end, 128)
+			spaceID, start, end, VEHICLE_SKIP_FLAGS)
 	return observed_ray(
 		'native.motion.ray', BigWorld.wg_collideSegment,
-		spaceID, start, end, 128, broken_filter)
+		spaceID, start, end, VEHICLE_SKIP_FLAGS, broken_filter)
 
 
 def _profile_gradient_limit(heights):
@@ -250,11 +252,11 @@ def _ground_top(spaceID, Math, pos, x, z, look, ground_plane=None,
 			broken_filter = ground_collision_filter(x, z)
 		ground = (observed_ray(
 			'native.motion.ground', BigWorld.wg_collideSegment,
-			spaceID, start, end, 128)
+			spaceID, start, end, VEHICLE_SKIP_FLAGS)
 			if broken_filter is None else
 			observed_ray(
 				'native.motion.ground', BigWorld.wg_collideSegment,
-				spaceID, start, end, 128, broken_filter))
+				spaceID, start, end, VEHICLE_SKIP_FLAGS, broken_filter))
 		return None if ground is None else float(ground[0].y)
 	except (AttributeError, IndexError, TypeError, ValueError):
 		return None

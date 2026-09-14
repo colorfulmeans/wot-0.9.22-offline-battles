@@ -180,7 +180,7 @@ class WorldCollisionTests(unittest.TestCase):
         destructibles_sensor.set_diagnostics(False)
         destructibles_sensor.set_catalog(None)
 
-    def _soft_recast_fixture(self, centers, hard_wall=None):
+    def _soft_recast_fixture(self, centers, hard_wall=None, hard_wall_flags=0):
         """Install exact soft OBBs and a native ray that retains their skins."""
         filename = 'content/environment/test/normal/lod0/soft-item.model'
         destructibles_sensor.xrange = range
@@ -216,7 +216,7 @@ class WorldCollisionTests(unittest.TestCase):
 
         normal = _Vector(0.0, 0.0, -1.0)
 
-        def collide(unused_space, start, end, unused_mask):
+        def collide(unused_space, start, end, mask):
             if end.z <= start.z:
                 return None
             hits = []
@@ -226,6 +226,7 @@ class WorldCollisionTests(unittest.TestCase):
                 if start.z <= exit_point and end.z >= entry:
                     hits.append(max(start.z, entry))
             if (hard_wall is not None and
+                    not hard_wall_flags & mask and
                     start.z <= float(hard_wall) <= end.z):
                 hits.append(float(hard_wall))
             if not hits:
@@ -258,10 +259,10 @@ class WorldCollisionTests(unittest.TestCase):
         return (bigworld, math_module, area, cache, authority,
                 descriptor, normal)
 
-    def _run_soft_recast(self, centers, hard_wall=None):
+    def _run_soft_recast(self, centers, hard_wall=None, hard_wall_flags=0):
         (bigworld, math_module, area, cache, authority,
          descriptor, normal) = self._soft_recast_fixture(
-             centers, hard_wall)
+             centers, hard_wall, hard_wall_flags)
         start = _Vector(0.0, 0.7, 0.0)
         end = _Vector(0.0, 0.7, 10.0)
         collision = (_Vector(0.0, 0.7, float(centers[0]) - 0.5),
@@ -366,6 +367,17 @@ class WorldCollisionTests(unittest.TestCase):
         final_recast_start = collide.call_args_list[-1][0][1].z
         self.assertGreater(final_recast_start, 5.6)
         self.assertLess(final_recast_start, 5.61)
+
+    def test_soft_chain_recast_keeps_vehicle_only_backing_wall(self):
+        # The first two hits use ordinary colliders. Changing just the initial
+        # hull ray is insufficient: the recast must still see the 0x80 guard.
+        cleared, collide = self._run_soft_recast(
+            (4.0, 5.1), hard_wall=5.61, hard_wall_flags=0x80)
+        self.assertFalse(cleared)
+        self.assertEqual(3, collide.call_count)
+        cleared, unused = self._run_soft_recast(
+            (4.0, 5.1), hard_wall=5.61, hard_wall_flags=0x10)
+        self.assertTrue(cleared)
 
     def test_soft_chain_over_world_recast_limit_stays_blocked(self):
         cleared, collide = self._run_soft_recast(
