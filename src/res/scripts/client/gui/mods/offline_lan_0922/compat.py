@@ -1094,7 +1094,13 @@ class OfflineCompatibility(object):
                 avatar = runtime.bigworld.player()
                 vehicle = runtime.bigworld.entity(avatar.playerVehicleID)
                 return append_speed(original, descriptor, vehicle.typeDescriptor)
-            except (AttributeError, TypeError, ValueError, ReferenceError):
+            except Exception as error:
+                # The stock formatter above owns ammo initialization. This
+                # optional extra line must never abort its event listeners.
+                if not getattr(compatibility, '_shell_tooltip_warning_logged', False):
+                    compatibility._shell_tooltip_warning_logged = True
+                    print('[Offline LAN 0.9.22] shell speed tooltip unavailable: '
+                          '%s: %s' % (type(error).__name__, error))
                 return original
 
         self._shell_tooltip_wrapper = shell_tooltip

@@ -220,7 +220,7 @@ MODERN_VISIBLE_MESSAGE_TYPES = frozenset((
     "battle_receipt_ack", "descriptor_catalog", "select_vehicle",
     "select_team", "set_team_size", "set_bot_tier_mode",
     "set_bot_skill_mode",
-    "ping", "leave",
+    "ping", "worker_ping", "leave",
     "track_repair",
     "equipment_intent",
     "team_command",

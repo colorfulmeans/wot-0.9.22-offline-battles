@@ -1860,6 +1860,58 @@ class OfflineCompatibilityTests(unittest.TestCase):
         compatibility.fini()
         self.assertIs(original, AmmoController.__dict__['changeSetting'])
 
+    def test_ammo_panel_initialization_accepts_native_attribute_only_gun_shots(self):
+        compatibility_module = _load_port_source('compat')
+        runtime, unused_operations = self._runtime()
+        shells = [types.SimpleNamespace(compactDescr=n) for n in (13066, 13578)]
+
+        class GunShot(object):
+            # The #1513 client uses NoLegacyStuff, unlike our old dict fixture.
+            def __init__(self, shell, speed):
+                self.shell, self.speed = shell, speed
+
+            def get(self, *unused):
+                raise AssertionError('Operation is not allowed')
+
+            __getitem__ = get
+
+        class ConsumablesPanel(object):
+            def __makeShellTooltip(self, descriptor, piercing_power):
+                return '{HEADER}shell{/HEADER}\n/{BODY}damage{/BODY}'
+
+            def onShellsAdded(self, descriptor):
+                text = self.__makeShellTooltip(descriptor, (175, 150))
+                self.added.append(text)
+
+        runtime.consumables_panel_type = ConsumablesPanel
+        original = ConsumablesPanel._ConsumablesPanel__makeShellTooltip
+        compatibility = compatibility_module.OfflineCompatibility(runtime)
+        compatibility.install()
+        self.addCleanup(compatibility.fini)
+        compatibility.configure_battle()
+        vehicle = types.SimpleNamespace(typeDescriptor=types.SimpleNamespace(
+            gun=types.SimpleNamespace(shots=[GunShot(shells[0], 780), GunShot(shells[1], 570)])))
+        runtime.bigworld.player = lambda: types.SimpleNamespace(playerVehicleID=10)
+        runtime.bigworld.entity = lambda unused: vehicle
+        panel = ConsumablesPanel()
+        panel.added = []
+        for shell in shells:
+            panel.onShellsAdded(shell)
+        self.assertEqual(2, len(panel.added))
+        self.assertIn('780', panel.added[0])
+        self.assertIn('570', panel.added[1])
+
+        # An optional display failure must not unwind the stock ammo event
+        # chain and make BattleRuntime._ammo_tick tear down the battle.
+        from gui.mods.offline_lan_0922 import battle_shell_tooltip
+        with mock.patch.object(battle_shell_tooltip, 'append_speed',
+                               side_effect=AssertionError('Operation is not allowed')):
+            panel.onShellsAdded(shells[0])
+        self.assertEqual(3, len(panel.added))
+        self.assertEqual(original(panel, shells[0], (175, 150)), panel.added[-1])
+        compatibility.fini()
+        self.assertIs(original, ConsumablesPanel._ConsumablesPanel__makeShellTooltip)
+
     def test_offline_battle_debug_panel_uses_lan_transport_health(self):
         compatibility_module = _load_port_source('compat')
         runtime, operations = self._runtime()
