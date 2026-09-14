@@ -13,11 +13,11 @@ VSVersionInfo(
     StringFileInfo([
       StringTable('040904B0', [
         StringStruct('CompanyName', 'colorfulmeans'),
-        StringStruct('FileDescription', 'wot-0.9.22-offline-battles'),
+        StringStruct('FileDescription', 'WoT-0.9.22-LAN-Server'),
         StringStruct('FileVersion', '0.8.1'),
-        StringStruct('InternalName', 'wot-0.9.22-offline-battles'),
-        StringStruct('OriginalFilename', 'wot-0.9.22-offline-battles.exe'),
-        StringStruct('ProductName', 'wot-0.9.22-offline-battles'),
+        StringStruct('InternalName', 'WoT-0.9.22-LAN-Server'),
+        StringStruct('OriginalFilename', 'WoT-0.9.22-LAN-Server.exe'),
+        StringStruct('ProductName', 'WoT-0.9.22-LAN-Server'),
         StringStruct('ProductVersion', '0.8.1')
       ])
     ]),

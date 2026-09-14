@@ -13,7 +13,7 @@ import windows_server  # noqa: E402
 
 
 class WindowsServerLauncherTests(unittest.TestCase):
-    def test_session_identity_is_diagnostic_environment_only(self):
+    def test_session_identity_uses_environment_or_standalone_release_version(self):
         environment = {
             windows_server.BUILD_SEMANTIC_VERSION_ENV: '0.6.1',
             windows_server.BUILD_IDENTITY_ENV: 'test-build-a',
@@ -23,7 +23,7 @@ class WindowsServerLauncherTests(unittest.TestCase):
             ('0.6.1', 'test-build-a'),
             windows_server._session_identity(environment))
         self.assertEqual(
-            ('unknown', 'unknown'),
+            ('0.8.1', 'unknown'),
             windows_server._session_identity({}))
 
     def test_double_click_entry_uses_fixed_zero_configuration_contract(self):

@@ -24,6 +24,7 @@ SERVER_BOT_EXCLUDED_VEHICLES_ENV = "WOT_0922_BOT_EXCLUDED_VEHICLES"
 SERVER_LOOPBACK_ONLY_ENV = "WOT_0922_LOOPBACK_ONLY"
 SERVER_VEHICLE_OVERLAY_ROOT_ENV = "WOT_0922_VEHICLE_OVERLAY_ROOT"
 BUILD_SEMANTIC_VERSION_ENV = "WOT_OFFLINE_SEMANTIC_VERSION"
+SERVER_VERSION = "0.8.1"
 BUILD_IDENTITY_ENV = "WOT_OFFLINE_BUILD_IDENTITY"
 WINDOWS_FIREWALL_RULE_PREFIX = "WoT 0.9.22 LAN Server"
 # Get-NetFirewallRule can take many seconds on a busy machine.
@@ -248,8 +249,8 @@ def _session_identity(environment=None):
     """Return launcher-supplied diagnostic labels without validating peers."""
     environment = os.environ if environment is None else environment
     semantic_version = str(
-        environment.get(BUILD_SEMANTIC_VERSION_ENV, "unknown") or
-        "unknown").strip()
+        environment.get(BUILD_SEMANTIC_VERSION_ENV, SERVER_VERSION) or
+        SERVER_VERSION).strip()
     build_identity = str(
         environment.get(BUILD_IDENTITY_ENV, "unknown") or
         "unknown").strip()
