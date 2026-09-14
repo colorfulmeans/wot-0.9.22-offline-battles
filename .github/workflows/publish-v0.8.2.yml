@@ -212,12 +212,14 @@ jobs:
           with ZipFile(path) as archive:
               names = archive.namelist()
               assert archive.testzip() is None
-              require_x64(archive.read('wot-0.9.22-offline-battles.exe'), 'launcher')
+              # The launcher hosts the bundled server from staged Python source.
+              # The standalone EXE belongs to the manual client overlay.
+              require_x64(archive.read('wot-0.9.22-offline-battles.exe'), 'launcher/server host')
+              require_x64(open('dist/server/WoT-0.9.22-LAN-Server.exe', 'rb').read(),
+                          'standalone server')
+              assert '_internal/servers/0.9.22/server/windows_server.py' in names
               with ZipFile(io.BytesIO(archive.read('_internal/client/0.9.22.zip'))) as payload:
-                  servers = [name for name in payload.namelist()
-                             if name.rsplit('/', 1)[-1] == 'WoT-0.9.22-LAN-Server.exe']
-                  assert len(servers) == 1, servers
-                  require_x64(payload.read(servers[0]), 'bundled server')
+                  assert payload.testzip() is None
               assert archive.read('UPDATE_NOTES.md') == open(
                   'docs/releases/v0.8.2.md', 'rb').read()
           assert 'wot-0.9.22-offline-battles.exe' in names
