@@ -93,8 +93,12 @@ class ArtilleryController(object):
         # moving-target pose buckets would restart long shared jobs forever.
         # ``solution`` re-leads the proved family from the current target pose,
         # and the separate exact queue checks that final physical trajectory.
+        # The tactical lane owner polls at one-second intervals. A 0.35 s
+        # positive window can expire entirely between polls, so a completed
+        # high arc never becomes an observed target. Retain this advisory
+        # family across two polling cycles; exact launch validity is separate.
         self.queue = queue or ArcProbeQueue(
-            success_ttl=0.35, failure_ttl=0.25, max_job_age=60.0)
+            success_ttl=2.5, failure_ttl=0.25, max_job_age=60.0)
         # Final launch paths are immutable and may contain 167 chords at the
         # 20-second protocol ceiling.  They therefore cannot share a short,
         # moving-target planning lifetime.  Completed receipts are pinned by

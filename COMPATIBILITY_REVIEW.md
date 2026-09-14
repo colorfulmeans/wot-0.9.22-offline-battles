@@ -3439,3 +3439,12 @@ invalidate the family job and cause visible oscillation. The retained aim is
 signature-bound and cannot supply a missing launch proof. The regression
 includes a low-path wall, a cross slope, a limited gun and real server/local
 planning through the high-arc launch.
+
+The real high-arc test also exposed a cadence mismatch: strategic successes
+expired after 0.35 seconds while the Bot lane owner polls on a one-second
+tactical cycle. A completion could repeatedly disappear before any observation
+used it, leaving the server without a shootable target. Strategic success
+retention is now 2.5 seconds (two polling cycles plus callback margin); source
+anchor invalidation and current-family re-leading remain active, and final
+native trajectory proof is unchanged. The prior expiry regression now checks
+that a result survives the next tactical poll and still expires thereafter.
