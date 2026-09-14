@@ -224,14 +224,24 @@ def forget_chassis_shape(type_descriptor):
     return True
 
 
-def vertical_overlap(y_a, shape_a, y_b, shape_b, slop=0.02):
-    """Return whether the two descriptor-derived body intervals overlap."""
+def vertical_interval(y, shape, pitch=0.0, roll=0.0):
+    """Project all eight body corners onto world Y before broad-phase culling."""
+    cp, sp = math.cos(float(pitch)), math.sin(float(pitch))
+    cr, sr = math.cos(float(roll)), math.sin(float(roll))
+    up = cp * cr
+    center = float(y) + (shape[2] + shape[3]) * 0.5 * up
+    extent = (abs(cp * sr) * shape[0] + abs(sp) * shape[1] +
+              abs(up) * (shape[3] - shape[2]) * 0.5)
+    return center - extent, center + extent
+
+
+def vertical_overlap(y_a, shape_a, y_b, shape_b, slop=0.02,
+                     pitch_a=0.0, roll_a=0.0, pitch_b=0.0, roll_b=0.0):
+    """Return whether the two oriented body intervals overlap."""
     if y_a is None or y_b is None:
         return True
-    a_low = float(y_a) + shape_a[2]
-    a_high = float(y_a) + shape_a[3]
-    b_low = float(y_b) + shape_b[2]
-    b_high = float(y_b) + shape_b[3]
+    a_low, a_high = vertical_interval(y_a, shape_a, pitch_a, roll_a)
+    b_low, b_high = vertical_interval(y_b, shape_b, pitch_b, roll_b)
     return min(a_high, b_high) - max(a_low, b_low) > slop
 
 
@@ -552,7 +562,10 @@ def traverse_impulses(tanks, dt, anchor=None):
             other_shape = _tank_shape(b)
             reach = math.hypot(*shape[:2])+math.hypot(*other_shape[:2])+POSITION_SLOP
             if ((a['x']-b['x'])**2+(a['z']-b['z'])**2 > reach*reach or
-                    not vertical_overlap(a.get('y'), shape, b.get('y'), other_shape)):
+                    not vertical_overlap(
+                        a.get('y'), shape, b.get('y'), other_shape,
+                        pitch_a=a.get('pitch', 0.0), roll_a=a.get('roll', 0.0),
+                        pitch_b=b.get('pitch', 0.0), roll_b=b.get('roll', 0.0))):
                 continue
             nx, nz, depth = _obb_overlap(a['x'], a['z'], a['yaw'], shape,
                                          b['x'], b['z'], b['yaw'], other_shape)
@@ -795,7 +808,10 @@ def resolve_pairs(tanks, dt):
                 pairs.append((a, b, shape_a, shape_b))
     for unused_pass in range(4):
         for a, b, shape_a, shape_b in pairs:
-            if not vertical_overlap(a.get('y'), shape_a, b.get('y'), shape_b):
+            if not vertical_overlap(
+                    a.get('y'), shape_a, b.get('y'), shape_b,
+                    pitch_a=a.get('pitch', 0.0), roll_a=a.get('roll', 0.0),
+                    pitch_b=b.get('pitch', 0.0), roll_b=b.get('roll', 0.0)):
                 continue
             hit = obb_contact(a['x'], a['z'], a['yaw'], shape_a,
                               b['x'], b['z'], b['yaw'], shape_b)
@@ -1014,7 +1030,12 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
         other_y = _tank_value(other, 'y')
         other_z = float(_tank_value(other, 'z', 0.0) or 0.0)
         other_shape = _tank_shape(other)
-        if not vertical_overlap(y, own_shape, other_y, other_shape):
+        if not vertical_overlap(
+                y, own_shape, other_y, other_shape,
+                pitch_a=_tank_value(tank, 'pitch', 0.0),
+                roll_a=_tank_value(tank, 'roll', 0.0),
+                pitch_b=_tank_value(other, 'pitch', 0.0),
+                roll_b=_tank_value(other, 'roll', 0.0)):
             continue
         center_dx = x - other_x
         center_dz = z - other_z

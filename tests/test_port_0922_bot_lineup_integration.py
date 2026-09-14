@@ -51,7 +51,7 @@ def _descriptor(name):
 
 
 class BotLineupIntegrationTests(unittest.TestCase):
-    def test_default_bot_lineup_has_no_artillery_and_keeps_tank_destroyers(self):
+    def test_default_bot_lineup_allows_three_artillery_and_keeps_destroyers(self):
         artillery = {'name': 'ussr:artillery', 'tags': ('SPG',)}
         destroyer = {'name': 'ussr:destroyer', 'tags': ('AT-SPG',)}
 
@@ -59,7 +59,8 @@ class BotLineupIntegrationTests(unittest.TestCase):
             [artillery, destroyer], 15)
 
         self.assertEqual(15, len(selected))
-        self.assertEqual({'ussr:destroyer'},
+        self.assertEqual(3, sum('SPG' in row['tags'] for row in selected))
+        self.assertEqual({'ussr:destroyer', 'ussr:artillery'},
                          {row['name'] for row in selected})
 
     def test_zero_artillery_cap_replaces_a_mirrored_human_artillery_slot(self):
@@ -72,7 +73,7 @@ class BotLineupIntegrationTests(unittest.TestCase):
 
         self.assertEqual([destroyer] * 15, selected)
 
-    def test_automatic_rosters_have_zero_artillery_without_removing_humans(self):
+    def test_automatic_rosters_allow_artillery_without_removing_humans(self):
         entries = {}
         for level in range(1, 11):
             for class_tag in bot_planner.MATCH_CLASSES:
@@ -114,9 +115,15 @@ class BotLineupIntegrationTests(unittest.TestCase):
 
                         selected = battle._bot_vehicle_assignments
                         self.assertEqual(29, len(selected))
-                        self.assertFalse(any('SPG' in by_name[name].tags
-                                             for name in selected.values()),
-                                         (level, mode, human_class, worker_mode))
+                        for team in (1, 2):
+                            spgs = sum('SPG' in by_name[name].tags
+                                       for (side, slot), name in selected.items()
+                                       if side == team)
+                            human_spgs = int(team == 1 and human_class == 'SPG')
+                            self.assertLessEqual(spgs + human_spgs, 3)
+                        if human_class == 'SPG':
+                            self.assertTrue(any('SPG' in by_name[name].tags
+                                                for name in selected.values()))
                         self.assertEqual((human_class,), descriptor.type.tags)
                         assignments.append(selected)
                     self.assertEqual(assignments[0], assignments[1])
@@ -151,8 +158,9 @@ class BotLineupIntegrationTests(unittest.TestCase):
 
         self.assertTrue(battle._prepare_bot_vehicle_assignments(descriptor))
 
-        self.assertEqual({(1, 1): 'ussr:regular', (2, 0): 'ussr:artillery'},
-                         battle._bot_vehicle_assignments)
+        self.assertEqual('ussr:artillery', battle._bot_vehicle_assignments[(2, 0)])
+        self.assertIn(battle._bot_vehicle_assignments[(1, 1)],
+                      ('ussr:regular', 'ussr:artillery'))
 
     def _profile_exclusion_runtime(self, worker, mode, excluded, lineup=()):
         names = ('ussr:Edited', 'usa:Regular', 'germany:Regular')

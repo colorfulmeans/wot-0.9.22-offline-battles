@@ -387,7 +387,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         return {
             'shooter_kind': 'player', 'shooter_id': 1, 'team': 1,
             'projectile_id': '1:p:1:1', 'shot_seq': 1,
-            'shell_index': 0,
+            'shell_index': 0, 'is_he': False,
         }
 
     def test_stale_destroyed_snapshot_damages_repaired_canonical_module(self):
@@ -1058,7 +1058,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         record = {
             'shooter_kind': 'player', 'shooter_id': 1, 'team': 1,
             'projectile_id': '1:p:1:1', 'shot_seq': 1,
-            'shell_index': 0,
+            'shell_index': 0, 'is_he': False,
         }
 
         state._apply_projectile_effect(record, proposal)
@@ -1109,7 +1109,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         record = {
             'shooter_kind': 'player', 'shooter_id': 1, 'team': 1,
             'projectile_id': '1:p:1:1', 'shot_seq': 1,
-            'shell_index': 0,
+            'shell_index': 0, 'is_he': False,
         }
 
         state._apply_projectile_effect(record, proposal)
@@ -3182,6 +3182,10 @@ class ServerProjectileLedgerTests(unittest.TestCase):
                 self.assertEqual(blocked, hit['blocked_damage'])
                 self.assertEqual(damage, hit['damage'])
                 self.assertEqual(health - damage, victim.health)
+                victim_row = state._statistics_row('player', 2)
+                self.assertEqual(1, victim_row['hits_received'])
+                self.assertEqual(int(shot_result == 2), victim_row['piercings_received'])
+                self.assertEqual(int(damage == 0), victim_row['no_damage_direct_hits_received'])
                 self.assertEqual(
                     blocked,
                     state._statistics_row('player', 2)['damage_blocked'])
@@ -3218,6 +3222,8 @@ class ServerProjectileLedgerTests(unittest.TestCase):
                 self.assertEqual(0, hit['blocked_damage'])
                 victim_row = state._statistics_row('player', 2)
                 self.assertEqual(0, victim_row['damage_blocked'])
+                self.assertEqual(0, victim_row['piercings_received'])
+                self.assertEqual(int(damage == 0), victim_row['no_damage_direct_hits_received'])
                 self.assertEqual(0, state.vehicle_interactions[
                     ('player', 2)]['player:1']['damage_blocked'])
                 # The separate potential-damage column is untouched.
@@ -3312,6 +3318,11 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertEqual(
             390, state._statistics_row('player', 2)['damage_blocked'])
         self.assertEqual(2, state.players[4].team)
+        splash_row = state._statistics_row('player', 4)
+        self.assertEqual(1, splash_row['explosion_hits_received'])
+        self.assertEqual(0, splash_row['hits_received'])
+        self.assertEqual(0, splash_row['piercings_received'])
+        self.assertEqual(0, splash_row['no_damage_direct_hits_received'])
         self.assertEqual(
             0, state._statistics_row('player', 4)['damage_blocked'])
         splash_hit = [event for event in state.pending_events

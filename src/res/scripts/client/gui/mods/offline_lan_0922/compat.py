@@ -330,6 +330,7 @@ def _load_runtime():
     from gui.battle_control.controllers.consumables.ammo_ctrl import \
         AmmoController
     from gui.Scaleform.daapi.view.battle.shared.debug_panel import DebugPanel
+    from gui.Scaleform.daapi.view.battle.shared.consumables_panel import ConsumablesPanel
     from gui.Scaleform.daapi.view.battle.shared.markers2d.plugins import \
         VehicleMarkerPlugin
     from gui.Scaleform.daapi.view.battle.shared.markers2d import settings as \
@@ -361,6 +362,7 @@ def _load_runtime():
     runtime.constants = constants
     runtime.connection_manager = dependency.instance(IConnectionManager)
     runtime.debug_panel_type = DebugPanel
+    runtime.consumables_panel_type = ConsumablesPanel
     runtime.login_status = LOGIN_STATUS
     runtime.math = Math
     runtime.offline_map_creator = g_offlineMapCreator
@@ -1077,7 +1079,33 @@ class OfflineCompatibility(object):
             self._original_debug_update = debug_panel_type.__dict__.get(
                 'updateDebugInfo',
                 getattr(debug_panel_type, 'updateDebugInfo', None))
+        consumables_panel_type = getattr(runtime, 'consumables_panel_type', None)
+        self._original_shell_tooltip = getattr(
+            consumables_panel_type, '_ConsumablesPanel__makeShellTooltip', None)
         compatibility = self
+
+        def shell_tooltip(panel, descriptor, piercing_power):
+            original = compatibility._original_shell_tooltip(
+                panel, descriptor, piercing_power)
+            if not compatibility._battle_active:
+                return original
+            try:
+                from gui.mods.offline_lan_0922.battle_shell_tooltip import append_speed
+                avatar = runtime.bigworld.player()
+                vehicle = runtime.bigworld.entity(avatar.playerVehicleID)
+                return append_speed(
+                    original, descriptor, vehicle.typeDescriptor,
+                    getattr(runtime.bigworld, 'wg_getNiceNumberFormat', None))
+            except Exception as error:
+                # The stock formatter above owns ammo initialization. This
+                # optional extra line must never abort its event listeners.
+                if not getattr(compatibility, '_shell_tooltip_warning_logged', False):
+                    compatibility._shell_tooltip_warning_logged = True
+                    print('[Offline LAN 0.9.22] shell speed tooltip unavailable: '
+                          '%s: %s' % (type(error).__name__, error))
+                return original
+
+        self._shell_tooltip_wrapper = shell_tooltip
 
         def account_init(account):
             offline_initializing = compatibility._connecting
@@ -2487,7 +2515,7 @@ class OfflineCompatibility(object):
             return compatibility._original_server_time()
 
         def debug_update(panel, ping, fps, isLaggingNow, fpsReplay=-1):
-            """Render LAN transport health during a client-only battle.
+            """Render the hidden client's mean frame interval in milliseconds.
 
             Exact #1513's DebugController reads BigWorld.statPing() and
             statLagDetected(), which describe the absent retail game-server
@@ -2496,6 +2524,11 @@ class OfflineCompatibility(object):
             """
             client = compatibility._battle_network_client
             if compatibility._battle_active and client is not None:
+                worker_ping = getattr(client, 'worker_ping_display', None)
+                if callable(worker_ping):
+                    ping, isLaggingNow = worker_ping()
+                    return compatibility._original_debug_update(
+                        panel, ping, fps, isLaggingNow, fpsReplay)
                 connected = bool(getattr(client, 'connected', False))
                 sample = getattr(client, 'rtt_ms', None)
                 if sample is None:
@@ -2636,6 +2669,8 @@ class OfflineCompatibility(object):
             runtime.bigworld.serverTime = server_time
             if self._original_debug_update is not None:
                 debug_panel_type.updateDebugInfo = debug_update
+            if self._original_shell_tooltip is not None:
+                consumables_panel_type._ConsumablesPanel__makeShellTooltip = shell_tooltip
             self._installed = True
         except Exception:
             self._rollback_install()
@@ -2906,6 +2941,11 @@ class OfflineCompatibility(object):
                 debug_panel_type.__dict__.get('updateDebugInfo') is
                 self._debug_update_wrapper):
             debug_panel_type.updateDebugInfo = self._original_debug_update
+        consumables_panel_type = getattr(runtime, 'consumables_panel_type', None)
+        if (consumables_panel_type is not None and
+                getattr(consumables_panel_type, '_ConsumablesPanel__makeShellTooltip', None)
+                is getattr(self, '_shell_tooltip_wrapper', None)):
+            consumables_panel_type._ConsumablesPanel__makeShellTooltip = self._original_shell_tooltip
         if self._host_added and self._host is not None:
             try:
                 runtime.predefined_hosts._hosts.remove(self._host)

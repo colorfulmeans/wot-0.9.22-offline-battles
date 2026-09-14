@@ -93,8 +93,12 @@ class ArtilleryController(object):
         # moving-target pose buckets would restart long shared jobs forever.
         # ``solution`` re-leads the proved family from the current target pose,
         # and the separate exact queue checks that final physical trajectory.
+        # The tactical lane owner polls at one-second intervals. A 0.35 s
+        # positive window can expire entirely between polls, so a completed
+        # high arc never becomes an observed target. Retain this advisory
+        # family across two polling cycles; exact launch validity is separate.
         self.queue = queue or ArcProbeQueue(
-            success_ttl=0.35, failure_ttl=0.25, max_job_age=60.0)
+            success_ttl=2.5, failure_ttl=0.25, max_job_age=60.0)
         # Final launch paths are immutable and may contain 167 chords at the
         # 20-second protocol ceiling.  They therefore cannot share a short,
         # moving-target planning lifetime.  Completed receipts are pinned by
@@ -123,8 +127,11 @@ class ArtilleryController(object):
             int(source.get('id', 0)), str(target.get('kind') or ''),
             int(target_id or 0), int(shell_index),
             tuple(float(value) for value in _position(source)),
+            # Laying the gun must not restart the strategic family proof.
+            # This queue selects low/high only; request_launch still proves
+            # every chord from the exact final native muzzle and angles.
             tuple(_number(source.get(name)) for name in (
-                'yaw', 'pitch', 'roll', 'turret_yaw', 'gun_pitch')),
+                'yaw', 'pitch', 'roll')),
         )
 
     @staticmethod
@@ -134,6 +141,25 @@ class ArtilleryController(object):
             int(source.get('id', 0)), str(target.get('kind') or ''),
             int(target_id or 0), int(shell_index),
         )
+
+    def _settled_planning_key(self, slot, key):
+        """Keep advisory family work through bounded suspension settling.
+
+        A strategic result never authorizes a launch. The current muzzle and
+        angles still receive an independent complete exact-path proof.
+        Compare to the retained anchor, so slow cumulative travel cannot keep
+        an arbitrarily old family alive by moving a little each frame.
+        """
+        previous = self._planning_keys.get(slot)
+        if previous is None or previous[:4] != key[:4]:
+            return key
+        moved = sum((key[4][index] - previous[4][index]) ** 2
+                    for index in range(3))
+        turned = max(abs((key[5][index] - previous[5][index] + math.pi) %
+                         (2.0 * math.pi) - math.pi) for index in range(3))
+        if moved <= 0.05 ** 2 and turned <= 0.001:
+            return previous
+        return key
 
     def _replace_planning_key(self, slot, key):
         previous = self._planning_keys.get(slot)
@@ -235,6 +261,7 @@ class ArtilleryController(object):
         except (TypeError, ValueError, OverflowError):
             self._replace_planning_key(slot, None)
             return True, None
+        key = self._settled_planning_key(slot, key)
         self._replace_planning_key(slot, key)
         candidates = self._candidates(
             source, target, descriptor, shell_index)
@@ -252,6 +279,7 @@ class ArtilleryController(object):
             slot = self._planning_slot(source, target, shell_index)
         except (TypeError, ValueError, OverflowError):
             return False, None
+        key = self._settled_planning_key(slot, key)
         if self._planning_keys.get(slot) != key:
             return False, None
         return self.queue.result(key, float(now))

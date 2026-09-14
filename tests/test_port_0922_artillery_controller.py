@@ -116,7 +116,7 @@ class ArtilleryControllerTests(unittest.TestCase):
         self.assertEqual((False, None), controller.result(
             moved, target, 0, 3.0))
 
-    def test_moving_target_job_can_finish_but_solution_expires_quickly(self):
+    def test_moving_target_job_survives_observation_poll_but_expires(self):
         controller = self.module.ArtilleryController()
         source = self.source()
         target = self.target()
@@ -140,8 +140,10 @@ class ArtilleryControllerTests(unittest.TestCase):
 
         self.assertIsNotNone(solution)
         self.assertLess(now - 4.0, 0.35)
+        self.assertIsNotNone(controller.solution(
+            source, moved, _descriptor(), 0, now + 1.0))
         self.assertIsNone(controller.solution(
-            source, moved, _descriptor(), 0, now + 0.36))
+            source, moved, _descriptor(), 0, now + 2.51))
 
     def test_moving_target_preserves_job_and_reaches_clear_high_arc(self):
         controller = self.module.ArtilleryController(maximum_step=0.12)

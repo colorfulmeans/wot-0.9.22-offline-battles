@@ -2144,6 +2144,7 @@ class BotRuntime(object):
         self._pending_launch_by_bot = {}
         self._artillery_intents = {}
         self._artillery_reproofs = {}
+        self._spg_aim_solutions = {}
         self._ballistic_solution_cache = {}
         self._friendly_repositions = {}
         self._shot_los_cache = {}
@@ -8678,6 +8679,8 @@ class BotRuntime(object):
                 'ram_profile': profile['ram_profile'],
                 'vx': math.sin(yaw) * speed,
                 'vz': math.cos(yaw) * speed,
+                'pitch': raw.get('pitch', 0.0),
+                'roll': raw.get('roll', 0.0),
             })
 
         by_id = dict((tank['id'], tank) for tank in tanks)
@@ -9257,6 +9260,7 @@ class BotRuntime(object):
         return intent is not None or reproof is not None
 
     def _clear_artillery_intents(self):
+        self._spg_aim_solutions.clear()
         bot_ids = set(self._artillery_intents)
         bot_ids.update(self._artillery_reproofs)
         for bot_id in list(bot_ids):
@@ -9628,6 +9632,24 @@ class BotRuntime(object):
         """Slew the rendered turret and barrel through the 0.8.2 limits."""
         descriptor = self._descriptors.get(state['id'], {})
         ballistic_solution = command.get('_ballistic_solution')
+        planning_pending = False
+        if str((state.get('profile') or {}).get('class_tag') or '') == 'SPG':
+            signature = self._ballistic_solution_signature(
+                state, target, descriptor, state.get('shell_index', 0))
+            if target is not None and isinstance(ballistic_solution, dict):
+                self._spg_aim_solutions[state['id']] = (
+                    signature, dict(ballistic_solution))
+            else:
+                cached = self._spg_aim_solutions.get(state['id'])
+                if target is not None and cached is not None and cached[0] == signature:
+                    # Expiring a strategic receipt must not lower the barrel
+                    # back to a direct-fire line while its next arc is queued.
+                    # This is aim continuity only: the actual command remains
+                    # unproved, and both alignment and fire admission stay off.
+                    ballistic_solution = cached[1]
+                    planning_pending = True
+                else:
+                    self._spg_aim_solutions.pop(state['id'], None)
         if target is None and not isinstance(ballistic_solution, dict):
             # Strategic route points lie on the terrain. They steer the hull,
             # but are not gun targets: aiming a tall tank at a nearby ground
@@ -9690,10 +9712,13 @@ class BotRuntime(object):
                             state, descriptor, 'turret_speed'))
         turret_step = turret_speed * step
         current_relative = state.get('turret_yaw', 0.0)
-        turret_difference = _angle_delta(desired_relative, current_relative)
-        current_relative = _wrapped(
-            current_relative + max(-turret_step,
-                                   min(turret_step, turret_difference)))
+        # A limited turret must travel through its legal interval. Wrapping
+        # +170 to -170 chooses the forbidden rear gap and sticks at the stop.
+        turret_difference = (desired_relative - current_relative if limited
+                             else _angle_delta(desired_relative, current_relative))
+        current_relative += max(-turret_step, min(turret_step, turret_difference))
+        if not limited:
+            current_relative = _wrapped(current_relative)
         if limited:
             current_relative = max(
                 minimum_yaw, min(maximum_yaw, current_relative))
@@ -9726,7 +9751,8 @@ class BotRuntime(object):
             world_angles[0] if world_angles is not None else
             _wrapped(state['yaw'] + current_relative))
         state['gun_aligned'] = bool(
-            pitch_limits is not None and target is not None and
+            not planning_pending and pitch_limits is not None and
+            target is not None and
             abs(_angle_delta(raw_relative, state['turret_yaw'])) <= 0.06 and
             abs(raw_pitch - state['gun_pitch']) <= 0.04)
         return desired_yaw, horizontal
@@ -11608,8 +11634,38 @@ class BotRuntime(object):
                 gun_yaw_limits = ai_driver.gun_yaw_limits(descriptor)
                 self._gun_yaw_limits[state['id']] = gun_yaw_limits
             minimum_yaw, maximum_yaw, unused_limited = gun_yaw_limits
+            hull_aim_yaw = desired_aim_yaw
+            if unused_limited and target is not None:
+                # The physical gun uses the stabilised hull basis, including
+                # pitch/roll and hydraulic correction. A flat compass bearing
+                # can be inside the nominal yaw interval while the actual local
+                # gun direction is still beyond its stop.
+                aim_pitch = -math.atan2(
+                    aim_position[1] + 1.0 - state['y'], max(0.5, aim_distance))
+                cached_aim = self._ballistic_solution_cache.get(state['id'])
+                aim_signature = self._ballistic_solution_signature(
+                    state, target, descriptor, state.get('shell_index', 0))
+                aim_solution = (
+                    cached_aim[2] if cached_aim is not None and
+                    cached_aim[0] == aim_signature else None)
+                if not isinstance(aim_solution, dict):
+                    retained_aim = self._spg_aim_solutions.get(state['id'])
+                    if (retained_aim is not None and
+                            retained_aim[0] == aim_signature):
+                        # The gun keeps this world arc while planning refreshes.
+                        # Hull aiming must keep the same direction too; using a
+                        # flat direct ray here turns the chassis back against
+                        # the high-arc gun and restarts its proof again.
+                        aim_solution = retained_aim[1]
+                if isinstance(aim_solution, dict):
+                    desired_aim_yaw = aim_solution['yaw']
+                    aim_pitch = aim_solution['pitch']
+                local_aim = self._local_gun_angles_for_world(
+                    state, desired_aim_yaw, aim_pitch)
+                hull_aim_yaw = (state['yaw'] + local_aim[0]
+                                if local_aim is not None else desired_aim_yaw)
             turn, throttle, hull_aiming = ai_driver.combat_hull_aim(
-                state['yaw'], desired_aim_yaw, minimum_yaw, maximum_yaw,
+                state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
                 target is not None and
                 command.get('combat_mode') != 'base_defense')

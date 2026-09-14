@@ -20,6 +20,12 @@ jobs:
           python-version: "3.11"
       - name: Install pinned test dependencies
         run: python -m pip install Pillow==12.3.0
+      - name: Run gameplay follow-up regressions
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python -m unittest discover -s tests
+          -p "test_port_0922_gameplay_followup.py" -v
       - name: Run client test suite
         env:
           PYTHONDONTWRITEBYTECODE: "1"

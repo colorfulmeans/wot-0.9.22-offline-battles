@@ -3011,8 +3011,14 @@ operation is forbidden, not unlimited.
   slot push the stock base32 cache path beyond Windows `MAX_PATH` under the
   normal preferences directory. The account dossier is unaffected:
   `account_rpc/server.py` pushes it in the post-battle diff rather than through
-  this cache. The current receipt does not measure mileage, each vehicle's time
-  alive or stunning-vehicle eligibility; these values are not inferred.
+  this cache. Receipts now carry HE explosion hit counts, the existing sniper
+  damage ledger, friendly hits/damage/kills, travelled metres and time alive.
+  Mileage sums accepted world-pose segments, including reverse travel, while
+  excluding spawn placement, replicated wreck motion and source-clock rebases.
+  It has the spatial resolution of those admitted samples. Time alive freezes
+  at the first canonical death/leave tick and excludes the countdown; it does
+  not grow while the player watches the rest of the battle. Stunning-vehicle
+  eligibility remains unmeasured.
 - Selling and rebuying a vehicle preserves its XP, including across restart.
   Elite vehicles with stored XP remain conversion candidates after sale.
   Conversion counts each selected vehicle once. Researching a vehicle also
@@ -3349,3 +3355,105 @@ constant; an offset contact prefers the nearer end. Other rear blockers and
 world hazards still veto. Supplied neighbour positions retain their tuple or
 XYZ wire coordinates in the traffic snapshot instead of defaulting to origin.
 Continuous stacked-hull/debris crushing HP remains unimplemented.
+
+## Gameplay follow-up: 2026-09-14
+
+- The battle HUD's ping slot displays the hidden worker's mean render-frame
+  interval: 1000 divided by FPS over the recent one-second sample window.
+  Frames are observed at the existing zero-delay battle callback, independently
+  of diagnostic logging. A correlated worker reply carries this millisecond
+  value. Transport RTT remains a separate measurement, and a missing/stale
+  reply never turns an unresponsive worker into a low-latency reading.
+- SPG strategic arc keys include hull pose but exclude the aiming turret and
+  barrel angles. Pending arc refreshes retain the last same-target elevation
+  only for aiming continuity; they cannot authorize fire. Final native-muzzle
+  and dispersed-path checks still gate each shot. Integration coverage runs the
+  actual Bot update, gun slew and both bounded queues through one launch.
+- Limited turrets slew through the installed legal interval instead of wrapping
+  across a forbidden rear gap. A stationary limited-traverse firing hold owns
+  hull steering once the target enters the arc; navigation and contact recovery
+  retain ownership while travelling or escaping. Asymmetric and fixed arcs use
+  their actual interval midpoint rather than assuming zero is reachable.
+- Version-9 destructible catalogs prove native transforms during the first
+  bounded category scan, before compacted-name mismatches can quarantine a
+  shifted group. Every remapped item still needs a unique full transform and
+  compatible native category. No scalar native filename query is introduced.
+- Shell speed uses the stock tooltip's parameter font spans, line separator
+  and native number formatter. The supported GunShot attribute contract and
+  optional-enrichment exception boundary remain intact.
+
+These tests prove source logic and queue/adapter contracts. Exact Windows
+#1513 rendering, native destruction, frame pacing and combat remain gameplay
+acceptance boundaries.
+
+### 2026-09-14 repeated gameplay report and reference ammo screenshots
+
+The next follow-up maps the accepted distinct enemy-damage set to native
+`damaged` in both personal and public vehicle results, alongside `kills`.
+Primary non-penetrating HE damage now contributes to explosion-hit statistics;
+the protocol's secondary-target `splash` flag is not the complete blast taxonomy.
+The launch ledger's admitted HE identity owns this classification. Direct-hit
+counts, accepted HP, replay idempotence and existing secondary-hit semantics
+remain independent.
+
+The four user-provided current-client screenshots define presentation only.
+Damage, both installed GunShot penetration endpoints, muzzle velocity and HE
+radius come from this #1513 vehicle's mounted ammunition. Chinese labels,
+inline units, comma-separated integer speed and distance notes follow those
+references. Stock extra rows, including HE stun duration, remain present.
+Native GunShot access remains attribute-only; NoLegacyStuff is not bypassed.
+
+Strategic artillery family work retains its original anchor while source
+settling remains within 5 cm and 0.001 radians, matching the existing Bot
+intent motion envelope. Cumulative movement is measured from that retained
+anchor. This advisory cache cannot authorize fire: the exact final native
+muzzle, dispersed angles and every trajectory chord still receive their own
+unchanged proof. Tests now include settling while the high arc is queued and a
+real server-planner/local-driver path with a pose-dependent barrel endpoint.
+
+The uploaded report ZIP could not be inspected because this session's runtime
+could not open attachments. The four latest PNGs are visible directly in the
+conversation. Engine-free regressions and CI packaging are not native Windows
+battle validation; live collision and remaining hydraulic/limited-turret
+behavior require further evidence.
+
+Limited-traverse Bot hull aiming now evaluates the gun direction in the same
+stabilized pitch/roll basis as gun slew, reusing a matching ballistic solution
+for lead and elevation. A flat compass bearing alone can lie inside the yaw
+interval while the physical gun remains beyond its stop on a cross slope.
+Normal route/recovery ownership and actual gun limits remain intact.
+
+Tank contact height culling projects the oriented descriptor body onto world Y.
+The previous unrotated interval could reject a nose-to-hull overlap on a slope
+before the contact solver ran. Local candidate culling and both contact solver
+owners consume pitch/roll; native armor proof still owns any ram HP. Remote
+human contact bodies also use the interpolated presentation pose, just as Bots
+already did, without rewriting the accepted network state. Regression fixtures
+check a point contained in both tilted bodies, an overhead non-contact, all
+eight vertical corners, and the local presentation-to-contact boundary.
+
+The SPG hull controller also retains the same last admitted world aim as the
+gun while its strategic refresh is pending. Reverting just the hull to a
+direct compass ray on a cross slope can turn against a high-arc gun, repeatedly
+invalidate the family job and cause visible oscillation. The retained aim is
+signature-bound and cannot supply a missing launch proof. The regression
+includes a low-path wall, a cross slope, a limited gun and real server/local
+planning through the high-arc launch.
+
+The real high-arc test also exposed a cadence mismatch: strategic successes
+expired after 0.35 seconds while the Bot lane owner polls on a one-second
+tactical cycle. A completion could repeatedly disappear before any observation
+used it, leaving the server without a shootable target. Strategic success
+retention is now 2.5 seconds (two polling cycles plus callback margin); source
+anchor invalidation and current-family re-leading remain active, and final
+native trajectory proof is unchanged. The prior expiry regression now checks
+that a result survives the next tactical poll and still expires thereafter.
+
+A further complete-cycle regression showed that the two-second generic target
+lease could drop an acquired SPG contact while chassis alignment invalidated
+and requeued its high arc. SPGs now retain an already acquired, still visible
+and in-range aim target while no replacement firing lane exists. This does not
+acquire unseen/never-shootable contacts, grant fire, or consume a focus slot.
+A shootable alternative, loss of visibility/range or an unrecoverable weapon
+still releases the hold. This retention is confined to artillery's existing
+rear-anchor behavior; ordinary tank route leases are unchanged.

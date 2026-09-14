@@ -8739,8 +8739,12 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             ((33411, 13, 73), (33411, 13, 75)), detail['token'])
         self.assertIn(
             (33411, 13), destructibles_sensor.g_offh_destr_instances)
-        bigworld.wg_getDestructibleMatrix.assert_called_once_with(
-            1, 33411, 13)
+        # Version 9 proves the initial native placement scan before the
+        # proposal resolves its own exact module geometry.
+        self.assertEqual(
+            [mock.call(1, 33411, item) for item in range(14)] +
+            [mock.call(1, 33411, 13)],
+            bigworld.wg_getDestructibleMatrix.call_args_list)
         self.assertEqual(
             ([mock.call(1, 33411, item, -1) for item in range(14)] +
              [mock.call(1, 33411, 13, material)

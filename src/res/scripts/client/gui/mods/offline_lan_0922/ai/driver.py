@@ -106,11 +106,18 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 	if not limited:
 		return float(turn), float(throttle), False
 	relative = _angle_delta(target_yaw, hull_yaw)
-	if float(minimum_yaw) + 0.04 <= relative <= float(maximum_yaw) - 0.04:
-		return float(turn), float(throttle), False
-	# Rotate before the physics step. The former post-physics velocity write was
-	# overwritten by LocalDriver on the next frame and never moved the hull.
-	hull_delta = _angle_delta(target_yaw, hull_yaw)
+	minimum_yaw, maximum_yaw = float(minimum_yaw), float(maximum_yaw)
+	margin = min(0.04, max(0.0, maximum_yaw - minimum_yaw) * 0.25)
+	if minimum_yaw + margin <= relative <= maximum_yaw - margin:
+		# A firing hold must not hand the hull back to an incompatible armour
+		# angle and immediately push the target outside this same arc again.
+		# Travel and recovery keep their normal steering owner.
+		return (0.0 if abs(float(throttle)) <= 0.01 else float(turn),
+		        float(throttle), False)
+	# Aim inside the installed interval, including asymmetric and fixed guns.
+	# A zero-width gun must not create an inverted artificial margin interval.
+	center = (minimum_yaw + maximum_yaw) * 0.5
+	hull_delta = _angle_delta(target_yaw - center, hull_yaw)
 	aim_turn = max(-1.0, min(1.0, hull_delta / 0.58))
 	return aim_turn, 0.0, True
 

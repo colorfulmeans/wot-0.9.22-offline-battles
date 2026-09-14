@@ -45,8 +45,11 @@ import math
 RECEIPT_STAT_NAMES = (
     "shots", "direct_hits", "piercings", "damage", "damage_received",
     "damage_blocked", "assist_track", "assist_radio", "assist_stun",
-    "kills", "spotted", "capture_points", "dropped_capture_points",
+    "damaged", "kills", "spotted", "capture_points", "dropped_capture_points",
     "hits_received", "potential_damage_received", "crits_received",
+    "piercings_received", "no_damage_direct_hits_received",
+    "explosion_hits_received", "explosion_hits", "sniper_damage",
+    "team_hits", "team_damage", "team_kills", "mileage", "life_time",
 )
 
 # The #1513 table holds 62 entries across every game mode this build ever

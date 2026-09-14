@@ -1417,6 +1417,40 @@ class SimulationWorkerSocketTests(unittest.TestCase):
             self.state.tick, int(round(PREBATTLE_SECONDS * TICK_HZ)))
         return manifest
 
+    def test_visible_ping_reaches_worker_main_loop_through_socket_dispatch(self):
+        from gui.mods.offline_lan_0922.authority_worker import AuthorityWorkerLANClient
+        worker = self._connect()
+        worker.send(_worker_hello())
+        worker.receive_until('welcome')
+        player = self._connect()
+        player.send(_player_hello())
+        welcome = player.receive_until('welcome')
+        self._enter_worker_countdown(worker, player)
+        stamp = time.monotonic()
+        player.send({'type': 'worker_ping', 'seq': 27, 'client_time': stamp})
+        probe = worker.receive_until('worker_ping')
+        player_id = welcome['player_id']
+        self.assertEqual(player_id, probe['player_id'])
+        self.assertIn(player_id, self.state.worker_ping_pending)
+        # A visible client must remain unable to impersonate the worker.
+        player.send(dict(probe, type='worker_pong'))
+        player.send({'type': 'ping', 'seq': 28, 'client_time': stamp})
+        player.receive_until('pong')
+        self.assertIn(player_id, self.state.worker_ping_pending)
+        client = AuthorityWorkerLANClient('localhost', 28782)
+        client._send = worker.send
+        client.round_id = self.state.round_id
+        client.authority_epoch = self.state.authority_epoch
+        client.record_frame_interval(0.1)
+        client._handle_message(probe)
+        reply = player.receive_until('worker_pong')
+        self.assertEqual(27, reply['seq'])
+        self.assertAlmostEqual(100.0, reply['frame_ms'], places=3)
+        self.assertEqual(stamp, reply['client_time'])
+        self.assertEqual(self.state.round_id, reply['round_id'])
+        self.assertEqual(self.state.authority_epoch, reply['authority_epoch'])
+        self.assertNotIn(player_id, self.state.worker_ping_pending)
+
     def test_handler_requires_exact_protocol_for_all_handshakes(self):
         incompatible = self._connect()
         incompatible_hello = _player_hello('Incompatible')

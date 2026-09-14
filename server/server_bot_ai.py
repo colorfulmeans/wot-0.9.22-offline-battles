@@ -1859,9 +1859,19 @@ class BotPlanner(object):
                 cover_state = self._cover_states.get(bot["id"])
                 cover_target = (cover_state.get("target")
                                 if isinstance(cover_state, dict) else None)
+                artillery_tracking = (
+                    str(bot.get("profile", {}).get("class_tag") or "") == "SPG")
                 if (isinstance(previous, dict) and
                         (_number(now) < _number(previous.get("until")) or
-                         cover_target == previous.get("target"))):
+                         cover_target == previous.get("target") or
+                         artillery_tracking)):
+                    # SPGs stay at their rear anchor while a high arc is
+                    # checked and the hull/gun are laid. Dropping an already
+                    # acquired visible target after two seconds resets that
+                    # progress. This is aim retention only: no current lane
+                    # means no fire or focus reservation. A newly shootable
+                    # alternative still wins above, and visibility/range and
+                    # recoverable-weapon checks below still release the hold.
                     bx = _number(bot["state"].get("x"))
                     bz = _number(bot["state"].get("z"))
                     for contact in contacts:

@@ -220,7 +220,7 @@ MODERN_VISIBLE_MESSAGE_TYPES = frozenset((
     "battle_receipt_ack", "descriptor_catalog", "select_vehicle",
     "select_team", "set_team_size", "set_bot_tier_mode",
     "set_bot_skill_mode",
-    "ping", "leave",
+    "ping", "worker_ping", "leave",
     "track_repair",
     "equipment_intent",
     "team_command",
@@ -2221,6 +2221,7 @@ class BattleState:
         self.team_size = max(team1_size, team2_size)
         self.players: Dict[int, Player] = {}
         self.simulation_worker: Optional[SimulationWorker] = None
+        self.worker_ping_pending = {}
         self.worker_failure_reason = ""
         self.next_id = 1
         self.tick = 0
@@ -2286,6 +2287,7 @@ class BattleState:
         self.human_ram_retired_probe_pairs = OrderedDict()
         self.human_ram_probe_fingerprints = OrderedDict()
         self.vehicle_statistics = {}
+        self.vehicle_end_ticks = {}
         self.vehicle_interactions = {}
         self._reset_achievement_tracking()
         self.round_participants = {}
@@ -3474,6 +3476,7 @@ class BattleState:
         self.human_ram_retired_probe_pairs = OrderedDict()
         self.human_ram_probe_fingerprints = OrderedDict()
         self.vehicle_statistics = {}
+        self.vehicle_end_ticks = {}
         self.vehicle_interactions = {}
         self._reset_achievement_tracking()
         self.round_participants = {}
@@ -4008,6 +4011,61 @@ class BattleState:
             message.update(self._authority_fields())
             return message
 
+    def request_worker_ping(self, player, message):
+        """Relay one bounded probe; only the native main loop may answer it."""
+        with self.lock:
+            seq = message.get('seq')
+            stamp = message.get('client_time')
+            if (self.players.get(player.player_id) is not player or
+                    isinstance(seq, bool) or not isinstance(seq, int) or
+                    not 0 < seq <= 2147483647 or
+                    isinstance(stamp, bool) or
+                    not isinstance(stamp, (int, float)) or
+                    not math.isfinite(stamp) or stamp <= 0):
+                return False
+            worker = self.simulation_worker
+            if worker is None or not worker.connected:
+                return False
+            self.worker_ping_pending[player.player_id] = (
+                seq, stamp, self.round_id, self.authority_epoch, worker)
+            # Remove departed players; one outstanding probe per live player.
+            for player_id in list(self.worker_ping_pending):
+                if player_id not in self.players:
+                    self.worker_ping_pending.pop(player_id, None)
+            return worker.offer_reliable({
+                'type': 'worker_ping', 'player_id': player.player_id,
+                'seq': seq, 'round_id': self.round_id,
+                'authority_epoch': self.authority_epoch})
+
+    def resolve_worker_ping(self, worker, message):
+        with self.lock:
+            player_id = message.get('player_id')
+            if isinstance(player_id, bool) or not isinstance(player_id, int):
+                return False
+            pending = self.worker_ping_pending.get(player_id)
+            if pending is None:
+                return False
+            seq, stamp, round_id, epoch, owner = pending
+            if (worker is not owner or worker is not self.simulation_worker or
+                    not worker.connected or message.get('seq') != seq or
+                    message.get('round_id') != round_id or
+                    message.get('authority_epoch') != epoch or
+                    self.round_id != round_id or self.authority_epoch != epoch):
+                return False
+            self.worker_ping_pending.pop(player_id, None)
+            player = self.players.get(player_id)
+            if player is None or not player.connected:
+                return False
+            frame_ms = message.get('frame_ms')
+            if (isinstance(frame_ms, bool) or
+                    not isinstance(frame_ms, (int, float)) or
+                    not math.isfinite(frame_ms) or frame_ms <= 0.0):
+                frame_ms = None
+            return player.offer_reliable({
+                'type': 'worker_pong', 'seq': seq, 'client_time': stamp,
+                'frame_ms': frame_ms,
+                'round_id': round_id, 'authority_epoch': epoch})
+
     @staticmethod
     def _sanitize_destructible(message):
         if not isinstance(message, dict):
@@ -4305,6 +4363,7 @@ class BattleState:
                     player.death_attacker_id or 0)
                 participant["team_killer"] = bool(player.team_killer)
                 participant["frags"] = int(player.frags)
+            self._record_vehicle_end("player", player_id)
             player.participating = False
             previous_health = player.health
             player.health = 0
@@ -6841,6 +6900,17 @@ class BattleState:
                     "bot_state", "batch_members",
                     "missing=%s" % sorted(set(identities) - set(next_states)))
             self._commit_human_ram_armors(human_ram_armors)
+            for bot_id, current in next_states.items():
+                previous = self.bot_states.get(bot_id)
+                if previous is not None and previous.get("alive"):
+                    if not current.get("alive"):
+                        self._record_vehicle_end("bot", bot_id)
+                    if (not source_clock_rebase and previous.get("world_pose")
+                            and current.get("world_pose")):
+                        self._record_vehicle_travel(
+                            "bot", bot_id,
+                            tuple(previous[name] for name in ("x", "y", "z")),
+                            tuple(current[name] for name in ("x", "y", "z")))
             self.bot_states = next_states
             self._admit_detached_turrets(message)
             self.bot_unavailable_checkpoints = next_unavailable_checkpoints
@@ -8884,11 +8954,20 @@ class BattleState:
                 self.support_targets.setdefault(shooter, set()).add(victim)
         enemy_hit = (
             int(record["team"]) != int(proposal["target_team"]))
-        if enemy_hit and proposal["splash"]:
-            self._increment_interaction(
-                shooter, victim, "explosion_hits")
         crits_mask = _crits_mask(critical_before, admitted_critical)
         crits = _popcount(crits_mask)
+        # A direct, non-penetrating HE hit can still damage its primary
+        # target through the explosion.  "splash" identifies secondary
+        # targets in the projectile protocol, not all blast damage.
+        explosion_damage = (
+            proposal["splash"] or
+            (record["is_he"] and proposal["shot_result"] != 2 and
+             (applied > 0 or crits > 0)))
+        if enemy_hit and explosion_damage:
+            self._statistics_row(*shooter)["explosion_hits"] += 1
+            self._increment_interaction(
+                shooter, victim, "explosion_hits")
+            self._statistics_row(*victim)["explosion_hits_received"] += 1
         if enemy_hit and crits_mask:
             victim_state = self._statistics_row(*victim)
             victim_state["crits_received_mask"] |= crits_mask
@@ -8899,6 +8978,7 @@ class BattleState:
             # earns the shooter nothing.
             self.ally_hits[shooter] = int(
                 self.ally_hits.get(shooter, 0)) + 1
+            self._statistics_row(*shooter)["team_hits"] += 1
         if not proposal["splash"] and enemy_hit:
             self._increment_interaction(
                 shooter, victim, "direct_hits")
@@ -8906,6 +8986,10 @@ class BattleState:
             row["shots_hit"] += 1
             victim_row = self._statistics_row(*victim)
             victim_row["hits_received"] += 1
+            if proposal["shot_result"] == 2:
+                victim_row["piercings_received"] += 1
+            if applied <= 0:
+                victim_row["no_damage_direct_hits_received"] += 1
             victim_row["potential_damage_received"] += max(
                 0, int(proposal["potential_damage"]))
             if applied > 0 or crits:
@@ -9658,6 +9742,7 @@ class BattleState:
                 row.get("damage_assisted_radio", 0))),
             "assist_stun": max(0, int(
                 row.get("damage_assisted_stun", 0))),
+            "damaged": max(0, int(row.get("damaged", 0))),
             "kills": max(0, int(row.get("kills", 0))),
             "spotted": max(0, int(row.get("spotted", 0))),
             "capture_points": max(0, int(
@@ -9665,9 +9750,21 @@ class BattleState:
             "dropped_capture_points": max(0, int(
                 row.get("dropped_capture_points", 0))),
             "hits_received": max(0, int(row.get("hits_received", 0))),
+            "piercings_received": max(0, int(row.get("piercings_received", 0))),
+            "no_damage_direct_hits_received": max(0, int(
+                row.get("no_damage_direct_hits_received", 0))),
+            "explosion_hits_received": max(0, int(
+                row.get("explosion_hits_received", 0))),
             "potential_damage_received": max(0, int(
                 row.get("potential_damage_received", 0))),
             "crits_received": _popcount(row.get("crits_received_mask", 0)),
+            "explosion_hits": max(0, int(row.get("explosion_hits", 0))),
+            "sniper_damage": max(0, int(row.get("sniper_damage_dealt", 0))),
+            "team_hits": max(0, int(row.get("team_hits", 0))),
+            "team_damage": max(0, int(row.get("team_damage", 0))),
+            "team_kills": max(0, int(row.get("team_kills", 0))),
+            "mileage": max(0, int(round(row.get("mileage", 0)))),
+            "life_time": max(0, int(row.get("life_time", 0))),
         }
 
     def _catalogued_vehicle(self, vehicle):
@@ -10035,6 +10132,7 @@ class BattleState:
         }
         next_receipts = OrderedDict(self.result_receipts)
         if record_receipts:
+            self._finalize_vehicle_statistics()
             participants = list(self.round_participants.values())
             if not participants:
                 participants = [{
@@ -10952,6 +11050,8 @@ class BattleState:
                     # Switching owns the drivetrain, not world contact. Keep
                     # accepting the client's gravity, slope and collision pose
                     # while forward/turn/speed remain authoritatively zero.
+                    previous_position = ((player.x, player.y, player.z)
+                                         if player.client_position else None)
                     player.x = _clamp(_finite_float(message.get("x"), player.x), -2000.0, 2000.0)
                     player.y = _clamp(_finite_float(message.get("y"), player.y), -1000.0, 1000.0)
                     player.z = _clamp(_finite_float(message.get("z"), player.z), -2000.0, 2000.0)
@@ -10967,6 +11067,9 @@ class BattleState:
                     if reported_up_cosine is not None:
                         player.up_cosine = round(reported_up_cosine, 6)
                     player.client_position = True
+                    self._record_vehicle_travel(
+                        "player", player.player_id, previous_position,
+                        (player.x, player.y, player.z))
                     if (HUMAN_RAM_TIMELINE_CAPABILITY in
                             player.capabilities):
                         self._record_player_pose_sample(player, message)
@@ -12350,13 +12453,17 @@ class BattleState:
                 "damage_dealt": 0, "damage_received": 0,
                 "damage_blocked": 0, "damage_assisted_track": 0,
                 "damage_assisted_radio": 0, "damage_assisted_stun": 0,
-                "kills": 0, "spotted": 0,
+                "damaged": 0, "kills": 0, "spotted": 0,
                 "capture_points": 0, "dropped_capture_points": 0,
                 # Battle-result fidelity fields.  #1513 shows every one of
                 # these on the results screen and Wargaming's achievement
                 # conditions read them, so they are canonical round state
                 # rather than presentation-only counters.
                 "potential_damage_received": 0, "hits_received": 0,
+                "piercings_received": 0, "no_damage_direct_hits_received": 0,
+                "explosion_hits_received": 0, "explosion_hits": 0,
+                "team_hits": 0, "team_damage": 0, "team_kills": 0,
+                "mileage": 0.0, "life_time": 0,
                 "damaging_hits_received": 0, "deflected_hits_received": 0,
                 "crits_received_mask": 0, "hits_with_damage": 0,
                 "sniper_damage_dealt": 0,
@@ -12379,6 +12486,33 @@ class BattleState:
         elif not row["team"]:
             row["team"] = self._vehicle_team(*key)
         return row
+
+    def _record_vehicle_end(self, kind, vehicle_id):
+        """Freeze the first canonical terminal tick, including non-shot deaths."""
+        identity = (str(kind), int(vehicle_id))
+        self.vehicle_end_ticks.setdefault(identity, int(self.tick))
+
+    def _record_vehicle_travel(self, kind, vehicle_id, previous, current):
+        """Accumulate accepted world-pose segments; never count a spawn or wreck."""
+        if (not self._combat_accepting() or self.battle_result is not None or
+                previous is None or current is None):
+            return
+        distance = math.sqrt(sum((float(current[index]) -
+                                  float(previous[index])) ** 2
+                                 for index in range(3)))
+        if math.isfinite(distance):
+            self._statistics_row(kind, vehicle_id)["mileage"] += distance
+
+    def _finalize_vehicle_statistics(self):
+        """Project time alive from the server combat clock before packing receipts."""
+        identities = set(self.vehicle_statistics)
+        identities.update(("player", int(player.player_id))
+                          for player in self.players.values())
+        identities.update(("bot", int(bot_id)) for bot_id in self.bot_states)
+        for identity in identities:
+            end_tick = self.vehicle_end_ticks.get(identity, self.tick)
+            elapsed = max(0.0, float(end_tick) / TICK_HZ - PREBATTLE_SECONDS)
+            self._statistics_row(*identity)["life_time"] = int(elapsed)
 
     def _statistics_interaction(self, actor, target):
         """Return one bounded per-target row owned by ``actor``."""
@@ -12484,6 +12618,8 @@ class BattleState:
         if damage <= 0:
             return
         self._statistics_row(*target)["damage_received"] += damage
+        if self._vehicle_position(target) is None:
+            self._record_vehicle_end(*target)
         target_team = self._vehicle_team(*target)
         if attacker is None:
             return
@@ -12498,6 +12634,7 @@ class BattleState:
             if attacker != target:
                 self.ally_damage[attacker] = int(
                     self.ally_damage.get(attacker, 0)) + damage
+                self._statistics_row(*attacker)["team_damage"] += damage
             return
         target = (str(target[0]), int(target[1]))
         self.enemy_damage_received[target] = int(
@@ -12510,7 +12647,9 @@ class BattleState:
         if not attacker_row["team"] and attacker_team in (1, 2):
             attacker_row["team"] = attacker_team
         attacker_row["damage_dealt"] += damage
-        self.damaged_targets.setdefault(attacker, set()).add(target)
+        damaged = self.damaged_targets.setdefault(attacker, set())
+        damaged.add(target)
+        attacker_row["damaged"] = len(damaged)
         # Fire Support counts distinct enemies this actor actually hurt; a
         # ricochet or non-penetration never reaches here.
         self.support_targets.setdefault(attacker, set()).add(target)
@@ -12618,6 +12757,7 @@ class BattleState:
             actor_identity = (str(attacker_kind), int(attacker_id))
             self.team_kills[actor_identity] = int(
                 self.team_kills.get(actor_identity, 0)) + 1
+            self._statistics_row(*actor_identity)["team_kills"] += 1
             self._record_lucky_devils(
                 (str(victim_kind), int(victim_id)), int(victim_team))
         if delta > 0:
@@ -14063,6 +14203,8 @@ class ClientHandler(socketserver.BaseRequestHandler):
                 not server.state._message_round_matches(message)):
             return False
         authority_id = SIMULATION_WORKER_AUTHORITY_ID
+        if message_type == "worker_pong":
+            return server.state.resolve_worker_ping(worker, message)
         if message_type == "simulation_progress":
             accepted = server.state.update_simulation_progress(worker, message)
         elif message_type == "player_environment":
@@ -14791,6 +14933,8 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "mode": message.get("mode"),
                                     "bot_tier_mode": server.state.bot_tier_mode,
                                 })
+                        elif message_type == "worker_ping":
+                            server.state.request_worker_ping(player, message)
                         elif message_type == "ping":
                             player.send({
                                 "type": "pong",
