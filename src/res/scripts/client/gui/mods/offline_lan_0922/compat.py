@@ -1093,7 +1093,9 @@ class OfflineCompatibility(object):
                 from gui.mods.offline_lan_0922.battle_shell_tooltip import append_speed
                 avatar = runtime.bigworld.player()
                 vehicle = runtime.bigworld.entity(avatar.playerVehicleID)
-                return append_speed(original, descriptor, vehicle.typeDescriptor)
+                return append_speed(
+                    original, descriptor, vehicle.typeDescriptor,
+                    getattr(runtime.bigworld, 'wg_getNiceNumberFormat', None))
             except Exception as error:
                 # The stock formatter above owns ammo initialization. This
                 # optional extra line must never abort its event listeners.
@@ -2513,7 +2515,7 @@ class OfflineCompatibility(object):
             return compatibility._original_server_time()
 
         def debug_update(panel, ping, fps, isLaggingNow, fpsReplay=-1):
-            """Render the hidden simulation main-loop round trip in battle.
+            """Render the hidden client's mean frame interval in milliseconds.
 
             Exact #1513's DebugController reads BigWorld.statPing() and
             statLagDetected(), which describe the absent retail game-server

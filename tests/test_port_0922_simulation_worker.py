@@ -1439,9 +1439,13 @@ class SimulationWorkerSocketTests(unittest.TestCase):
         self.assertIn(player_id, self.state.worker_ping_pending)
         client = AuthorityWorkerLANClient('localhost', 28782)
         client._send = worker.send
+        client.round_id = self.state.round_id
+        client.authority_epoch = self.state.authority_epoch
+        client.record_frame_interval(0.1)
         client._handle_message(probe)
         reply = player.receive_until('worker_pong')
         self.assertEqual(27, reply['seq'])
+        self.assertAlmostEqual(100.0, reply['frame_ms'], places=3)
         self.assertEqual(stamp, reply['client_time'])
         self.assertEqual(self.state.round_id, reply['round_id'])
         self.assertEqual(self.state.authority_epoch, reply['authority_epoch'])

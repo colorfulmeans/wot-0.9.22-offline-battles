@@ -123,8 +123,11 @@ class ArtilleryController(object):
             int(source.get('id', 0)), str(target.get('kind') or ''),
             int(target_id or 0), int(shell_index),
             tuple(float(value) for value in _position(source)),
+            # Laying the gun must not restart the strategic family proof.
+            # This queue selects low/high only; request_launch still proves
+            # every chord from the exact final native muzzle and angles.
             tuple(_number(source.get(name)) for name in (
-                'yaw', 'pitch', 'roll', 'turret_yaw', 'gun_pitch')),
+                'yaw', 'pitch', 'roll')),
         )
 
     @staticmethod

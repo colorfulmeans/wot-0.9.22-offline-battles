@@ -1585,6 +1585,7 @@ class LANClient(object):
         self.rtt_ms = None
         self.minimum_rtt_ms = None
         self.worker_rtt_ms = None
+        self.worker_frame_ms = None
         self._worker_ping_started = None
         self._worker_pong_time = None
         self._worker_ping_scope = None
@@ -1656,6 +1657,7 @@ class LANClient(object):
             self.rtt_ms = None
             self.minimum_rtt_ms = None
             self.worker_rtt_ms = None
+            self.worker_frame_ms = None
             self._worker_ping_started = None
             self._worker_pong_time = None
             self._worker_ping_scope = None
@@ -3946,6 +3948,7 @@ class LANClient(object):
             if self._worker_ping_scope != scope:
                 self._worker_ping_scope = scope
                 self.worker_rtt_ms = None
+                self.worker_frame_ms = None
                 self._worker_ping_started = None
                 self._worker_pong_time = None
             if (self.round_id is not None and
@@ -4030,9 +4033,11 @@ class LANClient(object):
             return 0, False
         age = max(0.0, now - reference)
         stale = age > max(2.0, PING_INTERVAL * 2.0)
-        sample = self.worker_rtt_ms
-        if sample is None or stale:
-            sample = age * 1000.0
+        sample = self.worker_frame_ms
+        if stale:
+            sample = max(sample or 0.0, age * 1000.0)
+        elif sample is None:
+            sample = 0.0
         return int(round(max(0.0, min(sample, 999.0)))), stale
 
     def _report_snapshot_stall(self, now):
@@ -5204,6 +5209,8 @@ class LANClient(object):
             sample = (received_time - client_time) * 1000.0
             self.worker_rtt_ms = (sample if self.worker_rtt_ms is None else
                                   self.worker_rtt_ms * 0.5 + sample * 0.5)
+            frame_ms = _finite_float(message.get('frame_ms'), -1.0)
+            self.worker_frame_ms = frame_ms if frame_ms > 0.0 else None
             self._worker_pong_time = received_time
         elif kind == 'pong':
             client_time = _finite_float(message.get('client_time'), 0.0)

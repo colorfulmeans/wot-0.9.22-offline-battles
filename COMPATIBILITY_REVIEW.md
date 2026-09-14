@@ -3011,8 +3011,14 @@ operation is forbidden, not unlimited.
   slot push the stock base32 cache path beyond Windows `MAX_PATH` under the
   normal preferences directory. The account dossier is unaffected:
   `account_rpc/server.py` pushes it in the post-battle diff rather than through
-  this cache. The current receipt does not measure mileage, each vehicle's time
-  alive or stunning-vehicle eligibility; these values are not inferred.
+  this cache. Receipts now carry HE explosion hit counts, the existing sniper
+  damage ledger, friendly hits/damage/kills, travelled metres and time alive.
+  Mileage sums accepted world-pose segments, including reverse travel, while
+  excluding spawn placement, replicated wreck motion and source-clock rebases.
+  It has the spatial resolution of those admitted samples. Time alive freezes
+  at the first canonical death/leave tick and excludes the countdown; it does
+  not grow while the player watches the rest of the battle. Stunning-vehicle
+  eligibility remains unmeasured.
 - Selling and rebuying a vehicle preserves its XP, including across restart.
   Elite vehicles with stored XP remain conversion candidates after sale.
   Conversion counts each selected vehicle once. Researching a vehicle also
@@ -3349,3 +3355,33 @@ constant; an offset contact prefers the nearer end. Other rear blockers and
 world hazards still veto. Supplied neighbour positions retain their tuple or
 XYZ wire coordinates in the traffic snapshot instead of defaulting to origin.
 Continuous stacked-hull/debris crushing HP remains unimplemented.
+
+## Gameplay follow-up: 2026-09-14
+
+- The battle HUD's ping slot displays the hidden worker's mean render-frame
+  interval: 1000 divided by FPS over the recent one-second sample window.
+  Frames are observed at the existing zero-delay battle callback, independently
+  of diagnostic logging. A correlated worker reply carries this millisecond
+  value. Transport RTT remains a separate measurement, and a missing/stale
+  reply never turns an unresponsive worker into a low-latency reading.
+- SPG strategic arc keys include hull pose but exclude the aiming turret and
+  barrel angles. Pending arc refreshes retain the last same-target elevation
+  only for aiming continuity; they cannot authorize fire. Final native-muzzle
+  and dispersed-path checks still gate each shot. Integration coverage runs the
+  actual Bot update, gun slew and both bounded queues through one launch.
+- Limited turrets slew through the installed legal interval instead of wrapping
+  across a forbidden rear gap. A stationary limited-traverse firing hold owns
+  hull steering once the target enters the arc; navigation and contact recovery
+  retain ownership while travelling or escaping. Asymmetric and fixed arcs use
+  their actual interval midpoint rather than assuming zero is reachable.
+- Version-9 destructible catalogs prove native transforms during the first
+  bounded category scan, before compacted-name mismatches can quarantine a
+  shifted group. Every remapped item still needs a unique full transform and
+  compatible native category. No scalar native filename query is introduced.
+- Shell speed uses the stock tooltip's parameter font spans, line separator
+  and native number formatter. The supported GunShot attribute contract and
+  optional-enrichment exception boundary remain intact.
+
+These tests prove source logic and queue/adapter contracts. Exact Windows
+#1513 rendering, native destruction, frame pacing and combat remain gameplay
+acceptance boundaries.

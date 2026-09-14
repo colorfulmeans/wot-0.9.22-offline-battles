@@ -2144,6 +2144,7 @@ class BotRuntime(object):
         self._pending_launch_by_bot = {}
         self._artillery_intents = {}
         self._artillery_reproofs = {}
+        self._spg_aim_solutions = {}
         self._ballistic_solution_cache = {}
         self._friendly_repositions = {}
         self._shot_los_cache = {}
@@ -9257,6 +9258,7 @@ class BotRuntime(object):
         return intent is not None or reproof is not None
 
     def _clear_artillery_intents(self):
+        self._spg_aim_solutions.clear()
         bot_ids = set(self._artillery_intents)
         bot_ids.update(self._artillery_reproofs)
         for bot_id in list(bot_ids):
@@ -9628,6 +9630,24 @@ class BotRuntime(object):
         """Slew the rendered turret and barrel through the 0.8.2 limits."""
         descriptor = self._descriptors.get(state['id'], {})
         ballistic_solution = command.get('_ballistic_solution')
+        planning_pending = False
+        if str((state.get('profile') or {}).get('class_tag') or '') == 'SPG':
+            signature = self._ballistic_solution_signature(
+                state, target, descriptor, state.get('shell_index', 0))
+            if target is not None and isinstance(ballistic_solution, dict):
+                self._spg_aim_solutions[state['id']] = (
+                    signature, dict(ballistic_solution))
+            else:
+                cached = self._spg_aim_solutions.get(state['id'])
+                if target is not None and cached is not None and cached[0] == signature:
+                    # Expiring a strategic receipt must not lower the barrel
+                    # back to a direct-fire line while its next arc is queued.
+                    # This is aim continuity only: the actual command remains
+                    # unproved, and both alignment and fire admission stay off.
+                    ballistic_solution = cached[1]
+                    planning_pending = True
+                else:
+                    self._spg_aim_solutions.pop(state['id'], None)
         if target is None and not isinstance(ballistic_solution, dict):
             # Strategic route points lie on the terrain. They steer the hull,
             # but are not gun targets: aiming a tall tank at a nearby ground
@@ -9690,10 +9710,13 @@ class BotRuntime(object):
                             state, descriptor, 'turret_speed'))
         turret_step = turret_speed * step
         current_relative = state.get('turret_yaw', 0.0)
-        turret_difference = _angle_delta(desired_relative, current_relative)
-        current_relative = _wrapped(
-            current_relative + max(-turret_step,
-                                   min(turret_step, turret_difference)))
+        # A limited turret must travel through its legal interval. Wrapping
+        # +170 to -170 chooses the forbidden rear gap and sticks at the stop.
+        turret_difference = (desired_relative - current_relative if limited
+                             else _angle_delta(desired_relative, current_relative))
+        current_relative += max(-turret_step, min(turret_step, turret_difference))
+        if not limited:
+            current_relative = _wrapped(current_relative)
         if limited:
             current_relative = max(
                 minimum_yaw, min(maximum_yaw, current_relative))
@@ -9726,7 +9749,8 @@ class BotRuntime(object):
             world_angles[0] if world_angles is not None else
             _wrapped(state['yaw'] + current_relative))
         state['gun_aligned'] = bool(
-            pitch_limits is not None and target is not None and
+            not planning_pending and pitch_limits is not None and
+            target is not None and
             abs(_angle_delta(raw_relative, state['turret_yaw'])) <= 0.06 and
             abs(raw_pitch - state['gun_pitch']) <= 0.04)
         return desired_yaw, horizontal

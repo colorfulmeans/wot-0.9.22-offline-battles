@@ -99,8 +99,9 @@ class FollowupTests(unittest.TestCase):
         client._worker_ping_started = 10.0
         client._handle_message({'type': 'worker_pong', 'round_id': 1,
             'authority_epoch': 2, 'seq': 1, 'client_time': 10.0,
-            '_client_received_time': 10.240})
-        self.assertEqual((240, False), client.worker_ping_display(10.25))
+            'frame_ms': 100.0, '_client_received_time': 10.240})
+        self.assertEqual((100, False), client.worker_ping_display(10.25))
+        self.assertAlmostEqual(240.0, client.worker_rtt_ms)
         self.assertEqual((999, True), client.worker_ping_display(14.0))
 
 
@@ -198,10 +199,10 @@ class DestructibleLayoutTests(unittest.TestCase):
             g_cache=types.SimpleNamespace(getDescByFilename=lambda name: by_name.get(name)))
         names = [rows[item]['descriptor_filename'] for item in sorted(rows)]
         with mock.patch.dict(sys.modules, {'Math': types.SimpleNamespace(Matrix=lambda x: x, Vector3=_Vector)}):
-            # First encounter reports live slot 8 with authored slot 7's matrix.
-            sensor._catalog_instance_for_matrix_1513(Matrix(rows[8]['signature']),
-                _Vector(), sys.modules['Math'], (32124, 8))
-            self.assertTrue(sensor._layout_repair_pending_1513(32124))
+            # Enter through the real first-use name scan. A manual mismatch
+            # trigger hid the production deadlock: name alignment quarantined
+            # shifted slots before the proximity matrix pass could reach them.
+            self.assertFalse(sensor._layout_repair_pending_1513(32124))
             for tick in range(10):
                 native.now += .04
                 mapping, status = sensor._chunk_native_names_1513(

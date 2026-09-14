@@ -16214,6 +16214,10 @@ class BattleRuntime(object):
         raw_dt = (0.0 if frame_start is None else
                   now - frame_start)
         rule_dt = max(0.0, raw_dt)
+        if self._worker_mode:
+            recorder = getattr(self.client, 'record_frame_interval', None)
+            if callable(recorder):
+                recorder(rule_dt)
         if ((self._worker_mode or self._worker_probe is not None) and
                 raw_dt > 0.1000001):
             self._worker_probe_simulation_caps += 1

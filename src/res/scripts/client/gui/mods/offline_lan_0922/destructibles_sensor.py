@@ -477,7 +477,10 @@ def _probe_authored_placement_1513(bigworld, area, space_id, chunk_id,
 		item_index, native_type, names, native_count):
 	catalog = _destructible_catalog or {}
 	index = catalog.get('authored_placement_index')
-	if not index or not _layout_repair_pending_1513(chunk_id):
+	# Discover placement shifts during the first bounded name scan. Waiting
+	# for a later matrix mismatch lets name alignment quarantine the affected
+	# type first, so that later trigger can never be reached.
+	if not index or not catalog.get('layout_repair_supported'):
 		return None
 	kind = ('tree' if native_type == getattr(area, 'DESTR_TYPE_TREE', None)
 		else _catalog_kind_for_type_1513(area, native_type))
@@ -873,7 +876,8 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 	end_item = entry['next_item'] + query_count
 	for item_index in range(entry['next_item'], end_item):
 		identity = (int(chunk_id), int(item_index))
-		if is_excluded_1513(*identity) and not _layout_repair_pending_1513(chunk_id):
+		if (is_excluded_1513(*identity) and
+				not (_destructible_catalog or {}).get('layout_repair_supported')):
 			entry['ignored_items'].add(item_index)
 			continue
 		if _destructible_isolated_1513(*identity):
