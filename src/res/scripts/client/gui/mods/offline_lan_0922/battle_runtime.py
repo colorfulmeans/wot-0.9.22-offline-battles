@@ -18411,6 +18411,9 @@ class BattleRuntime(object):
         diagnostic = getattr(self, '_combat_diagnostics', None)
         pos = self._vector(position)
         bot_state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
+        # Evidence only: candidate probes cannot apply HP. BotRuntime consumes
+        # the primary realised hard contact before trying alternate headings.
+        bot_state.pop('_world_contact_trace', None)
         airborne = bool(bot_state.get('airborne', False))
         movement_dir = int(bot_state.get('movement_dir', 0))
         rotation_dir = int(bot_state.get('rotation_dir', 0))
@@ -18470,6 +18473,7 @@ class BattleRuntime(object):
             limit_name = 'speedBwd' if speed < 0.0 else 'speedFwd'
             kinetic_speed = (-float(params[limit_name]) if speed < 0.0 else
                              float(params[limit_name]))
+        contact_trace = {}
         world_status = world_collision.check_horizontal_collision(
             self._runtime.bigworld, self._runtime.math,
             self._avatar.spaceID, pos, yaw, speed, descriptor, airborne, dt,
@@ -18478,7 +18482,7 @@ class BattleRuntime(object):
             pitch=_number(bot_state.get(
                 'terrain_pitch', bot_state.get('pitch'))),
             roll=_number(bot_state.get('roll')),
-            motion_yaw=motion_yaw)
+            motion_yaw=motion_yaw, trace=contact_trace)
         if isinstance(world_status, bool):
             world_status = 'hard' if world_status else 'clear'
         self._bot_motion_kinds[int(bot_id)] = '-'
@@ -18489,6 +18493,7 @@ class BattleRuntime(object):
                     **destructible_motion)):
                 self._bot_motion_kinds[int(bot_id)] = 'broken'
                 return 'soft'
+            bot_state['_world_contact_trace'] = contact_trace
             return 'hard'
         if self._destructibles is None:
             return 'clear' if world_status == 'clear' else 'hard'
@@ -19885,8 +19890,9 @@ class BattleRuntime(object):
                 front = value
             else:
                 rear = value
-        if (centre is None or follow_gap is None or
-                position[1] - centre <= float(follow_gap)):
+        if (follow_gap is None or not self._local_fall_armed or
+                (centre is not None and
+                 position[1] - centre <= float(follow_gap))):
             return highest, centre
         lateral = tuple(
             self._support_column(
@@ -19896,6 +19902,10 @@ class BattleRuntime(object):
                 yaw, half_width, half_length)[1])
         bridged = tank_collision.straddled_support(
             position[1], follow_gap, ((front, rear), lateral))
+        if centre is None:
+            # One remaining end is a cliff pivot, not a bridge beneath the
+            # centre of mass. Do not replace absent support with that rim.
+            return bridged, bridged
         if bridged is None or bridged <= centre:
             return highest, centre
         if highest is None or bridged > highest:
@@ -20097,7 +20107,9 @@ class BattleRuntime(object):
             previous_plane, position[0], position[2])
         if start_height is None or end_height is None:
             return float(position[1])
-        return float(position[1]) + end_height - start_height
+        # A query window may extend uphill, but must not jump down an
+        # extrapolated cliff face. The world-Y sweep owns downward reach.
+        return float(position[1]) + max(0.0, end_height - start_height)
 
     def _local_suspension_path_is_supported(
             self, previous_plane, current_plane, motion_pose, position):
@@ -20223,6 +20235,29 @@ class BattleRuntime(object):
         self._pending_landing_impacts.append(impact_speed)
         return damage
 
+    def _apply_world_contact_impact(self, entity, trace, speed, yaw):
+        """Submit one realised hull/world impact through the reliable HP path.
+
+        Reason 3 is world_collision for both falls and hard scenery impacts;
+        the existing sequenced landing channel already owns that shared law.
+        This must only run for the accepted blocking witness, never a probe
+        of a possible escape direction or an arena boundary.
+        """
+        if not isinstance(trace, dict) or 'hit' not in trace:
+            return 0.0
+        velocity = (math.sin(yaw) * speed, self._local_vertical_speed,
+                    math.cos(yaw) * speed)
+        impact = vehicle_physics.world_impact_speed(velocity, trace.get('normal'))
+        now = self._clock()
+        if (impact > vehicle_physics.FALL_SAFE_SPEED and
+                now - getattr(self, '_last_world_impact_time', -1.0e30) >= 0.25):
+            if self._apply_fall_damage(entity, impact):
+                self._last_world_impact_time = now
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] WORLD IMPACT speed=%.3f contact=%s\n' %
+                    (impact, trace.get('reason', 'hull')))
+        return impact
+
     def _flush_landing_observation(self):
         """Bind a queued landing to the next admitted local pose sample."""
         if not self._pending_landing_impacts or self._sender is None:
@@ -20302,9 +20337,13 @@ class BattleRuntime(object):
                     ground = lower_ground
                     com_gap = position[1] - ground
                     land_y = ground if centre is None else centre
-                if (position[1] <= ground or
-                        (com_gap <= snap_gap and
-                         not self._local_airborne)):
+                if (position[1] < ground - 0.002 or
+                        (position[1] <= ground and
+                         self._local_vertical_speed <= 0.0) or
+                        (not self._local_airborne and
+                         vehicle_physics.ground_reachable(
+                             position[1], ground,
+                             self._local_vertical_speed, dt))):
                     if (self._local_airborne and
                             self._local_vertical_speed < 0.0):
                         self._apply_landing_impact(
@@ -20316,12 +20355,19 @@ class BattleRuntime(object):
                         next_y = position[1] + (
                             ground - position[1]) * min(1.0, dt * 15.0)
                         next_y = min(next_y, ground + 0.12)
+                    # Carry actual supported vertical motion into the next
+                    # tick; a crest cannot erase upward/downward momentum.
+                    self._local_vertical_speed = (
+                        ((next_y - position[1]) / dt if next_y < position[1]
+                         else vehicle_physics.launch_vertical_speed(
+                             self._local_speed, self._local_last_pitch))
+                        if dt > 0.0 and not self._local_airborne else 0.0)
                     position = (position[0], next_y, position[2])
-                    self._local_vertical_speed = 0.0
                     self._local_airborne = False
                     self._local_fall_armed = True
                 else:
-                    if not self._local_airborne:
+                    if (not self._local_airborne and
+                            abs(self._local_vertical_speed) < 1.0e-8):
                         self._local_vertical_speed = (
                             vehicle_physics.launch_vertical_speed(
                                 self._local_speed,
@@ -20346,7 +20392,8 @@ class BattleRuntime(object):
                             break
                     position = (position[0], next_y, position[2])
         elif self._local_fall_armed:
-            if not self._local_airborne:
+            if (not self._local_airborne and
+                    abs(self._local_vertical_speed) < 1.0e-8):
                 self._local_vertical_speed = (
                     vehicle_physics.launch_vertical_speed(
                         self._local_speed, self._local_last_pitch))
@@ -20367,24 +20414,25 @@ class BattleRuntime(object):
             support_height_delta=0.0, support_speed_delta=0.0):
         """Contain the optional suspension trial to this local vehicle."""
         self._local_suspension_failed_this_tick = False
-        self._local_suspension_air_motion_this_tick = False
+        self._local_suspension_slide_motion_this_tick = False
         params = self._ensure_local_suspension_params(entity.typeDescriptor)
         if params is None:
             return self._update_vertical_motion_legacy(
                 entity, position, yaw, dt)
         snapshot = self._local_suspension_state_snapshot()
         try:
-            if self._local_airborne and dt > 0.0:
-                # Realise carried world X/Z velocity before sampling a landing
-                # plane so the normal verdict uses this tick's displacement.
+            if dt > 0.0:
+                # Realise both grounded side-slip and airborne carry before
+                # the ONE timed vertical solve. Moving downhill afterwards
+                # required a zero-time Y teleport to stay on the old plane.
                 position = self._apply_suspension_slope_slide(
                     position, yaw, dt, entity)
-                self._local_suspension_air_motion_this_tick = True
+                self._local_suspension_slide_motion_this_tick = True
             position = self._update_suspension_vertical_motion(
                 entity, position, yaw, dt,
                 support_height_delta, support_speed_delta)
             if (self._local_support_rise_blocked and
-                    self._local_suspension_air_motion_this_tick):
+                    self._local_suspension_slide_motion_this_tick):
                 # The carried displacement and its decay belong to the same
                 # rejected pose. Restore both alongside its X/Z rollback.
                 self._local_slide_speed = snapshot['_local_slide_speed']
@@ -20535,7 +20583,9 @@ class BattleRuntime(object):
         if any(math.isnan(value) or math.isinf(value) for value in values):
             raise RuntimeError('player suspension produced a non-finite pose')
         invalid_pose = (
-            abs(float(solved['height']) - position[1]) > 5.0 or
+            abs(float(solved['height']) - position[1]) > (
+                5.0 + abs(before_vertical_speed) * float(dt) +
+                vehicle_physics.GRAVITY * float(dt) ** 2) or
             # A steep absolute attitude is valid, including while falling.
             abs(float(solved['pitch']) - previous_pitch) > 1.2 or
             abs(float(solved['roll']) - previous_roll) > 1.2)
@@ -20628,12 +20678,12 @@ class BattleRuntime(object):
         support_height_delta = 0.0
         support_speed_delta = 0.0
         if support_gradient is not None:
-            support_height_delta = (
+            support_height_delta = max(0.0, (
                 float(support_gradient[0]) * dx +
-                float(support_gradient[1]) * dz)
-            if float(motion_dt) > 0.0:
-                support_speed_delta = (
-                    support_height_delta / float(motion_dt))
+                float(support_gradient[1]) * dz))
+            # This is a zero-time collision projection. It may lift a hull
+            # out of actual support, never lower it or manufacture velocity.
+            # The next timed suspension step owns gravity and spring impulses.
         # A rejected vertical support must retain collision separation X/Z;
         # only the endpoint's incoming Y and attitude are restored.
         self._local_support_tick_pose = tuple(position)
@@ -21048,6 +21098,8 @@ class BattleRuntime(object):
                         'visible_soft_hold', 0, False,
                         world_status=self._local_motion_status)
                 else:
+                    self._apply_world_contact_impact(
+                        entity, primary_contact, self._local_speed, yaw)
                     deflected = False
                     for slide_yaw in \
                             vehicle_physics.hard_contact_candidate_yaws(yaw):
@@ -21076,6 +21128,30 @@ class BattleRuntime(object):
                         self._local_grind = (
                             vehicle_physics.HARD_CONTACT_GRIND_TICKS)
                         contact_path = 'brake'
+            else:
+                # The old airborne branch withheld X/Z travel but retained
+                # full speed forever, pinning the falling hull to a cliff.
+                primary_contact = dict(getattr(
+                    self, '_local_world_collision_trace', None) or {})
+                if not self._local_motion_soft_block:
+                    self._apply_world_contact_impact(
+                        entity, primary_contact, self._local_speed, yaw)
+                    if 'normal' in primary_contact:
+                        sine, cosine = math.sin(yaw), math.cos(yaw)
+                        velocity = vehicle_physics.world_contact_velocity(
+                            (sine * self._local_speed,
+                             self._local_vertical_speed,
+                             cosine * self._local_speed),
+                            primary_contact['normal'])
+                        self._local_speed = velocity[0] * sine + velocity[2] * cosine
+                        self._local_vertical_speed = velocity[1]
+                        self._local_air_lateral = (
+                            velocity[0] - sine * self._local_speed,
+                            velocity[2] - cosine * self._local_speed)
+                    else:
+                        self._local_speed = 0.0
+                        self._local_air_lateral = (0.0, 0.0)
+                    contact_path = 'air_contact'
 
         if siege_drive_locked or overturned or is_tracked or is_engine_dead:
             turn = 0.0
@@ -21131,7 +21207,7 @@ class BattleRuntime(object):
         suspension_active = bool(
             self._ensure_local_suspension_params(entity.typeDescriptor))
         self._local_support_rise_blocked = False
-        self._local_suspension_air_motion_this_tick = False
+        self._local_suspension_slide_motion_this_tick = False
         self._local_support_tick_pose = tick_pose
         self._local_support_motion_pose = tick_pose
         try:
@@ -21140,8 +21216,8 @@ class BattleRuntime(object):
         finally:
             self._local_support_tick_pose = None
             self._local_support_motion_pose = None
-        air_motion_applied = bool(getattr(
-            self, '_local_suspension_air_motion_this_tick', False))
+        slide_motion_applied = bool(getattr(
+            self, '_local_suspension_slide_motion_this_tick', False))
         suspension_active = bool(
             self._local_suspension_params is not None and
             not self._local_suspension_disabled)
@@ -21164,7 +21240,7 @@ class BattleRuntime(object):
                 self._local_suspension_params is not None and
                 not self._local_suspension_disabled)
             if (suspension_active and not support_blocked and
-                    not air_motion_applied):
+                    not slide_motion_applied):
                 slide_start = position
                 position = self._apply_suspension_slope_slide(
                     position, yaw, dt, entity)
@@ -21187,7 +21263,8 @@ class BattleRuntime(object):
             contact_path = 'support'
         suspension_failed = bool(self._local_suspension_failed_this_tick)
         if not suspension_active and not suspension_failed:
-            self._ground_pitch(position, yaw, entity.typeDescriptor)
+            if not self._local_airborne:
+                self._ground_pitch(position, yaw, entity.typeDescriptor)
             if not slide_moved:
                 position = self._apply_slope_slide(
                     position, yaw, dt, entity)

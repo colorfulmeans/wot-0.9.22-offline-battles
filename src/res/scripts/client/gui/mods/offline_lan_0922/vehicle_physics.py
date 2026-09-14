@@ -2257,6 +2257,43 @@ def launch_vertical_speed(speed, slope_pitch):
 	return vertical if vertical > 0.0 else 0.0
 
 
+def ground_reachable(height, ground, vertical_speed, dt):
+	'''A static support can push up, but cannot pull a hull down a ledge.
+
+	The legacy seam/straddle search radius is not downward travel permission.
+	Use world-Y momentum and gravity, with only float32 contact tolerance.
+	'''
+	step = max(0.0, float(dt))
+	reachable_y = (float(height) + float(vertical_speed) * step -
+		GRAVITY * step * step)
+	return float(ground) >= reachable_y - 0.002
+
+
+def world_impact_speed(velocity, normal):
+	'''Closing speed against an outward world normal, including vertical walls.'''
+	try:
+		v = tuple(float(velocity[i]) for i in range(3))
+		n = tuple(float(normal[i]) for i in range(3))
+	except (IndexError, TypeError, ValueError, OverflowError):
+		return 0.0
+	if any(math.isnan(x) or math.isinf(x) for x in v + n):
+		return 0.0
+	length = math.sqrt(sum(x * x for x in n))
+	if length <= 1.0e-8 or math.isinf(length):
+		return 0.0
+	return max(0.0, -sum(v[i] * n[i] for i in range(3)) / length)
+
+
+def world_contact_velocity(velocity, normal):
+	'''Remove inward momentum while preserving travel tangent to a wall.'''
+	closing = world_impact_speed(velocity, normal)
+	if closing <= 0.0:
+		return tuple(velocity)
+	length = math.sqrt(sum(float(normal[i]) ** 2 for i in range(3)))
+	return tuple(float(velocity[i]) + closing * float(normal[i]) / length
+		for i in range(3))
+
+
 def overturn_level_from_up_cosine(up_cosine, warning_cosine=None,
 			danger_cosine=None):
 	'''Return 0=safe, 1=caution or 2=danger from hull world-up cosine.'''

@@ -6009,7 +6009,7 @@ class BotRuntime(object):
             previous_plane, position[0], position[2])
         if old_ground is None or expected_ground is None:
             return float(position[1])
-        return float(position[1]) + expected_ground - old_ground
+        return float(position[1]) + max(0.0, expected_ground - old_ground)
 
     @staticmethod
     def _suspension_rise_exceeds_base(body_y, support_y):
@@ -6152,6 +6152,9 @@ class BotRuntime(object):
             # The vertical law below always selects centre while it exists;
             # front/back could not affect the realised pose on this branch.
             return centre, centre
+        if follow_gap is not None and state.get('grounded_once', False):
+            bridged = self._straddled_terrain_support(state, position, follow_gap)
+            return bridged, bridged
         highest = None
         for distance in (half_length, -half_length):
             x = position[0] + sine * distance
@@ -6541,6 +6544,23 @@ class BotRuntime(object):
         self._turn_speeds[state['id']] = 0.0
         return damage
 
+    def _apply_world_contact_impact(self, state, speed, now):
+        """Consume primary native hull contact; speculative probes own no HP."""
+        trace = state.pop('_world_contact_trace', None)
+        if not isinstance(trace, dict) or 'hit' not in trace:
+            return 0
+        yaw = _number(state.get('yaw'))
+        impact = vehicle_physics.world_impact_speed(
+            (math.sin(yaw) * speed, _number(state.get('vertical_speed')),
+             math.cos(yaw) * speed), trace.get('normal'))
+        if (impact <= vehicle_physics.FALL_SAFE_SPEED or
+                now - _number(state.get('_last_world_impact_time'), -1.0e30) < 0.25):
+            return 0
+        damage = self._apply_bot_fall_damage(state, impact)
+        if damage:
+            state['_last_world_impact_time'] = now
+        return damage
+
     def _apply_bot_landing_impact(
             self, state, impact_speed, normal_impact=False):
         """Retain airborne skid and apply legacy or normal impact speed."""
@@ -6664,11 +6684,11 @@ class BotRuntime(object):
         support_height_delta = 0.0
         if (float(step) <= 0.0 and motion_pose is not None and
                 support_gradient is not None):
-            support_height_delta = (
+            support_height_delta = max(0.0, (
                 float(support_gradient[0]) *
                 (float(position[0]) - float(motion_pose[0])) +
                 float(support_gradient[1]) *
-                (float(position[2]) - float(motion_pose[2])))
+                (float(position[2]) - float(motion_pose[2]))))
         probe_height = self._suspension_probe_height_for_motion(
             position, motion_pose, previous_plane)
         sweep_drop = vehicle_physics.suspension_vertical_sweep_drop(
@@ -6755,7 +6775,9 @@ class BotRuntime(object):
         if any(math.isnan(value) or math.isinf(value) for value in values):
             raise RuntimeError('bot suspension produced a non-finite pose')
         invalid_pose = (
-            abs(solved['height'] - _number(state.get('y'))) > 5.0 or
+            abs(solved['height'] - _number(state.get('y'))) > (
+                5.0 + abs(before_vertical_speed) * float(step) +
+                vehicle_physics.GRAVITY * float(step) ** 2) or
             # Reject solver jumps, not a valid steep or overturned attitude.
             abs(solved['pitch'] - physics_state['pitch']) > 1.2 or
             abs(solved['roll'] - physics_state['roll']) > 1.2)
@@ -6989,10 +7011,16 @@ class BotRuntime(object):
                     (state['yaw'] if attempted_yaw is None
                      else attempted_yaw))
                 return True
-            elif (state['y'] <= ground or
-                  (com_gap <= snap_gap and not state.get('airborne', False))):
+            elif (state['y'] < ground - 0.002 or
+                  (state['y'] <= ground and
+                   state.get('vertical_speed', 0.0) <= 0.0) or
+                  (not state.get('airborne', False) and
+                   vehicle_physics.ground_reachable(
+                       state['y'], ground,
+                       state.get('vertical_speed', 0.0), step))):
                 impact_speed = (state.get('vertical_speed', 0.0)
                                 if state.get('airborne', False) else 0.0)
+                previous_y = state['y']
                 if state['y'] < ground:
                     rise = ground - state['y']
                     state['y'] += min(rise, max_climb)
@@ -7000,12 +7028,17 @@ class BotRuntime(object):
                     state['y'] += ((ground - state['y']) *
                                    min(1.0, step * 15.0))
                     state['y'] = min(state['y'], ground + 0.12)
-                state['vertical_speed'] = 0.0
+                state['vertical_speed'] = (
+                    ((state['y'] - previous_y) / step if state['y'] < previous_y
+                     else vehicle_physics.launch_vertical_speed(
+                         state['speed'], state.get('last_drive_pitch', 0.0)))
+                    if step > 0.0 and not state.get('airborne', False) else 0.0)
                 state['airborne'] = False
                 if impact_speed < 0.0:
                     self._apply_bot_landing_impact(state, impact_speed)
             else:
-                if not state.get('airborne', False):
+                if (not state.get('airborne', False) and
+                        abs(state.get('vertical_speed', 0.0)) < 1.0e-8):
                     pitch = state.get('last_drive_pitch', 0.0)
                     state['vertical_speed'] = (
                         vehicle_physics.launch_vertical_speed(
@@ -7028,7 +7061,8 @@ class BotRuntime(object):
                             state, impact_speed)
                         break
         elif state.get('grounded_once', False):
-            if not state.get('airborne', False):
+            if (not state.get('airborne', False) and
+                    abs(state.get('vertical_speed', 0.0)) < 1.0e-8):
                 state['vertical_speed'] = (
                     vehicle_physics.launch_vertical_speed(
                         state['speed'],
@@ -12048,6 +12082,9 @@ class BotRuntime(object):
                             speed = previous_speed
                             state.pop('destructible_contact_speed', None)
                         elif motion_status == 'hard':
+                            self._apply_world_contact_impact(state, speed, now)
+                            if not state.get('alive', True):
+                                speed = 0.0
                             realised_contact_yaw = state['yaw']
                             if contact_v0 < 0.0:
                                 realised_contact_yaw += math.pi

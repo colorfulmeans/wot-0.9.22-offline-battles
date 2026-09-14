@@ -4533,7 +4533,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertFalse(state['airborne'])
         self.assertEqual(5, len(calls))
 
-    def test_fast_bot_follow_gap_still_accepts_an_unbridged_drop(self):
+    def test_fast_bot_follow_gap_cannot_pull_down_an_unbridged_drop(self):
         for single_rim in (False, True):
             with self.subTest(single_rim=single_rim):
                 self.runtime.battle_start(self.start)
@@ -4551,7 +4551,10 @@ class BotRuntimeTests(unittest.TestCase):
 
                 self.assertFalse(self.runtime._update_vertical_motion(state, 0.15))
 
-                self.assertAlmostEqual(8.46, state['y'])
+                self.assertAlmostEqual(
+                    10.0 - self.module.vehicle_physics.GRAVITY * 0.15 ** 2,
+                    state['y'])
+                self.assertTrue(state['airborne'])
                 self.assertEqual(5, len(calls))
 
     def test_bot_bridges_a_slot_running_along_its_hull(self):
@@ -5250,6 +5253,13 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertGreater(corrections[0], 25)
         self.assertAlmostEqual(
             -0.05 * corrections[0], state['x'], places=6)
+        self.assertAlmostEqual(
+            gradient * state['x'], state['y'], delta=0.10)
+        # Positional separation has no elapsed time to pull the hull down.
+        # Allow the real spring/gravity steps to settle after pushes stop.
+        runtime._resolve_tank_contacts = lambda *args: []
+        for index in range(40):
+            runtime.update(0.05, 4.5 + index * 0.05)
         self.assertAlmostEqual(
             gradient * state['x'], state['y'], delta=0.03)
 

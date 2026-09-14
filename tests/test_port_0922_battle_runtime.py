@@ -22961,7 +22961,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         # rest of the three-ray exceptional budget.
         self.assertEqual(23, battle._suspension_ground_y.call_count)
 
-    def test_local_suspension_settles_ram_then_slide_at_each_endpoint(self):
+    def test_local_suspension_integrates_slide_once_before_settling_ram(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         client = _Client()
@@ -23020,16 +23020,16 @@ class BattleRuntimeContractTests(unittest.TestCase):
             battle._drive_local_step(0.1)
 
         self.assertEqual(
-            ['settle', 'ram', 'settle', 'slide', 'settle'],
+            ['slide', 'settle', 'ram', 'settle'],
             [row[0] for row in order])
-        ram_input = order[1]
-        slide_input = order[3]
+        ram_input = order[2]
+        slide_input = order[0]
         self.assertTrue(abs(ram_input[3]) > 0.001)
-        self.assertGreater(slide_input[1][1], ram_input[1][1])
-        self.assertEqual(0.2, slide_input[1][0])
-        self.assertEqual([0.1, 0.0, 0.0], [
+        self.assertEqual((0.0, 0.0, 0.0), slide_input[1])
+        self.assertEqual(0.2, ram_input[1][2])
+        self.assertEqual([0.1, 0.0], [
             call.args[3] for call in solver.call_args_list])
-        self.assertEqual(66, battle._suspension_ground_y.call_count)
+        self.assertEqual(44, battle._suspension_ground_y.call_count)
         self.assertAlmostEqual(0.2, battle._local_position[0])
         self.assertAlmostEqual(0.2, battle._local_position[2])
         self.assertFalse(battle._local_support_rise_blocked)
@@ -23051,10 +23051,14 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._motion_is_clear = mock.Mock(return_value=True)
         position = (0.0, 0.0, 0.0)
 
-        for unused in range(240):
-            battle._local_support_motion_pose = position
-            position = battle._update_vertical_motion(
-                entity, position, 0.0, dt)
+        # Prepare a settled hull, then release lateral motion. Production
+        # now integrates that motion inside the timed vertical step itself.
+        with mock.patch.object(battle, '_apply_suspension_slope_slide',
+                               side_effect=lambda pos, *args: pos):
+            for unused in range(240):
+                battle._local_support_motion_pose = position
+                position = battle._update_vertical_motion(
+                    entity, position, 0.0, dt)
         battle._local_downhill = (-1.0, 0.0, 0.0)
         battle._local_slope_tangent = gradient
 
@@ -23063,11 +23067,6 @@ class BattleRuntimeContractTests(unittest.TestCase):
             battle._local_support_motion_pose = position
             position = battle._update_vertical_motion(
                 entity, position, 0.0, dt)
-            slide_start = position
-            position = battle._apply_suspension_slope_slide(
-                position, 0.0, dt, entity)
-            position = battle._resettle_local_suspension_endpoint(
-                entity, slide_start, position, 0.0, dt)
             maximum_gap = max(
                 maximum_gap,
                 abs(position[1] - gradient * position[0]))
