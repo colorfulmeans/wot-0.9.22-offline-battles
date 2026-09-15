@@ -7803,6 +7803,29 @@ class BattleRuntime(object):
                 self._equipment_state or ()).get(
                     'enginePowerFactor'), 1.0))
 
+    @staticmethod
+    def _crew_stat_factor(entity, stat, snapshot):
+        """Combine damage penalties with the accepted crew's conditional effects."""
+        value = critical_damage.stat_factor(entity, stat)
+        if (stat not in ('reload', 'dispersion') or entity is None or
+                snapshot is None):
+            return value
+        from gui.mods.offline_lan_0922 import crew_battle
+        factors = crew_battle.for_critical(
+            snapshot, crew_battle.critical_from_vehicle(entity))
+        maximum = _number(getattr(entity, 'maxHealth', None),
+                          _number(_field(entity.typeDescriptor, 'maxHealth'), 1.0))
+        return value * crew_battle.stat_multiplier(
+            factors, stat, _number(getattr(entity, 'health', 0)), maximum,
+            critical_damage._module_factor(entity, stat))
+
+    def _local_stat_factor(self, entity, stat):
+        snapshot = None
+        if (not self._worker_mode and self._server is not None and
+                entity is self._server_entity(self._server.vehicle_id)):
+            snapshot = self._local_effective_params
+        return self._crew_stat_factor(entity, stat, snapshot)
+
     def _install_critical_equipment_effects(self, record, entity):
         """Bind exact target-owned consumable factors to a crit proposal."""
         if record is None or entity is None:
@@ -7820,8 +7843,14 @@ class BattleRuntime(object):
                 if isinstance(value, dict) and
                 isinstance(value.get('equipment'), dict)]
         passives = equipment_mechanics.passive_effects(equipments)
-        entity._fire_starting_chance_factor = max(0.0, _number(
-            passives.get('fireStartingChanceFactor'), 1.0))
+        from gui.mods.offline_lan_0922 import crew_battle
+        snapshot = (self._local_effective_params if record.get('local') else
+                    state.get('effective_params'))
+        battle_factors = crew_battle.for_critical(
+            snapshot, crew_battle.critical_from_vehicle(entity))
+        entity._fire_starting_chance_factor = (
+            max(0.0, _number(passives.get('fireStartingChanceFactor'), 1.0)) *
+            battle_factors['engine_fire_factor'])
         entity._medkit_bonus_value = max(0.0, _number(
             passives.get('medkitBonusValue'), 0.0))
         return True
@@ -7904,7 +7933,7 @@ class BattleRuntime(object):
             raise RuntimeError('#1513 gun descriptor has no dispersion angle')
         shot_multiplier = (
             state.base_dispersion / base_dispersion *
-            critical_damage.stat_factor(entity, 'dispersion'))
+            self._local_stat_factor(entity, 'dispersion'))
         aiming_time = (
             state.aim_time *
             critical_damage.stat_factor(entity, 'aim_time'))
@@ -7987,7 +8016,7 @@ class BattleRuntime(object):
         if state is None or entity is None:
             return False
         return self._rescale_current_reload(
-            state, critical_damage.stat_factor(entity, 'reload'))
+            state, self._local_stat_factor(entity, 'reload'))
 
     def _advance_local_gun_to(self, entity, now=None):
         """Advance the presented gun to one exact wall-clock edge.
@@ -8014,7 +8043,7 @@ class BattleRuntime(object):
         state.tick(
             dt, self._battle_live, self._local_speed,
             self._local_turn_speed, 0.0, descriptor,
-            dispersion_factor=critical_damage.stat_factor(
+            dispersion_factor=self._local_stat_factor(
                 entity, 'dispersion'),
             aim_time_factor=critical_damage.stat_factor(
                 entity, 'aim_time'))
@@ -8023,7 +8052,7 @@ class BattleRuntime(object):
         # would apply a newly damaged or repaired reload factor retroactively
         # to the whole callback gap.
         reload_rescaled = self._rescale_current_reload(
-            state, critical_damage.stat_factor(entity, 'reload'))
+            state, self._local_stat_factor(entity, 'reload'))
         self._report_crew_penalty(entity)
         self._publish_ammo_state(state)
         self._tick_equipment_cooldowns(now)
@@ -8068,9 +8097,9 @@ class BattleRuntime(object):
             '[Offline LAN 0.9.22] CREW out=%s reload=%.3f aim=%.3f '
             'disp=%.3f turret=%.3f mobility=%.3f vision=%.3f\n' % (
                 ','.join(sorted(impaired)) or '-',
-                critical_damage.stat_factor(entity, 'reload'),
+                self._local_stat_factor(entity, 'reload'),
                 critical_damage.stat_factor(entity, 'aim_time'),
-                critical_damage.stat_factor(entity, 'dispersion'),
+                self._local_stat_factor(entity, 'dispersion'),
                 critical_damage.stat_factor(entity, 'turret_speed'),
                 critical_damage.stat_factor(entity, 'mobility'),
                 critical_damage.stat_factor(entity, 'vision')))
@@ -11576,7 +11605,9 @@ class BattleRuntime(object):
                     'canonical player shot does not acknowledge worker intent')
             entity = self._server_entity(record.get('engine_id'))
             reload_factor = (1.0 if entity is None else
-                             critical_damage.stat_factor(entity, 'reload'))
+                             self._crew_stat_factor(
+                                 entity, 'reload',
+                                 getattr(gun, '_effective_params', None)))
             if (shell_index != gun.shot_index or
                     not gun.commit_fire(reload_factor)):
                 raise RuntimeError(
@@ -11603,7 +11634,7 @@ class BattleRuntime(object):
             edge = self._advance_local_gun_edge(gun)
             entity = (edge[0] if edge is not None else
                       self._server_entity(record['engine_id']))
-            reload_factor = critical_damage.stat_factor(entity, 'reload')
+            reload_factor = self._local_stat_factor(entity, 'reload')
             if pending.get('deferred_gun_settings'):
                 gun.pending_index = pending['deferred_gun_pending_index']
             if (shell_index != gun.shot_index or

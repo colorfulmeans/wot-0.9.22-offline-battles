@@ -15,6 +15,7 @@ importable on both the embedded Python 2 client and the Python 3 server.
 import math
 
 from gui.mods.offline_lan_0922 import equipment_mechanics
+from gui.mods.offline_lan_0922 import crew_battle
 
 
 SCHEMA_VERSION = 1
@@ -598,11 +599,23 @@ def _canonical_crew(value):
     if set(raw_states) != expected:
         return None
     states = {}
+    battle_rows = []
     for key in sorted(expected):
         row = raw_states.get(key)
-        if not _mapping(row, _DYNAMIC_SPOTTING_ROW_KEYS):
+        if not isinstance(row, dict):
+            return None
+        has_battle = 'battle_factors' in row
+        battle_rows.append(has_battle)
+        keys = (_DYNAMIC_SPOTTING_ROW_KEYS | frozenset(('battle_factors',))
+                if has_battle else _DYNAMIC_SPOTTING_ROW_KEYS)
+        if not _mapping(row, keys):
             return None
         canonical_row = {}
+        if has_battle:
+            battle = crew_battle.canonical(row['battle_factors'])
+            if battle is None:
+                return None
+            canonical_row['battle_factors'] = battle
         for name in ('vision', 'signal', 'camouflage'):
             value = _number(row.get(name), 0.0, 10.0)
             if value is None:
@@ -619,6 +632,8 @@ def _canonical_crew(value):
                 return None
             canonical_row[name] = pair
         states[key] = canonical_row
+    if any(battle_rows) and not all(battle_rows):
+        return None
     return {
         'members': members,
         'dynamic_spotting': {'crew': list(instances), 'states': states},

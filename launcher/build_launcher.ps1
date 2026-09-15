@@ -95,6 +95,9 @@ Copy-Item -Force `
     (Join-Path $LauncherRoot "LAUNCHER_README.txt") `
     (Join-Path $DistRoot "$AppName\README.txt")
 Copy-Item -Force `
+    (Join-Path $RepoRoot "TESTING_20260915_ZH.md") `
+    (Join-Path $DistRoot "$AppName\TESTING_20260915_ZH.md")
+Copy-Item -Force `
     (Join-Path $RepoRoot "LICENSE") `
     (Join-Path $DistRoot "$AppName\LICENSE")
 Copy-Item -Force `

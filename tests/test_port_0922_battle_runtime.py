@@ -10815,6 +10815,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             getList=lambda unused_nation_id: entries)
         descriptor = _Descriptor('china:Ch22_113P')
         descriptor.type.level = 8
+        # The human reservation needs a usable same-class opponent in this
+        # deliberately small catalogue, just as it does in the full client.
+        descriptor.type.tags = frozenset(('heavyTank',))
         battle = BattleRuntime(runtime)
         battle._config = {'vehicle': descriptor.name}
         battle._start_message = {'players': [

@@ -381,6 +381,7 @@ def _selected_vehicle_effective_params():
                 raise ValueError(
                     'the exact dynamic camouflage values are invalid')
             row = {
+                'battle_factors': loadout.crew_battle.from_native(dynamic),
                 'vision': float(ratios['vision']),
                 'signal': float(ratios['signal']),
                 'camouflage': float(ratios['camouflage']),

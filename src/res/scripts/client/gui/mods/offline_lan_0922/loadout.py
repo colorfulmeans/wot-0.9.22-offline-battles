@@ -23,6 +23,8 @@ import copy
 import math
 import sys
 
+from gui.mods.offline_lan_0922 import crew_battle
+
 try:
     _INTEGER_TYPES = (int, long)
 except NameError:
@@ -143,10 +145,12 @@ def _collect_battle_crew_factors(descriptor_crew):
     """Collect effects omitted by the garage's VehicleDescrCrew processors.
 
     Keep the native crew eligibility, level bonuses and directive processing;
-    only the three cell-side consumers are supplied by the offline adapter.
+    the cell-side consumers are supplied by the offline adapter.
     """
     result = {'offline/moveBloom': 1.0, 'offline/turretBloom': 1.0,
               'offline/ammoBayHealth': 1.0}
+    result.update(('offline/' + name, value)
+                  for name, value in crew_battle.DEFAULTS.items())
     processors = getattr(descriptor_crew, '_skillProcessors', None)
     if not isinstance(processors, dict):
         return {}
@@ -169,10 +173,30 @@ def _collect_battle_crew_factors(descriptor_crew):
         if active and level >= 100.0:
             result['offline/ammoBayHealth'] = config.ammoBayHealthFactor
 
+    def desperado(unused_self, unused_index, level, unused_increase,
+                  active, unused_fire, config):
+        if active and level >= 100.0:
+            result['offline/adrenaline_health_fraction'] = config.vehicleHealthFraction
+            result['offline/adrenaline_reload_factor'] = config.gunReloadTimeFactor
+
+    def tidy_person(unused_self, unused_index, level, unused_increase,
+                    active, unused_fire, config):
+        if active and level >= 100.0:
+            result['offline/engine_fire_factor'] = config.fireStartingChanceFactor
+
+    def gunsmith(unused_self, unused_index, level, increase,
+                 active, fire, config):
+        if active and not fire:
+            result['offline/damaged_gun_factor'] = max(
+                0.01, 1.0 - (level + increase) * config.shotDispersionFactorPerLevel)
+
     descriptor_crew._skillProcessors.update({
         'driver_smoothDriving': smooth_driving,
         'gunner_smoothTurret': smooth_turret,
         'loader_pedant': pedant,
+        'loader_desperado': desperado,
+        'driver_tidyPerson': tidy_person,
+        'gunner_gunsmith': gunsmith,
     })
     return result
 

@@ -60,6 +60,12 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
+The [September 15 test notes](TESTING_20260915_ZH.md) describe artillery
+feedback, Expert, conditional crew effects, directives, bonds and the remaining
+mode/skill limitations. Adrenaline Rush, Preventative Maintenance and Armorer
+now consume native skill parameters and follow the physical crew's injury and
+recovery state.
+
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
 spawn groups and the large Grand Battle maps. The current package has neither

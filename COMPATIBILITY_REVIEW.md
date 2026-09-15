@@ -3491,12 +3491,23 @@ is donated separately; an untrained perk receives its ordinary completed effect.
 The improved stabilizer uses the descriptor's actual additive dispersion
 factor, and its directive applies the native additional factor.
 
-This audit does not establish complete crew-skill parity. In particular,
 Adrenaline Rush (`loader_desperado`), Preventative Maintenance
-(`driver_tidyPerson`), Armorer (`gunner_gunsmith`) and Relaying
-(`radioman_retransmitter`) still lack dedicated battle consumers. Existing
-numeric, spotting, repair, XP and discrete-perk tests are not evidence that
-these remaining perks work.
+(`driver_tidyPerson`) and Armorer (`gunner_gunsmith`) now also use native
+skill-config values. Each physical crew/fire mask carries its own conditional
+factors in the immutable round snapshot. Adrenaline Rush applies below the
+descriptor's HP fraction and rescales only the remaining reload progress;
+Armorer changes only the damaged gun's dispersion factor. The authority's
+engine-fire proposal combines the target's live crew row with consumable
+passives. Crew injury and recovery select another donated row. Old snapshots
+without this optional extension remain readable; incomplete or nonfinite
+extensions are rejected.
+
+This audit does not establish complete crew-skill parity. Relaying
+(`radioman_retransmitter`) still has no battle consumer. The current team-wide
+spotting broadcast also does not model radio contact distance, so Signal
+Boosting (`radioman_inventor`) is numeric-only in this respect. Existing
+numeric, spotting, repair, XP and discrete-perk tests do not prove untested
+skill behavior.
 
 Bond currency survives catalogue parsing, account shop/stats updates, garage
 persistence, launcher balance editing, battle receipts, medal replay details,
