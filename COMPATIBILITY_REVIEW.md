@@ -3457,3 +3457,79 @@ acquire unseen/never-shootable contacts, grant fire, or consume a focus slot.
 A shootable alternative, loss of visibility/range or an unrecoverable weapon
 still releases the hold. This retention is confined to artillery's existing
 rear-anchor behavior; ordinary tank route leases are unchanged.
+
+
+## Artillery feedback, Expert, directives and bonds
+
+Direct SPG hits with positive HP damage now use the direct-projectile
+penetration sound flags. A direct zero-HP hit uses non-penetration flags;
+only a splash event uses external-explosion flags. The physical shot result,
+decal and statistics remain unchanged. Module damage is still published in
+critical feedback; its alternative voice does not replace this SPG rule.
+
+Expert's four-second lock now publishes to the stock shared feedback adapter.
+The Avatar wrapper rechecks `BigWorld.target()` against a stock Vehicle, which
+cannot accept the synthetic entity selected by the offline outline ray.
+The offline path retains target identity, visibility and alive guards, hides
+old module icons on a target change, and revokes the view when the commander
+loses the active perk. Destroyed crew extras join the module list.
+
+The regular three consumable slots and the fourth directive slot have separate
+layout and auto-resupply handling. A directive travels in the frozen effective
+parameters, and its compact descriptor is retained in the round participant
+receipt so later garage edits cannot change which directive that battle used.
+Settlement, the wallet update and its receipt marker share the existing durable
+transaction. Old three-slot records and wallets without crystal remain readable.
+
+Equipment directives enter the native attribute-factor chain. Crew directives
+enter `VehicleDescrCrew.boostSkillBy`; the battle projection also grants the
+completed discrete perk where required. Native processors which the garage
+leaves empty for Smooth Ride, Snap Shot and Safe Stowage now have offline
+consumers using the native level, eligibility and skill config arguments.
+The modified timing for trained Sixth Sense, Designated Target and Last Effort
+is donated separately; an untrained perk receives its ordinary completed effect.
+The improved stabilizer uses the descriptor's actual additive dispersion
+factor, and its directive applies the native additional factor.
+
+Adrenaline Rush (`loader_desperado`), Preventative Maintenance
+(`driver_tidyPerson`) and Armorer (`gunner_gunsmith`) now also use native
+skill-config values. Each physical crew/fire mask carries its own conditional
+factors in the immutable round snapshot. Adrenaline Rush applies below the
+descriptor's HP fraction and rescales only the remaining reload progress;
+Armorer changes only the damaged gun's dispersion factor. The authority's
+engine-fire proposal combines the target's live crew row with consumable
+passives. Crew injury and recovery select another donated row. Old snapshots
+without this optional extension remain readable; incomplete or nonfinite
+extensions are rejected.
+
+This audit does not establish complete crew-skill parity. Relaying
+(`radioman_retransmitter`) still has no battle consumer. The current team-wide
+spotting broadcast also does not model radio contact distance, so Signal
+Boosting (`radioman_inventor`) is numeric-only in this respect. Existing
+numeric, spotting, repair, XP and discrete-perk tests do not prove untested
+skill behavior.
+
+Bond currency survives catalogue parsing, account shop/stats updates, garage
+persistence, launcher balance editing, battle receipts, medal replay details,
+consumption and service costs. The 21 affected catalogue entries retain their
+existing baked amounts and gain the omitted crystal marker; this is a targeted
+currency correction, not a claim of rebaking the entire #1513 client. The
+baker now preserves `<crystal/>` when run again. The medal schedule comes from
+WG's [9.20.1 announcement](https://worldoftanks.eu/en/news/general-news/920-1-bonds-and-medals/)
+and its [reward table](https://eu-wotp.wgcdn.co/dcont/fb/image/medals_en.jpg).
+The all-Tier-X base-XP bond conversion is not reconstructed. No guessed
+XP-to-bonds formula or later weekly-cap system is introduced.
+
+Grand Battles remain unavailable. The current 15-slot team layout, bot identity
+ranges, 30-row result validators and baked map data need a coordinated change.
+The [historical Grand Battle rules](https://worldoftanks.eu/en/news/general-news/update-920-grand-battles/)
+require 30 Tier-X vehicles per side, three matched spawn groups, a 15-minute
+limit and at most four SPGs per team. The exact #1513 large-map navigation,
+spawn and native 60-vehicle acceptance data are not available in this workspace.
+
+Static reference for the newly connected directive and feedback consumers was
+also compared with public 0.9.22.0.1 #788 scripts (StranikS-Scan's decompiled
+archive, commit 487396ac2bec27127b8e03abca33bc961dc67021). This different regional
+build is orientation, not #1513 ABI proof. Only a run of the resulting package
+on the supported China HD #1513 Windows client can establish native voice,
+Expert overlay, fourth-slot UI, timing and frame-pacing acceptance.

@@ -98,8 +98,12 @@ class _Replay(object):
         return self
 
     def __add__(self, other):
-        self.connector.values[self.record_name] += self.connector.values[
-            other]
+        if other.startswith('eventCrystalList_'):
+            value = dict(self.connector.values['eventCrystalList'])[
+                other.split('eventCrystalList_', 1)[1]]
+        else:
+            value = self.connector.values[other]
+        self.connector.values[self.record_name] += value
         self.chain.append('ADD:%s' % other)
         _Replay.steps.append((self.record_name, 'ADD', other))
         return self

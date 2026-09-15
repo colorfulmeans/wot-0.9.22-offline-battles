@@ -132,6 +132,7 @@ def _vehicles(unlocks_descrs=(), autounlocked=()):
     }
     return types.SimpleNamespace(
         getTypeOfCompactDescr=lambda compact_descr: item_types[compact_descr],
+        getItemByCompactDescr=lambda compact_descr: types.SimpleNamespace(tags=()),
         getVehicleType=lambda compact_descr: types.SimpleNamespace(
             id=(0, 1), unlocksDescrs=unlocks_descrs,
             autounlockedItems=autounlocked))

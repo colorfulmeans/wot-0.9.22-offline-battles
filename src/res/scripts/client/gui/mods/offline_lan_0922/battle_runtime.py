@@ -3500,7 +3500,9 @@ class BattleRuntime(object):
                             'commander_sixthsense') > 0),
                     lambda: (self.local_health() or 0) > 0,
                     lambda: self.state == 'running' and self._battle_live,
-                    VehicleStatePresenter(provider, vehicle_view_state))
+                    VehicleStatePresenter(provider, vehicle_view_state),
+                    delay=effective_params.booster_skill_value(
+                        self._local_effective_params, 'sixth_sense_delay', 3.0))
             bot_start_message = dict(self._start_message or {})
             if (self._worker_mode and
                     lan_protocol.HUMAN_RAM_TIMELINE_CAPABILITY in
@@ -4706,7 +4708,7 @@ class BattleRuntime(object):
         }
 
     def _prepare_bot_vehicle_assignments(self, player_descriptor):
-        """Build the mature mirrored 0.8.2 line-up afresh per battle.
+        """Share tier/class slots, then draw each team's vehicles independently.
 
         There is deliberately no process-wide vehicle pool.  The selected
         battle tiers and role template are shared by both teams, humans remove
@@ -4858,9 +4860,11 @@ class BattleRuntime(object):
             template = bot_planner.build_match_template(
                 candidates, team_size, player_profile, match_tiers,
                 lineup_random, requirements)
+            validated_names = set(value['name'] for value in all_candidates)
             automatic_candidates = [
                 candidate for candidate in candidates
-                if candidate['name'] not in excluded_names]
+                if candidate['name'] not in excluded_names and
+                candidate['name'] in validated_names]
 
             assignments = {}
             for team in (1, 2):
@@ -4881,6 +4885,18 @@ class BattleRuntime(object):
                     spg_limit=max(0, 3 - human_spgs),
                     fallback_candidates=automatic_candidates)
                 picked = list(picked[:len(team_bots)])
+                # The template balances roles and tiers, not vehicle names.
+                # Draw only from the validated, non-excluded automatic pool;
+                # the shared seed keeps replicas and the worker in agreement.
+                randomized = []
+                for entry in picked:
+                    pool = [candidate for candidate in automatic_candidates
+                            if candidate['level'] == entry['level'] and
+                            bot_planner.vehicle_match_class(candidate) ==
+                            bot_planner.vehicle_match_class(entry)]
+                    if pool:
+                        randomized.append(lineup_random.choice(pool))
+                picked = randomized
                 lineup_random.shuffle(picked)
                 picked.sort(key=self._vehicle_class_order)
                 for raw, entry in zip(team_bots, picked):
@@ -4913,7 +4929,7 @@ class BattleRuntime(object):
                     return False
                 if (team, slot) in bot_slots:
                     assignments[(team, slot)] = vehicle
-            if excluded_names and set(assignments) != bot_slots:
+            if set(assignments) != bot_slots:
                 self._bot_vehicle_assignments = {}
                 return False
             self._bot_vehicle_assignments = assignments
@@ -7193,9 +7209,11 @@ class BattleRuntime(object):
         """Publish canonical module phases after Expert's four-second delay."""
         vehicle_id = int(self._expert_target_id or 0)
         if (not self._has_expert or
-                self._local_skill_count('commander_expert') <= 0 or
-                vehicle_id <= 0 or
-                float(now) < self._expert_target_due):
+                self._local_skill_count('commander_expert') <= 0):
+            if vehicle_id:
+                self.monitor_vehicle_damaged_devices(0)
+            return False
+        if vehicle_id <= 0 or float(now) < self._expert_target_due:
             return False
         record = None
         for candidate in self._records.values():
@@ -7204,7 +7222,8 @@ class BattleRuntime(object):
                 break
         entity = self._server_entity(vehicle_id)
         if (record is None or record.get('local') or
-                record.get('tombstone') or entity is None or
+                record.get('tombstone') or
+                not record.get('spot_visible', True) or entity is None or
                 not self._record_alive(record, entity)):
             self.monitor_vehicle_damaged_devices(0)
             return False
@@ -7231,12 +7250,24 @@ class BattleRuntime(object):
                 entity.typeDescriptor, 'fire')
             if fire_index is not None:
                 damaged.append(fire_index)
+        for name in critical.get('crew_ko') or ():
+            extra_name = str(name)
+            if not extra_name.endswith('Health'):
+                extra_name += 'Health'
+            index = self._expert_extra_index(entity.typeDescriptor, extra_name)
+            if index is not None:
+                destroyed.append(index)
         signature = (tuple(sorted(set(damaged))),
                      tuple(sorted(set(destroyed))))
         if signature == self._expert_target_signature:
             return False
-        callback = getattr(
-            self._avatar, 'showOtherVehicleDamagedDevices', None)
+        # Avatar.showOtherVehicleDamagedDevices rechecks BigWorld.target().
+        # Offline targeting is owned by our precise silhouette/occlusion ray;
+        # its rendered OfflineEntity is not a stock Vehicle. Publish through
+        # the same stock feedback consumer after our target checks instead.
+        provider = getattr(self._avatar, 'guiSessionProvider', None)
+        feedback = getattr(getattr(provider, 'shared', None), 'feedback', None)
+        callback = getattr(feedback, 'showVehicleDamagedDevices', None)
         if not callable(callback):
             raise RuntimeError(
                 '#1513 Expert damaged-device callback is unavailable')
@@ -7772,6 +7803,29 @@ class BattleRuntime(object):
                 self._equipment_state or ()).get(
                     'enginePowerFactor'), 1.0))
 
+    @staticmethod
+    def _crew_stat_factor(entity, stat, snapshot):
+        """Combine damage penalties with the accepted crew's conditional effects."""
+        value = critical_damage.stat_factor(entity, stat)
+        if (stat not in ('reload', 'dispersion') or entity is None or
+                snapshot is None):
+            return value
+        from gui.mods.offline_lan_0922 import crew_battle
+        factors = crew_battle.for_critical(
+            snapshot, crew_battle.critical_from_vehicle(entity))
+        maximum = _number(getattr(entity, 'maxHealth', None),
+                          _number(_field(entity.typeDescriptor, 'maxHealth'), 1.0))
+        return value * crew_battle.stat_multiplier(
+            factors, stat, _number(getattr(entity, 'health', 0)), maximum,
+            critical_damage._module_factor(entity, stat))
+
+    def _local_stat_factor(self, entity, stat):
+        snapshot = None
+        if (not self._worker_mode and self._server is not None and
+                entity is self._server_entity(self._server.vehicle_id)):
+            snapshot = self._local_effective_params
+        return self._crew_stat_factor(entity, stat, snapshot)
+
     def _install_critical_equipment_effects(self, record, entity):
         """Bind exact target-owned consumable factors to a crit proposal."""
         if record is None or entity is None:
@@ -7789,8 +7843,14 @@ class BattleRuntime(object):
                 if isinstance(value, dict) and
                 isinstance(value.get('equipment'), dict)]
         passives = equipment_mechanics.passive_effects(equipments)
-        entity._fire_starting_chance_factor = max(0.0, _number(
-            passives.get('fireStartingChanceFactor'), 1.0))
+        from gui.mods.offline_lan_0922 import crew_battle
+        snapshot = (self._local_effective_params if record.get('local') else
+                    state.get('effective_params'))
+        battle_factors = crew_battle.for_critical(
+            snapshot, crew_battle.critical_from_vehicle(entity))
+        entity._fire_starting_chance_factor = (
+            max(0.0, _number(passives.get('fireStartingChanceFactor'), 1.0)) *
+            battle_factors['engine_fire_factor'])
         entity._medkit_bonus_value = max(0.0, _number(
             passives.get('medkitBonusValue'), 0.0))
         return True
@@ -7873,7 +7933,7 @@ class BattleRuntime(object):
             raise RuntimeError('#1513 gun descriptor has no dispersion angle')
         shot_multiplier = (
             state.base_dispersion / base_dispersion *
-            critical_damage.stat_factor(entity, 'dispersion'))
+            self._local_stat_factor(entity, 'dispersion'))
         aiming_time = (
             state.aim_time *
             critical_damage.stat_factor(entity, 'aim_time'))
@@ -7956,7 +8016,7 @@ class BattleRuntime(object):
         if state is None or entity is None:
             return False
         return self._rescale_current_reload(
-            state, critical_damage.stat_factor(entity, 'reload'))
+            state, self._local_stat_factor(entity, 'reload'))
 
     def _advance_local_gun_to(self, entity, now=None):
         """Advance the presented gun to one exact wall-clock edge.
@@ -7983,7 +8043,7 @@ class BattleRuntime(object):
         state.tick(
             dt, self._battle_live, self._local_speed,
             self._local_turn_speed, 0.0, descriptor,
-            dispersion_factor=critical_damage.stat_factor(
+            dispersion_factor=self._local_stat_factor(
                 entity, 'dispersion'),
             aim_time_factor=critical_damage.stat_factor(
                 entity, 'aim_time'))
@@ -7992,7 +8052,7 @@ class BattleRuntime(object):
         # would apply a newly damaged or repaired reload factor retroactively
         # to the whole callback gap.
         reload_rescaled = self._rescale_current_reload(
-            state, critical_damage.stat_factor(entity, 'reload'))
+            state, self._local_stat_factor(entity, 'reload'))
         self._report_crew_penalty(entity)
         self._publish_ammo_state(state)
         self._tick_equipment_cooldowns(now)
@@ -8037,9 +8097,9 @@ class BattleRuntime(object):
             '[Offline LAN 0.9.22] CREW out=%s reload=%.3f aim=%.3f '
             'disp=%.3f turret=%.3f mobility=%.3f vision=%.3f\n' % (
                 ','.join(sorted(impaired)) or '-',
-                critical_damage.stat_factor(entity, 'reload'),
+                self._local_stat_factor(entity, 'reload'),
                 critical_damage.stat_factor(entity, 'aim_time'),
-                critical_damage.stat_factor(entity, 'dispersion'),
+                self._local_stat_factor(entity, 'dispersion'),
                 critical_damage.stat_factor(entity, 'turret_speed'),
                 critical_damage.stat_factor(entity, 'mobility'),
                 critical_damage.stat_factor(entity, 'vision')))
@@ -10713,17 +10773,7 @@ class BattleRuntime(object):
                     raise RuntimeError(
                         '#1513 VEHICLE_HIT_FLAGS are unavailable')
                 explosion = bool(event.get('splash'))
-                if not explosion and damage > 0 and int(event.get('shot_result', 2)) != 2:
-                    attacker_entity = self._server_entity(
-                        attacker_record.get('engine_id'))
-                    descriptor = getattr(attacker_entity, 'typeDescriptor', None)
-                    tags = _field(_field(descriptor, 'type', None), 'tags', ())
-                    he_type = getattr(self._runtime.constants,
-                                      'SHELL_TYPES_INDICES', {}).get('HIGH_EXPLOSIVE')
-                    # Only the voice RPC treats a damaging SPG HE direct hit
-                    # as an explosion. Damage, decals and penetration stats
-                    # retain the accepted projectile result.
-                    explosion = 'SPG' in (tags or ()) and shell_type == he_type
+                direct_artillery = False
                 if explosion:
                     flags = int(flags_type.ATTACK_IS_EXTERNAL_EXPLOSION)
                     if damage > 0:
@@ -10742,6 +10792,16 @@ class BattleRuntime(object):
                     flags = int(flags_type.ATTACK_IS_DIRECT_PROJECTILE)
                     shot_result = max(
                         0, min(int(event.get('shot_result', 2)), 2))
+                    attacker_entity = self._server_entity(
+                        attacker_record.get('engine_id'))
+                    descriptor = getattr(attacker_entity, 'typeDescriptor', None)
+                    tags = _field(_field(descriptor, 'type', None), 'tags', ())
+                    direct_artillery = 'SPG' in (tags or ())
+                    if direct_artillery:
+                        # Voice only: any damaging direct artillery hit uses
+                        # the penetration call; a zero-damage hit uses bounce.
+                        # Keep the actual projectile result for stats/decals.
+                        shot_result = 2 if damage > 0 else 1
                     if shot_result == 2:
                         flags |= int(
                             flags_type.
@@ -10781,6 +10841,14 @@ class BattleRuntime(object):
                             flags |= chassis_flag
                         elif name == 'gunHealth':
                             flags |= gun_flag
+                if direct_artillery:
+                    # A module hit must not replace the requested plain
+                    # penetration/non-penetration artillery voice. Module
+                    # events remain in the independent critical feedback.
+                    flags &= ~(int(flags_type.GUN_DAMAGED_BY_PROJECTILE) |
+                               int(flags_type.GUN_DAMAGED_BY_EXPLOSION) |
+                               int(flags_type.CHASSIS_DAMAGED_BY_PROJECTILE) |
+                               int(flags_type.CHASSIS_DAMAGED_BY_EXPLOSION))
                 if bool(event.get('dead')):
                     flags |= int(flags_type.VEHICLE_KILLED)
                 callback = getattr(self._avatar, 'showShotResults', None)
@@ -11537,7 +11605,9 @@ class BattleRuntime(object):
                     'canonical player shot does not acknowledge worker intent')
             entity = self._server_entity(record.get('engine_id'))
             reload_factor = (1.0 if entity is None else
-                             critical_damage.stat_factor(entity, 'reload'))
+                             self._crew_stat_factor(
+                                 entity, 'reload',
+                                 getattr(gun, '_effective_params', None)))
             if (shell_index != gun.shot_index or
                     not gun.commit_fire(reload_factor)):
                 raise RuntimeError(
@@ -11564,7 +11634,7 @@ class BattleRuntime(object):
             edge = self._advance_local_gun_edge(gun)
             entity = (edge[0] if edge is not None else
                       self._server_entity(record['engine_id']))
-            reload_factor = critical_damage.stat_factor(entity, 'reload')
+            reload_factor = self._local_stat_factor(entity, 'reload')
             if pending.get('deferred_gun_settings'):
                 gun.pending_index = pending['deferred_gun_pending_index']
             if (shell_index != gun.shot_index or
@@ -16965,6 +17035,7 @@ class BattleRuntime(object):
         if chosen == held_id:
             if chosen is not None:
                 self._refresh_native_target_outline()
+                self.monitor_vehicle_damaged_devices(chosen)
             return
         if not self._clear_target_outline():
             return
@@ -17442,7 +17513,7 @@ class BattleRuntime(object):
                 raise ValueError('team spot memory time is invalid')
             if (math.isnan(time_left) or math.isinf(time_left) or
                     time_left < 0.0 or
-                    time_left > spotting.DESIGNATED_SPOT_MEMORY_SECONDS or
+                    time_left > spotting.MAX_SPOT_MEMORY_SECONDS or
                     bool(contact.get('visible')) != (time_left > 0.0)):
                 raise ValueError('team spot memory time is invalid')
             deadlines[(record_kind, target_id)] = now + time_left

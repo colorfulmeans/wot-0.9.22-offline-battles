@@ -353,7 +353,9 @@ def _modules():
         # removable, and removeOptionalDevice destroys such a device unless
         # the player paid to take it off.
         getItemByCompactDescr=lambda compact_descr: types.SimpleNamespace(
-            removable=(compact_descr != 9002)),
+            removable=(compact_descr != 9002),
+            equipmentType=1 if compact_descr == 11003 else 0,
+            tags=('notForSale',) if compact_descr == 11003 else ()),
         getVehicleType=lambda compact_descr: types.SimpleNamespace(
             id=(0, VEHICLE_TYPE_ID if compact_descr == 50001
                 else compact_descr % 1000),
@@ -443,11 +445,12 @@ class GarageStateTests(unittest.TestCase):
         self.assertEqual(
             1, self._record()['inventoryItems'][11][11001])
 
-    def test_the_trailing_battle_booster_slot_is_accepted_and_dropped(self):
+    def test_the_trailing_battle_booster_slot_is_mounted(self):
         # VehicleEquipment.getConsumablesIntCDs appends the booster slot.
-        self.state.equip_equipments(9, [11001, 0, 0, 11002])
+        self.state._snapshot['shopItemPrices'][11003] = {'credits': 0}
+        self.state.equip_equipments(9, [11001, 0, 0, 11003])
 
-        self.assertEqual([11001, 0, 0], self._record()['eqs'])
+        self.assertEqual([11001, 0, 0, 11003], self._record()['eqs'])
 
     def test_mounting_a_fifth_consumable_is_refused(self):
         with self.assertRaises(self.garage.GarageError):
@@ -902,9 +905,10 @@ class GarageStateTests(unittest.TestCase):
     def test_a_battle_booster_layout_leaves_the_regular_slots_alone(self):
         self.state.equip_equipments(9, [11001, 0, 0])
 
-        self.state.set_layouts(9, None, 1, [0, 0, 0, 0, 0, 0, 11002, 1])
+        self.state._snapshot['shopItemPrices'][11003] = {'credits': 0}
+        self.state.set_layouts(9, None, 1, [0, 0, 0, 0, 0, 0, 11003, 1])
 
-        self.assertEqual([11001, 0, 0], self._record()['eqs'])
+        self.assertEqual([11001, 0, 0, 11003], self._record()['eqs'])
 
     def test_an_odd_equipment_layout_is_refused(self):
         with self.assertRaises(self.garage.GarageError):
@@ -2767,7 +2771,7 @@ class GarageSaveDurabilityTests(unittest.TestCase):
         self.assertIn('without 1 vehicle', log.getvalue())
         # The account survives the one vehicle it could not publish.
         self.assertEqual(
-            {'credits': 250000, 'gold': 700, 'freeXP': 4200}, fresh['wallet'])
+            {'credits': 250000, 'gold': 700, 'freeXP': 4200, 'crystal': 0}, fresh['wallet'])
         self.assertIn(50002, fresh['unlockItemCompactDescrs'])
         self.assertEqual(1, len(self._variants('rejected-')))
 
@@ -2795,7 +2799,7 @@ class GarageSaveDurabilityTests(unittest.TestCase):
 
         self.assertIn('without any vehicle fitting or crew', log.getvalue())
         self.assertEqual(
-            {'credits': 250000, 'gold': 700, 'freeXP': 4200}, fresh['wallet'])
+            {'credits': 250000, 'gold': 700, 'freeXP': 4200, 'crystal': 0}, fresh['wallet'])
         self.assertIn(50002, fresh['unlockItemCompactDescrs'])
 
     def test_a_degraded_restore_is_not_rewritten_for_convenience(self):
@@ -3518,7 +3522,7 @@ class GaragePersistenceTests(unittest.TestCase):
         self.assertEqual(10, snapshot['wallet']['freeXP'])
         self.assertEqual(200, snapshot['vehicleXP'][50001])
         self.assertEqual(
-            {'credits': 1000, 'xp': 200, 'free_xp': 10}, result['awarded'])
+            {'credits': 1000, 'xp': 200, 'free_xp': 10, 'crystal': 0}, result['awarded'])
 
     def test_the_launchers_multiplier_moves_credits_and_experience(self):
         """One number on the save, applied to everything a battle pays."""
@@ -3530,7 +3534,7 @@ class GaragePersistenceTests(unittest.TestCase):
         self.assertEqual(25, snapshot['wallet']['freeXP'])
         self.assertEqual(500, snapshot['vehicleXP'][50001])
         self.assertEqual(
-            {'credits': 2500, 'xp': 500, 'free_xp': 25}, result['awarded'])
+            {'credits': 2500, 'xp': 500, 'free_xp': 25, 'crystal': 0}, result['awarded'])
         # The crew was trained on the multiplied experience too: #1513 gives
         # each crew member the battle's whole experience, not a share of it.
         self.assertEqual(500, _TankmanDescriptor(
@@ -3546,7 +3550,7 @@ class GaragePersistenceTests(unittest.TestCase):
         self.assertEqual(200, snapshot['vehicleXP'][PREMIUM_VEHICLE_CD])
         self.assertEqual(10, snapshot['wallet']['freeXP'])
         self.assertEqual(
-            {'credits': 1500, 'xp': 200, 'free_xp': 10}, result['awarded'])
+            {'credits': 1500, 'xp': 200, 'free_xp': 10, 'crystal': 0}, result['awarded'])
 
     def test_native_vehicle_and_crew_bonuses_keep_distinct_owners(self):
         snapshot = self._earning_snapshot(
@@ -3566,7 +3570,7 @@ class GaragePersistenceTests(unittest.TestCase):
                 tankmen_module=tankmen, rewards=self.REWARDS,
                 vehicles_module=vehicles)
         result = settle()
-        self.assertEqual({'credits': 3000, 'xp': 600, 'free_xp': 30},
+        self.assertEqual({'credits': 3000, 'xp': 600, 'free_xp': 30, 'crystal': 0},
                          result['awarded'])
         self.assertEqual(600, snapshot['vehicleXP'][PREMIUM_VEHICLE_CD])
         self.assertEqual(30, snapshot['wallet']['freeXP'])

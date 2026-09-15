@@ -209,10 +209,38 @@ def _selected_vehicle_effective_params():
                 'a mounted garage equipment descriptor is unavailable')
         equipments.append(equipment)
     equipments = tuple(equipments)
+    booster_slots = getattr(getattr(item, 'equipment', None),
+                            'battleBoosterConsumables', None)
+    boosters = tuple(loadout._artefact(value, vehicles) for value in
+                     (() if booster_slots is None else
+                      booster_slots.getInstalledItems()))
+    if any(value is None for value in boosters):
+        raise ValueError('a mounted directive descriptor is unavailable')
+    if len(boosters) > 1:
+        raise ValueError('a vehicle can carry only one directive')
+    booster_projection = None
+    if boosters:
+        booster = boosters[0]
+        overrides = {}
+        skill_name = str(getattr(booster, 'skillName', '')).lower()
+        # An untrained perk receives its ordinary completed effect. Only a
+        # completed perk receives the directive's improved timing/sector.
+        if loadout.finished_skill_count(crew, skill_name):
+            if skill_name == 'commander_sixthsense':
+                overrides['sixth_sense_delay'] = float(booster.delay)
+            elif skill_name == 'gunner_rancorous':
+                overrides['designated_target_duration'] = float(booster.duration)
+                overrides['designated_target_sector'] = float(booster.sectorHalfAngle)
+            elif skill_name == 'radioman_lasteffort':
+                overrides['last_effort_duration'] = float(booster.duration)
+        booster_projection = {
+            'compact_descr': int(booster.compactDescr),
+            'skill_overrides': overrides,
+        }
     # A Removed RPM Limiter is trigger-only.  Supplying it to the passive
     # attribute-factor chain would claim it is permanently enabled.
     factor_equipments = tuple(
-        equipment for equipment in equipments
+        equipment for equipment in equipments + boosters
         if not any('removedrpmlimiter' in name for name in
                    loadout.equipment_names((equipment,))))
     factors = loadout.attribute_factors(
@@ -281,7 +309,7 @@ def _selected_vehicle_effective_params():
     equipment_contracts = [
         equipment_mechanics.project_equipment(equipment)
         for equipment in equipments]
-    critical_profile = player_critical_mechanics.project_profile(descriptor)
+    critical_profile = player_critical_mechanics.project_profile(descriptor, factors)
     members = _ordered_crew_members(crew)
     roles = tuple(getattr(
         getattr(descriptor, 'type', None), 'crewRoles', ()) or ())
@@ -308,6 +336,20 @@ def _selected_vehicle_effective_params():
                 raise ValueError(
                     'a mounted crew skill does not match its slot roles')
             projected_skills.append(projected)
+        for booster in boosters:
+            skill_name = str(getattr(booster, 'skillName', '')).lower()
+            if skill_name not in effective_params.DISCRETE_SKILL_ROLES:
+                continue
+            required_role = effective_params.skill_required_role(skill_name)
+            if not skill_name or (required_role is not None and
+                                  required_role not in member_roles):
+                continue
+            existing = next((value for value in projected_skills
+                             if value['name'] == skill_name), None)
+            if existing is None:
+                existing = {'name': skill_name}
+                projected_skills.append(existing)
+            existing.update(level=100.0, active=True, enabled=True)
         projected_skills.sort(key=lambda entry: entry['name'])
         projected_members.append({
             'instance': roster[index],
@@ -339,6 +381,7 @@ def _selected_vehicle_effective_params():
                 raise ValueError(
                     'the exact dynamic camouflage values are invalid')
             row = {
+                'battle_factors': loadout.crew_battle.from_native(dynamic),
                 'vision': float(ratios['vision']),
                 'signal': float(ratios['signal']),
                 'camouflage': float(ratios['camouflage']),
@@ -363,11 +406,12 @@ def _selected_vehicle_effective_params():
         },
     }
     healthy_skills = effective_params.skill_summary(crew_projection)
+    loadout_values['has_sixth_sense'] = healthy_skills['sixth_sense']
     if effective_params._canonical_equipment(equipment_contracts) is None:
         raise ValueError('the selected vehicle equipment projection is invalid')
     if effective_params._canonical_critical(critical_profile) is None:
         raise ValueError('the selected vehicle critical profile is invalid')
-    result = effective_params.canonical({
+    projected = {
         'version': effective_params.SCHEMA_VERSION,
         'loadout': loadout_values,
         'physics': physics_values,
@@ -388,7 +432,10 @@ def _selected_vehicle_effective_params():
         },
         'equipment': equipment_contracts,
         'critical': critical_profile,
-    })
+    }
+    if booster_projection is not None:
+        projected['battle_booster'] = booster_projection
+    result = effective_params.canonical(projected)
     if result is None:
         raise ValueError('the selected vehicle effective parameters are invalid')
     return result

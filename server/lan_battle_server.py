@@ -46,7 +46,7 @@ from vehicle_overlay_store import (
     VehicleOverlayStore,
     VehicleOverlayStoreError,
 )
-from gui.mods.offline_lan_0922 import tank_collision
+from gui.mods.offline_lan_0922 import battle_bonds, tank_collision
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
 from gui.mods.offline_lan_0922.battle_achievements import (
     ACHIEVEMENT_CONDITIONS, AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES,
@@ -1158,11 +1158,15 @@ def _persisted_result_receipt(value):
     stat_names = RECEIPT_STAT_NAMES
     # repair_cost and ammo_cost stay zero for good: a receipt states what the
     # battle did, and only the client can price it.
-    reward_names = ("credits", "xp", "free_xp", "repair_cost", "ammo_cost")
+    reward_names = ("credits", "xp", "free_xp", "repair_cost", "ammo_cost", "crystal")
     if not isinstance(stats, dict) or not isinstance(rewards, dict):
         raise ValueError("invalid persisted battle receipt summary")
     # A receipt persisted before a statistic existed keeps its zero default;
     # the durable store applies the same rule.
+    rewards.setdefault("crystal", 0)
+    booster = value.get("battle_booster", 0)
+    if isinstance(booster, bool) or not isinstance(booster, int) or not 0 <= booster <= 2 ** 31 - 1:
+        raise ValueError("invalid persisted battle directive")
     for name in stat_names:
         stats.setdefault(name, 0)
     for mapping, names in ((stats, stat_names), (rewards, reward_names)):
@@ -3788,6 +3792,8 @@ class BattleState:
                     participant.death_attacker_id or 0),
                 "frags": int(participant.frags),
                 "team_killer": bool(participant.team_killer),
+                "battle_booster": int(((participant.effective_params or {}).get(
+                    "battle_booster") or {}).get("compact_descr", 0)),
             }
         self.round_participants = frozen
 
@@ -4966,7 +4972,7 @@ class BattleState:
                         contact.get("target_team"), 1, 2)
                     time_left = _bounded_float(
                         contact.get("time_left"), 0.0,
-                        spotting.DESIGNATED_SPOT_MEMORY_SECONDS)
+                        spotting.MAX_SPOT_MEMORY_SECONDS)
                 except ValueError:
                     return False
                 target_kind = contact.get("target_kind")
@@ -10192,6 +10198,9 @@ class BattleState:
                         "player", player_id, participant["team"]),
                     killed_durability=self._killed_durability(
                         "player", player_id))
+                crystal_rewards = battle_bonds.medal_rewards(
+                    public_row["achievements"], participant.get("vehicle_tier", 1))
+                rewards["crystal"] = sum(crystal_rewards.values())
                 receipt = {
                     "type": "battle_receipt",
                     "protocol": PROTOCOL_VERSION,
@@ -10215,6 +10224,8 @@ class BattleState:
                         not live_player.participating),
                     "stats": dict(public_row["stats"]),
                     "rewards": rewards,
+                    "crystal_rewards": crystal_rewards,
+                    "battle_booster": int(participant.get("battle_booster", 0)),
                     "public_results": public_results,
                     "interactions": self._receipt_interactions(
                         ("player", player_id)),

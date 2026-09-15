@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v0.8.2
+wot-0.9.22-offline-battles v0.8.3
 ================================
 
 The launcher prepares one battle before the game starts. It installs the mod,

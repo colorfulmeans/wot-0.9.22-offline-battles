@@ -5159,7 +5159,7 @@ class BotRuntime(object):
         if duration is None:
             duration = spotting.SPOT_MEMORY_SECONDS
         duration = max(
-            0.0, min(spotting.DESIGNATED_SPOT_MEMORY_SECONDS,
+            0.0, min(spotting.MAX_SPOT_MEMORY_SECONDS,
                      duration))
         deadline = now + duration
         self._spot_until[key] = max(
@@ -5171,7 +5171,7 @@ class BotRuntime(object):
         if remaining <= 0.0:
             self._spot_until.pop(key, None)
             return 0.0
-        return min(spotting.DESIGNATED_SPOT_MEMORY_SECONDS, remaining)
+        return min(spotting.MAX_SPOT_MEMORY_SECONDS, remaining)
 
     def _track_human_observer_lifecycle(
             self, players, now, visibility_tick=None):
@@ -5192,7 +5192,9 @@ class BotRuntime(object):
                 if _player_spotting_perk(
                         snapshot, prior, 'radioman_lasteffort'):
                     self._human_vengeance_until[player_id] = (
-                        now + spotting.LAST_EFFORT_SECONDS)
+                        now + effective_params.booster_skill_value(
+                            snapshot, 'last_effort_duration',
+                            spotting.LAST_EFFORT_SECONDS))
             elif alive:
                 critical = raw.get('critical')
                 self._human_last_alive_critical[player_id] = dict(
@@ -5220,16 +5222,20 @@ class BotRuntime(object):
         if not _player_spotting_perk(
                 snapshot, source, 'gunner_rancorous'):
             return spotting.SPOT_MEMORY_SECONDS
+        duration = spotting.SPOT_MEMORY_SECONDS + effective_params.booster_skill_value(
+            snapshot, 'designated_target_duration', 2.0)
+        sector = effective_params.booster_skill_value(
+            snapshot, 'designated_target_sector', math.radians(5.0))
         source_position = _position(source)
         target_position = target.get('position') or _position(target)
         dx = target_position[0] - source_position[0]
         dz = target_position[2] - source_position[2]
         if dx * dx + dz * dz <= 0.000001:
-            return spotting.DESIGNATED_SPOT_MEMORY_SECONDS
+            return duration
         bearing = math.atan2(dx, dz)
         gun_yaw = source.get('aim_yaw', source.get('yaw', 0.0))
-        if abs(_angle_delta(bearing, gun_yaw)) <= math.radians(5.0) + 1e-9:
-            return spotting.DESIGNATED_SPOT_MEMORY_SECONDS
+        if abs(_angle_delta(bearing, gun_yaw)) <= sector + 1e-9:
+            return duration
         return spotting.SPOT_MEMORY_SECONDS
 
     @staticmethod

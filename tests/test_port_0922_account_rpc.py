@@ -228,7 +228,7 @@ class AccountRpcTests(unittest.TestCase):
 
         update = pickle.loads(self.player.updates[-1])
         self.assertEqual(
-            {'credits', 'gold', 'freeXP', 'vehTypeXP', 'dossier'},
+            {'credits', 'gold', 'freeXP', 'crystal', 'vehTypeXP', 'dossier'},
             set(update['stats']))
         self.assertNotIn('eliteVehicles', update['stats'])
         self.assertNotIn('unlocks', update['stats'])
@@ -866,7 +866,7 @@ class AccountRpcTests(unittest.TestCase):
                 set(shop_contract['tankmanCostDirectKeys']), set(cost))
         currency_mappings = {
             'paidRemovalCost': {'gold': 0},
-            'paidDeluxeRemovalCost': {'crystal': 0},
+            'paidDeluxeRemovalCost': {'crystal': 200},
         }
         self.assertEqual(
             set(currency_mappings), set(shop_contract['currencyMappings']))

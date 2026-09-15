@@ -10815,6 +10815,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             getList=lambda unused_nation_id: entries)
         descriptor = _Descriptor('china:Ch22_113P')
         descriptor.type.level = 8
+        # The human reservation needs a usable same-class opponent in this
+        # deliberately small catalogue, just as it does in the full client.
+        descriptor.type.tags = frozenset(('heavyTank',))
         battle = BattleRuntime(runtime)
         battle._config = {'vehicle': descriptor.name}
         battle._start_message = {'players': [
@@ -10838,7 +10841,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(4, len(assignments))
         self.assertIn('ussr:heavy', assignments.values())
         self.assertIn('ussr:medium', assignments.values())
-        self.assertIn(descriptor.name, assignments.values())
+        self.assertNotIn(descriptor.name, assignments.values())
         self.assertNotIn('_BOT_POOL_BY_TIER', vars(sys.modules[
             'gui.mods.offline_lan_0922.battle_runtime']))
 
@@ -15172,8 +15175,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertFalse(battle._tick_expert_target(13.999))
         self.assertTrue(battle._tick_expert_target(14.0))
         self.assertFalse(battle._tick_expert_target(15.0))
-        self.assertEqual([(11, (0, 1), (2,))],
-                         battle._avatar.other_vehicle_devices)
+        feedback = battle._avatar.guiSessionProvider.shared.feedback
+        feedback.showVehicleDamagedDevices.assert_called_once_with(
+            11, (0, 1), (2,))
+        self.assertEqual([], battle._avatar.other_vehicle_devices)
 
         record['critical_state'] = dict(critical)
         record['critical_state']['devices'] = [
@@ -15183,8 +15188,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         record['critical_state']['destroyed'] = [
             'engineHealth', 'leftTrackHealth']
         self.assertTrue(battle._tick_expert_target(15.1))
-        self.assertEqual((11, (0,), (1, 2)),
-                         battle._avatar.other_vehicle_devices[-1])
+        feedback.showVehicleDamagedDevices.assert_called_with(
+            11, (0,), (1, 2))
 
         self.assertTrue(battle.monitor_vehicle_damaged_devices(0))
         feedback = battle._avatar.guiSessionProvider.shared.feedback

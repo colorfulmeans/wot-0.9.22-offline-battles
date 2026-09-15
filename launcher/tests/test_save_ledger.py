@@ -59,7 +59,7 @@ class SaveLedgerTest(unittest.TestCase):
         self._write(_state(credits_amount=250000, gold=1500, free_xp=90))
 
         self.assertEqual(
-            {"credits": 250000, "gold": 1500, "freeXP": 90},
+            {"credits": 250000, "gold": 1500, "freeXP": 90, "crystal": 0},
             save_ledger.read_balances(self.slot, root=self.root))
 
     def test_a_save_that_never_ran_reports_initial_balances(self):
@@ -96,11 +96,11 @@ class SaveLedgerTest(unittest.TestCase):
         self._write(_state())
 
         save_ledger.write_balances(
-            self.slot, {"credits": 5, "gold": 6, "freeXP": 7},
+            self.slot, {"credits": 5, "gold": 6, "freeXP": 7, "crystal": 12345},
             root=self.root, is_running=lambda: False)
 
         self.assertEqual(
-            {"credits": 5, "gold": 6, "freeXP": 7},
+            {"credits": 5, "gold": 6, "freeXP": 7, "crystal": 12345},
             save_ledger.read_balances(self.slot, root=self.root))
 
     def test_a_negative_or_unreadable_amount_becomes_zero(self):

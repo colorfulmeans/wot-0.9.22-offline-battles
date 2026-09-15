@@ -631,7 +631,7 @@ def save_slot_initial_wallet(slot=None, user_data_dir=None):
     if not isinstance(wallet, dict):
         return {}
     result = {}
-    for name in ('credits', 'gold', 'freeXP'):
+    for name in ('credits', 'gold', 'freeXP', 'crystal'):
         if name in wallet:
             try:
                 result[name] = max(0, min(2 ** 31 - 1, int(wallet[name])))

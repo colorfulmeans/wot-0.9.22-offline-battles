@@ -22,7 +22,8 @@ from gui.mods.offline_lan_0922 import price_catalogue
 CREDITS = 'credits'
 GOLD = 'gold'
 FREE_XP = 'freeXP'
-CURRENCIES = (CREDITS, GOLD)
+CRYSTAL = 'crystal'
+CURRENCIES = (CREDITS, GOLD, CRYSTAL)
 
 # items/__init__ ITEM_TYPE_NAMES indices used when a compact descriptor has to
 # be turned back into the catalogue key that names it.
@@ -116,9 +117,9 @@ DROP_SKILLS_COSTS = {
 }
 
 CAREER_WALLET = {
-    CREDITS: CAREER_CREDITS, GOLD: CAREER_GOLD, FREE_XP: CAREER_FREE_XP}
+    CREDITS: CAREER_CREDITS, GOLD: CAREER_GOLD, FREE_XP: CAREER_FREE_XP, CRYSTAL: 0}
 SANDBOX_WALLET = {
-    CREDITS: SANDBOX_CREDITS, GOLD: SANDBOX_GOLD, FREE_XP: SANDBOX_FREE_XP}
+    CREDITS: SANDBOX_CREDITS, GOLD: SANDBOX_GOLD, FREE_XP: SANDBOX_FREE_XP, CRYSTAL: 0}
 
 # The three recruitment schools #1513 offers, in the order its shop data lists
 # them: ``Shop.buyTankman`` sends the player's choice as an index into this
@@ -171,11 +172,11 @@ def _int(value, default=0):
 
 
 def empty_wallet():
-    return {CREDITS: 0, GOLD: 0, FREE_XP: 0}
+    return {CREDITS: 0, GOLD: 0, FREE_XP: 0, CRYSTAL: 0}
 
 
 def normalized_wallet(value):
-    """Return a wallet with exactly the three balances, never negative."""
+    """Return a wallet with the persisted balances, never negative."""
     value = value if isinstance(value, dict) else {}
     wallet = empty_wallet()
     for name in wallet:
@@ -256,7 +257,7 @@ def scale_rewards(rewards, credits_percent=100, experience_percent=100):
 
 
 def price_index(vehicles_module, nations_module):
-    """Return ``{compactDescr: (credits, gold, not_in_shop)}``.
+    """Return ``{compactDescr: (credits, gold, not_in_shop[, crystal])}``.
 
     The installed client is the authority on which items exist and what their
     compact descriptors are; the baked catalogue only supplies the amount.  An
@@ -333,6 +334,8 @@ def cost(index, compact_descr, count=1):
     if price is None:
         return {CREDITS: 0}
     count = max(1, _int(count, 1))
+    if len(price) > 3 and price[3]:
+        return {CRYSTAL: price[3] * count}
     if price[price_catalogue.GOLD]:
         return {GOLD: price[price_catalogue.GOLD] * count}
     return {CREDITS: price[price_catalogue.CREDITS] * count}
@@ -449,7 +452,7 @@ def spend_research(wallet, vehicle_xp, vehicle_type_compact_descr, xp_cost):
 
 SERVICE_COST_FIELDS = (
     'repair_credits', 'ammo_credits', 'ammo_gold',
-    'equipment_credits', 'equipment_gold')
+    'equipment_credits', 'equipment_gold', 'equipment_crystal')
 
 
 def service_costs(value):

@@ -1208,7 +1208,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
     def test_the_first_garage_uses_the_launchers_initial_wallet(self):
         snapshot = self._with_saved_garage(
             (), initial_wallet={'credits': 23, 'gold': 45, 'freeXP': 67})
-        self.assertEqual({'credits': 23, 'gold': 45, 'freeXP': 67}, snapshot['wallet'])
+        self.assertEqual({'credits': 23, 'gold': 45, 'freeXP': 67, 'crystal': 0}, snapshot['wallet'])
 
     def test_the_garage_reads_the_multiplier_the_launcher_wrote(self):
         """It describes the account, like the save type, not the garage."""
@@ -1413,7 +1413,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
                     {11100: {'credits': 100}, 11200: {'credits': 200}}, set())):
             snapshot = bootstrap._selected_vehicle(
                 {'vehicle': 'ussr:R11_MS-1'}, restore_saved=False)
-        for compact_descr in (11100, 11200):
+        for compact_descr in (11100,):
             self.assertNotIn(compact_descr, snapshot['shopItemPrices'])
             self.assertIn(compact_descr, snapshot['notInShopItems'])
 
@@ -1477,7 +1477,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual([live], applied)
         self.assertIs(live, context['selected_vehicle'])
         self.assertEqual([{'xp': 100}], banked)
-        self.assertEqual([(2, 4, 8)], switches)
+        self.assertEqual([(2, 4, 8, 128)], switches)
         self.assertEqual([40], settled)
         self.assertEqual([{0: 12}], spent)
         self.assertEqual([[11001]], consumed)
@@ -1555,9 +1555,10 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertTrue(
             required_prices.issubset(selected['unlockItemCompactDescrs']))
         self.assertEqual(4, selected['optionalDeviceCount'])
-        # The avatar strike and the battle booster stay out of the catalogue.
-        self.assertEqual(3, selected['equipmentCount'])
-        for compact_descr in (11100, 11200):
+        # Avatar strikes stay out; the fourth-slot directive is offered.
+        self.assertEqual(4, selected['equipmentCount'])
+        self.assertIn(11200, selected['shopItemPrices'])
+        for compact_descr in (11100,):
             self.assertNotIn(compact_descr, selected['inventoryItems'][11])
             self.assertNotIn(compact_descr, selected['shopItemPrices'])
         for compact_descr in (9000, 9003, 11000, 11002):
