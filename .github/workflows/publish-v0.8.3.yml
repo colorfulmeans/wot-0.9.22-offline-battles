@@ -1,4 +1,5 @@
 name: Publish v0.8.3 release
+# Release metadata assertions are aligned with the 0.8.3 binaries.
 
 on:
   push:
