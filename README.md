@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.8.2** — [更新说明](docs/releases/v0.8.2.md).
+Current release: **v0.8.3** — [更新说明](docs/releases/v0.8.3.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.8.2-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.8.3-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.

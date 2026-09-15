@@ -1,4 +1,4 @@
-WoT 0.9.22 Offline LAN Server v0.8.2
+WoT 0.9.22 Offline LAN Server v0.8.3
 ================================
 
 1. Double-click WoT-0.9.22-LAN-Server.exe.
