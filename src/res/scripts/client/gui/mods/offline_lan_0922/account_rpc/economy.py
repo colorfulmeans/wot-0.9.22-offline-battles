@@ -258,6 +258,18 @@ def scale_rewards(rewards, credits_percent=100, experience_percent=100,
     return scaled
 
 
+def award_record(value):
+    """Keep an actual settlement delta; friendly-fire debits can exceed income."""
+    result = {}
+    for name in ('credits', 'xp', 'free_xp', 'crystal'):
+        try:
+            amount = int(value.get(name, 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            amount = 0
+        result[name] = amount if name == 'credits' else max(0, amount)
+    return result
+
+
 def price_index(vehicles_module, nations_module):
     """Return ``{compactDescr: (credits, gold, not_in_shop[, crystal])}``.
 

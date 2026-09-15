@@ -108,6 +108,12 @@ class _Replay(object):
         _Replay.steps.append((self.record_name, 'ADD', other))
         return self
 
+    def __sub__(self, other):
+        self.connector.values[self.record_name] -= self.connector.values[other]
+        self.chain.append('SUB:%s' % other)
+        _Replay.steps.append((self.record_name, 'SUB', other))
+        return self
+
     def pack(self):
         return ('%s=%s' % ('+'.join(self.chain),
                            self.connector.values[self.record_name])).encode(

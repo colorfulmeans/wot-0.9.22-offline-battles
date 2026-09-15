@@ -76,6 +76,48 @@ All fifteen directive prices, depot purchases, fourth-slot layout fills and
 automatic resupply paths have regression coverage, including a 12-bond Vent
 Purge purchase refused at an 11-bond balance with no inventory mutation.
 No general purchase defect was established, so the buying policy is unchanged.
+
+The owner's September 15 report `c293714d6eed` records one HE projectile,
+`3:p:1:3`, charging the same allied Bot 334 HP three times (1002 total) after
+a `projectile_resolve` ValueError. The archive contains neither that exception's
+stack nor the complete proposal/pose evidence: it establishes the duplicate
+settlement, but not the original exception cause or whether the initial close
+contact was physically correct. Admission formerly retired a projectile only
+after applying all victims, allowing a later exception to replay earlier HP
+and statistics. A fully admitted terminal now retires before any victim
+mutation; failures remain local to one victim. An unverifiable critical profile
+discards module/ammo-rack augmentation while retaining the independently
+established hull damage. Tests reproduce a failing self-splash after a direct
+ally hit, unexpected post-hit failure, duplicates and zero-damage contacts.
+Native result `teamHitsDamage` pairs `tkills` with `tdamageDealt`; its zero
+count is allied kills, not the number of allies damaged.
+
+Eligible friendly HP loss now has a per-victim ledger shared by public XP,
+private receipts and client settlement. Self damage and already-blue victims
+are excluded from economic penalties. The published
+[official guide](https://wotgame.cn/zh-cn/content/guide/general/teamkill/)
+specifies repair compensation, an additional 10% credit fine, payment before
+maintenance, victim compensation independent of offender funds, and XP
+penalties. That retained guide is not an archived 0.9.22 server formula. Native
+victim `VehicleDescr.type.repairCost` prices hull damage just as the existing
+garage repair bill does; module/stun-only costs and unpublished XP coefficients
+are unavailable. XP therefore reverses this product's existing offline
+damage/kill valuation, capped at the battle's gross XP; free XP derives from
+the remainder. No new coefficient is presented as retail. Credits use the
+offline wallet's available funds without creating debt; a victim is still
+compensated in full. No new automatic ban or team-killer rating is invented.
+
+Gross credit awards, actual compensation/fines and the signed net credit delta
+share the garage receipt's atomic write. Failure/retry and restart cannot
+multiply either payments or deductions. Penalties and compensation are not
+save-multiplied; XP is penalized before account bonuses. The native result
+breakdown uses `originalXPPenalty`, `originalCreditsPenalty` and
+`originalCreditsContributionIn/Out` through subtraction/addition replay steps.
+Its net values and garage balances reconcile even when old garage credits pay
+the charge. The public 9.22 result consumer is orientation for these fields;
+the exact Windows #1513 breakdown and the report's original close-range
+collision remain gameplay acceptance items. This change does not rewrite
+historical receipts or balances absent from the submitted archive.
 Real UI/plugin-specific failures still require that affected session's evidence.
 
 Tactical authoring contains route sketches, not a duplicate set of base

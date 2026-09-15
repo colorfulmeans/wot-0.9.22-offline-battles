@@ -57,6 +57,7 @@ from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import effective_params as effective_params_wire
 from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import device_damage
+from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922 import player_critical_mechanics
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
@@ -1181,6 +1182,7 @@ def _persisted_result_receipt(value):
             raise ValueError("invalid persisted battle receipt statistic")
     if rewards["repair_cost"] or rewards["ammo_cost"]:
         raise ValueError("offline service costs must be zero")
+    friendly_fire.facts(value.get("friendly_fire"))
     fired = value.get("shells_fired")
     if fired is None:
         value["shells_fired"] = {}
@@ -8813,20 +8815,32 @@ class BattleState:
             critical is not None and was_alive and isinstance(delta, dict) and
             not delta["devices"] and not delta["crew_ko"] and
             not delta["ignite"])
+        critical_reject_reason = None
         if critical_noop:
             admitted_critical = None
         elif critical is not None and was_alive and isinstance(delta, dict):
-            if target_kind == "player":
-                admitted_critical = self._merge_player_critical_damage(
-                    target, critical, delta)
-            else:
-                # Bot repair publications can overtake a shot just as owner
-                # track reports can. Rebase the successful damage operations;
-                # an outdated full snapshot must neither lose a hit nor undo
-                # unrelated repair or consumable work.
-                profile = self.bot_terminal_criticals.get(target_id) or critical
-                admitted_critical = self._merge_critical_damage(
-                    target.get("critical"), critical, delta, profile)
+            try:
+                if target_kind == "player":
+                    admitted_critical = self._merge_player_critical_damage(
+                        target, critical, delta)
+                else:
+                    # Bot repair publications can overtake a shot just as
+                    # owner track reports can. Rebase only the successful
+                    # operations, preserving unrelated repair/consumable work.
+                    profile = self.bot_terminal_criticals.get(target_id) or critical
+                    admitted_critical = self._merge_critical_damage(
+                        target.get("critical"), critical, delta, profile)
+            except (TypeError, ValueError, OverflowError) as error:
+                # A locally unverifiable module proposal cannot undo the
+                # established hull hit, or abort later victims in this blast.
+                # An earlier victim may already have lost HP; failing a
+                # self-splash profile must not replay the entire shot.
+                admitted_critical = None
+                module_hits.clear()
+                critical_reject_reason = "critical_profile"
+                _server_log(
+                    "PROJECTILE CRITICAL ignored id=%s target=%s:%s reason=%s" %
+                    (record["projectile_id"], target_kind, target_id, error))
         else:
             admitted_critical = (
                 critical if proposal["critical_accepted"] and was_alive
@@ -8983,7 +8997,7 @@ class BattleState:
             elif not critical_noop:
                 event["critical_reject_reason"] = (
                     "target_destroyed" if not was_alive else
-                    "stale_target_state")
+                    critical_reject_reason or "stale_target_state")
                 if critical_commit:
                     event.update(critical_commit)
         self.pending_events.append(event)
@@ -9301,11 +9315,9 @@ class BattleState:
                 impact_event["wreck_hit"] = wreck_hit
             self._commit_projectile_destructibles(
                 player_id, destructibles)
-            self.pending_events.append(impact_event)
-            if direct is not None:
-                self._apply_projectile_effect(record, direct)
-            for proposal in splash:
-                self._apply_projectile_effect(record, proposal)
+            # Admission is complete. Seal the identity before mutating any
+            # victim: an unexpected post-hit callback failure must never turn
+            # a transport retry into another hit from the same projectile.
             self.projectiles.pop(projectile_id, None)
             self.projectile_tombstones[projectile_id] = {
                 "projectile_id": projectile_id,
@@ -9316,6 +9328,18 @@ class BattleState:
                     "last_progress_request_fingerprint"),
             }
             self.projectile_revision += 1
+            self.pending_events.append(impact_event)
+            effects = ([direct] if direct is not None else []) + splash
+            for proposal in effects:
+                try:
+                    self._apply_projectile_effect(record, proposal)
+                except Exception as error:
+                    # Contain this victim's failure; other independently
+                    # validated direct/splash contacts still need a result.
+                    _server_log(
+                        "PROJECTILE EFFECT failed id=%s target=%s:%s error=%s: %s" %
+                        (projectile_id, proposal["target_kind"],
+                         proposal["target_id"], type(error).__name__, error))
             self._maybe_finish_battle()
             return True
 
@@ -10085,6 +10109,10 @@ class BattleState:
             xp = compute_offline_rewards(
                 {
                     "damage_dealt": statistics["damage"],
+                    "team_damage_penalized": self._statistics_row(
+                        "player", player_id)["team_damage_penalized"],
+                    "team_killed_durability": self._statistics_row(
+                        "player", player_id)["team_killed_durability"],
                     "damage_assisted_track": statistics["assist_track"],
                     "damage_assisted_radio": statistics["assist_radio"],
                     "damage_assisted_stun": statistics["assist_stun"],
@@ -10134,6 +10162,10 @@ class BattleState:
             xp = compute_offline_rewards(
                 {
                     "damage_dealt": statistics["damage"],
+                    "team_damage_penalized": self._statistics_row(
+                        "bot", bot_id)["team_damage_penalized"],
+                    "team_killed_durability": self._statistics_row(
+                        "bot", bot_id)["team_killed_durability"],
                     "damage_assisted_track": statistics["assist_track"],
                     "damage_assisted_radio": statistics["assist_radio"],
                     "damage_assisted_stun": statistics["assist_stun"],
@@ -10241,6 +10273,8 @@ class BattleState:
                 crystal_rewards = battle_bonds.medal_rewards(
                     public_row["achievements"], participant.get("vehicle_tier", 1))
                 rewards["crystal"] = sum(crystal_rewards.values())
+                friendly = self._friendly_fire_receipt(
+                    ("player", player_id), rewards.pop("xp_penalty", 0))
                 receipt = {
                     "type": "battle_receipt",
                     "protocol": PROTOCOL_VERSION,
@@ -10265,6 +10299,7 @@ class BattleState:
                     "stats": dict(public_row["stats"]),
                     "rewards": rewards,
                     "crystal_rewards": crystal_rewards,
+                    "friendly_fire": friendly,
                     "battle_booster": int(participant.get("battle_booster", 0)),
                     "public_results": public_results,
                     "interactions": self._receipt_interactions(
@@ -12252,6 +12287,9 @@ class BattleState:
         self.ever_spotted_targets = set()
         # actor -> damage it dealt to its own team.
         self.ally_damage = {}
+        # (attacker, victim) -> eligible HP loss and the victim's native type.
+        # Self damage and already-blue victims never enter compensation.
+        self.friendly_damage_ledger = {}
         # actor -> vehicles of its own team it destroyed.
         self.team_kills = {}
         # target -> damage received from enemies. The public result statistic
@@ -12533,6 +12571,7 @@ class BattleState:
                 "piercings_received": 0, "no_damage_direct_hits_received": 0,
                 "explosion_hits_received": 0, "explosion_hits": 0,
                 "team_hits": 0, "team_damage": 0, "team_kills": 0,
+                "team_damage_penalized": 0, "team_killed_durability": 0,
                 "mileage": 0.0, "life_time": 0,
                 "damaging_hits_received": 0, "deflected_hits_received": 0,
                 "crits_received_mask": 0, "hits_with_damage": 0,
@@ -12676,6 +12715,29 @@ class BattleState:
         return [dict(self.vehicle_statistics[key])
                 for key in sorted(self.vehicle_statistics)]
 
+    def _is_blue_target(self, target):
+        if target[0] == "player":
+            player = self.players.get(int(target[1]))
+            participant = self._frozen_player_participant(target[1]) or {}
+            return bool(player.team_killer if player is not None else
+                        participant.get("team_killer", False))
+        return bool((self.bot_states.get(int(target[1])) or {}).get(
+            "team_killer", False))
+
+    def _friendly_fire_receipt(self, actor, xp_penalty=0):
+        victims = []
+        received = 0
+        for (attacker, target), row in sorted(self.friendly_damage_ledger.items()):
+            if attacker == actor:
+                victims.append({
+                    "actor_kind": target[0], "actor_id": target[1],
+                    "vehicle": row["vehicle"], "damage": row["damage"]})
+            if target == actor:
+                received += row["damage"]
+        return friendly_fire.facts({
+            "victims": victims, "received_damage": received,
+            "xp_penalty": int(xp_penalty)})
+
     def _record_damage(self, attacker, target, damage, target_critical,
                        attacker_team=None):
         """Attribute one applied damage amount and every assist it earned.
@@ -12705,6 +12767,13 @@ class BattleState:
                 self.ally_damage[attacker] = int(
                     self.ally_damage.get(attacker, 0)) + damage
                 self._statistics_row(*attacker)["team_damage"] += damage
+                if not self._is_blue_target(target):
+                    self._statistics_row(*attacker)["team_damage_penalized"] += damage
+                    key = (attacker, target)
+                    row = self.friendly_damage_ledger.setdefault(key, {
+                        "vehicle": self._actor_vehicle_name(*target),
+                        "damage": 0})
+                    row["damage"] += damage
             return
         target = (str(target[0]), int(target[1]))
         self.enemy_damage_received[target] = int(
@@ -12828,6 +12897,9 @@ class BattleState:
             self.team_kills[actor_identity] = int(
                 self.team_kills.get(actor_identity, 0)) + 1
             self._statistics_row(*actor_identity)["team_kills"] += 1
+            if not self._is_blue_target((str(victim_kind), int(victim_id))):
+                self._statistics_row(*actor_identity)["team_killed_durability"] += (
+                    self._vehicle_max_health((str(victim_kind), int(victim_id))))
             self._record_lucky_devils(
                 (str(victim_kind), int(victim_id)), int(victim_team))
         if delta > 0:

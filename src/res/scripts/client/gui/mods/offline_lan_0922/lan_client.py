@@ -15,6 +15,7 @@ from gui.mods.offline_lan_0922.battle_achievements import (
 from gui.mods.offline_lan_0922 import bot_gunnery
 from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import equipment_mechanics
+from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
@@ -1340,6 +1341,10 @@ def _valid_battle_receipt(message):
             not 0 <= message.get('battle_booster', 0) <= 2 ** 31 - 1):
         return False
     if rewards.get('repair_cost') != 0 or rewards.get('ammo_cost') != 0:
+        return False
+    try:
+        friendly_fire.facts(message.get('friendly_fire'))
+    except (TypeError, ValueError, OverflowError):
         return False
     # What the battle drew, by the shell's index in the gun's own shot order.
     # A receipt from a server that does not send it fired nothing.

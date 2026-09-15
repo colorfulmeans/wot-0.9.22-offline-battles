@@ -129,6 +129,17 @@ one health point costs what that vehicle charges per point -- and it has to be
 paid before the tank can fight again. A save keeps the damage across a
 restart, because a restart is not a free repair.
 
+Friendly fire counts only applied HP loss and earns no damage or kill reward.
+It reduces battle XP, and charges the victim's hull repair cost plus a 10%
+credit fine before automatic maintenance. Victims receive their repair
+compensation independently of the offender's funds. These charges and
+compensation do not receive the save earnings multiplier. A result can show
+negative credit income when the charge uses the existing garage balance;
+retries and restarts preserve the original settlement. The published
+[team-damage guide](https://wotgame.cn/zh-cn/content/guide/general/teamkill/)
+does not disclose the XP coefficient, so this port reverses its existing
+offline damage/kill XP valuation. It does not claim exact retail XP penalties.
+
 Crew members are recruited from the same three schools the game offers, at
 50%, 75% or 100% of their role: free, 20000 credits and 200 gold in a career,
 and free in a fully unlocked save. A recruit goes to the barracks or straight
