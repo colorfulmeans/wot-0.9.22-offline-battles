@@ -23840,11 +23840,6 @@ class BattleRuntime(object):
         marker_visible = bool(marker_visible)
         record['spot_visible'] = visible
         record['spot_marker_visible'] = marker_visible
-        if not visible:
-            # Client-only entities remain in BigWorld after going dark.
-            # Release before returning for an unready model or invoking any
-            # fallible presentation callback, not on the next battle tick.
-            self._release_target_lock(record['engine_id'])
         if not record.get('presentation') or not record.get('ready'):
             return visible
         vehicle = self._remote_factory.get(record['engine_id'])
@@ -24738,7 +24733,7 @@ class BattleRuntime(object):
         return False
 
     def _release_target_lock(self, engine_id):
-        """Drop a lock before a vehicle dies, goes dark or loses its model."""
+        """Drop a lock on a vehicle that just died, before it is re-presented."""
         release = getattr(
             self._runtime.compatibility, 'release_target_lock', None)
         if not callable(release) or self._avatar is None:

@@ -4221,10 +4221,6 @@ class OfflineCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(77, avatar._PlayerAvatar__autoAimVehID)
         self.assertIn(('original_avatar_auto_aim', native), operations)
-        native._spot_visible = False
-        avatar.autoAim(native)
-        self.assertEqual(0, avatar._PlayerAvatar__autoAimVehID)
-        self.assertEqual(('original_avatar_auto_aim', None), operations[-1])
         compatibility.fini()
 
     def test_native_remote_outline_never_locks_on_a_stock_unlock(self):

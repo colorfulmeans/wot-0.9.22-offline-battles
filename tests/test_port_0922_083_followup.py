@@ -81,13 +81,6 @@ class Gameplay083Tests(unittest.TestCase):
         self.assertFalse(set_engine_audible(vehicle, True))
         self.assertIsNone(appearance.engineAudition)
 
-    def test_hide_releases_lock_even_before_the_model_is_ready(self):
-        battle = BattleRuntime(_runtime())
-        battle._release_target_lock = mock.Mock()
-        record = {'engine_id': 12, 'presentation': True, 'ready': False}
-        battle._set_record_spot_visibility(record, False)
-        battle._release_target_lock.assert_called_once_with(12)
-
     def test_native_stun_component_survives_all_frozen_shot_boundaries(self):
         shot = types.SimpleNamespace(
             speed=720.0, gravity=9.81, maxDistance=1000.0,

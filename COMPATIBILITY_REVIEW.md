@@ -18,10 +18,11 @@ vehicle suspends its engine-audition component and detailed-engine callbacks;
 reveal restores the same living owner, while death and teardown discard it.
 This uses the stock `CompoundAppearance.__destroyEngineAudition` component
 removal pattern seen in the 9.22 reference, but audible silence/restart and
-repeated native model changes still require Windows #1513 acceptance. A spot
-loss also releases auto-aim before model readiness checks, and the auto-aim
-entry point rejects a caller's retained hidden entity. These changes do not
-establish which third-party aiming plugin, if any, caused a particular report.
+repeated native model changes still require Windows #1513 acceptance.
+The owner confirmed that the published build already releases an SPG's lock
+when its target becomes unspotted. Its auto-aim behavior is unchanged in this
+follow-up. A third-party plugin conflict remains a hypothesis for the group's
+report; no particular plugin or failing session has been identified.
 
 HE direct impact presentation selects `armorHit` when HP damage is positive
 and `armorResisted` otherwise; the original physical penetration result stays
