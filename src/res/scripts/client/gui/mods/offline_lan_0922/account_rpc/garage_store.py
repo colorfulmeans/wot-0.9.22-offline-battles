@@ -138,7 +138,7 @@ def _ledger_payload(snapshot):
     return {
         'wallet': dict(
             (name, max(0, int(wallet.get(name, 0) or 0)))
-            for name in ('credits', 'gold', 'freeXP')),
+            for name in ('credits', 'gold', 'freeXP', 'crystal')),
         'vehicleXP': vehicle_xp,
         'unlocks': sorted(int(value) for value in (unlocks or ())),
         'slots': max(0, int(snapshot.get('accountSlots', 0) or 0)),
@@ -173,7 +173,8 @@ def _settle_automatically(state, vehicle_id, auto_settings, garage_error):
     costs = economy.service_costs(None)
     if not auto_settings:
         return costs
-    repair_flag, load_flag, equip_flag = auto_settings
+    repair_flag, load_flag, equip_flag = auto_settings[:3]
+    booster_flag = auto_settings[3] if len(auto_settings) > 3 else 0
     for record in state.snapshot().get('vehicles') or ():
         if int(record.get('id', 0)) != int(vehicle_id):
             continue
@@ -189,7 +190,11 @@ def _settle_automatically(state, vehicle_id, auto_settings, garage_error):
             (load_flag, 'ammo', lambda: state.equip_shells(
                 vehicle_id, list(shell_layout)) if shell_layout else None),
             (equip_flag, 'equipment', lambda: state.equip_equipments(
-                vehicle_id, equipment_layout) if any(equipment_layout) else None),
+                vehicle_id, equipment_layout[:3]) if any(equipment_layout[:3]) else None),
+            (booster_flag, 'equipment', lambda: state.set_layouts(
+                vehicle_id, equipment_type=1,
+                equipments_layout=[0, 0, 0, 0, 0, 0, equipment_layout[3], 1])
+             if len(equipment_layout) > 3 and equipment_layout[3] else None),
         )
         for flag, name, apply in operations:
             if not settings & int(flag or 0):
@@ -200,10 +205,10 @@ def _settle_automatically(state, vehicle_id, auto_settings, garage_error):
             except garage_error:
                 continue
             after = state._balances()
-            for currency in ('credits', 'gold'):
+            for currency in ('credits', 'gold', 'crystal'):
                 key = name + '_' + currency
                 if key in costs:
-                    costs[key] = max(0, before[currency] - after[currency])
+                    costs[key] += max(0, before[currency] - after[currency])
         return costs
     return costs
 
@@ -244,7 +249,7 @@ def _apply_ledger(staged, stored):
     if isinstance(wallet, dict):
         staged['wallet'] = dict(
             (name, max(0, _int_value(wallet.get(name))))
-            for name in ('credits', 'gold', 'freeXP'))
+            for name in ('credits', 'gold', 'freeXP', 'crystal'))
     saved_xp = ledger.get('vehicleXP')
     if isinstance(saved_xp, dict):
         published = staged.setdefault('vehicleXP', {})
@@ -767,7 +772,7 @@ class GarageStore(object):
             # lifetime counters report the same amounts as the wallet.
             result['awarded'] = dict(
                 (name, int(awarded.get(name, 0) or 0))
-                for name in ('credits', 'xp', 'free_xp'))
+                for name in ('credits', 'xp', 'free_xp', 'crystal'))
         if refused:
             _log('battle settlement refused %s for receipt %s; the award was '
                  'banked anyway' % (', '.join(refused), receipt_id))
@@ -1010,7 +1015,7 @@ class GarageStore(object):
             if isinstance(awarded, dict):
                 row['awarded'] = dict(
                     (name, max(0, _int_value(awarded.get(name))))
-                    for name in ('credits', 'xp', 'free_xp'))
+                    for name in ('credits', 'xp', 'free_xp', 'crystal'))
             row['service_costs'] = economy.service_costs(raw.get('service_costs'))
             touched = raw.get('touched_items')
             if isinstance(touched, dict):

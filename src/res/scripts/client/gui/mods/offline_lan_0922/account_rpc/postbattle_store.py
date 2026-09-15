@@ -32,7 +32,7 @@ try:
 except ImportError:
     import pickle as _pickle
 
-from gui.mods.offline_lan_0922 import battle_mastery
+from gui.mods.offline_lan_0922 import battle_bonds, battle_mastery
 from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922.battle_achievements import (
     AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES)
@@ -140,7 +140,7 @@ def _receipt(value):
     stats = dict((name, max(0, _int(raw_stats.get(name))))
                  for name in RECEIPT_STAT_NAMES)
     rewards = dict((name, max(0, _int(raw_rewards.get(name)))) for name in (
-        'credits', 'xp', 'free_xp', 'repair_cost', 'ammo_cost'))
+        'credits', 'xp', 'free_xp', 'repair_cost', 'ammo_cost', 'crystal'))
     # The client owns service prices and debits. A server receipt may not
     # charge them again; local service_costs records the actual settlement.
     if rewards['repair_cost'] or rewards['ammo_cost']:
@@ -153,7 +153,7 @@ def _receipt(value):
     if isinstance(raw_awarded, dict):
         awarded = dict(
             (name, max(0, _int(raw_awarded.get(name))))
-            for name in ('credits', 'xp', 'free_xp'))
+            for name in ('credits', 'xp', 'free_xp', 'crystal'))
     shells_fired = {}
     raw_fired = value.get('shells_fired')
     if raw_fired is not None:
@@ -180,6 +180,18 @@ def _receipt(value):
                 raise ValueError('battle receipt consumables are invalid')
             if compact_descr not in equipment_used:
                 equipment_used.append(compact_descr)
+    battle_booster = _int(value.get('battle_booster', 0), -1)
+    if not 0 <= battle_booster <= 2 ** 31 - 1:
+        raise ValueError('battle receipt directive is invalid')
+    crystal_rewards = value.get('crystal_rewards') or {}
+    if (not isinstance(crystal_rewards, dict) or
+            not set(crystal_rewards).issubset(battle_bonds.MEDAL_BONDS)):
+        raise ValueError('battle receipt medal bonds are invalid')
+    crystal_rewards = dict((name, _int(amount, -1))
+                           for name, amount in crystal_rewards.items())
+    if (any(not 1 <= amount <= 15 for amount in crystal_rewards.values()) or
+            sum(crystal_rewards.values()) > rewards['crystal']):
+        raise ValueError('battle receipt medal bonds do not match the reward')
     public_results = []
     raw_public = value.get('public_results')
     if raw_public is None:
@@ -321,6 +333,8 @@ def _receipt(value):
         # Consumables come by compact descriptor, which the client does send
         # with the mounted equipment.
         'equipment_used': equipment_used,
+        'battle_booster': battle_booster,
+        'crystal_rewards': crystal_rewards,
         'public_results': public_results,
         'interactions': interactions,
     }
@@ -419,7 +433,9 @@ def _banked_rewards(receipt):
     """Keep durable garage awards authoritative, including vehicle bonuses."""
     awarded = receipt.get('awarded')
     if isinstance(awarded, dict):
-        return awarded
+        result = dict(awarded)
+        result['crystal'] = receipt['rewards'].get('crystal', 0)
+        return result
     rewards = dict(receipt['rewards'])
     factor = _premium_vehicle_xp_factor_100(receipt['vehicle'])
     for name in ('xp', 'free_xp'):
@@ -531,6 +547,9 @@ def _add_value_replays(packers, vehicle, replay_types=None):
             replay = replay * factor_name
         if bonus_name is not None and vehicle[bonus_name]:
             replay = replay + bonus_name
+        if record_name == 'crystal':
+            for name, unused_value in vehicle.get('eventCrystalList', ()):
+                replay = replay + ('eventCrystalList_' + name)
         vehicle[result_name] = replay.pack()
 
 def _pack_interaction_details(receipt, vehicle_ids, vehicle_type_cds,
@@ -746,14 +765,16 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'xpByTmen': sorted((xp_by_tankman or {}).items()),
         'gold': 0,
         'originalGold': 0,
-        'crystal': 0,
-        'originalCrystal': 0,
+        'crystal': rewards['crystal'],
+        'originalCrystal': rewards['crystal'] - sum(
+            receipt['crystal_rewards'].values()),
+        'eventCrystalList': sorted(receipt['crystal_rewards'].items()),
         'creditsToDraw': 0,
         'originalCreditsToDraw': 0,
         'autoRepairCost': service['repair_credits'],
         'autoLoadCost': (service['ammo_credits'], service['ammo_gold']),
         'autoEquipCost': (service['equipment_credits'],
-                          service['equipment_gold'], 0),
+                          service['equipment_gold'], service['equipment_crystal']),
         'isPrematureLeave': receipt['premature_leave'],
         'watchedBattleToTheEnd': not receipt['premature_leave'],
         'isTeamKiller': False,
@@ -761,7 +782,7 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
     avatar = {
         'accountDBID': account_dbid, 'team': receipt['team'],
         'credits': rewards['credits'], 'xp': rewards['xp'],
-        'freeXP': rewards['free_xp'], 'crystal': 0,
+        'freeXP': rewards['free_xp'], 'crystal': rewards['crystal'],
         # These are damage and kills caused by the avatar outside its
         # vehicles.  The stock result model adds them to the per-vehicle
         # totals, so mirroring vehicle statistics here doubles both columns.
@@ -949,7 +970,7 @@ class PostBattleStore(object):
     @staticmethod
     def _empty_progress():
         return {
-            'credits': 0, 'freeXP': 0, 'battles': 0, 'wins': 0,
+            'credits': 0, 'freeXP': 0, 'crystal': 0, 'battles': 0, 'wins': 0,
             'losses': 0,
             'damage': 0, 'kills': 0, 'achievements': {}, 'vehicles': {},
         }
@@ -1008,7 +1029,7 @@ class PostBattleStore(object):
         if isinstance(awarded, dict):
             receipt['awarded'] = dict(
                 (name, max(0, _int(awarded.get(name))))
-                for name in ('credits', 'xp', 'free_xp'))
+                for name in ('credits', 'xp', 'free_xp', 'crystal'))
         previous = self._snapshot()
         self._pending[arena_key] = receipt
         self._session_crew_xp[receipt_id] = dict(
@@ -1082,7 +1103,7 @@ class PostBattleStore(object):
                     battle_mastery.MAX_MARK_OF_MASTERY))}},
             'xp': rewards['xp'],
             'credits': rewards['credits'],
-            'crystal': 0, 'creditsToDraw': 0,
+            'crystal': rewards['crystal'], 'creditsToDraw': 0,
             'isWinner': result_key, 'team': receipt['team'],
             'winnerIfDraw': 0, 'guiType': 1,
             'arenaUniqueID': receipt['arena_unique_id'],
@@ -1143,6 +1164,7 @@ class PostBattleStore(object):
         rewards = _banked_rewards(receipt)
         stats = receipt['stats']
         progress = self._progress
+        progress['crystal'] = _int(progress.get('crystal')) + rewards['crystal']
         progress['credits'] += rewards['credits']
         progress['freeXP'] += rewards['free_xp']
         progress['battles'] += 1

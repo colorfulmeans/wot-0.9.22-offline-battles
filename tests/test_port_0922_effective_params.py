@@ -362,10 +362,17 @@ class EffectiveParamsContractTests(unittest.TestCase):
         consumables = types.SimpleNamespace(
             getInstalledItems=lambda: (
                 types.SimpleNamespace(intCD=1009),))
+        directive = types.SimpleNamespace(
+            compactDescr=11003, skillName='commander_sixthSense', delay=2.0,
+            updateVehicleAttrFactors=lambda *args: None)
+        booster_slots = types.SimpleNamespace(getInstalledItems=lambda: (
+            types.SimpleNamespace(descriptor=directive),))
         item = types.SimpleNamespace(
             descriptor=descriptor,
             crew=crew,
-            equipment=types.SimpleNamespace(regularConsumables=consumables),
+            equipment=types.SimpleNamespace(
+                regularConsumables=consumables,
+                battleBoosterConsumables=booster_slots),
             shells=(types.SimpleNamespace(intCD=2, count=10),
                     types.SimpleNamespace(intCD=1, count=20)),
             getBonusCamo=lambda: types.SimpleNamespace(id=7))
@@ -417,6 +424,11 @@ class EffectiveParamsContractTests(unittest.TestCase):
             result = lan_session._selected_vehicle_effective_params()
 
         self.assertEqual(33, attribute_factors.call_count)
+        self.assertTrue(all(call.args[2] == (equipment_descriptor, directive)
+                            for call in attribute_factors.call_args_list))
+        self.assertEqual({'compact_descr': 11003,
+                          'skill_overrides': {'sixth_sense_delay': 2.0}},
+                         result['battle_booster'])
         self.assertTrue(all(
             call.args[0] is descriptor
             for call in attribute_factors.call_args_list))

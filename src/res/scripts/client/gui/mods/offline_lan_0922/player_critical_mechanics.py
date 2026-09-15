@@ -19,7 +19,7 @@ CREW_NAMES = frozenset((
     'loader1', 'loader2', 'radioman', 'radioman1', 'radioman2'))
 
 
-def project_profile(descriptor):
+def project_profile(descriptor, factors=None):
     """Project final mounted device HP pools from the exact #1513 client."""
     devices = []
     for name in DEVICE_NAMES:
@@ -27,6 +27,10 @@ def project_profile(descriptor):
         if maximum is None:
             continue
         regen = device_damage.device_regen_hp(descriptor, name)
+        if name == 'ammoBayHealth' and factors is not None:
+            factor = float(factors.get('offline/ammoBayHealth', 1.0))
+            maximum = int(round(maximum * factor))
+            regen = int(round((regen or 0.0) * factor))
         devices.append({
             'name': name,
             'max_hp': float(maximum),

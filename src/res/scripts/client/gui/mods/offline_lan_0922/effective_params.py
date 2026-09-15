@@ -714,10 +714,37 @@ def skill_summary(value, crew_ko=()):
     return result
 
 
+def _canonical_battle_booster(value):
+    if not _mapping(value, frozenset(('compact_descr', 'skill_overrides'))):
+        return None
+    compact_descr = _exact_int(value['compact_descr'], 1, 2 ** 31 - 1)
+    overrides = value['skill_overrides']
+    bounds = {
+        'sixth_sense_delay': (0.0, 3.0),
+        'designated_target_duration': (0.0, 4.0),
+        'designated_target_sector': (0.0, math.pi),
+        'last_effort_duration': (0.0, 5.0),
+    }
+    if (compact_descr is None or not isinstance(overrides, dict) or
+            not set(overrides).issubset(bounds)):
+        return None
+    result = {}
+    for name, raw in overrides.items():
+        result[name] = _number(raw, *bounds[name])
+        if result[name] is None:
+            return None
+    return {'compact_descr': compact_descr, 'skill_overrides': result}
+
+
+def booster_skill_value(snapshot, name, default):
+    booster = (snapshot or {}).get('battle_booster') or {}
+    return booster.get('skill_overrides', {}).get(name, default)
+
+
 def canonical(value):
     """Return a detached canonical snapshot, or ``None`` when invalid."""
     if (not isinstance(value, dict) or
-            set(value) not in (
+            set(value).difference(('battle_booster',)) not in (
                 _TOP_LEVEL_KEYS, _TOP_LEVEL_KEYS_WITH_EQUIPMENT,
                 _TOP_LEVEL_KEYS_WITH_CRITICAL)):
         return None
@@ -741,6 +768,10 @@ def canonical(value):
             gun, equipment)):
         return None
     if 'critical' in value and critical is None:
+        return None
+    booster = (_canonical_battle_booster(value['battle_booster'])
+               if 'battle_booster' in value else None)
+    if 'battle_booster' in value and booster is None:
         return None
     if (critical is not None and critical.get('crew_roster') is not None and
             critical.get('crew_roster') !=
@@ -777,4 +808,6 @@ def canonical(value):
     }
     if critical is not None:
         result['critical'] = critical
+    if booster is not None:
+        result['battle_booster'] = booster
     return result

@@ -21,6 +21,8 @@ SPOT_MEMORY_SECONDS = 10.0
 # ``gunner_rancorous`` extends the ordinary visibility lease by two seconds
 # while its living carrier keeps the target inside the five-degree sector.
 DESIGNATED_SPOT_MEMORY_SECONDS = SPOT_MEMORY_SECONDS + 2.0
+# The trained Designated Target directive extends memory by four seconds.
+MAX_SPOT_MEMORY_SECONDS = SPOT_MEMORY_SECONDS + 4.0
 LAST_EFFORT_SECONDS = 2.0
 MOVING_SPEED_EPSILON = 0.5
 SHOT_CAMOUFLAGE_SECONDS = 0.75

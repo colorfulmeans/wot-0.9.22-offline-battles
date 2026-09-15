@@ -28,15 +28,15 @@ class SaveLedgerError(Exception):
 
 
 LEDGER_FILE_NAME = "garage_state.json"
-CURRENCIES = ("credits", "gold", "freeXP")
+CURRENCIES = ("credits", "gold", "freeXP", "crystal")
 # The client refuses to publish a balance it cannot represent, and #1513's own
 # account fields are 32-bit signed.
 MAX_BALANCE = 2 ** 31 - 1
 INITIAL_WALLET_KEY = "initial_wallet"
 DEFAULT_BALANCES = {
-    save_slots.MODE_NEW_ACCOUNT: {"credits": 100000, "gold": 0, "freeXP": 0},
+    save_slots.MODE_NEW_ACCOUNT: {"credits": 100000, "gold": 0, "freeXP": 0, "crystal": 0},
     save_slots.MODE_UNLOCKED: {
-        "credits": 100000000, "gold": 1000000, "freeXP": 100000000},
+        "credits": 100000000, "gold": 1000000, "freeXP": 100000000, "crystal": 0},
 }
 
 

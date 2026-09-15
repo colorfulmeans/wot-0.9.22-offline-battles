@@ -48,9 +48,9 @@ class FollowupTests(unittest.TestCase):
         self.assertIsInstance(battle_shell_tooltip.append_speed(
             text.encode(), a, vehicle), bytes)
 
-    def test_spg_he_damage_uses_explosion_voice_and_other_shells_keep_flags(self):
+    def test_spg_direct_damage_uses_penetration_voice_and_keeps_physical_result(self):
         for tag, shell, damage, result, explosion in (
-                ('SPG', 'HIGH_EXPLOSIVE', 80, 1, True),
+                ('SPG', 'HIGH_EXPLOSIVE', 80, 1, False),
                 ('SPG', 'HIGH_EXPLOSIVE', 0, 1, False),
                 ('SPG', 'HIGH_EXPLOSIVE', 80, 2, False),
                 ('AT-SPG', 'HIGH_EXPLOSIVE', 80, 1, False),

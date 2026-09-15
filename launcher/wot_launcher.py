@@ -31,11 +31,12 @@ else:
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays)
 
 
-# The three balances a save carries, in the order the panel shows them.
+# The account balances a save carries, in the order the panel shows them.
 _BALANCE_LABELS = {
     "credits": "Credits",
     "gold": "Gold",
     "freeXP": "Free experience",
+    "crystal": "War bonds",
 }
 
 _SHOP_HELP = (
@@ -159,6 +160,7 @@ _CHINESE = {
     "Credits": "银币",
     "Gold": "金币",
     "Free experience": "自由经验",
+    "War bonds": "战争债券",
     "Apply": "应用",
     "Edit this save's balances and battle earnings. Before the first "
     "game, these are its starting funds. Close the game before editing.":

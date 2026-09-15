@@ -39,6 +39,7 @@ EQUIPMENT_SLOT_COUNT = 3
 # battle-booster slot that every equipment payload still carries.
 EQUIPMENT_PAYLOAD_SLOT_COUNT = 4
 EQUIPMENT_TYPE_REGULAR = 0
+EQUIPMENT_TYPE_BOOSTERS = 1
 VEHICLE_ITEM_TYPE = 1
 TURRET_ITEM_TYPE = 3
 GUN_ITEM_TYPE = 4
@@ -400,7 +401,7 @@ class GarageState(object):
         count = max(1, _int(count))
         if not isinstance(price, dict):
             return {'credits': 0}
-        for currency in ('gold', 'credits'):
+        for currency in ('crystal', 'gold', 'credits'):
             amount = _int(price.get(currency, 0) or 0)
             if amount:
                 return {currency: amount * count}
@@ -420,7 +421,10 @@ class GarageState(object):
         cost = self._item_cost(compact_descr)
         credits = (_int(cost.get('credits', 0)) +
                    _int(cost.get('gold', 0)) * GOLD_EXCHANGE_RATE)
-        return {'credits': int(math.ceil(credits * factor)) * max(1, _int(count))}
+        crystal_credits = int(math.ceil(
+            _int(cost.get('crystal', 0)) * 200 * factor))
+        return {'credits': (int(math.ceil(credits * factor)) +
+                            crystal_credits) * max(1, _int(count))}
 
     def _in_credits(self, cost, item_type):
         """Price a gold round or consumable in credits, as the shop does.
@@ -440,14 +444,15 @@ class GarageState(object):
 
     def _charge(self, amount):
         """Take one currency mapping from the account, or refuse it whole."""
-        wallet = self._wallet()
-        for currency in ('credits', 'gold'):
+        wallet = self._balances()
+        for currency in ('credits', 'gold', 'crystal'):
             needed = _int(amount.get(currency, 0) or 0)
             if needed > wallet[currency]:
                 raise GarageError(
                     'the account has %d %s and needs %d' % (
                         wallet[currency], currency, needed))
-        for currency in ('credits', 'gold'):
+        wallet = self._wallet()
+        for currency in ('credits', 'gold', 'crystal'):
             needed = _int(amount.get(currency, 0) or 0)
             if needed:
                 wallet[currency] = wallet[currency] - needed
@@ -455,7 +460,7 @@ class GarageState(object):
 
     def _pay_back(self, amount):
         wallet = self._wallet()
-        for currency in ('credits', 'gold'):
+        for currency in ('credits', 'gold', 'crystal'):
             value = _int(amount.get(currency, 0) or 0)
             if value:
                 wallet[currency] = wallet[currency] + value
@@ -573,7 +578,7 @@ class GarageState(object):
     # ---- consumables ----------------------------------------------------
 
     def equip_equipments(self, vehicle_inventory_id, equipments):
-        """Mount the regular consumables of one equipment payload.
+        """Mount three consumables and the separate one-battle directive.
 
         A consumable a battle used has to be bought again, exactly as a round
         does, so the layout is filled from the depot and whatever the depot is
@@ -584,10 +589,18 @@ class GarageState(object):
         alternative_items = set(abs(value) for value in layout if value < 0)
         if len(values) > EQUIPMENT_PAYLOAD_SLOT_COUNT:
             raise GarageError('an equipment payload carries at most four slots')
-        # The trailing battle-booster slot has no published counterpart.
-        values = values[:EQUIPMENT_SLOT_COUNT]
-        values += [0] * (EQUIPMENT_SLOT_COUNT - len(values))
         record = self._record(vehicle_inventory_id, touch=False)
+        # A regular-only caller preserves the separately managed directive.
+        if len(values) <= EQUIPMENT_SLOT_COUNT:
+            values += [0] * (EQUIPMENT_SLOT_COUNT - len(values))
+            layout += [0] * (EQUIPMENT_SLOT_COUNT - len(layout))
+            previous = list(record.get('eqs') or ())
+            previous_layout = list(record.get('eqsLayout') or ())
+            if len(previous) == EQUIPMENT_PAYLOAD_SLOT_COUNT:
+                values.append(previous[3])
+                layout.append(previous_layout[3] if len(previous_layout) > 3
+                              else previous[3])
+        self._validate_equipment_slots(values)
         purchase, owned = self._consumables_to_buy(record, values)
         # Every refusal happens before the first slot is filled, so a layout
         # the account cannot pay for leaves the vehicle exactly as it was.
@@ -597,8 +610,7 @@ class GarageState(object):
         # The vehicle is at its layout again, which is what the player asked
         # for.  Vehicle.isAutoEquipFull compares the two and warns when they
         # differ, and a battle is what makes them differ.
-        record['eqsLayout'] = (layout[:EQUIPMENT_SLOT_COUNT] +
-                               [0] * EQUIPMENT_SLOT_COUNT)[:EQUIPMENT_SLOT_COUNT]
+        record['eqsLayout'] = list(layout)
         carried = {}
         for compact_descr in values:
             if compact_descr:
@@ -617,6 +629,21 @@ class GarageState(object):
             self._price(compact_descr)
         self.revision += 1
         return record
+
+    def _validate_equipment_slots(self, values):
+        for slot, compact_descr in enumerate(values):
+            if not compact_descr:
+                continue
+            try:
+                descriptor = self._vehicles_module().getItemByCompactDescr(
+                    compact_descr)
+            except Exception as error:
+                raise GarageError('equipment descriptor is unavailable: %s' % error)
+            kind = getattr(descriptor, 'equipmentType', EQUIPMENT_TYPE_REGULAR)
+            expected = (EQUIPMENT_TYPE_BOOSTERS if slot == 3 else
+                        EQUIPMENT_TYPE_REGULAR)
+            if kind != expected:
+                raise GarageError('equipment does not fit this slot')
 
     def _consumables_to_buy(self, record, values):
         """Return what a consumable layout must buy, and the stock it read."""
@@ -708,15 +735,28 @@ class GarageState(object):
                 # set, which is not the same as emptying the rack.
                 if flat:
                     self.equip_shells(vehicle_inventory_id, flat)
-            if (equipments_layout is not None and
-                    _int(equipment_type) == EQUIPMENT_TYPE_REGULAR):
+            if equipments_layout is not None:
+                kind = _int(equipment_type)
+                if kind not in (EQUIPMENT_TYPE_REGULAR, EQUIPMENT_TYPE_BOOSTERS):
+                    raise GarageError('unknown equipment layout type')
                 pairs = _layout_pairs(
                     equipments_layout, EQUIPMENT_PAYLOAD_SLOT_COUNT,
                     preserve_currency=True)
-                slots = [compact_descr
-                         for compact_descr, unused_count in pairs
-                         ][:EQUIPMENT_SLOT_COUNT]
-                self.equip_equipments(vehicle_inventory_id, slots)
+                slots = [compact_descr for compact_descr, count in pairs]
+                if kind == EQUIPMENT_TYPE_BOOSTERS:
+                    if len(slots) != EQUIPMENT_PAYLOAD_SLOT_COUNT:
+                        raise GarageError('a directive layout requires four slots')
+                    saved_layout = list(record.get('eqsLayout') or ())[:3]
+                    current = list(record.get('eqs') or ())[:3]
+                    current += [0] * (3 - len(current))
+                    self.equip_equipments(
+                        vehicle_inventory_id, current + slots[3:4])
+                    # Editing the directive must not resupply a used medkit
+                    # or erase the regular consumables' desired layout.
+                    record['eqsLayout'][:3] = saved_layout + [0] * (
+                        3 - len(saved_layout))
+                else:
+                    self.equip_equipments(vehicle_inventory_id, slots[:3])
             self.revision += 1
             return record
 
@@ -764,7 +804,7 @@ class GarageState(object):
             destroyed = 0
             if outgoing and not self._is_removable(outgoing):
                 if paid_removal:
-                    self._charge(self._removal_cost())
+                    self._charge(self._removal_cost(outgoing))
                 else:
                     destroyed = outgoing
             self._touched.add(_int(record.get('id', 0)))
@@ -900,8 +940,10 @@ class GarageState(object):
         device = devices[_int(slot_index)]
         return _int(getattr(device, 'compactDescr', 0) or 0)
 
-    def _removal_cost(self):
+    def _removal_cost(self, outgoing=0):
         """Return what a paid removal costs, as the shop publishes it."""
+        if self._item_cost(outgoing).get('crystal', 0):
+            return {'crystal': 200}
         cost = self._snapshot.get('deviceRemovalCost')
         if not isinstance(cost, dict):
             return {}
@@ -1125,7 +1167,7 @@ class GarageState(object):
         if gold_for_credits:
             cost = self._in_credits(cost, item_type)
         balances = self._balances()
-        for currency in ('credits', 'gold'):
+        for currency in ('credits', 'gold', 'crystal'):
             needed = _int(cost.get(currency, 0) or 0)
             if needed > balances[currency]:
                 raise GarageError(
@@ -1162,8 +1204,9 @@ class GarageState(object):
                 slots = list(record.get('eqs') or [0] * EQUIPMENT_SLOT_COUNT)
                 slots += [0] * (EQUIPMENT_SLOT_COUNT - len(slots))
                 index = _int(slot_index)
-                if not 0 <= index < EQUIPMENT_SLOT_COUNT:
-                    raise GarageError('a vehicle has three equipment slots')
+                if not 0 <= index < EQUIPMENT_PAYLOAD_SLOT_COUNT:
+                    raise GarageError('a vehicle has four equipment slots')
+                slots += [0] * (EQUIPMENT_PAYLOAD_SLOT_COUNT - len(slots))
                 slots[index] = compact_descr
                 record = self.equip_equipments(vehicle_inventory_id, slots)
             else:
@@ -1534,6 +1577,7 @@ class GarageState(object):
             0, wallet['credits'] + max(0, _int(rewards.get('credits', 0))))
         wallet['freeXP'] = max(
             0, wallet['freeXP'] + max(0, _int(rewards.get('free_xp', 0))))
+        wallet['crystal'] += max(0, _int(rewards.get('crystal', 0)))
         experience = max(0, _int(rewards.get('xp', 0)))
         key = _int(vehicle_type_compact_descr)
         vehicle_xp = self._snapshot.setdefault('vehicleXP', {})
@@ -1682,6 +1726,9 @@ class GarageState(object):
         compact_descr = _int(compact_descr)
         if not compact_descr:
             raise GarageError('a sale needs an item')
+        descriptor = self._vehicles_module().getItemByCompactDescr(compact_descr)
+        if 'notForSale' in (getattr(descriptor, 'tags', ()) or ()):
+            raise GarageError('this equipment cannot be sold')
         count = max(1, _int(count))
         item_type = self._item_type(compact_descr)
         owned = self._snapshot.get('inventoryItems', {}).get(item_type, {})
@@ -1853,7 +1900,7 @@ class GarageState(object):
                     self._mounted(installed, item_type, remaining)))
             for device in devices:
                 if device not in items_from_vehicle and not self._is_removable(device):
-                    self._charge(self._removal_cost())
+                    self._charge(self._removal_cost(device))
             for listed in items_from_vehicle:
                 self._add_money(
                     refund, self._sold_off_vehicle(record, listed, remaining))
@@ -2727,7 +2774,7 @@ class GarageState(object):
         return dict(
             (name, max(0, _int(
                 wallet.get(name, economy.SANDBOX_WALLET[name]))))
-            for name in ('credits', 'gold', 'freeXP'))
+            for name in ('credits', 'gold', 'freeXP', 'crystal'))
 
     def _wallet(self):
         """Return the mutable account balances, seeding them if a save had none.

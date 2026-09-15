@@ -279,9 +279,9 @@ def _validate_selected_vehicle(vehicle):
                 raise ValueError('selected vehicle repair cost cannot be negative')
             for key in ('eqs', 'eqsLayout'):
                 value = record.get(key)
-                if not isinstance(value, (tuple, list)) or len(value) != 3:
+                if not isinstance(value, (tuple, list)) or len(value) not in (3, 4):
                     raise ValueError(
-                        'selected vehicle %s must contain three slots' % key)
+                        'selected vehicle %s must contain three or four slots' % key)
 
             shells = record.get('shells')
             if (not isinstance(shells, (tuple, list)) or not shells or
@@ -713,7 +713,7 @@ def stats(selected_vehicle=None, postbattle_progress=None):
         (name, max(0, int(wallet.get(name, default) or 0)))
         for name, default in (('credits', OFFLINE_CREDITS),
                               ('gold', OFFLINE_GOLD),
-                              ('freeXP', OFFLINE_FREE_XP)))
+                              ('freeXP', OFFLINE_FREE_XP), ('crystal', 0)))
     vehicle_xp = dict((compact_descr, 0) for compact_descr in vehicle_types)
     saved_xp = vehicle.get('vehicleXP')
     if isinstance(saved_xp, dict):
@@ -732,7 +732,7 @@ def stats(selected_vehicle=None, postbattle_progress=None):
         'stats': {
             'credits': balances['credits'],
             'gold': balances['gold'],
-            'crystal': 0,
+            'crystal': balances['crystal'],
             'freeXP': balances['freeXP'],
             'slots': max(0, int(
                 vehicle.get('accountSlots', OFFLINE_GARAGE_SLOTS) or 0)),
@@ -817,6 +817,15 @@ def sync_data(revision=0, selected_vehicle=None, int_user_settings=None,
     return result
 
 
+def _medal_bond_rewards():
+    from gui.mods.offline_lan_0922 import battle_bonds
+    try:
+        from dossiers2.custom.records import RECORD_DB_IDS
+    except ImportError:
+        return {'isEnabled': False, 'groups': {}, 'medals': {}}
+    return battle_bonds.shop_rewards(RECORD_DB_IDS)
+
+
 def shop(revision=0, selected_vehicle=None):
     """Return the smallest stream accepted by #1513 ``Shop``.
 
@@ -857,7 +866,8 @@ def shop(revision=0, selected_vehicle=None):
     return {
         'rev': int(revision) + 1,
         'prevRev': int(revision),
-        'crystalExchangeRate': 0,
+        'crystalExchangeRate': 200,
+        'achievementsReward': _medal_bond_rewards(),
         'sellPriceFactor': OFFLINE_SELL_PRICE_FACTOR,
         'items': dict(empty_items),
         'defaults': {
@@ -871,7 +881,7 @@ def shop(revision=0, selected_vehicle=None):
             'paidRemovalCost': _device_removal_cost(vehicle),
             # #1513 OptionalDevice.getRemovalPrice uses a separate Money
             # value for optional devices tagged ``deluxe``.
-            'paidDeluxeRemovalCost': {'crystal': 0},
+            'paidDeluxeRemovalCost': {'crystal': 200},
         },
         'goodies': dict(empty_goodies),
         # Exact #1513 consumers fall back to the final price entry and the
@@ -903,7 +913,7 @@ def shop(revision=0, selected_vehicle=None):
         # Deluxe optional devices do not use paidRemovalCost.  Publish their
         # exact #1513 shop field so the requester does not use its retail
         # crystal-price fallback.
-        'paidDeluxeRemovalCost': {'crystal': 0},
+        'paidDeluxeRemovalCost': {'crystal': 200},
         'dailyXPFactor': 1,
         # The crew shop.  These three are #1513's own ShopCommonStats
         # fallbacks rather than offline policy, and the garage charges the

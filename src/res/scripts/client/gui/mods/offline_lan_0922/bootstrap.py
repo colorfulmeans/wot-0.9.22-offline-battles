@@ -130,16 +130,20 @@ def _bind_battle_progress(context):
         nation_id, vehicle_type_id = descriptor.type.id
         vehicle_type_cd = vehicles.makeIntCompactDescrByID(
             'vehicle', nation_id, vehicle_type_id)
+        used = list(receipt.get('equipment_used') or ())
+        if receipt.get('battle_booster'):
+            used.append(int(receipt['battle_booster']))
         result = garage_store.apply_battle_crew_xp(
             snapshot, receipt['receipt_id'], vehicle_type_cd,
             receipt['rewards']['xp'], VEHICLE_SETTINGS_FLAG.XP_TO_TMAN,
             tankmen_module=tankmen, rewards=receipt['rewards'],
             health=receipt.get('health'), vehicles_module=vehicles,
             shells_fired=receipt.get('shells_fired'),
-            equipment_used=receipt.get('equipment_used'),
+            equipment_used=used,
             auto_settings=(VEHICLE_SETTINGS_FLAG.AUTO_REPAIR,
                            VEHICLE_SETTINGS_FLAG.AUTO_LOAD,
-                           VEHICLE_SETTINGS_FLAG.AUTO_EQUIP))
+                           VEHICLE_SETTINGS_FLAG.AUTO_EQUIP,
+                           VEHICLE_SETTINGS_FLAG.AUTO_EQUIP_BOOSTER))
         context['selected_vehicle'] = snapshot
         touched.add(int(result['vehicle_id']))
         # The depot changed too: a battle spends rounds and consumables, and

@@ -1311,6 +1311,12 @@ def _valid_battle_receipt(message):
     if any(_exact_int(rewards.get(name)) is None or
            _exact_int(rewards.get(name)) < 0 for name in reward_names):
         return False
+    if (_exact_int(rewards.get('crystal', 0)) is None or
+            rewards.get('crystal', 0) < 0):
+        return False
+    if (_exact_int(message.get('battle_booster', 0)) is None or
+            not 0 <= message.get('battle_booster', 0) <= 2 ** 31 - 1):
+        return False
     if rewards.get('repair_cost') != 0 or rewards.get('ammo_cost') != 0:
         return False
     # What the battle drew, by the shell's index in the gun's own shot order.
@@ -5147,7 +5153,7 @@ class LANClient(object):
                 isinstance(contact.get('fresh'), bool) and
                 _projectile_float_range(
                     contact.get('time_left'), 0.0,
-                    spotting.DESIGNATED_SPOT_MEMORY_SECONDS) is not None and
+                    spotting.MAX_SPOT_MEMORY_SECONDS) is not None and
                 bool(contact.get('visible')) == (
                     float(contact.get('time_left')) > 0.0) and
                 isinstance(contact.get('visible_by_bot_ids'),

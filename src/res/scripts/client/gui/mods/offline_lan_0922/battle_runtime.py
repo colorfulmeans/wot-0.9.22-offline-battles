@@ -3500,7 +3500,9 @@ class BattleRuntime(object):
                             'commander_sixthsense') > 0),
                     lambda: (self.local_health() or 0) > 0,
                     lambda: self.state == 'running' and self._battle_live,
-                    VehicleStatePresenter(provider, vehicle_view_state))
+                    VehicleStatePresenter(provider, vehicle_view_state),
+                    delay=effective_params.booster_skill_value(
+                        self._local_effective_params, 'sixth_sense_delay', 3.0))
             bot_start_message = dict(self._start_message or {})
             if (self._worker_mode and
                     lan_protocol.HUMAN_RAM_TIMELINE_CAPABILITY in
@@ -4706,7 +4708,7 @@ class BattleRuntime(object):
         }
 
     def _prepare_bot_vehicle_assignments(self, player_descriptor):
-        """Build the mature mirrored 0.8.2 line-up afresh per battle.
+        """Share tier/class slots, then draw each team's vehicles independently.
 
         There is deliberately no process-wide vehicle pool.  The selected
         battle tiers and role template are shared by both teams, humans remove
@@ -4858,9 +4860,11 @@ class BattleRuntime(object):
             template = bot_planner.build_match_template(
                 candidates, team_size, player_profile, match_tiers,
                 lineup_random, requirements)
+            validated_names = set(value['name'] for value in all_candidates)
             automatic_candidates = [
                 candidate for candidate in candidates
-                if candidate['name'] not in excluded_names]
+                if candidate['name'] not in excluded_names and
+                candidate['name'] in validated_names]
 
             assignments = {}
             for team in (1, 2):
@@ -4881,6 +4885,18 @@ class BattleRuntime(object):
                     spg_limit=max(0, 3 - human_spgs),
                     fallback_candidates=automatic_candidates)
                 picked = list(picked[:len(team_bots)])
+                # The template balances roles and tiers, not vehicle names.
+                # Draw only from the validated, non-excluded automatic pool;
+                # the shared seed keeps replicas and the worker in agreement.
+                randomized = []
+                for entry in picked:
+                    pool = [candidate for candidate in automatic_candidates
+                            if candidate['level'] == entry['level'] and
+                            bot_planner.vehicle_match_class(candidate) ==
+                            bot_planner.vehicle_match_class(entry)]
+                    if pool:
+                        randomized.append(lineup_random.choice(pool))
+                picked = randomized
                 lineup_random.shuffle(picked)
                 picked.sort(key=self._vehicle_class_order)
                 for raw, entry in zip(team_bots, picked):
@@ -4913,7 +4929,7 @@ class BattleRuntime(object):
                     return False
                 if (team, slot) in bot_slots:
                     assignments[(team, slot)] = vehicle
-            if excluded_names and set(assignments) != bot_slots:
+            if set(assignments) != bot_slots:
                 self._bot_vehicle_assignments = {}
                 return False
             self._bot_vehicle_assignments = assignments
@@ -7193,9 +7209,11 @@ class BattleRuntime(object):
         """Publish canonical module phases after Expert's four-second delay."""
         vehicle_id = int(self._expert_target_id or 0)
         if (not self._has_expert or
-                self._local_skill_count('commander_expert') <= 0 or
-                vehicle_id <= 0 or
-                float(now) < self._expert_target_due):
+                self._local_skill_count('commander_expert') <= 0):
+            if vehicle_id:
+                self.monitor_vehicle_damaged_devices(0)
+            return False
+        if vehicle_id <= 0 or float(now) < self._expert_target_due:
             return False
         record = None
         for candidate in self._records.values():
@@ -7204,7 +7222,8 @@ class BattleRuntime(object):
                 break
         entity = self._server_entity(vehicle_id)
         if (record is None or record.get('local') or
-                record.get('tombstone') or entity is None or
+                record.get('tombstone') or
+                not record.get('spot_visible', True) or entity is None or
                 not self._record_alive(record, entity)):
             self.monitor_vehicle_damaged_devices(0)
             return False
@@ -7231,12 +7250,24 @@ class BattleRuntime(object):
                 entity.typeDescriptor, 'fire')
             if fire_index is not None:
                 damaged.append(fire_index)
+        for name in critical.get('crew_ko') or ():
+            extra_name = str(name)
+            if not extra_name.endswith('Health'):
+                extra_name += 'Health'
+            index = self._expert_extra_index(entity.typeDescriptor, extra_name)
+            if index is not None:
+                destroyed.append(index)
         signature = (tuple(sorted(set(damaged))),
                      tuple(sorted(set(destroyed))))
         if signature == self._expert_target_signature:
             return False
-        callback = getattr(
-            self._avatar, 'showOtherVehicleDamagedDevices', None)
+        # Avatar.showOtherVehicleDamagedDevices rechecks BigWorld.target().
+        # Offline targeting is owned by our precise silhouette/occlusion ray;
+        # its rendered OfflineEntity is not a stock Vehicle. Publish through
+        # the same stock feedback consumer after our target checks instead.
+        provider = getattr(self._avatar, 'guiSessionProvider', None)
+        feedback = getattr(getattr(provider, 'shared', None), 'feedback', None)
+        callback = getattr(feedback, 'showVehicleDamagedDevices', None)
         if not callable(callback):
             raise RuntimeError(
                 '#1513 Expert damaged-device callback is unavailable')
@@ -10713,17 +10744,7 @@ class BattleRuntime(object):
                     raise RuntimeError(
                         '#1513 VEHICLE_HIT_FLAGS are unavailable')
                 explosion = bool(event.get('splash'))
-                if not explosion and damage > 0 and int(event.get('shot_result', 2)) != 2:
-                    attacker_entity = self._server_entity(
-                        attacker_record.get('engine_id'))
-                    descriptor = getattr(attacker_entity, 'typeDescriptor', None)
-                    tags = _field(_field(descriptor, 'type', None), 'tags', ())
-                    he_type = getattr(self._runtime.constants,
-                                      'SHELL_TYPES_INDICES', {}).get('HIGH_EXPLOSIVE')
-                    # Only the voice RPC treats a damaging SPG HE direct hit
-                    # as an explosion. Damage, decals and penetration stats
-                    # retain the accepted projectile result.
-                    explosion = 'SPG' in (tags or ()) and shell_type == he_type
+                direct_artillery = False
                 if explosion:
                     flags = int(flags_type.ATTACK_IS_EXTERNAL_EXPLOSION)
                     if damage > 0:
@@ -10742,6 +10763,16 @@ class BattleRuntime(object):
                     flags = int(flags_type.ATTACK_IS_DIRECT_PROJECTILE)
                     shot_result = max(
                         0, min(int(event.get('shot_result', 2)), 2))
+                    attacker_entity = self._server_entity(
+                        attacker_record.get('engine_id'))
+                    descriptor = getattr(attacker_entity, 'typeDescriptor', None)
+                    tags = _field(_field(descriptor, 'type', None), 'tags', ())
+                    direct_artillery = 'SPG' in (tags or ())
+                    if direct_artillery:
+                        # Voice only: any damaging direct artillery hit uses
+                        # the penetration call; a zero-damage hit uses bounce.
+                        # Keep the actual projectile result for stats/decals.
+                        shot_result = 2 if damage > 0 else 1
                     if shot_result == 2:
                         flags |= int(
                             flags_type.
@@ -10781,6 +10812,14 @@ class BattleRuntime(object):
                             flags |= chassis_flag
                         elif name == 'gunHealth':
                             flags |= gun_flag
+                if direct_artillery:
+                    # A module hit must not replace the requested plain
+                    # penetration/non-penetration artillery voice. Module
+                    # events remain in the independent critical feedback.
+                    flags &= ~(int(flags_type.GUN_DAMAGED_BY_PROJECTILE) |
+                               int(flags_type.GUN_DAMAGED_BY_EXPLOSION) |
+                               int(flags_type.CHASSIS_DAMAGED_BY_PROJECTILE) |
+                               int(flags_type.CHASSIS_DAMAGED_BY_EXPLOSION))
                 if bool(event.get('dead')):
                     flags |= int(flags_type.VEHICLE_KILLED)
                 callback = getattr(self._avatar, 'showShotResults', None)
@@ -16965,6 +17004,7 @@ class BattleRuntime(object):
         if chosen == held_id:
             if chosen is not None:
                 self._refresh_native_target_outline()
+                self.monitor_vehicle_damaged_devices(chosen)
             return
         if not self._clear_target_outline():
             return
@@ -17442,7 +17482,7 @@ class BattleRuntime(object):
                 raise ValueError('team spot memory time is invalid')
             if (math.isnan(time_left) or math.isinf(time_left) or
                     time_left < 0.0 or
-                    time_left > spotting.DESIGNATED_SPOT_MEMORY_SECONDS or
+                    time_left > spotting.MAX_SPOT_MEMORY_SECONDS or
                     bool(contact.get('visible')) != (time_left > 0.0)):
                 raise ValueError('team spot memory time is invalid')
             deadlines[(record_kind, target_id)] = now + time_left

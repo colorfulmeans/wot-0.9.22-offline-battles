@@ -47,13 +47,24 @@ The 0.9.22 client gets a working offline garage:
   radio and fuel tank, plus an automatic fire extinguisher, a large first aid
   kit and a large repair kit.
 - You can change modules, optional devices, consumables, shells, camouflage
-  and crew skills. Every item costs nothing.
+  and crew skills. Vehicle equipment uses the catalogue's currency and price;
+  customization remains free.
 - The garage is written to the selected save after each change, so it survives
   a restart.
 - The battle runs the vehicle the garage fitted. Crew skills, optional devices
   and consumables move the same values the garage parameters panel shows: view
   range, concealment, reload, aim time, dispersion, traverse, engine power,
   terrain resistance and repair speed.
+
+Automatic teams share a tier/class template but draw vehicle models
+independently from the usable catalogue. The existing model blacklist and
+host exclusions still apply. A host's explicit lineup overrides stay explicit.
+
+Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
+Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
+spawn groups and the large Grand Battle maps. The current package has neither
+the validated navigation/spawn data for those maps nor a 60-vehicle protocol
+and UI path. Raising the player limit alone would not make this mode playable.
 
 ## Saves
 
@@ -76,7 +87,24 @@ vehicles and gold ammunition are paid for out of the gold the launcher grants.
 Taking a complex optional device off a vehicle follows the client's own rule:
 its descriptor says whether the device survives being removed, and one that
 does not is destroyed unless the player pays the game's own removal price --
-10 gold in a career, nothing in a fully unlocked save.
+10 gold in a career, nothing in a fully unlocked save. Improved equipment
+uses its separate 200-bond removal price.
+
+The fourth equipment slot accepts the fifteen 0.9.22 directives. Buy them
+with bonds, mount one for a battle, and enable their separate auto-resupply
+switch if wanted. A used directive is consumed once per battle, including
+when its perk was never triggered. The six improved optional devices also
+cost bonds (3000-5000), rather than credits. Directives cost 2-12 bonds and
+cannot be sold; improved equipment resale yields credits, not bonds.
+
+Epic medals and Battle Hero achievements award bonds according to the
+[9.20.1 schedule retained in 0.9.22](https://worldoftanks.eu/en/news/general-news/920-1-bonds-and-medals/).
+Awards depend on vehicle tier and appear individually in the battle results.
+They persist with the save and do not receive the offline earnings multiplier.
+The launcher's Saves tab can also edit the bond balance. Older saves start
+with zero bonds. The historical additional base-XP bond payout for all-Tier-X
+battles is not implemented: its exact conversion table is still unavailable.
+Ranked-season and clan-event rewards are outside the offline modes.
 
 Ammunition and consumables are stock now, not scenery. A battle spends the
 rounds it fired and one of each consumable it used, the server reports both,

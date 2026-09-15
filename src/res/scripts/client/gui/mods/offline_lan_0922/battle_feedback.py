@@ -45,7 +45,7 @@ class SixthSenseController(object):
     """
 
     def __init__(self, schedule, cancel, generation, has_sixth_sense,
-                 is_alive, is_battle, presenter):
+                 is_alive, is_battle, presenter, delay=SIXTH_SENSE_DELAY_SECONDS):
         required = (schedule, cancel, generation, has_sixth_sense,
                     is_alive, is_battle)
         if not all(callable(value) for value in required):
@@ -60,6 +60,7 @@ class SixthSenseController(object):
         self._is_alive = is_alive
         self._is_battle = is_battle
         self._presenter = presenter
+        self._delay = float(delay)
         self._observed_until = 0.0
         self._pending_callback = None
 
@@ -92,11 +93,12 @@ class SixthSenseController(object):
                 self._pending_callback = None
             if self._generation() != expected_generation:
                 return
-            if not self._is_alive() or not self._is_battle():
+            if (not self._is_alive() or not self._is_battle() or
+                    not self._has_sixth_sense()):
                 return
             self._presenter.notify_observed_by_enemy(True)
 
-        callback = self._schedule(SIXTH_SENSE_DELAY_SECONDS, _deliver)
+        callback = self._schedule(self._delay, _deliver)
         holder[0] = callback
         self._pending_callback = callback
         return True

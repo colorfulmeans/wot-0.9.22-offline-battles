@@ -139,6 +139,44 @@ def _artefact(value, vehicles_module):
     return None
 
 
+def _collect_battle_crew_factors(descriptor_crew):
+    """Collect effects omitted by the garage's VehicleDescrCrew processors.
+
+    Keep the native crew eligibility, level bonuses and directive processing;
+    only the three cell-side consumers are supplied by the offline adapter.
+    """
+    result = {'offline/moveBloom': 1.0, 'offline/turretBloom': 1.0,
+              'offline/ammoBayHealth': 1.0}
+    processors = getattr(descriptor_crew, '_skillProcessors', None)
+    if not isinstance(processors, dict):
+        return {}
+    descriptor_crew._skillProcessors = dict(processors)
+
+    def smooth_driving(unused_self, unused_index, level, increase,
+                       active, fire, config):
+        if active and not fire:
+            result['offline/moveBloom'] = (
+                1.0 - (level + increase) * config.shotDispersionFactorPerLevel)
+
+    def smooth_turret(unused_self, unused_index, level, increase,
+                      active, fire, config):
+        if active and not fire:
+            result['offline/turretBloom'] = (
+                1.0 - (level + increase) * config.shotDispersionFactorPerLevel)
+
+    def pedant(unused_self, unused_index, level, unused_increase,
+               active, unused_fire, config):
+        if active and level >= 100.0:
+            result['offline/ammoBayHealth'] = config.ammoBayHealthFactor
+
+    descriptor_crew._skillProcessors.update({
+        'driver_smoothDriving': smooth_driving,
+        'gunner_smoothTurret': smooth_turret,
+        'loader_pedant': pedant,
+    })
+    return result
+
+
 def _update_native_attribute_factors(
         descriptor, compact_descrs, equipments, factors, aspect,
         activity_flags, is_fire, qualifier_type, crew_class,
@@ -158,11 +196,13 @@ def _update_native_attribute_factors(
     descriptor_crew = crew_class(
         descriptor, compact_descrs, main_skill_bonuses,
         activityFlags=activity_flags, isFire=is_fire)
+    battle_factors = _collect_battle_crew_factors(descriptor_crew)
     for equipment in equipments:
         if (equipment is not None and
                 'crewSkillBattleBooster' in equipment.tags):
             descriptor_crew.boostSkillBy(equipment)
     descriptor_crew.onCollectFactors(factors)
+    factors.update(battle_factors)
     factors['camouflage'] = descriptor_crew.camouflageFactor
     shot_dispersion = [1.0, 0.0]
     descriptor_crew.onCollectShotDispersionFactors(shot_dispersion)
@@ -522,13 +562,26 @@ def modifiers(descriptor=None, equipments=(), crew_skills=None, factors=None):
     rotation_factor = 1.0
     turret_factor = 1.0
     if has_stabiliser:
-        move_factor *= STABILISER_BLOOM_FACTOR
-        rotation_factor *= STABILISER_BLOOM_FACTOR
-        turret_factor *= STABILISER_BLOOM_FACTOR
+        stabiliser = _misc_factor(
+            misc, 'additiveShotDispersionFactor', STABILISER_BLOOM_FACTOR)
+        move_factor *= stabiliser
+        rotation_factor *= stabiliser
+        turret_factor *= stabiliser
+    if factors:
+        directive_bloom = _factor(factors, 'additiveShotDispersionFactor')
+        move_factor *= directive_bloom
+        rotation_factor *= directive_bloom
+        turret_factor *= directive_bloom
     if has_snap_shot:
-        turret_factor *= SNAP_SHOT_TURRET_FACTOR
+        turret_factor *= ((factors or {}).get(
+            'offline/turretBloom', SNAP_SHOT_TURRET_FACTOR))
+    elif factors:
+        turret_factor *= factors.get('offline/turretBloom', 1.0)
     if has_smooth_ride:
-        move_factor *= SMOOTH_RIDE_MOVE_FACTOR
+        move_factor *= ((factors or {}).get(
+            'offline/moveBloom', SMOOTH_RIDE_MOVE_FACTOR))
+    elif factors:
+        move_factor *= factors.get('offline/moveBloom', 1.0)
 
     return {
         'crew_level': crew_level,
