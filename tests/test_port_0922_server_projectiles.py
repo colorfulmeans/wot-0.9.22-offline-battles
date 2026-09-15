@@ -1,3 +1,4 @@
+import copy
 import json
 import math
 from pathlib import Path
@@ -389,6 +390,83 @@ class ServerProjectileLedgerTests(unittest.TestCase):
             'projectile_id': '1:p:1:1', 'shot_seq': 1,
             'shell_index': 0, 'is_he': False,
         }
+
+    def test_bot_repair_publication_cannot_discard_a_later_module_hit(self):
+        for hp, status in ((25.0, 'destroyed'), (50.0, 'critical')):
+            with self.subTest(hp=hp, status=status):
+                state = _state()
+                proposal_critical = {
+                    'devices': [{'name': 'leftTrackHealth', 'hp': 0.0,
+                                 'max_hp': 100.0, 'state': 'destroyed'}],
+                    'destroyed': ['leftTrackHealth'], 'crew_ko': [],
+                    'fire': False, 'ammo_rack_death': False, 'events': []}
+                current = copy.deepcopy(proposal_critical)
+                current['devices'][0].update(hp=hp, state=status)
+                if status != 'destroyed':
+                    current['destroyed'] = []
+                # Unrelated progress must survive the stale shot snapshot.
+                current['devices'].append({'name': 'engineHealth', 'hp': 80.0,
+                                           'max_hp': 100.0, 'state': 'normal'})
+                target = dict(id=16, team=2, health=500, max_health=500, alive=True,
+                              critical=current, combat_revision=7,
+                              combat_base_revision=4, combat_ack_seq=5)
+                state.bot_states[16] = target
+                raw = _effect(target_kind='bot', target_id=16, damage=0,
+                              critical=proposal_critical,
+                              critical_target_base_revision=4,
+                              critical_target_ack_seq=3, hull_damage=0,
+                              critical_delta={'devices': [{
+                                  'name': 'leftTrackHealth', 'hp_loss': 60.0}],
+                                  'crew_ko': [], 'ignite': False})
+                shot = self._critical_record()
+                proposal = state._normalize_projectile_effect(
+                    raw, shot, (10.0, 1.0, 0.0), False)
+                self.assertFalse(proposal['critical_accepted'])
+                state._apply_projectile_effect(shot, proposal)
+                devices = {row['name']: row for row in target['critical']['devices']}
+                self.assertEqual(0.0, devices['leftTrackHealth']['hp'])
+                self.assertIn('leftTrackHealth', target['critical']['destroyed'])
+                self.assertEqual(80.0, devices['engineHealth']['hp'])
+                self.assertEqual(8, target['combat_base_revision'])
+                self.assertTrue(state.pending_events[-1]['critical_accepted'])
+
+    def test_zero_to_zero_hit_invalidates_pre_hit_owner_repair_checkpoint(self):
+        state = _state()
+        target = state.players[2]
+        target.critical = {
+            'devices': [{'name': 'leftTrackHealth', 'hp': 0.0,
+                         'max_hp': 100.0, 'state': 'destroyed'}],
+            'destroyed': ['leftTrackHealth'], 'crew_ko': [],
+            'fire': False, 'ammo_rack_death': False, 'events': []}
+        target.effective_params['critical']['devices'] = [
+            {'name': 'leftTrackHealth', 'max_hp': 100.0, 'regen_hp': 50.0}]
+        target.effective_params['critical']['crew_roster'] = []
+        before = copy.deepcopy(target.critical)
+        shot = self._critical_record()
+        raw = _effect(damage=0, critical=before,
+                      critical_target_base_revision=0, critical_target_ack_seq=0,
+                      hull_damage=0, critical_delta={
+                          'devices': [{'name': 'leftTrackHealth', 'hp_loss': 1.0}],
+                          'crew_ko': [], 'ignite': False})
+        proposal = state._normalize_projectile_effect(raw, shot, (10.0, 1.0, 0.0), False)
+        state._apply_projectile_effect(shot, proposal)
+        self.assertEqual(before, target.critical)
+        self.assertEqual(1, target.critical_report_base_revision)
+        checkpoint = dict(type='track_repair', round_id=state.round_id,
+                          critical_base_revision=0, repair_seq=1,
+                          tracks=[dict(name='leftTrackHealth', hp=25.0,
+                                       max_hp=100.0, state='destroyed')])
+        self.assertFalse(state.report_track_repair(2, checkpoint))
+        self.assertEqual(0.0, target.critical['devices'][0]['hp'])
+        checkpoint['critical_base_revision'] = 1
+        self.assertTrue(state.report_track_repair(2, checkpoint))
+        self.assertEqual(25.0, target.critical['devices'][0]['hp'])
+        # The same native hit, now overtaken by repair, resets its new progress.
+        proposal = state._normalize_projectile_effect(raw, shot, (10.0, 1.0, 0.0), False)
+        state._apply_projectile_effect(shot, proposal)
+        self.assertEqual(0.0, target.critical['devices'][0]['hp'])
+        self.assertGreater(target.critical_report_base_revision, 1)
+        self.assertFalse(state.report_track_repair(2, checkpoint))
 
     def test_stale_destroyed_snapshot_damages_repaired_canonical_module(self):
         state = _state()

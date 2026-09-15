@@ -2032,6 +2032,15 @@ class OfflineCompatibility(object):
             if (candidate is not None and target is not None and
                     target is getattr(candidate, 'bw_entity', None)):
                 target = candidate
+            # Native remote Vehicles also remain addressable while hidden.
+            # A caller retaining an old entity (including an aiming mod) must
+            # not reacquire it after the visibility edge released the lock.
+            if target is not None and not bool(getattr(
+                    target, '_spot_visible', True)):
+                if current_id:
+                    return compatibility._original_avatar_auto_aim(
+                        avatar, None)
+                return None
             if not bool(getattr(
                     target, '_offlineLANPresentation', False)):
                 return compatibility._original_avatar_auto_aim(

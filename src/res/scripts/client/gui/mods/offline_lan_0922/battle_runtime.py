@@ -7948,10 +7948,13 @@ class BattleRuntime(object):
         turret_speed = (
             _number(turret.rotationSpeed) * gunner_factor *
             critical_damage.stat_factor(entity, 'turret_speed'))
+        stun = getattr(entity, '_offlineStunFactors', None) or {}
         targeting_signature = (
             turret_speed,
-            _number(gun.rotationSpeed) * gun_factor, shot_multiplier,
-            turret_factor, movement_factor, rotation_factor, aiming_time)
+            _number(gun.rotationSpeed) * gun_factor * stun.get('turret_speed', 1.0),
+            shot_multiplier, turret_factor * stun.get('bloom_turret', 1.0),
+            movement_factor * stun.get('bloom_move', 1.0),
+            rotation_factor * stun.get('bloom_rotation', 1.0), aiming_time)
         if targeting_signature == self._targeting_signature:
             return False
         turret_yaw, gun_pitch = entity.getAimParams()
@@ -8040,9 +8043,12 @@ class BattleRuntime(object):
         dt = max(0.0, now - self._gun_last_tick)
         self._gun_last_tick = now
         previous_reload = state.reload_time
+        stun = getattr(entity, '_offlineStunFactors', {}) or {}
         state.tick(
-            dt, self._battle_live, self._local_speed,
-            self._local_turn_speed, 0.0, descriptor,
+            dt, self._battle_live,
+            self._local_speed * stun.get('bloom_move', 1.0),
+            self._local_turn_speed * stun.get('bloom_rotation', 1.0),
+            0.0, descriptor,
             dispersion_factor=self._local_stat_factor(
                 entity, 'dispersion'),
             aim_time_factor=critical_damage.stat_factor(
@@ -9298,6 +9304,7 @@ class BattleRuntime(object):
             raise RuntimeError('stun event has an invalid end time')
         state = dict(state or {})
         state['stun_end_server_time_ms'] = int(end)
+        state['stun_factors'] = dict(event.get('stun_factors') or {}) if end else {}
         if active:
             attacker_kind = event.get('attacker_kind')
             attacker_id = event.get('attacker_id')
@@ -10446,15 +10453,19 @@ class BattleRuntime(object):
             'vehicle hit impulse', self._present_hit_impulse,
             (event, target_record, effects_descr, direction))
         # Retail presents an HE near-miss through
-        # Vehicle.showDamageFromExplosion/armorSplashHit.  Direct hits keep
-        # the three protocol outcomes: ricochet, resisted and pierced.
+        # Vehicle.showDamageFromExplosion/armorSplashHit. HE direct impacts
+        # use the explosion group whenever HP damage was dealt, independently
+        # of physical penetration. Keep the protocol result for statistics.
         damage_factor = self._hit_damage_factor(event, target_record)
         if event.get('splash', False):
             return self._present_splash_hit(
                 target_record, effects_descr, effects_index, impact_position,
                 direction, damage_factor)
-        effect_group = ('armorRicochet', 'armorResisted', 'armorHit')[
-            shot_result]
+        if combat_rules.is_he(shot):
+            effect_group = 'armorHit' if damage > 0 else 'armorResisted'
+        else:
+            effect_group = ('armorRicochet', 'armorResisted', 'armorHit')[
+                shot_result]
         stages, effects, unused = effects_descr[effect_group]
         hit_position = self._vector(impact_position)
         terrain_effects = getattr(self._avatar, 'terrainEffects', None)
@@ -12230,6 +12241,8 @@ class BattleRuntime(object):
             if name in shell:
                 frozen_shell[name] = lan_protocol._projectile_wire_round(
                     shell[name])
+        if 'stun' in shell:
+            frozen_shell['stun'] = dict(shell['stun'])
         return {
             'speed': lan_protocol._projectile_wire_round(
                 normalized['speed']),
@@ -14920,7 +14933,7 @@ class BattleRuntime(object):
         potential_damage = int(
             damage_roll if int(result) == 2
             else combat_rules.shell_nominal_damage(shot))
-        return self._projectile_effect(
+        effect = self._projectile_effect(
             record, damage, result, terminal_data['impact'],
             critical, hull_damage, critical_delta,
             damage_sticker=damage_sticker,
@@ -14929,6 +14942,49 @@ class BattleRuntime(object):
                 contact is not None and
                 contact.get('layer') == 'structural'),
             high_explosive=is_he)
+        self._projectile_stun_effect(
+            effect, shot, record, target, state,
+            blast_contact.get('distance') if blast_contact is not None else
+            0.0 if contact is not None and contact.get('layer') == 'structural'
+            else None)
+        return effect
+
+    def _projectile_stun_effect(self, effect, shot, record, target, state,
+                                distance):
+        """Attach one descriptor-owned stun to an already established hit.
+
+        A real hull surface and an unoccluded ray are required even for
+        zero-HP splash. Failure in this additive effect never loses HP damage.
+        """
+        from gui.mods.offline_lan_0922 import stun_mechanics
+        shell = combat_rules.legacy_shot(shot).get('shell') or {}
+        if distance is None or not shell.get('stun'):
+            return False
+        try:
+            from items.stun import g_cfg
+            equipments = ((record.get('state') or {}).get('equipment_states') or ())
+            if record.get('local') and self._equipment_state is not None:
+                equipments = self._equipment_state
+            result = stun_mechanics.impact(
+                shell, effect['damage'], distance, g_cfg,
+                stun_mechanics.resistance(target.typeDescriptor, equipments))
+            if result is None:
+                return False
+            duration, factors = result
+            impact_time = self._turret_server_time_ms(state['cursor_time'])
+            end = int(impact_time + round(duration * 1000.0))
+            # The server applies the actual battle-clock ceiling; avoid
+            # extending a legal late hit beyond that terminal boundary.
+            end = min(end, int(round((self._prebattle_seconds() +
+                                     self._battle_seconds()) * 1000.0)))
+            if end <= impact_time:
+                return False
+            effect['stun_end_server_time_ms'] = end
+            effect['stun_factors'] = factors
+            return True
+        except Exception as error:
+            self._warn_optional_failure('projectile stun', error, disable=False)
+            return False
 
     def _projectile_ricochet_contact(
             self, meta, state, terminal_data, collisions, contact):
@@ -15007,6 +15063,8 @@ class BattleRuntime(object):
         legacy_shell = combat_rules.legacy_shot(shot).get('shell') or {}
         effects = []
         for key, record in tuple(self._records.items()):
+            if len(effects) >= 30:
+                break
             if key == direct_key or record.get('tombstone'):
                 continue
             if self._worker_mode and record.get('local'):
@@ -15056,9 +15114,18 @@ class BattleRuntime(object):
                 contact = self._projectile_he_blast_contact(
                     meta, record, target, shot, impact, rolled_damage,
                     state=state, pose=pose)
-                if contact is None or contact['damage'] <= 0:
+                if contact is None:
                     continue
                 hull_damage = contact['damage']
+                if hull_damage <= 0:
+                    position = _xyz(getattr(
+                        critical_target, 'position', record.get('state', {})))
+                    effect = self._projectile_effect(
+                        record, 0, 1, impact, None, 0, {}, position)
+                    if self._projectile_stun_effect(
+                            effect, shot, record, target, state or {}, contact.get('distance')):
+                        effects.append(effect)
+                    continue
                 self._install_critical_equipment_effects(record, critical_target)
                 damage, critical, critical_delta = (
                     critical_damage.propose_explosion(
@@ -15074,10 +15141,13 @@ class BattleRuntime(object):
                     critical_target, critical)
                 position = _xyz(getattr(
                     critical_target, 'position', record.get('state', {})))
-                effects.append(self._projectile_effect(
+                damage_effect = self._projectile_effect(
                     record, damage, 2,
                     impact if visual_impact is None else visual_impact,
-                    critical, hull_damage, critical_delta, position))
+                    critical, hull_damage, critical_delta, position)
+                self._projectile_stun_effect(
+                    damage_effect, shot, record, target, state or {}, contact.get('distance'))
+                effects.append(damage_effect)
             except Exception as error:
                 # A missing victim surface cannot discard an established
                 # direct effect or prevent other blast victims from resolving.
@@ -21233,9 +21303,12 @@ class BattleRuntime(object):
         else:
             drive_physics = self._local_physics
             power_factor = self._active_engine_power_factor()
-            if power_factor != 1.0:
+            speed_factor = (getattr(entity, '_offlineStunFactors', None) or {}).get('speed', 1.0)
+            if power_factor != 1.0 or speed_factor != 1.0:
                 drive_physics = dict(drive_physics)
                 drive_physics['powerW'] *= power_factor
+                drive_physics['speedFwd'] *= speed_factor
+                drive_physics['speedBwd'] *= speed_factor
             self._local_speed = vehicle_physics.longitudinal_step(
                 drive_physics, self._local_speed,
                 throttle, turn != 0.0,
@@ -23470,7 +23543,9 @@ class BattleRuntime(object):
                     'LAN snapshot has an invalid stun attacker')
         elif attacker_kind or attacker_id:
             raise RuntimeError('cleared LAN stun retains an attacker')
-        signature = (int(end), str(attacker_kind), int(attacker_id))
+        factors = state.get('stun_factors') or {}
+        signature = (int(end), str(attacker_kind), int(attacker_id),
+                     tuple(sorted(factors.items())))
         # Vehicle construction already seeds stunInfo=0. Keep this additive
         # snapshot field compatible with older peers and avoid replaying an
         # initial no-op clear through the stock feedback adaptor.
@@ -23490,6 +23565,7 @@ class BattleRuntime(object):
         previous = getattr(entity, 'stunInfo', 0.0)
         entity.stunInfo = (
             self._server_clock() + remaining if remaining > 0.0 else 0.0)
+        entity._offlineStunFactors = dict(factors) if remaining > 0.0 else {}
         if not self._worker_mode:
             native_callback = getattr(entity, 'set_stunInfo', None)
             if callable(native_callback):
@@ -23764,6 +23840,11 @@ class BattleRuntime(object):
         marker_visible = bool(marker_visible)
         record['spot_visible'] = visible
         record['spot_marker_visible'] = marker_visible
+        if not visible:
+            # Client-only entities remain in BigWorld after going dark.
+            # Release before returning for an unready model or invoking any
+            # fallible presentation callback, not on the next battle tick.
+            self._release_target_lock(record['engine_id'])
         if not record.get('presentation') or not record.get('ready'):
             return visible
         vehicle = self._remote_factory.get(record['engine_id'])
@@ -24657,7 +24738,7 @@ class BattleRuntime(object):
         return False
 
     def _release_target_lock(self, engine_id):
-        """Drop a lock on a vehicle that just died, before it is re-presented."""
+        """Drop a lock before a vehicle dies, goes dark or loses its model."""
         release = getattr(
             self._runtime.compatibility, 'release_target_lock', None)
         if not callable(release) or self._avatar is None:

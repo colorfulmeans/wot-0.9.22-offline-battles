@@ -865,7 +865,7 @@ class AccountRpcTests(unittest.TestCase):
             self.assertEqual(
                 set(shop_contract['tankmanCostDirectKeys']), set(cost))
         currency_mappings = {
-            'paidRemovalCost': {'gold': 0},
+            'paidRemovalCost': {'gold': 10},
             'paidDeluxeRemovalCost': {'crystal': 200},
         }
         self.assertEqual(

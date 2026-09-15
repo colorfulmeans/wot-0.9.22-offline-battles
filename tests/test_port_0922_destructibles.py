@@ -2404,6 +2404,30 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         self.assertEqual('pending',
                          destructibles_authority._state['entities'][22]['state'])
 
+    def test_cross_chunk_prop_creates_controller_in_its_owned_chunk_once(self):
+        manager = _Manager()
+        area = _authority_environment(manager)
+        controllers = {}
+        manager.getController = controllers.get
+        chunk_id = (127 << 8) | 127
+        created = []
+
+        def create(unused_type, unused_space, unused_vehicle, position, *unused):
+            derived = ((int(position.x // 100.0) + 127) << 8) | (
+                int(position.z // 100.0) + 127)
+            created.append((derived, position.x, position.z))
+            controllers[derived] = object()
+            return 900
+
+        destructibles_authority.BigWorld.createEntity = create
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area}):
+            first = destructibles_authority._ensure_chunk(
+                1, chunk_id, (101.0, 2.0, 20.0))
+            self.assertIs(first, destructibles_authority._ensure_chunk(
+                1, chunk_id, (105.0, 2.0, 21.0)))
+        self.assertIsNotNone(first)
+        self.assertEqual([(chunk_id, 50.0, 50.0)], created)
+
     def test_visible_entity_without_controller_is_replaced_and_then_committed(self):
         manager = _Manager()
         area = _authority_environment(manager)
@@ -10493,6 +10517,8 @@ class NativeItemNameContractTests(unittest.TestCase):
         self.descriptors = {}
 
     def tearDown(self):
+        destructibles_sensor.__dict__.pop(
+            'g_offh_destr_isolated_name_types', None)
         destructibles_sensor.__dict__.pop('g_offh_destr_item_names', None)
         destructibles_sensor.__dict__.pop(
             'g_offh_destr_native_name_lists', None)
@@ -10751,6 +10777,31 @@ class NativeItemNameContractTests(unittest.TestCase):
         self.assertIsNone(mapping)
         self.assertEqual('isolated_item', status)
         self.assertEqual((), anomalous)
+
+    def test_compacted_rebuild_retains_type_proof_for_a_later_isolated_slot(self):
+        tree = 'speedtree/test/oak.spt'
+        self.descriptors[tree] = {'type': self.TREE, 'health': 10}
+        items = ((self.TREE, tree), (self.FRAGILE, None), (self.TREE, tree))
+        names, (mapping, status, unused) = self._align(items)
+        self.assertEqual('exact', status)
+        self.assertEqual({0: tree, 2: tree}, mapping)
+        destructibles_sensor.g_offh_destr_isolated_slots = {(22, 1)}
+        destructibles_sensor.g_offh_destr_item_names = {}
+        calls = []
+        bigworld = types.ModuleType('BigWorld')
+
+        def category(unused_space, unused_chunk, item, unused_module):
+            calls.append(item)
+            self.assertNotEqual(1, item)
+            return self.TREE
+
+        bigworld.wg_getDestructibleEffectCategory = category
+        mapping, status = destructibles_sensor._chunk_native_names_1513(
+            bigworld, self._area(), 1, 22, 3, names)
+        self.assertEqual('exact', status)
+        self.assertEqual({0: tree, 2: tree}, mapping)
+        self.assertEqual([0, 2], calls)
+        self.assertNotIn('g_offh_destr_isolated_chunks', destructibles_sensor.__dict__)
 
     def test_short_list_with_empty_name_never_uses_list_positions(self):
         first = 'speedtree/test/first.spt'

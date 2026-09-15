@@ -933,6 +933,11 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 			return entry['result']
 		if native_type == -1:
 			continue
+		# A later matrix/catalog failure may quarantine this slot. Preserve its
+		# already-proved name group before that can happen, so rebuilding the
+		# bounded alignment cache never escalates one bad item to a whole chunk.
+		globals().setdefault('g_offh_destr_isolated_name_types', {}).setdefault(
+			(int(space_id), int(chunk_id)), {})[item_index] = int(native_type)
 		match = _probe_authored_placement_1513(
 			bigworld, area_destructibles, space_id, chunk_id, item_index,
 			native_type, names, int(native_count))

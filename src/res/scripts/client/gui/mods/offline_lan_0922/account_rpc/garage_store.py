@@ -715,7 +715,8 @@ class GarageStore(object):
                 // 100)
         awarded = economy.scale_rewards(
             rewards, credits_percent=credits_percent,
-            experience_percent=experience_percent)
+            experience_percent=experience_percent,
+            bonds_percent=experience_percent)
         battle_xp = awarded.get('xp', battle_xp) if rewards else (
             max(0, int(battle_xp or 0)) * experience_percent // 100)
         # What the battle earned does not depend on the vehicle it was

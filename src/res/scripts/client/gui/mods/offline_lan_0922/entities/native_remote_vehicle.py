@@ -25,6 +25,49 @@ _SIEGE_ENABLED = 2
 _SIEGE_SWITCHING_OFF = 3
 
 
+def set_engine_audible(entity, audible):
+    """Suspend the stock sound component while a remote vehicle is absent.
+
+    CompoundAppearance.changeVisibility only controls drawing. Use its
+    ComponentDescriptor removal path, also used by __destroyEngineAudition,
+    so Svarog deactivates the running engine/chassis sound owner. Keep the
+    component for a symmetric reveal without creating another native owner.
+    """
+    appearance = getattr(entity, 'appearance', None)
+    if appearance is None:
+        return False
+    saved = getattr(appearance, '_offlineLANMutedEngine', None)
+    audition = getattr(appearance, 'engineAudition', None)
+    detailed = getattr(appearance, 'detailedEngineState', None)
+    if not audible:
+        if audition is None:
+            return saved is not None
+        links = (getattr(detailed, 'onEngineStart', None),
+                 getattr(detailed, 'onStateChanged', None))
+        # Publish ownership before the ComponentDescriptor can re-enter.
+        appearance._offlineLANMutedEngine = (audition, detailed, links)
+        if detailed is not None:
+            detailed.onEngineStart = None
+            detailed.onStateChanged = None
+        appearance.engineAudition = None
+        return True
+    if saved is None:
+        return False
+    alive = getattr(entity, 'isAlive', None)
+    alive = alive() if callable(alive) else bool(alive)
+    if not alive or audition is not None or detailed is not saved[1]:
+        # Death/model rebuilding may already have installed a new owner.
+        appearance._offlineLANMutedEngine = None
+        return False
+    audition, old_detailed, links = saved
+    audition.attachToModel(appearance.compoundModel)
+    appearance.engineAudition = audition
+    if detailed is old_detailed and detailed is not None:
+        detailed.onEngineStart, detailed.onStateChanged = links
+    appearance._offlineLANMutedEngine = None
+    return True
+
+
 def set_draw_visibility(entity, visible):
     """Use the stock compound gate so a hidden tank cannot cast a shadow."""
     show = getattr(entity, 'show', None)
@@ -34,6 +77,7 @@ def set_draw_visibility(entity, visible):
         raise RuntimeError(
             '#1513 native vehicle visibility gate is unavailable')
     visible = bool(visible)
+    set_engine_audible(entity, visible)
     # Vehicle.show controls the model draw pass while CompoundAppearance owns
     # the compound, stickers and crashed-track visibility.  Keep both native
     # layers symmetric: the initial enemy gate may already have selected the
@@ -479,6 +523,9 @@ class _NativeRemoteState(object):
 
         detailed = getattr(appearance, 'detailedEngineState', None)
         audition = getattr(appearance, 'engineAudition', None)
+        if audition is None:
+            paused = getattr(appearance, '_offlineLANMutedEngine', None)
+            audition = paused[0] if paused is not None else None
         engine_ready = False
         if detailed is not None and audition is not None:
             try:
@@ -889,6 +936,8 @@ class _NativeRemoteState(object):
         # entity and callback owners if it raises so factory teardown can retry
         # rather than forgetting a still-linked presentation.
         clear_ground_decal_visibility_state(appearance)
+        if appearance is not None:
+            appearance._offlineLANMutedEngine = None
         self.model_changed = None
         self.entity = None
         return True

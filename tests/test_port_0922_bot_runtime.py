@@ -1769,6 +1769,7 @@ class BotRuntimeTests(unittest.TestCase):
                 'combat_fire_elapsed': 0.25,
                 'combat_fire_timer': 0.5,
                 'stun_end_server_time_ms': 1250,
+                'stun_factors': {},
             }, self.module._combat_record(state))
         finally:
             self.module._number = original_number
@@ -12417,6 +12418,8 @@ class BotRuntimeTests(unittest.TestCase):
 
     def test_bot_medkit_clears_stun_only_after_a_later_simulation_frame(self):
         contracts = _bot_equipment_contracts(self.module)
+        factors = {name: (1.5 if name in self.module.stun_mechanics.INCREASING_STATS else 0.8)
+                   for name in self.module.stun_mechanics.STAT_CONFIG}
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _critical_descriptor(),
             adapter_factory=lambda *unused: _Adapter(),
@@ -12430,8 +12433,11 @@ class BotRuntimeTests(unittest.TestCase):
             'server_tick': 1, 'server_time_ms': 1000,
             'bots': [_snapshot_bot(
                 critical={}, revision=1, base_revision=1,
-                stun_end_server_time_ms=5000)]})
+                stun_end_server_time_ms=5000, stun_factors=factors)]})
         state = runtime.states[11]
+        self.assertEqual(factors, state['stun_factors'])
+        self.assertEqual(1.5, self.module._critical_factor(
+            state, _critical_descriptor(), 'reload'))
 
         runtime._advance_equipment_clock(0.2)
         self.assertFalse(runtime._advance_bot_critical(state, 0.2, 0.2))
@@ -12441,6 +12447,7 @@ class BotRuntimeTests(unittest.TestCase):
         runtime._advance_equipment_clock(0.2)
         self.assertTrue(runtime._advance_bot_critical(state, 0.2, 0.4))
         self.assertEqual(0, state['stun_end_server_time_ms'])
+        self.assertEqual({}, state['stun_factors'])
         self.assertEqual(1, runtime._equipment_states[11][1].uses_left)
         self.assertAlmostEqual(
             90.0, state['equipment_states'][1]['cooldownTimeLeft'])

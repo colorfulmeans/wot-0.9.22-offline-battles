@@ -154,6 +154,9 @@ def _receipt(value):
         awarded = dict(
             (name, max(0, _int(raw_awarded.get(name))))
             for name in ('credits', 'xp', 'free_xp', 'crystal'))
+        if 'crystal' not in raw_awarded:
+            # Receipts predating bond awards did not store this currency.
+            awarded['crystal'] = rewards['crystal']
     shells_fired = {}
     raw_fired = value.get('shells_fired')
     if raw_fired is not None:
@@ -434,7 +437,7 @@ def _banked_rewards(receipt):
     awarded = receipt.get('awarded')
     if isinstance(awarded, dict):
         result = dict(awarded)
-        result['crystal'] = receipt['rewards'].get('crystal', 0)
+        result.setdefault('crystal', receipt['rewards'].get('crystal', 0))
         return result
     rewards = dict(receipt['rewards'])
     factor = _premium_vehicle_xp_factor_100(receipt['vehicle'])
@@ -509,6 +512,31 @@ def _account_award_split(battle_amount, awarded_amount, factor_100=0):
     if awarded_amount < multiplied:
         return awarded_amount, 0
     return battle_amount, awarded_amount - multiplied
+
+
+def _bond_award_breakdown(receipt, awarded):
+    """Apportion the banked integer reward across the native medal rows.
+
+    The server's medal schedule stays unchanged in the receipt. Scale its
+    result rows from the durable award, distributing rounding remainders in
+    a stable order so fractional/downward multipliers also add up exactly.
+    The #1513 packer has medal rows and originalCrystal, but no boosterCrystal.
+    """
+    base = receipt['rewards']['crystal']
+    awarded = max(0, _int(awarded))
+    medals = receipt['crystal_rewards']
+    if base <= 0 or not medals:
+        return awarded, []
+    parts = [('', max(0, base - sum(medals.values())))] + sorted(medals.items())
+    shares = [amount * awarded // base for name, amount in parts]
+    remaining = awarded - sum(shares)
+    order = sorted(range(len(parts)), key=lambda index: (
+        -(parts[index][1] * awarded % base), parts[index][0]))
+    for index in order[:remaining]:
+        shares[index] += 1
+    return shares[0], [(name, shares[index])
+                       for index, (name, amount) in enumerate(parts)
+                       if name and shares[index] > 0]
 
 
 def _add_value_replays(packers, vehicle, replay_types=None):
@@ -710,6 +738,8 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         original['xp'], rewards['xp'], xp_factor_100)
     base_free_xp, booster_free_xp = _account_award_split(
         original['free_xp'], rewards['free_xp'], xp_factor_100)
+    base_crystal, event_crystal = _bond_award_breakdown(
+        receipt, rewards['crystal'])
     vehicle = {
         'accountDBID': account_dbid,
         'typeCompDescr': vehicle_type_cd,
@@ -766,9 +796,8 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'gold': 0,
         'originalGold': 0,
         'crystal': rewards['crystal'],
-        'originalCrystal': rewards['crystal'] - sum(
-            receipt['crystal_rewards'].values()),
-        'eventCrystalList': sorted(receipt['crystal_rewards'].items()),
+        'originalCrystal': base_crystal,
+        'eventCrystalList': event_crystal,
         'creditsToDraw': 0,
         'originalCreditsToDraw': 0,
         'autoRepairCost': service['repair_credits'],

@@ -7,6 +7,7 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
 
 import copy
 import math
+from gui.mods.offline_lan_0922 import stun_mechanics
 from gui.mods.offline_lan_0922 import tank_contact_ledger
 import json
 import random
@@ -835,7 +836,8 @@ def _critical_factor(state, descriptor, stat):
     devices, destroyed, crew_ko, yellow = _critical_parts(state)
     return (device_damage.crew_stat_factor(crew_ko, stat) *
             device_damage.module_stat_factor(
-                devices, destroyed, descriptor, stat, yellow))
+                devices, destroyed, descriptor, stat, yellow) *
+            stun_mechanics.factor(state, stat))
 
 
 def _critical_signature(payload):
@@ -919,6 +921,7 @@ def _combat_record(state):
             state.get('combat_fire_timer', 0.0), 6),
         'stun_end_server_time_ms': max(
             0, int(state.get('stun_end_server_time_ms', 0))),
+        'stun_factors': dict(state.get('stun_factors') or {}),
     }
 
 
@@ -983,6 +986,8 @@ def _apply_combat_record(state, record):
         _number(record.get('combat_fire_timer')), 6)
     state['stun_end_server_time_ms'] = max(
         0, int(_number(record.get('stun_end_server_time_ms'))))
+    state['stun_factors'] = (dict(record.get('stun_factors') or {})
+                            if state['stun_end_server_time_ms'] else {})
     state['display_health'] = state['health']
     if not state['alive']:
         state['speed'] = 0.0
@@ -2975,6 +2980,7 @@ class BotRuntime(object):
                 isinstance(server_time_ms, bool) or end < 0 or observed < 0):
             raise ValueError('bot stun clock is invalid')
         state['stun_end_server_time_ms'] = end
+        state['stun_factors'] = dict(raw.get('stun_factors') or {}) if end > observed else {}
         state['_stun_until_equipment_time'] = (
             self._equipment_now + max(0.0, (end - observed) / 1000.0))
         return end > observed
@@ -3810,6 +3816,9 @@ class BotRuntime(object):
         if stun_end < 0:
             raise ValueError('modern bot snapshot combat contract is invalid')
         candidate['stun_end_server_time_ms'] = stun_end
+        candidate['stun_factors'] = (
+            stun_mechanics.canonical_factors(raw['stun_factors'])
+            if stun_end and raw.get('stun_factors') else {})
         candidate_record = _combat_record(candidate)
         signature = _combat_signature(candidate)
 
@@ -4010,6 +4019,7 @@ class BotRuntime(object):
         if clear_stun:
             if int(state.get('stun_end_server_time_ms', 0)) == stun_base:
                 state['stun_end_server_time_ms'] = 0
+                state['stun_factors'] = {}
                 state['_stun_until_equipment_time'] = self._equipment_now
                 stun_cleared = True
         return payload is not None or stun_cleared
@@ -4041,9 +4051,10 @@ class BotRuntime(object):
         # Repair, consumables and fire may replace the canonical payload. Never
         # carry a parsed view across that mutation boundary.
         _clear_critical_parts_tick_cache(state)
-        payload = state.get('critical')
-        if ((not isinstance(payload, dict) or not payload) and
-                not self._bot_stunned(state)):
+        payload = state.get('critical') or {}
+        if not self._bot_stunned(state):
+            state['stun_factors'] = {}
+        if not payload and not self._bot_stunned(state):
             return False
         before_signature = _combat_signature(state)
         was_on_fire = bool(payload.get('fire', False))
@@ -4568,7 +4579,8 @@ class BotRuntime(object):
             module_factor = device_damage.module_stat_factor(
                 devices, destroyed, descriptor, 'vision', yellow)
             damage_factor = device_damage.clamp_vision_factor(
-                dynamic.get('vision', 1.0) * module_factor)
+                dynamic.get('vision', 1.0) * module_factor *
+                stun_mechanics.factor(source, 'vision'))
             since = self._source_still.get(('human', player_id))
             binocular_active = bool(
                 profile['has_binoculars'] and since is not None and
@@ -9749,7 +9761,8 @@ class BotRuntime(object):
             state['gun_pitch'] = hull_aiming.gun_pitch_step(
                 state.get('gun_pitch', 0.0), raw_pitch, static_pitch,
                 _rotation_speed(gun, 0.35) * max(
-                    0.0, modifier_bundle.get('gun_rotation_factor', 1.0)),
+                    0.0, modifier_bundle.get('gun_rotation_factor', 1.0)) *
+                stun_mechanics.factor(state, 'turret_speed'),
                 step, turret_rotation_time, pitch_limits)
         state['desired_gun_pitch'] = desired_pitch
         world_angles = self._world_barrel_angles(state, descriptor)
@@ -12009,6 +12022,11 @@ class BotRuntime(object):
                 diagnostic.phase('bot.integrate')
             if not self.native_motion:
                 params = self._physics_params_for(state['id'])
+                if state.get('stun_end_server_time_ms', 0):
+                    params = dict(params)
+                    params['speedFwd'] *= stun_mechanics.factor(state, 'speed')
+                    params['speedBwd'] *= stun_mechanics.factor(state, 'speed')
+                    params['rotSpd'] *= stun_mechanics.factor(state, 'traverse')
                 # The selected corridor's ground sample is also the copied
                 # physics slope.  A second native probe here used to double the
                 # render-thread work for every moving bot.
@@ -12280,9 +12298,11 @@ class BotRuntime(object):
                 state.get('turret_yaw', 0.0), previous_turret_yaw)) / max(
                 step, 1.0e-9)
             gun_state.tick_dispersion(
-                step, abs(state['speed']),
-                abs(self._turn_speeds.get(state['id'], 0.0)),
-                turret_speed,
+                step, abs(state['speed']) * stun_mechanics.factor(
+                    state, 'bloom_move'),
+                abs(self._turn_speeds.get(state['id'], 0.0)) *
+                stun_mechanics.factor(state, 'bloom_rotation'),
+                turret_speed * stun_mechanics.factor(state, 'bloom_turret'),
                 _critical_factor(state, descriptor, 'dispersion'),
                 _critical_factor(state, descriptor, 'aim_time'))
             state['clip_size'] = gun_state.clip_size

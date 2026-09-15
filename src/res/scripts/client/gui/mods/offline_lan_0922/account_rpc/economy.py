@@ -138,11 +138,10 @@ def _tankman_cost(credits_amount, gold, role_level, premium=False):
 
 
 # ``ShopCommonStats.paidRemovalCost`` falls back to 10 gold when the shop
-# publishes none, and ``paidDeluxeRemovalCost`` to 100 crystal.  Those are the
-# client's own numbers for taking a complex optional device off a vehicle, so
-# a career charges them and the historical sandbox charges nothing.
+# publishes none. The live shop, its undiscounted defaults and both save modes
+# use the same standard-equipment price. Improved equipment uses 200 bonds.
 CAREER_DEVICE_REMOVAL = {'gold': 10}
-SANDBOX_DEVICE_REMOVAL = {'gold': 0}
+SANDBOX_DEVICE_REMOVAL = {'gold': 10}
 
 CAREER_TANKMAN_COSTS = (
     _tankman_cost(0, 0, 50),
@@ -232,13 +231,15 @@ def premium_xp_bonus(value, factor_100):
     return int(amount + 0.5)
 
 
-def scale_rewards(rewards, credits_percent=100, experience_percent=100):
+def scale_rewards(rewards, credits_percent=100, experience_percent=100,
+                  bonds_percent=100):
     """Return one battle's rewards after the account's own multipliers.
 
     The receipt states what the battle did; the multipliers are the account's,
     so the client applies them.  Credits and experience are scaled separately
     because the offline credit policy is separate from descriptor-owned XP
-    bonuses, while the save's own multiplier moves both.
+    bonuses. Bonds use only the save multiplier, independently of premium
+    vehicle/account bonuses. Service costs are never earnings.
     """
     rewards = rewards if isinstance(rewards, dict) else {}
     scaled = dict(rewards)
@@ -246,6 +247,7 @@ def scale_rewards(rewards, credits_percent=100, experience_percent=100):
         ('credits', credits_percent),
         ('xp', experience_percent),
         ('free_xp', experience_percent),
+        ('crystal', bonds_percent),
     )
     for name, percent in factors:
         try:

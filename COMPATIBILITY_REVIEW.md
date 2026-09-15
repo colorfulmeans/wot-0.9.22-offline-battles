@@ -13,6 +13,70 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+The post-0.8.3 gameplay follow-up addresses nine reported paths. A hidden remote
+vehicle suspends its engine-audition component and detailed-engine callbacks;
+reveal restores the same living owner, while death and teardown discard it.
+This uses the stock `CompoundAppearance.__destroyEngineAudition` component
+removal pattern seen in the 9.22 reference, but audible silence/restart and
+repeated native model changes still require Windows #1513 acceptance. A spot
+loss also releases auto-aim before model readiness checks, and the auto-aim
+entry point rejects a caller's retained hidden entity. These changes do not
+establish which third-party aiming plugin, if any, caused a particular report.
+
+HE direct impact presentation selects `armorHit` when HP damage is positive
+and `armorResisted` otherwise; the original physical penetration result stays
+in the damage/statistics ledger. AP and HE near-miss presentation retain their
+existing groups. Ordinary paid equipment demounting now publishes and charges
+10 gold in both economy modes; the descriptor still determines freely
+removable equipment, and improved equipment retains its 200-bond cost.
+
+Native shell `Stun` fields now survive descriptor donation, effective-parameter
+validation and frozen projectile transport. The mandatory worker attaches
+duration and stat multipliers to established direct/visible blast contacts,
+including zero-HP blast contacts. It reads the installed `items.stun.g_cfg`
+and target resistance rather than class names or modern balance constants.
+The existing server stun state, expiry, assistance and medical-kit flow carries
+those multipliers to human movement/aim/reload/vision and Bot combat state.
+An already elapsed stun does not discard an otherwise valid delayed damage
+batch; a shorter follow-up does not truncate an existing stun. This restores
+the previously missing generation/penalty path, not the unavailable retail
+cell implementation: exact overlap-strength/assistance sharing, partial-cover
+stun weighting and native visual/audio acceptance remain boundaries.
+
+Destructible controllers now spawn at the centre of the chunk encoded by the
+admitted native identity, using the stock 100-metre/127-offset mapping. A
+straddling object's impact/bounds position must not put its controller in a
+neighbouring chunk and trigger replacement on subsequent contacts. Name
+alignment retains each successful category proof before a later per-slot
+catalog/matrix failure, so rebuilding an evicted compact-name mapping does
+not quarantine the entire chunk. Unknown isolated slots remain solid and
+unqueried. Regression tests prove the lifecycle/rebuild cases; no measured FPS
+gain or identification of every reported scenery object is claimed.
+
+The follow-up also applies the save earnings multiplier to bonds at the
+existing atomic garage settlement. It does not apply premium coefficients or
+scale directive service charges. Result packing and lifetime counters now
+respect the durable award; scaled medal rows apportion integer rounding
+without changing the server's historical medal schedule. A retried receipt
+keeps its original settled multiplier, even after editing the save setting.
+
+Successful damage to a still-destroyed device resets its repair progress to
+zero. Failed module rolls and hull-only hits do not restart repair. Bot
+projectile damage now rebases its successful device/crew operations over the
+canonical state, as human-target damage already does, instead of dropping
+module damage when a repair publication overtakes the shot. A fresh damage
+lineage is opened even for a zero-to-zero hit on a repairing device, preventing
+an older repair checkpoint from undoing the hit. The native countdown is
+repopulated from the new progress. Per-device retail repair rates remain the
+previously documented reconstruction; this does not claim exact retail timing.
+
+Vent Purge's reported purchase failure was not reproduced by the owner.
+All fifteen directive prices, depot purchases, fourth-slot layout fills and
+automatic resupply paths have regression coverage, including a 12-bond Vent
+Purge purchase refused at an 11-bond balance with no inventory mutation.
+No general purchase defect was established, so the buying policy is unchanged.
+Real UI/plugin-specific failures still require that affected session's evidence.
+
 Tactical authoring contains route sketches, not a duplicate set of base
 coordinates. The navigation baker applies the reviewed route overlay once to
 the original sketches, using #1513 arena-decoded team starts for orientation
@@ -2341,9 +2405,10 @@ components and critical state. That calculation cannot change the live target
 or invoke native kill
 and damage-panel callbacks. The proposal carries the target's exact base/ack
 token and its pre-critical hull damage separately. If the target was repaired,
-extinguished or otherwise revised before the report arrives, the server keeps
-the ordinary hull damage and shot feedback but rejects the stale module state
-and any obsolete ammo-rack damage amplification explicitly. A monotonic server
+extinguished or otherwise revised before the report arrives, the server applies
+the successful module/crew damage operations over the latest canonical state
+for both players and Bots. It retains unrelated progress and recomputes lethal
+module consequences instead of installing a stale full state. A monotonic server
 event is delivered before the snapshot containing its new HP/critical state;
 the client presents stock shot results and battle events, then installs the
 accepted revision exactly once.
@@ -3151,7 +3216,9 @@ The source audit deliberately keeps the following differences visible:
 - the server publishes terminal winner/reason/base team plus live frags and the
   human team-killer flag, but not the retired predecessor's complete
   `personal`/`players`/`vehicles` battle-result record;
-- the complete stun penalty/medical-kit loop remains open. Bot movement and
+- the post-0.8.3 follow-up wires stun generation, penalties and the existing
+  medical-kit loop, subject to the retail-parity boundaries documented above.
+  Bot movement and
   both Bot and human projectile trajectories run in the mandatory hidden
   native worker, while the LAN server admits their ordered results and shared
   ledgers. Each human client still originates its own input, pose and gun-state

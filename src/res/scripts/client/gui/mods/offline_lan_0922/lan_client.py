@@ -3,6 +3,7 @@ from __future__ import print_function
 import base64
 import json
 import math
+from gui.mods.offline_lan_0922 import stun_mechanics
 import socket
 import threading
 import time
@@ -559,6 +560,12 @@ def _canonical_runtime_vehicle_row(value):
         if parsed is None:
             return None
         result[name] = parsed
+    if result.get('stun_factors'):
+        try:
+            result['stun_factors'] = stun_mechanics.canonical_factors(
+                result['stun_factors'])
+        except (TypeError, ValueError, OverflowError):
+            return None
     if 'velocity' in result:
         velocity = result.get('velocity')
         if not isinstance(velocity, (list, tuple)) or len(velocity) < 3:
@@ -707,7 +714,7 @@ def _strict_projectile_source_shot(value):
     shell_fields = set(shell) if isinstance(shell, dict) else set()
     base_shell_fields = {'kind', 'caliber', 'damage', 'explosionRadius'}
     if (not isinstance(shell, dict) or
-            shell_fields not in (
+            shell_fields - {'stun'} not in (
                 base_shell_fields,
                 base_shell_fields | PROJECTILE_HE_FACTOR_FIELDS)):
         return None
@@ -773,6 +780,13 @@ def _strict_projectile_source_shot(value):
     }
     if he_factors is not None:
         result['shell'].update(he_factors)
+    if 'stun' in shell:
+        try:
+            if kind != 'HIGH_EXPLOSIVE' or shell['stun'] is None:
+                return None
+            result['shell']['stun'] = stun_mechanics.shell_component(shell['stun'])
+        except (TypeError, ValueError, KeyError):
+            return None
     return result
 
 
@@ -960,6 +974,8 @@ def _strict_projectile_effect(value):
         'critical', 'critical_target_base_revision',
         'critical_target_ack_seq', 'hull_damage', 'critical_delta'))
     stun_fields = frozenset(('stun_end_server_time_ms',))
+    if 'stun_factors' in value:
+        stun_fields |= frozenset(('stun_factors',))
     target_pose_fields = frozenset(('target_x', 'target_y', 'target_z'))
     damage_sticker_fields = frozenset(('damage_sticker',))
     potential_fields = frozenset(('potential_damage',))
@@ -1041,6 +1057,12 @@ def _strict_projectile_effect(value):
         if stun_end is None:
             return None
         result['stun_end_server_time_ms'] = stun_end
+        if 'stun_factors' in value:
+            try:
+                result['stun_factors'] = stun_mechanics.canonical_factors(
+                    value['stun_factors'])
+            except (TypeError, ValueError):
+                return None
     if has_damage_sticker:
         damage_sticker = _projectile_int_range(
             value.get('damage_sticker'), 0,

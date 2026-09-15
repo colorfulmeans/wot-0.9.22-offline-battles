@@ -93,7 +93,7 @@ vehicles and gold ammunition are paid for out of the gold the launcher grants.
 Taking a complex optional device off a vehicle follows the client's own rule:
 its descriptor says whether the device survives being removed, and one that
 does not is destroyed unless the player pays the game's own removal price --
-10 gold in a career, nothing in a fully unlocked save. Improved equipment
+10 gold in either a career or a fully unlocked save. Improved equipment
 uses its separate 200-bond removal price.
 
 The fourth equipment slot accepts the fifteen 0.9.22 directives. Buy them
@@ -106,7 +106,11 @@ cannot be sold; improved equipment resale yields credits, not bonds.
 Epic medals and Battle Hero achievements award bonds according to the
 [9.20.1 schedule retained in 0.9.22](https://worldoftanks.eu/en/news/general-news/920-1-bonds-and-medals/).
 Awards depend on vehicle tier and appear individually in the battle results.
-They persist with the save and do not receive the offline earnings multiplier.
+They persist with the save and receive its offline earnings multiplier.
+Premium bonuses do not multiply bonds. Directive purchases and automatic
+resupply still charge their normal prices. The wallet, battle-result medal
+rows and lifetime totals use the same rounded award, applied only once even
+after a retry or restart.
 The launcher's Saves tab can also edit the bond balance. Older saves start
 with zero bonds. The historical additional base-XP bond payout for all-Tier-X
 battles is not implemented: its exact conversion table is still unavailable.

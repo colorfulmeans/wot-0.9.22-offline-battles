@@ -31,6 +31,7 @@ EQUIPMENT_CONTRACT_FIELDS = (
 EQUIPMENT_SNAPSHOT_FIELDS = (
     'equipment', 'usesLeft', 'cooldownTimeLeft', 'active',
     'autoPendingElapsed', 'aiPendingElapsed')
+STUN_RESISTANCE_FIELDS = ('stunResistanceDuration', 'stunResistanceEffect')
 
 
 def _value(source, name, default=None):
@@ -142,6 +143,10 @@ def project_equipment(descriptor, reaction_seconds=None):
                 descriptor, 'engineHpLossPerSecond'), 0.0)),
         'autoReactionSeconds': max(0.0, _number(reaction_seconds, 0.0)),
     }
+    for name in STUN_RESISTANCE_FIELDS:
+        value = _value(descriptor, name)
+        if value is not None:
+            result[name] = _number(value)
     return result
 
 
@@ -167,7 +172,7 @@ def _validate_contract(contract):
     """Return one strict JSON-safe projection used by runtime state."""
     if not isinstance(contract, dict):
         raise ValueError('equipment contract is not an object')
-    if set(contract) != set(EQUIPMENT_CONTRACT_FIELDS):
+    if set(contract) - set(STUN_RESISTANCE_FIELDS) != set(EQUIPMENT_CONTRACT_FIELDS):
         raise ValueError('equipment contract fields are incomplete')
     name = str(contract.get('name') or '')
     kind = str(contract.get('kind') or '')
@@ -203,6 +208,12 @@ def _validate_contract(contract):
         'autoReactionSeconds': _number(
             contract.get('autoReactionSeconds'), -1.0),
     }
+    for key in STUN_RESISTANCE_FIELDS:
+        if key in contract:
+            raw = contract[key]
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not 0.0 <= raw <= 1.0:
+                raise ValueError('equipment stun resistance is invalid')
+            result[key] = float(raw)
     if (result['id'] < 0 or result['compactDescr'] < 0 or
             result['cooldownSeconds'] < 0.0 or
             result['fireStartingChanceFactor'] < 0.0 or

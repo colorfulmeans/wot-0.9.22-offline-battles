@@ -60,6 +60,7 @@ from gui.mods.offline_lan_0922 import device_damage
 from gui.mods.offline_lan_0922 import player_critical_mechanics
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
+from gui.mods.offline_lan_0922 import stun_mechanics
 from gui.mods.offline_lan_0922 import vehicle_physics
 from gui.mods.offline_lan_0922.ai import planner as bot_planner
 from gui.mods.offline_lan_0922.ai.maps import get_tactical_map
@@ -986,7 +987,7 @@ def _projectile_source_shot(value):
         "explosionDamageFactor", "explosionDamageAbsorptionFactor",
         "explosionEdgeDamageFactor"}
     if (not isinstance(shell, dict) or
-            shell_fields not in (
+            shell_fields - {'stun'} not in (
                 base_shell_fields, base_shell_fields | he_factor_fields)):
         raise ValueError("invalid source shell shape")
     kind = shell.get("kind")
@@ -1038,6 +1039,10 @@ def _projectile_source_shot(value):
                     shell.get("explosionEdgeDamageFactor"),
                     0.000001, 1.0)),
         })
+    if 'stun' in shell:
+        if shell['kind'] != 'HIGH_EXPLOSIVE' or shell['stun'] is None:
+            raise ValueError('invalid stun shell')
+        result['shell']['stun'] = stun_mechanics.shell_component(shell['stun'])
     return result
 
 
@@ -2095,6 +2100,7 @@ class Player(_EndpointSendMixin):
     death_attacker_kind: str = ""
     death_attacker_id: int = 0
     stun_end_server_time_ms: int = 0
+    stun_factors: dict = field(default_factory=dict)
     stun_attacker_kind: str = ""
     stun_attacker_id: int = 0
     client_position: bool = False
@@ -3359,6 +3365,7 @@ class BattleState:
             player.death_attacker_kind = ""
             player.death_attacker_id = 0
             player.stun_end_server_time_ms = 0
+            player.stun_factors = {}
             player.stun_attacker_kind = ""
             player.stun_attacker_id = 0
             player.participating = True
@@ -4442,6 +4449,7 @@ class BattleState:
                         "combat_fire_timer", "stun_end_server_time_ms",
                         "stun_attacker_kind", "stun_attacker_id"):
                     entry[name] = state[name]
+                entry['stun_factors'] = dict(state.get('stun_factors') or {})
                 takeover_manifest.append(entry)
             message = {
                 "type": "battle_start",
@@ -6040,6 +6048,7 @@ class BattleState:
             # this durable state. Preserve only the server-admitted value.
             "stun_end_server_time_ms": int((previous or {}).get(
                 "stun_end_server_time_ms", 0)),
+            'stun_factors': dict((previous or {}).get('stun_factors') or {}),
             "stun_attacker_kind": str((previous or {}).get(
                 "stun_attacker_kind", "")),
             "stun_attacker_id": int((previous or {}).get(
@@ -6135,6 +6144,7 @@ class BattleState:
             raise ValueError("bot stun clear has no medkit activation")
         result["stun_end_server_time_ms"] = proposed_stun_end
         if proposed_stun_end == 0:
+            result['stun_factors'] = {}
             result["stun_attacker_kind"] = ""
             result["stun_attacker_id"] = 0
         return result
@@ -6324,7 +6334,7 @@ class BattleState:
                     "combat_base_revision", "combat_ack_seq",
                     "combat_fire_elapsed", "combat_fire_timer",
                     "fire_attacker_kind", "fire_attacker_id",
-                    "stun_end_server_time_ms", "stun_attacker_kind",
+                    "stun_end_server_time_ms", "stun_factors", "stun_attacker_kind",
                     "stun_attacker_id"):
             if key in source:
                 value = source[key]
@@ -6333,7 +6343,7 @@ class BattleState:
                 target.pop(key, None)
 
     @staticmethod
-    def _commit_external_bot_combat(bot, before):
+    def _commit_external_bot_combat(bot, before, restart_repair=False):
         """Open a new lineage for one server-admitted bot combat change."""
         before_fire = bool(before[2] and before[2].get("fire", False))
         after_critical = bot.get("critical") or {}
@@ -6345,7 +6355,7 @@ class BattleState:
             bot["fire_attacker_kind"] = ""
             bot["fire_attacker_id"] = 0
         after = BattleState._bot_combat_signature(bot)
-        if after == before:
+        if after == before and not restart_repair:
             return False
         revision = int(bot.get("combat_revision", 0)) + 1
         bot["combat_revision"] = revision
@@ -8470,7 +8480,7 @@ class BattleState:
             "x", "y", "z", "critical",
             "critical_target_base_revision", "critical_target_ack_seq",
             "hull_damage", "critical_delta", "potential_damage",
-            "stun_end_server_time_ms",
+            "stun_end_server_time_ms", "stun_factors",
             "target_x", "target_y", "target_z",
             "damage_sticker",
             "structural_armor_hit",
@@ -8589,14 +8599,24 @@ class BattleState:
                          "critical_delta"}:
             raise ValueError("critical tokens without critical payload")
         stun_end_server_time_ms = 0
+        stun_factors = {}
+        if 'stun_factors' in raw and 'stun_end_server_time_ms' not in raw:
+            raise ValueError('stun factors require an active stun')
         if "stun_end_server_time_ms" in raw:
             if not allow_stun or stun_now_ms is None:
                 raise ValueError("stun result needs internal authority")
             stun_end_server_time_ms = _exact_int(
                 raw.get("stun_end_server_time_ms"),
-                int(stun_now_ms) + 1,
+                1,
                 int(round((PREBATTLE_SECONDS +
                            self.battle_duration_seconds) * 1000.0)))
+            if 'stun_factors' in raw:
+                stun_factors = stun_mechanics.canonical_factors(raw['stun_factors'])
+            # An old terminal may arrive after its stun elapsed. Its HP and
+            # critical results are still valid; do not reject the whole shot.
+            if stun_end_server_time_ms <= int(stun_now_ms):
+                stun_end_server_time_ms = 0
+                stun_factors = {}
         return {
             "target_kind": target_kind, "target_id": target_id,
             "target": target, "target_team": target_team,
@@ -8611,6 +8631,7 @@ class BattleState:
             "hull_damage": hull_damage, "splash": bool(splash),
             "retired_target": retired_target,
             "stun_end_server_time_ms": stun_end_server_time_ms,
+            "stun_factors": stun_factors,
             "damage_sticker": damage_sticker,
         }
 
@@ -8783,17 +8804,29 @@ class BattleState:
             # damage, assist, stun or statistic against an absent vehicle.
             return
         critical = proposal["critical"]
+        delta = proposal["critical_delta"]
+        module_hits = set(change["name"] for change in
+                          (delta or {}).get("devices", ())
+                          if change["hp_loss"] > 0.0)
+        module_hits.difference_update(device_damage.NO_REPAIR_PROGRESS_DEVICES)
         critical_noop = bool(
-            target_kind == "player" and critical is not None and was_alive and
-            not proposal["critical_delta"]["devices"] and
-            not proposal["critical_delta"]["crew_ko"] and
-            not proposal["critical_delta"]["ignite"])
+            critical is not None and was_alive and isinstance(delta, dict) and
+            not delta["devices"] and not delta["crew_ko"] and
+            not delta["ignite"])
         if critical_noop:
             admitted_critical = None
-        elif (target_kind == "player" and critical is not None and was_alive and
-                not critical_noop):
-            admitted_critical = self._merge_player_critical_damage(
-                target, critical, proposal["critical_delta"])
+        elif critical is not None and was_alive and isinstance(delta, dict):
+            if target_kind == "player":
+                admitted_critical = self._merge_player_critical_damage(
+                    target, critical, delta)
+            else:
+                # Bot repair publications can overtake a shot just as owner
+                # track reports can. Rebase the successful damage operations;
+                # an outdated full snapshot must neither lose a hit nor undo
+                # unrelated repair or consumable work.
+                profile = self.bot_terminal_criticals.get(target_id) or critical
+                admitted_critical = self._merge_critical_damage(
+                    target.get("critical"), critical, delta, profile)
         else:
             admitted_critical = (
                 critical if proposal["critical_accepted"] and was_alive
@@ -8805,10 +8838,11 @@ class BattleState:
             was_alive and isinstance(admitted_critical, dict) and
             admitted_critical.get("ammo_rack_death", False))
         damage = (proposal["hull_damage"]
-                  if target_kind == "player" and critical is not None
+                  if critical is not None and isinstance(delta, dict)
                   else proposal["damage"])
         if (target_kind != "player" and critical is not None and
-                not proposal["critical_accepted"]):
+                not proposal["critical_accepted"] and
+                not isinstance(delta, dict)):
             damage = proposal["hull_damage"]
         if not was_alive:
             damage = 0
@@ -8831,7 +8865,9 @@ class BattleState:
                 target.death_reason = 0
             critical_commit = self._commit_external_player_critical(
                 target, admitted_critical,
-                (record["shooter_kind"], record["shooter_id"]))
+                (record["shooter_kind"], record["shooter_id"]),
+                restart_repair=bool(module_hits.intersection(
+                    (critical_before or {}).get("destroyed") or ())))
             health = target.health
             alive = target.alive
         else:
@@ -8864,7 +8900,10 @@ class BattleState:
                     # fresh hit feedback. Preserve only admitted hit events.
                     event_critical["events"] = list(
                         (admitted_critical or {}).get("events") or ())
-            self._commit_external_bot_combat(target, combat_before)
+            self._commit_external_bot_combat(
+                target, combat_before,
+                restart_repair=bool(module_hits.intersection(
+                    (critical_before or {}).get("destroyed") or ())))
             critical_commit = ({
                 "combat_revision": target.get("combat_revision", 0),
                 "combat_base_revision": target.get(
@@ -9055,7 +9094,8 @@ class BattleState:
             self._clear_vehicle_stun(victim)
         elif proposal["stun_end_server_time_ms"]:
             self._set_canonical_stun(
-                shooter, victim, proposal["stun_end_server_time_ms"])
+                shooter, victim, proposal["stun_end_server_time_ms"],
+                proposal.get('stun_factors'))
 
     def resolve_projectile(self, player_id, message):
         """Validate one whole terminal effect batch before applying any HP."""
@@ -11353,28 +11393,33 @@ class BattleState:
 
     @staticmethod
     def _merge_player_critical_damage(player, proposal, delta):
-        """Apply one monotonic worker delta over current canonical progress."""
+        """Apply a worker delta using the player's frozen descriptor profile."""
         if proposal is None or delta is None:
             return None
         params = player.effective_params if isinstance(
             player.effective_params, dict) else {}
         profile = params.get("critical") if isinstance(params, dict) else None
+        return BattleState._merge_critical_damage(
+            player.critical, proposal, delta, profile)
+
+    @staticmethod
+    def _merge_critical_damage(current, proposal, delta, profile):
+        """Rebase a successful hit over the actor's current repair progress."""
         rows = profile.get("devices") if isinstance(profile, dict) else None
         if not isinstance(rows, list):
-            raise ValueError("player critical profile is unavailable")
+            raise ValueError("critical profile is unavailable")
         maxima = {}
         for row in rows:
             if not isinstance(row, dict):
-                raise ValueError("player critical profile is invalid")
+                raise ValueError("critical profile is invalid")
             name = str(row.get("name", ""))
             maximum = _finite_float(row.get("max_hp"), -1.0)
             if (name not in CRITICAL_DEVICE_NAMES or name in maxima or
                     maximum <= 0.0):
-                raise ValueError("player critical profile is invalid")
+                raise ValueError("critical profile is invalid")
             maxima[name] = maximum
 
-        current = (copy.deepcopy(player.critical)
-                   if isinstance(player.critical, dict) else {})
+        current = copy.deepcopy(current) if isinstance(current, dict) else {}
         current_devices = []
         by_name = {}
         for raw in current.get("devices") or ():
@@ -11419,8 +11464,9 @@ class BattleState:
                 raise ValueError("canonical critical maximum disagrees")
             old_hp = _clamp(
                 _finite_float(record.get("hp"), maximum), 0.0, maximum)
-            new_hp = max(0.0, old_hp - hp_loss)
             old_state = str(record.get("state", "normal"))
+            new_hp = device_damage.damaged_hp(
+                old_hp, hp_loss, old_state == "destroyed")
             derived = device_damage.device_state(new_hp, maximum)
             state_rank = {"normal": 0, "critical": 1, "destroyed": 2}
             new_state = (old_state if state_rank.get(old_state, 0) >=
@@ -11489,7 +11535,8 @@ class BattleState:
         return _critical_payload(candidate)
 
     @staticmethod
-    def _commit_external_player_critical(player, critical, attacker=None):
+    def _commit_external_player_critical(player, critical, attacker=None,
+                                         restart_repair=False):
         """Commit damage and open a new owner-report lineage.
 
         A later repair checkpoint may advance within this lineage, but a
@@ -11503,7 +11550,10 @@ class BattleState:
                 not candidate.get("crew_roster")):
             candidate["crew_roster"] = list(
                 player.critical["crew_roster"])
-        if candidate == player.critical:
+        # Even 0 -> 0 on a still-destroyed device is a new hit: an owner may
+        # already have unacknowledged repair progress. Close that lineage so
+        # its old checkpoint cannot repair through this shot.
+        if candidate == player.critical and not restart_repair:
             return {
                 "critical_revision": player.critical_revision,
                 "critical_base_revision":
@@ -12082,7 +12132,7 @@ class BattleState:
             "alive": bool(vehicle.get("alive")),
         }
 
-    def _write_vehicle_stun(self, target, end, attacker):
+    def _write_vehicle_stun(self, target, end, attacker, factors=None):
         kind, vehicle_id = str(target[0]), int(target[1])
         attacker_kind = str(attacker[0]) if attacker is not None else ""
         attacker_id = int(attacker[1]) if attacker is not None else 0
@@ -12091,6 +12141,7 @@ class BattleState:
             if vehicle is None:
                 return False
             vehicle.stun_end_server_time_ms = int(end)
+            vehicle.stun_factors = dict(factors or {}) if end else {}
             vehicle.stun_attacker_kind = attacker_kind
             vehicle.stun_attacker_id = attacker_id
             return True
@@ -12100,11 +12151,13 @@ class BattleState:
         if vehicle is None:
             return False
         vehicle["stun_end_server_time_ms"] = int(end)
+        vehicle['stun_factors'] = dict(factors or {}) if end else {}
         vehicle["stun_attacker_kind"] = attacker_kind
         vehicle["stun_attacker_id"] = attacker_id
         return True
 
-    def _set_canonical_stun(self, attacker, target, end_server_time_ms):
+    def _set_canonical_stun(self, attacker, target, end_server_time_ms,
+                            factors=None):
         """Carry one internal projectile resolver's final stun state.
 
         The resolver owns duration and overlap semantics. This layer only
@@ -12117,6 +12170,11 @@ class BattleState:
         state = self._vehicle_stun_state(target)
         if state is None or not state["alive"]:
             return False
+        if int(state['end']) >= end_server_time_ms:
+            # Repeated/smaller hits must not shorten the existing stun or
+            # steal its outstanding assistance attribution.
+            return False
+        factors = stun_mechanics.canonical_factors(factors) if factors else {}
         attacker = (str(attacker[0]), int(attacker[1]))
         if self._vehicle_team(*attacker) not in (1, 2):
             return False
@@ -12124,7 +12182,7 @@ class BattleState:
                if str(target[0]) == "bot" else None)
         combat_before = (self._bot_combat_signature(bot)
                          if bot is not None else None)
-        if not self._write_vehicle_stun(target, end_server_time_ms, attacker):
+        if not self._write_vehicle_stun(target, end_server_time_ms, attacker, factors):
             return False
         if bot is not None:
             self._commit_external_bot_combat(bot, combat_before)
@@ -12133,6 +12191,7 @@ class BattleState:
             "target_kind": str(target[0]), "target_id": int(target[1]),
             "attacker_kind": attacker[0], "attacker_id": attacker[1],
             "stun_end_server_time_ms": end_server_time_ms,
+            'stun_factors': dict(factors),
         })
         return True
 
@@ -13928,6 +13987,7 @@ class BattleState:
             "death_attacker_id": player.death_attacker_id,
             "stun_end_server_time_ms":
                 player.stun_end_server_time_ms,
+            'stun_factors': dict(player.stun_factors),
             "stun_attacker_kind": player.stun_attacker_kind,
             "stun_attacker_id": player.stun_attacker_id,
             "critical_revision": player.critical_revision,

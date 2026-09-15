@@ -64,7 +64,7 @@ def _device_removal_cost(vehicle):
     """
     cost = vehicle.get('deviceRemovalCost')
     if not isinstance(cost, dict):
-        return {'gold': 0}
+        return {'gold': 10}
     return dict((str(currency), int(amount))
                 for currency, amount in cost.items())
 
@@ -909,7 +909,7 @@ def shop(revision=0, selected_vehicle=None):
             'posByXPinTeam': 0,
         },
         # ShopRequester calls .get(Currency.GOLD) on this value.
-        'paidRemovalCost': {'gold': 0},
+        'paidRemovalCost': _device_removal_cost(vehicle),
         # Deluxe optional devices do not use paidRemovalCost.  Publish their
         # exact #1513 shop field so the requester does not use its retail
         # crystal-price fallback.

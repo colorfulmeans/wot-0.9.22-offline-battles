@@ -8,7 +8,7 @@ import types
 import unittest
 from unittest import mock
 
-from test_port_0922_garage import SNAPSHOT, _modules, _load
+from test_port_0922_garage import SNAPSHOT, _modules, _load, _request_modules
 from test_port_0922_postbattle import _receipt, _packed_vehicle, _Socket
 from test_port_0922_battle_runtime import _runtime, _Client, _effective_params_snapshot
 from effective_params_fixture import effective_params
@@ -139,6 +139,67 @@ class BondsAndDirectivesTests(unittest.TestCase):
         self.assertEqual(1000000, state.snapshot()['wallet']['credits'])
         self.assertEqual([0, 0, 0, 11003], state.snapshot()['vehicles'][0]['eqs'])
 
+    def test_every_directive_can_be_bought_mounted_and_resupplied(self):
+        # Exact 0.9.22 catalogue names/prices; exercise both native UI flows:
+        # depot purchase followed by install, and a fourth-slot layout fill.
+        directives = {
+            'aimingStabilizerBattleBooster': 10, 'camouflageBattleBooster': 12,
+            'coatedOpticsBattleBooster': 8, 'enhancedAimDrivesBattleBooster': 10,
+            'fireFightingBattleBooster': 2, 'improvedVentilationBattleBooster': 12,
+            'lastEffortBattleBooster': 4, 'pedantBattleBooster': 6,
+            'rammerBattleBooster': 12, 'rancorousBattleBooster': 2,
+            'sixthSenseBattleBooster': 6, 'smoothDrivingBattleBooster': 10,
+            'smoothTurretBattleBooster': 10, 'toolboxBattleBooster': 6,
+            'virtuosoBattleBooster': 8}
+        for name, price in sorted(directives.items()):
+            for entrance in ('depot', 'layout'):
+                with self.subTest(name=name, entrance=entrance):
+                    requests, commands, garage = _request_modules()
+                    vehicles, tankmen = _modules()
+                    snapshot = copy.deepcopy(SNAPSHOT)
+                    snapshot['wallet'] = dict(credits=1000000, gold=100,
+                                              freeXP=0, crystal=price * 3)
+                    snapshot['shopItemPrices'][11003] = price_catalogue.money(
+                        price_catalogue.ARTEFACT_PRICES[name])
+                    self.assertEqual({'crystal': price}, snapshot['shopItemPrices'][11003])
+                    state = garage.GarageState(snapshot, vehicles_module=vehicles,
+                                               tankmen_module=tankmen)
+                    context = {'garage': state}
+                    if entrance == 'depot':
+                        bought = requests._buy_item(context, (0, 11003, 2, 0))
+                        self.assertEqual(commands.RES_SUCCESS, bought.result_id)
+                        self.assertEqual(2, state.snapshot()['inventoryItems'][11][11003])
+                    layout = [0, 9, 0, 1, 8, 0, 0, 0, 0, 0, 0, 11003, 1]
+                    mounted = requests._set_and_fill_layouts(context, (layout,))
+                    self.assertEqual(commands.RES_SUCCESS, mounted.result_id)
+                    self.assertEqual([0, 0, 0, 11003], state.snapshot()['vehicles'][0]['eqs'])
+                    state.settle_battle_consumables(50001, [11003])
+                    state.change_vehicle_setting(9, 16, 1)
+                    store = _load('garage_store')
+                    costs = store._settle_automatically(
+                        state, 9, (1, 2, 4, 16), garage.GarageError)
+                    self.assertEqual(0 if entrance == 'depot' else price,
+                                     costs['equipment_crystal'])
+                    self.assertEqual(price, state.snapshot()['wallet']['crystal'])
+                    self.assertEqual([0, 0, 0, 11003], state.snapshot()['vehicles'][0]['eqs'])
+                    self.assertEqual(1000000, state.snapshot()['wallet']['credits'])
+                    self.assertEqual(100, state.snapshot()['wallet']['gold'])
+
+    def test_ventilation_insufficient_bonds_refuses_without_changing_inventory(self):
+        requests, commands, garage = _request_modules()
+        vehicles, tankmen = _modules()
+        snapshot = copy.deepcopy(SNAPSHOT)
+        snapshot['wallet'] = dict(credits=1000000, gold=100, freeXP=0, crystal=11)
+        snapshot['shopItemPrices'][11003] = price_catalogue.money(
+            price_catalogue.ARTEFACT_PRICES['improvedVentilationBattleBooster'])
+        state = garage.GarageState(snapshot, vehicles_module=vehicles,
+                                   tankmen_module=tankmen)
+        before = copy.deepcopy(state.snapshot())
+        refused = requests._buy_item({'garage': state}, (0, 11003, 1, 0))
+        self.assertEqual(commands.RES_FAILURE, refused.result_id)
+        self.assertIn('11 crystal and needs 12', refused.error)
+        self.assertEqual(before, state.snapshot())
+
     def test_directive_edit_and_resupply_do_not_buy_regular_consumables(self):
         garage, state, unused_vehicles, unused_tankmen = self._garage()
         record = state._snapshot['vehicles'][0]
@@ -190,15 +251,18 @@ class BondsAndDirectivesTests(unittest.TestCase):
                                    'crystal': 3}, equipment_used=[11003])
             first = store.apply_battle_crew_xp(snapshot, 'bonds:1', 50001, 10, 0, **kwargs)
             self.assertTrue(first['applied'])
-            self.assertEqual(97, snapshot['wallet']['crystal'])
+            self.assertEqual(103, snapshot['wallet']['crystal'])
+            self.assertEqual(9, first['awarded']['crystal'])
             self.assertEqual([0, 0, 0, 0], snapshot['vehicles'][0]['eqs'])
             restarted = store_module.GarageStore(path)
+            snapshot['earningsPercent'] = 10000
             second = restarted.apply_battle_crew_xp(snapshot, 'bonds:1', 50001, 10, 0, **kwargs)
             self.assertFalse(second['applied'])
-            self.assertEqual(97, snapshot['wallet']['crystal'])
+            self.assertEqual(103, snapshot['wallet']['crystal'])
+            self.assertEqual(9, second['awarded']['crystal'])
             restored = copy.deepcopy(SNAPSHOT)
             restarted.apply(restored)
-            self.assertEqual(97, restored['wallet']['crystal'])
+            self.assertEqual(103, restored['wallet']['crystal'])
             self.assertEqual([0, 0, 0, 0], restored['vehicles'][0]['eqs'])
 
     def test_results_include_the_medal_breakdown_and_directive_service_cost(self):
@@ -212,6 +276,40 @@ class BondsAndDirectivesTests(unittest.TestCase):
         self.assertEqual([('mainGun', 2), ('warrior', 3)], vehicle['eventCrystalList'])
         self.assertEqual((0, 0, 6), vehicle['autoEquipCost'])
         self.assertIn(b'eventCrystalList_warrior', vehicle['crystalReplay'])
+
+    def test_scaled_bonds_results_and_medal_rows_equal_the_bank(self):
+        for percent, total in ((1, 0), (50, 2), (100, 5), (250, 12),
+                               (300, 15), (10000, 500)):
+            with self.subTest(percent=percent):
+                receipt = _receipt()
+                receipt['rewards']['crystal'] = 5
+                receipt['crystal_rewards'] = {'warrior': 3, 'mainGun': 2}
+                receipt['awarded'] = economy.scale_rewards(
+                    receipt['rewards'], 150, 150, bonds_percent=percent)
+                receipt['service_costs'] = {'equipment_crystal': 12}
+                vehicle = _packed_vehicle(receipt)
+                self.assertEqual(total, vehicle['crystal'])
+                self.assertGreaterEqual(vehicle['originalCrystal'], 0)
+                self.assertEqual(total, vehicle['originalCrystal'] + sum(
+                    amount for name, amount in vehicle['eventCrystalList']))
+                self.assertEqual((0, 0, 12), vehicle['autoEquipCost'])
+                self.assertEqual(5, receipt['rewards']['crystal'])
+                self.assertEqual({'warrior': 3, 'mainGun': 2}, receipt['crystal_rewards'])
+
+    def test_bonds_lifetime_progress_survives_result_retry_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'postbattle.json')
+            store = postbattle_store.PostBattleStore(path)
+            receipt = _receipt(store.account_key)
+            receipt['rewards']['crystal'] = 5
+            receipt['crystal_rewards'] = {'warrior': 3, 'mainGun': 2}
+            store.set_progress_applier(lambda value: {'awarded':
+                economy.scale_rewards(value['rewards'], 300, 300, 300)})
+            self.assertTrue(store.accept(receipt))
+            self.assertEqual(15, store.progress()['crystal'])
+            restarted = postbattle_store.PostBattleStore(path)
+            self.assertFalse(restarted.accept(receipt))
+            self.assertEqual(15, restarted.progress()['crystal'])
 
     def test_finished_server_round_uses_frozen_directive_and_medal_tier(self):
         state = server.BattleState(map_name='01_karelia')
