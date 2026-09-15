@@ -26,12 +26,13 @@ _SIEGE_SWITCHING_OFF = 3
 
 
 def set_engine_audible(entity, audible):
-    """Suspend the stock sound component while a remote vehicle is absent.
+    """Retire hidden sound owners and assemble a fresh one on reveal.
 
-    CompoundAppearance.changeVisibility only controls drawing. Use its
-    ComponentDescriptor removal path, also used by __destroyEngineAudition,
-    so Svarog deactivates the running engine/chassis sound owner. Keep the
-    component for a symmetric reveal without creating another native owner.
+    A Svarog component wrapper cannot transfer ownership twice. Keeping the
+    Python wrapper after ComponentDescriptor removal does not keep its native
+    component alive; re-adding it triggers the #1513 py_systems.cpp assertion
+    "This wrapper own nothing" seen in report 83fea4595275. Retain only the
+    live appearance generation, never the removed wrapper or its callbacks.
     """
     appearance = getattr(entity, 'appearance', None)
     if appearance is None:
@@ -42,10 +43,9 @@ def set_engine_audible(entity, audible):
     if not audible:
         if audition is None:
             return saved is not None
-        links = (getattr(detailed, 'onEngineStart', None),
-                 getattr(detailed, 'onStateChanged', None))
         # Publish ownership before the ComponentDescriptor can re-enter.
-        appearance._offlineLANMutedEngine = (audition, detailed, links)
+        appearance._offlineLANMutedEngine = (
+            detailed, getattr(appearance, 'compoundModel', None))
         if detailed is not None:
             detailed.onEngineStart = None
             detailed.onStateChanged = None
@@ -55,16 +55,59 @@ def set_engine_audible(entity, audible):
         return False
     alive = getattr(entity, 'isAlive', None)
     alive = alive() if callable(alive) else bool(alive)
-    if not alive or audition is not None or detailed is not saved[1]:
+    model = getattr(appearance, 'compoundModel', None)
+    if (not alive or not getattr(entity, 'inWorld', False) or
+            audition is not None or detailed is not saved[0] or
+            model is not saved[1]):
         # Death/model rebuilding may already have installed a new owner.
         appearance._offlineLANMutedEngine = None
         return False
-    audition, old_detailed, links = saved
-    audition.attachToModel(appearance.compoundModel)
-    appearance.engineAudition = audition
-    if detailed is old_detailed and detailed is not None:
-        detailed.onEngineStart, detailed.onStateChanged = links
+    if not getattr(entity, 'isStarted', False):
+        # startVisual will replay the visibility gate once the owner is live.
+        return False
+    # Consume the request before a native assembly call can re-enter Python.
     appearance._offlineLANMutedEngine = None
+    try:
+        from vehicle_systems import model_assembler
+        import DataLinks
+
+        sensor = appearance.waterSensor
+        weapon_energy = appearance._CompoundAppearance__weaponEnergy
+        if detailed is None or model is None or sensor is None:
+            raise RuntimeError('stock engine-audition inputs are unavailable')
+        underwater = DataLinks.createBoolLink(sensor, 'isUnderWater')
+        in_water = DataLinks.createBoolLink(sensor, 'isInWater')
+        # Use the installed client's assembler for vehicle-specific sounds,
+        # speed/track/flying links, siege sounds and its NPC update period.
+        model_assembler.assembleVehicleAudition(False, appearance)
+        audition = appearance.engineAudition
+        # Complete the stock vehicle_assembler / __startSystems bindings.
+        audition.setIsUnderwaterInfo(underwater)
+        audition.setIsInWaterInfo(in_water)
+        audition.setWeaponEnergy(weapon_energy)
+        audition.attachToModel(model)
+        model_assembler.subscribeEngineAuditionToEngineState(
+            audition, detailed)
+    except Exception as error:
+        # A Python-side assembly/binding failure is local to this sound
+        # owner. Retire any partial component and let a later reveal retry;
+        # never put an old wrapper back or abort the model visibility edge.
+        if (getattr(entity, 'appearance', None) is appearance and
+                getattr(appearance, 'detailedEngineState', None) is detailed and
+                getattr(appearance, 'compoundModel', None) is model and
+                getattr(entity, 'inWorld', False) and
+                getattr(entity, 'isStarted', False)):
+            if detailed is not None:
+                detailed.onEngineStart = None
+                detailed.onStateChanged = None
+            appearance.engineAudition = None
+            appearance._offlineLANMutedEngine = saved
+        if not getattr(appearance, '_offlineLANEngineRestoreReported', False):
+            appearance._offlineLANEngineRestoreReported = True
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] remote engine sound rebuild failed: '
+                '%s\n' % error)
+        return False
     return True
 
 
@@ -522,12 +565,10 @@ class _NativeRemoteState(object):
             return False
 
         detailed = getattr(appearance, 'detailedEngineState', None)
-        audition = getattr(appearance, 'engineAudition', None)
-        if audition is None:
-            paused = getattr(appearance, '_offlineLANMutedEngine', None)
-            audition = paused[0] if paused is not None else None
         engine_ready = False
-        if detailed is not None and audition is not None:
+        if detailed is not None:
+            # Motion state remains live while its sound component is absent.
+            # A newly assembled audition reads these same links on reveal.
             try:
                 # #1513 accepts a callable here.  DataLinks.createFloatLink
                 # only supports native data-link owners; passing this plain

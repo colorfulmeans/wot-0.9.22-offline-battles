@@ -14,11 +14,35 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 client or package layout.
 
 The post-0.8.3 gameplay follow-up addresses nine reported paths. A hidden remote
-vehicle suspends its engine-audition component and detailed-engine callbacks;
-reveal restores the same living owner, while death and teardown discard it.
-This uses the stock `CompoundAppearance.__destroyEngineAudition` component
-removal pattern seen in the 9.22 reference, but audible silence/restart and
-repeated native model changes still require Windows #1513 acceptance.
+vehicle retires its engine-audition component and detailed-engine callbacks.
+Report `83fea4595275` from the owner's #1513 client records an abort on Lakeville
+at 05:14:18 on September 16: `MF_ASSERT_DEV FAILED: isOwning() && "This wrapper
+own nothing"`, `wot_svarog/py_wrappers/py_systems.cpp(46)`. The termination dump
+retains that native assertion banner, but no live Python traceback. The former
+hide/reveal code retained and re-added a removed native wrapper, which violates
+the one-time ownership transfer implicated by that assertion. The earlier
+SimpleNamespace test did not model this guard and incorrectly accepted reuse.
+
+Reveal now calls the installed client's `model_assembler.assembleVehicleAudition`
+to build a fresh NPC sound owner, restores the water-sensor links, weapon energy
+and model attachment, then subscribes fresh detailed-engine callbacks. This
+follows the stock assembly/start sequence reviewed in the 9.22 reference;
+the exact #1513 executable and scripts archive were unavailable for a new
+bytecode audit in this environment. The still-live detailed engine state keeps
+its LAN motion links while muted. Death, world exit and a changed appearance
+generation cannot restore a removed owner. A partial Python-side binding
+failure retires the partial sound component and allows a later reveal to retry.
+Guarded tests cover repeated ownership transfer, callback retirement, model
+replacement, startVisual deferral and assembly reentry. Native audible
+silence/restart and crash-free repeated spotting still require Windows #1513
+acceptance of the corrected build.
+
+The crash-text scanner now retains real assertion banners containing a
+BuildAgent source path. That path incorrectly classified this report's
+assertion as a static template, leaving its useful message only inside the
+dump. Unexpanded printf templates remain excluded, and the repaired scanner
+extracts this report's complete assertion from the original dump.
+
 The owner confirmed that the published build already releases an SPG's lock
 when its target becomes unspotted. Its auto-aim behavior is unchanged in this
 follow-up. A third-party plugin conflict remains a hypothesis for the group's

@@ -1,8 +1,10 @@
 """Regression cases reported against the published 0.8.3 build."""
 import copy
+import gc
 import sys
 import types
 import unittest
+import weakref
 from unittest import mock
 
 import test_port_0922_battle_runtime as fixtures
@@ -58,28 +60,6 @@ class Gameplay083Tests(unittest.TestCase):
             self.assertEqual({'gold': 10}, shop['paidRemovalCost'])
             self.assertEqual(shop['paidRemovalCost'], shop['defaults']['paidRemovalCost'])
             self.assertEqual({'crystal': 200}, shop['paidDeluxeRemovalCost'])
-
-    def test_hidden_sound_owner_is_removed_and_reused_once_on_reveal(self):
-        audition = types.SimpleNamespace(attachToModel=mock.Mock())
-        detailed = types.SimpleNamespace(onEngineStart=object(), onStateChanged=object())
-        links = detailed.onEngineStart, detailed.onStateChanged
-        appearance = types.SimpleNamespace(engineAudition=audition,
-                                           detailedEngineState=detailed,
-                                           compoundModel=object())
-        vehicle = types.SimpleNamespace(appearance=appearance, isAlive=lambda: True)
-        self.assertTrue(set_engine_audible(vehicle, False))
-        self.assertIsNone(appearance.engineAudition)
-        self.assertIsNone(detailed.onEngineStart)
-        self.assertTrue(set_engine_audible(vehicle, False))
-        self.assertTrue(set_engine_audible(vehicle, True))
-        self.assertIs(audition, appearance.engineAudition)
-        self.assertEqual(links, (detailed.onEngineStart, detailed.onStateChanged))
-        self.assertFalse(set_engine_audible(vehicle, True))
-        audition.attachToModel.assert_called_once_with(appearance.compoundModel)
-        set_engine_audible(vehicle, False)
-        vehicle.isAlive = lambda: False
-        self.assertFalse(set_engine_audible(vehicle, True))
-        self.assertIsNone(appearance.engineAudition)
 
     def test_native_stun_component_survives_all_frozen_shot_boundaries(self):
         shot = types.SimpleNamespace(
@@ -167,6 +147,189 @@ class Gameplay083Tests(unittest.TestCase):
         bot_runtime._apply_combat_record(restored, record)
         self.assertEqual({}, restored['stun_factors'])
         self.assertEqual(1.0, stun_mechanics.factor(restored, 'reload'))
+
+
+class _EngineAudition:
+    def __init__(self):
+        self.ownership = 'new'
+        self.attachToModel = mock.Mock(side_effect=self._attach)
+        self.setIsUnderwaterInfo = mock.Mock()
+        self.setIsInWaterInfo = mock.Mock()
+        self.setWeaponEnergy = mock.Mock()
+
+    def _attach(self, model):
+        if self.ownership == 'retired':
+            raise ReferenceError('removed native component')
+
+    def onEngineStart(self):
+        if self.ownership != 'installed':
+            raise ReferenceError('engine callback outlived its component')
+
+    def onEngineStateChanged(self):
+        self.onEngineStart()
+
+
+class _EngineAppearance(types.SimpleNamespace):
+    """Model the one-time ownership transfer missing from the old fake."""
+    _audition = None
+
+    @property
+    def engineAudition(self):
+        return self._audition
+
+    @engineAudition.setter
+    def engineAudition(self, value):
+        if self._audition is not None:
+            # Removal destroys the native component, regardless of Python
+            # references to its wrapper. Clear its callback owners first.
+            assert self.detailedEngineState.onEngineStart is None
+            assert self.detailedEngineState.onStateChanged is None
+            self._audition.ownership = 'retired'
+        if value is not None:
+            assert value.ownership == 'new', 'This wrapper own nothing'
+            value.ownership = 'installed'
+        self._audition = value
+
+
+class EngineAudioOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        self.detailed = types.SimpleNamespace(
+            onEngineStart=None, onStateChanged=None, vehicleSpeedLink=object())
+        self.appearance = _EngineAppearance(
+            detailedEngineState=self.detailed, compoundModel=object(),
+            waterSensor=object(), _CompoundAppearance__weaponEnergy=723.5)
+        self.vehicle = types.SimpleNamespace(
+            appearance=self.appearance, isAlive=lambda: True,
+            inWorld=True, isStarted=True)
+        self.original = _EngineAudition()
+        self.appearance.engineAudition = self.original
+        self._subscribe(self.original, self.detailed)
+        self.created = []
+        assembler = types.ModuleType('vehicle_systems.model_assembler')
+        assembler.assembleVehicleAudition = mock.Mock(side_effect=self._assemble)
+        assembler.subscribeEngineAuditionToEngineState = self._subscribe
+        self.assembler = assembler
+        package = types.ModuleType('vehicle_systems')
+        package.model_assembler = assembler
+        self.links = types.ModuleType('DataLinks')
+        self.links.createBoolLink = mock.Mock(side_effect=lambda owner, field:
+                                             (owner, field))
+        patch = mock.patch.dict(sys.modules, {
+            'vehicle_systems': package,
+            'vehicle_systems.model_assembler': assembler, 'DataLinks': self.links})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def _assemble(self, is_player, appearance):
+        self.assertFalse(is_player)
+        audition = _EngineAudition()
+        self.created.append(audition)
+        appearance.engineAudition = audition
+
+    @staticmethod
+    def _subscribe(audition, detailed):
+        detailed.onEngineStart = audition.onEngineStart
+        detailed.onStateChanged = audition.onEngineStateChanged
+
+    def test_repeated_hide_reveal_uses_fresh_native_owners(self):
+        speed_link = self.detailed.vehicleSpeedLink
+        for index in range(3):
+            old = self.appearance.engineAudition
+            self.assertTrue(set_engine_audible(self.vehicle, False))
+            self.assertEqual('retired', old.ownership)
+            self.assertIsNone(self.appearance.engineAudition)
+            self.assertIsNone(self.detailed.onEngineStart)
+            self.assertIsNone(self.detailed.onStateChanged)
+            self.assertTrue(set_engine_audible(self.vehicle, False))
+            self.assertTrue(set_engine_audible(self.vehicle, True))
+            new = self.appearance.engineAudition
+            self.assertIsNot(old, new)
+            self.assertEqual(index + 1, len(self.created))
+            self.assertFalse(set_engine_audible(self.vehicle, True))
+            self.assertIs(speed_link, self.detailed.vehicleSpeedLink)
+            self.assertIs(new, self.detailed.onEngineStart.__self__)
+            self.assertIs(new, self.detailed.onStateChanged.__self__)
+            self.detailed.onEngineStart()
+            new.attachToModel.assert_called_once_with(self.appearance.compoundModel)
+            new.setIsUnderwaterInfo.assert_called_once_with(
+                (self.appearance.waterSensor, 'isUnderWater'))
+            new.setIsInWaterInfo.assert_called_once_with(
+                (self.appearance.waterSensor, 'isInWater'))
+            new.setWeaponEnergy.assert_called_once_with(723.5)
+
+    def test_mute_does_not_retain_the_retired_wrapper_or_bound_callbacks(self):
+        reference = weakref.ref(self.original)
+        set_engine_audible(self.vehicle, False)
+        del self.original
+        gc.collect()
+        self.assertIsNone(reference())
+
+    def test_death_does_not_resurrect_engine_sound(self):
+        set_engine_audible(self.vehicle, False)
+        self.vehicle.isAlive = lambda: False
+        self.assertFalse(set_engine_audible(self.vehicle, True))
+        self.assertIsNone(self.appearance.engineAudition)
+        self.assembler.assembleVehicleAudition.assert_not_called()
+
+    def test_world_exit_does_not_resurrect_engine_sound(self):
+        set_engine_audible(self.vehicle, False)
+        self.vehicle.inWorld = False
+        self.assertFalse(set_engine_audible(self.vehicle, True))
+        self.assertIsNone(self.appearance.engineAudition)
+        self.assembler.assembleVehicleAudition.assert_not_called()
+
+    def test_model_replacement_drops_the_old_generation_request(self):
+        set_engine_audible(self.vehicle, False)
+        self.appearance.compoundModel = object()
+        self.appearance.detailedEngineState = types.SimpleNamespace(
+            onEngineStart=None, onStateChanged=None)
+        self.assertFalse(set_engine_audible(self.vehicle, True))
+        self.assembler.assembleVehicleAudition.assert_not_called()
+
+    def test_stock_replacement_while_hidden_is_preserved(self):
+        set_engine_audible(self.vehicle, False)
+        replacement = _EngineAudition()
+        self.appearance.engineAudition = replacement
+        self._subscribe(replacement, self.detailed)
+        self.assertFalse(set_engine_audible(self.vehicle, True))
+        self.assertIs(replacement, self.appearance.engineAudition)
+        self.assertIs(replacement, self.detailed.onEngineStart.__self__)
+        self.assembler.assembleVehicleAudition.assert_not_called()
+
+    def test_reveal_waits_for_start_visual(self):
+        set_engine_audible(self.vehicle, False)
+        self.vehicle.isStarted = False
+        self.assertFalse(set_engine_audible(self.vehicle, True))
+        self.assembler.assembleVehicleAudition.assert_not_called()
+        self.vehicle.isStarted = True
+        self.assertTrue(set_engine_audible(self.vehicle, True))
+
+    def test_failed_binding_retires_partial_owner_and_next_reveal_can_retry(self):
+        set_engine_audible(self.vehicle, False)
+
+        def fail_binding(is_player, appearance):
+            self._assemble(is_player, appearance)
+            appearance.engineAudition.attachToModel.side_effect = ValueError('model link')
+
+        self.assembler.assembleVehicleAudition.side_effect = fail_binding
+        self.assertFalse(set_engine_audible(self.vehicle, True))
+        self.assertEqual('retired', self.created[-1].ownership)
+        self.assertIsNone(self.appearance.engineAudition)
+        self.assertIsNone(self.detailed.onEngineStart)
+        self.assembler.assembleVehicleAudition.side_effect = self._assemble
+        self.assertTrue(set_engine_audible(self.vehicle, True))
+        self.assertEqual(2, len(self.created))
+
+    def test_native_assembly_reentry_cannot_create_another_owner(self):
+        set_engine_audible(self.vehicle, False)
+
+        def reenter(is_player, appearance):
+            self.assertFalse(set_engine_audible(self.vehicle, True))
+            self._assemble(is_player, appearance)
+
+        self.assembler.assembleVehicleAudition.side_effect = reenter
+        self.assertTrue(set_engine_audible(self.vehicle, True))
+        self.assertEqual(1, len(self.created))
 
 
 if __name__ == '__main__':
