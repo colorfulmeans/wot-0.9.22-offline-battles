@@ -12712,7 +12712,11 @@ class BattleState:
         return result
 
     def _vehicle_statistics_payload(self):
-        return [dict(self.vehicle_statistics[key])
+        # Compensation eligibility is server settlement state, not a new
+        # live statistic. Keep the existing public protocol shape stable.
+        return [dict((name, value) for name, value in
+                     self.vehicle_statistics[key].items()
+                     if name not in ("team_damage_penalized", "team_killed_durability"))
                 for key in sorted(self.vehicle_statistics)]
 
     def _is_blue_target(self, target):
