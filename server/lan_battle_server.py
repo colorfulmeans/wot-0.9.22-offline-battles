@@ -9047,6 +9047,15 @@ class BattleState:
                 proposal["shot_result"] != 2):
             blocked_damage = max(
                 0, proposal["potential_damage"] - damage)
+        # One physical shell is one blocked-damage event.  A continuing
+        # ricochet can strike armour again before its projectile record is
+        # retired; counting both contacts made one incoming shot appear twice
+        # in the damage panel and post-battle statistics.
+        if blocked_damage:
+            if record.get("blocked_damage_credited", False):
+                blocked_damage = 0
+            else:
+                record["blocked_damage_credited"] = True
         event = {
             "kind": event_kind,
             attacker_key: record["shooter_id"],
@@ -11035,13 +11044,31 @@ class BattleState:
     @staticmethod
     def _player_pose_for_destructible_contact(player, contact):
         """Bind a proposal only to an already admitted player input sample."""
+        # The native contact sweep is produced between input publications and
+        # can legitimately refer to the preceding rendered pose.  At driving
+        # speed that pose is far more than two centimetres behind the next
+        # admitted sample, which rejected real fence/house contacts before
+        # they ever reached the hidden worker.  Bound the allowance by the
+        # proposal's validated speed and step instead of a fixed tiny epsilon.
+        horizontal_tolerance = max(
+            0.02, abs(float(contact.get("speed", 0.0))) *
+            float(contact.get("dt", 0.0)) +
+            MAX_PLAYER_DESTRUCTIBLE_LINEAR_SLOP)
+        vertical_tolerance = max(
+            0.05, MAX_PLAYER_DESTRUCTIBLE_VERTICAL_TRAVEL)
+        yaw_tolerance = max(
+            0.002, MAX_PLAYER_DESTRUCTIBLE_ANGULAR_SPEED *
+            float(contact.get("dt", 0.0)) + 0.001)
         for sample in reversed(player.pose_history):
             yaw_delta = (float(sample["yaw"]) - float(contact["yaw"]) +
                          math.pi) % (2.0 * math.pi) - math.pi
-            if (abs(float(sample["x"]) - float(contact["x"])) > 0.02 or
-                    abs(float(sample["y"]) - float(contact["y"])) > 0.05 or
-                    abs(float(sample["z"]) - float(contact["z"])) > 0.02 or
-                    abs(yaw_delta) > 0.002):
+            if (math.hypot(
+                    float(sample["x"]) - float(contact["x"]),
+                    float(sample["z"]) - float(contact["z"])) >
+                    horizontal_tolerance or
+                    abs(float(sample["y"]) - float(contact["y"])) >
+                    vertical_tolerance or
+                    abs(yaw_delta) > yaw_tolerance):
                 continue
             return sample
         return None
