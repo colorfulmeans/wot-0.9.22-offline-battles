@@ -5877,7 +5877,11 @@ class BotRuntime(object):
                 if body is not None:
                     result.append(body)
             return result
-        result = list(supplied or ())
+        result = []
+        for raw in supplied or ():
+            body = dict(raw)
+            body['position'] = _boundary_point(raw.get('position', raw))
+            result.append(body)
         for bot_id, raw in self.states.items():
             if bot_id == source.get('id'):
                 continue
@@ -11391,6 +11395,28 @@ class BotRuntime(object):
                     return True
 
             def sample_clear(sample_yaw, maximum_distance=None):
+                # A vehicle brake must also reach local steering. Otherwise
+                # the planner repeatedly sees a clear world ray through the
+                # same live hull and renews its original drive heading. Keep
+                # the short vehicle sweep during the driver's avoidance lease;
+                # checked reverse and side departures remain available.
+                # Explicit short recovery/clearance probes already check the
+                # current hull and its swept turn in LocalDriver. Applying an
+                # instant candidate-yaw box there rejects valid backing turns.
+                vehicle_obstacles = state.get('traffic_obstacles', {})
+                if maximum_distance is None and vehicle_obstacles:
+                    live_neighbours = [peer for peer in
+                        self._neighbours_for(state, neighbours)
+                        if peer.get('alive', True) and now <
+                        vehicle_obstacles.get(peer.get('id'), 0.0)]
+                    # Remember every recently proved blocker, not just the
+                    # last one in an alternating queue. Unrelated passing
+                    # traffic must not turn every steering candidate into a wall.
+                    if self._traffic_coordinator._escape_probe._reverse_blocked_by_vehicle(
+                            position, sample_yaw + math.pi, live_neighbours,
+                            state.get('half_length', 3.5),
+                            state.get('half_width', 1.7)) is not None:
+                        return False
                 # A short manoeuvre asks about the space it actually enters.
                 # Ranking a five-metre backing escape against the fifteen to
                 # twenty metre travel horizon rejects every gateway, alley and
@@ -11758,6 +11784,15 @@ class BotRuntime(object):
                 current_stopping_distance, step)
             throttle, turn = safety['throttle'], safety['turn']
             state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
+            vehicle_obstacles = state.get('traffic_obstacles', {})
+            for peer_id, until in list(vehicle_obstacles.items()):
+                if now >= until:
+                    del vehicle_obstacles[peer_id]
+            if safety.get('forward_blocked_by') is not None:
+                # Match LocalDriver's 1.20-second avoidance-heading lease;
+                # an older obstruction must not outlive that local plan.
+                vehicle_obstacles[safety['forward_blocked_by']] = now + 1.2
+            state['traffic_obstacles'] = vehicle_obstacles
             if siege_motion_locked:
                 # Stock Siege transitions immobilize the hull for the whole
                 # transition tick, including the publication which starts or

@@ -99,7 +99,7 @@ class RuntimeVehicleBrakingTests(unittest.TestCase):
     setUp = _fixture.setUp
     tearDown = _fixture.tearDown
 
-    def test_new_player_blocker_is_checked_before_cached_decision_expires(self):
+    def _route_runtime(self):
         from test_port_0922_separation_progress import _flat_graph, runtime_fixtures
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: runtime_fixtures._combat_descriptor(),
@@ -118,6 +118,10 @@ class RuntimeVehicleBrakingTests(unittest.TestCase):
         runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[
             dict(id=25, move_position=(0., 0., 30.), face_position=(0., 0., 30.),
                  combat_mode='route', fire_allowed=False)]))
+        return runtime
+
+    def test_new_player_blocker_is_checked_before_cached_decision_expires(self):
+        runtime = self._route_runtime()
         runtime.update(.1, .1)
         count = runtime._decision_counts[25]
         own = runtime.states[25]
@@ -126,6 +130,40 @@ class RuntimeVehicleBrakingTests(unittest.TestCase):
         self.assertEqual(count, runtime._decision_counts[25])
         self.assertTrue(own['traffic_braking'])
         self.assertEqual(0, own['movement_dir'])
+
+    def test_route_steers_around_a_stationary_player_without_pushing(self):
+        from gui.mods.offline_lan_0922 import tank_collision
+        for fps in (15, 24):
+            runtime = self._route_runtime()
+            own = runtime.states[25]
+            peer = body(100001, 0., 12., speed=0.)
+            braking, maximum_side = 0, 0.
+            for frame in range(1, fps * 30 + 1):
+                runtime.update(1. / fps, frame / float(fps), neighbours=[peer])
+                braking += own.get('traffic_braking', False)
+                maximum_side = max(maximum_side, abs(own['x']))
+                overlap = tank_collision._obb_overlap(
+                    own['x'], own['z'], own['yaw'], own['collision_shape'],
+                    0., 12., 0., (1.5, 3.5))
+                self.assertLessEqual(overlap[2], .011)
+            self.assertGreater(braking, 0)
+            self.assertGreater(maximum_side, 3.)
+            self.assertGreater(own['z'], 20.)
+
+    def test_two_adjacent_parked_vehicles_do_not_create_an_alternating_blockage(self):
+        from gui.mods.offline_lan_0922 import tank_collision
+        runtime = self._route_runtime()
+        own = runtime.states[25]
+        peers = [body(100001, -2., 12., speed=0.),
+                 body(100002, 2., 12., speed=0.)]
+        for frame in range(1, 721):
+            runtime.update(1. / 24., frame / 24., neighbours=peers)
+            for peer in peers:
+                overlap = tank_collision._obb_overlap(
+                    own['x'], own['z'], own['yaw'], own['collision_shape'],
+                    peer['position'][0], 12., 0., (1.5, 3.5))
+                self.assertLessEqual(overlap[2], .011)
+        self.assertGreater(own['z'], 20.)
 
 
 if __name__ == '__main__':

@@ -77,6 +77,11 @@ build; it is not a new stable release.
   reverse/separating movement remains possible, and a stopped follower can ask
   a parked ally to clear the route before making physical contact. This changes
   Bot driving policy, not the player's mass/traction-based push capability.
+  Vehicle brakes feed a short hull sweep back into local steering so a live
+  vehicle cannot remain invisible to path selection. The regression checks a
+  Bot passing a stationary player without overlap, both supported player
+  coordinate formats, and the original crowded airport/fjord departures at
+  15/24 FPS. Cooperative clearance retains its short, checked manoeuvre.
 - Radio observations retain the original observing vehicle and its expiry.
   Each recipient must have a direct connection to that observer. The server
   validates recipient identities, teams, uniqueness and bounded lifetimes
