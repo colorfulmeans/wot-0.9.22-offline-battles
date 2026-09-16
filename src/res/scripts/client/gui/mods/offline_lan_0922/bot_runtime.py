@@ -9750,6 +9750,15 @@ class BotRuntime(object):
                            -math.atan2(
                                (aim_position[1] + 1.0) - origin[1],
                                max(0.5, horizontal)))
+            # Inside roughly one hull width, centimetre-scale target-pose
+            # corrections can flip the bearing across the muzzle and make the
+            # turret/barrel hunt left-right every control refresh.  Preserve
+            # the current world bearing until the target again has a stable
+            # geometric direction; firing remains governed by the normal lane
+            # and alignment checks below.
+            if horizontal < 1.5:
+                desired_yaw = state.get(
+                    'aim_yaw', state.get('yaw', desired_yaw))
         self._update_hydraulic_suspension(
             state, descriptor, desired_yaw, world_pitch, step,
             self._turret_motion_probe)
@@ -12336,34 +12345,64 @@ class BotRuntime(object):
                         self._hard_contact_response(
                             state, position, state['yaw'], speed,
                             descriptor, step, now)
+                    report_hard_contact = getattr(
+                        self.navigator, 'report_hard_contact', None)
                     report_contact = getattr(
                         self.navigator, 'report_blocked_step', None)
                     contact_target = command.get('move_position')
-                    if (contact_target is not None and
+                    # The driver owns the realised heading failure above.
+                    # Navigation instead needs a stable first route edge: a
+                    # wedged hull's recovery yaw can alternate on every try
+                    # and would otherwise restart the replan verdict count.
+                    contact_yaw = travel_yaw
+                    if realised_contact_yaw is not None:
+                        contact_yaw = realised_contact_yaw
+                    if (realised_contact_yaw is None and
+                            contact_target is not None and
                             navigation_grid is not None):
-                        # A generic contact came from the pre-turn direction
-                        # probe.  A resolved one came from this exact hull yaw
-                        # and signed speed; a reversing command can still be
-                        # braking a forward-moving hull (or vice versa).
-                        contact_yaw = travel_yaw
-                        if realised_contact_yaw is not None:
-                            contact_yaw = realised_contact_yaw
-                        edge_length = _number(
-                            getattr(navigation_grid, 'cell_size', 0.0), 0.0)
-                        if edge_length > 0.0:
-                            contact_target = (
-                                position[0] + math.sin(
-                                    contact_yaw) * edge_length,
-                                position[1],
-                                position[2] + math.cos(
-                                    contact_yaw) * edge_length)
-                    if (callable(report_contact) and
-                            contact_target is not None):
+                        # A generic direction probe looks well beyond the
+                        # distance this physics slice can realise.  Its
+                        # collision can therefore be several cells ahead and
+                        # must not veto the navigation target's first edge as
+                        # though the hull had touched it.  Preserve the old
+                        # local-edge verdict for forward forecasts.  Reverse
+                        # forecasts still enter ``report_hard_contact`` with
+                        # the semantic target so that method can pin their
+                        # separate realised rear edge for the episode.
+                        dx = float(contact_target[0]) - float(position[0])
+                        dz = float(contact_target[2]) - float(position[2])
+                        if (math.sin(contact_yaw) * dx +
+                                math.cos(contact_yaw) * dz > 0.0):
+                            edge_length = _number(
+                                getattr(navigation_grid, 'cell_size', 0.0),
+                                0.0)
+                            if edge_length > 0.0:
+                                contact_target = (
+                                    position[0] + math.sin(contact_yaw) *
+                                    edge_length,
+                                    position[1],
+                                    position[2] + math.cos(contact_yaw) *
+                                    edge_length)
+                    if (callable(report_hard_contact) and
+                            contact_target is not None and
+                            command.get('movement_intent', True)):
+                        report_hard_contact(
+                            state['id'], position, contact_target,
+                            contact_yaw, now)
+                    elif (callable(report_contact) and
+                            contact_target is not None and
+                            command.get('movement_intent', True)):
                         report_contact(
                             state['id'], position,
                             contact_target, now)
                 elif motion_status in ('soft', 'cap_crushed'):
                     self._hard_contact_grinds[state['id']] = 1
+                if (resolved_motion and
+                        motion_status in ('clear', 'crushed')):
+                    clear_contact = getattr(
+                        self.navigator, 'clear_blocked_contact', None)
+                    if callable(clear_contact):
+                        clear_contact(state['id'])
                 if resolved_motion and callable(self.motion_report):
                     self.motion_report(
                         state['id'], motion_status, contact_v0, speed)

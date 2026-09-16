@@ -1641,6 +1641,82 @@ class TerrainNavigator(object):
 		"""Expose one Bot's live hard-contact edge veto to target admission."""
 		return self._bot_edges_penalized(bot_id, start, end, now)
 
+	def clear_blocked_contact(self, bot_id):
+		"""End one physical-contact episode without removing a proved veto."""
+		state = self.bot_states.get(int(bot_id))
+		if state is None:
+			return False
+		changed = bool(
+			state.get('blocked_step_tracker') is not None or
+			state.get('hard_contact_episode') is not None)
+		state['blocked_step_tracker'] = None
+		state.pop('hard_contact_episode', None)
+		return changed
+
+	def report_hard_contact(self, bot_id, current, target,
+			realised_yaw, now):
+		"""Report a physical blocker against stable navigation intent.
+
+		The driver deliberately remembers the realised hull heading so its
+		short-range candidate fan widens after a collision.  That heading is
+		not a stable navigation edge, however: a wedged hull can wag across a
+		coarse-cell boundary forever and give ``report_blocked_step`` a new key
+		on every attempt.  Prefer the current navigation target, whose first
+		grid edge is stable, only while realised travel is closing on it.  A
+		reverse recovery or a target inside the occupied cell instead pins the
+		first realised direction for the lifetime of its own contact episode;
+		it must never penalise the clear forward route for a rear collision.
+		"""
+		bot_id = int(bot_id)
+		state = self.bot_states.get(bot_id)
+		if state is None or target is None:
+			return False
+		try:
+			target = tuple(target)
+			origin_cell = self.grid.cell_for(current)
+			target_cell = self.grid.cell_for(target)
+			yaw = float(realised_yaw)
+		except Exception:
+			return False
+		dx = float(target[0]) - float(current[0])
+		dz = float(target[2]) - float(current[2])
+		use_navigation_target = bool(
+			self.grid._edge_cells_for_segment(current, target) is not None and
+			math.sin(yaw) * dx + math.cos(yaw) * dz > 0.0)
+		episode = state.get('hard_contact_episode')
+		same_episode = bool(
+			isinstance(episode, dict) and
+			episode.get('origin_cell') == origin_cell and
+			episode.get('target_cell') == target_cell and
+			episode.get('target') == target and
+			episode.get('uses_navigation_target') ==
+			use_navigation_target)
+		if not same_episode:
+			report_target = target if use_navigation_target else None
+			if report_target is None:
+				# Two cell widths cross a rounded cell boundary even from a corner
+				# and at a diagonal heading.  This point exists only to identify the
+				# first reverse/recovery edge; it is never issued as a driving target.
+				distance = max(1.0, float(self.grid.cell_size)) * 2.0
+				report_target = (
+					float(current[0]) + math.sin(yaw) * distance,
+					float(current[1]),
+					float(current[2]) + math.cos(yaw) * distance)
+				if self.grid._edge_cells_for_segment(
+						current, report_target) is None:
+					return False
+			episode = {
+				'origin_cell': origin_cell,
+				'target_cell': target_cell,
+				'target': target,
+				'report_target': report_target,
+				'uses_navigation_target': use_navigation_target,
+			}
+			state['hard_contact_episode'] = episode
+			state['blocked_step_tracker'] = None
+		return self.report_blocked_step(
+			bot_id, current, episode['report_target'], now)
+
 	def report_blocked_step(self, bot_id, current, target, now):
 		"""Escalate a repeated contact or planner veto into a bot-local replan."""
 		bot_id = int(bot_id)
@@ -1656,12 +1732,16 @@ class TerrainNavigator(object):
 		key = self.grid._edge_cells_for_segment(current, target)
 		if key is None:
 			return False
+		origin_cell = self.grid.cell_for(current)
+		target_cell = self.grid.cell_for(target)
 		now = float(now)
 		if now < float(state.get('blocked_step_escalated_until', 0.0)):
 			return False
 		tracker = state.get('blocked_step_tracker')
 		same_edge = bool(
 			isinstance(tracker, dict) and tracker.get('key') == key and
+			tracker.get('origin_cell') == origin_cell and
+			tracker.get('target_cell') == target_cell and
 			now - float(tracker.get('last_at', now)) <= 0.5 and
 			_distance_2d(current, tracker.get('origin', current)) <=
 			max(1.5, self.grid.cell_size * 0.5))
@@ -1671,7 +1751,8 @@ class TerrainNavigator(object):
 		else:
 			tracker = {
 				'key': key, 'count': 1, 'first_at': now,
-				'last_at': now, 'origin': tuple(current)}
+				'last_at': now, 'origin': tuple(current),
+				'origin_cell': origin_cell, 'target_cell': target_cell}
 			state['blocked_step_tracker'] = tracker
 		if (int(tracker['count']) < BLOCKED_STEP_REPLAN_VERDICTS or
 				now - float(tracker['first_at']) < BLOCKED_STEP_REPLAN_SECONDS):
@@ -2123,6 +2204,8 @@ class TerrainNavigator(object):
 			state['recovery_start'] = None
 			state['replan_active'] = False
 			state['macro_replan_active'] = False
+			state['blocked_step_tracker'] = None
+			state.pop('hard_contact_episode', None)
 			self.bot_macro_edges.pop(bot_id, None)
 			state.pop('macro_escape_target', None)
 			state.pop('macro_escape_until', None)

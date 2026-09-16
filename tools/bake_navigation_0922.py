@@ -771,6 +771,40 @@ def _transform_0922(matrix, point):
             matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14])
 
 
+def _convex_hull_2d(points):
+    """Return the counter-clockwise hull of finite X/Z points."""
+    values = sorted(set((float(point[0]), float(point[1]))
+                        for point in points))
+    if not all(math.isfinite(value) for point in values for value in point):
+        raise UnsafeBakeInputError(
+            'soft destructible has a non-finite transformed bound')
+    if len(values) < 3:
+        raise UnsafeBakeInputError(
+            'soft destructible has an empty transformed footprint')
+
+    def cross(origin, first, second):
+        return ((first[0] - origin[0]) * (second[1] - origin[1]) -
+                (first[1] - origin[1]) * (second[0] - origin[0]))
+
+    lower = []
+    for point in values:
+        while (len(lower) >= 2 and
+               cross(lower[-2], lower[-1], point) <= 0.0):
+            lower.pop()
+        lower.append(point)
+    upper = []
+    for point in reversed(values):
+        while (len(upper) >= 2 and
+               cross(upper[-2], upper[-1], point) <= 0.0):
+            upper.pop()
+        upper.append(point)
+    result = tuple(lower[:-1] + upper[:-1])
+    if len(result) < 3:
+        raise UnsafeBakeInputError(
+            'soft destructible has an empty transformed footprint')
+    return result
+
+
 def _compiled_models(space_data):
     if VENDOR_ROOT not in sys.path:
         sys.path.insert(0, VENDOR_ROOT)
@@ -839,6 +873,79 @@ def compiled_soft_destructible_instances(compiled):
                       tuple(float(value) for value in transform)))
     counts['primitive_transform_keys'] = len(keys)
     return keys, counts
+
+
+def _soft_destructible_spawn_obb(transform, bounds):
+    minimum = tuple(float(value) for value in bounds[:3])
+    maximum = tuple(float(value) for value in bounds[3:6])
+    if (len(minimum) != 3 or len(maximum) != 3 or
+            any(minimum[index] > maximum[index] for index in range(3))):
+        raise UnsafeBakeInputError(
+            'soft destructible has invalid local collision bounds')
+    corners = tuple(
+        _transform_0922(transform, (x, y, z))
+        for x in (minimum[0], maximum[0])
+        for y in (minimum[1], maximum[1])
+        for z in (minimum[2], maximum[2]))
+    if not all(math.isfinite(value) for point in corners
+               for value in point):
+        raise UnsafeBakeInputError(
+            'soft destructible has a non-finite transformed bound')
+    footprint = _convex_hull_2d(
+        tuple((point[0], point[2]) for point in corners))
+    return {
+        'minimum_x': min(point[0] for point in corners),
+        'minimum_y': min(point[1] for point in corners),
+        'minimum_z': min(point[2] for point in corners),
+        'maximum_x': max(point[0] for point in corners),
+        'maximum_y': max(point[1] for point in corners),
+        'maximum_z': max(point[2] for point in corners),
+        'footprint': footprint,
+    }
+
+
+def compiled_soft_destructible_spawn_obbs(compiled):
+    """Return transformed falling/fragile bounds used only at spawn.
+
+    Falling and fragile collision must stay absent from the navigation raster
+    so routes can cross objects a tank is expected to crush.  A tank must not,
+    however, be born already intersecting one of those native bodies.  Keep a
+    separate set of the exact BSMO local collision boxes transformed by their
+    BSMI placements for the formation audit and selector.
+    """
+    bsmo = compiled.sections['BSMO']._data
+    bsmi = compiled.sections['BSMI']
+    transforms = bsmi._data['transforms']
+    model_ids = list(bsmi.model_ids())
+    if len(transforms) != len(model_ids):
+        raise UnsafeBakeInputError(
+            'BSMI model ids do not match static transforms')
+    model_infos = bsmo['model_info_items']
+    colliders = bsmo['models_colliders']
+    result = []
+    for transform, model_id in zip(transforms, model_ids):
+        if model_id < 0 or model_id >= len(model_infos):
+            raise UnsafeBakeInputError('BSMI references an invalid BSMO model')
+        if int(model_infos[model_id]['type']) not in (1, 2):
+            continue
+        if model_id >= len(colliders):
+            raise UnsafeBakeInputError(
+                'soft BSMO model has no collision bounds')
+        collider = colliders[model_id]
+        minimum = tuple(collider['collision_bounds_min'])
+        maximum = tuple(collider['collision_bounds_max'])
+        if (len(minimum) != 3 or len(maximum) != 3 or
+                not all(math.isfinite(float(value))
+                        for value in minimum + maximum) or
+                any(float(minimum[index]) > float(maximum[index])
+                    for index in range(3)) or
+                all(abs(float(minimum[index]) - float(maximum[index])) <= 1e-9
+                    for index in range(3))):
+            raise UnsafeBakeInputError(
+                'soft BSMO model has invalid collision bounds')
+        bounds = minimum + maximum
+        result.append(_soft_destructible_spawn_obb(transform, bounds))
+    return tuple(result)
 
 
 def compiled_local_obstacle_instances(compiled, maximum_height):
@@ -1846,6 +1953,10 @@ SPAWN_ROW_DEPTHS = (20.0, 32.0)
 SPAWN_LATERAL_SPACING = 14.0
 SPAWN_MAXIMUM_PROJECTION = 32.0
 SPAWN_MINIMUM_SPACING = 10.5
+# Native vehicle contacts include a shell outside the authored chassis visual.
+# Keep this margin spawn-local: routes must still cross soft scenery so a tank
+# can crush it after the battle starts.
+SPAWN_SOFT_DESTRUCTIBLE_CLEARANCE = 0.5
 
 
 def representative_vehicle_chassis_envelope(client_root):
@@ -1957,6 +2068,85 @@ def spawn_obstacle_obb_blocked(obstacles, x, z, ground_y, yaw, half_width,
     return False
 
 
+def _spawn_chassis_footprint(x, z, yaw, half_width, half_length):
+    sine, cosine = math.sin(float(yaw)), math.cos(float(yaw))
+    forward = (sine * float(half_length),
+               cosine * float(half_length))
+    right = (cosine * float(half_width),
+             -sine * float(half_width))
+    return (
+        (float(x) + forward[0] + right[0],
+         float(z) + forward[1] + right[1]),
+        (float(x) + forward[0] - right[0],
+         float(z) + forward[1] - right[1]),
+        (float(x) - forward[0] - right[0],
+         float(z) - forward[1] - right[1]),
+        (float(x) - forward[0] + right[0],
+         float(z) - forward[1] + right[1]),
+    )
+
+
+def _convex_footprints_overlap(first, second):
+    """Return strict overlap for two convex X/Z polygons."""
+    for polygon in (first, second):
+        for start, end in zip(polygon, polygon[1:] + polygon[:1]):
+            axis = (-(end[1] - start[1]), end[0] - start[0])
+            if abs(axis[0]) + abs(axis[1]) <= 1e-12:
+                continue
+            first_projection = tuple(
+                point[0] * axis[0] + point[1] * axis[1]
+                for point in first)
+            second_projection = tuple(
+                point[0] * axis[0] + point[1] * axis[1]
+                for point in second)
+            if (max(first_projection) <= min(second_projection) or
+                    max(second_projection) <= min(first_projection)):
+                return False
+    return True
+
+
+def spawn_soft_destructible_obb_blocked(obstacles, x, z, ground_y, yaw,
+                                        half_width, half_length, legacy):
+    """Return whether a spawn chassis intersects a skipped soft BSMO OBB."""
+    records = tuple(getattr(obstacles, 'soft_spawn_obbs', ()))
+    if not records:
+        return False
+    footprint = _spawn_chassis_footprint(
+        x, z, yaw,
+        float(half_width) + SPAWN_SOFT_DESTRUCTIBLE_CLEARANCE,
+        float(half_length) + SPAWN_SOFT_DESTRUCTIBLE_CLEARANCE)
+    minimum_x = min(point[0] for point in footprint)
+    maximum_x = max(point[0] for point in footprint)
+    minimum_z = min(point[1] for point in footprint)
+    maximum_z = max(point[1] for point in footprint)
+    minimum_y = (float(ground_y) +
+                 float(legacy.VEHICLE_GROUND_CLEARANCE))
+    maximum_y = (float(ground_y) +
+                 float(legacy.VEHICLE_CLEARANCE_HEIGHT))
+    for record in records:
+        if (float(record['maximum_x']) <= minimum_x or
+                float(record['minimum_x']) >= maximum_x or
+                float(record['maximum_z']) <= minimum_z or
+                float(record['minimum_z']) >= maximum_z or
+                float(record['maximum_y']) <= minimum_y or
+                float(record['minimum_y']) >= maximum_y):
+            continue
+        if _convex_footprints_overlap(
+                footprint, tuple(record['footprint'])):
+            return True
+    return False
+
+
+def spawn_pose_blocked(obstacles, pose, half_width, half_length, legacy):
+    """Apply both hard-BSP and spawn-only soft-destructible clearance."""
+    return (spawn_obstacle_obb_blocked(
+        obstacles, pose[0], pose[2], pose[1], pose[3],
+        half_width, half_length, legacy) or
+        spawn_soft_destructible_obb_blocked(
+            obstacles, pose[0], pose[2], pose[1], pose[3],
+            half_width, half_length, legacy))
+
+
 def spawn_obbs_overlap(first, second, half_width, half_length):
     """Use a 2-D separating-axis test for two maximum spawn chassis."""
     first_yaw = float(first[3])
@@ -2001,6 +2191,10 @@ def spawn_clearance_failures(formations, obstacles, vehicle_envelope,
                     obstacles, pose[0], pose[2], pose[1], pose[3],
                     half_width, half_length, legacy):
                 failures.append(('compiled_bsp', team, slot))
+            if spawn_soft_destructible_obb_blocked(
+                    obstacles, pose[0], pose[2], pose[1], pose[3],
+                    half_width, half_length, legacy):
+                failures.append(('soft_destructible_obb', team, slot))
     for index, first in enumerate(records):
         for second in records[index + 1:]:
             if spawn_obbs_overlap(
@@ -2087,9 +2281,8 @@ def bake_spawn_formations(graph, anchors, map_name, obstacles,
                            for other in selected):
                         continue
                     pose = (candidate[1], candidate[2], candidate[3], yaw)
-                    if spawn_obstacle_obb_blocked(
-                            obstacles, pose[0], pose[2], pose[1], pose[3],
-                            half_width, half_length, legacy):
+                    if spawn_pose_blocked(
+                            obstacles, pose, half_width, half_length, legacy):
                         continue
                     if any(spawn_obbs_overlap(
                             pose, (other[1], other[2], other[3], yaw),
@@ -2150,6 +2343,9 @@ def bake_spawn_formations(graph, anchors, map_name, obstacles,
             minimum_team_separation, 3),
         'spawn_maximum_projection_metres': round(max(projections), 3),
         'spawn_compiled_bsp_obb_clearance': True,
+        'spawn_soft_destructible_obb_clearance': True,
+        'spawn_soft_destructible_clearance_metres': (
+            SPAWN_SOFT_DESTRUCTIBLE_CLEARANCE),
         'spawn_pairwise_obb_clearance': True,
         'spawn_vehicle_half_width_metres': round(half_width, 6),
         'spawn_vehicle_half_length_metres': round(half_length, 6),
@@ -2183,6 +2379,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
         world, compiled = _compiled_models(space_data)
         soft_instance_keys, soft_destructible_counts = \
             compiled_soft_destructible_instances(compiled)
+        soft_spawn_obbs = compiled_soft_destructible_spawn_obbs(compiled)
         local_instance_keys, local_obstacle_counts = \
             compiled_local_obstacle_instances(
                 compiled, legacy.LOCAL_OBSTACLE_MAX_HEIGHT)
@@ -2260,6 +2457,10 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
                 self.model_library = type('LibraryStats', (), {'cache': {}})()
                 self.unsupported = []
                 self.invalid_triangles = 0
+                # Spawn placement must see these exact authored bodies, while
+                # the route raster below must continue to omit them so tanks
+                # can plan through crushable scenery.
+                self.soft_spawn_obbs = soft_spawn_obbs
                 self._load_target()
             def _load_target(self):
                 for model in world.models:
