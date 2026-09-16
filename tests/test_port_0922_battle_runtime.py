@@ -10140,8 +10140,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._server = types.SimpleNamespace(vehicle_id=10)
         battle._roll_loader_intuition = lambda: True
 
-        self.assertTrue(
-            battle.change_vehicle_setting(settings.CURRENT_SHELLS, 102))
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertTrue(
+                battle.change_vehicle_setting(settings.CURRENT_SHELLS, 102))
 
         self.assertEqual(1, state.shot_index)
         self.assertEqual(0.0, state.reload_time)
@@ -10150,6 +10151,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             [(10, status.LOADER_INTUITION_WAS_USED, 0, (0.0,))],
             battle._avatar.misc_statuses)
+        self.assertIn(
+            'INTUITION result=committed hud=shown shell_index=1 clip=1 '
+            'reload=0.000', log.getvalue())
 
     def test_two_loader_intuition_switches_leave_hud_and_ammo_consistent(self):
         battle, state, settings = self._shell_change_battle()
@@ -10183,8 +10187,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._server = types.SimpleNamespace(vehicle_id=10)
         battle._roll_loader_intuition = lambda: True
 
-        self.assertTrue(
-            battle.change_vehicle_setting(settings.CURRENT_SHELLS, 102))
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertTrue(
+                battle.change_vehicle_setting(settings.CURRENT_SHELLS, 102))
 
         self.assertEqual(1, state.shot_index)
         self.assertIsNone(state.pending_index)
@@ -10199,6 +10204,30 @@ class BattleRuntimeContractTests(unittest.TestCase):
             battle._runtime.constants.VEHICLE_MISC_STATUS.
             LOADER_INTUITION_WAS_USED,
             0, (0.0,))
+        self.assertIn(
+            'INTUITION result=committed hud=failed shell_index=1 clip=1 '
+            'reload=0.000', log.getvalue())
+
+    def test_intuition_hud_and_log_failures_keep_committed_shell(self):
+        battle, state, settings = self._shell_change_battle()
+        battle._avatar = types.SimpleNamespace(
+            updateVehicleMiscStatus=mock.Mock(
+                side_effect=IndexError('tuple index out of range')))
+        battle._server = types.SimpleNamespace(vehicle_id=10)
+        battle._roll_loader_intuition = lambda: True
+
+        with mock.patch.object(
+                battle_runtime_module.sys.stdout, 'write',
+                side_effect=IOError('closed')):
+            self.assertTrue(
+                battle.change_vehicle_setting(
+                    settings.CURRENT_SHELLS, 102))
+
+        self.assertEqual(1, state.shot_index)
+        self.assertIsNone(state.pending_index)
+        self.assertEqual(0.0, state.reload_time)
+        self.assertEqual(1, state.clip)
+        battle._sender.send_current.assert_called_once_with()
 
     def test_an_unfinished_intuition_perk_never_rolls(self):
         battle, unused_state, unused_settings = self._shell_change_battle()
@@ -10224,6 +10253,39 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertTrue(battle._roll_loader_intuition())
 
         battle._garage_loadout_snapshot.assert_not_called()
+
+    def test_intuition_roll_diagnostics_are_bounded_without_extra_rng(self):
+        battle, unused_state, unused_settings = self._shell_change_battle()
+        battle._local_effective_params = _effective_params_snapshot(
+            intuition_chances=1)
+        limit = battle_runtime_module.SKILL_DIAGNOSTIC_DETAIL_LIMIT
+
+        with mock.patch.object(
+                battle_runtime_module.random, 'random', return_value=1.0
+                ) as roll, contextlib.redirect_stdout(io.StringIO()) as log:
+            for unused_index in range(limit + 1):
+                self.assertFalse(battle._roll_loader_intuition())
+
+        self.assertEqual(limit + 1, roll.call_count)
+        self.assertEqual(
+            limit,
+            len([line for line in log.getvalue().splitlines()
+                 if 'INTUITION chances=1 result=miss' in line]))
+        self.assertEqual(1, battle._skill_diagnostic_dropped['intuition'])
+
+    def test_intuition_log_failure_does_not_change_the_roll(self):
+        battle, unused_state, unused_settings = self._shell_change_battle()
+        battle._local_effective_params = _effective_params_snapshot(
+            intuition_chances=1)
+
+        with mock.patch.object(
+                battle_runtime_module.random, 'random', return_value=0.1
+                ) as roll, mock.patch.object(
+                    battle_runtime_module.sys.stdout, 'write',
+                    side_effect=IOError('closed')):
+            self.assertTrue(battle._roll_loader_intuition())
+
+        roll.assert_called_once_with()
 
     def test_intuition_uses_only_conscious_loader_carriers(self):
         battle, unused_state, unused_settings = self._shell_change_battle()
@@ -15374,10 +15436,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'critical_state': critical,
             'state': {'team': 2, 'health': 500, 'alive': True}}
         battle._records = {'bot:2': record}
+        log = io.StringIO()
 
         self.assertTrue(battle.monitor_vehicle_damaged_devices(11))
         self.assertFalse(battle._tick_expert_target(13.999))
-        self.assertTrue(battle._tick_expert_target(14.0))
+        with contextlib.redirect_stdout(log):
+            self.assertTrue(battle._tick_expert_target(14.0))
         self.assertFalse(battle._tick_expert_target(15.0))
         feedback = battle._avatar.guiSessionProvider.shared.feedback
         feedback.showVehicleDamagedDevices.assert_called_once_with(
@@ -15391,13 +15455,81 @@ class BattleRuntimeContractTests(unittest.TestCase):
         ]
         record['critical_state']['destroyed'] = [
             'engineHealth', 'leftTrackHealth']
-        self.assertTrue(battle._tick_expert_target(15.1))
+        with contextlib.redirect_stdout(log):
+            self.assertTrue(battle._tick_expert_target(15.1))
         feedback.showVehicleDamagedDevices.assert_called_with(
             11, (0,), (1, 2))
 
-        self.assertTrue(battle.monitor_vehicle_damaged_devices(0))
+        with contextlib.redirect_stdout(log):
+            self.assertTrue(battle.monitor_vehicle_damaged_devices(0))
         feedback = battle._avatar.guiSessionProvider.shared.feedback
         feedback.hideVehicleDamagedDevices.assert_called_once_with(11)
+        self.assertIn(
+            'EXPERT result=shown target=11 damaged=0,1 destroyed=2',
+            log.getvalue())
+        self.assertIn(
+            'EXPERT result=shown target=11 damaged=0 destroyed=1,2',
+            log.getvalue())
+        self.assertIn(
+            'EXPERT result=hidden target=11 reason=target_clear',
+            log.getvalue())
+
+    def test_expert_diagnostic_does_not_disclose_unspotted_modules(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle.client = _Client()
+        battle.state = 'running'
+        battle._avatar = runtime.bigworld.avatar
+        battle._has_expert = True
+        battle._local_effective_params = _effective_params_snapshot(
+            expert=True)
+        battle._clock = lambda: 10.0
+        secret = types.SimpleNamespace(name='secretHealth')
+        descriptor = types.SimpleNamespace(
+            extras=(secret,), extrasDict={'secretHealth': secret})
+        entity = types.SimpleNamespace(
+            id=11, typeDescriptor=descriptor, health=500,
+            isCrewActive=True, isAlive=lambda: True)
+        runtime.bigworld.entities[11] = entity
+        record = {
+            'engine_id': 11, 'local': False, 'ready': True,
+            'spot_visible': False,
+            'critical_state': {
+                'devices': [{'name': 'secretHealth', 'state': 'critical'}],
+                'destroyed': [], 'crew_ko': [], 'fire': False},
+            'state': {'team': 2, 'health': 500, 'alive': True}}
+        battle._records = {'bot:2': record}
+
+        self.assertTrue(battle.monitor_vehicle_damaged_devices(11))
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertFalse(battle._tick_expert_target(14.0))
+
+        feedback = battle._avatar.guiSessionProvider.shared.feedback
+        feedback.showVehicleDamagedDevices.assert_not_called()
+        self.assertNotIn('secretHealth', log.getvalue())
+        self.assertNotIn('damaged=', log.getvalue())
+        self.assertIn('reason=spot_lost', log.getvalue())
+
+    def test_expert_diagnostic_detail_is_bounded_without_blocking_ui(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        limit = battle_runtime_module.SKILL_DIAGNOSTIC_DETAIL_LIMIT
+
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            for unused_index in range(limit + 1):
+                self.assertTrue(battle._hide_expert_devices(
+                    11, 'target_clear'))
+
+        feedback = battle._avatar.guiSessionProvider.shared.feedback
+        self.assertEqual(
+            limit + 1,
+            feedback.hideVehicleDamagedDevices.call_count)
+        self.assertEqual(
+            limit,
+            len([line for line in log.getvalue().splitlines()
+                 if 'EXPERT result=hidden' in line]))
+        self.assertEqual(1, battle._skill_diagnostic_dropped['expert'])
 
     def test_server_hit_uses_stock_shot_result_and_battle_feedback(self):
         runtime = _runtime()
@@ -30397,6 +30529,142 @@ class BattleRuntimeContractTests(unittest.TestCase):
             ('killed', (11, 10, 0)),
         ], presentation_order)
 
+    def test_local_kill_contract_reads_teams_only_after_kill_dispatch(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._binding = mock.Mock()
+        battle._avatar.playerVehicleID = 10
+        battle._avatar.team = 1
+        battle._avatar.arena.vehicles = {
+            10: {'team': 1}, 11: {'team': 2}}
+        attacker = _Vehicle(
+            10, _Descriptor(), _Vector(), (0, 0, 0), {'health': 500})
+        target = _Vehicle(
+            11, _Descriptor(), _Vector(0, 0, 1), (0, 0, 0),
+            {'health': 500})
+        runtime.bigworld.entities.update({10: attacker, 11: target})
+        attacker_record = {
+            'engine_id': 10, 'local': True, 'kind': 'player',
+            'network_id': 1,
+            'state': {'team': 1, 'health': 500, 'alive': True}}
+        target_record = {
+            'engine_id': 11, 'local': False, 'kind': 'bot',
+            'network_id': 2, 'spot_visible': False,
+            'spot_marker_visible': False,
+            'state': {'team': 2, 'health': 500, 'alive': True}}
+        battle._records = {
+            'player:1': attacker_record, 'bot:2': target_record}
+        battle._last_health[11] = (500, 500, True, 0)
+        dispatched = [False]
+
+        def killed(unused_victim, unused_attacker, unused_reason):
+            dispatched[0] = True
+
+        def vehicle_info(vehicle_id):
+            self.assertTrue(dispatched[0])
+            return types.SimpleNamespace(
+                vehicleID=int(vehicle_id),
+                team={10: 1, 11: 2}[int(vehicle_id)])
+
+        battle._binding.arena_vehicle_killed.side_effect = killed
+        battle._avatar.arena_dp.getVehicleInfo = mock.Mock(
+            side_effect=vehicle_info)
+        battle._avatar.arena_dp.getNumberOfTeam = mock.Mock(
+            return_value=1)
+
+        with mock.patch.object(
+                critical_damage, 'apply_death', return_value=None), \
+                contextlib.redirect_stdout(io.StringIO()) as log:
+            battle._apply_health(
+                target_record,
+                {'health': 0, 'display_health': 0, 'alive': False,
+                 'team': 2, 'death_reason': 0},
+                attacker_id=10, reason_id=0, force_cause=True)
+
+        battle._binding.arena_vehicle_killed.assert_called_once_with(
+            11, 10, 0)
+        self.assertEqual(
+            [mock.call(11), mock.call(10)],
+            battle._avatar.arena_dp.getVehicleInfo.call_args_list)
+        self.assertIn(
+            'KILL-CONTRACT victim=11 attacker=10 blind=True '
+            'runtime_team=2/1 avatar_team=1 arena_team=2/1 '
+            'arenaDP=11:2/10:1 arenaDP_player_team=1 '
+            'payload=11,10,0,0 match=yes',
+            log.getvalue())
+        self.assertEqual([], battle._avatar.shot_results)
+        self.assertEqual([], battle._avatar.battle_events)
+
+    def test_kill_contract_detects_arena_dp_player_team_mismatch(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._avatar.playerVehicleID = 10
+        battle._avatar.team = 1
+        battle._avatar.arena.vehicles = {
+            10: {'team': 1}, 11: {'team': 2}}
+        attacker_record = {
+            'engine_id': 10, 'local': True,
+            'state': {'team': 1}}
+        target_record = {
+            'engine_id': 11, 'local': False,
+            'state': {'team': 2}, 'dead_marker_known': False}
+        battle._records = {
+            'player:1': attacker_record, 'bot:2': target_record}
+        battle._avatar.arena_dp.getVehicleInfo = mock.Mock(
+            side_effect=lambda vehicle_id: types.SimpleNamespace(
+                vehicleID=int(vehicle_id),
+                team={10: 1, 11: 2}[int(vehicle_id)]))
+        battle._avatar.arena_dp.getNumberOfTeam = mock.Mock(
+            return_value=2)
+
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertTrue(battle._report_local_kill_contract(
+                target_record, 10, 0))
+
+        self.assertIn('arenaDP_player_team=2', log.getvalue())
+        self.assertIn('match=no', log.getvalue())
+        battle._avatar.arena_dp.getNumberOfTeam.assert_called_once_with(
+            False)
+
+    def test_kill_contract_diagnostic_failure_cannot_escape(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._avatar.playerVehicleID = 10
+        record = {
+            'engine_id': 11, 'local': False,
+            'state': {'team': 2}, 'dead_marker_known': False}
+        battle._records = {
+            'player:1': {
+                'engine_id': 10, 'local': True,
+                'state': {'team': 1}},
+            'bot:2': record}
+
+        with mock.patch.object(
+                battle_runtime_module.sys.stdout, 'write',
+                side_effect=IOError('closed')):
+            self.assertFalse(battle._report_local_kill_contract(
+                record, 10, 0))
+
+    def test_world_death_cannot_be_logged_as_a_local_kill(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._avatar.playerVehicleID = 0
+        get_arena_dp = mock.Mock(
+            wraps=battle._avatar.guiSessionProvider.getArenaDP)
+        battle._avatar.guiSessionProvider.getArenaDP = get_arena_dp
+        record = {
+            'engine_id': 11, 'local': False,
+            'state': {'team': 2}, 'dead_marker_known': False}
+        battle._records = {'bot:2': record}
+
+        self.assertFalse(battle._report_local_kill_contract(
+            record, 0, 3))
+        get_arena_dp.assert_not_called()
+
     def test_server_owned_frag_and_team_killer_updates_use_native_arena(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
@@ -30473,6 +30741,55 @@ class BattleRuntimeContractTests(unittest.TestCase):
         runtime.bigworld.callbacks.pop()()
         self.assertEqual(['destroy', 'restore'], calls)
         self.assertEqual([], battle._retired_native_owners)
+
+    def test_cleanup_resets_sixth_sense_before_one_anonymous_summary(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle.state = 'running'
+        calls = []
+
+        class _Sixth(object):
+            def reset(self):
+                calls.append('reset')
+
+            def diagnostic_summary(self):
+                calls.append('summary')
+                return {
+                    'scheduled': 2, 'presented': 1,
+                    'presentation_failed': 0,
+                    'suppressed_generation': 0,
+                    'suppressed_dead': 0,
+                    'suppressed_not_battle': 0,
+                    'suppressed_skill': 0,
+                    'suppressed_reset': 1,
+                    'detail_dropped': 0,
+                }
+
+        battle._sixth_sense = _Sixth()
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            battle.stop(show_login=False)
+
+        self.assertEqual(['reset', 'summary'], calls)
+        self.assertIsNone(battle._sixth_sense)
+        summaries = [line for line in log.getvalue().splitlines()
+                     if 'SIXTH summary' in line]
+        self.assertEqual(1, len(summaries))
+        self.assertIn(
+            'scheduled=2 presented=1 presentation_failed=0 '
+            'suppressed_generation=0 suppressed_dead=0 '
+            'suppressed_not_battle=0 suppressed_skill=0 '
+            'suppressed_reset=1 detail_dropped=0', summaries[0])
+
+    def test_sixth_summary_write_failure_is_cleanup_safe(self):
+        battle = BattleRuntime(_runtime())
+        controller = types.SimpleNamespace(
+            diagnostic_summary=lambda: {'scheduled': 1})
+
+        with mock.patch.object(
+                battle_runtime_module.sys.stdout, 'write',
+                side_effect=IOError('closed')):
+            self.assertFalse(
+                battle._report_sixth_sense_summary(controller))
 
     def test_round_collection_waits_for_released_native_owners(self):
         """The sweep runs past the native teardown boundary, once.

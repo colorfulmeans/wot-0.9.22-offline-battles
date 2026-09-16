@@ -167,6 +167,10 @@ BOT_WATER_ESCAPE_DEEPEN_EPSILON = 0.10
 CRITICAL_REPAIR_NETWORK_SECONDS = 1.0
 # tankmen.xml commander_expert.delay in the pinned #1513 client.
 EXPERT_DEVICE_DELAY_SECONDS = 4.0
+# A player can sweep the reticle or switch shells many times in one round.
+# Keep the useful presentation edges while preventing diagnostics from
+# becoming an unbounded render-thread log source.
+SKILL_DIAGNOSTIC_DETAIL_LIMIT = 16
 PROJECTILE_PROGRESS_SECONDS = 0.10
 PROJECTILE_MAX_TIME_MS = 20000
 PROJECTILE_MAX_ACTIVE = 128
@@ -1702,6 +1706,8 @@ class BattleRuntime(object):
         self._expert_target_id = 0
         self._expert_target_due = 0.0
         self._expert_target_signature = None
+        self._skill_diagnostic_counts = {}
+        self._skill_diagnostic_dropped = {}
         self._records = {}
         self._records_revision = 0
         self._last_snapshot = None
@@ -2045,6 +2051,8 @@ class BattleRuntime(object):
         self._expert_target_id = 0
         self._expert_target_due = 0.0
         self._expert_target_signature = None
+        self._skill_diagnostic_counts = {}
+        self._skill_diagnostic_dropped = {}
         self._last_snapshot = None
         self._last_frame_time = None
         self._standard_space_visibility = None
@@ -2887,6 +2895,66 @@ class BattleRuntime(object):
         if not message:
             message = error.__class__.__name__
         return message[:max(1, int(limit))]
+
+    def _report_skill_detail(self, skill, detail):
+        """Write one bounded, presentation-only skill diagnostic."""
+        if self._worker_mode:
+            return False
+        skill = str(skill)
+        counts = self._skill_diagnostic_counts
+        emitted = int(counts.get(skill, 0))
+        if emitted >= SKILL_DIAGNOSTIC_DETAIL_LIMIT:
+            dropped = self._skill_diagnostic_dropped
+            dropped[skill] = int(dropped.get(skill, 0)) + 1
+            return False
+        counts[skill] = emitted + 1
+        try:
+            detail = ' '.join(str(detail).split())[:256]
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] %s %s\n' % (
+                    skill.upper(), detail))
+        except Exception:
+            # A closed or malformed log stream cannot affect battle state.
+            return False
+        return True
+
+    def _report_skill_diagnostic_drops(self):
+        """Report detail suppression once, after the round has ended."""
+        dropped = self._skill_diagnostic_dropped
+        if not dropped:
+            return False
+        try:
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] SKILL diagnostic_dropped=%s\n' %
+                ','.join('%s:%d' % (name, int(dropped[name]))
+                         for name in sorted(dropped)))
+        except Exception:
+            return False
+        return True
+
+    def _report_sixth_sense_summary(self, controller):
+        """Publish no Sixth Sense observation detail until round teardown."""
+        try:
+            summary = controller.diagnostic_summary()
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] SIXTH summary scheduled=%d '
+                'presented=%d presentation_failed=%d '
+                'suppressed_generation=%d suppressed_dead=%d '
+                'suppressed_not_battle=%d suppressed_skill=%d '
+                'suppressed_reset=%d detail_dropped=%d\n' % (
+                    int(summary.get('scheduled', 0)),
+                    int(summary.get('presented', 0)),
+                    int(summary.get('presentation_failed', 0)),
+                    int(summary.get('suppressed_generation', 0)),
+                    int(summary.get('suppressed_dead', 0)),
+                    int(summary.get('suppressed_not_battle', 0)),
+                    int(summary.get('suppressed_skill', 0)),
+                    int(summary.get('suppressed_reset', 0)),
+                    int(summary.get('detail_dropped', 0))))
+        except Exception:
+            # This runs inside cleanup; diagnostics cannot obstruct teardown.
+            return False
+        return True
 
     def _optional_feature_enabled(self, feature):
         disabled = getattr(self, '_disabled_optional_features', None)
@@ -7126,13 +7194,16 @@ class BattleRuntime(object):
         self._expert_visibility_enabled = True
         return True
 
-    def _hide_expert_devices(self, vehicle_id):
+    def _hide_expert_devices(self, vehicle_id, reason='target_clear'):
         provider = getattr(self._avatar, 'guiSessionProvider', None)
         shared = getattr(provider, 'shared', None)
         feedback = getattr(shared, 'feedback', None)
         callback = getattr(feedback, 'hideVehicleDamagedDevices', None)
         if callable(callback):
             callback(int(vehicle_id or 0))
+            self._report_skill_detail(
+                'expert', 'result=hidden target=%d reason=%s' % (
+                    int(vehicle_id or 0), str(reason)))
             return True
         return False
 
@@ -7145,12 +7216,13 @@ class BattleRuntime(object):
         self._expert_target_signature = None
         if previous:
             try:
-                self._hide_expert_devices(previous)
+                self._hide_expert_devices(previous, 'feature_disabled')
             except Exception:
                 pass
         return True
 
-    def monitor_vehicle_damaged_devices(self, vehicle_id):
+    def monitor_vehicle_damaged_devices(
+            self, vehicle_id, clear_reason='target_clear'):
         """Own the cell half of #1513's Expert target-monitor mailbox."""
         try:
             vehicle_id = int(vehicle_id)
@@ -7162,7 +7234,7 @@ class BattleRuntime(object):
             self._expert_target_due = 0.0
             self._expert_target_signature = None
             if previous:
-                self._hide_expert_devices(previous)
+                self._hide_expert_devices(previous, clear_reason)
             return True
         if (not self._has_expert or
                 self._local_skill_count('commander_expert') <= 0 or
@@ -7183,7 +7255,7 @@ class BattleRuntime(object):
         if previous == vehicle_id:
             return True
         if previous:
-            self._hide_expert_devices(previous)
+            self._hide_expert_devices(previous, 'target_changed')
         self._expert_target_id = vehicle_id
         self._expert_target_due = (
             self._clock() + EXPERT_DEVICE_DELAY_SECONDS)
@@ -7211,7 +7283,8 @@ class BattleRuntime(object):
         if (not self._has_expert or
                 self._local_skill_count('commander_expert') <= 0):
             if vehicle_id:
-                self.monitor_vehicle_damaged_devices(0)
+                self.monitor_vehicle_damaged_devices(
+                    0, clear_reason='skill_unavailable')
             return False
         if vehicle_id <= 0 or float(now) < self._expert_target_due:
             return False
@@ -7221,11 +7294,20 @@ class BattleRuntime(object):
                 record = candidate
                 break
         entity = self._server_entity(vehicle_id)
-        if (record is None or record.get('local') or
-                record.get('tombstone') or
-                not record.get('spot_visible', True) or entity is None or
-                not self._record_alive(record, entity)):
-            self.monitor_vehicle_damaged_devices(0)
+        invalid_reason = None
+        if record is None or record.get('local'):
+            invalid_reason = 'entity_missing'
+        elif record.get('tombstone'):
+            invalid_reason = 'dead'
+        elif not record.get('spot_visible', True):
+            invalid_reason = 'spot_lost'
+        elif entity is None:
+            invalid_reason = 'entity_missing'
+        elif not self._record_alive(record, entity):
+            invalid_reason = 'dead'
+        if invalid_reason is not None:
+            self.monitor_vehicle_damaged_devices(
+                0, clear_reason=invalid_reason)
             return False
         critical = (record.get('critical_state') or
                     (record.get('state') or {}).get('critical') or {})
@@ -7272,6 +7354,11 @@ class BattleRuntime(object):
             raise RuntimeError(
                 '#1513 Expert damaged-device callback is unavailable')
         callback(vehicle_id, signature[0], signature[1])
+        self._report_skill_detail(
+            'expert', 'result=shown target=%d damaged=%s destroyed=%s' % (
+                vehicle_id,
+                ','.join(str(value) for value in signature[0]) or '-',
+                ','.join(str(value) for value in signature[1]) or '-'))
         if self._expert_target_id == vehicle_id:
             self._expert_target_signature = signature
         return True
@@ -8162,14 +8249,13 @@ class BattleRuntime(object):
         chances = self._local_skill_count('loader_intuition')
         for chance_index in range(chances):
             if random.random() < loadout_law.INTUITION_CHANCE:
-                sys.stdout.write(
-                    '[Offline LAN 0.9.22] INTUITION chances=%d '
-                    'result=triggered attempt=%d\n' % (
+                self._report_skill_detail(
+                    'intuition',
+                    'chances=%d result=triggered attempt=%d' % (
                         chances, chance_index + 1))
                 return True
-        sys.stdout.write(
-            '[Offline LAN 0.9.22] INTUITION chances=%d result=miss\n' %
-            chances)
+        self._report_skill_detail(
+            'intuition', 'chances=%d result=miss' % chances)
         return False
 
     def _present_loader_intuition(self):
@@ -8189,11 +8275,24 @@ class BattleRuntime(object):
         except Exception as error:
             # The shell transaction is authoritative. A stock presentation
             # failure must not strand the new round behind a failed HUD call.
-            sys.stdout.write(
-                '[Offline LAN 0.9.22] loader intuition notification '
-                'failed: %s\n' % error)
+            self._report_skill_detail(
+                'intuition', 'notification=failed error=%s' %
+                self._bounded_failure_reason(error))
             return False
         return True
+
+    def _report_loader_intuition_commit(self, state, hud_presented):
+        """Report only after the instant shell transaction has committed."""
+        try:
+            detail = (
+                'result=committed hud=%s shell_index=%d clip=%d '
+                'reload=%.3f' % (
+                    'shown' if hud_presented else 'failed',
+                    int(state.shot_index), int(state.clip),
+                    float(state.reload_time)))
+        except Exception:
+            return False
+        return self._report_skill_detail('intuition', detail)
 
     def _reload_partial_clip_now(self, state):
         edge = self._advance_local_gun_edge(state)
@@ -8247,7 +8346,8 @@ class BattleRuntime(object):
         self._publish_loaded_shell_change(
             state, previous_reload, previous_duration)
         if instant:
-            self._present_loader_intuition()
+            hud_presented = self._present_loader_intuition()
+            self._report_loader_intuition_commit(state, hud_presented)
         return True
 
     @staticmethod
@@ -9108,7 +9208,9 @@ class BattleRuntime(object):
             self._publish_loaded_shell_change(
                 state, previous_reload, previous_duration)
             if intuition_used:
-                self._present_loader_intuition()
+                hud_presented = self._present_loader_intuition()
+                self._report_loader_intuition_commit(
+                    state, hud_presented)
         return True
 
     def _cancel_native_shot_wait(self):
@@ -25422,6 +25524,158 @@ class BattleRuntime(object):
             return 0
         return self._detached_turrets.advance(now)
 
+    @staticmethod
+    def _diagnostic_int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @classmethod
+    def _diagnostic_vehicle_info(cls, info):
+        if isinstance(info, dict):
+            vehicle_id = info.get('vehicleID', info.get('id'))
+            team = info.get('team')
+        else:
+            vehicle_id = getattr(info, 'vehicleID', None)
+            team = getattr(info, 'team', None)
+        return cls._diagnostic_int(vehicle_id), cls._diagnostic_int(team)
+
+    @staticmethod
+    def _diagnostic_value(value):
+        return '-' if value is None else str(value)
+
+    def _report_local_kill_contract(
+            self, target_record, attacker_id, reason_id):
+        """Snapshot #1513's kill classifier inputs after its synchronous use.
+
+        Calling ArenaDP before ``ClientArena.onVehicleKilled`` could warm a
+        lazy cache and hide the very stale-team defect this line diagnoses.
+        The caller therefore invokes this only after ``arena_vehicle_killed``
+        returns.  Every failure remains diagnostic-only.
+        """
+        try:
+            if (self._worker_mode or target_record.get('local') or
+                    self._avatar is None):
+                return False
+            target_id = self._diagnostic_int(
+                target_record.get('engine_id'))
+            attacker_id = self._diagnostic_int(attacker_id)
+            player_id = self._diagnostic_int(
+                getattr(self._avatar, 'playerVehicleID', None))
+            if (target_id is None or target_id <= 0 or
+                    attacker_id is None or attacker_id <= 0 or
+                    player_id is None or player_id <= 0 or
+                    attacker_id != player_id):
+                return False
+
+            attacker_record = None
+            for candidate in self._records.values():
+                if self._diagnostic_int(candidate.get('engine_id')) == \
+                        attacker_id:
+                    attacker_record = candidate
+                    break
+            target_team = self._diagnostic_int(
+                (target_record.get('state') or {}).get('team'))
+            attacker_team = (None if attacker_record is None else
+                             self._diagnostic_int(
+                                 (attacker_record.get('state') or {}).get(
+                                     'team')))
+            avatar_team = self._diagnostic_int(
+                getattr(self._avatar, 'team', None))
+
+            arena = getattr(self._avatar, 'arena', None)
+            arena_vehicles = getattr(arena, 'vehicles', None)
+            if not hasattr(arena_vehicles, 'get'):
+                arena_vehicles = {}
+            unused_id, arena_target_team = self._diagnostic_vehicle_info(
+                arena_vehicles.get(target_id))
+            unused_id, arena_attacker_team = self._diagnostic_vehicle_info(
+                arena_vehicles.get(attacker_id))
+
+            dp_target_id = dp_target_team = None
+            dp_attacker_id = dp_attacker_team = None
+            dp_player_team = None
+            provider = getattr(self._avatar, 'guiSessionProvider', None)
+            get_arena_dp = getattr(provider, 'getArenaDP', None)
+            arena_dp = get_arena_dp() if callable(get_arena_dp) else None
+            get_vehicle_info = getattr(arena_dp, 'getVehicleInfo', None)
+            if callable(get_vehicle_info):
+                try:
+                    dp_target_id, dp_target_team = \
+                        self._diagnostic_vehicle_info(
+                            get_vehicle_info(target_id))
+                except Exception:
+                    pass
+                try:
+                    dp_attacker_id, dp_attacker_team = \
+                        self._diagnostic_vehicle_info(
+                            get_vehicle_info(attacker_id))
+                except Exception:
+                    pass
+            get_number_of_team = getattr(
+                arena_dp, 'getNumberOfTeam', None)
+            if callable(get_number_of_team):
+                try:
+                    # BattleCtx.isAlly ultimately reads ArenaDP's independent
+                    # cached player team through this public #1513 boundary.
+                    dp_player_team = self._diagnostic_int(
+                        get_number_of_team(False))
+                except Exception:
+                    pass
+
+            values = (
+                target_team, attacker_team, avatar_team,
+                arena_target_team, arena_attacker_team,
+                dp_target_id, dp_target_team,
+                dp_attacker_id, dp_attacker_team, dp_player_team)
+            mismatches = []
+            for observed, expected in (
+                    (attacker_team, avatar_team),
+                    (arena_target_team, target_team),
+                    (arena_attacker_team, attacker_team),
+                    (dp_target_id, target_id),
+                    (dp_target_team, target_team),
+                    (dp_attacker_id, attacker_id),
+                    (dp_attacker_team, attacker_team),
+                    (dp_player_team, avatar_team)):
+                if (observed is not None and expected is not None and
+                        observed != expected):
+                    mismatches.append(True)
+            if mismatches:
+                match = 'no'
+            elif any(value is None for value in values):
+                match = 'unknown'
+            else:
+                match = 'yes'
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] KILL-CONTRACT victim=%d attacker=%d '
+                'blind=%s runtime_team=%s/%s avatar_team=%s '
+                'arena_team=%s/%s arenaDP=%s:%s/%s:%s '
+                'arenaDP_player_team=%s payload=%d,%d,0,%d match=%s\n' % (
+                    target_id, attacker_id,
+                    not bool(target_record.get('dead_marker_known', False)),
+                    self._diagnostic_value(target_team),
+                    self._diagnostic_value(attacker_team),
+                    self._diagnostic_value(avatar_team),
+                    self._diagnostic_value(arena_target_team),
+                    self._diagnostic_value(arena_attacker_team),
+                    self._diagnostic_value(dp_target_id),
+                    self._diagnostic_value(dp_target_team),
+                    self._diagnostic_value(dp_attacker_id),
+                    self._diagnostic_value(dp_attacker_team),
+                    self._diagnostic_value(dp_player_team), target_id,
+                    attacker_id, int(reason_id), match))
+            return True
+        except Exception:
+            try:
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] KILL-CONTRACT '
+                    'result=unavailable\n')
+            except Exception:
+                pass
+            return False
+
     def _apply_health(self, record, state, attacker_id=0, reason_id=None,
                       force_cause=False, attack_reason_id=None,
                       suppress_combat_presentation=False,
@@ -25663,6 +25917,8 @@ class BattleRuntime(object):
                 killed = getattr(self._binding, 'arena_vehicle_killed', None)
                 if callable(killed):
                     killed(engine_id, int(attacker_id), int(reason_id))
+                    self._report_local_kill_contract(
+                        record, int(attacker_id), int(reason_id))
                     if (record.get('local') and
                             suppress_postmortem_killer):
                         clear_killer = getattr(
@@ -26371,16 +26627,19 @@ class BattleRuntime(object):
         except Exception as error:
             cleanup_error = error
         if self._sixth_sense is not None:
+            sixth_sense = self._sixth_sense
             try:
-                self._sixth_sense.reset()
+                sixth_sense.reset()
             except Exception as error:
                 cleanup_error = error
+            self._report_sixth_sense_summary(sixth_sense)
             self._sixth_sense = None
         try:
             self._quiesce_native_presentations()
         except Exception as error:
             if cleanup_error is None:
                 cleanup_error = error
+        self._report_skill_diagnostic_drops()
         self._descriptor_cache = {}
         self._prepared_vehicle_names = []
         self._unusable_vehicles_reported = set()
@@ -26519,6 +26778,8 @@ class BattleRuntime(object):
         self._expert_target_id = 0
         self._expert_target_due = 0.0
         self._expert_target_signature = None
+        self._skill_diagnostic_counts = {}
+        self._skill_diagnostic_dropped = {}
         self._last_snapshot = None
         self._last_frame_time = None
         self._last_health = {}

@@ -893,6 +893,118 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual(set(range(1, 13)), set(data['inventory']))
         self.assertEqual({}, data['inventory'][1]['compDescr'])
 
+    def test_sync_data_logs_anonymous_barracks_producer_counts(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        snapshot['barracksTankmen'] = {909: b'private-descriptor'}
+        snapshot['accountBerths'] = 19
+        context = {'selected_vehicle': snapshot}
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            result = account_requests._sync_data(context, [0])
+
+        self.assertEqual(commands.RES_SUCCESS, result.result_id)
+        line = write.call_args[0][0]
+        self.assertEqual(
+            '[Offline LAN 0.9.22] BARRACKS_SYNC v=1 '
+            'snapshot_seated=2 snapshot_barracks=1 wire_compDescr=3 '
+            'wire_vehicle=3 wire_positive=2 wire_nonpositive=1 '
+            'missing_vehicle_ref=0 extra_vehicle_ref=0 berths=19\n',
+            line)
+        self.assertIn('BARRACKS_SYNC v=1', line)
+        self.assertIn('snapshot_seated=2', line)
+        self.assertIn('snapshot_barracks=1', line)
+        self.assertIn('wire_compDescr=3', line)
+        self.assertIn('wire_vehicle=3', line)
+        self.assertIn('wire_positive=2', line)
+        self.assertIn('wire_nonpositive=1', line)
+        self.assertIn('missing_vehicle_ref=0', line)
+        self.assertIn('extra_vehicle_ref=0', line)
+        self.assertIn('berths=19', line)
+        self.assertNotIn('909', line)
+        self.assertNotIn('private-descriptor', line)
+        for private_value in ('101', '102', 'commander', 'driver', 'compact'):
+            self.assertNotIn(private_value, line)
+
+    def test_sync_data_logs_seated_crew_when_the_barracks_is_empty(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            account_requests._sync_data(
+                {'selected_vehicle': snapshot}, [0])
+
+        line = write.call_args[0][0]
+        self.assertIn('snapshot_seated=2', line)
+        self.assertIn('snapshot_barracks=0', line)
+        self.assertIn('wire_positive=2', line)
+        self.assertIn('wire_nonpositive=0', line)
+
+    def test_repeated_sync_deduplicates_the_barracks_diagnostic(self):
+        context = {'selected_vehicle': copy.deepcopy(SELECTED_VEHICLE)}
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            first = account_requests._sync_data(context, [0])
+            second = account_requests._sync_data(context, [1])
+
+        self.assertEqual(commands.RES_SUCCESS, first.result_id)
+        self.assertEqual(commands.RES_SUCCESS, second.result_id)
+        self.assertEqual(1, write.call_count)
+        self.assertIn('BARRACKS_SYNC v=1', write.call_args[0][0])
+
+    def test_barracks_diagnostic_has_a_hard_detail_limit(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        context = {}
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            for index in range(
+                    account_requests.BARRACKS_SYNC_DIAGNOSTIC_LIMIT + 2):
+                payload = account_data.sync_data(selected_vehicle=snapshot)
+                payload['stats']['berths'] += index
+                account_requests._report_barracks_sync(
+                    snapshot, payload, context)
+
+        self.assertEqual(
+            account_requests.BARRACKS_SYNC_DIAGNOSTIC_LIMIT + 1,
+            write.call_count)
+        detail_lines = [call[0][0] for call in write.call_args_list
+                        if 'snapshot_seated=' in call[0][0]]
+        self.assertEqual(
+            account_requests.BARRACKS_SYNC_DIAGNOSTIC_LIMIT,
+            len(detail_lines))
+        self.assertIn(
+            'detail_limit=%d reached' %
+            account_requests.BARRACKS_SYNC_DIAGNOSTIC_LIMIT,
+            write.call_args_list[-1][0][0])
+
+    def test_barracks_diagnostic_observes_foreign_keys_without_mutation(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        payload = account_data.sync_data(selected_vehicle=snapshot)
+        tankmen = payload['inventory'][8]
+        tankmen['vehicle'].pop(101)
+        tankmen['vehicle'][999] = -1
+        before = copy.deepcopy(payload)
+
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            self.assertTrue(account_requests._report_barracks_sync(
+                snapshot, payload))
+
+        line = write.call_args[0][0]
+        self.assertIn('missing_vehicle_ref=1', line)
+        self.assertIn('extra_vehicle_ref=1', line)
+        self.assertEqual(before, payload)
+
+    def test_barracks_diagnostic_failure_does_not_change_sync(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        expected = account_data.sync_data(7, snapshot, {}, None)
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write',
+                side_effect=OSError('log unavailable')):
+            result = account_requests._sync_data(
+                {'selected_vehicle': snapshot}, [7])
+
+        self.assertEqual(commands.RES_SUCCESS, result.result_id)
+        self.assertEqual(expected, result.ext)
+
     def test_repeated_sync_keeps_existing_elite_vehicles_out_of_notifications(self):
         snapshot = _full_garage_snapshot()
         self.server.update_context({'selected_vehicle': snapshot})

@@ -95,8 +95,8 @@ Copy-Item -Force `
     (Join-Path $LauncherRoot "LAUNCHER_README.txt") `
     (Join-Path $DistRoot "$AppName\README.txt")
 Copy-Item -Force `
-    (Join-Path $RepoRoot "TESTING_20260915_ZH.md") `
-    (Join-Path $DistRoot "$AppName\TESTING_20260915_ZH.md")
+    (Join-Path $RepoRoot "TESTING_20260916_GROUP1_ZH.md") `
+    (Join-Path $DistRoot "$AppName\TESTING_20260916_GROUP1_ZH.md")
 Copy-Item -Force `
     (Join-Path $RepoRoot "LICENSE") `
     (Join-Path $DistRoot "$AppName\LICENSE")
@@ -109,7 +109,8 @@ Copy-Item -Force `
     (Join-Path $RepoRoot "licenses\Boost-1.0.txt") `
     (Join-Path $LicenseRoot "Boost-1.0.txt")
 
-foreach ($entry in @("$AppName.exe", "README.txt", "LICENSE",
+foreach ($entry in @("$AppName.exe", "README.txt",
+                     "TESTING_20260916_GROUP1_ZH.md", "LICENSE",
                      "THIRD_PARTY_NOTICES.md", "licenses\Boost-1.0.txt")) {
     if (-not (Test-Path -LiteralPath (Join-Path $DistRoot "$AppName\$entry"))) {
         throw "Launcher distribution is incomplete: $entry"

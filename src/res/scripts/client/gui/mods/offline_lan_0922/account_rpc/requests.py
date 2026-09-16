@@ -34,6 +34,8 @@ class Result(object):
 # extras into one flag word before sending them.
 BUY_VEHICLE_FLAG_CREW = 1
 BUY_VEHICLE_FLAG_SHELLS = 16
+BARRACKS_SYNC_DIAGNOSTIC_LIMIT = 4
+_BARRACKS_SYNC_DIAGNOSTIC_KEY = '_offline_barracks_sync_diagnostics'
 
 
 def _int(value, default=0):
@@ -523,9 +525,92 @@ def _sync_data(context, args):
         account_state.snapshot() if account_state is not None else {})
     postbattle = context.get('postbattle_store')
     progress = postbattle.progress() if postbattle is not None else None
-    return Result(commands.RES_SUCCESS, '', ext=data.sync_data(
-        revision, context.get('selected_vehicle'), int_user_settings,
-        progress))
+    selected_vehicle = context.get('selected_vehicle')
+    payload = data.sync_data(
+        revision, selected_vehicle, int_user_settings,
+        progress)
+    _report_barracks_sync(selected_vehicle, payload, context)
+    return Result(commands.RES_SUCCESS, '', ext=payload)
+
+
+def _report_barracks_sync(selected_vehicle, payload, context=None):
+    """Write one anonymous producer summary for a complete account sync.
+
+    A screenshot can show that Barracks rendered no rows, but the error
+    report previously could not distinguish an empty producer from a saved
+    client filter.  Keep this diagnostic on the producer side: it records
+    only bounded counts, never crew ids, names or compact descriptors, and a
+    broken logger must not change the sync response.
+    """
+    try:
+        snapshot = (selected_vehicle
+                    if isinstance(selected_vehicle, dict) else {})
+        records = data._vehicle_records(snapshot)
+        seated = sum(
+            len(record.get('tankmen') or {})
+            for record in records
+            if isinstance(record.get('tankmen') or {}, dict))
+        barracks = snapshot.get('barracksTankmen') or {}
+        if not isinstance(barracks, dict):
+            barracks = {}
+
+        inventory = (payload.get('inventory') or {}).get(
+            data.TANKMAN_ITEM_TYPE) or {}
+        compact_descrs = inventory.get('compDescr') or {}
+        vehicle_refs = inventory.get('vehicle') or {}
+        if not isinstance(compact_descrs, dict):
+            compact_descrs = {}
+        if not isinstance(vehicle_refs, dict):
+            vehicle_refs = {}
+        compact_keys = set(compact_descrs)
+        vehicle_keys = set(vehicle_refs)
+        positive = 0
+        nonpositive = 0
+        for value in vehicle_refs.values():
+            try:
+                if int(value) > 0:
+                    positive += 1
+                else:
+                    nonpositive += 1
+            except (TypeError, ValueError, OverflowError):
+                nonpositive += 1
+        berths = _int((payload.get('stats') or {}).get('berths', 0))
+        summary = (
+            seated, len(barracks), len(compact_descrs), len(vehicle_refs),
+            positive, nonpositive, len(compact_keys - vehicle_keys),
+            len(vehicle_keys - compact_keys), berths)
+        if isinstance(context, dict):
+            diagnostic = context.get(_BARRACKS_SYNC_DIAGNOSTIC_KEY)
+            if not isinstance(diagnostic, dict):
+                diagnostic = {'signatures': set(), 'limit_reported': False}
+                context[_BARRACKS_SYNC_DIAGNOSTIC_KEY] = diagnostic
+            signatures = diagnostic.get('signatures')
+            if not isinstance(signatures, set):
+                signatures = set()
+                diagnostic['signatures'] = signatures
+            if summary in signatures:
+                return False
+            if len(signatures) >= BARRACKS_SYNC_DIAGNOSTIC_LIMIT:
+                if diagnostic.get('limit_reported'):
+                    return False
+                diagnostic['limit_reported'] = True
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] BARRACKS_SYNC v=1 '
+                    'detail_limit=%d reached\n' %
+                    BARRACKS_SYNC_DIAGNOSTIC_LIMIT)
+                return False
+            signatures.add(summary)
+        sys.stdout.write(
+            '[Offline LAN 0.9.22] BARRACKS_SYNC v=1 '
+            'snapshot_seated=%d snapshot_barracks=%d '
+            'wire_compDescr=%d wire_vehicle=%d wire_positive=%d '
+            'wire_nonpositive=%d missing_vehicle_ref=%d '
+            'extra_vehicle_ref=%d berths=%d\n' % (
+                summary[0], summary[1], summary[2], summary[3], summary[4],
+                summary[5], summary[6], summary[7], summary[8]))
+        return True
+    except Exception:
+        return False
 
 
 def _server_stats(context, args):
