@@ -484,7 +484,8 @@ def _probe_authored_placement_1513(bigworld, area, space_id, chunk_id,
 		return None
 	kind = ('tree' if native_type == getattr(area, 'DESTR_TYPE_TREE', None)
 		else _catalog_kind_for_type_1513(area, native_type))
-	if kind is None:
+	unregistered = native_type == _NATIVE_EFFECT_CATEGORY_UNREGISTERED_1513
+	if kind is None and not unregistered:
 		return None
 	try:
 		import Math
@@ -497,6 +498,19 @@ def _probe_authored_placement_1513(bigworld, area, space_id, chunk_id,
 		match = match_placement(index, int(chunk_id), signature, kind)
 		if match is None:
 			return None
+		if unregistered:
+			# -1 proves a resolved native slot, not its type. Anonymous model
+			# groups use it even when their exact authored placement is valid.
+			# Recover only non-tree models through a unique full transform AND
+			# the authored resource's real descriptor; never infer from -1 alone.
+			record = match[1]
+			if record['kind'] not in ('fragile', 'falling', 'structure'):
+				return None
+			desc = area.g_cache.getDescByFilename(record['descriptor_filename'])
+			if (not isinstance(desc, dict) or
+					_catalog_kind_for_type_1513(area, desc.get('type')) !=
+					record['kind']):
+				return None
 		if (len(names) == native_count and names[item_index] and
 				_normalized_filename(names[item_index]) != match[1]['filename']):
 			return None
@@ -931,13 +945,20 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 			entry['result'] = (None, 'category_abi', ())
 			_release_item_name_query_focus_1513(space_id, chunk_id)
 			return entry['result']
-		if native_type == -1:
-			continue
 		match = _probe_authored_placement_1513(
 			bigworld, area_destructibles, space_id, chunk_id, item_index,
 			native_type, names, int(native_count))
 		if match is not None:
 			entry['placement_matches'][item_index] = match
+		if native_type == -1:
+			# This native group contributes no name to the compacted list, but
+			# its independently proved placement must survive a layout repair.
+			continue
+		# A later matrix/catalog failure may quarantine this slot. Preserve its
+		# already-proved name group before that can happen, so rebuilding the
+		# bounded alignment cache never escalates one bad item to a whole chunk.
+		globals().setdefault('g_offh_destr_isolated_name_types', {}).setdefault(
+			(int(space_id), int(chunk_id)), {})[item_index] = int(native_type)
 		entry['items_by_type'].setdefault(
 			int(native_type), []).append(item_index)
 	entry['next_item'] = end_item
@@ -6712,27 +6733,37 @@ def _native_item_scale_1513(measured, spaceID, chunk_id, item_index):
 		return None
 
 
-def _tree_shoot_through_1513(measured, spaceID, decoded, shot):
-	"""Return ``(allowed, health)`` for one standing SpeedTree on a shell ray.
+# Exact #1513 resource families for thin poles and lighting. A falling atom
+# alone is not sufficient: fence end-posts, mailboxes and other destructible
+# obstacles share that native type and still detonate HE/HEAT.
+_SHOT_TRANSPARENT_POLE_FAMILIES_1513 = frozenset((
+	'env413_streetlamp', 'env414_pole', 'env423_streetlamp',
+	'envam_006_streetlamps', 'envam_009_poles', 'envam_018_lamppost',
+	'enveu_013_streetlights', 'envsu_83_02_trampost',
+	'env_112_09_streetlamp'))
+_SHOT_TRANSPARENT_POLE_MODELS_1513 = frozenset((
+	'envf_008_factorylamppost.model', 'envf_009_factorystreetlamp.model'))
 
-	The local adapter applies the shared XML shooting-through threshold to
-	trees. Exact client data proves the numbers and health scaling, but the
-	stock Vehicle._isDestructibleMayBeBroken consumer is a vehicle-ram path,
-	not proof of the retail server's projectile policy for trees. This policy
-	still needs independent #1513 projectile evidence. HE/HEAT stop before
-	requesting a native item matrix.
+
+def _shot_transparent_pole_1513(desc, filename):
+	"""Classify only authored falling poles/lamps, independent of shell kind.
+
+	These props and SpeedTrees are not shell obstacles in the requested 9.22
+	behaviour. Their vehicle-crush health does not charge shell penetration or
+	trigger HE/HEAT. True destructible cover keeps the AP-only traversal law.
 	"""
-	if _shot_kind_1513(shot) not in _SHOT_AP_KINDS_1513:
-		return False, None
 	import AreaDestructibles
-	desc = _runtime_material_descriptor_1513(
-		AreaDestructibles, decoded[5], decoded[2], decoded[3])
-	health = _scaled_shot_through_health_1513(
-		desc, decoded[4],
-		_native_item_scale_1513(
-			measured, spaceID, decoded[2], decoded[3]))
-	return (health is not None and
-		health <= _SHOT_THROUGH_MAX_HP_1513), health
+	if (not isinstance(desc, dict) or desc.get('type') !=
+			AreaDestructibles.DESTR_TYPE_FALLING_ATOM):
+		return False
+	parts = (_normalized_filename(filename) or '').split('/')
+	if len(parts) != 6 or parts[:2] != ['content', 'environment']:
+		return False
+	if parts[3:5] != ['normal', 'lod0']:
+		return False
+	return (parts[2] in _SHOT_TRANSPARENT_POLE_FAMILIES_1513 or
+		(parts[2] == 'envf_001_factoryclock' and
+			parts[5] in _SHOT_TRANSPARENT_POLE_MODELS_1513))
 
 
 def _shot_broken_surface_advance_1513(measured, bigworld, spaceID,
@@ -6808,15 +6839,6 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 				spaceID, start_pos, end_pos, world_dist)
 			if catalog_hit is not None:
 				break
-		tree_shoot_through = None
-		if (tree_identity is not None and shot is not None and
-				not _get_destr_authority().is_destroyed(
-					tree_identity[0], tree_identity[1], decoded[4])):
-			# Freeze this standing tree's own scaled health before the
-			# native fall can move its item matrix.  The legacy float
-			# contract has no shell to test and keeps tree transparency.
-			tree_shoot_through = _tree_shoot_through_1513(
-				measured, spaceID, decoded, shot)
 		destruction_accepted = _try_destroy_destructible(
 			spaceID, mat_info, shot_yaw, 12.0, True)
 		if destruction_accepted:
@@ -6825,33 +6847,19 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 					'shot_material_accept', decoded[2], decoded[3],
 					fields=(('mat', decoded[4]),))
 		broken_surface = None
-		if tree_identity is not None and (
-				destruction_accepted or _get_destr_authority().is_destroyed(
-					tree_identity[0], tree_identity[1], decoded[4])):
-			tree_key = (tree_identity[0], tree_identity[1], None)
-			if not (destruction_accepted and
-					tree_shoot_through is not None):
-				# A tree the round already felled is not collision at all.
-				broken_surface = tree_key
-			elif not tree_shoot_through[0]:
-				# Above the threshold, or HE/HEAT: felled, but the shell
-				# ends here exactly like any other destructible.
-				return _typed_shot_result_1513(
-					world_dist, stop_distance=world_dist,
-					stopped_by_destructible=True,
-					stop_reason=_shot_through_refusal_1513(
-						shot, tree_shoot_through[1]))
-			else:
-				# Trees own no catalog OBB, so the proved next surface is
-				# the only exit evidence available for one.
-				return _typed_shot_result_1513(
-					99999.0,
-					piercing_loss=_SHOT_THROUGH_MIN_REDUCTION_1513,
-					continue_from=_shot_broken_surface_advance_1513(
-						measured, bigworld, spaceID, start_pos, end_pos,
-						tree_key, world_dist, ignored_surfaces,
-						surface_filter),
-					loss_distance=world_dist)
+		accepted_descriptor = None
+		if tree_identity is not None:
+			# A tree is scenery for every shell family, regardless of its ram
+			# health, scale or whether the fall animation was already queued.
+			# Recast with only this exact identity hidden, preserving any wall
+			# or vehicle behind the trunk and applying no penetration penalty.
+			broken_surface = (tree_identity[0], tree_identity[1], None)
+		elif destruction_accepted and decoded is not None:
+			area = __import__('AreaDestructibles')
+			accepted_descriptor = _runtime_material_descriptor_1513(
+				area, decoded[5], decoded[2], decoded[3])
+			if _shot_transparent_pole_1513(accepted_descriptor, decoded[5]):
+				broken_surface = (decoded[2], decoded[3], None)
 		elif not destruction_accepted:
 			# A fragile, module or falling atom that this round already broke
 			# keeps its native skin while the hide callback runs, and a felled
@@ -6877,9 +6885,7 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 			continue
 		if destruction_accepted:
 			if shot is not None:
-				area_destructibles = __import__('AreaDestructibles')
-				desc = _runtime_material_descriptor_1513(
-					area_destructibles, decoded[5], decoded[2], decoded[3])
+				desc = accepted_descriptor
 				item_scale = _registered_item_scale_1513(
 					decoded[2], decoded[3], decoded[5])
 				health = _scaled_shot_through_health_1513(
@@ -7010,6 +7016,13 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 		import AreaDestructibles
 		desc = _runtime_material_descriptor_1513(
 			AreaDestructibles, candidate[3], chunk_id, item_index)
+		if _shot_transparent_pole_1513(desc, candidate[3]):
+			# Advance only past the contact, not the whole conservative OBB.
+			# The authority now marks this exact prop broken; the next chord
+			# still tests walls/vehicles even if they overlap its bounding box.
+			return _typed_shot_result_1513(
+				99999.0, continue_from=(catalog_hit['distance'] +
+					_SHOT_RAY_EPSILON))
 		health = _scaled_shot_through_health_1513(
 			desc, mat_kind, candidate[5])
 		can_continue = (_shot_kind_1513(shot) in _SHOT_AP_KINDS_1513 and

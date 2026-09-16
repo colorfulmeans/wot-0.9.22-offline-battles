@@ -2602,8 +2602,12 @@ class BotAiPortTests(unittest.TestCase):
 
     def test_wedged_hull_holds_when_neither_pivot_fits(self):
         driver = LocalDriver()
+        # Both translations must be occupied: a rear contact by itself still
+        # permits driving straight forward when an in-place pivot cannot fit.
         behind = ({'id': 12, 'position': (0.0, 0.0, -7.0), 'yaw': 0.0,
-                   'half_length': 3.5, 'half_width': 1.7},)
+                   'half_length': 3.5, 'half_width': 1.7},
+                  {'id': 13, 'position': (0.0, 0.0, 7.0), 'yaw': 0.0,
+                   'half_length': 3.5, 'half_width': 1.7})
         blocked = []
         for unused in range(150):
             order = driver.drive(

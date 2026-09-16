@@ -533,8 +533,8 @@ def traverse_impulses(tanks, dt, anchor=None):
     """Spend track torque at an occupied corner instead of a free yaw shove.
 
     The chassis remains a constrained planar box, not the retail cell body.
-    Its box inertia and the descriptor's traction-limited engine torque bound
-    the contact impulse. Actual yaw still sweeps the free space: a held peer
+    The descriptor's traction-limited engine torque bounds the contact
+    impulse. Actual yaw still sweeps the free space: a held peer
     permits no corner penetration; a movable peer opens space under force.
     Ground reactions use the same track budget as translational contacts.
     Callers transport the reciprocal linear momentum through the usual ledger.
@@ -549,10 +549,12 @@ def traverse_impulses(tanks, dt, anchor=None):
         if not omega or budget <= 0.0 or not a.get('alive', True):
             continue
         shape = _tank_shape(a)
-        inertia = a['mass']*(shape[0]**2+shape[1]**2)/3.0
-        # Traversing at a free-space target speed must not create an unlimited
-        # angular impulse anew on every blocked frame.
-        omega = math.copysign(min(abs(omega), budget/inertia), omega)
+        # ``traverse_speed`` is a motor target, not stored angular momentum.
+        # A held corner converts the track couple into force at its lever
+        # arm. Spending the torque on a fictitious free angular acceleration
+        # first, then dividing by angular inertia again at the contact, made
+        # ordinary heavy/light side hugs immovable despite sufficient torque.
+        # The budget limits force; the target speed separately limits travel.
         axes = _axes(a['yaw'])
         for b in bodies:
             if (a['id'] == b['id'] or not a.get('impulse', True) or
@@ -585,7 +587,14 @@ def traverse_impulses(tanks, dt, anchor=None):
                 continue
             ia = 0.0 if a.get('immovable') else 1.0/a['mass']
             ib = 0.0 if b.get('immovable') else 1.0/b['mass']
-            impulse = min(budget/abs(arm), -arm*omega/(ia+ib+arm*arm/inertia))
+            if ia + ib <= 0.0:
+                continue
+            avx, avz = result[a['id']]
+            bvx, bvz = result[b['id']]
+            relative = ((a.get('vx', 0.0)+avx-b.get('vx', 0.0)-bvx)*nx +
+                        (a.get('vz', 0.0)+avz-b.get('vz', 0.0)-bvz)*nz)
+            closing = max(0.0, -arm*omega-relative)
+            impulse = min(budget/abs(arm), closing/(ia+ib))
             budget -= impulse*abs(arm)
             for body, inverse, sign in ((a, ia, 1.0), (b, ib, -1.0)):
                 grip = body.get('contact_decel')

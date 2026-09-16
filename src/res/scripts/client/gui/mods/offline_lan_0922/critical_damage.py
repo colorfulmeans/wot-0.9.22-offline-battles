@@ -1123,10 +1123,8 @@ def _apply_module_damage(target_mock, all_hits, start_pos, end_pos, dmg, _shell,
 			_record_proposal_device_damage(
 				target_mock, _name, _loss, max_hp)
 			previous_hp = target_mock.devices_hp.get(_name, max_hp)
-			current_hp = previous_hp - _loss
-			# Clamp at 0 so auto-repair does not have to climb out of a deficit.
-			if current_hp < 0:
-				current_hp = 0
+			current_hp = _device_damage.damaged_hp(
+				previous_hp, _loss, _name in _dev_destroyed_set(target_mock))
 			target_mock.devices_hp[_name] = current_hp
 			if _track_decision is not None:
 				# Bounded to one line per target, side and zone, so a Windows
@@ -1882,4 +1880,5 @@ def stat_factor(vehicle, stat):
         return 1.0
     crew = _crew_factor(vehicle, stat)
     modules = _module_factor(vehicle, stat)
-    return crew * modules
+    stun = (getattr(vehicle, '_offlineStunFactors', None) or {}).get(stat, 1.0)
+    return crew * modules * float(stun)

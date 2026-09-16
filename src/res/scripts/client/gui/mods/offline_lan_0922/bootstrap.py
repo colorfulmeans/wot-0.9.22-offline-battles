@@ -140,6 +140,8 @@ def _bind_battle_progress(context):
             health=receipt.get('health'), vehicles_module=vehicles,
             shells_fired=receipt.get('shells_fired'),
             equipment_used=used,
+            friendly_fire_facts=receipt.get('friendly_fire'),
+            vehicle_type_name=receipt['vehicle'],
             auto_settings=(VEHICLE_SETTINGS_FLAG.AUTO_REPAIR,
                            VEHICLE_SETTINGS_FLAG.AUTO_LOAD,
                            VEHICLE_SETTINGS_FLAG.AUTO_EQUIP,

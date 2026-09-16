@@ -33,6 +33,7 @@ except ImportError:
     import pickle as _pickle
 
 from gui.mods.offline_lan_0922 import battle_bonds, battle_mastery
+from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922.battle_achievements import (
     AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES)
@@ -151,9 +152,10 @@ def _receipt(value):
     awarded = None
     raw_awarded = value.get('awarded')
     if isinstance(raw_awarded, dict):
-        awarded = dict(
-            (name, max(0, _int(raw_awarded.get(name))))
-            for name in ('credits', 'xp', 'free_xp', 'crystal'))
+        awarded = economy.award_record(raw_awarded)
+        if 'crystal' not in raw_awarded:
+            # Receipts predating bond awards did not store this currency.
+            awarded['crystal'] = rewards['crystal']
     shells_fired = {}
     raw_fired = value.get('shells_fired')
     if raw_fired is not None:
@@ -317,6 +319,8 @@ def _receipt(value):
         'premature_leave': bool(value.get('premature_leave', False)),
         'stats': stats,
         'rewards': rewards,
+        'friendly_fire': friendly_fire.facts(value.get('friendly_fire')),
+        'friendly_fire_costs': friendly_fire.costs(value.get('friendly_fire_costs')),
         'service_costs': economy.service_costs(value.get('service_costs')),
         # The personal row owns the medal list and the health the battle left;
         # mirroring both here keeps the durable progress transaction from
@@ -434,7 +438,7 @@ def _banked_rewards(receipt):
     awarded = receipt.get('awarded')
     if isinstance(awarded, dict):
         result = dict(awarded)
-        result['crystal'] = receipt['rewards'].get('crystal', 0)
+        result.setdefault('crystal', receipt['rewards'].get('crystal', 0))
         return result
     rewards = dict(receipt['rewards'])
     factor = _premium_vehicle_xp_factor_100(receipt['vehicle'])
@@ -511,6 +515,31 @@ def _account_award_split(battle_amount, awarded_amount, factor_100=0):
     return battle_amount, awarded_amount - multiplied
 
 
+def _bond_award_breakdown(receipt, awarded):
+    """Apportion the banked integer reward across the native medal rows.
+
+    The server's medal schedule stays unchanged in the receipt. Scale its
+    result rows from the durable award, distributing rounding remainders in
+    a stable order so fractional/downward multipliers also add up exactly.
+    The #1513 packer has medal rows and originalCrystal, but no boosterCrystal.
+    """
+    base = receipt['rewards']['crystal']
+    awarded = max(0, _int(awarded))
+    medals = receipt['crystal_rewards']
+    if base <= 0 or not medals:
+        return awarded, []
+    parts = [('', max(0, base - sum(medals.values())))] + sorted(medals.items())
+    shares = [amount * awarded // base for name, amount in parts]
+    remaining = awarded - sum(shares)
+    order = sorted(range(len(parts)), key=lambda index: (
+        -(parts[index][1] * awarded % base), parts[index][0]))
+    for index in order[:remaining]:
+        shares[index] += 1
+    return shares[0], [(name, shares[index])
+                       for index, (name, amount) in enumerate(parts)
+                       if name and shares[index] > 0]
+
+
 def _add_value_replays(packers, vehicle, replay_types=None):
     """Populate the non-empty replay chains consumed by the #1513 UI.
 
@@ -543,10 +572,18 @@ def _add_value_replays(packers, vehicle, replay_types=None):
             ('crystal', 'originalCrystal', None, None, 'crystalReplay')):
         replay = ValueReplay(
             connector, recordName=record_name, startRecordName=start_name)
+        if record_name == 'xp' and vehicle.get('originalXPPenalty'):
+            replay = replay - 'originalXPPenalty'
         if factor_name is not None and _int(vehicle.get(factor_name)) > 100:
             replay = replay * factor_name
         if bonus_name is not None and vehicle[bonus_name]:
             replay = replay + bonus_name
+        if record_name == 'credits':
+            for name in ('originalCreditsContributionOut', 'originalCreditsPenalty'):
+                if vehicle.get(name):
+                    replay = replay - name
+            if vehicle.get('originalCreditsContributionIn'):
+                replay = replay + 'originalCreditsContributionIn'
         if record_name == 'crystal':
             for name, unused_value in vehicle.get('eventCrystalList', ()):
                 replay = replay + ('eventCrystalList_' + name)
@@ -684,6 +721,8 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
     original = receipt['rewards']
     rewards = _banked_rewards(receipt)
     service = economy.service_costs(receipt.get('service_costs'))
+    misconduct = receipt['friendly_fire_costs']
+    xp_penalty = receipt['friendly_fire']['xp_penalty']
     account_dbid = 1
     vehicle_type_cd = _vehicle_type_compact_descr(receipt['vehicle'])
     won = receipt['winner'] == receipt['team']
@@ -705,11 +744,13 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
     # #1513's one row for an account-owned multiplier on a finished battle.
     base_credits, booster_credits = _account_award_split(
         _premium_vehicle_credits(receipt['vehicle'], original['credits']),
-        rewards['credits'])
+        misconduct['gross_credits'] if misconduct else rewards['credits'])
     base_xp, booster_xp = _account_award_split(
         original['xp'], rewards['xp'], xp_factor_100)
     base_free_xp, booster_free_xp = _account_award_split(
         original['free_xp'], rewards['free_xp'], xp_factor_100)
+    base_crystal, event_crystal = _bond_award_breakdown(
+        receipt, rewards['crystal'])
     vehicle = {
         'accountDBID': account_dbid,
         'typeCompDescr': vehicle_type_cd,
@@ -747,11 +788,18 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'boosterCredits': booster_credits,
         'factualCredits': rewards['credits'],
         'subtotalCredits': rewards['credits'],
-        # ``originalXP`` is the bare battle XP the mastery badge ranks; every
-        # account-side bonus rides in the totals below and in the chain's
-        # boosters step, never inside the number the badge reads.
+        'creditsPenalty': misconduct.get('credits_penalty', 0),
+        'originalCreditsPenalty': misconduct.get('credits_penalty', 0),
+        'creditsContributionOut': misconduct.get('credits_out', 0),
+        'originalCreditsContributionOut': misconduct.get('credits_out', 0),
+        'creditsContributionIn': misconduct.get('credits_in', 0),
+        'originalCreditsContributionIn': misconduct.get('credits_in', 0),
+        # The first native row is gross XP. Its penalty step restores the
+        # net battle XP before any account or premium-vehicle bonus.
         'xp': rewards['xp'],
-        'originalXP': base_xp,
+        'originalXP': base_xp + xp_penalty,
+        'xpPenalty': xp_penalty,
+        'originalXPPenalty': xp_penalty,
         'boosterXP': booster_xp,
         'factualXP': rewards['xp'],
         'subtotalXP': rewards['xp'],
@@ -766,9 +814,8 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'gold': 0,
         'originalGold': 0,
         'crystal': rewards['crystal'],
-        'originalCrystal': rewards['crystal'] - sum(
-            receipt['crystal_rewards'].values()),
-        'eventCrystalList': sorted(receipt['crystal_rewards'].items()),
+        'originalCrystal': base_crystal,
+        'eventCrystalList': event_crystal,
         'creditsToDraw': 0,
         'originalCreditsToDraw': 0,
         'autoRepairCost': service['repair_credits'],
@@ -1025,11 +1072,11 @@ class PostBattleStore(object):
         if self._progress_applier is not None:
             policy = self._progress_applier(receipt) or {}
         receipt['service_costs'] = economy.service_costs(policy.get('service_costs'))
+        receipt['friendly_fire_costs'] = friendly_fire.costs(
+            policy.get('friendly_fire_costs'))
         awarded = policy.get('awarded')
         if isinstance(awarded, dict):
-            receipt['awarded'] = dict(
-                (name, max(0, _int(awarded.get(name))))
-                for name in ('credits', 'xp', 'free_xp', 'crystal'))
+            receipt['awarded'] = economy.award_record(awarded)
         previous = self._snapshot()
         self._pending[arena_key] = receipt
         self._session_crew_xp[receipt_id] = dict(
@@ -1165,7 +1212,7 @@ class PostBattleStore(object):
         stats = receipt['stats']
         progress = self._progress
         progress['crystal'] = _int(progress.get('crystal')) + rewards['crystal']
-        progress['credits'] += rewards['credits']
+        progress['credits'] = max(0, progress['credits'] + rewards['credits'])
         progress['freeXP'] += rewards['free_xp']
         progress['battles'] += 1
         progress['wins'] += int(receipt['winner'] == receipt['team'])

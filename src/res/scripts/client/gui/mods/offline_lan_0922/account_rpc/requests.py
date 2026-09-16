@@ -314,7 +314,7 @@ def _change_tankman_role(context, args):
     if len(args) < 4:
         return Result(commands.RES_FAILURE, 'INVALID_CREW_REQUEST')
     return _fitting(context, lambda state: state.change_tankman_role(
-        args[1], args[2], args[3]))
+        args[1], args[2], args[3]), extension=lambda outcome: outcome)
 
 
 def _change_tankman_passport(context, args):

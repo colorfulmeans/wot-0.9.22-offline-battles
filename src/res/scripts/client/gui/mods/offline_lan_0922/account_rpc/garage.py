@@ -74,6 +74,10 @@ GOLD_EXCHANGE_RATE = 400
 GARAGE_SLOT_GOLD_PRICE = 300
 BARRACKS_BERTH_GOLD_PRICE = 300
 BARRACKS_BERTH_COUNT = 16
+# constants.EQUIP_TMAN_CODE, returned to TankmanChangeRole._successHandler.
+CREW_EQUIP_OK = 0
+CREW_EQUIP_NO_VEHICLE = 1
+CREW_EQUIP_NO_FREE_SLOT = 3
 # Shop.freeXPConversion in the pinned #1513 sync data: 25 vehicle experience
 # becomes 25 free experience for one gold.
 FREE_XP_CONVERSION = (25, 1)
@@ -2341,6 +2345,12 @@ class GarageState(object):
         The client's own ``tankmenGroupCanChangeRole`` decides whether this
         crew member's group offers more than one role at all.
         """
+        with self._transaction():
+            return self._change_tankman_role(
+                tankman_inventory_id, role_index, vehicle_type_compact_descr)
+
+    def _change_tankman_role(self, tankman_inventory_id, role_index,
+                             vehicle_type_compact_descr):
         rows, tankman_id = self._tankman_record(tankman_inventory_id)
         tankmen = self._tankmen_module()
         vehicles = self._vehicles_module()
@@ -2348,7 +2358,10 @@ class GarageState(object):
         names = list(getattr(tankmen, 'SKILL_NAMES', ()) or ())
         roles = set(getattr(tankmen, 'ROLES', ()) or ())
         try:
-            role = names[_int(role_index)]
+            index = _int(role_index)
+            if index < 0:
+                raise IndexError(index)
+            role = names[index]
         except (IndexError, TypeError):
             raise GarageError('unknown crew role index %r' % (role_index,))
         if roles and role not in roles:
@@ -2362,7 +2375,7 @@ class GarageState(object):
             raise GarageError('the client refused the role change: %s' % error)
         if _int(descriptor.nationID) != _int(nation_id):
             raise GarageError('a crew member cannot change nation')
-        if not any(role in seat for seat in crew_roles):
+        if not any(seat and role == seat[0] for seat in crew_roles):
             raise GarageError('this vehicle has no %s' % role)
         can_change = getattr(tankmen, 'tankmenGroupCanChangeRole', None)
         if can_change is not None:
@@ -2370,28 +2383,54 @@ class GarageState(object):
                 allowed = can_change(
                     _int(descriptor.nationID), _int(descriptor.gid),
                     bool(descriptor.isPremium))
-            except Exception:
-                allowed = True
+            except Exception as error:
+                raise GarageError('the client refused the crew group: %s' %
+                                  error)
             if not allowed:
                 raise GarageError(
                     'this crew member cannot change role')
-        seat = self._seat_of(tankman_id)
-        if seat is not None:
-            record, slot = seat
-            record_roles = self._crew_roles(record)
-            if (_int(record.get('vehicleTypeCompactDescr', 0)) != compact_descr
-                    or not 0 <= slot < len(record_roles)
-                    or role not in record_roles[slot]):
-                # The restore boundary requires every seated crew member to
-                # match their seat, so a change that would break it is
-                # refused rather than allowed to make the save unloadable.
+        has_role = getattr(tankmen, 'tankmenGroupHasRole', None)
+        if has_role is not None:
+            try:
+                allowed = has_role(
+                    _int(descriptor.nationID), _int(descriptor.gid),
+                    bool(descriptor.isPremium), role)
+            except Exception as error:
+                raise GarageError('the client refused the crew group: %s' %
+                                  error)
+            if not allowed:
                 raise GarageError(
-                    'take this crew member out of the vehicle first')
+                    'this crew group cannot use the requested role')
+
+        # Retail can change a seated crew member's primary qualification.
+        # Find an empty matching seat without displacing another tankman;
+        # otherwise the requalified member belongs in the barracks.
+        source = self._seat_of(tankman_id)
+        target = None
+        target_slot = None
+        equip_code = CREW_EQUIP_NO_VEHICLE
+        for record in self._records():
+            if _int(record.get('vehicleTypeCompactDescr', 0)) != compact_descr:
+                continue
+            equip_code = CREW_EQUIP_NO_FREE_SLOT
+            record_roles = self._crew_roles(record)
+            crew = list(record.get('crew') or ())
+            if len(crew) != len(record_roles):
+                raise GarageError('the vehicle crew does not match its roles')
+            for slot, seat_roles in enumerate(record_roles):
+                if (seat_roles and seat_roles[0] == role and
+                        crew[slot] in (None, tankman_id)):
+                    target, target_slot = record, slot
+                    equip_code = CREW_EQUIP_OK
+                    break
+            if target is not None:
+                break
+        if target is None and source is not None:
+            self._require_berths(1)
         cost = self._crew_cost('crewChangeRoleCost')
-        # Serialize before charging.  The client can accept a change and
-        # still refuse to write it down, and ``_fitting`` reports one result
-        # for the whole command, so nothing that can fail may follow the
-        # money leaving the wallet.
+        # Validate serialization before charging or moving a crew member.
+        # The transaction also rolls back the wallet and both seats if a
+        # later ownership update fails.
         try:
             descriptor.role = role
             descriptor.vehicleTypeID = _int(vehicle_type_id)
@@ -2399,9 +2438,26 @@ class GarageState(object):
         except Exception as error:
             raise GarageError('the client refused the role change: %s' % error)
         self._charge(cost)
-        rows[tankman_id] = serialized
+        if source is not None:
+            record, slot = source
+            crew = list(record['crew'])
+            crew[slot] = None
+            record['crew'] = crew
+            record['tankmen'].pop(tankman_id)
+            self._touched.add(_int(record['id']))
+        else:
+            rows.pop(tankman_id)
+        if target is None:
+            self._to_barracks(tankman_id, serialized)
+        else:
+            crew = list(target['crew'])
+            crew[target_slot] = tankman_id
+            target['crew'] = crew
+            target['tankmen'][tankman_id] = serialized
+            self._touched.add(_int(target['id']))
+        self._touched_tankmen.add(tankman_id)
         self.revision += 1
-        return tankman_id
+        return equip_code
 
     def change_tankman_passport(self, tankman_inventory_id, is_premium,
                                 is_female, first_name_group, first_name,
@@ -2454,12 +2510,12 @@ class GarageState(object):
     def _crew_cost(self, key):
         """Return one published crew-shop price as a currency mapping.
 
-        An absent price is refused rather than treated as free: the snapshot
-        and the shop stream are built from the same key, so a missing one
-        means the client was shown a price this garage cannot charge.
+        Legacy saves use the same client defaults as the shop stream.
         """
-        cost = self._snapshot.get(key)
-        if not isinstance(cost, dict):
+        from gui.mods.offline_lan_0922.account_rpc import economy
+
+        cost = economy.crew_service_cost(self._snapshot, key)
+        if not cost:
             raise GarageError('the shop publishes no %s' % key)
         return dict((str(currency), _int(amount))
                     for currency, amount in cost.items())

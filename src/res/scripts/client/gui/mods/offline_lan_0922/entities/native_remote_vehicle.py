@@ -25,6 +25,92 @@ _SIEGE_ENABLED = 2
 _SIEGE_SWITCHING_OFF = 3
 
 
+def set_engine_audible(entity, audible):
+    """Retire hidden sound owners and assemble a fresh one on reveal.
+
+    A Svarog component wrapper cannot transfer ownership twice. Keeping the
+    Python wrapper after ComponentDescriptor removal does not keep its native
+    component alive; re-adding it triggers the #1513 py_systems.cpp assertion
+    "This wrapper own nothing" seen in report 83fea4595275. Retain only the
+    live appearance generation, never the removed wrapper or its callbacks.
+    """
+    appearance = getattr(entity, 'appearance', None)
+    if appearance is None:
+        return False
+    saved = getattr(appearance, '_offlineLANMutedEngine', None)
+    audition = getattr(appearance, 'engineAudition', None)
+    detailed = getattr(appearance, 'detailedEngineState', None)
+    if not audible:
+        if audition is None:
+            return saved is not None
+        # Publish ownership before the ComponentDescriptor can re-enter.
+        appearance._offlineLANMutedEngine = (
+            detailed, getattr(appearance, 'compoundModel', None))
+        if detailed is not None:
+            detailed.onEngineStart = None
+            detailed.onStateChanged = None
+        appearance.engineAudition = None
+        return True
+    if saved is None:
+        return False
+    alive = getattr(entity, 'isAlive', None)
+    alive = alive() if callable(alive) else bool(alive)
+    model = getattr(appearance, 'compoundModel', None)
+    if (not alive or not getattr(entity, 'inWorld', False) or
+            audition is not None or detailed is not saved[0] or
+            model is not saved[1]):
+        # Death/model rebuilding may already have installed a new owner.
+        appearance._offlineLANMutedEngine = None
+        return False
+    if not getattr(entity, 'isStarted', False):
+        # startVisual will replay the visibility gate once the owner is live.
+        return False
+    # Consume the request before a native assembly call can re-enter Python.
+    appearance._offlineLANMutedEngine = None
+    try:
+        from vehicle_systems import model_assembler
+        import DataLinks
+
+        sensor = appearance.waterSensor
+        weapon_energy = appearance._CompoundAppearance__weaponEnergy
+        if detailed is None or model is None or sensor is None:
+            raise RuntimeError('stock engine-audition inputs are unavailable')
+        underwater = DataLinks.createBoolLink(sensor, 'isUnderWater')
+        in_water = DataLinks.createBoolLink(sensor, 'isInWater')
+        # Use the installed client's assembler for vehicle-specific sounds,
+        # speed/track/flying links, siege sounds and its NPC update period.
+        model_assembler.assembleVehicleAudition(False, appearance)
+        audition = appearance.engineAudition
+        # Complete the stock vehicle_assembler / __startSystems bindings.
+        audition.setIsUnderwaterInfo(underwater)
+        audition.setIsInWaterInfo(in_water)
+        audition.setWeaponEnergy(weapon_energy)
+        audition.attachToModel(model)
+        model_assembler.subscribeEngineAuditionToEngineState(
+            audition, detailed)
+    except Exception as error:
+        # A Python-side assembly/binding failure is local to this sound
+        # owner. Retire any partial component and let a later reveal retry;
+        # never put an old wrapper back or abort the model visibility edge.
+        if (getattr(entity, 'appearance', None) is appearance and
+                getattr(appearance, 'detailedEngineState', None) is detailed and
+                getattr(appearance, 'compoundModel', None) is model and
+                getattr(entity, 'inWorld', False) and
+                getattr(entity, 'isStarted', False)):
+            if detailed is not None:
+                detailed.onEngineStart = None
+                detailed.onStateChanged = None
+            appearance.engineAudition = None
+            appearance._offlineLANMutedEngine = saved
+        if not getattr(appearance, '_offlineLANEngineRestoreReported', False):
+            appearance._offlineLANEngineRestoreReported = True
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] remote engine sound rebuild failed: '
+                '%s\n' % error)
+        return False
+    return True
+
+
 def set_draw_visibility(entity, visible):
     """Use the stock compound gate so a hidden tank cannot cast a shadow."""
     show = getattr(entity, 'show', None)
@@ -34,6 +120,7 @@ def set_draw_visibility(entity, visible):
         raise RuntimeError(
             '#1513 native vehicle visibility gate is unavailable')
     visible = bool(visible)
+    set_engine_audible(entity, visible)
     # Vehicle.show controls the model draw pass while CompoundAppearance owns
     # the compound, stickers and crashed-track visibility.  Keep both native
     # layers symmetric: the initial enemy gate may already have selected the
@@ -478,9 +565,10 @@ class _NativeRemoteState(object):
             return False
 
         detailed = getattr(appearance, 'detailedEngineState', None)
-        audition = getattr(appearance, 'engineAudition', None)
         engine_ready = False
-        if detailed is not None and audition is not None:
+        if detailed is not None:
+            # Motion state remains live while its sound component is absent.
+            # A newly assembled audition reads these same links on reveal.
             try:
                 # #1513 accepts a callable here.  DataLinks.createFloatLink
                 # only supports native data-link owners; passing this plain
@@ -889,6 +977,8 @@ class _NativeRemoteState(object):
         # entity and callback owners if it raises so factory teardown can retry
         # rather than forgetting a still-linked presentation.
         clear_ground_decal_visibility_state(appearance)
+        if appearance is not None:
+            appearance._offlineLANMutedEngine = None
         self.model_changed = None
         self.entity = None
         return True

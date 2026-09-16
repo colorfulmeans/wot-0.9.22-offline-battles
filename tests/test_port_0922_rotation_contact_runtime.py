@@ -114,7 +114,10 @@ class BotRotationContactTests(unittest.TestCase):
                     self.assertGreater(stopped*direction, 0.)
                     self.assertLess(abs(stopped), .011/shape[1])
                     self.assertEqual(0., runtime._turn_speeds[11])
-                    self.assertEqual(direction, state['rotation_dir'])
+                    # The physical yaw sweep still clips the forced native
+                    # motion above, while AI withdraws steering torque into
+                    # the player rather than continuing to push their side.
+                    self.assertEqual(0, state['rotation_dir'])
                     peer['x'] = 100.
                     runtime.update(.04, 1.04, neighbours=[peer])
                 self.assertAlmostEqual(.08*direction, state['yaw']-stopped)

@@ -2344,14 +2344,96 @@ class CrewShopTests(unittest.TestCase):
         with self.assertRaises(self.garage.GarageError):
             state.change_tankman_role(201, 3, 50002)
 
-    def test_a_seated_crew_member_keeps_the_seat_they_still_fit(self):
-        """The restore boundary requires a seat and its occupant to match."""
+    def test_a_seated_crew_member_changes_role_into_the_barracks(self):
         state = self._state()
 
+        result = state.change_tankman_role(101, 3, 50001)
+
+        snapshot = state.snapshot()
+        self.assertEqual(self.garage.CREW_EQUIP_NO_FREE_SLOT, result)
+        self.assertEqual([None, 102], snapshot['vehicles'][0]['crew'])
+        self.assertNotIn(101, snapshot['vehicles'][0]['tankmen'])
+        self.assertEqual('driver', _TankmanDescriptor(
+            snapshot['barracksTankmen'][101]).role)
+        self.assertEqual(9400, snapshot['wallet']['gold'])
+        self.assertEqual({9}, state.touched_vehicles())
+        self.assertIn(101, state.touched_tankmen())
+
+    def test_role_change_fills_an_empty_primary_seat_with_no_free_berths(self):
+        state = self._state(berths=0, barracks={})
+        record = state.snapshot()['vehicles'][0]
+        record['crew'][1] = None
+        del record['tankmen'][102]
+
+        result = state.change_tankman_role(101, 3, 50001)
+
+        self.assertEqual(self.garage.CREW_EQUIP_OK, result)
+        self.assertEqual([None, 101], record['crew'])
+        self.assertEqual('driver', _TankmanDescriptor(
+            record['tankmen'][101]).role)
+        self.assertEqual({}, state.snapshot()['barracksTankmen'])
+
+    def test_a_barracks_member_installs_automatically_after_role_change(self):
+        state = self._state()
+        record = state.snapshot()['vehicles'][0]
+        record['crew'][1] = None
+        del record['tankmen'][102]
+
+        result = state.change_tankman_role(201, 3, 50001)
+
+        self.assertEqual(self.garage.CREW_EQUIP_OK, result)
+        self.assertEqual([101, 201], record['crew'])
+        self.assertNotIn(201, state.snapshot()['barracksTankmen'])
+
+    def test_a_seated_role_change_to_an_unowned_vehicle_uses_the_barracks(self):
+        state = self._state()
+
+        result = state.change_tankman_role(101, 3, 50002)
+
+        self.assertEqual(self.garage.CREW_EQUIP_NO_VEHICLE, result)
+        self.assertEqual([None, 102], state.snapshot()['vehicles'][0]['crew'])
+        descriptor = _TankmanDescriptor(
+            state.snapshot()['barracksTankmen'][101])
+        self.assertEqual(('driver', 2),
+                         (descriptor.role, descriptor.vehicleTypeID))
+
+    def test_a_seated_role_change_to_a_full_barracks_is_atomic(self):
+        state = self._state(berths=1)
+        before = copy.deepcopy(state.snapshot())
+
         with self.assertRaises(self.garage.GarageError):
-            # 101 is the commander of the fixture's vehicle; a driver does
-            # not belong in the commander's seat.
             state.change_tankman_role(101, 3, 50001)
+
+        self.assertEqual(before, state.snapshot())
+        self.assertEqual(0, state.revision)
+        self.assertEqual(set(), state.touched_vehicles())
+        self.assertEqual(set(), state.touched_tankmen())
+
+    def test_an_unaffordable_seated_role_change_does_not_unseat_or_charge(self):
+        state = self._state(gold=599)
+        before = copy.deepcopy(state.snapshot())
+
+        with self.assertRaises(self.garage.GarageError):
+            state.change_tankman_role(101, 3, 50001)
+
+        self.assertEqual(before, state.snapshot())
+
+    def test_a_secondary_role_does_not_count_as_a_primary_crew_seat(self):
+        state = self._state()
+        state._vehicles.getVehicleType = lambda compact_descr: (
+            types.SimpleNamespace(id=(0, 2),
+                                  crewRoles=(('commander', 'driver'),)))
+
+        with self.assertRaises(self.garage.GarageError):
+            state.change_tankman_role(201, 3, 50002)
+
+    def test_a_legacy_snapshot_uses_the_same_crew_price_as_the_shop(self):
+        state = self._state()
+        del state.snapshot()['crewChangeRoleCost']
+
+        state.change_tankman_role(201, 3, 50002)
+
+        self.assertEqual(9400, state.snapshot()['wallet']['gold'])
 
     def test_a_role_index_that_names_a_skill_is_refused(self):
         state = self._state()

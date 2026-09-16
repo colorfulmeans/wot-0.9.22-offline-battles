@@ -16,6 +16,7 @@ import math
 
 from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import crew_battle
+from gui.mods.offline_lan_0922 import stun_mechanics
 
 
 SCHEMA_VERSION = 1
@@ -350,7 +351,7 @@ def _canonical_source_shot(value):
         return None
     shell = value.get('shell')
     if (not isinstance(shell, dict) or
-            set(shell) not in (
+            set(shell) - {'stun'} not in (
                 _SOURCE_SHELL_KEYS,
                 _SOURCE_SHELL_KEYS | _SOURCE_SHELL_HE_FACTOR_KEYS)):
         return None
@@ -405,6 +406,13 @@ def _canonical_source_shot(value):
     }
     if he_factors is not None:
         result['shell'].update(he_factors)
+    if 'stun' in shell:
+        try:
+            if kind != 'HIGH_EXPLOSIVE' or shell['stun'] is None:
+                return None
+            result['shell']['stun'] = stun_mechanics.shell_component(shell['stun'])
+        except (TypeError, ValueError, KeyError):
+            return None
     return result
 
 

@@ -23,6 +23,7 @@ import os
 import sys
 
 from gui.mods.offline_lan_0922 import config as port_config
+from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922.account_rpc import data, economy
 from gui.mods.offline_lan_0922.account_rpc.garage import (
     STOCKED_ITEM_TYPES, mirror_shells_layout)
@@ -670,7 +671,8 @@ class GarageStore(object):
                              xp_to_tankman_flag, tankmen_module=None,
                              rewards=None, health=None, vehicles_module=None,
                              shells_fired=None, equipment_used=None,
-                             auto_settings=None):
+                             auto_settings=None, friendly_fire_facts=None,
+                             vehicle_type_name=None):
         """Apply and persist one battle's whole settlement exactly once.
 
         The compact crew descriptors, the earnings, the damage the battle did
@@ -702,6 +704,10 @@ class GarageStore(object):
         staged = copy.deepcopy(snapshot)
         state = GarageState(staged, tankmen_module=tankmen_module,
                             vehicles_module=vehicles_module)
+        # Resolve every victim's own native hull repair price before changing
+        # the staged wallet. A missing descriptor leaves the receipt pending.
+        friendly_prices = friendly_fire.price(
+            friendly_fire_facts, vehicle_type_name, vehicles_module)
         # The receipt says what the battle did; what it is worth is the
         # account's business, so the two multipliers are applied here, once,
         # and everything downstream banks and shows the same numbers.
@@ -715,7 +721,8 @@ class GarageStore(object):
                 // 100)
         awarded = economy.scale_rewards(
             rewards, credits_percent=credits_percent,
-            experience_percent=experience_percent)
+            experience_percent=experience_percent,
+            bonds_percent=experience_percent)
         battle_xp = awarded.get('xp', battle_xp) if rewards else (
             max(0, int(battle_xp or 0)) * experience_percent // 100)
         # What the battle earned does not depend on the vehicle it was
@@ -768,6 +775,12 @@ class GarageStore(object):
             result['earnings'] = state.award_battle_earnings(
                 vehicle_type_compact_descr, awarded,
                 accelerated=bool(result['accelerated']))
+            if any(friendly_prices.values()):
+                settlement = friendly_fire.settle(
+                    state._wallet(), friendly_prices, awarded['credits'])
+                result['friendly_fire_costs'] = settlement
+                awarded['credits'] = friendly_fire.net_credits(settlement)
+                result['earnings']['credits'] = state._wallet()['credits']
             # What was actually banked, so the battle-results screen and the
             # lifetime counters report the same amounts as the wallet.
             result['awarded'] = dict(
@@ -794,6 +807,8 @@ class GarageStore(object):
             marker['awarded'] = dict(result['awarded'])
         marker['touched_items'] = copy.deepcopy(result['touched_items'])
         marker['service_costs'] = dict(result['service_costs'])
+        if 'friendly_fire_costs' in result:
+            marker['friendly_fire_costs'] = dict(result['friendly_fire_costs'])
         next_receipts = (list(self._battle_receipts) + [marker])[
             -MAX_BATTLE_RECEIPTS:]
         if self._path is not None and not self._write_state(
@@ -1013,9 +1028,15 @@ class GarageStore(object):
             }
             awarded = raw.get('awarded')
             if isinstance(awarded, dict):
-                row['awarded'] = dict(
-                    (name, max(0, _int_value(awarded.get(name))))
-                    for name in ('credits', 'xp', 'free_xp', 'crystal'))
+                row['awarded'] = economy.award_record(awarded)
+            if raw.get('friendly_fire_costs'):
+                try:
+                    row['friendly_fire_costs'] = friendly_fire.costs(
+                        raw['friendly_fire_costs'])
+                except (TypeError, ValueError, OverflowError):
+                    # A damaged breakdown must not discard the identity that
+                    # prevents paying or charging this battle a second time.
+                    pass
             row['service_costs'] = economy.service_costs(raw.get('service_costs'))
             touched = raw.get('touched_items')
             if isinstance(touched, dict):
