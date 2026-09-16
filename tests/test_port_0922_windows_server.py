@@ -23,7 +23,7 @@ class WindowsServerLauncherTests(unittest.TestCase):
             ('0.6.1', 'test-build-a'),
             windows_server._session_identity(environment))
         self.assertEqual(
-            ('0.8.3', 'unknown'),
+            ('0.8.4', 'unknown'),
             windows_server._session_identity({}))
 
     def test_double_click_entry_uses_fixed_zero_configuration_contract(self):
