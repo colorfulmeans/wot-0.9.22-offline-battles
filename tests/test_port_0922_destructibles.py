@@ -6461,7 +6461,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         self.assertEqual(4, len(state['seen_pending']))
         self.assertEqual(24, len(state['seen_chunks']))
 
-    def test_blank_v4_ambiguous_slot_is_permanently_isolated(self):
+    def test_blank_v4_distinct_ambiguous_slot_is_permanently_isolated(self):
         unique = 'content/test/normal/lod0/unique.model'
         ambiguous = 'content/test/normal/lod0/ambiguous.model'
         chunk_translation = _Vector()
@@ -6484,7 +6484,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 'boxes': [[-1, 0, -1, 1, 3, 1, None]],
             },
         }, [list(other_signature) + [unique, 0, 23, 0, 1.0]], [
-            list(signature) + [[[ambiguous, 0], [ambiguous, 0]]],
+            list(signature) + [[[ambiguous, 0], [unique, 0]]],
         ])
         destructibles_sensor.set_catalog(catalog)
         manager = _Manager()
@@ -6535,6 +6535,98 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         bigworld.wg_getDestructibleMatrix.assert_called_once_with(1, 22, 0)
         bigworld.wg_getDestructibleEffectCategory.assert_called_once_with(
             1, 22, 0, -1)
+
+    def test_duplicate_identical_candidates_use_the_live_native_wire(self):
+        """A repeated compiled row is identity-equivalent, not ambiguous."""
+        filename = 'content/test/normal/lod0/pak40.model'
+        chunk_translation = _Vector()
+        matrix = _ItemMatrix(_Vector(2.0, 0.0, 4.0), scale=0.94)
+        other = _ItemMatrix(_Vector(50.0, 0.0, 50.0))
+        math_module = types.ModuleType('Math')
+        math_module.Vector3 = _Vector
+        signature = destructibles_sensor._locator_signature(
+            matrix, chunk_translation, math_module, 1000)
+        other_signature = destructibles_sensor._locator_signature(
+            other, chunk_translation, math_module, 1000)
+        catalog = _catalog({
+            filename: {
+                'kind': 'fragile',
+                'boxes': [[-1, 0, -1, 1, 2, 1, None]],
+            },
+        }, [list(other_signature) + [filename, 0, 23, 0, 1.0]], [
+            list(signature) + [[[filename, 0], [filename, 0]]],
+        ])
+
+        destructibles_sensor.set_catalog(catalog)
+        prepared = destructibles_sensor._destructible_catalog
+        self.assertNotIn(signature, prepared['ambiguous_instances'])
+        self.assertIn(signature, prepared['equivalent_instances'])
+
+        live_signature, located = (
+            destructibles_sensor._catalog_instance_for_matrix_1513(
+                matrix, chunk_translation, math_module, (32897, 51)))
+        self.assertEqual(signature, live_signature)
+        self.assertEqual(filename.lower(), located['filename'])
+        self.assertEqual(0, located['box_index'])
+        self.assertEqual((32897, 51), located['wire'])
+
+        # Without a streamed native wire the duplicate cannot enter the baked
+        # broad phase; it remains unavailable rather than inventing an id.
+        unused_signature, unbound = (
+            destructibles_sensor._catalog_instance_for_matrix_1513(
+                matrix, chunk_translation, math_module))
+        self.assertEqual(signature, unused_signature)
+        self.assertIsNone(unbound)
+
+    def test_duplicate_equivalent_signature_is_rejected_fail_closed(self):
+        filename = 'content/test/normal/lod0/pak40.model'
+        signature = (2, 0, 4, 1000, 0, 0, 0, 1000, 0, 0, 0, 1000)
+        other_signature = (50, 0, 50, 1000, 0, 0, 0, 1000, 0, 0, 0, 1000)
+        duplicate = list(signature) + [
+            [[filename, 0], [filename, 0]]]
+        catalog = _catalog({
+            filename: {
+                'kind': 'fragile',
+                'boxes': [[-1, 0, -1, 1, 2, 1, None]],
+            },
+        }, [list(other_signature) + [filename, 0, 23, 0, 1.0]], [
+            duplicate, duplicate,
+        ])
+
+        with self.assertRaisesRegex(
+                ValueError, 'ambiguous destructible instance row is invalid'):
+            destructibles_sensor.set_catalog(catalog)
+
+    def test_dday_reported_pak40_duplicate_uses_observed_live_wire(self):
+        """Pin the decorative cannon from report 20260916-174916."""
+        data = json.loads((ROOT / 'destructibles' / '101_dday.json').read_text(
+            encoding='utf-8'))
+        signature = (
+            183774, 74948, 208831, 313, 1, 886,
+            -72, 937, 24, -884, -76, 312)
+        filename = (
+            'content/MilitaryEnvironment/mleSU_05_03_Pak40/normal/lod0/'
+            'mleSU_05_03_Pak40_1.model')
+        row = next(row for row in data['ambiguous_instances']
+                   if tuple(row[:12]) == signature)
+        self.assertEqual([[filename, 0], [filename, 0]], row[12])
+
+        destructibles_sensor.set_catalog(data)
+        prepared = destructibles_sensor._destructible_catalog
+        self.assertNotIn(signature, prepared['ambiguous_instances'])
+        self.assertEqual(filename.lower(),
+                         prepared['equivalent_instances'][signature][
+                             'filename'])
+
+        math_module = types.ModuleType('Math')
+        math_module.Vector3 = _Vector
+        matrix = _CatalogSignatureMatrix(signature)
+        live_signature, located = (
+            destructibles_sensor._catalog_instance_for_matrix_1513(
+                matrix, _Vector(), math_module, (32897, 51)))
+        self.assertEqual(signature, live_signature)
+        self.assertEqual(filename.lower(), located['filename'])
+        self.assertEqual((32897, 51), located['wire'])
 
     def test_v4_signature_miss_isolates_named_and_unnamed_slots(self):
         type_descriptor = _Strict1513Component(

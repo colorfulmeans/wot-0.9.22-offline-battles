@@ -4047,9 +4047,16 @@ class NarrowInventoryDiffTests(unittest.TestCase):
         full = self.data.inventory(snapshot)
 
         tankmen = full['inventory'][self.data.TANKMAN_ITEM_TYPE]
-        self.assertEqual(b'tman:201', tankmen['compDescr'][201])
+        # ItemsRequester.getTankmen enumerates this complete compDescr map.
+        # Barracks then applies its location criterion: positive foreign keys
+        # are the "in tanks" rows and -1 is the "in barracks" row.  Publishing
+        # the latter must never replace or duplicate the seated crew.
         self.assertEqual(
-            self.data.BARRACKS_VEHICLE_ID, tankmen['vehicle'][201])
+            {101: b'tman:101', 102: b'tman:102', 201: b'tman:201'},
+            tankmen['compDescr'])
+        self.assertEqual(
+            {101: 9, 102: 9, 201: self.data.BARRACKS_VEHICLE_ID},
+            tankmen['vehicle'])
 
     def test_a_barracks_larger_than_its_berths_is_refused(self):
         snapshot = copy.deepcopy(SNAPSHOT)

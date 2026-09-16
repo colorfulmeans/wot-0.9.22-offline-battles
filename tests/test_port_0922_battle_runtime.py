@@ -1026,6 +1026,8 @@ class _InputHandler(object):
         self.gun_marker_flags = []
         self.client_markers = []
         self.server_markers = []
+        self.killer_vehicle_id = None
+        self.killer_vehicle_updates = []
         self._AvatarInputHandler__ctrlModeName = 'arcade'
         self._AvatarInputHandler__curCtrl = types.SimpleNamespace(
             camera=_ArcadeCamera(),
@@ -1046,6 +1048,10 @@ class _InputHandler(object):
 
     def showGunMarker2(self, flag):
         self.server_markers.append(bool(flag))
+
+    def setKillerVehicleID(self, vehicle_id):
+        self.killer_vehicle_id = vehicle_id
+        self.killer_vehicle_updates.append(vehicle_id)
 
 
 class _StockAutorotationHandler(object):
@@ -1408,6 +1414,7 @@ class _Compatibility(object):
         self.target_lock_validations = []
         self.account_int_commands = []
         self.postmortem_vehicle_id = 0
+        self.postmortem_killer_clears = []
         self.target_focus_clears = 0
 
     def dispatch_account_int_command(self, command, values):
@@ -1455,6 +1462,11 @@ class _Compatibility(object):
         previous = self.postmortem_vehicle_id
         self.postmortem_vehicle_id = 0
         return previous
+
+    def clear_postmortem_killer(self, avatar):
+        self.postmortem_killer_clears.append(avatar)
+        avatar.inputHandler.setKillerVehicleID(None)
+        return True
 
     def validate_target_lock(self, avatar):
         self.target_lock_validations.append(avatar)
@@ -14080,6 +14092,169 @@ class BattleRuntimeContractTests(unittest.TestCase):
         entity.appearance.delCrashedTrack.assert_called_once_with(True)
         entity.appearance.addCrashedTrack.assert_not_called()
 
+    def test_rebased_track_at_regen_cap_finishes_repair(self):
+        """A new damage lineage may echo the last uncompleted checkpoint.
+
+        Three-decimal wire rounding can make that canonical row say
+        ``destroyed`` at the regeneration cap.  It is a state edge, not
+        another HP step: the owner must publish the completed repair on the
+        new lineage instead of leaving the vehicle tracked forever.
+        """
+        descriptor = _Descriptor()
+        descriptor.chassis.maxHealth = 100
+        descriptor.chassis.maxRegenHealth = 50
+        entity = _Vehicle(10, descriptor, _Vector(), (0, 0, 0),
+                          {'health': 500})
+        entity.devices_hp = {'leftTrackHealth': 50.0}
+        entity._destroyed_devices = set(['leftTrackHealth'])
+        entity._critical_devices = set()
+        entity.is_tracked = True
+        entity.appearance.addCrashedTrack = mock.Mock()
+        entity.appearance.delCrashedTrack = mock.Mock()
+
+        payload = BattleRuntime._tick_local_track_repair(
+            entity, 0.1, critical_damage._device_damage.CREW_FACTOR_BASE)
+
+        self.assertEqual('critical', payload['devices'][0]['state'])
+        self.assertEqual([], payload['destroyed'])
+        self.assertEqual([{
+            'kind': 'device', 'name': 'leftTrackHealth',
+            'old_state': 'destroyed', 'state': 'critical',
+            'cause': 'repair',
+        }], payload['events'])
+        self.assertNotIn('leftTrackHealth', entity._destroyed_devices)
+        self.assertFalse(entity.is_tracked)
+        entity.appearance.delCrashedTrack.assert_called_once_with(True)
+        entity.appearance.addCrashedTrack.assert_not_called()
+        battle = BattleRuntime(_runtime())
+        battle._local_critical_base_revision = 5
+        report = battle._queue_local_track_repair(payload)
+        self.assertEqual(5, report['critical_base_revision'])
+        self.assertEqual('critical', report['tracks'][0]['state'])
+        self.assertTrue(battle._local_critical_owned)
+
+    def test_canonical_large_repair_kit_supersedes_local_track_checkpoint(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle.client = types.SimpleNamespace(player_id=1)
+        battle._avatar = runtime.bigworld.avatar
+        battle._clock = lambda: 100.0
+
+        descriptor = types.SimpleNamespace(
+            id=(11, 23), compactDescr=423,
+            name='largeRepairkit', tags=('repairkit',), reuseCount=-1,
+            cooldownSeconds=90.0, repairAll=True, bonusValue=0.10)
+        contract = equipment_mechanics.project_equipment(descriptor)
+        previous = equipment_mechanics.EquipmentState(contract, now=100.0)
+        consumed = equipment_mechanics.EquipmentState(contract, now=100.0)
+        damaged = {
+            'devices': [{'name': 'leftTrackHealth', 'hp': 25.0,
+                         'max_hp': 100.0, 'state': 'destroyed'}],
+            'destroyed': ['leftTrackHealth'], 'crew_ko': [],
+            'fire': False, 'ammo_rack_death': False, 'events': []}
+        self.assertIsNotNone(consumed.activate(
+            100.0, critical=damaged, selected=None))
+        battle._equipment_state = [previous]
+        battle._equipment_revision = 3
+        battle._local_critical_base_revision = 4
+        battle._local_critical_next_seq = 4
+        battle._local_critical_owned = True
+        battle._local_damage_report = {
+            'tracks': [dict(damaged['devices'][0])],
+            'critical_base_revision': 4, 'critical_seq': 4}
+
+        self.assertTrue(battle._restore_local_equipment_snapshot({
+            'players': [{
+                'id': 1, 'equipment_revision': 4,
+                'equipment_states': [consumed.snapshot(100.0)],
+            }],
+        }))
+        self.assertIsNone(battle._local_damage_report)
+        self.assertFalse(battle._local_critical_owned)
+
+        vehicle_descriptor = _Descriptor()
+        vehicle_descriptor.chassis.maxHealth = 100
+        vehicle_descriptor.chassis.maxRegenHealth = 50
+        entity = _Vehicle(10, vehicle_descriptor, _Vector(), (0, 0, 0),
+                          {'health': 500})
+        entity.devices_hp = {'leftTrackHealth': 25.0}
+        entity._destroyed_devices = set(['leftTrackHealth'])
+        entity._critical_devices = set()
+        entity.is_tracked = True
+        entity.appearance.addCrashedTrack = mock.Mock()
+        entity.appearance.delCrashedTrack = mock.Mock()
+        runtime.bigworld.entities[10] = entity
+        record = {
+            'engine_id': 10,
+            'state': {'health': 500, 'alive': True, 'critical': damaged},
+            'critical_state': damaged, 'critical_revision': 8,
+            'kind': 'player', 'network_id': 1, 'local': True}
+        repaired = {
+            'devices': [{'name': 'leftTrackHealth', 'hp': 100.0,
+                         'max_hp': 100.0, 'state': 'normal'}],
+            'destroyed': [], 'crew_ko': [], 'fire': False,
+            'ammo_rack_death': False, 'events': []}
+        battle._present_critical = mock.Mock(return_value=True)
+
+        self.assertTrue(battle._apply_critical_state(record, repaired, {
+            'critical_revision': 9, 'critical_base_revision': 4,
+            'critical_ack_seq': 3,
+        }))
+        self.assertFalse(entity.is_tracked)
+        self.assertEqual(set(), entity._destroyed_devices)
+        entity.appearance.delCrashedTrack.assert_called_once_with(True)
+        battle._present_critical.assert_called_once_with(record, ({
+            'kind': 'device', 'name': 'leftTrackHealth',
+            'old_state': 'destroyed', 'state': 'normal',
+            'cause': 'repair',
+        },), 0)
+
+    def test_unrelated_equipment_edge_keeps_local_track_checkpoint(self):
+        battle = BattleRuntime(_runtime())
+        battle.client = types.SimpleNamespace(player_id=1)
+        battle._clock = lambda: 100.0
+        descriptors = (
+            types.SimpleNamespace(
+                id=(11, 23), compactDescr=423,
+                name='largeRepairkit', tags=('repairkit',), reuseCount=-1,
+                cooldownSeconds=90.0, repairAll=True, bonusValue=0.10),
+            types.SimpleNamespace(
+                id=(11, 24), compactDescr=424,
+                name='largeMedkit', tags=('medkit',), reuseCount=-1,
+                cooldownSeconds=90.0, repairAll=True, bonusValue=0.15),
+        )
+        previous = [equipment_mechanics.EquipmentState(
+            equipment_mechanics.project_equipment(value), now=100.0)
+            for value in descriptors]
+        canonical = [equipment_mechanics.EquipmentState(
+            equipment_mechanics.project_equipment(value), now=100.0)
+            for value in descriptors]
+        self.assertIsNotNone(canonical[1].activate(
+            100.0,
+            critical={
+                'devices': [], 'destroyed': [], 'crew_ko': ['driver'],
+                'fire': False, 'ammo_rack_death': False, 'events': []},
+            selected=None))
+        report = {
+            'tracks': [{
+                'name': 'leftTrackHealth', 'hp': 25.0,
+                'max_hp': 100.0, 'state': 'destroyed'}],
+            'critical_base_revision': 4, 'critical_seq': 4}
+        battle._equipment_state = previous
+        battle._equipment_revision = 3
+        battle._local_critical_owned = True
+        battle._local_damage_report = report
+
+        self.assertTrue(battle._restore_local_equipment_snapshot({
+            'players': [{
+                'id': 1, 'equipment_revision': 4,
+                'equipment_states': [
+                    value.snapshot(100.0) for value in canonical],
+            }],
+        }))
+        self.assertIs(report, battle._local_damage_report)
+        self.assertTrue(battle._local_critical_owned)
+
     def test_input_sender_retries_pending_track_repair_separately(self):
         battle = BattleRuntime(_runtime())
         battle.client = _Client()
@@ -15032,6 +15207,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
             setVehicleState.assert_not_called()
         battle._binding.arena_vehicle_killed.assert_called_once_with(
             11, 10, 0)
+        self.assertEqual(1, battle._records['player:1']['state']['team'])
+        self.assertEqual(2, target_record['state']['team'])
         battle._binding.arena_vehicle_statistics.assert_called_once_with(
             10, 1)
         battle._avatar.onRoundFinished.assert_called_once_with(
@@ -29877,6 +30054,136 @@ class BattleRuntimeContractTests(unittest.TestCase):
         handler.activatePostmortem.assert_called_once_with(False)
         battle._binding.arena_vehicle_killed.assert_called_once_with(
             10, 11, 0)
+
+    def test_local_death_camera_only_keeps_a_world_visible_enemy_killer(self):
+        cases = (
+            ('hidden', False, False, None),
+            ('marker-only', False, True, None),
+            ('world-visible', True, True, 11),
+        )
+        for label, spot_visible, marker_visible, expected in cases:
+            with self.subTest(label=label):
+                runtime = _runtime()
+                battle = BattleRuntime(runtime)
+                battle._avatar = runtime.bigworld.avatar
+                battle._binding = mock.Mock()
+                battle._avatar.playerVehicleID = 10
+                battle._synchronise_player_identity(10)
+                victim = _Vehicle(
+                    10, _Descriptor(), _Vector(), (0, 0, 0),
+                    {'health': 500})
+                killer = _Vehicle(
+                    11, _Descriptor(), _Vector(10, 0, 0), (0, 0, 0),
+                    {'health': 500})
+                runtime.bigworld.entities.update({10: victim, 11: killer})
+                victim_record = {
+                    'engine_id': 10, 'local': True, 'kind': 'player',
+                    'network_id': 1,
+                    'state': {'team': 1, 'health': 500, 'alive': True}}
+                killer_record = {
+                    'engine_id': 11, 'local': False, 'kind': 'bot',
+                    'network_id': 2, 'spot_visible': spot_visible,
+                    'spot_marker_visible': marker_visible,
+                    'state': {'team': 2, 'health': 500, 'alive': True}}
+                battle._records = {
+                    'player:1': victim_record, 'bot:2': killer_record}
+                battle._last_health[10] = (500, 500, True, 0)
+                battle._present_combat_hit = mock.Mock(return_value=False)
+                battle._present_combat_feedback = mock.Mock(
+                    return_value=False)
+                handler = battle._avatar.inputHandler
+
+                def exact_kill(unused_victim, attacker_id, unused_reason):
+                    # ClientArena dispatches synchronously and PlayerAvatar
+                    # stores this value for the two-second PostmortemDelay.
+                    handler.setKillerVehicleID(attacker_id)
+
+                battle._binding.arena_vehicle_killed.side_effect = exact_kill
+                with mock.patch.object(
+                        battle_runtime_module.critical_damage,
+                        'apply_death', return_value=None):
+                    self.assertTrue(battle._apply_combat_event({
+                        'kind': 'bot_human_hit', 'attacker_bot': 2,
+                        'target': 1, 'health': 0, 'dead': True,
+                        'attack_reason': 0, 'death_reason': 0,
+                        'source': 'shot', 'world_pose': True,
+                        'x': 0.0, 'y': 1.0, 'z': 0.0,
+                        'shell_index': 0, 'shot_result': 2,
+                        'damage': 500}))
+
+                battle._binding.arena_vehicle_killed.assert_called_once_with(
+                    10, 11, 0)
+                self.assertEqual(expected, handler.killer_vehicle_id)
+                self.assertEqual(
+                    0 if spot_visible else 1,
+                    len(runtime.compatibility.postmortem_killer_clears))
+                self.assertEqual(
+                    [11] if spot_visible else [11, None],
+                    handler.killer_vehicle_updates)
+
+    def test_snapshot_only_death_freezes_killer_visibility_at_death_edge(self):
+        cases = (
+            ('never-spotted', False, False, None),
+            ('marker-only', False, True, None),
+            ('world-visible', True, True, 11),
+        )
+        for label, spot_visible, marker_visible, expected in cases:
+            with self.subTest(label=label):
+                runtime = _runtime()
+                battle = BattleRuntime(runtime)
+                battle._avatar = runtime.bigworld.avatar
+                battle._binding = mock.Mock()
+                battle._avatar.playerVehicleID = 10
+                battle._synchronise_player_identity(10)
+                victim = _Vehicle(
+                    10, _Descriptor(), _Vector(), (0, 0, 0),
+                    {'health': 500})
+                killer = _Vehicle(
+                    11, _Descriptor(), _Vector(10, 0, 0), (0, 0, 0),
+                    {'health': 500})
+                runtime.bigworld.entities.update({10: victim, 11: killer})
+                victim_record = {
+                    'engine_id': 10, 'local': True, 'ready': True,
+                    'kind': 'player', 'network_id': 1,
+                    'state': {
+                        'team': 1, 'health': 0, 'display_health': 0,
+                        'alive': False, 'death_reason': 0,
+                        'death_attacker_kind': 'bot',
+                        'death_attacker_id': 2}}
+                killer_record = {
+                    'engine_id': 11, 'local': False, 'ready': True,
+                    'kind': 'bot', 'network_id': 2,
+                    'spot_visible': spot_visible,
+                    'spot_marker_visible': marker_visible,
+                    'state': {'team': 2, 'health': 500, 'alive': True}}
+                battle._records = {
+                    'player:1': victim_record, 'bot:2': killer_record}
+                battle._last_health[10] = (500, 500, True, 0)
+                handler = battle._avatar.inputHandler
+
+                def exact_kill(unused_victim, attacker_id, unused_reason):
+                    handler.setKillerVehicleID(attacker_id)
+
+                battle._binding.arena_vehicle_killed.side_effect = exact_kill
+                with mock.patch.object(
+                        battle_runtime_module.critical_damage,
+                        'apply_death', return_value=None):
+                    self.assertTrue(battle._materialize_record(victim_record))
+                    # A visibility change during PostmortemDelay must not
+                    # revise the decision frozen by the death snapshot.
+                    killer_record['spot_visible'] = not spot_visible
+                    killer_record['spot_marker_visible'] = not marker_visible
+                    self.assertTrue(battle._materialize_record(victim_record))
+
+                battle._binding.arena_vehicle_killed.assert_called_once_with(
+                    10, 11, 0)
+                self.assertEqual(expected, handler.killer_vehicle_id)
+                self.assertEqual(
+                    0 if spot_visible else 1,
+                    len(runtime.compatibility.postmortem_killer_clears))
+                self.assertEqual(
+                    [11] if spot_visible else [11, None],
+                    handler.killer_vehicle_updates)
 
     def test_terminal_critical_state_does_not_replay_device_hits_to_flash(self):
         runtime = _runtime()

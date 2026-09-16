@@ -12,7 +12,7 @@ from gui.mods.offline_lan_0922 import tank_collision
 import math
 
 from gui.mods.offline_lan_0922.ai.driver import (
-    LocalDriver, WAYPOINT_ARRIVAL_RADIUS,
+    LocalDriver, WAYPOINT_ARRIVAL_RADIUS, recovery_probe_distance,
 )
 from gui.mods.offline_lan_0922.ai.planner import BattleDirector
 
@@ -55,12 +55,12 @@ class BotAdapter(object):
         self._contact_peers.pop(int(bot_id), None)
 
     def _enemy_contact(self, bot_id, state, position):
-        """Keep driving out of a real hostile hull contact across small gaps."""
+        """Return geometry for a real hostile hull contact across small gaps."""
         team = state.get('team')
         if team is None:
             team = self.director.agents.get(bot_id, {}).get('team')
         if team is None:
-            return False
+            return None
         shape = state.get('collision_shape') or (
             state.get('half_width', 1.7), state.get('half_length', 3.5),
             tank_collision.DEFAULT_SHAPE[2], tank_collision.DEFAULT_SHAPE[3])
@@ -72,16 +72,88 @@ class BotAdapter(object):
             other_shape = tank_collision._tank_shape(peer)
             if not tank_collision.vertical_overlap(position[1], shape, where[1], other_shape):
                 continue
-            gap = tank_collision._obb_overlap(
+            overlap = tank_collision._obb_overlap(
                 position[0], position[2], state.get('yaw', 0.0), shape,
-                where[0], where[2], peer.get('yaw', 0.0), other_shape)[2]
+                where[0], where[2], peer.get('yaw', 0.0), other_shape)
             margin = (tank_collision.CONTACT_BROADPHASE_PADDING
                       if peer.get('id') == previous else tank_collision.POSITION_SLOP)
-            if gap >= -margin:
+            if overlap[2] >= -margin:
                 self._contact_peers[bot_id] = peer.get('id')
-                return True
+                return {
+                    'peer_id': peer.get('id'),
+                    'normal': overlap[:2],
+                    'peer_position': where,
+                }
         self._contact_peers.pop(bot_id, None)
-        return False
+        return None
+
+    def _contact_escape_plan(self, state, position, direction_clear,
+                             contact):
+        """Select one separating longitudinal exit and prove its full sweep.
+
+        A side contact does not imply that both longitudinal directions are
+        usable.  In particular, driving towards the near end of an offset
+        hull makes the final traffic guard brake, leaving a tactical hold with
+        ``contact_escape`` intent but zero throttle.  Only choose a direct
+        escape when SAT geometry identifies a separating end, and retain the
+        same terrain and complete-vehicle-sweep checks as ordinary recovery.
+        An exactly centred side contact has no preferred end and deliberately
+        falls back to LocalDriver's bounded recovery state machine.
+        """
+        if not isinstance(contact, dict):
+            return None
+        yaw = float(state.get('yaw', 0.0))
+        forward = math.sin(yaw), math.cos(yaw)
+        normal = contact.get('normal') or (0.0, 0.0)
+        peer_position = contact.get('peer_position')
+        normal_alignment = (forward[0] * float(normal[0]) +
+                            forward[1] * float(normal[1]))
+        longitudinal_offset = 0.0
+        if peer_position is not None:
+            longitudinal_offset = (
+                forward[0] * (float(position[0]) - float(peer_position[0])) +
+                forward[1] * (float(position[2]) - float(peer_position[2])))
+        epsilon = tank_collision.POSITION_SLOP
+        if abs(normal_alignment) > epsilon:
+            preferred = 1.0 if normal_alignment > 0.0 else -1.0
+        elif abs(longitudinal_offset) > epsilon:
+            # The contact is on a side face. Leave through the nearer
+            # longitudinal end instead of compressing the overlap along it.
+            preferred = 1.0 if longitudinal_offset > 0.0 else -1.0
+        else:
+            return None
+        shape = state.get('collision_shape') or (
+            state.get('half_width', 1.7), state.get('half_length', 3.5),
+            tank_collision.DEFAULT_SHAPE[2], tank_collision.DEFAULT_SHAPE[3])
+        half_width = float(state.get('half_width', shape[0]))
+        half_length = float(state.get('half_length', shape[1]))
+        neighbours = state.get('neighbours', ())
+        for sign in (preferred, -preferred):
+            heading = yaw + (math.pi if sign < 0.0 else 0.0)
+            if not self.driver._clear(
+                    direction_clear, heading,
+                    recovery_probe_distance(half_length)):
+                continue
+            # ``_reverse_blocked_by_vehicle`` owns the exact longitudinal OBB
+            # sweep. Supplying the opposite hull heading makes its reverse
+            # axis equal this candidate's direction of travel.
+            blocker = self.driver._reverse_blocked_by_vehicle(
+                position, heading + math.pi, neighbours,
+                half_length, half_width)
+            if blocker is not None:
+                continue
+            distance = 2.0 * half_length + WAYPOINT_ARRIVAL_RADIUS
+            target = (
+                position[0] + math.sin(heading) * distance,
+                position[1],
+                position[2] + math.cos(heading) * distance)
+            return target, {
+                'throttle': 0.72 * sign,
+                'turn': 0.0,
+                'target_yaw': yaw,
+                'recovery_mode': 'contact_escape',
+            }
+        return None
 
     def decide(self, state, direction_clear):
         """Return a deterministic, serializable command for one bot.
@@ -138,14 +210,19 @@ class BotAdapter(object):
                 position, aim_position, move_position, face_position))
         target = move_position
         contact_escape = self._enemy_contact(bot_id, state, position)
+        contact_plan = None
         if contact_escape:
             # A tactical firing hold is not a decision to surrender when an
-            # enemy pins the hull. Keep the target/fire order while the normal
-            # driver tries forward travel and its bounded reverse recovery.
+            # enemy pins the hull. Keep the target/fire order while selecting
+            # a geometrically separating, fully checked longitudinal exit.
             yaw = float(state.get('yaw', 0.0))
             distance = 2.0*float(state.get('half_length', 3.5))+WAYPOINT_ARRIVAL_RADIUS
             target = (position[0]+math.sin(yaw)*distance, position[1],
                       position[2]+math.cos(yaw)*distance)
+            contact_plan = self._contact_escape_plan(
+                state, position, direction_clear, contact_escape)
+            if contact_plan is not None:
+                target = contact_plan[0]
         elif callable(self.navigation_target):
             target = _position(self.navigation_target(
                 bot_id, position, target, strategic, state), target)
@@ -168,7 +245,9 @@ class BotAdapter(object):
             requested_dx * requested_dx + requested_dz * requested_dz > 225.0 and
             target_dx * target_dx + target_dz * target_dz <=
             WAYPOINT_ARRIVAL_RADIUS * WAYPOINT_ARRIVAL_RADIUS)
-        if navigation_wait:
+        if contact_plan is not None:
+            local = contact_plan[1]
+        elif navigation_wait:
             # TerrainNavigator returned the current pose because a resumable A*
             # job is still pending. This is a planner wait, not route arrival and
             # not physical evidence that should advance LocalDriver recovery.

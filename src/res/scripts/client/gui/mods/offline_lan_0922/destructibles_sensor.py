@@ -1780,6 +1780,7 @@ def set_catalog(catalog):
 					bounds[3] + broad_phase_margin):
 				baked_shot_bins.setdefault(bin_key, set()).add(wire)
 	ambiguous_signatures = set()
+	equivalent_instances = {}
 	for row in raw_ambiguous:
 		if (not isinstance(row, (list, tuple)) or len(row) != 13 or
 				any(type(value) is not int for value in row[:12]) or
@@ -1787,16 +1788,48 @@ def set_catalog(catalog):
 			raise ValueError(
 				'ambiguous destructible instance row is invalid')
 		signature = tuple(row[:12])
-		if signature in instance_index or signature in ambiguous_signatures:
+		if (signature in instance_index or
+				signature in ambiguous_signatures or
+				signature in equivalent_instances):
 			raise ValueError(
 				'ambiguous destructible instance row is invalid')
+		candidates = []
 		for candidate in row[12]:
 			if (not isinstance(candidate, (list, tuple)) or
 					len(candidate) != 2 or
 					_normalized_filename(candidate[0]) not in prepared):
 				raise ValueError(
 					'ambiguous destructible candidate is invalid')
-		ambiguous_signatures.add(signature)
+			normalized = _normalized_filename(candidate[0])
+			record = prepared[normalized]
+			box_index = candidate[1]
+			if record['kind'] == 'structure':
+				if box_index is not None:
+					raise ValueError(
+						'structure instance has a box index')
+			elif (type(box_index) not in _INTEGER_TYPES or box_index < 0 or
+					box_index >= len(record['boxes'])):
+				raise ValueError(
+					'destructible instance box index is invalid')
+			candidates.append((normalized, box_index))
+		# Some compiled maps contain the same BSMI model more than once in a
+		# single native WGDE item.  The baker used to preserve that source-row
+		# multiplicity as an ambiguity even when every candidate resolves to
+		# the exact same descriptor and collision box.  There is no resource
+		# choice to guess in that case: the live native slot supplies the wire,
+		# matrix and effect category, while all duplicate candidates describe
+		# one identical gameplay object.  Keep genuinely different candidates
+		# fail-closed as before.
+		unique_candidates = set(candidates)
+		if len(unique_candidates) == 1:
+			normalized, box_index = next(iter(unique_candidates))
+			equivalent_instances[signature] = {
+				'filename': normalized,
+				'kind': prepared[normalized]['kind'],
+				'box_index': box_index,
+			}
+		else:
+			ambiguous_signatures.add(signature)
 	tree_instances = {}
 	tree_resources = {}
 	raw_trees = catalog.get('tree_instances', [])
@@ -1840,6 +1873,7 @@ def set_catalog(catalog):
 		'resources': prepared, 'quantization': quantization,
 		'max_radius': max_radius, 'instances': instance_index,
 		'ambiguous_instances': ambiguous_signatures,
+		'equivalent_instances': equivalent_instances,
 		'has_instance_index': catalog_version >= 4,
 		'layout_repair_supported': catalog_version >= 9,
 		'layout_repairs': set(),
@@ -2309,6 +2343,15 @@ def _catalog_instance_for_matrix_1513(matrix, chunk_translation,
 		_destructible_catalog['quantization'])
 	if identity is not None and _request_layout_repair_1513(identity, signature):
 		return signature, None
+	equivalent = _destructible_catalog.get(
+		'equivalent_instances', {}).get(signature)
+	if equivalent is not None and identity is not None:
+		# The current streamed slot is the missing wire identity.  Its exact
+		# matrix, native name/effect category and descriptor are still checked
+		# by the ordinary registry path before any destroy call is admitted.
+		located = dict(equivalent)
+		located['wire'] = (int(identity[0]), int(identity[1]))
+		return signature, located
 	if signature in _destructible_catalog['ambiguous_instances']:
 		return signature, None
 	located = _destructible_catalog['instances'].get(signature)

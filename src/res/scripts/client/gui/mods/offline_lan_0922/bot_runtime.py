@@ -11853,7 +11853,14 @@ class BotRuntime(object):
                     BAKED_MOTION_LOOKAHEAD_SECONDS)
             else:
                 reactive_horizon = None
-            if (travel_sign > 0.0 and reactive_horizon is not None and
+            if command.get('recovery_mode') == 'contact_escape':
+                # BotAdapter admitted this separating direction with the same
+                # short hull sweep. A wall beyond that bounded exit must not
+                # turn the final selected-motion gate back into a long-range
+                # veto and leave contact_escape at zero throttle every frame.
+                maximum_probe_distance = ai_driver.recovery_probe_distance(
+                    state.get('half_length', 3.5))
+            elif (travel_sign > 0.0 and reactive_horizon is not None and
                     move_position is not None and
                     command.get('movement_intent', True) and
                     command.get('recovery_mode', 'drive') in
@@ -12103,26 +12110,40 @@ class BotRuntime(object):
                     remember(state['id'], travel_yaw)
                 report_blocked = getattr(
                     self.navigator, 'report_blocked_step', None)
+                report_corridor = getattr(
+                    self.navigator, 'report_blocked_corridor', None)
                 # A hull contact escalates from its realised status below.
                 if (callable(report_blocked) and not probe_deferred and
                         not (isinstance(motion_probe, dict) and
                              motion_probe.get('collision', False)) and
                         command.get('move_position') is not None):
-                    blocked_target = command.get('move_position')
-                    if navigation_grid is not None:
-                        # The generic probe just rejected travel_yaw before
-                        # this slice turns the hull.  Mark that local edge,
-                        # rather than the strategic waypoint it was pursuing.
-                        edge_length = _number(
-                            getattr(navigation_grid, 'cell_size', 0.0), 0.0)
-                        if edge_length > 0.0:
-                            blocked_target = (
-                                position[0] + math.sin(travel_yaw) *
-                                edge_length,
-                                position[1],
-                                position[2] + math.cos(travel_yaw) *
-                                edge_length)
-                    report_blocked(state['id'], position, blocked_target, now)
+                    if (callable(report_corridor) and
+                            isinstance(motion_probe, dict) and
+                            not motion_probe.get('water', False)):
+                        # A terrain/world veto follows the realised hull yaw,
+                        # but a stationary wedged hull can wag that yaw every
+                        # decision. Accumulate against the stable semantic
+                        # route edge while travel still closes on it.
+                        report_corridor(
+                            state['id'], position,
+                            command.get('move_position'), travel_yaw, now)
+                    else:
+                        blocked_target = command.get('move_position')
+                        if navigation_grid is not None:
+                            # Water and legacy navigators retain the precise
+                            # sampled edge rather than penalising a whole
+                            # semantic corridor they cannot classify.
+                            edge_length = _number(
+                                getattr(navigation_grid, 'cell_size', 0.0), 0.0)
+                            if edge_length > 0.0:
+                                blocked_target = (
+                                    position[0] + math.sin(travel_yaw) *
+                                    edge_length,
+                                    position[1],
+                                    position[2] + math.cos(travel_yaw) *
+                                    edge_length)
+                        report_blocked(
+                            state['id'], position, blocked_target, now)
             steer_dir = 0
             if abs(turn) > 0.01:
                 # LocalDriver already inverts reverse recovery steering for the

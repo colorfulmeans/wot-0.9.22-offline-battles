@@ -7374,19 +7374,54 @@ class BattleRuntime(object):
             int(value.get('id', 0) or 0) == int(self.client.player_id)), None)
         if local is None or 'equipment_states' not in local:
             return False
+        previous_states = self._equipment_state
+        previous_revision = self._equipment_revision
+        now = self._clock()
         try:
             revision = int(local.get('equipment_revision'))
-            if revision < 0 or revision < self._equipment_revision:
+            if revision < 0 or revision < previous_revision:
                 raise ValueError('player equipment revision regressed')
             states = equipment_mechanics.restore_equipment_states(
-                local.get('equipment_states'), now=self._clock())
+                local.get('equipment_states'), now=now)
         except (TypeError, ValueError, OverflowError):
             raise RuntimeError('canonical player equipment snapshot is invalid')
+        repairkit_activated = False
+        if (revision > previous_revision >= 0 and
+                previous_states is not None):
+            previous_by_id = {
+                (int(value.contract.get('id', 0)),
+                 int(value.contract.get('compactDescr', 0))): value
+                for value in previous_states}
+            for state in states:
+                if state.contract.get('kind') != 'repairkit':
+                    continue
+                identity = (
+                    int(state.contract.get('id', 0)),
+                    int(state.contract.get('compactDescr', 0)))
+                previous = previous_by_id.get(identity)
+                if previous is None:
+                    continue
+                spent_charge = (
+                    previous.uses_left >= 0 and
+                    state.uses_left < previous.uses_left)
+                entered_cooldown = (
+                    previous.ready(now) and not state.ready(now))
+                if spent_charge or entered_cooldown:
+                    repairkit_activated = True
+                    break
         self._equipment_state = states
         self._equipment_revision = revision
+        if repairkit_activated:
+            # The server commits the kit's critical repair and this ledger
+            # edge under one lock.  Stop suppressing that canonical critical
+            # snapshot with an older locally timed track checkpoint; if the
+            # track somehow remains destroyed, its next tick opens a fresh
+            # checkpoint from the applied canonical state.
+            self._local_damage_report = None
+            self._local_critical_owned = False
         if (present and not self._worker_mode and
                 self._avatar is not None and self._server is not None):
-            self._present_equipments(self._clock())
+            self._present_equipments(now)
         return True
 
     def _garage_item(self):
@@ -10973,6 +11008,9 @@ class BattleRuntime(object):
         dead_target = (
             _number(state.get('health', 0.0)) <= 0.0 or
             not bool(state.get('alive', True)))
+        suppress_postmortem_killer = (
+            self._should_suppress_postmortem_killer(
+                record, state, attacker_id))
         if (entity is not None and attacker is not None and
                 not record.get('local')):
             entity.last_killer_id = int(attacker_id or 0)
@@ -11018,7 +11056,8 @@ class BattleRuntime(object):
             force_cause=force_health_cause,
             attack_reason_id=(0 if attack_reason is None else attack_reason),
             suppress_combat_presentation=(
-                blind_local_attack and not dead_target))
+                blind_local_attack and not dead_target),
+            suppress_postmortem_killer=suppress_postmortem_killer)
         if not update_state:
             record['state'] = latest_state
         return True
@@ -11173,6 +11212,45 @@ class BattleRuntime(object):
             return 0
         record = self._records.get('%s:%s' % (kind, network_id))
         return int(record.get('engine_id', 0)) if record is not None else 0
+
+    def _should_suppress_postmortem_killer(
+            self, victim_record, death_state, attacker_id):
+        """Freeze whether a local death may reveal its enemy killer.
+
+        ``PostmortemDelay`` reads its killer two seconds later.  This port's
+        contract deliberately samples world/AOI visibility at the canonical
+        death snapshot instead of re-evaluating during that delay: a target
+        which lights or disappears afterwards cannot rewrite the completed
+        death edge.  Marker-only memory is not a world-visible vehicle.
+        """
+        if not victim_record.get('local') or 'health' not in death_state:
+            return False
+        dead = (
+            _number(death_state.get('health', 0.0)) <= 0.0 or
+            not bool(death_state.get('alive', True)))
+        try:
+            attacker_id = int(attacker_id or 0)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not dead or attacker_id <= 0:
+            return False
+        attacker_record = None
+        for candidate in self._records.values():
+            if int(candidate.get('engine_id', 0) or 0) == attacker_id:
+                attacker_record = candidate
+                break
+        if attacker_record is None:
+            return False
+        try:
+            victim_team = int(death_state.get('team', 0) or 0)
+            attacker_team = int(
+                (attacker_record.get('state') or {}).get('team', 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if (victim_team <= 0 or attacker_team <= 0 or
+                victim_team == attacker_team):
+            return False
+        return not bool(attacker_record.get('spot_visible', True))
 
     @staticmethod
     def _critical_extra_index(descriptor, name):
@@ -11390,7 +11468,19 @@ class BattleRuntime(object):
                 continue
             cap = critical_damage._device_damage.device_regen_hp(
                 entity.typeDescriptor, name)
-            if cap is None or devices[name] >= cap:
+            if cap is None:
+                continue
+            if devices[name] >= cap:
+                # Repair checkpoints round HP to three decimals.  A newer
+                # damage lineage can overtake the final owner report after a
+                # still-destroyed value just below the cap rounded up to it.
+                # The canonical rebase then legitimately carries a destroyed
+                # row at the cap.  Finish that state edge even though there is
+                # no HP step left, or the track stays red and immobilising
+                # forever and no new CAS checkpoint can be generated.
+                destroyed.discard(name)
+                critical.add(name)
+                changed = True
                 continue
             repaired = critical_damage._device_damage.repair_step_hp(
                 devices[name], name, entity.typeDescriptor, dt,
@@ -23585,9 +23675,13 @@ class BattleRuntime(object):
                   'critical_revision', 'critical_base_revision',
                   'critical_ack_seq'))):
             self._reconcile_critical_authority(record, state)
+        death_attacker_id = self._death_attacker_engine_id(state)
         self._apply_health(
-            record, state, self._death_attacker_engine_id(state),
-            max(0, int(state.get('death_reason', 0) or 0)))
+            record, state, death_attacker_id,
+            max(0, int(state.get('death_reason', 0) or 0)),
+            suppress_postmortem_killer=(
+                self._should_suppress_postmortem_killer(
+                    record, state, death_attacker_id)))
         return True
 
     def _apply_stun_state(self, record, state):
@@ -25330,7 +25424,8 @@ class BattleRuntime(object):
 
     def _apply_health(self, record, state, attacker_id=0, reason_id=None,
                       force_cause=False, attack_reason_id=None,
-                      suppress_combat_presentation=False):
+                      suppress_combat_presentation=False,
+                      suppress_postmortem_killer=False):
         if 'health' not in state:
             return
         requested_presentation_suppression = bool(
@@ -25568,6 +25663,16 @@ class BattleRuntime(object):
                 killed = getattr(self._binding, 'arena_vehicle_killed', None)
                 if callable(killed):
                     killed(engine_id, int(attacker_id), int(reason_id))
+                    if (record.get('local') and
+                            suppress_postmortem_killer):
+                        clear_killer = getattr(
+                            self._runtime.compatibility,
+                            'clear_postmortem_killer', None)
+                        if not callable(clear_killer):
+                            raise RuntimeError(
+                                '#1513 postmortem killer compatibility '
+                                'boundary is unavailable')
+                        clear_killer(self._avatar)
                 if not record.get('local'):
                     self._fallback_postmortem_viewpoint(engine_id)
         if (not previous_dead and dead and record.get('presentation') and

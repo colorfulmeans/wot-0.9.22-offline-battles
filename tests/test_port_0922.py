@@ -3700,6 +3700,25 @@ class OfflineCompatibilityTests(unittest.TestCase):
         self.assertEqual(92, compatibility.clear_postmortem_vehicle())
         self.assertEqual(0, compatibility._postmortem_vehicle_id)
 
+    def test_hidden_killer_clear_uses_the_guarded_stock_camera_boundary(self):
+        compatibility_module = _load_port_source('compat')
+        runtime, unused_operations = self._runtime()
+        compatibility = compatibility_module.OfflineCompatibility(runtime)
+        setter = mock.Mock()
+        avatar = types.SimpleNamespace(inputHandler=types.SimpleNamespace(
+            setKillerVehicleID=setter))
+
+        with self.assertRaisesRegex(RuntimeError, 'active battle'):
+            compatibility.clear_postmortem_killer(avatar)
+
+        compatibility._battle_active = True
+        self.assertTrue(compatibility.clear_postmortem_killer(avatar))
+        setter.assert_called_once_with(None)
+
+        avatar.inputHandler = types.SimpleNamespace()
+        with self.assertRaisesRegex(RuntimeError, 'boundary is unavailable'):
+            compatibility.clear_postmortem_killer(avatar)
+
     def test_offline_vehicle_pose_overlay_preserves_native_entity_transform(self):
         compatibility_module = _load_port_source('compat')
         runtime, unused_operations = self._runtime()
