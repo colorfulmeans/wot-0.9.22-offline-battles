@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.8.3** — [更新说明](docs/releases/v0.8.3.md).
+Current release: **v0.8.4** — [更新说明](docs/releases/v0.8.4.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.8.3-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.8.4-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -60,11 +60,9 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
-The [September 15 test notes](TESTING_20260915_ZH.md) describe artillery
-feedback, Expert, conditional crew effects, directives, bonds and the remaining
-mode/skill limitations. Adrenaline Rush, Preventative Maintenance and Armorer
-now consume native skill parameters and follow the physical crew's injury and
-recovery state.
+The [v0.8.4 release notes](docs/releases/v0.8.4.md) describe the latest combat
+feedback, artillery stun, spotting and radio, Bot navigation, destructible
+scenery, garage-economy and stability updates.
 
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
@@ -93,7 +91,7 @@ vehicles and gold ammunition are paid for out of the gold the launcher grants.
 Taking a complex optional device off a vehicle follows the client's own rule:
 its descriptor says whether the device survives being removed, and one that
 does not is destroyed unless the player pays the game's own removal price --
-10 gold in a career, nothing in a fully unlocked save. Improved equipment
+10 gold in either a career or a fully unlocked save. Improved equipment
 uses its separate 200-bond removal price.
 
 The fourth equipment slot accepts the fifteen 0.9.22 directives. Buy them
@@ -106,7 +104,11 @@ cannot be sold; improved equipment resale yields credits, not bonds.
 Epic medals and Battle Hero achievements award bonds according to the
 [9.20.1 schedule retained in 0.9.22](https://worldoftanks.eu/en/news/general-news/920-1-bonds-and-medals/).
 Awards depend on vehicle tier and appear individually in the battle results.
-They persist with the save and do not receive the offline earnings multiplier.
+They persist with the save and receive its offline earnings multiplier.
+Premium bonuses do not multiply bonds. Directive purchases and automatic
+resupply still charge their normal prices. The wallet, battle-result medal
+rows and lifetime totals use the same rounded award, applied only once even
+after a retry or restart.
 The launcher's Saves tab can also edit the bond balance. Older saves start
 with zero bonds. The historical additional base-XP bond payout for all-Tier-X
 battles is not implemented: its exact conversion table is still unavailable.
@@ -124,6 +126,17 @@ offers the repair. The bill comes out of the client's own repair formula --
 one health point costs what that vehicle charges per point -- and it has to be
 paid before the tank can fight again. A save keeps the damage across a
 restart, because a restart is not a free repair.
+
+Friendly fire counts only applied HP loss and earns no damage or kill reward.
+It reduces battle XP, and charges the victim's hull repair cost plus a 10%
+credit fine before automatic maintenance. Victims receive their repair
+compensation independently of the offender's funds. These charges and
+compensation do not receive the save earnings multiplier. A result can show
+negative credit income when the charge uses the existing garage balance;
+retries and restarts preserve the original settlement. The published
+[team-damage guide](https://wotgame.cn/zh-cn/content/guide/general/teamkill/)
+does not disclose the XP coefficient, so this port reverses its existing
+offline damage/kill XP valuation. It does not claim exact retail XP penalties.
 
 Crew members are recruited from the same three schools the game offers, at
 50%, 75% or 100% of their role: free, 20000 credits and 200 gold in a career,

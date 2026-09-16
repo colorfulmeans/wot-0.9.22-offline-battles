@@ -865,7 +865,7 @@ class AccountRpcTests(unittest.TestCase):
             self.assertEqual(
                 set(shop_contract['tankmanCostDirectKeys']), set(cost))
         currency_mappings = {
-            'paidRemovalCost': {'gold': 0},
+            'paidRemovalCost': {'gold': 10},
             'paidDeluxeRemovalCost': {'crystal': 200},
         }
         self.assertEqual(
@@ -1364,6 +1364,50 @@ class CrewShopStreamTests(unittest.TestCase):
         self.assertEqual(600, value['changeRoleCost'])
         self.assertEqual(50, value['passportChangeCost'])
         self.assertEqual(500, value['femalePassportChangeCost'])
+
+    def test_legacy_snapshots_publish_paid_crew_service_defaults(self):
+        value = self._shop()
+
+        self.assertEqual(600, value['changeRoleCost'])
+        self.assertEqual(50, value['passportChangeCost'])
+        self.assertEqual(500, value['femalePassportChangeCost'])
+
+    def test_capacity_prices_are_scalar_gold_and_show_a_sixteen_bed_pack(self):
+        value = self._shop()
+
+        self.assertEqual((0, [300]), value['slotsPrices'])
+        self.assertEqual((0, 16, [300]), value['berthsPrices'])
+        for key in ('slotsPrices', 'berthsPrices'):
+            self.assertEqual(value[key], value['defaults'][key])
+
+    def test_capacity_purchase_cost_and_increment_match_the_shop_stream(self):
+        from gui.mods.offline_lan_0922.account_rpc.garage import GarageState
+
+        state = GarageState({'wallet': {'gold': 600},
+                             'accountSlots': 0, 'accountBerths': 0})
+        shop = account_data.shop()
+        before_gold = state.snapshot()['wallet']['gold']
+
+        self.assertEqual(1, state.buy_slot())
+        self.assertEqual(shop['slotsPrices'][1][-1],
+                         before_gold - state.snapshot()['wallet']['gold'])
+        before_gold = state.snapshot()['wallet']['gold']
+        self.assertEqual(shop['berthsPrices'][1], state.buy_berths())
+        self.assertEqual(shop['berthsPrices'][2][-1],
+                         before_gold - state.snapshot()['wallet']['gold'])
+
+    def test_unaffordable_capacity_purchases_leave_balance_and_capacity_alone(self):
+        from gui.mods.offline_lan_0922.account_rpc.garage import (
+            GarageError, GarageState)
+
+        for method in ('buy_slot', 'buy_berths'):
+            state = GarageState({'wallet': {'gold': 299},
+                                 'accountSlots': 0, 'accountBerths': 0})
+            before = copy.deepcopy(state.snapshot())
+            with self.assertRaises(GarageError):
+                getattr(state, method)()
+            self.assertEqual(before, state.snapshot())
+            self.assertEqual(0, state.revision)
 
     def test_the_skill_reset_table_is_published_not_hard_coded(self):
         """``SkillDropWindow`` lists whatever keys arrive, live and default."""

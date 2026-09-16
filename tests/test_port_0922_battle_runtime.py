@@ -14230,6 +14230,33 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(450, record['state']['health'])
         self.assertEqual(450, record['state']['display_health'])
 
+    def test_repeated_module_damage_restarts_native_repair_countdown(self):
+        runtime = _runtime()
+        runtime.constants.VEHICLE_MISC_STATUS.DESTROYED_DEVICE_IS_REPAIRING = 17
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        descriptor = _Descriptor()
+        extra = types.SimpleNamespace(name='leftTrackHealth')
+        descriptor.extrasDict = {'leftTrackHealth': extra}
+        descriptor.extras = {3: extra}
+        entity = _Vehicle(10, descriptor, _Vector(), (0, 0, 0), {'health': 500})
+        entity.devices_hp = {'leftTrackHealth': 25.0}
+        entity._destroyed_devices = {'leftTrackHealth'}
+        with mock.patch.object(critical_damage._device_damage, 'device_regen_hp',
+                               return_value=50.0), \
+                mock.patch.object(critical_damage._device_damage, 'repair_seconds',
+                                  return_value=10.0):
+            battle._present_repair_progress(entity)
+            critical_damage.apply_payload(entity, {
+                'devices': [dict(name='leftTrackHealth', hp=0.0,
+                                 max_hp=100.0, state='destroyed')],
+                'destroyed': ['leftTrackHealth'], 'crew_ko': [],
+                'fire': False, 'ammo_rack_death': False, 'events': []})
+            battle._present_repair_progress(entity)
+            battle._present_repair_progress(entity)
+        self.assertEqual([(10, 17, 3 | (50 << 8), (5.0,)),
+                          (10, 17, 3, (10.0,))], battle._avatar.misc_statuses)
+
     def test_repair_progress_closes_with_zero_seconds_once(self):
         runtime = _runtime()
         runtime.constants.VEHICLE_MISC_STATUS.\
@@ -26366,7 +26393,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         target.computeBaseInvisibility = lambda *unused: (0.0, 0.0)
         calls = []
 
-        def foliage_bonus(unused_observer, unused_target, fired_recently):
+        def foliage_bonus(unused_observer, unused_target, fired_recently, **unused):
             calls.append(fired_recently)
             return 0.0 if fired_recently else 0.60
 

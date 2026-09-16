@@ -99,7 +99,7 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		turn, throttle, recovery_mode, has_target=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn',
-			'pivot_recovery', 'forward_escape', 'contact_escape'):
+			'pivot_recovery', 'forward_escape', 'contact_escape', 'friendly_yield'):
 		return float(turn), float(throttle), False
 	limited = not (float(minimum_yaw) <= -math.pi + 0.1 and
 	               float(maximum_yaw) >= math.pi - 0.1)
@@ -390,10 +390,10 @@ class LocalDriver(object):
 				other_width = float(
 					neighbour.get('half_width', half_width) or half_width)
 			try:
-				contact = tank_collision.obb_contact(
+				contact = tank_collision._obb_overlap(
 					position[0], position[2], yaw, (half_width, half_length),
 					other[0], other[2], other_yaw, (other_width, other_length))
-				if contact is not None:
+				if contact[2] >= -1.0e-9:
 					back_x, back_z = -math.sin(yaw), -math.cos(yaw)
 					outward = back_x*contact[0] + back_z*contact[1]
 					away = back_x*(position[0]-other[0]) + back_z*(position[2]-other[2])

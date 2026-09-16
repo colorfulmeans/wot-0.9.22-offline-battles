@@ -1546,6 +1546,44 @@ class CriticalDamageTests(unittest.TestCase):
             self.assertEqual(
                 0.5, critical_damage.stat_factor(vehicle, 'mobility'))
 
+    def test_successful_repeat_hits_restart_only_the_damaged_module_repair(self):
+        for name in ('leftTrackHealth', 'rightTrackHealth', 'engineHealth',
+                     'gunHealth', 'radioHealth', 'turretRotatorHealth',
+                     'surveyingDeviceHealth'):
+            with self.subTest(name=name):
+                vehicle = types.SimpleNamespace(
+                    id=1, typeDescriptor=_descriptor(), health=500,
+                    devices_hp={name: 0.0, 'fuelTankHealth': 40.0},
+                    _destroyed_devices={name}, _crew_ko=set(), is_on_fire=False)
+                collision = (1.0, 1.0, _Material(name), None)
+                with mock.patch.dict(sys.modules, {
+                        'BigWorld': self.bigworld, 'Math': self.math}), \
+                        mock.patch('random.uniform', return_value=1.0), \
+                        mock.patch('random.random', return_value=0.0):
+                    for unused in range(3):
+                        critical_damage.tick_repair(vehicle, 3.0, repair_skill=0.0)
+                        self.assertGreater(vehicle.devices_hp[name], 1.0)
+                        critical_damage.apply_direct(
+                            vehicle, (collision,), object(), object(), 0,
+                            {'damage': (1.0, 1.0)}, 2, penetrated=False)
+                        self.assertEqual(0.0, vehicle.devices_hp[name])
+                        self.assertIn(name, vehicle._destroyed_devices)
+                        self.assertEqual(40.0, vehicle.devices_hp['fuelTankHealth'])
+                critical_damage.tick_repair(vehicle, 100.0, repair_skill=0.0)
+                self.assertNotIn(name, vehicle._destroyed_devices)
+
+    def test_failed_module_roll_does_not_reset_repair_progress(self):
+        vehicle = types.SimpleNamespace(
+            id=1, typeDescriptor=_descriptor(), health=500,
+            devices_hp={'leftTrackHealth': 25.0},
+            _destroyed_devices={'leftTrackHealth'}, _crew_ko=set(), is_on_fire=False)
+        collision = (1.0, 1.0, _Material('leftTrackHealth', chance=0.0), None)
+        with mock.patch.dict(sys.modules, {'BigWorld': self.bigworld, 'Math': self.math}):
+            critical_damage.apply_direct(
+                vehicle, (collision,), object(), object(), 0,
+                {'damage': (100.0, 120.0)}, 2, penetrated=False)
+        self.assertEqual(25.0, vehicle.devices_hp['leftTrackHealth'])
+
     def test_repaired_track_can_be_destroyed_again(self):
         vehicle = types.SimpleNamespace(
             id=1, typeDescriptor=_descriptor(), health=500,

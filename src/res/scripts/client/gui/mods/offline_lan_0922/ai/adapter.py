@@ -228,6 +228,8 @@ class BotAdapter(object):
             'recovery_mode': recovery_mode,
             'movement_intent': movement_intent,
         }
+        if local.get('reverse_blocked_by') is not None:
+            result['reverse_blocked_by'] = local['reverse_blocked_by']
         if strategic.get('hull_angle_degrees') is not None:
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))

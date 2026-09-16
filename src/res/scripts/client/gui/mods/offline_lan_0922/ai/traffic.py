@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Short friendly crossing leases; physical contact remains the motion owner."""
+"""Friendly crossing coordination and a per-slice vehicle braking guard."""
 
 import math
 from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+from gui.mods.offline_lan_0922 import tank_collision
 
 
 PREDICTION_SECONDS = 1.0
@@ -10,6 +11,12 @@ YIELD_SECONDS = 1.5
 HEAD_ON_OFFSET = 0.42
 # A single bounded backing manoeuvre after both lateral exits are denied.
 HEAD_ON_RETREAT_SECONDS = 6.0
+# A firing hold may make room for a stalled friendly hull, but only for one
+# short, checked manoeuvre per physical blockage. It is not a new route.
+PARKED_JAM_SECONDS = 1.5
+PARKED_YIELD_SECONDS = 4.0
+PARKED_CONTACT_MARGIN = 0.15
+ORDER_FRESH_SECONDS = 1.5
 _EPSILON = 1.0e-9
 
 
@@ -60,6 +67,20 @@ def _same_level(first, second):
     first_y, second_y = first['position'][1], second['position'][1]
     return min(first_y + first_shape[3], second_y + second_shape[3]) > max(
         first_y + first_shape[2], second_y + second_shape[2])
+
+
+def _separation(first, second):
+    """Largest signed gap between the actual hulls on their SAT axes."""
+    first_pos, second_pos = _position(first), _position(second)
+    delta = (second_pos[0] - first_pos[0], second_pos[1] - first_pos[1])
+    return max(abs(_dot(delta, axis)) - _radius(first, axis) -
+               _radius(second, axis) for axis in _axes(first) + _axes(second))
+
+
+def _dimensions(body):
+    shape = body.get('shape')
+    return ((shape[1], shape[0]) if shape is not None else
+            (body.get('half_length', 3.5), body.get('half_width', 1.7)))
 
 
 def _contact_time(first, second):
@@ -125,13 +146,246 @@ class TrafficCoordinator(object):
     def __init__(self):
         self._pairs = {}
         self._held = {}
+        self._orders = {}
+        self._jams = {}
+        self._parked = {}
         self._escape_probe = LocalDriver()
 
     def forget(self, bot_id):
         self._held.pop(bot_id, None)
+        self._orders.pop(bot_id, None)
+        self._parked.pop(bot_id, None)
+        for actor, lease in list(self._parked.items()):
+            if lease['requester'] == bot_id:
+                del self._parked[actor]
+        for pair in list(self._jams):
+            if bot_id in pair:
+                del self._jams[pair]
         for pair in list(self._pairs):
             if bot_id in pair:
                 del self._pairs[pair]
+
+    def _blocks_requester(self, body, peer, order, margin):
+        if _separation(body, peer) <= margin:
+            return True
+        if order.get('forward_blocked_by') == body['id']:
+            length, width = _dimensions(peer)
+            return self._escape_probe._reverse_blocked_by_vehicle(
+                peer['position'], peer['yaw'] + math.pi,
+                [body], length, width) is not None
+        if order.get('reverse_blocked_by') != body['id']:
+            return False
+        length, width = _dimensions(peer)
+        return self._escape_probe._reverse_blocked_by_vehicle(
+            peer['position'], peer['yaw'], [body], length, width) is not None
+
+    def _parked_yield(self, bot_id, body, command, peers, neighbours, now,
+                      direction_clear):
+        """Ask a parked ally to clear a persistent, observed traffic blockage.
+
+        Only a fresh movement order from another bot can request clearance.
+        Nearby parked tanks, players and ordinary passing traffic cannot start
+        it. The original hold/target is restored after separation or a fixed
+        deadline, which cannot be renewed while the same pair stays wedged.
+        """
+        parked_hold = (command.get('recovery_mode') == 'arrived' and
+                       command.get('combat_mode') not in
+                       ('physical_hold', 'nav_wait'))
+        route_order = (command.get('combat_mode') in ('route', 'advance') and
+                       command.get('recovery_mode') in
+                       ('drive', 'avoid', 'blocked', 'reverse_turn',
+                        'pivot_recovery', 'forward_escape'))
+        # A route tank can itself be the neighbour occupying a proved reverse
+        # escape. The driver already waited through its stuck threshold and
+        # checked both pivots/forward travel before naming this blocker. Honour
+        # that explicit request even when the blocker is also trying to drive.
+        # Mere proximity between two route orders must not steal either route.
+        requests = set(peer_id for peer_id in peers
+                       if peer_id in self._orders and
+                       now - self._orders[peer_id][0] <= ORDER_FRESH_SECONDS and
+                       (self._orders[peer_id][1].get('reverse_blocked_by') == bot_id or
+                        self._orders[peer_id][1].get('forward_blocked_by') == bot_id) and
+                       peer_id not in self._parked)
+        eligible = (body.get('alive', True) and
+                    (parked_hold or
+                     (route_order and (requests or bot_id in self._parked))))
+        for pair in list(self._jams):
+            if pair[0] == bot_id and pair[1] not in peers:
+                del self._jams[pair]
+        if not eligible:
+            self._parked.pop(bot_id, None)
+            for pair in list(self._jams):
+                if pair[0] == bot_id:
+                    del self._jams[pair]
+            return None
+        lease = self._parked.get(bot_id)
+        if lease is not None:
+            peer = peers.get(lease['requester'])
+            observation = self._orders.get(lease['requester'])
+            if (peer is None or observation is None or
+                    now - observation[0] > ORDER_FRESH_SECONDS or
+                    not observation[1].get('movement_intent', True) or
+                    observation[1].get('recovery_mode') in
+                    ('arrived', 'nav_wait', 'physical_hold') or
+                    not self._blocks_requester(
+                        body, peer, observation[1], PARKED_CONTACT_MARGIN * 3.0)):
+                self._parked.pop(bot_id, None)
+                self._jams.pop((bot_id, lease['requester']), None)
+                lease = None
+            elif now >= lease['until']:
+                # Keep the exhausted episode until the physical blockage ends.
+                return None
+        if lease is None:
+            candidates = []
+            for peer_id in sorted(peers):
+                peer = peers[peer_id]
+                observation = self._orders.get(peer_id)
+                pair = (bot_id, peer_id)
+                blocked = (observation is not None and
+                           now - observation[0] <= ORDER_FRESH_SECONDS and
+                           observation[1].get('movement_intent', True) and
+                           (parked_hold or peer_id in requests) and
+                           observation[1].get('recovery_mode') not in
+                           ('arrived', 'nav_wait', 'physical_hold') and
+                           math.hypot(*_velocity(body)) <= 0.65 and
+                           math.hypot(*_velocity(peer)) <= 0.65 and
+                           self._blocks_requester(
+                               body, peer, observation[1], PARKED_CONTACT_MARGIN))
+                if not blocked:
+                    self._jams.pop(pair, None)
+                    continue
+                since = self._jams.setdefault(pair, now)
+                if (not parked_hold and peer_id in requests or
+                        now - since >= PARKED_JAM_SECONDS):
+                    candidates.append(peer)
+            if not candidates:
+                return None
+            peer = candidates[0]
+            length, width = _dimensions(body)
+            away = (_position(body)[0] - _position(peer)[0],
+                    _position(body)[1] - _position(peer)[1])
+            preferred = 1.0 if _dot(away, _axes(body)[1]) >= 0.0 else -1.0
+            sign = None
+            for candidate in (preferred, -preferred):
+                heading = body['yaw'] + (math.pi if candidate < 0.0 else 0.0)
+                # Reuse the exact longitudinal hull sweep in either direction;
+                # every other tank, including wrecks/enemies, remains a veto.
+                if (self._escape_probe._clear(direction_clear, heading, length * 1.6) and
+                        self._escape_probe._reverse_blocked_by_vehicle(
+                            body['position'], heading + math.pi,
+                            neighbours, length, width) is None):
+                    sign = candidate
+                    break
+            if sign is None:
+                return None
+            lease = {'requester': peer['id'], 'until': now + PARKED_YIELD_SECONDS,
+                     'sign': sign, 'origin': _position(body),
+                     'distance': length + _radius(peer, _axes(body)[1]) +
+                                 PARKED_CONTACT_MARGIN * 3.0}
+            self._parked[bot_id] = lease
+        displacement = math.hypot(
+            _position(body)[0] - lease['origin'][0],
+            _position(body)[1] - lease['origin'][1])
+        if displacement >= lease['distance']:
+            lease['until'] = now
+            return None
+        length, width = _dimensions(body)
+        heading = body['yaw'] + (math.pi if lease['sign'] < 0.0 else 0.0)
+        clear = (self._escape_probe._clear(direction_clear, heading, length * 1.6) and
+                 self._escape_probe._reverse_blocked_by_vehicle(
+                     body['position'], heading + math.pi,
+                     neighbours, length, width) is None)
+        result = dict(command)
+        result.update(throttle=0.65 * lease['sign'] if clear else 0.0,
+                      turn=0.0, target_yaw=body['yaw'], movement_intent=True,
+                      recovery_mode='friendly_yield', traffic_mode='friendly_yield',
+                      fire_allowed=False)
+        return result
+
+    def safe_controls(self, body, command, neighbours, now, stopping_distance,
+                      step=1.0 / 30.0):
+        """Release drive into occupied hulls after planning and gun aiming.
+
+        This guard is independent of friendly leases and tactical modes. In
+        particular a player does not have to publish a cooperative Bot order.
+        It changes controls only: momentum, contact mass and player pushing
+        remain owned by physics. Re-evaluate even when a decision is cached.
+        """
+        result = dict(command)
+        speed = _dot(_velocity(body), _axes(body)[1])
+        throttle, turn = result.get('throttle', 0.0), result.get('turn', 0.0)
+        peers = [peer for peer in neighbours
+                 if peer['id'] != body['id'] and peer.get('alive', True) and
+                 _same_level(body, peer)]
+        # Braking against current travel must remain available. At rest the
+        # intended gear determines which hull face needs a clear corridor.
+        sign = -1.0 if throttle < -0.01 or (
+            abs(throttle) <= 0.01 and speed < 0.0) else 1.0
+        forward = _axes(body)[1]
+        axis = forward[0] * sign, forward[1] * sign
+        position = _position(body)
+        candidates = []
+        for peer in peers:
+            delta = (_position(peer)[0] - position[0],
+                     _position(peer)[1] - position[1])
+            if _dot(delta, axis) <= 0.0:
+                continue  # Do not brake a leader because of a rear follower.
+            reach = sum(_dimensions(body)) + sum(_dimensions(peer))
+            if math.hypot(*delta) > reach + max(2.0, speed * speed):
+                continue
+            candidates.append(peer)
+        blocker = None
+        if candidates and (abs(throttle) > 0.01 or abs(speed) > 0.01):
+            coast = max(0.0, stopping_distance())
+            # One integration slice of reaction plus a small standstill gap.
+            # The coast integral is based on this vehicle's real parameters.
+            distance = min(80.0, coast) + abs(speed) * step + 0.12
+            horizon = min(1.0, max(step, 2.0 * min(coast, 80.0) /
+                                    max(abs(speed), 0.1)))
+            swept = dict(body, velocity=(axis[0] * distance, 0.0,
+                                         axis[1] * distance))
+            for peer in candidates:
+                own_shape = body.get('shape') or (
+                    body['half_width'], body['half_length'])
+                peer_shape = peer.get('shape') or (
+                    peer['half_width'], peer['half_length'])
+                contact = tank_collision._obb_overlap(
+                    position[0], position[1], body['yaw'], own_shape,
+                    _position(peer)[0], _position(peer)[1], peer['yaw'], peer_shape)
+                if contact[2] >= -1.0e-9:
+                    if _dot(axis, contact[:2]) >= -1.0e-9:
+                        continue  # Existing side contact can slide or separate.
+                    blocker = peer['id']
+                    break
+                velocity = _velocity(peer)
+                predicted = dict(peer, velocity=(velocity[0] * horizon, 0.0,
+                                                 velocity[1] * horizon))
+                if _contact_time(swept, predicted) is not None:
+                    blocker = peer['id']
+                    break
+        if blocker is not None and speed * throttle >= -0.01:
+            result.update(throttle=0.0, traffic_mode='vehicle_brake')
+            result['forward_blocked_by' if sign > 0.0 else
+                   'reverse_blocked_by'] = blocker
+        if abs(turn) > 0.01 and peers:
+            shape = body.get('shape') or (
+                body['half_width'], body['half_length'], -0.8, 2.0)
+            steer_sign = -1.0 if result['throttle'] < 0.0 else 1.0
+            if tank_collision.rotation_fraction(
+                    body['position'], body['yaw'],
+                    body['yaw'] + turn * steer_sign * max(step, 0.1),
+                    shape, peers) < 1.0:
+                result.update(turn=0.0, traffic_mode='vehicle_brake')
+        # A stopped follower can request clearance before physical contact.
+        # Preserve raw movement intent so the driver's stuck clock still runs.
+        observation = self._orders.get(body['id'])
+        if observation is not None:
+            order = dict(observation[1])
+            order.pop('forward_blocked_by', None)
+            if blocker is not None and sign > 0.0:
+                order['forward_blocked_by'] = blocker
+            self._orders[body['id']] = (now, order)
+        return result
 
     def _holding(self, body, now):
         """Report whether this coordinator is the reason a hull is stopped."""
@@ -201,6 +455,14 @@ class TrafficCoordinator(object):
 
     def adjust(self, bot_id, body, command, neighbours, now, direction_clear):
         result = dict(command)
+        self._orders[bot_id] = (now, dict(command))
+        peers = dict((peer['id'], peer) for peer in neighbours
+                     if peer['id'] != bot_id and peer.get('alive', True) and
+                     peer.get('team') == body.get('team') and _same_level(body, peer))
+        parked = self._parked_yield(
+            bot_id, body, command, peers, neighbours, now, direction_clear)
+        if parked is not None:
+            return parked
         retreat_active = any(bot_id in pair and lease['mode'] == 'head_on' and
                              len(lease.get('blocked', ())) == 2 and
                              lease['until'] <= now < lease['until'] + HEAD_ON_RETREAT_SECONDS
@@ -213,9 +475,6 @@ class TrafficCoordinator(object):
                   command.get('throttle', 0.0) <= 0.0 or
                   _dot(_velocity(body), _axes(body)[1]) < -_EPSILON))):
             return result
-        peers = dict((peer['id'], peer) for peer in neighbours
-                     if peer['id'] != bot_id and peer.get('alive', True) and
-                     peer.get('team') == body.get('team') and _same_level(body, peer))
         for pair in list(self._pairs):
             if bot_id in pair and any(actor != bot_id and actor not in peers
                                      for actor in pair):

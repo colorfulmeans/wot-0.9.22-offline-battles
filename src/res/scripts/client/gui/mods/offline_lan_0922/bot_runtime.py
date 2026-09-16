@@ -7,6 +7,7 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
 
 import copy
 import math
+from gui.mods.offline_lan_0922 import stun_mechanics
 from gui.mods.offline_lan_0922 import tank_contact_ledger
 import json
 import random
@@ -33,6 +34,7 @@ from gui.mods.offline_lan_0922 import prebaked_navigation
 from gui.mods.offline_lan_0922 import shot_geometry
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
+from gui.mods.offline_lan_0922 import radio
 from gui.mods.offline_lan_0922 import loadout
 from gui.mods.offline_lan_0922 import lan_client
 from gui.mods.offline_lan_0922 import tank_collision
@@ -835,7 +837,8 @@ def _critical_factor(state, descriptor, stat):
     devices, destroyed, crew_ko, yellow = _critical_parts(state)
     return (device_damage.crew_stat_factor(crew_ko, stat) *
             device_damage.module_stat_factor(
-                devices, destroyed, descriptor, stat, yellow))
+                devices, destroyed, descriptor, stat, yellow) *
+            stun_mechanics.factor(state, stat))
 
 
 def _critical_signature(payload):
@@ -919,6 +922,7 @@ def _combat_record(state):
             state.get('combat_fire_timer', 0.0), 6),
         'stun_end_server_time_ms': max(
             0, int(state.get('stun_end_server_time_ms', 0))),
+        'stun_factors': dict(state.get('stun_factors') or {}),
     }
 
 
@@ -983,6 +987,8 @@ def _apply_combat_record(state, record):
         _number(record.get('combat_fire_timer')), 6)
     state['stun_end_server_time_ms'] = max(
         0, int(_number(record.get('stun_end_server_time_ms'))))
+    state['stun_factors'] = (dict(record.get('stun_factors') or {})
+                            if state['stun_end_server_time_ms'] else {})
     state['display_health'] = state['health']
     if not state['alive']:
         state['speed'] = 0.0
@@ -2183,6 +2189,8 @@ class BotRuntime(object):
         self._team_visibility_cache = {}
         self._visible_target_poses = {}
         self._spot_until = {}
+        self._radio_network = radio.RadioNetwork()
+        self._radio_factor_cache = {}
         self._human_observer_alive = {}
         self._human_last_alive_critical = {}
         self._human_direct_targets = {}
@@ -2975,6 +2983,7 @@ class BotRuntime(object):
                 isinstance(server_time_ms, bool) or end < 0 or observed < 0):
             raise ValueError('bot stun clock is invalid')
         state['stun_end_server_time_ms'] = end
+        state['stun_factors'] = dict(raw.get('stun_factors') or {}) if end > observed else {}
         state['_stun_until_equipment_time'] = (
             self._equipment_now + max(0.0, (end - observed) / 1000.0))
         return end > observed
@@ -3265,6 +3274,8 @@ class BotRuntime(object):
             self._team_visibility_cache = {}
             self._visible_target_poses = {}
             self._spot_until = {}
+            self._radio_network = radio.RadioNetwork()
+            self._radio_factor_cache = {}
             self._human_observer_alive = {}
             self._human_last_alive_critical = {}
             self._human_direct_targets = {}
@@ -3323,6 +3334,8 @@ class BotRuntime(object):
             self._team_visibility_cache = {}
             self._visible_target_poses = {}
             self._spot_until = {}
+            self._radio_network = radio.RadioNetwork()
+            self._radio_factor_cache = {}
             self._human_observer_alive = {}
             self._human_last_alive_critical = {}
             self._human_direct_targets = {}
@@ -3810,6 +3823,9 @@ class BotRuntime(object):
         if stun_end < 0:
             raise ValueError('modern bot snapshot combat contract is invalid')
         candidate['stun_end_server_time_ms'] = stun_end
+        candidate['stun_factors'] = (
+            stun_mechanics.canonical_factors(raw['stun_factors'])
+            if stun_end and raw.get('stun_factors') else {})
         candidate_record = _combat_record(candidate)
         signature = _combat_signature(candidate)
 
@@ -4010,6 +4026,7 @@ class BotRuntime(object):
         if clear_stun:
             if int(state.get('stun_end_server_time_ms', 0)) == stun_base:
                 state['stun_end_server_time_ms'] = 0
+                state['stun_factors'] = {}
                 state['_stun_until_equipment_time'] = self._equipment_now
                 stun_cleared = True
         return payload is not None or stun_cleared
@@ -4041,9 +4058,10 @@ class BotRuntime(object):
         # Repair, consumables and fire may replace the canonical payload. Never
         # carry a parsed view across that mutation boundary.
         _clear_critical_parts_tick_cache(state)
-        payload = state.get('critical')
-        if ((not isinstance(payload, dict) or not payload) and
-                not self._bot_stunned(state)):
+        payload = state.get('critical') or {}
+        if not self._bot_stunned(state):
+            state['stun_factors'] = {}
+        if not payload and not self._bot_stunned(state):
             return False
         before_signature = _combat_signature(state)
         was_on_fire = bool(payload.get('fire', False))
@@ -4568,7 +4586,8 @@ class BotRuntime(object):
             module_factor = device_damage.module_stat_factor(
                 devices, destroyed, descriptor, 'vision', yellow)
             damage_factor = device_damage.clamp_vision_factor(
-                dynamic.get('vision', 1.0) * module_factor)
+                dynamic.get('vision', 1.0) * module_factor *
+                stun_mechanics.factor(source, 'vision'))
             since = self._source_still.get(('human', player_id))
             binocular_active = bool(
                 profile['has_binoculars'] and since is not None and
@@ -4602,6 +4621,77 @@ class BotRuntime(object):
             return value
         return value * device_damage.clamp_vision_factor(
             _critical_factor(source, descriptor, 'vision'))
+
+    @staticmethod
+    def _radio_identity(source):
+        return ('human' if source.get('kind') == 'human' else 'bot',
+                int(source.get('network_id', source.get('id', 0))))
+
+    def _source_radio_range(self, source, tick_cache=None):
+        if source.get('kind') == 'human':
+            # Missing round radio data fails closed; it never grants team vision.
+            try:
+                snapshot = _player_effective_params(source, tick_cache)
+            except ValueError:
+                return 0.0
+            descriptor = self._player_vehicle_profile(source, tick_cache)['descriptor']
+            unused_key, dynamic = _player_dynamic_spotting(snapshot, source)
+            devices, destroyed, unused_crew, yellow = _critical_parts(source)
+            factor = (snapshot['loadout']['radio_factor'] *
+                      dynamic.get('signal', 1.0) *
+                      device_damage.module_stat_factor(
+                          devices, destroyed, descriptor, 'signal', yellow))
+        else:
+            actor = int(source.get('id', 0))
+            descriptor = self._descriptors.get(actor, {})
+            cache = getattr(self, '_radio_factor_cache', None)
+            if cache is None:
+                cache = self._radio_factor_cache = {}
+            crew_level = self.bot_crew_level(actor)
+            key = (actor, id(descriptor), crew_level)
+            if key not in cache:
+                cache[key] = loadout.modifiers(descriptor, factors=
+                    _bot_default_crew_factors(descriptor, crew_level))['radio_factor']
+            factor = cache[key] * _critical_factor(source, descriptor, 'signal')
+        base = _number(_value(_value(descriptor, 'radio', {}), 'distance', 0.0))
+        return max(0.0, base * factor)
+
+    def _configure_radio(self, players, now, tick_cache=None):
+        actors = {}
+        for source in self.states.values():
+            if source.get('alive', True):
+                actors[self._radio_identity(source)] = (
+                    int(source.get('team', 0)), _position(source),
+                    self._source_radio_range(source, tick_cache))
+        for raw in players or ():
+            if not isinstance(raw, dict) or raw.get('id') is None:
+                continue
+            if not raw.get('alive', True) and now >= self._human_vengeance_until.get(
+                    int(raw['id']), 0.0):
+                continue
+            source = dict(raw, kind='human')
+            try:
+                snapshot = _player_effective_params(source, tick_cache)
+            except ValueError:
+                snapshot = None
+            relay_bonus = (effective_params.living_skill_level(
+                snapshot, 'radioman_retransmitter', source.get('critical') or {}) *
+                0.001) if snapshot is not None else 0.0
+            actors[self._radio_identity(source)] = (
+                int(source.get('team', 0)), _position(source),
+                self._source_radio_range(source, tick_cache), relay_bonus)
+        self._radio_network.configure(actors, now)
+
+    def _renew_observer_spot(self, source, target, now, duration=None, target_key=None):
+        self._radio_network.observe(
+            self._radio_identity(source),
+            target_key if target_key is not None else self._observer_target_key(target), now,
+            spotting.SPOT_MEMORY_SECONDS if duration is None else duration,
+            self._target_pose_snapshot(target))
+
+    def _recipient_contact(self, source, target_key, now):
+        return self._radio_network.contact(
+            self._radio_identity(source), tuple(target_key[-2:]), now)
 
     def _note_source_stillness(self, state, now):
         """Stamp when this bot stopped, so its own stereoscope can arm.
@@ -5383,6 +5473,7 @@ class BotRuntime(object):
                 entry[0] = bool(entry[0] or direct_visible)
                 entry[2] = target
                 if not direct_visible:
+                    self._radio_network.hidden(self._radio_identity(source), target_key)
                     continue
                 entry[3].add(source['id'])
                 team_visibility[key] = True
@@ -5394,6 +5485,7 @@ class BotRuntime(object):
                     duration = self._designated_spot_duration(
                         source, target, snapshot)
                 self._renew_team_spot(key, now, duration)
+                self._renew_observer_spot(source, target, now, duration, target_key)
             if alive:
                 self._human_direct_targets[source['id']] = direct_targets
         return True
@@ -5406,16 +5498,9 @@ class BotRuntime(object):
         source_team = int(source.get('team', 0))
         source_position = _position(source)
         source_view_range = [None]
-        remembered_team = (
-            visibility_tick.setdefault('remembered_team', {})
-            if isinstance(visibility_tick, dict) else {})
         pose_cache = (
             visibility_tick.setdefault('target_pose_snapshots', {})
             if isinstance(visibility_tick, dict) else None)
-
-        hidden_templates = (
-            visibility_tick.setdefault('hidden_target_templates', {})
-            if isinstance(visibility_tick, dict) else {})
 
         def resolve_source_view_range():
             if source_view_range[0] is None:
@@ -5426,47 +5511,18 @@ class BotRuntime(object):
         def retain_team_known_pose(target, template):
             key = (source_team, target.get('kind'),
                    int(target.get('network_id', 0)))
-            if target['fresh_visible']:
+            remembered = target.pop('_radio_pose', None)
+            if target['direct_visible']:
                 remembered = self._target_pose_snapshot(template, pose_cache)
                 self._visible_target_poses[key] = remembered
-                target.update(remembered)
-                return True
-            remembered = self._visible_target_poses.get(key)
-            cache_key = (source_team, id(template), id(remembered))
-            cached = hidden_templates.get(cache_key)
-            if cached is not None:
-                # Retain the original objects with the projection: identities
-                # cannot be recycled during this slice. Only pose removal and
-                # the team's remembered pose are shared, never observer flags.
-                visible = bool(target['visible'] and remembered is not None)
-                direct = target['direct_visible']
-                fresh = target['fresh_visible']
-                target.clear()
-                target.update(cached[2])
-                target.update(visible=visible, direct_visible=direct,
-                              fresh_visible=fresh)
-                return visible
-            # Discard every live pose field first: an old observation can lack
-            # articulation or velocity that the current hidden entity has.
             for name in _TARGET_POSE_FIELDS:
                 target.pop(name, None)
             if remembered is None:
-                # The server treats a first hidden sample as a valid no-op.
-                # Publish a shape-complete neutral record, but never expose
-                # the worker's omniscient live pose to local targeting.
-                target.update({
-                    'position': (0.0, 0.0, 0.0),
-                    'x': 0.0, 'y': 0.0, 'z': 0.0,
-                    'yaw': 0.0, 'speed': 0.0,
-                })
-                target['visible'] = False
+                target.update(position=(0.0, 0.0, 0.0), x=0.0, y=0.0, z=0.0,
+                              yaw=0.0, speed=0.0, visible=False)
             else:
                 target.update(remembered)
-            projection = dict(target)
-            for name in ('visible', 'direct_visible', 'fresh_visible'):
-                projection.pop(name, None)
-            hidden_templates[cache_key] = (template, remembered, projection)
-            return bool(target.get('visible'))
+            return bool(target['visible'])
 
         def visible_to_team(target):
             key = (source_team, target.get('kind'),
@@ -5476,18 +5532,15 @@ class BotRuntime(object):
                 resolve_source_view_range)
             if direct_visible:
                 self._renew_team_spot(key, now)
-                remembered_team[key] = True
-            if direct_visible and team_spotted is not None:
-                team_spotted[key] = True
-            if key not in remembered_team:
-                remembered_team[key] = \
-                    self._team_spot_time_left(key, now) > 0.0
-            remembered = remembered_team[key]
-            fresh_shared = bool(
-                team_spotted is not None and team_spotted.get(key, False))
-            return (bool(direct_visible or remembered or fresh_shared),
-                    bool(direct_visible),
-                    bool(direct_visible or fresh_shared))
+                self._renew_observer_spot(source, target, now)
+                if team_spotted is not None:
+                    team_spotted[key] = True
+            else:
+                self._radio_network.hidden(self._radio_identity(source), key[1:])
+            remaining, fresh_shared, radio_pose = self._recipient_contact(source, key, now)
+            target['_radio_pose'] = radio_pose
+            return (bool(direct_visible or remaining > 0.0),
+                    bool(direct_visible), bool(direct_visible or fresh_shared))
 
         for raw in players or ():
             if (not isinstance(raw, dict) or raw.get('id') is None or
@@ -5824,7 +5877,11 @@ class BotRuntime(object):
                 if body is not None:
                     result.append(body)
             return result
-        result = list(supplied or ())
+        result = []
+        for raw in supplied or ():
+            body = dict(raw)
+            body['position'] = _boundary_point(raw.get('position', raw))
+            result.append(body)
         for bot_id, raw in self.states.items():
             if bot_id == source.get('id'):
                 continue
@@ -9693,6 +9750,15 @@ class BotRuntime(object):
                            -math.atan2(
                                (aim_position[1] + 1.0) - origin[1],
                                max(0.5, horizontal)))
+            # Inside roughly one hull width, centimetre-scale target-pose
+            # corrections can flip the bearing across the muzzle and make the
+            # turret/barrel hunt left-right every control refresh.  Preserve
+            # the current world bearing until the target again has a stable
+            # geometric direction; firing remains governed by the normal lane
+            # and alignment checks below.
+            if horizontal < 1.5:
+                desired_yaw = state.get(
+                    'aim_yaw', state.get('yaw', desired_yaw))
         self._update_hydraulic_suspension(
             state, descriptor, desired_yaw, world_pitch, step,
             self._turret_motion_probe)
@@ -9749,7 +9815,8 @@ class BotRuntime(object):
             state['gun_pitch'] = hull_aiming.gun_pitch_step(
                 state.get('gun_pitch', 0.0), raw_pitch, static_pitch,
                 _rotation_speed(gun, 0.35) * max(
-                    0.0, modifier_bundle.get('gun_rotation_factor', 1.0)),
+                    0.0, modifier_bundle.get('gun_rotation_factor', 1.0)) *
+                stun_mechanics.factor(state, 'turret_speed'),
                 step, turret_rotation_time, pitch_limits)
         state['desired_gun_pitch'] = desired_pitch
         world_angles = self._world_barrel_angles(state, descriptor)
@@ -10252,6 +10319,13 @@ class BotRuntime(object):
                 'visible': visible,
                 'fresh': fresh,
                 'time_left': round(time_left, 6),
+                'radio_recipients': [
+                    {'kind': actor[0], 'id': actor[1],
+                     'time_left': round(min(time_left, self._radio_network.contact(
+                         actor, key[1:], now)[0]), 6)}
+                    for actor, participant in sorted(self._radio_network.actors.items())
+                    if visible and participant[0] == key[0] and
+                    self._radio_network.contact(actor, key[1:], now)[0] > 0.0],
                 # These identities are produced only by the hidden worker's
                 # native LOS probes. Visible clients cannot submit this
                 # authority message.
@@ -10260,7 +10334,9 @@ class BotRuntime(object):
                 # Current clients always publish this field. An empty list
                 # means team-spotted without a local firing lane; the server
                 # rejects omission rather than guessing.
-                'shootable_by_bot_ids': sorted(shootable),
+                'shootable_by_bot_ids': sorted(
+                    actor for actor in shootable if self._radio_network.contact(
+                        ('bot', int(actor)), key[1:], now)[1]),
                 # Positive evidence only: an absent id is unknown, not safe.
                 'threatened_bot_ids': sorted(set(
                     incoming_by_target.get(key, ()))) if fresh else [],
@@ -11149,6 +11225,7 @@ class BotRuntime(object):
         visibility_tick = {'target_pose_snapshots': pose_cache}
         self._track_human_observer_lifecycle(
             players, now, visibility_tick)
+        self._configure_radio(players, now, visibility_tick)
         live_players = None
         live_probe_targets = {}
         processed_bot_ids = set()
@@ -11327,6 +11404,28 @@ class BotRuntime(object):
                     return True
 
             def sample_clear(sample_yaw, maximum_distance=None):
+                # A vehicle brake must also reach local steering. Otherwise
+                # the planner repeatedly sees a clear world ray through the
+                # same live hull and renews its original drive heading. Keep
+                # the short vehicle sweep during the driver's avoidance lease;
+                # checked reverse and side departures remain available.
+                # Explicit short recovery/clearance probes already check the
+                # current hull and its swept turn in LocalDriver. Applying an
+                # instant candidate-yaw box there rejects valid backing turns.
+                vehicle_obstacles = state.get('traffic_obstacles', {})
+                if maximum_distance is None and vehicle_obstacles:
+                    live_neighbours = [peer for peer in
+                        self._neighbours_for(state, neighbours)
+                        if peer.get('alive', True) and now <
+                        vehicle_obstacles.get(peer.get('id'), 0.0)]
+                    # Remember every recently proved blocker, not just the
+                    # last one in an alternating queue. Unrelated passing
+                    # traffic must not turn every steering candidate into a wall.
+                    if self._traffic_coordinator._escape_probe._reverse_blocked_by_vehicle(
+                            position, sample_yaw + math.pi, live_neighbours,
+                            state.get('half_length', 3.5),
+                            state.get('half_width', 1.7)) is not None:
+                        return False
                 # A short manoeuvre asks about the space it actually enters.
                 # Ranking a five-metre backing escape against the fifteen to
                 # twenty metre travel horizon rejects every gateway, alley and
@@ -11478,9 +11577,8 @@ class BotRuntime(object):
                     DECISION_TIER_FACTOR[self._detail_tier(state)],
                     3, decision_cache is None)
                 raw_command = dict(command)
-            # Keep this decision until the next scheduled refresh. Friendly
-            # following uses contact physics; crossing yields have a fixed
-            # deadline and never renew LocalDriver's stuck timer.
+            # Keep the plan until its next refresh. The final vehicle braking
+            # guard below still reads current neighbours on every physics slice.
             command['throttle'] = max(
                 -1.0, min(1.0, command.get('throttle', 0.0)))
             if decision_due:
@@ -11676,6 +11774,34 @@ class BotRuntime(object):
                 target is not None and
                 command.get('combat_mode') != 'base_defense')
             state['hull_aiming'] = bool(hull_aiming)
+            safety_body = {
+                'id': state['id'], 'position': position, 'yaw': state['yaw'],
+                'shape': state.get('collision_shape'),
+                'half_width': state.get('half_width', 1.7),
+                'half_length': state.get('half_length', 3.5),
+                'velocity': (math.sin(state['yaw']) * state['speed'], 0.0,
+                             math.cos(state['yaw']) * state['speed']),
+            }
+            def current_stopping_distance():
+                return self._cached_traffic_stopping_distance(
+                    state, dict(command, turn=turn),
+                    self._physics_params_for(state['id']) or
+                    vehicle_physics._DEFAULTS)
+            safety = self._traffic_coordinator.safe_controls(
+                safety_body, dict(command, throttle=throttle, turn=turn),
+                self._neighbours_for(state, neighbours), now,
+                current_stopping_distance, step)
+            throttle, turn = safety['throttle'], safety['turn']
+            state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
+            vehicle_obstacles = state.get('traffic_obstacles', {})
+            for peer_id, until in list(vehicle_obstacles.items()):
+                if now >= until:
+                    del vehicle_obstacles[peer_id]
+            if safety.get('forward_blocked_by') is not None:
+                # Match LocalDriver's 1.20-second avoidance-heading lease;
+                # an older obstruction must not outlive that local plan.
+                vehicle_obstacles[safety['forward_blocked_by']] = now + 1.2
+            state['traffic_obstacles'] = vehicle_obstacles
             if siege_motion_locked:
                 # Stock Siege transitions immobilize the hull for the whole
                 # transition tick, including the publication which starts or
@@ -11744,6 +11870,11 @@ class BotRuntime(object):
                     command.get('recovery_mode') == 'reverse_turn'):
                 # Recovery is intentionally a short backing manoeuvre. A wall
                 # beyond that escape edge must not veto clear space at the rear.
+                maximum_probe_distance = reactive_horizon
+            elif (reactive_horizon is not None and
+                    command.get('recovery_mode') == 'friendly_yield'):
+                # A blocked teammate yields only a short, hull-checked gap.
+                # The distant tactical route does not own this manoeuvre.
                 maximum_probe_distance = reactive_horizon
             cached_motion_probe = self._motion_probe_cache.get(state['id'])
             # A frozen pose keeps this slice's realised translation at zero
@@ -12009,6 +12140,11 @@ class BotRuntime(object):
                 diagnostic.phase('bot.integrate')
             if not self.native_motion:
                 params = self._physics_params_for(state['id'])
+                if state.get('stun_end_server_time_ms', 0):
+                    params = dict(params)
+                    params['speedFwd'] *= stun_mechanics.factor(state, 'speed')
+                    params['speedBwd'] *= stun_mechanics.factor(state, 'speed')
+                    params['rotSpd'] *= stun_mechanics.factor(state, 'traverse')
                 # The selected corridor's ground sample is also the copied
                 # physics slope.  A second native probe here used to double the
                 # render-thread work for every moving bot.
@@ -12209,34 +12345,64 @@ class BotRuntime(object):
                         self._hard_contact_response(
                             state, position, state['yaw'], speed,
                             descriptor, step, now)
+                    report_hard_contact = getattr(
+                        self.navigator, 'report_hard_contact', None)
                     report_contact = getattr(
                         self.navigator, 'report_blocked_step', None)
                     contact_target = command.get('move_position')
-                    if (contact_target is not None and
+                    # The driver owns the realised heading failure above.
+                    # Navigation instead needs a stable first route edge: a
+                    # wedged hull's recovery yaw can alternate on every try
+                    # and would otherwise restart the replan verdict count.
+                    contact_yaw = travel_yaw
+                    if realised_contact_yaw is not None:
+                        contact_yaw = realised_contact_yaw
+                    if (realised_contact_yaw is None and
+                            contact_target is not None and
                             navigation_grid is not None):
-                        # A generic contact came from the pre-turn direction
-                        # probe.  A resolved one came from this exact hull yaw
-                        # and signed speed; a reversing command can still be
-                        # braking a forward-moving hull (or vice versa).
-                        contact_yaw = travel_yaw
-                        if realised_contact_yaw is not None:
-                            contact_yaw = realised_contact_yaw
-                        edge_length = _number(
-                            getattr(navigation_grid, 'cell_size', 0.0), 0.0)
-                        if edge_length > 0.0:
-                            contact_target = (
-                                position[0] + math.sin(
-                                    contact_yaw) * edge_length,
-                                position[1],
-                                position[2] + math.cos(
-                                    contact_yaw) * edge_length)
-                    if (callable(report_contact) and
-                            contact_target is not None):
+                        # A generic direction probe looks well beyond the
+                        # distance this physics slice can realise.  Its
+                        # collision can therefore be several cells ahead and
+                        # must not veto the navigation target's first edge as
+                        # though the hull had touched it.  Preserve the old
+                        # local-edge verdict for forward forecasts.  Reverse
+                        # forecasts still enter ``report_hard_contact`` with
+                        # the semantic target so that method can pin their
+                        # separate realised rear edge for the episode.
+                        dx = float(contact_target[0]) - float(position[0])
+                        dz = float(contact_target[2]) - float(position[2])
+                        if (math.sin(contact_yaw) * dx +
+                                math.cos(contact_yaw) * dz > 0.0):
+                            edge_length = _number(
+                                getattr(navigation_grid, 'cell_size', 0.0),
+                                0.0)
+                            if edge_length > 0.0:
+                                contact_target = (
+                                    position[0] + math.sin(contact_yaw) *
+                                    edge_length,
+                                    position[1],
+                                    position[2] + math.cos(contact_yaw) *
+                                    edge_length)
+                    if (callable(report_hard_contact) and
+                            contact_target is not None and
+                            command.get('movement_intent', True)):
+                        report_hard_contact(
+                            state['id'], position, contact_target,
+                            contact_yaw, now)
+                    elif (callable(report_contact) and
+                            contact_target is not None and
+                            command.get('movement_intent', True)):
                         report_contact(
                             state['id'], position,
                             contact_target, now)
                 elif motion_status in ('soft', 'cap_crushed'):
                     self._hard_contact_grinds[state['id']] = 1
+                if (resolved_motion and
+                        motion_status in ('clear', 'crushed')):
+                    clear_contact = getattr(
+                        self.navigator, 'clear_blocked_contact', None)
+                    if callable(clear_contact):
+                        clear_contact(state['id'])
                 if resolved_motion and callable(self.motion_report):
                     self.motion_report(
                         state['id'], motion_status, contact_v0, speed)
@@ -12280,9 +12446,11 @@ class BotRuntime(object):
                 state.get('turret_yaw', 0.0), previous_turret_yaw)) / max(
                 step, 1.0e-9)
             gun_state.tick_dispersion(
-                step, abs(state['speed']),
-                abs(self._turn_speeds.get(state['id'], 0.0)),
-                turret_speed,
+                step, abs(state['speed']) * stun_mechanics.factor(
+                    state, 'bloom_move'),
+                abs(self._turn_speeds.get(state['id'], 0.0)) *
+                stun_mechanics.factor(state, 'bloom_rotation'),
+                turret_speed * stun_mechanics.factor(state, 'bloom_turret'),
                 _critical_factor(state, descriptor, 'dispersion'),
                 _critical_factor(state, descriptor, 'aim_time'))
             state['clip_size'] = gun_state.clip_size
@@ -12683,6 +12851,13 @@ class BotRuntime(object):
                 'type': 'bot_observation',
                 'contacts': self._pack_observations(
                     observation_entries, now),
+                'radio_links': [
+                    {'kind': actor[0], 'id': actor[1], 'allies': [
+                        {'kind': ally[0], 'id': ally[1]}
+                        for ally in sorted(self._radio_network.actors)
+                        if ally != actor and self._radio_network.connected(actor, ally)]}
+                    for actor in sorted(self._radio_network.actors)
+                    if actor[0] == 'human'],
                 'affordances': list(completed_affordances),
             })
         return outgoing

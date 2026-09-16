@@ -679,8 +679,10 @@ class LanProtocolTests(unittest.TestCase):
         }, json.loads(json.dumps(event)))
         result = state.battle_result
         self.assertEqual(result, json.loads(json.dumps(result)))
+        self.assertEqual(
+            {'winner': 1, 'reason': 'elimination', 'base_team': 0}, result)
         rows = dict((row['actor_id'], row)
-                    for row in result['vehicle_statistics'])
+                    for row in state._vehicle_statistics_payload())
         self.assertEqual({
             'actor_kind', 'actor_id', 'team', 'shots_fired', 'shots_hit',
             'shots_penetrated', 'damage_dealt', 'damage_received',
@@ -1658,8 +1660,10 @@ class OrderedEventVocabularyTests(unittest.TestCase):
         kinds = set(re.findall(r'"kind":\s*"([a-z_]+)"', source))
         # Critical-damage records have their own nested ``kind`` vocabulary;
         # they are payload rows inside a top-level hit/repair event and never
-        # enter the ordered battle-event dispatcher directly.
-        return kinds - {'device', 'ammo_rack', 'crew', 'fire'}
+        # enter the ordered battle-event dispatcher directly. Radio link
+        # recipients likewise use ``kind=human`` inside bot_observation,
+        # outside the ordered event journal.
+        return kinds - {'device', 'ammo_rack', 'crew', 'fire', 'human'}
 
     def _client_kinds(self):
         namespace = {}

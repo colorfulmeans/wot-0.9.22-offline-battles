@@ -2011,7 +2011,12 @@ def contact_traverse(p, half_width, speed, turn, dt, drive_intent=0.0,
 	it does not claim a recovered retail steering transmission model.'''
 	if not turn or dt <= 0.0:
 		return 0.0, 0.0
-	omega = _traverse_step(p, 0.0, turn, speed, dt, drive_intent=drive_intent)
+	# Contacts need the commanded speed limit. Restarting the free-turn ramp
+	# from zero on every blocked slice permanently reduced this limit at high
+	# frame rates, even after the same motor had been held for several seconds.
+	# The contact's torque * dt budget owns its actual acceleration.
+	omega = _traverse_step(p, 0.0, turn, speed,
+		max(dt, ANG_ACCELERATION_TIME), drive_intent=drive_intent)
 	track_speed = abs(speed)+abs(omega)*half_width
 	force = abs(engine_force(p, track_speed, turn, slope_pitch))
 	if drive_intent:

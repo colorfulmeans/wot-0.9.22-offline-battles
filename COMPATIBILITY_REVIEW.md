@@ -13,6 +13,137 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+The post-0.8.3 gameplay follow-up addresses nine reported paths. A hidden remote
+vehicle retires its engine-audition component and detailed-engine callbacks.
+Report `83fea4595275` from the owner's #1513 client records an abort on Lakeville
+at 05:14:18 on September 16: `MF_ASSERT_DEV FAILED: isOwning() && "This wrapper
+own nothing"`, `wot_svarog/py_wrappers/py_systems.cpp(46)`. The termination dump
+retains that native assertion banner, but no live Python traceback. The former
+hide/reveal code retained and re-added a removed native wrapper, which violates
+the one-time ownership transfer implicated by that assertion. The earlier
+SimpleNamespace test did not model this guard and incorrectly accepted reuse.
+
+Reveal now calls the installed client's `model_assembler.assembleVehicleAudition`
+to build a fresh NPC sound owner, restores the water-sensor links, weapon energy
+and model attachment, then subscribes fresh detailed-engine callbacks. This
+follows the stock assembly/start sequence reviewed in the 9.22 reference;
+the exact #1513 executable and scripts archive were unavailable for a new
+bytecode audit in this environment. The still-live detailed engine state keeps
+its LAN motion links while muted. Death, world exit and a changed appearance
+generation cannot restore a removed owner. A partial Python-side binding
+failure retires the partial sound component and allows a later reveal to retry.
+Guarded tests cover repeated ownership transfer, callback retirement, model
+replacement, startVisual deferral and assembly reentry. Native audible
+silence/restart and crash-free repeated spotting still require Windows #1513
+acceptance of the corrected build.
+
+The crash-text scanner now retains real assertion banners containing a
+BuildAgent source path. That path incorrectly classified this report's
+assertion as a static template, leaving its useful message only inside the
+dump. Unexpanded printf templates remain excluded, and the repaired scanner
+extracts this report's complete assertion from the original dump.
+
+The owner confirmed that the published build already releases an SPG's lock
+when its target becomes unspotted. Its auto-aim behavior is unchanged in this
+follow-up. A third-party plugin conflict remains a hypothesis for the group's
+report; no particular plugin or failing session has been identified.
+
+HE direct impact presentation selects `armorHit` when HP damage is positive
+and `armorResisted` otherwise; the original physical penetration result stays
+in the damage/statistics ledger. AP and HE near-miss presentation retain their
+existing groups. Ordinary paid equipment demounting now publishes and charges
+10 gold in both economy modes; the descriptor still determines freely
+removable equipment, and improved equipment retains its 200-bond cost.
+
+Native shell `Stun` fields now survive descriptor donation, effective-parameter
+validation and frozen projectile transport. The mandatory worker attaches
+duration and stat multipliers to established direct/visible blast contacts,
+including zero-HP blast contacts. It reads the installed `items.stun.g_cfg`
+and target resistance rather than class names or modern balance constants.
+The existing server stun state, expiry, assistance and medical-kit flow carries
+those multipliers to human movement/aim/reload/vision and Bot combat state.
+An already elapsed stun does not discard an otherwise valid delayed damage
+batch; a shorter follow-up does not truncate an existing stun. This restores
+the previously missing generation/penalty path, not the unavailable retail
+cell implementation: exact overlap-strength/assistance sharing, partial-cover
+stun weighting and native visual/audio acceptance remain boundaries.
+
+Destructible controllers now spawn at the centre of the chunk encoded by the
+admitted native identity, using the stock 100-metre/127-offset mapping. A
+straddling object's impact/bounds position must not put its controller in a
+neighbouring chunk and trigger replacement on subsequent contacts. Name
+alignment retains each successful category proof before a later per-slot
+catalog/matrix failure, so rebuilding an evicted compact-name mapping does
+not quarantine the entire chunk. Unknown isolated slots remain solid and
+unqueried. Regression tests prove the lifecycle/rebuild cases; no measured FPS
+gain or identification of every reported scenery object is claimed.
+
+The follow-up also applies the save earnings multiplier to bonds at the
+existing atomic garage settlement. It does not apply premium coefficients or
+scale directive service charges. Result packing and lifetime counters now
+respect the durable award; scaled medal rows apportion integer rounding
+without changing the server's historical medal schedule. A retried receipt
+keeps its original settled multiplier, even after editing the save setting.
+
+Successful damage to a still-destroyed device resets its repair progress to
+zero. Failed module rolls and hull-only hits do not restart repair. Bot
+projectile damage now rebases its successful device/crew operations over the
+canonical state, as human-target damage already does, instead of dropping
+module damage when a repair publication overtakes the shot. A fresh damage
+lineage is opened even for a zero-to-zero hit on a repairing device, preventing
+an older repair checkpoint from undoing the hit. The native countdown is
+repopulated from the new progress. Per-device retail repair rates remain the
+previously documented reconstruction; this does not claim exact retail timing.
+
+Vent Purge's reported purchase failure was not reproduced by the owner.
+All fifteen directive prices, depot purchases, fourth-slot layout fills and
+automatic resupply paths have regression coverage, including a 12-bond Vent
+Purge purchase refused at an 11-bond balance with no inventory mutation.
+No general purchase defect was established, so the buying policy is unchanged.
+
+The owner's September 15 report `c293714d6eed` records one HE projectile,
+`3:p:1:3`, charging the same allied Bot 334 HP three times (1002 total) after
+a `projectile_resolve` ValueError. The archive contains neither that exception's
+stack nor the complete proposal/pose evidence: it establishes the duplicate
+settlement, but not the original exception cause or whether the initial close
+contact was physically correct. Admission formerly retired a projectile only
+after applying all victims, allowing a later exception to replay earlier HP
+and statistics. A fully admitted terminal now retires before any victim
+mutation; failures remain local to one victim. An unverifiable critical profile
+discards module/ammo-rack augmentation while retaining the independently
+established hull damage. Tests reproduce a failing self-splash after a direct
+ally hit, unexpected post-hit failure, duplicates and zero-damage contacts.
+Native result `teamHitsDamage` pairs `tkills` with `tdamageDealt`; its zero
+count is allied kills, not the number of allies damaged.
+
+Eligible friendly HP loss now has a per-victim ledger shared by public XP,
+private receipts and client settlement. Self damage and already-blue victims
+are excluded from economic penalties. The published
+[official guide](https://wotgame.cn/zh-cn/content/guide/general/teamkill/)
+specifies repair compensation, an additional 10% credit fine, payment before
+maintenance, victim compensation independent of offender funds, and XP
+penalties. That retained guide is not an archived 0.9.22 server formula. Native
+victim `VehicleDescr.type.repairCost` prices hull damage just as the existing
+garage repair bill does; module/stun-only costs and unpublished XP coefficients
+are unavailable. XP therefore reverses this product's existing offline
+damage/kill valuation, capped at the battle's gross XP; free XP derives from
+the remainder. No new coefficient is presented as retail. Credits use the
+offline wallet's available funds without creating debt; a victim is still
+compensated in full. No new automatic ban or team-killer rating is invented.
+
+Gross credit awards, actual compensation/fines and the signed net credit delta
+share the garage receipt's atomic write. Failure/retry and restart cannot
+multiply either payments or deductions. Penalties and compensation are not
+save-multiplied; XP is penalized before account bonuses. The native result
+breakdown uses `originalXPPenalty`, `originalCreditsPenalty` and
+`originalCreditsContributionIn/Out` through subtraction/addition replay steps.
+Its net values and garage balances reconcile even when old garage credits pay
+the charge. The public 9.22 result consumer is orientation for these fields;
+the exact Windows #1513 breakdown and the report's original close-range
+collision remain gameplay acceptance items. This change does not rewrite
+historical receipts or balances absent from the submitted archive.
+Real UI/plugin-specific failures still require that affected session's evidence.
+
 Tactical authoring contains route sketches, not a duplicate set of base
 coordinates. The navigation baker applies the reviewed route overlay once to
 the original sketches, using #1513 arena-decoded team starts for orientation
@@ -2341,9 +2472,10 @@ components and critical state. That calculation cannot change the live target
 or invoke native kill
 and damage-panel callbacks. The proposal carries the target's exact base/ack
 token and its pre-critical hull damage separately. If the target was repaired,
-extinguished or otherwise revised before the report arrives, the server keeps
-the ordinary hull damage and shot feedback but rejects the stale module state
-and any obsolete ammo-rack damage amplification explicitly. A monotonic server
+extinguished or otherwise revised before the report arrives, the server applies
+the successful module/crew damage operations over the latest canonical state
+for both players and Bots. It retains unrelated progress and recomputes lethal
+module consequences instead of installing a stale full state. A monotonic server
 event is delivered before the snapshot containing its new HP/critical state;
 the client presents stock shot results and battle events, then installs the
 accepted revision exactly once.
@@ -3151,7 +3283,9 @@ The source audit deliberately keeps the following differences visible:
 - the server publishes terminal winner/reason/base team plus live frags and the
   human team-killer flag, but not the retired predecessor's complete
   `personal`/`players`/`vehicles` battle-result record;
-- the complete stun penalty/medical-kit loop remains open. Bot movement and
+- the post-0.8.3 follow-up wires stun generation, penalties and the existing
+  medical-kit loop, subject to the retail-parity boundaries documented above.
+  Bot movement and
   both Bot and human projectile trajectories run in the mandatory hidden
   native worker, while the LAN server admits their ordered results and shared
   ledgers. Each human client still originates its own input, pose and gun-state

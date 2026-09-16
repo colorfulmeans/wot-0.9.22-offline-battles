@@ -523,6 +523,60 @@ class CompiledSpace0922Test(unittest.TestCase):
                 self.assertNotIn(
                     'fallback', data['spawn_formation_source'].lower())
 
+    def test_murovanka_spawn_formation_clears_every_soft_destructible_obb(self):
+        graph = json.loads(
+            (ROOT / 'navgraphs' / '11_murovanka.json').read_text())
+        catalog = json.loads(
+            (ROOT / 'destructibles' / '11_murovanka.json').read_text())
+        quantization = float(catalog['locator_quantization'])
+        records = []
+        for instance in catalog['instances']:
+            resource = catalog['resources'][instance[12]]
+            if resource['kind'] not in ('falling', 'fragile'):
+                continue
+            values = [float(value) / quantization
+                      for value in instance[:12]]
+            transform = (
+                values[3], values[4], values[5], 0.0,
+                values[6], values[7], values[8], 0.0,
+                values[9], values[10], values[11], 0.0,
+                values[0], values[1], values[2], 1.0,
+            )
+            bounds = resource['boxes'][instance[13]][:6]
+            records.append(baker._soft_destructible_spawn_obb(
+                transform, bounds))
+        legacy = types.SimpleNamespace(
+            VEHICLE_GROUND_CLEARANCE=0.65,
+            VEHICLE_CLEARANCE_HEIGHT=2.4)
+        obstacles = types.SimpleNamespace(
+            raster_size=1.0, cells={}, soft_spawn_obbs=records)
+        validation = graph['validation']
+        half_width = validation['spawn_vehicle_half_width_metres']
+        half_length = validation['spawn_vehicle_half_length_metres']
+
+        # The captured M41 90 birth pose is inside wire (32386, 24).
+        self.assertTrue(baker.spawn_soft_destructible_obb_blocked(
+            obstacles, -26.0, 386.0, 3.829, math.pi,
+            half_width, half_length, legacy))
+        failures = []
+        for team in ('1', '2'):
+            for slot, pose in enumerate(graph['spawn_formations'][team]):
+                if baker.spawn_soft_destructible_obb_blocked(
+                        obstacles, pose[0], pose[2], pose[1], pose[3],
+                        half_width, half_length, legacy):
+                    failures.append((team, slot))
+
+        self.assertEqual([], failures)
+        self.assertEqual(30, sum(
+            len(formation)
+            for formation in graph['spawn_formations'].values()))
+        self.assertIs(
+            True,
+            validation['spawn_soft_destructible_obb_clearance'])
+        self.assertEqual(
+            baker.SPAWN_SOFT_DESTRUCTIBLE_CLEARANCE,
+            validation['spawn_soft_destructible_clearance_metres'])
+
     def test_shipped_manifest_hashes_the_complete_rebaked_batch(self):
         graph_root = ROOT / 'navgraphs'
         manifest = json.loads((graph_root / 'manifest.json').read_text())
@@ -704,6 +758,100 @@ class CompiledSpace0922Test(unittest.TestCase):
             'structures_preserved': 1,
             'primitive_transform_keys': 2,
         }, counts)
+
+    def test_soft_destructible_collision_boxes_are_kept_for_spawn_only(self):
+        identity = (1.0, 0.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0,
+                    0.0, 0.0, 0.0, 1.0)
+        translated = identity[:12] + (12.0, 1.0, -4.0, 1.0)
+        transforms = [identity, translated, identity, identity]
+
+        class ModelInstances(object):
+            _data = {'transforms': transforms}
+
+            @staticmethod
+            def model_ids():
+                return iter((0, 1, 2, 3))
+
+        model_data = {
+            'model_info_items': [
+                {'type': 0}, {'type': 1}, {'type': 2}, {'type': 3}],
+            'models_colliders': [
+                {'collision_bounds_min': (-1.0, 0.0, -1.0),
+                 'collision_bounds_max': (1.0, 2.0, 1.0)},
+                {'collision_bounds_min': (-2.0, 0.0, -0.5),
+                 'collision_bounds_max': (2.0, 3.0, 0.5)},
+                {'collision_bounds_min': (-0.5, 0.0, -3.0),
+                 'collision_bounds_max': (0.5, 1.5, 3.0)},
+                {'collision_bounds_min': (-4.0, 0.0, -4.0),
+                 'collision_bounds_max': (4.0, 8.0, 4.0)},
+            ],
+        }
+        compiled = types.SimpleNamespace(sections={
+            'BSMI': ModelInstances(),
+            'BSMO': types.SimpleNamespace(_data=model_data),
+        })
+
+        records = baker.compiled_soft_destructible_spawn_obbs(compiled)
+
+        self.assertEqual(2, len(records))
+        self.assertEqual((10.0, 14.0),
+                         (records[0]['minimum_x'],
+                          records[0]['maximum_x']))
+        self.assertEqual((-4.5, -3.5),
+                         (records[0]['minimum_z'],
+                          records[0]['maximum_z']))
+        self.assertEqual((1.0, 4.0),
+                         (records[0]['minimum_y'],
+                          records[0]['maximum_y']))
+        self.assertEqual((-0.5, 0.5),
+                         (records[1]['minimum_x'],
+                          records[1]['maximum_x']))
+        self.assertEqual((-3.0, 3.0),
+                         (records[1]['minimum_z'],
+                          records[1]['maximum_z']))
+
+        legacy = types.SimpleNamespace(
+            VEHICLE_GROUND_CLEARANCE=0.65,
+            VEHICLE_CLEARANCE_HEIGHT=2.4)
+        obstacles = types.SimpleNamespace(
+            raster_size=1.0, cells={}, soft_spawn_obbs=records)
+        # Soft bodies remain absent from the ordinary route raster.
+        self.assertFalse(baker.spawn_obstacle_obb_blocked(
+            obstacles, 12.0, -4.0, 0.5, 0.0, 1.0, 2.0, legacy))
+        # The same body is authoritative for the one-time spawn audit.
+        self.assertTrue(baker.spawn_soft_destructible_obb_blocked(
+            obstacles, 12.0, -4.0, 0.5, 0.0, 1.0, 2.0, legacy))
+        self.assertFalse(baker.spawn_soft_destructible_obb_blocked(
+            obstacles, 20.0, -4.0, 0.5, 0.0, 1.0, 2.0, legacy))
+
+    def test_soft_spawn_clearance_honours_rotated_half_metre_boundary(self):
+        identity = (1.0, 0.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0, 0.0,
+                    0.0, 0.0, 1.0, 0.0,
+                    0.0, 0.0, 0.0, 1.0)
+        touching = baker._soft_destructible_spawn_obb(
+            identity, (2.5, 0.7, -0.25, 3.5, 2.0, 0.25))
+        inside_clearance = baker._soft_destructible_spawn_obb(
+            identity, (2.49, 0.7, -0.25, 3.5, 2.0, 0.25))
+        legacy = types.SimpleNamespace(
+            VEHICLE_GROUND_CLEARANCE=0.65,
+            VEHICLE_CLEARANCE_HEIGHT=2.4)
+
+        # At 90 degrees the 2 m half-length lies on X.  Its clearance shell
+        # ends at x=2.5, where exact contact is allowed but 1 cm inside is not.
+        self.assertFalse(baker.spawn_soft_destructible_obb_blocked(
+            types.SimpleNamespace(soft_spawn_obbs=(touching,)),
+            0.0, 0.0, 0.0, math.pi / 2.0, 1.0, 2.0, legacy))
+        self.assertTrue(baker.spawn_soft_destructible_obb_blocked(
+            types.SimpleNamespace(soft_spawn_obbs=(inside_clearance,)),
+            0.0, 0.0, 0.0, math.pi / 2.0, 1.0, 2.0, legacy))
+        # Without the rotation the 1 m half-width lies on X, so the same body
+        # remains a full metre outside the expanded chassis footprint.
+        self.assertFalse(baker.spawn_soft_destructible_obb_blocked(
+            types.SimpleNamespace(soft_spawn_obbs=(inside_clearance,)),
+            0.0, 0.0, 0.0, 0.0, 1.0, 2.0, legacy))
 
     def test_compiled_local_collision_bounds_preserve_low_obstacle_rule(self):
         transforms = [tuple([float(index)] + [0.0] * 15)

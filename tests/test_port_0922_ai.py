@@ -1278,6 +1278,99 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(
             'blocked', no_local.bot_states[13]['navigation_status'])
 
+    def test_hard_contact_wag_accumulates_on_the_navigation_first_edge(self):
+        """Changing realised yaw cannot restart one static-blocker verdict."""
+        current = (10.0, 0.0, 20.0)
+        goal = (26.0, 0.0, 20.0)
+        navigator = TerrainNavigator(
+            lambda *unused: None, baked_graph=self._baked_graph(5, 3))
+        navigator.next_target(
+            11, current, goal, ('route', 1, 'hard-wag'), 0.9)
+
+        verdicts = [navigator.report_hard_contact(
+            11, current, goal, yaw, now)
+            for yaw, now in zip(
+                (1.0, 1.3, 1.8, 1.4),
+                (1.0, 1.34, 1.68, 2.02))]
+
+        self.assertEqual([False, False, False, True], verdicts)
+        self.assertEqual(
+            1, navigator.bot_states[11]['blocked_step_replans'])
+        expected = navigator.grid._edge_cells_for_segment(current, goal)
+        self.assertIn(expected, navigator.bot_failed_edges[11])
+
+    def test_reverse_hard_contact_pins_a_separate_realised_edge(self):
+        """A rear recovery collision cannot veto the clear forward route."""
+        current = (10.0, 0.0, 20.0)
+        goal = (26.0, 0.0, 20.0)
+        navigator = TerrainNavigator(
+            lambda *unused: None, baked_graph=self._baked_graph(5, 3))
+        navigator.next_target(
+            11, current, goal, ('route', 1, 'reverse-hard'), 0.9)
+
+        verdicts = [navigator.report_hard_contact(
+            11, current, goal, yaw, now)
+            for yaw, now in zip(
+                (-math.pi * 0.5, -1.2, -1.9, -1.4),
+                (1.0, 1.34, 1.68, 2.02))]
+
+        self.assertEqual([False, False, False, True], verdicts)
+        state = navigator.bot_states[11]
+        self.assertFalse(
+            state['hard_contact_episode']['uses_navigation_target'])
+        rear_target = state['hard_contact_episode']['report_target']
+        rear_edge = navigator.grid._edge_cells_for_segment(
+            current, rear_target)
+        forward_edge = navigator.grid._edge_cells_for_segment(current, goal)
+        self.assertIn(rear_edge, navigator.bot_failed_edges[11])
+        self.assertNotIn(forward_edge, navigator.bot_failed_edges[11])
+
+    def test_same_cell_hard_contact_episode_pins_then_resets_cleanly(self):
+        current = (10.0, 0.0, 20.0)
+        close_target = (11.0, 0.0, 20.0)
+        navigator = TerrainNavigator(
+            lambda *unused: None, baked_graph=self._baked_graph(5, 3))
+        navigator.next_target(
+            11, current, (26.0, 0.0, 20.0),
+            ('route', 1, 'same-cell-hard'), 0.9)
+
+        self.assertFalse(navigator.report_hard_contact(
+            11, current, close_target, 0.0, 1.0))
+        episode_target = navigator.bot_states[11][
+            'hard_contact_episode']['report_target']
+        self.assertFalse(navigator.report_hard_contact(
+            11, current, close_target, 1.4, 1.34))
+        state = navigator.bot_states[11]
+        self.assertEqual(
+            episode_target, state['hard_contact_episode']['report_target'])
+        self.assertEqual(2, state['blocked_step_tracker']['count'])
+
+        # A different semantic target, even inside the same coarse cell,
+        # starts fresh instead of inheriting an unrelated collision.
+        changed_target = (11.2, 0.0, 20.0)
+        self.assertFalse(navigator.report_hard_contact(
+            11, current, changed_target, -1.4, 1.68))
+        self.assertEqual(1, state['blocked_step_tracker']['count'])
+
+        navigator.clear_blocked_contact(11)
+        self.assertIsNone(state['blocked_step_tracker'])
+        self.assertNotIn('hard_contact_episode', state)
+        far_target = (26.0, 0.0, 20.0)
+        self.assertFalse(navigator.report_hard_contact(
+            11, current, far_target, math.pi * 0.5, 2.02))
+        self.assertEqual(1, state['blocked_step_tracker']['count'])
+
+        # Crossing a grid cell alone is a distinct physical episode: keep the
+        # exact same target and travel classification so origin_cell is the only
+        # changed identity component.
+        moved = (14.0, 0.0, 20.0)
+        self.assertFalse(navigator.report_hard_contact(
+            11, moved, far_target, math.pi * 0.5, 2.36))
+        self.assertEqual(
+            navigator.grid.cell_for(moved),
+            state['hard_contact_episode']['origin_cell'])
+        self.assertEqual(1, state['blocked_step_tracker']['count'])
+
     def test_blocked_step_replan_detours_then_expires_per_bot(self):
         """A real replan avoids its reported edge without changing a peer."""
         current = (10.0, 0.0, 24.0)
@@ -2602,8 +2695,12 @@ class BotAiPortTests(unittest.TestCase):
 
     def test_wedged_hull_holds_when_neither_pivot_fits(self):
         driver = LocalDriver()
+        # Both translations must be occupied: a rear contact by itself still
+        # permits driving straight forward when an in-place pivot cannot fit.
         behind = ({'id': 12, 'position': (0.0, 0.0, -7.0), 'yaw': 0.0,
-                   'half_length': 3.5, 'half_width': 1.7},)
+                   'half_length': 3.5, 'half_width': 1.7},
+                  {'id': 13, 'position': (0.0, 0.0, 7.0), 'yaw': 0.0,
+                   'half_length': 3.5, 'half_width': 1.7})
         blocked = []
         for unused in range(150):
             order = driver.drive(

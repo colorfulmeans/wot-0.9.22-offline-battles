@@ -1433,7 +1433,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
                                      tankmen_module=None, rewards=None,
                                      health=None, vehicles_module=None,
                                      shells_fired=None, equipment_used=None,
-                                     auto_settings=None):
+                                     auto_settings=None, friendly_fire_facts=None,
+                                     vehicle_type_name=None):
                 applied.append(snapshot)
                 self.assert_not_used = tankmen_module
                 # The vehicle's own repair/reload/restock switches are settled
@@ -1447,12 +1448,14 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 settled.append(health)
                 spent.append(shells_fired)
                 consumed.append(equipment_used)
+                misconduct.append((friendly_fire_facts, vehicle_type_name))
                 return {'vehicle_id': 1, 'applied': True}
 
         banked = []
         settled = []
         spent = []
         consumed = []
+        misconduct = []
         switches = []
         bootstrap._postbattle_store = types.SimpleNamespace(
             set_progress_applier=lambda callback: bound.append(callback))
@@ -1472,6 +1475,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 'health': 40,
                 'shells_fired': {0: 12},
                 'equipment_used': [11001],
+                'friendly_fire': {'victims': [], 'received_damage': 10, 'xp_penalty': 0},
             })
 
         self.assertEqual([live], applied)
@@ -1481,6 +1485,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual([40], settled)
         self.assertEqual([{0: 12}], spent)
         self.assertEqual([[11001]], consumed)
+        self.assertEqual([({'victims': [], 'received_damage': 10, 'xp_penalty': 0},
+                           'ussr:R11_MS-1')], misconduct)
         self.assertEqual(
             b'top-fitting', live['vehicles'][1]['compDescr'])
 
