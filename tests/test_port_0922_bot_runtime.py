@@ -541,10 +541,10 @@ class ServerBotStateRevisionTests(unittest.TestCase):
             'battle_result': copy.deepcopy(server.battle_result),
         }
 
-    def test_lost_lineage_sections_are_republished_on_a_cadence(self):
-        # Every lineage section is recorded as delivered when it is written to
-        # the socket. Without a periodic republication one frame a replica
-        # could not consume cost it that section for the whole round.
+    def test_manifest_replay_is_isolated_from_other_large_sections(self):
+        # A periodic reliable manifest repairs a replica that could not consume
+        # an earlier lineage frame. Keep that recovery barrier, but never align
+        # its large static table with orders or the destructible ledger.
         from lan_battle_server import (
             BOT_MANIFEST_REFRESH_TICKS, LEAN_SNAPSHOT_MANIFEST_CAPABILITY)
 
@@ -572,7 +572,10 @@ class ServerBotStateRevisionTests(unittest.TestCase):
 
         server.tick += BOT_MANIFEST_REFRESH_TICKS
         server.tick_once(1.0 / 30.0)
-        self.assertIn('bot_manifest', sent_snapshots()[-1])
+        replay = sent_snapshots()[-1]
+        self.assertIn('bot_manifest', replay)
+        self.assertNotIn('bot_orders', replay)
+        self.assertNotIn('destructibles', replay)
 
     def test_revision_survives_player_departure_and_resets(self):
         server, manifest_bot, authority_socket = self._server()

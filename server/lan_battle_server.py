@@ -1775,16 +1775,24 @@ class _EndpointSendMixin:
         return payload
 
     def _mark_message_sent(self, message):
+        try:
+            server_tick = int(message.get("server_tick", -1))
+        except (AttributeError, TypeError, ValueError):
+            server_tick = -1
         if "bot_orders" in message:
             try:
                 self.bot_order_revision_sent = int(
                     message.get("bot_order_revision", -1))
+                if server_tick >= 0:
+                    self.bot_order_tick_sent = server_tick
             except (TypeError, ValueError):
                 pass
         if "destructibles" in message:
             try:
                 self.destructible_revision_sent = int(
                     message.get("destructible_revision", -1))
+                if server_tick >= 0:
+                    self.destructible_tick_sent = server_tick
             except (TypeError, ValueError):
                 pass
 
@@ -4477,8 +4485,11 @@ class BattleState:
                 "bot_orders": list(self.bot_orders["orders"]),
                 "rules": self.rules_state,
                 "battle_result": self.battle_result,
+                # The cumulative ledger is replayed in byte-budgeted snapshot
+                # pages immediately after this late-join barrier.  Embedding
+                # it here could make a long scenery-heavy round impossible to
+                # rejoin with the protocol's fixed one-line frame limit.
                 "destructible_revision": self.destructible_revision,
-                "destructibles": list(self.destructibles.values()),
                 "detached_turrets": self._detached_turret_snapshot(),
             }
             message.update({
@@ -10330,7 +10341,13 @@ class BattleState:
             public_by_player = dict(
                 (row["actor_id"], row) for row in public_results
                 if row["actor_kind"] == "player")
-            result["vehicle_statistics"] = self._vehicle_statistics_payload()
+            # The durable battle receipt below already owns the complete
+            # 30-vehicle result table.  Keeping the same table in the live
+            # battle-result marker made every terminal snapshot repeat tens
+            # of kilobytes of settlement data that neither the visible battle
+            # runtime nor the worker reads; on a full room that could push an
+            # otherwise valid snapshot over the 256 KiB framing limit.  The
+            # live marker is deliberately just the state-transition fact.
             arena_unique_id = (
                 (((self.receipt_arena_prefix + int(self.round_id)) &
                   0xffffffff) << 32) |
@@ -14028,14 +14045,18 @@ class BattleState:
             replica_limited = bool(
                 isinstance(player, Player) and
                 player.player_id != snapshot_bot_authority_id)
-            snapshot_lineage_due = bool(
+            snapshot_lineage_changed = bool(
                 player.bot_manifest_round_id_sent != snapshot_round_id or
                 player.bot_manifest_revision_sent !=
                 snapshot_manifest_revision or
                 player.bot_manifest_authority_epoch_sent !=
-                snapshot_authority_epoch or
+                snapshot_authority_epoch)
+            snapshot_manifest_refresh_due = bool(
                 snapshot_tick - player.bot_manifest_tick_sent >=
                 BOT_MANIFEST_REFRESH_TICKS)
+            snapshot_lineage_due = bool(
+                snapshot_lineage_changed or
+                snapshot_manifest_refresh_due)
             supports_lean_manifest = bool(
                 LEAN_SNAPSHOT_MANIFEST_CAPABILITY in player.capabilities)
             snapshot_due = bool(
@@ -14055,24 +14076,129 @@ class BattleState:
             includes_manifest = bool(
                 needs_manifest or not supports_lean_manifest)
             needs_orders = bool(
-                player.bot_order_revision_sent !=
-                snapshot_order_revision or
-                snapshot_tick - player.bot_order_tick_sent >=
-                BOT_ORDER_REFRESH_TICKS)
+                not needs_manifest and (
+                    player.bot_order_revision_sent !=
+                    snapshot_order_revision or
+                    snapshot_tick - player.bot_order_tick_sent >=
+                    BOT_ORDER_REFRESH_TICKS))
             needs_destructibles = bool(
-                player.destructible_revision_sent !=
-                snapshot_destructible_revision or
-                snapshot_tick - player.destructible_tick_sent >=
-                DESTRUCTIBLE_REFRESH_TICKS)
-            if (not includes_manifest or needs_orders or
-                    needs_destructibles):
-                outgoing = dict(snapshot)
+                not needs_manifest and (
+                    player.destructible_revision_sent !=
+                    snapshot_destructible_revision or
+                    snapshot_tick - player.destructible_tick_sent >=
+                    DESTRUCTIBLE_REFRESH_TICKS))
+            # ``bot_manifest``, ``bot_orders`` and the cumulative
+            # destructible ledger are independently replayable sections.  A
+            # busy 30-vehicle round used to align all three refresh cadences
+            # in one snapshot; Murovanka's newly working scenery was enough
+            # to make that single JSON line exceed MAX_LINE_BYTES and the
+            # transport correctly closed both peers.  Build every endpoint's
+            # snapshot against the real wire budget instead.  Destructibles
+            # advance by their monotonic revision, so a large ledger naturally
+            # continues over later snapshots and a periodic replay remains
+            # idempotent.
+            outgoing = dict(snapshot)
             if not includes_manifest:
                 outgoing.pop("bot_manifest", None)
+            included_orders = False
             if needs_orders:
-                outgoing["bot_orders"] = snapshot_orders
+                candidate = dict(outgoing)
+                candidate["bot_orders"] = snapshot_orders
+                if self._projectile_message_fits(candidate):
+                    outgoing = candidate
+                    included_orders = True
+            included_destructibles = False
             if needs_destructibles:
-                outgoing["destructibles"] = snapshot_destructibles
+                sent_revision = int(player.destructible_revision_sent)
+                after_revision = (
+                    sent_revision
+                    if 0 <= sent_revision < snapshot_destructible_revision
+                    else 0)
+                candidates = [
+                    event for event in snapshot_destructibles
+                    if int(event.get("revision", 0)) > after_revision]
+                candidates.sort(key=lambda event: int(
+                    event.get("revision", 0)))
+
+                def destructible_candidate(base, count):
+                    value = dict(base)
+                    rows = candidates[:count]
+                    value["destructibles"] = rows
+                    value["destructible_revision"] = (
+                        int(rows[-1]["revision"]) if rows else 0)
+                    return value
+
+                if candidates:
+                    low = 0
+                    high = len(candidates)
+                    while low < high:
+                        middle = (low + high + 1) // 2
+                        if self._projectile_message_fits(
+                                destructible_candidate(outgoing, middle)):
+                            low = middle
+                        else:
+                            high = middle - 1
+                    if low:
+                        outgoing = destructible_candidate(outgoing, low)
+                        included_destructibles = True
+                    elif included_orders:
+                        # Orders are refreshed every five seconds and can wait
+                        # one replica frame.  Never let them prevent even one
+                        # destruction revision from making progress.
+                        without_orders = dict(outgoing)
+                        without_orders.pop("bot_orders", None)
+                        low = 0
+                        high = len(candidates)
+                        while low < high:
+                            middle = (low + high + 1) // 2
+                            if self._projectile_message_fits(
+                                    destructible_candidate(
+                                        without_orders, middle)):
+                                low = middle
+                            else:
+                                high = middle - 1
+                        if low:
+                            outgoing = destructible_candidate(
+                                without_orders, low)
+                            included_orders = False
+                            included_destructibles = True
+                else:
+                    candidate = destructible_candidate(outgoing, 0)
+                    if self._projectile_message_fits(candidate):
+                        outgoing = candidate
+                        included_destructibles = True
+            if (needs_orders and not included_orders and
+                    self._projectile_message_fits(dict(
+                        outgoing, bot_orders=snapshot_orders))):
+                outgoing = dict(outgoing, bot_orders=snapshot_orders)
+                included_orders = True
+            deferred_manifest_refresh = False
+            if (not self._projectile_message_fits(outgoing) and
+                    needs_manifest and not snapshot_lineage_changed and
+                    supports_lean_manifest):
+                # A cadence replay is restorative, not a state transition.
+                # If the otherwise valid live state leaves no room for the
+                # static manifest, keep the replica moving and retry the
+                # repair on a later cadence.  A real lineage change may never
+                # take this path: applying it without the new identities
+                # would make the dynamic Bot rows ambiguous.
+                outgoing = dict(outgoing)
+                outgoing.pop("bot_manifest", None)
+                needs_manifest = False
+                deferred_manifest_refresh = True
+            if not self._projectile_message_fits(outgoing):
+                # Never turn a locally constructed oversized snapshot into a
+                # peer disconnect.  No delivery frontier advances, so a later
+                # tick can retry after transient projectiles/contacts retire.
+                endpoint_id = getattr(
+                    player, "player_id", getattr(player, "worker_id", -1))
+                _server_log_limited(
+                    "snapshot-wire-budget:%s" % endpoint_id,
+                    "SNAPSHOT deferred endpoint=%s round=%d tick=%d; "
+                    "mandatory live state exceeds %d bytes" % (
+                        endpoint_id, snapshot_round_id, snapshot_tick,
+                        MAX_LINE_BYTES))
+                continue
             # A manifest-bearing snapshot is a rare lineage barrier and must
             # not be replaced. Steady snapshots occupy one latest-only slot.
             with self.lock:
@@ -14089,10 +14215,8 @@ class BattleState:
                 if offered:
                     player.snapshot_round_id_sent = snapshot_round_id
                     player.snapshot_tick_sent = snapshot_tick
-                    if needs_orders:
-                        player.bot_order_tick_sent = snapshot_tick
-                    if needs_destructibles:
-                        player.destructible_tick_sent = snapshot_tick
+                    if deferred_manifest_refresh:
+                        player.bot_manifest_tick_sent = snapshot_tick
                     if needs_manifest:
                         player.bot_manifest_tick_sent = snapshot_tick
                         player.bot_manifest_round_id_sent = (
