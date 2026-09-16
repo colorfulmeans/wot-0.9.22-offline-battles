@@ -6,7 +6,6 @@ on:
     branches:
       - fix/0922-cliff-gravity-hull-damage
       - fix/0922-battle-followup-20260914
-      - fix/0922-test-followup-20260916
       - fix/0922-bonds-crew-grand-battles
 
 permissions:
