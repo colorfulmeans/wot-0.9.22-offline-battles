@@ -12357,6 +12357,32 @@ class BotRuntime(object):
                     contact_yaw = travel_yaw
                     if realised_contact_yaw is not None:
                         contact_yaw = realised_contact_yaw
+                    if (realised_contact_yaw is None and
+                            contact_target is not None and
+                            navigation_grid is not None):
+                        # A generic direction probe looks well beyond the
+                        # distance this physics slice can realise.  Its
+                        # collision can therefore be several cells ahead and
+                        # must not veto the navigation target's first edge as
+                        # though the hull had touched it.  Preserve the old
+                        # local-edge verdict for forward forecasts.  Reverse
+                        # forecasts still enter ``report_hard_contact`` with
+                        # the semantic target so that method can pin their
+                        # separate realised rear edge for the episode.
+                        dx = float(contact_target[0]) - float(position[0])
+                        dz = float(contact_target[2]) - float(position[2])
+                        if (math.sin(contact_yaw) * dx +
+                                math.cos(contact_yaw) * dz > 0.0):
+                            edge_length = _number(
+                                getattr(navigation_grid, 'cell_size', 0.0),
+                                0.0)
+                            if edge_length > 0.0:
+                                contact_target = (
+                                    position[0] + math.sin(contact_yaw) *
+                                    edge_length,
+                                    position[1],
+                                    position[2] + math.cos(contact_yaw) *
+                                    edge_length)
                     if (callable(report_hard_contact) and
                             contact_target is not None and
                             command.get('movement_intent', True)):

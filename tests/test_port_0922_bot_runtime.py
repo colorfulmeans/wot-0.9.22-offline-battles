@@ -4149,6 +4149,46 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertFalse(runtime.navigator.bot_states[11][
             'hard_contact_episode']['uses_navigation_target'])
 
+    def test_unresolved_forward_forecast_reports_only_local_edge(self):
+        yaw = 0.25
+        aim = (math.sin(yaw) * 200.0, 0.0,
+               math.cos(yaw) * 200.0)
+        command = {
+            'target_yaw': yaw, 'throttle': 1.0, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': False, 'target_id': None,
+            'fire_range': 0.0, 'combat_mode': 'route',
+            'aim_position': aim, 'face_position': aim,
+            'move_position': aim, 'recovery_mode': 'drive',
+            'movement_intent': True,
+        }
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+            direction_probe=lambda *unused: {
+                'clear': False, 'collision': True, 'water': False,
+                'slope': 0.0},
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        reports = []
+        runtime.navigator.report_blocked_step = (
+            lambda *args: reports.append(args))
+        runtime.navigator.bot_states[11] = {}
+        state = runtime.states[11]
+        state.update(x=0.0, y=0.0, z=0.0, yaw=yaw, speed=6.0,
+                     grounded_once=True)
+
+        runtime.update(.04, 1.0)
+
+        edge_length = runtime.navigator.grid.cell_size
+        expected = (math.sin(yaw) * edge_length, 0.0,
+                    math.cos(yaw) * edge_length)
+        self.assertEqual(expected, reports[0][2])
+        self.assertNotEqual(aim, reports[0][2])
+        self.assertEqual(expected, runtime.navigator.bot_states[11][
+            'hard_contact_episode']['report_target'])
+
     def test_nonhard_realised_contacts_keep_cached_command_and_probe(self):
         command = {
             'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
