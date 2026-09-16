@@ -9750,6 +9750,15 @@ class BotRuntime(object):
                            -math.atan2(
                                (aim_position[1] + 1.0) - origin[1],
                                max(0.5, horizontal)))
+            # Inside roughly one hull width, centimetre-scale target-pose
+            # corrections can flip the bearing across the muzzle and make the
+            # turret/barrel hunt left-right every control refresh.  Preserve
+            # the current world bearing until the target again has a stable
+            # geometric direction; firing remains governed by the normal lane
+            # and alignment checks below.
+            if horizontal < 1.5:
+                desired_yaw = state.get(
+                    'aim_yaw', state.get('yaw', desired_yaw))
         self._update_hydraulic_suspension(
             state, descriptor, desired_yaw, world_pitch, step,
             self._turret_motion_probe)
