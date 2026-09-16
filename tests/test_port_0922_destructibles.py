@@ -8835,6 +8835,148 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         event_sink.assert_called_once()
         self.assertEqual(73, event_sink.call_args[0][0]['mat_kind'])
 
+    def test_vehicle_body_bbox_mounts_hull_and_keeps_raw_hull_contract(self):
+        raw_hull = (
+            (-1.08788, -0.392689, -2.86745),
+            (1.08921, 0.637632, 2.71439), None)
+        descriptor = _Strict1513Component(
+            hull=_Strict1513Component(
+                hitTester=types.SimpleNamespace(bbox=raw_hull)),
+            chassis=_Strict1513Component(
+                hitTester=types.SimpleNamespace(bbox=(
+                    (-1.382557988, 0.002, -2.789793),
+                    (1.382557988, 1.175, 2.789793), None)),
+                hullPosition=_Vector(0.0, 0.882831, 0.0)))
+
+        self.assertIs(raw_hull,
+                      destructibles_sensor._vehicle_hull_bbox(descriptor))
+        body = destructibles_sensor._vehicle_body_bbox(descriptor)
+
+        expected = ((-1.382557988, 0.002, -2.86745),
+                    (1.382557988, 1.520463, 2.789793), None)
+        for actual_point, expected_point in zip(body[:2], expected[:2]):
+            for actual, wanted in zip(actual_point, expected_point):
+                self.assertAlmostEqual(wanted, actual, places=6)
+        self.assertIsNone(body[2])
+
+    def test_dday_vshed_live_upper_module_blocks_mounted_wz132_body(self):
+        catalog = json.loads((
+            ROOT / 'destructibles' / '101_dday.json').read_text())
+        row = next(
+            value for value in catalog['instances']
+            if value[14:16] == [32896, 55])
+        filename = row[12]
+        self.assertTrue(filename.endswith('bld_101_05_VShed02.model'))
+        record = catalog['resources'][filename]
+        self.assertEqual(
+            [73, 74, 75], [box[6] for box in record['boxes']])
+        math_module = types.ModuleType('Math')
+        math_module.Vector3 = _Vector
+        boxes = destructibles_sensor._world_catalog_boxes(
+            record, _CatalogSignatureMatrix(row[:12]), _Vector(),
+            math_module)
+        instance = {
+            'filename': filename,
+            'descriptor_filename': filename,
+            'kind': 'structure',
+            'boxes': boxes,
+            'item_scale': row[16],
+        }
+        raw_hull = (
+            (-1.08788, -0.392689, -2.86745),
+            (1.08921, 0.637632, 2.71439), None)
+        descriptor = _Strict1513Component(
+            physics={'weight': 24312.0},
+            hull=_Strict1513Component(
+                hitTester=types.SimpleNamespace(bbox=raw_hull)),
+            chassis=_Strict1513Component(
+                hitTester=types.SimpleNamespace(bbox=(
+                    (-1.382557988, 0.002, -2.789793),
+                    (1.382557988, 1.175, 2.789793), None)),
+                hullPosition=_Vector(0.0, 0.882831, 0.0)))
+        # First hard-contact pose from the attached 22:22 D-Day report.
+        position = _Vector(126.4777527, 76.0503082, 146.2113342)
+        yaw = 0.12306468
+        speed = 13.3189335
+        dt = 0.0109863
+        reach = destructibles_sensor._motion_travel_reach(speed, dt)
+        raw_sweep = destructibles_sensor._vehicle_swept_box(
+            position, yaw, speed, raw_hull, reach)
+        body_bbox = destructibles_sensor._vehicle_body_bbox(descriptor)
+        body_sweep = destructibles_sensor._vehicle_swept_box(
+            position, yaw, speed, body_bbox, reach)
+        raw_materials = set(
+            box[2] for box in boxes
+            if destructibles_sensor._boxes_intersect(raw_sweep, box))
+        body_materials = set(
+            box[2] for box in boxes
+            if destructibles_sensor._boxes_intersect(body_sweep, box))
+
+        self.assertNotIn(73, raw_materials)
+        self.assertIn(73, body_materials)
+        body_top = position.y + body_bbox[1][1]
+        above_body = (
+            (position.x, body_top + 0.11, position.z),
+            ((0.1, 0.0, 0.0), (0.0, 0.1, 0.0),
+             (0.0, 0.0, 0.1)), None)
+        self.assertFalse(destructibles_sensor._boxes_intersect(
+            body_sweep, above_body))
+
+        destructibles_sensor.xrange = range
+        destructibles_sensor.set_catalog(catalog)
+        destructibles_sensor.g_offh_destr_instances = {
+            (32896, 55): instance}
+        destructibles_sensor.g_offh_destr_contact_bins = {}
+        destructibles_sensor._index_catalog_instance_1513(
+            destructibles_sensor.g_offh_destr_contact_bins,
+            (32896, 55), instance)
+        area = types.ModuleType('AreaDestructibles')
+        area.DESTR_TYPE_TREE = 1
+        area.DESTR_TYPE_FALLING_ATOM = 2
+        area.DESTR_TYPE_FRAGILE = 3
+        area.DESTR_TYPE_STRUCTURE = 4
+        area.g_cache = types.SimpleNamespace(
+            unitVehicleMass=10000.0,
+            getDescByFilename=lambda value: ({
+                'type': 4,
+                'modules': {
+                    73: {'health': 100000},
+                    74: {'health': 100000},
+                    75: {'health': 100000},
+                },
+            } if value == filename else None))
+        cache = types.ModuleType('DestructiblesCache')
+        cache.scaledDestructibleHealth = lambda scale, health: scale * health
+        authority = types.SimpleNamespace(
+            is_destroyed=lambda unused_chunk, unused_item, material:
+                material in (74, 75),
+            destroy_module=mock.Mock(side_effect=AssertionError(
+                'the live upper module is not crushable')))
+
+        with mock.patch.dict(sys.modules, {
+                'AreaDestructibles': area,
+                'DestructiblesCache': cache,
+                'Math': math_module}), \
+                mock.patch.object(
+                    destructibles_sensor, '_get_destr_authority',
+                    return_value=authority), \
+                mock.patch.object(
+                    destructibles_sensor,
+                    '_stream_baked_motion_instances_1513', return_value=()):
+            detail = destructibles_sensor._catalog_motion_proposal(
+                1, position, yaw, speed, descriptor, 10.0,
+                dt=dt, kinetic_speed=speed)
+
+        self.assertEqual('hard', detail['status'])
+        self.assertEqual('structure', detail['kinds'])
+        self.assertNotIn((32896, 55, 73), detail['token'] or ())
+        self.assertLessEqual(
+            set(detail['token'] or ()),
+            {(32896, 55, 74), (32896, 55, 75)})
+        self.assertFalse(detail['accepted_now'])
+        self.assertFalse(detail['requires_commit'])
+        authority.destroy_module.assert_not_called()
+
     def test_karelia_player_proposal_streams_exact_multi_module_structure(self):
         catalog_path = ROOT / 'destructibles' / '01_karelia.json'
         catalog = json.loads(catalog_path.read_text())

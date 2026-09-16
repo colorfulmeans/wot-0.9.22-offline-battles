@@ -7683,6 +7683,8 @@ class BattleRuntime(object):
         profile = self._spotting_profile(descriptor, local=True)
         loadout = self._local_loadout(descriptor)
         snapshot = self._garage_loadout_snapshot()
+        native_factors = self._local_factors(descriptor)
+        native_factor_values = native_factors or {}
         effective_skills = (
             {} if self._local_effective_params is None else
             self._local_effective_params['skills'])
@@ -7692,13 +7694,25 @@ class BattleRuntime(object):
         moving_add, moving_mult = profile['invisibility_moving']
         still_add, still_mult = profile['invisibility_still']
         shot_factor = self._shot_invisibility_factor(descriptor)
-        physics = vehicle_physics.derive_params(
-            descriptor, self._local_factors(descriptor))
+        physics = vehicle_physics.derive_params(descriptor, native_factors)
         gun_factors = _field(_field(descriptor, 'gun', {}),
                              'shotDispersionFactors', {}) or {}
         chassis_factors = _field(_field(descriptor, 'chassis', {}),
                                  'shotDispersionFactors', (0.0, 0.0)) or (
                                      0.0, 0.0)
+        snapshot_crew_increase = 0.0
+        for equipment in snapshot['equipments']:
+            increase = _field(equipment, 'crewLevelIncrease', None)
+            if increase is None:
+                increase = _field(
+                    _field(equipment, 'descriptor', {}),
+                    'crewLevelIncrease', 0.0)
+            snapshot_crew_increase += _number(increase)
+        misc = _field(descriptor, 'miscAttrs', {}) or {}
+        device_rammer_factor = loadout_law._misc_factor(
+            misc, 'gunReloadTimeFactor',
+            (loadout_law.RAMMER_RELOAD_FACTOR
+             if native_factors is None and loadout['has_rammer'] else 1.0))
         sys.stdout.write(
             '[Offline LAN 0.9.22] PARAMS source=%s view=%.1f '
             'view_still=%.1f binoc=%.3f binoc_delay=%.1fs '
@@ -7751,6 +7765,23 @@ class BattleRuntime(object):
                 int(effective_skills.get('intuition_chances', 0)),
                 self._has_deadeye, self._has_sixth_sense,
                 self._has_expert))
+        sys.stdout.write(
+            '[Offline LAN 0.9.22] PARAMS reload_chain '
+            'base_reload=%.3fs device_rammer_factor=%.6f '
+            'native_crew_level_increase=%.2f '
+            'snapshot_crew_level_increase=%.2f '
+            'native_gun_reload_factor=%.6f '
+            'final_reload_factor=%.6f final_reload=%.3fs\n' % (
+                _number(_field(_field(descriptor, 'gun', {}),
+                               'reloadTime', 0.0)),
+                device_rammer_factor,
+                _number(_field(
+                    native_factor_values, 'crewLevelIncrease', 0.0)),
+                snapshot_crew_increase,
+                _number(_field(
+                    native_factor_values, 'gun/reloadTime', 1.0), 1.0),
+                _number(loadout.get('reload_factor'), 1.0),
+                _number(state.reload)))
         return True
 
     def _log_local_ammo(self, state):
@@ -18291,7 +18322,10 @@ class BattleRuntime(object):
         if self._destructibles is None:
             return clear
         bbox_reader = getattr(
-            self._destructibles, '_vehicle_hull_bbox', None)
+            self._destructibles, '_vehicle_body_bbox', None)
+        if not callable(bbox_reader):
+            bbox_reader = getattr(
+                self._destructibles, '_vehicle_hull_bbox', None)
         if not callable(bbox_reader):
             # Production always has the pinned typed sensor.  Preserve the old
             # no-rotation behavior for narrow injected adapters which predate

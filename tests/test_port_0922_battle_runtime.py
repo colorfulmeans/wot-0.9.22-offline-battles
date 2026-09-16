@@ -9070,6 +9070,60 @@ class BattleRuntimeContractTests(unittest.TestCase):
             runtime.bigworld.avatar.ammo_updates[-1])
         self.assertFalse(battle._activate_equipment(17))
 
+    def test_effective_parameter_log_exposes_the_complete_reload_chain(self):
+        battle = BattleRuntime(_runtime())
+        descriptor = _Descriptor()
+        descriptor.gun.reloadTime = 7.5
+        descriptor.miscAttrs = {'gunReloadTimeFactor': 0.9}
+        battle._gun_state = types.SimpleNamespace(
+            reload=5.9335, aim_time=1.0, base_dispersion=0.0037)
+        battle._spotting_profile = lambda unused, local=False: {
+            'binocular_delay': 3.0, 'binocular_factor': 1.25,
+            'invisibility_moving': (0.0, 1.0),
+            'invisibility_still': (0.0, 1.0),
+            'recon_level': 0.0, 'camouflage_level': 0.0,
+            'camouflage_factor': 1.0, 'vision_factor': 1.0,
+        }
+        battle._local_loadout = lambda unused: {
+            'from_client_factors': True,
+            'crew_factor': 1.1376, 'gun_rotation_factor': 1.1376,
+            'repair_factor': 1.0, 'has_big_kit': False,
+            'radio_factor': 1.0, 'crew_level': 120.0,
+            'effective_crew_level': 132.0, 'has_rammer': True,
+            'has_ventilation': True, 'has_brotherhood': True,
+            'has_rations': True, 'reload_factor': 0.791133,
+        }
+        battle._garage_loadout_snapshot = lambda: {
+            'equipments': (types.SimpleNamespace(
+                descriptor=types.SimpleNamespace(crewLevelIncrease=10.0)),),
+            'camouflage_id': None,
+        }
+        battle._local_factors = lambda unused: {
+            'crewLevelIncrease': 10.0,
+            'gun/reloadTime': 0.879507,
+        }
+        battle._base_invisibility = lambda *unused: (0.0, 0.0)
+        battle._shot_invisibility_factor = lambda unused: 1.0
+        battle._vision_radius = lambda *unused, **unused_kwargs: 400.0
+        physics = {
+            'rotSpd': 0.75, 'terrainResist': (1.0, 1.0, 1.0),
+            'powerW': 735498.75, 'speedFwd': 10.0, 'speedBwd': 5.0,
+        }
+
+        with mock.patch.object(
+                vehicle_physics, 'derive_params', return_value=physics), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertTrue(battle._log_effective_parameters(descriptor))
+
+        self.assertIn(
+            'PARAMS reload_chain base_reload=7.500s '
+            'device_rammer_factor=0.900000 '
+            'native_crew_level_increase=10.00 '
+            'snapshot_crew_level_increase=10.00 '
+            'native_gun_reload_factor=0.879507 '
+            'final_reload_factor=0.791133 final_reload=5.934s',
+            output.getvalue())
+
     def test_bot_consumables_are_resolved_from_the_exact_client_cache(self):
         runtime = _runtime()
         descriptors = {}
@@ -19014,6 +19068,37 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertTrue(all(
             abs(call.kwargs['kinetic_speed'] - expected_cap) < 1.0e-9
             for call in resolver.call_args_list))
+
+    def test_pose_sweep_prefers_the_mounted_body_bbox(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        body_bbox = ((-2.0, 0.1, -3.5), (2.0, 1.6, 3.5), None)
+        body_reader = mock.Mock(return_value=body_bbox)
+        hull_reader = mock.Mock(side_effect=AssertionError(
+            'the raw hull must not replace the mounted body'))
+        resolver = mock.Mock(return_value={
+            'status': 'clear', 'token': None,
+            'accepted_now': False, 'used_kinetic_speed': False,
+            'kinds': '-', 'requires_commit': False,
+        })
+        battle._destructibles = types.SimpleNamespace(
+            _vehicle_body_bbox=body_reader,
+            _vehicle_hull_bbox=hull_reader,
+            _catalog_motion_proposal=resolver)
+        descriptor = _Descriptor()
+
+        detail = battle._destructible_pose_sweep(
+            (2.0, 3.0, 4.0), 0.0, (2.0, 3.0, 4.0), 0.1,
+            0.0, descriptor, 12.5, 0.1, rotation_speed_cap=0.75)
+
+        self.assertEqual('clear', detail['status'])
+        body_reader.assert_called_once_with(descriptor)
+        hull_reader.assert_not_called()
+        sweep_descriptor = resolver.call_args.args[4]
+        swept_bbox = sweep_descriptor['hull']['hitTester'].bbox
+        self.assertEqual(body_bbox[0][1], swept_bbox[0][1])
+        self.assertEqual(body_bbox[1][1], swept_bbox[1][1])
 
     def test_first_turn_pose_uses_actual_geometry_and_reachable_crush_cap(self):
         runtime = _runtime()

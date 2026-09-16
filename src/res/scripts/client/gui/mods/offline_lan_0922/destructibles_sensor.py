@@ -4038,7 +4038,7 @@ def _catalog_pending_at_hull(pos, yaw, vel, td, now, dt=0.04,
 	of applying the hard wall exponential brake.  The window is the pinned
 	``DESTRUCTIBLE_HIDING_DELAY``, so a wall that outlives it is a real wall.
 	"""
-	bbox = _vehicle_hull_bbox(td)
+	bbox = _vehicle_body_bbox(td)
 	if _destructible_catalog is None or bbox is None:
 		return False
 	vehicle_box = _vehicle_swept_box(
@@ -4069,7 +4069,7 @@ def _unidentified_hull_contact_1513(unresolved, vehicle_box, authority):
 def _catalog_hull_contact(pos, yaw, vel, td, dt=0.04,
 		motion_yaw=None):
 	"""Cheap contact-bin guard for the copied player/Bot pose integrators."""
-	bbox = _vehicle_hull_bbox(td)
+	bbox = _vehicle_body_bbox(td)
 	if _destructible_catalog is None or bbox is None:
 		return False
 	vehicle_box = _vehicle_swept_box(
@@ -4137,7 +4137,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			'clear',
 			return_status=return_status, return_detail=return_detail,
 			requires_commit=False if proposal_only else None)
-	bbox = _vehicle_hull_bbox(td)
+	bbox = _vehicle_body_bbox(td)
 	if bbox is None:
 		return _catalog_motion_result(
 			'clear',
@@ -4751,6 +4751,64 @@ def _vehicle_hull_bbox(type_descriptor):
 	if bbox is None:
 		raise RuntimeError('#1513 hull hit tester bbox is unavailable')
 	return bbox
+
+
+def _vehicle_body_bbox(type_descriptor):
+	"""Return the chassis plus the hull at its mounted chassis position.
+
+	The hull hit tester is authored in hull-local coordinates.  Catalog
+	destructible sweeps previously used that raw box at the vehicle origin,
+	while #1513's native solid lanes cover the chassis and add
+	``chassis.hullPosition`` to the hull.  On vehicles with a raised hull this
+	left upper structure modules outside the destroy proposal even though the
+	native lane could still hit them, allowing a tank to enter the lower broken
+	part of a building and become wedged under the live upper part.
+
+	Keep ``_vehicle_hull_bbox`` raw for callers which apply the mount themselves;
+	the destructible collision law uses this full mounted-body union.
+	"""
+	if type_descriptor is None:
+		return None
+	hull_bbox = _vehicle_hull_bbox(type_descriptor)
+	chassis = _descriptor_value(type_descriptor, 'chassis')
+	if chassis is None:
+		# A few narrow integration adapters (and older third-party callers) only
+		# expose the hull.  Preserve their pre-body-union behavior; retail #1513
+		# descriptors always provide ``chassis`` and therefore use the mounted
+		# body contract below.  Once a chassis is present its fields stay strict.
+		return hull_bbox
+	hit_tester = _descriptor_value(chassis, 'hitTester')
+	if hit_tester is None:
+		raise RuntimeError('#1513 chassis hit tester is unavailable')
+	chassis_bbox = getattr(hit_tester, 'bbox', None)
+	hull_position = _descriptor_value(chassis, 'hullPosition')
+	if chassis_bbox is None:
+		raise RuntimeError('#1513 chassis hit tester bbox is unavailable')
+	if hull_position is None:
+		raise RuntimeError('#1513 chassis hull position is unavailable')
+
+	def coordinate(value, index):
+		try:
+			return float(value[index])
+		except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+			try:
+				return float((value.x, value.y, value.z)[index])
+			except (AttributeError, IndexError, TypeError, ValueError):
+				raise RuntimeError(
+					'#1513 vehicle body bbox coordinate is invalid')
+
+	try:
+		minimum = tuple(min(
+			coordinate(chassis_bbox[0], index),
+			coordinate(hull_bbox[0], index) +
+			coordinate(hull_position, index)) for index in range(3))
+		maximum = tuple(max(
+			coordinate(chassis_bbox[1], index),
+			coordinate(hull_bbox[1], index) +
+			coordinate(hull_position, index)) for index in range(3))
+	except (IndexError, KeyError, TypeError):
+		raise RuntimeError('#1513 vehicle body bbox is invalid')
+	return minimum, maximum, None
 
 def LOG_DEBUG(*unused_args):
 	# The user requested no trace-heavy battle logging.
