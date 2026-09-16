@@ -3368,13 +3368,14 @@ class LANClient(object):
         self._team_chat_seq = sequence
         return sequence
 
-    def send_bot_observation(self, contacts, affordances=None):
+    def send_bot_observation(self, contacts, affordances=None, radio_links=None):
         if not self.is_bot_authority():
             return False
         return self._send({'type': 'bot_observation',
                            'round_id': self.round_id,
                            'contacts': list(contacts or ())[:64],
-                           'affordances': list(affordances or ())[:16]})
+                           'affordances': list(affordances or ())[:16],
+                           'radio_links': list(radio_links or ())[:30]})
 
     def send_descriptor_catalog(self, vehicles):
         if not self.ready:

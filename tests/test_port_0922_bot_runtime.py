@@ -213,7 +213,7 @@ def _combat_descriptor(reload_time=0.5, clip=(2, 0.2),
         gun=gun, turret={'rotationSpeed': turret_speed,
                          'circularVisionRadius': 445.0},
         physics={'speedLimits': (14.0, 7.0)}, chassis=chassis,
-        hull=hull, maxHealth=1000)
+        hull=hull, maxHealth=1000, radio=types.SimpleNamespace(distance=700.0))
 
 
 def _wide_track_descriptor():
@@ -7950,6 +7950,8 @@ class BotRuntimeTests(unittest.TestCase):
                 runtime._visibility_cache[pair_key] = (1.0, True, 0)
                 runtime._visible_target_poses[team_key] = dict(remembered)
                 runtime._spot_until[team_key] = 20.0
+                runtime._radio_network.observe(('bot', 11), ('bot', 25),
+                                               9.0, 11.0, remembered)
                 team_spotted = {}
                 runtime._begin_visibility_frame()
                 runtime._visibility_frame['budget'] = 0
@@ -19149,6 +19151,10 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertEqual((10.0, 1.0, 20.0), target['position'])
             self.assertEqual(0.3, target['gun_pitch'])
 
+        # This observer previously received these poses before losing contact.
+        # A global team pose alone is no longer an observer's visibility lease.
+        for key, pose in remembered.items():
+            runtime._radio_network.observe(('bot', 13), key[1:], 0.0, 10.0, pose)
         bot.update(x=40.0, gun_pitch=0.6)
         player.update(x=70.0, gun_pitch=0.9)
         hidden, unused = runtime._contacts_for(

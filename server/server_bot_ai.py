@@ -346,6 +346,10 @@ class BotPlanner(object):
                     # proof that the team is safe.
                     "threatened_bot_ids": threatened,
                 }
+                if "radio_recipients" in raw:
+                    self._contacts[observing_team][contact_key]["radio_bot_until"] = {
+                        row["id"]: now + row["time_left"]
+                        for row in raw["radio_recipients"] if row["kind"] == "bot"}
                 accepted += 1
                 if accepted_visibility is not None:
                     accepted_contact = {
@@ -366,11 +370,16 @@ class BotPlanner(object):
                     if threatened is not None:
                         accepted_contact["threatened_bot_ids"] = list(
                             threatened)
+                    if "radio_recipients" in raw:
+                        accepted_contact["radio_recipients"] = [
+                            dict(row) for row in raw["radio_recipients"]]
                     accepted_visibility.append(accepted_contact)
             elif previous is not None:
                 previous["visible"] = False
                 previous["shootable_by_bot_ids"] = []
                 previous["threatened_bot_ids"] = []
+                if "radio_recipients" in raw:
+                    previous["radio_bot_until"] = {}
                 accepted += 1
                 if accepted_visibility is not None:
                     accepted_visibility.append({
@@ -386,6 +395,8 @@ class BotPlanner(object):
                         "shootable_by_bot_ids": [],
                         "threatened_bot_ids": [],
                     })
+                    if "radio_recipients" in raw:
+                        accepted_visibility[-1]["radio_recipients"] = []
         return accepted
 
     @staticmethod
@@ -713,20 +724,25 @@ class BotPlanner(object):
                 team, team_bots, contacts[team], assignments,
                 defenders.get(team, {}), defense)
             for bot in team_bots:
+                bot_contacts = self._contacts_for_bot(contacts[team], bot["id"])
                 commanded_focus = self._team_order_focus(
-                    team_order_by_bot.get(bot["id"]), bot, contacts[team])
+                    team_order_by_bot.get(bot["id"]), bot, bot_contacts)
                 if (commanded_focus is not None and
                         bot["id"] not in defenders.get(team, {})):
                     assignments[bot["id"]] = commanded_focus
             assignments = self._mark_flank_suppressors(
                 assignments, team_bots)
             for index, bot in enumerate(team_bots):
+                bot_contacts = self._contacts_for_bot(contacts[team], bot["id"])
+                focus = assignments.get(bot["id"])
+                if focus is not None and not self._contact_for_bot(focus, bot["id"]):
+                    focus = None
                 order = self._order_for(
-                    bot, index, len(team_bots), assignments.get(bot["id"]),
-                    contacts[team], now,
+                    bot, index, len(team_bots), focus,
+                    bot_contacts, now,
                     defenders.get(team, {}).get(bot["id"]), team_axis,
                     team_bots, capture_targets[team],
-                    not bool(contacts[team]) and bot["id"] in capture_ids)
+                    not bool(bot_contacts) and bot["id"] in capture_ids)
                 route_point = order.pop("_route_position")
                 turnback_point = order.pop("_turnback_position")
                 self._apply_team_order(
@@ -887,10 +903,28 @@ class BotPlanner(object):
                 if target is None or not target.get("alive") or _number(now) - contact["last_seen"] > CONTACT_TTL_SECONDS:
                     stale.append(target_key)
                 else:
-                    result[team].append(dict(contact))
+                    current = dict(contact)
+                    if "radio_bot_until" in current:
+                        recipients = {identity for identity, until in
+                                      current["radio_bot_until"].items()
+                                      if until > now}
+                        current["radio_bot_ids"] = recipients
+                        current["shootable_by_bot_ids"] = [
+                            identity for identity in current["shootable_by_bot_ids"]
+                            if identity in recipients]
+                    result[team].append(current)
             for target_key in stale:
                 del self._contacts[team][target_key]
         return result
+
+    @staticmethod
+    def _contact_for_bot(contact, bot_id):
+        return ("radio_bot_ids" not in contact or
+                bot_id in contact["radio_bot_ids"])
+
+    @staticmethod
+    def _contacts_for_bot(contacts, bot_id):
+        return [row for row in contacts if BotPlanner._contact_for_bot(row, bot_id)]
 
     @staticmethod
     def _alive_bots(manifest, bot_states):
@@ -2158,6 +2192,27 @@ class BotPlanner(object):
                           protected_ids=()):
         """Move at most one adaptable tank toward a pressured route every 4s."""
         catalog = self._route_catalog(bots)
+        # A route change is an intelligence-driven order too. Filtering only
+        # the final firing target still let disconnected tanks chase a red
+        # dot on another flank through this team-wide pressure calculation.
+        contact_routes = [(contact, self._nearest_route(contact, catalog))
+                          for contact in contacts]
+        pressures = {}
+        radio_routes = {}
+        for bot in bots:
+            pressure = dict((route_id, 0.0) for route_id in catalog)
+            scoped = set()
+            for contact, route_id in contact_routes:
+                if (route_id is None or
+                        not self._contact_for_bot(contact, bot["id"])):
+                    continue
+                health_fraction = (_number(contact.get("health"), 1.0) /
+                                   max(1.0, _number(contact.get("max_health"), 1.0)))
+                pressure[route_id] += max(0.3, health_fraction)
+                if "radio_bot_ids" in contact:
+                    scoped.add(route_id)
+            pressures[bot["id"]] = pressure
+            radio_routes[bot["id"]] = scoped
         for bot in bots:
             route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
             route_id = str(route.get("id") or "")
@@ -2166,9 +2221,15 @@ class BotPlanner(object):
             assigned_id = (str(assigned_route.get("id") or "")
                            if isinstance(assigned_route, dict) else "")
             assigned_until = _number(assigned.get("until")) if isinstance(assigned, dict) else 0.0
+            # Expired radio knowledge cannot retain or renew the old enemy-
+            # driven movement lease, even before the next 4s planning tick.
+            radio_lost = bool(isinstance(assigned, dict) and
+                              assigned.get("radio_scoped") and
+                              pressures[bot["id"]].get(assigned_id, 0.0) <= 0.0)
             if (assigned_id not in catalog or
                     assigned_route != catalog.get(assigned_id) or
-                    (assigned_until > 0.0 and assigned_until <= _number(now))):
+                    (assigned_until > 0.0 and assigned_until <= _number(now)) or
+                    radio_lost):
                 if route_id in catalog:
                     self._route_assignments[bot["id"]] = {
                         "route": catalog[route_id], "until": 0.0,
@@ -2181,15 +2242,8 @@ class BotPlanner(object):
         if _number(now) < _number(self._next_route_rebalance.get(team)):
             return
         self._next_route_rebalance[team] = _number(now) + ROUTE_REBALANCE_SECONDS
-        pressure = dict((route_id, 0.0) for route_id in catalog)
-        for contact in contacts:
-            route_id = self._nearest_route(contact, catalog)
-            if route_id is None:
-                continue
-            health_fraction = (_number(contact.get("health"), 1.0) /
-                               max(1.0, _number(contact.get("max_health"), 1.0)))
-            pressure[route_id] += max(0.3, health_fraction)
-        if not pressure or max(pressure.values()) <= 0.0:
+        if not any(value > 0.0 for pressure in pressures.values()
+                   for value in pressure.values()):
             return
         # SPGs stage behind a lane and do not provide its front-line coverage.
         # Counting them here made a road look defended while also preventing
@@ -2198,7 +2252,8 @@ class BotPlanner(object):
         for bot in bots:
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
                 continue
-            if not self._route_line_contributor(bot, contacts):
+            if not self._route_line_contributor(
+                    bot, self._contacts_for_bot(contacts, bot["id"])):
                 continue
             assignment = self._route_assignments.get(bot["id"], {})
             route = assignment.get("route") if isinstance(assignment, dict) else None
@@ -2207,27 +2262,38 @@ class BotPlanner(object):
             route_id = str(route.get("id") or "")
             if route_id in counts:
                 counts[route_id] += 1
-        target_route = max(sorted(catalog), key=lambda route_id:
-                           pressure[route_id] - counts[route_id] * 0.45)
-        if pressure[target_route] - counts[target_route] * 0.45 <= 0.0:
-            return
-        target_record = catalog[target_route]
         # Re-evaluation happens before a temporary assignment expires. Renew
         # the same pressured route in place so its waypoint index survives;
         # only a real route change clears progress below.
+        targets = {}
         for bot in bots:
+            pressure = pressures[bot["id"]]
+            target_route = max(sorted(catalog), key=lambda route_id:
+                               pressure[route_id] - counts[route_id] * 0.45)
+            urgency = pressure[target_route] - counts[target_route] * 0.45
+            if urgency <= 0.0:
+                continue
+            targets[bot["id"]] = (target_route, urgency)
             assignment = self._route_assignments.get(bot["id"])
             route = assignment.get("route") if isinstance(assignment, dict) else None
             if (isinstance(route, dict) and
                     str(route.get("id") or "") == target_route and
                     _number(assignment.get("until")) > 0.0):
                 assignment["until"] = _number(now) + ROUTE_LEASE_SECONDS
-        if ("capacity" in target_record and
-                counts[target_route] >= max(
-                    1, _integer(target_record.get("capacity"), 1))):
-            return
+                assignment["radio_scoped"] = (
+                    target_route in radio_routes[bot["id"]])
         candidates = []
         for bot in bots:
+            target = targets.get(bot["id"])
+            if target is None:
+                continue
+            target_route, urgency = target
+            target_record = catalog[target_route]
+            pressure = pressures[bot["id"]]
+            if ("capacity" in target_record and
+                    counts[target_route] >= max(
+                        1, _integer(target_record.get("capacity"), 1))):
+                continue
             if bot["id"] in protected_ids:
                 continue
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
@@ -2268,13 +2334,14 @@ class BotPlanner(object):
                      _number(roles.get("brawler")) * 0.65 -
                      pressure.get(current_id, 0.0) * 0.7 +
                      class_affinity * 1.8 + role_affinity * 1.2)
-            candidates.append((score, -bot["id"], bot))
+            candidates.append((urgency, score, -bot["id"], target_route, bot))
         if not candidates:
             return
-        donor = max(candidates)[2]
+        unused_urgency, unused_score, unused_id, target_route, donor = max(candidates)
         self._route_assignments[donor["id"]] = {
             "route": catalog[target_route],
             "until": _number(now) + ROUTE_LEASE_SECONDS,
+            "radio_scoped": target_route in radio_routes[donor["id"]],
         }
         self._route_states.pop(donor["id"], None)
 

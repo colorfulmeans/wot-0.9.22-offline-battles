@@ -4924,6 +4924,40 @@ class BattleState:
             int(target.get("team", 0)) == target_team and
             target_team != observing_team)
 
+    @staticmethod
+    def _validated_radio_rows(raw, actors, team, max_duration=None,
+                              exclude=None):
+        """Validate identity lists before committing any observation state.
+
+        The worker owns native radio/crew ranges. This boundary checks the
+        bounded recipients it proved, without inventing a server-side range.
+        Dead known actors are an ordinary in-flight race and are retired.
+        """
+        if not isinstance(raw, (list, tuple)) or len(raw) > len(actors):
+            raise ValueError("invalid radio recipient list")
+        result, seen = [], set()
+        for row in raw:
+            if not isinstance(row, dict):
+                raise ValueError("invalid radio recipient")
+            kind = row.get("kind")
+            identity = _exact_int(row.get("id"), 1, PROJECTILE_MAX_ID)
+            key = (kind, identity)
+            actor = actors.get(key)
+            if (kind not in ("human", "bot") or actor is None or
+                    actor[0] != team or key in seen or key == exclude):
+                raise ValueError("invalid radio recipient identity")
+            seen.add(key)
+            clean = {"kind": kind, "id": identity}
+            if max_duration is not None:
+                duration = _bounded_float(row.get("time_left"), 0.0,
+                                          max_duration)
+                if duration <= 0.0:
+                    raise ValueError("radio recipient lease must be positive")
+                clean["time_left"] = duration
+            if actor[1]:
+                result.append(clean)
+        return result
+
     def update_bot_observation(self, player_id, message):
         """Accept authority observations; never derive contacts from snapshots."""
         with self.lock:
@@ -4950,6 +4984,36 @@ class BattleState:
                 if player.connected and player.participating)
             known_bots = self.bot_planner.known_bots(
                 self.bot_manifest, list(self.bot_states.values()))
+            radio_actors = {
+                ("human", identity): (int(player.team), bool(player.alive))
+                for identity, player in known_players.items()}
+            radio_actors.update({
+                ("bot", identity): (int(bot["team"]), bool(bot["alive"]))
+                for identity, bot in known_bots.items()})
+            radio_links = None
+            if "radio_links" in message:
+                raw_links = message["radio_links"]
+                if (not isinstance(raw_links, (list, tuple)) or
+                        len(raw_links) > len(known_players)):
+                    return False
+                radio_links, seen_receivers = [], set()
+                try:
+                    for row in raw_links:
+                        if not isinstance(row, dict) or row.get("kind") != "human":
+                            return False
+                        identity = _exact_int(row.get("id"), 1, PROJECTILE_MAX_ID)
+                        receiver = known_players.get(identity)
+                        if receiver is None or identity in seen_receivers:
+                            return False
+                        seen_receivers.add(identity)
+                        allies = self._validated_radio_rows(
+                            row.get("allies"), radio_actors, int(receiver.team),
+                            exclude=("human", identity))
+                        if receiver.alive:
+                            radio_links.append({"kind": "human", "id": identity,
+                                                "allies": allies})
+                except (ValueError, TypeError):
+                    return False
             direct_bot_spots = dict(
                 (bot_id, set()) for bot_id in known_bots)
             direct_player_spots = dict(
@@ -5015,6 +5079,13 @@ class BattleState:
                         (not reported_fresh and
                          contact["shootable_by_bot_ids"])):
                     return False
+                if "radio_recipients" in contact:
+                    try:
+                        contact["radio_recipients"] = self._validated_radio_rows(
+                            contact["radio_recipients"], radio_actors,
+                            observing_team, max_duration=time_left)
+                    except (ValueError, TypeError):
+                        return False
                 bot_observer_ids = []
                 for raw_bot_id in contact.get("visible_by_bot_ids"):
                     try:
@@ -5070,6 +5141,11 @@ class BattleState:
                         stale_observation = True
                 shooter_ids = [bot_id for bot_id in shooter_ids
                                if known_bots[bot_id].get("alive")]
+                if "radio_recipients" in contact:
+                    radio_bots = {row["id"] for row in contact["radio_recipients"]
+                                  if row["kind"] == "bot"}
+                    shooter_ids = [identity for identity in shooter_ids
+                                   if identity in radio_bots]
                 contact["shootable_by_bot_ids"] = sorted(shooter_ids)
                 # A threat is advisory native geometry: a malformed row must
                 # not make an otherwise valid observation batch fail or give
@@ -5134,13 +5210,16 @@ class BattleState:
             self._replace_player_spotted(direct_player_spots)
             self._replace_team_lit(team_lit, now=now)
             self._commit_detections()
-            if accepted_visibility:
-                return {
+            if accepted_visibility or radio_links is not None:
+                relay = {
                     "type": "bot_observation",
                     "protocol": PROTOCOL_VERSION,
                     "round_id": self.round_id,
                     "contacts": accepted_visibility,
                 }
+                if radio_links is not None:
+                    relay["radio_links"] = radio_links
+                return relay
             # A first ``visible=false`` sample is a valid complete observation
             # even though there is no prior contact to hide.  Keep that valid
             # no-op distinct from authorization or protocol rejection so the

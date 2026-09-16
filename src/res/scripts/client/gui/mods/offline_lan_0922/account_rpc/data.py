@@ -76,9 +76,9 @@ def _crew_cost(vehicle, key, currency='gold'):
     gold amounts rather than ``Money`` mappings, so the shop publishes the
     amount and the garage charges the same mapping it was built from.
     """
-    cost = vehicle.get(key)
-    if not isinstance(cost, dict):
-        return 0
+    from gui.mods.offline_lan_0922.account_rpc import economy
+
+    cost = economy.crew_service_cost(vehicle, key)
     try:
         return max(0, int(cost.get(currency, 0) or 0))
     except (TypeError, ValueError):
@@ -834,6 +834,8 @@ def shop(revision=0, selected_vehicle=None):
     ``Shop.__onSyncDataReceived``; the remaining values keep read-only getters
     deterministic instead of leaving a half-synchronized cache.
     """
+    from gui.mods.offline_lan_0922.account_rpc import garage
+
     vehicle = selected_vehicle if isinstance(selected_vehicle, dict) else {}
     _validate_selected_vehicle(vehicle)
     item_prices = dict(vehicle.get('shopItemPrices', {}))
@@ -872,6 +874,9 @@ def shop(revision=0, selected_vehicle=None):
         'items': dict(empty_items),
         'defaults': {
             'items': dict(empty_items),
+            'slotsPrices': (0, [garage.GARAGE_SLOT_GOLD_PRICE]),
+            'berthsPrices': (0, garage.BARRACKS_BERTH_COUNT,
+                             [garage.BARRACKS_BERTH_GOLD_PRICE]),
             'freeXPToTManXPRate': 10,
             'goodies': dict(empty_goodies),
             # SkillDropWindow reads shop.defaults.dropSkillsCost beside the
@@ -884,11 +889,12 @@ def shop(revision=0, selected_vehicle=None):
             'paidDeluxeRemovalCost': {'crystal': 200},
         },
         'goodies': dict(empty_goodies),
-        # Exact #1513 consumers fall back to the final price entry and the
-        # berth helper divides by pack size.  Empty lists and a zero pack size
-        # therefore crash even though the outer tuple arity is correct.
-        'berthsPrices': (0, 1, [0]),
-        'slotsPrices': (0, [0]),
+        # Prices are scalar gold amounts: ShopCommonStats wraps the helper's
+        # result in Money(gold=...). Both dialogs and transactions use the
+        # same price and the barracks dialog must show the entire 16-bed pack.
+        'berthsPrices': (0, garage.BARRACKS_BERTH_COUNT,
+                         [garage.BARRACKS_BERTH_GOLD_PRICE]),
+        'slotsPrices': (0, [garage.GARAGE_SLOT_GOLD_PRICE]),
         # Stock-compatible, non-zero exchange ratios.  The native exchange
         # dialogs divide by both freeXPConversion[0] and this tankman rate.
         'freeXPConversion': (25, 1),

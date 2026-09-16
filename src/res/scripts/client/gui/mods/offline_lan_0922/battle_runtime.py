@@ -10784,7 +10784,7 @@ class BattleRuntime(object):
                     raise RuntimeError(
                         '#1513 VEHICLE_HIT_FLAGS are unavailable')
                 explosion = bool(event.get('splash'))
-                direct_artillery = False
+                direct_he = False
                 if explosion:
                     flags = int(flags_type.ATTACK_IS_EXTERNAL_EXPLOSION)
                     if damage > 0:
@@ -10803,15 +10803,16 @@ class BattleRuntime(object):
                     flags = int(flags_type.ATTACK_IS_DIRECT_PROJECTILE)
                     shot_result = max(
                         0, min(int(event.get('shot_result', 2)), 2))
-                    attacker_entity = self._server_entity(
-                        attacker_record.get('engine_id'))
-                    descriptor = getattr(attacker_entity, 'typeDescriptor', None)
-                    tags = _field(_field(descriptor, 'type', None), 'tags', ())
-                    direct_artillery = 'SPG' in (tags or ())
-                    if direct_artillery:
-                        # Voice only: any damaging direct artillery hit uses
-                        # the penetration call; a zero-damage hit uses bounce.
-                        # Keep the actual projectile result for stats/decals.
+                    direct_he = shell_type == int(
+                        self._runtime.constants.SHELL_TYPES_INDICES[
+                            'HIGH_EXPLOSIVE'])
+                    if direct_he:
+                        # #1513 chooses commander voices from these flags,
+                        # independently of the canonical penetration result.
+                        # Every HE/HESH direct HP hit gets the normal damage
+                        # voice, including a non-penetrating explosion. The
+                        # fired shell owns this rule, never the vehicle class
+                        # or the round currently selected after firing.
                         shot_result = 2 if damage > 0 else 1
                     if shot_result == 2:
                         flags |= int(
@@ -10852,9 +10853,9 @@ class BattleRuntime(object):
                             flags |= chassis_flag
                         elif name == 'gunHealth':
                             flags |= gun_flag
-                if direct_artillery:
+                if direct_he:
                     # A module hit must not replace the requested plain
-                    # penetration/non-penetration artillery voice. Module
+                    # damage/non-penetration HE voice. Module
                     # events remain in the independent critical feedback.
                     flags &= ~(int(flags_type.GUN_DAMAGED_BY_PROJECTILE) |
                                int(flags_type.GUN_DAMAGED_BY_EXPLOSION) |
@@ -17565,6 +17566,15 @@ class BattleRuntime(object):
         local_team = int(self.client.team)
         now = float(now)
         deadlines = {}
+        local_id = int(self.client.player_id)
+        self._radio_ally_contacts = set()
+        for row in message.get('radio_links') or ():
+            if row.get('kind') == 'human' and int(row.get('id', 0)) == local_id:
+                self._radio_ally_contacts.update(
+                    ('player' if ally.get('kind') == 'human' else 'bot',
+                     int(ally.get('id', 0))) for ally in row.get('allies') or ())
+        local_record = self._records.get('player:%s' % local_id) or {}
+        spectating = not (local_record.get('state') or {}).get('alive', True)
         for contact in message.get('contacts') or ():
             if (not isinstance(contact, dict) or
                     int(contact.get('observing_team', 0)) != local_team):
@@ -17586,6 +17596,14 @@ class BattleRuntime(object):
                     time_left > spotting.MAX_SPOT_MEMORY_SECONDS or
                     bool(contact.get('visible')) != (time_left > 0.0)):
                 raise ValueError('team spot memory time is invalid')
+            if not spectating:
+                if 'radio_recipients' in contact:
+                    time_left = max([float(row.get('time_left', 0.0))
+                        for row in contact['radio_recipients']
+                        if row.get('kind') == 'human' and
+                        int(row.get('id', 0)) == local_id] or [0.0])
+                elif local_id not in contact.get('visible_by_player_ids', ()):
+                    time_left = 0.0
             deadlines[(record_kind, target_id)] = now + time_left
 
         # This is a complete worker-owned relative snapshot.  Replace its
@@ -21942,19 +21960,64 @@ class BattleRuntime(object):
             (hit[0] - start).length + spotting.SIGHT_END_TOLERANCE >=
             (end - start).length)
 
-    def _bot_visibility(self, source, target, fired_recently=False):
-        source_position = _xyz(source)
+    @staticmethod
+    def _spot_entity_pose(position, entity=None, state=None):
+        pose = dict(state or {})
+        pose['position'] = tuple(position)
+        if entity is not None:
+            for name in ('yaw', 'pitch', 'roll'):
+                value = getattr(entity, name, None)
+                if value is not None:
+                    pose[name] = float(value)
+            aim = getattr(entity, 'getAimParams', None)
+            if callable(aim):
+                angles = aim()
+                if angles is not None:
+                    pose['turret_yaw'] = float(angles[0])
+        return pose
+
+    def _spot_geometry(self, observer, target, observer_descriptor=None,
+                       target_descriptor=None, fired_recently=False):
+        """One native port to the six exact vehicle visibility checkpoints."""
+        source_position = observer.get('position') or _xyz(observer)
         target_position = target.get('position') or _xyz(target)
-        line_of_sight = self._spot_segment_clear(
-            source_position, target_position)
-        foliage_bonus = 0.0
-        if line_of_sight and self._foliage is not None:
-            foliage_bonus = self._foliage_camouflage_bonus(
-                source_position, target_position, fired_recently)
-        return {
-            'line_of_sight': line_of_sight,
-            'foliage_bonus': foliage_bonus,
-        }
+        starts = spotting.vehicle_check_points(
+            observer_descriptor, observer, observer=True,
+            phase=int(max(0, self._turret_server_time_ms()) / 2000))
+        ends = spotting.vehicle_check_points(target_descriptor, target)
+        broken_filter = self._sight_collision_filter()
+        best_cover = None
+        for start_point in starts:
+            start = self._vector(start_point)
+            for end_point in ends:
+                end = self._vector(end_point)
+                args = (self._avatar.spaceID, start, end, 128)
+                if broken_filter is not None:
+                    args += (broken_filter,)
+                hit = self._runtime.bigworld.wg_collideSegment(*args)
+                if (hit is not None and
+                        (hit[0] - start).length + spotting.SIGHT_END_TOLERANCE <
+                        (end - start).length):
+                    continue
+                cover = self._foliage_camouflage_bonus(
+                    source_position, target_position, fired_recently,
+                    start_point, end_point)
+                best_cover = cover if best_cover is None else min(best_cover, cover)
+                if best_cover <= 0.0:
+                    return {'line_of_sight': True, 'foliage_bonus': 0.0}
+        return {'line_of_sight': best_cover is not None,
+                'foliage_bonus': best_cover or 0.0}
+
+    def _bot_visibility(self, source, target, fired_recently=False):
+        descriptors = []
+        for state in (source, target):
+            kind = 'player' if state.get('kind') == 'human' else 'bot'
+            actor = state.get('network_id', state.get('id', 0))
+            record = self._records.get('%s:%s' % (kind, actor))
+            entity = self._server_entity(record['engine_id']) if record else None
+            descriptors.append(getattr(entity, 'typeDescriptor', None))
+        return self._spot_geometry(source, target, descriptors[0], descriptors[1],
+                                   fired_recently)
 
     def _bot_aim_context(self, source, target):
         """Keep candidate ownership on the current source/target records."""
@@ -22584,7 +22647,8 @@ class BattleRuntime(object):
                 message.get('rows'), **state_kwargs)
         if kind == 'bot_observation':
             return self.client.send_bot_observation(
-                message.get('contacts'), message.get('affordances'))
+                message.get('contacts'), message.get('affordances'),
+                radio_links=message.get('radio_links'))
         if kind == 'bot_ram':
             contact_kwargs = {}
             if 'contact_positions' in message:
@@ -24250,11 +24314,15 @@ class BattleRuntime(object):
         return spotting.clamp(
             _field(gun, 'invisibilityFactorAtShot', 1.0), 0.0, 1.0)
 
-    def _foliage_camouflage_bonus(self, observer, target, fired_recently):
+    def _foliage_camouflage_bonus(self, observer, target, fired_recently,
+                                  start=None, end=None):
         if (self._foliage is None or not self._optional_feature_enabled(
                 'foliage camouflage')):
             return 0.0
         try:
+            if start is not None and end is not None:
+                return self._foliage.camouflage_bonus(
+                    observer, target, fired_recently, start=start, end=end)
             return self._foliage.camouflage_bonus(
                 observer, target, fired_recently)
         except Exception as error:
@@ -24430,7 +24498,7 @@ class BattleRuntime(object):
     def _spot_line_of_sight(self, observer, target, target_descriptor,
                             target_moving=False, fired_recently=False,
                             target_still_seconds=0.0,
-                            target_effective=None):
+                            target_effective=None, target_pose=None):
         (observer_position, observer_descriptor, observer_entity,
          observer_still_seconds, observer_is_local) = _spotting_observer(
             observer)
@@ -24439,10 +24507,13 @@ class BattleRuntime(object):
             return True
         if distance > spotting.MAX_SPOT_DISTANCE:
             return False
-        if not self._spot_segment_clear(observer_position, target):
+        geometry = self._spot_geometry(
+            self._spot_entity_pose(observer_position, observer_entity),
+            self._spot_entity_pose(target, state=target_pose),
+            observer_descriptor, target_descriptor, fired_recently)
+        if not geometry['line_of_sight']:
             return False
-        foliage_bonus = self._foliage_camouflage_bonus(
-            observer_position, target, fired_recently)
+        foliage_bonus = geometry['foliage_bonus']
         if target_effective is None:
             target_profile = self._spotting_profile(target_descriptor)
             base_invisibility = self._base_invisibility(
@@ -24637,17 +24708,26 @@ class BattleRuntime(object):
             if entity is None:
                 continue
             if int(state.get('team', 0)) == local_team:
-                # Synthetic allies never leave BigWorld.entities, so enforce
-                # the stock #1513 vehicle AOI here as well.  Team knowledge
-                # remains permanent: only the world model and 3D marker leave
-                # at 565 m, while the minimap entry stays available.
+                # Allied positions arrive by direct radio or own vision.
+                # Being in the team roster is not permanent minimap knowledge.
                 previous = (
                     bool(record.get('spot_visible', True)),
                     bool(record.get(
                         'spot_marker_visible',
                         record.get('spot_visible', True))))
+                ally_key = (record.get('kind'), int(record.get('network_id', 0)))
+                remembered = ally_key in getattr(self, '_radio_ally_contacts', set())
+                if not observers or observers[0] is None:
+                    remembered = True  # Postmortem follows the team's live view.
+                elif not remembered:
+                    # Radio loss does not erase a friendly tank in direct sight.
+                    if self._spotting_probe_due(record, now):
+                        record['direct_spot_visible'] = self._spot_line_of_sight(
+                            observers[0], _xyz(entity.position), entity.typeDescriptor,
+                            target_pose=state)
+                    remembered = bool(record.get('direct_spot_visible', False))
                 visible, marker_visible = self._apply_spot_presentation(
-                    record, entity, True)
+                    record, entity, remembered)
                 if (visible, marker_visible) != previous:
                     changed = True
                 continue
@@ -24671,12 +24751,13 @@ class BattleRuntime(object):
                         observers[0], target, entity.typeDescriptor,
                         target_moving, fired_recently,
                         target_still_seconds=target_still,
-                        target_effective=target_effective))
+                        target_effective=target_effective,
+                        target_pose=state))
                 seen = direct_seen or any(self._spot_line_of_sight(
                     observer, target, entity.typeDescriptor,
                     target_moving, fired_recently,
                     target_still_seconds=target_still,
-                    target_effective=target_effective)
+                    target_effective=target_effective, target_pose=state)
                     for observer in observers[1:])
                 # A direct LOS sample owns local visibility until this
                 # record's next staggered sample, independently of the

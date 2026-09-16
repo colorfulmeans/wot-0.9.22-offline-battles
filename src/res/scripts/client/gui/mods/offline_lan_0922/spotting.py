@@ -127,3 +127,54 @@ def is_detected(distance, view_range, camouflage, has_line_of_sight=True):
 		return True
 	return bool(has_line_of_sight and
 		distance <= detection_distance(view_range, camouflage))
+
+
+def vehicle_check_points(descriptor, pose, observer=False, phase=0):
+    """Project the client's six native detection checkpoints into the world.
+
+    VehicleDescr already computes these from the actual hull/turret models.
+    Point 1 follows turret traverse; the other five follow the hull. The two
+    observer ports alternate every two seconds, as in the legacy mechanism.
+    """
+    from gui.mods.offline_lan_0922 import shot_geometry
+    field = shot_geometry._field
+    points = field(descriptor, 'visibilityCheckPoints', ()) or ()
+    position = pose.get('position') or (
+        pose.get('x', 0.0), pose.get('y', 0.0), pose.get('z', 0.0))
+    if len(points) < 6:
+        height = OBSERVER_EYE_HEIGHT if observer else TARGET_CHECK_HEIGHT
+        return ((position[0], position[1] + height, position[2]),)
+    indices = (int(phase) % 2,) if observer else range(6)
+    result = []
+    for index in indices:
+        point = shot_geometry._box_point(points[index])
+        if index == 1:
+            chassis = field(descriptor, 'chassis', {})
+            hull = field(descriptor, 'hull', {})
+            try:
+                hp = shot_geometry._box_point(field(chassis, 'hullPosition'))
+                tp = shot_geometry._box_point(field(hull, 'turretPositions')[0])
+                mount = tuple(hp[i] + tp[i] for i in range(3))
+                yaw = float(pose.get('yaw', 0.0))
+                turret_yaw = field(field(descriptor, 'gun', {}), 'staticTurretYaw')
+                if turret_yaw is None:
+                    turret_yaw = pose.get('turret_yaw', pose.get('aim_yaw', yaw) - yaw)
+                relative = tuple(point[i] - mount[i] for i in range(3))
+                relative = shot_geometry._rotate_y(relative, float(turret_yaw))
+                point = tuple(mount[i] + relative[i] for i in range(3))
+            except (TypeError, ValueError, IndexError, KeyError):
+                pass
+        result.append(shot_geometry.transform_vehicle_point(
+            point, position, pose.get('yaw', 0.0),
+            pose.get('pitch', 0.0), pose.get('roll', 0.0)))
+    return tuple(result)
+
+
+def radio_link(first_position, first_range, second_position, second_range):
+    """Direct legacy radio contact: sum both ranges, never relay chains."""
+    distance_squared = sum((float(first_position[i]) -
+                            float(second_position[i])) ** 2 for i in range(3))
+    first_range, second_range = float(first_range), float(second_range)
+    reach = max(0.0, first_range) + max(0.0, second_range)
+    return (first_range > 0.0 and second_range > 0.0 and
+            distance_squared <= reach * reach)

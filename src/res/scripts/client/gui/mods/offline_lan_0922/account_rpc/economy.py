@@ -89,6 +89,18 @@ CHANGE_ROLE_COST = {'gold': 600}
 PASSPORT_CHANGE_COST = {'gold': 50}
 FEMALE_PASSPORT_CHANGE_COST = {'gold': 500}
 
+
+def crew_service_cost(snapshot, key):
+    """Keep legacy saves and shop dialogs on the same crew-service price."""
+    defaults = {
+        'crewChangeRoleCost': CHANGE_ROLE_COST,
+        'crewPassportCost': PASSPORT_CHANGE_COST,
+        'crewFemalePassportCost': FEMALE_PASSPORT_CHANGE_COST,
+    }
+    cost = snapshot.get(key)
+    return dict(cost if isinstance(cost, dict) else defaults.get(key, {}))
+
+
 # The recycle bin holds a dismissed crew member until the window closes, and
 # hiring them back costs what the shop says.  #1513 receives the whole window
 # and price from a server it never reaches here, so these are offline policy.

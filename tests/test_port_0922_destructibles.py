@@ -4210,48 +4210,21 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 _Vector(0, 0, 1), shot)
         return result, felled, matrix_queries
 
-    def test_standing_tree_below_the_threshold_costs_25mm_and_passes(self):
-        result, felled, queries = self._standing_tree_shot(
-            18, 1.0, 'ARMOR_PIERCING')
-        self.assertEqual(1, len(felled))
-        self.assertEqual((1, 22, 1), felled[0][:3])
-        self.assertEqual([(1, 22, 1)], queries)
-        self.assertIsNone(result['stop_distance'])
-        self.assertEqual(25.0, result['piercing_loss'])
-        self.assertAlmostEqual(5.0, result['loss_distance'])
-        # Trees have no catalog OBB, so the proved next surface is the exit.
-        self.assertLess(result['continue_from'], 9.0)
-        self.assertGreater(result['continue_from'], 8.99)
-
-    def test_standing_tree_above_the_threshold_falls_and_stops_the_shell(self):
-        result, felled, unused_queries = self._standing_tree_shot(
-            20, 1.0, 'ARMOR_PIERCING')
-        self.assertEqual(1, len(felled))
-        self.assertAlmostEqual(5.0, result['stop_distance'])
-        self.assertIsNone(result['continue_from'])
-        self.assertEqual(0.0, result['piercing_loss'])
-        self.assertTrue(result['stopped_by_destructible'])
-        self.assertEqual('above_threshold_hp', result['stop_reason'])
-
-    def test_tree_threshold_uses_the_native_scaled_health(self):
-        """ceil(1.2 * 1.2 * 18) = 26 exceeds maxHpForShootingThrough."""
-        result, felled, queries = self._standing_tree_shot(
-            18, 1.2, 'ARMOR_PIERCING')
-        self.assertEqual([(1, 22, 1)], queries)
-        self.assertEqual(1, len(felled))
-        self.assertAlmostEqual(5.0, result['stop_distance'])
-        self.assertEqual('above_threshold_hp', result['stop_reason'])
-
-    def test_he_and_heat_stop_at_a_tree_without_a_matrix_query(self):
-        for shell_kind in ('HIGH_EXPLOSIVE', 'HOLLOW_CHARGE'):
-            result, felled, queries = self._standing_tree_shot(
-                18, 1.0, shell_kind)
-            self.assertEqual(1, len(felled), shell_kind)
-            self.assertAlmostEqual(5.0, result['stop_distance'], msg=shell_kind)
-            self.assertTrue(result['stopped_by_destructible'], shell_kind)
-            self.assertEqual('shell_family', result['stop_reason'])
-            # The family gate is decided before any native scale is read.
-            self.assertEqual([], queries, shell_kind)
+    def test_standing_trees_are_transparent_to_all_shells_without_penalty(self):
+        for shell_kind in ('ARMOR_PIERCING', 'ARMOR_PIERCING_CR',
+                           'ARMOR_PIERCING_HE', 'HIGH_EXPLOSIVE', 'HOLLOW_CHARGE'):
+            for health, scale in ((18, 1.0), (20, 1.0), (1000, 2.0)):
+                result, felled, queries = self._standing_tree_shot(
+                    health, scale, shell_kind)
+                self.assertEqual(1, len(felled), shell_kind)
+                self.assertEqual((1, 22, 1), felled[0][:3])
+                # The real wall behind the tree owns the stop. Ram health and
+                # scale neither detonate HE/HEAT nor take 25 mm from AP.
+                self.assertAlmostEqual(9.0, result['stop_distance'])
+                self.assertIsNone(result['continue_from'])
+                self.assertEqual(0.0, result['piercing_loss'])
+                self.assertFalse(result['stopped_by_destructible'])
+                self.assertEqual([], queries)
 
     def test_catalog_obstacle_stops_before_native_trees_are_destroyed(self):
         destructibles_sensor.xrange = range
@@ -4355,11 +4328,11 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         self.assertAlmostEqual(4.0, result['stop_distance'])
         self.assertTrue(result['stopped_by_destructible'])
 
-    def test_typed_native_low_health_falling_pole_keeps_shell_rules(self):
+    def test_typed_native_falling_mailbox_keeps_obstacle_shell_rules(self):
         destructibles_sensor.xrange = range
         filename = (
-            'content/Environment/envAM_009_Poles/normal/lod0/'
-            'envAM_009_Poles_01.model')
+            'content/Environment/envAM_008_PostBox/normal/lod0/'
+            'envAM_008_PostBox_01.model')
         destructibles_sensor.set_catalog(_catalog({
             filename: {
                 'kind': 'falling',
@@ -4438,9 +4411,9 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 self.assertTrue(result['stopped_by_destructible'])
                 self.assertEqual('shell_family', result['stop_reason'])
 
-    def _falling_pole_shot_fixture(self, boxes):
+    def _falling_pole_shot_fixture(self, boxes, filename=None):
         """Register one exact #1513 falling atom with a live catalog OBB."""
-        filename = (
+        filename = filename or (
             'content/Environment/envAM_009_Poles/normal/lod0/'
             'envAM_009_Poles_01.model')
         destructibles_sensor.xrange = range
@@ -4495,6 +4468,89 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             return None
         return collide
 
+    def test_native_standing_pole_and_lamp_do_not_detonate_he_or_heat(self):
+        for shell_kind in ('ARMOR_PIERCING', 'HIGH_EXPLOSIVE', 'HOLLOW_CHARGE'):
+            filename, math_module, area, cache = self._falling_pole_shot_fixture(
+                [[-0.5, -1.0, 4.0, 0.5, 2.0, 6.0, None]])
+            # Deliberately inside the pole's conservative OBB: skipping the
+            # entire box would lose this real wall, so filter the exact skin.
+            wall_z = 4.25
+            bigworld = types.SimpleNamespace(time=lambda: 10.,
+                wg_collideSegment=self._filtered_world_ray(
+                    ((4., 22, 1, 72), (wall_z, 0, 0, 5))))
+            bigworld.wg_getMatInfoNearPoint = lambda space, start, end, point, callback: (
+                _mat_info_1513(True, point, _Vector(0, 1, 0), 72, filename, 22, 1)
+                if point.z == 4. else
+                _mat_info_1513(True, point, _Vector(0, 1, 0), 5, '', 0, 0))
+            destroyed = set()
+            orders = []
+            def destroy(*args):
+                orders.append(args)
+                destroyed.add((args[1], args[2]))
+                return True
+            authority = types.SimpleNamespace(
+                is_destroyed=lambda chunk, item, mat=None: (chunk, item) in destroyed,
+                destroy_column=destroy)
+            destructibles_sensor.set_event_sink(lambda unused: True)
+            shot = types.SimpleNamespace(shell=types.SimpleNamespace(kind=shell_kind))
+            with mock.patch.dict(sys.modules, {
+                    'BigWorld': bigworld, 'AreaDestructibles': area,
+                    'Math': math_module, 'DestructiblesCache': cache}), \
+                    mock.patch.object(destructibles_sensor, '_get_destr_authority',
+                                      return_value=authority):
+                result = destructibles_sensor.shot_world_distance(
+                    bigworld, 1, _Vector(), _Vector(0, 0, 20), _Vector(0, 0, 1), shot)
+            self.assertEqual(1, len(orders))
+            self.assertEqual(wall_z, result['stop_distance'])
+            self.assertEqual(0., result['piercing_loss'])
+            self.assertFalse(result['stopped_by_destructible'])
+
+    def test_catalog_only_pole_continues_just_past_contact_without_penalty(self):
+        for shell_kind in ('HIGH_EXPLOSIVE', 'HOLLOW_CHARGE'):
+            filename, math_module, area, cache = self._falling_pole_shot_fixture(
+                [[-0.5, -1.0, 4.0, 0.5, 2.0, 6.0, None]])
+            bigworld = types.SimpleNamespace(time=lambda: 10.,
+                wg_collideSegment=lambda *args: None)
+            orders = []
+            authority = types.SimpleNamespace(is_destroyed=lambda *args: False,
+                destroy_column=lambda *args: orders.append(args) or True)
+            destructibles_sensor.set_event_sink(lambda unused: True)
+            shot = types.SimpleNamespace(shell=types.SimpleNamespace(kind=shell_kind))
+            with mock.patch.dict(sys.modules, {
+                    'BigWorld': bigworld, 'AreaDestructibles': area,
+                    'Math': math_module, 'DestructiblesCache': cache}), \
+                    mock.patch.object(destructibles_sensor, '_get_destr_authority',
+                                      return_value=authority):
+                result = destructibles_sensor.shot_world_distance(
+                    bigworld, 1, _Vector(), _Vector(0, 0, 20), _Vector(0, 0, 1), shot)
+            self.assertEqual(1, len(orders))
+            self.assertIsNone(result['stop_distance'])
+            self.assertGreater(result['continue_from'], 4.)
+            self.assertLess(result['continue_from'], 4.01)
+            self.assertEqual(0., result['piercing_loss'])
+            self.assertIsNone(result['loss_distance'])
+
+    def test_transparent_poles_require_exact_resource_family_and_falling_type(self):
+        area = types.SimpleNamespace(DESTR_TYPE_FALLING_ATOM=2)
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area}):
+            for family, model in (
+                    ('env413_StreetLamp', 'env413_StreetLamp1.model'),
+                    ('env414_Pole', 'env414_Pole.model'),
+                    ('envAM_009_Poles', 'envAM_009_Poles_01.model'),
+                    ('envF_001_FactoryClock', 'envF_008_FactoryLamppost.model')):
+                name = 'content/Environment/%s/normal/lod0/%s' % (family, model)
+                self.assertTrue(destructibles_sensor._shot_transparent_pole_1513(
+                    {'type': 2, 'health': 1000}, name))
+                self.assertFalse(destructibles_sensor._shot_transparent_pole_1513(
+                    {'type': 3}, name))
+            for name in (
+                    'content/Environment/envAM_008_PostBox/normal/lod0/envAM_008_PostBox_01.model',
+                    'content/GatesAndFences/gaf023_ForgedFence/normal/lod0/gaf023_ForgedFence_end.model',
+                    'content/Environment/envF_001_FactoryClock/normal/lod0/envF_001_FactoryClock.model',
+                    'content/Buildings/PoleHouse/normal/lod0/PoleHouse.model'):
+                self.assertFalse(destructibles_sensor._shot_transparent_pole_1513(
+                    {'type': 2}, name))
+
     def test_broken_falling_atom_skin_no_longer_stops_a_later_shell(self):
         """A felled pole keeps its native skin; retail stops colliding with it."""
         filename, math_module, area, cache = self._falling_pole_shot_fixture(
@@ -4542,7 +4598,8 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
     def test_destroyed_item_without_exact_exit_still_passes_the_shell(self):
         """An admitted shot may not end on an item it has just removed."""
         filename, math_module, area, cache = self._falling_pole_shot_fixture(
-            [[-0.5, -1.0, 12.0, 0.5, 2.0, 14.0, None]])
+            [[-0.5, -1.0, 12.0, 0.5, 2.0, 14.0, None]],
+            filename='content/Environment/envAM_008_PostBox/normal/lod0/envAM_008_PostBox_01.model')
         surfaces = ((4.0, 22, 1, 72), (9.0, 0, 0, 5))
         bigworld = types.ModuleType('BigWorld')
         bigworld.wg_collideSegment = self._filtered_world_ray(surfaces)

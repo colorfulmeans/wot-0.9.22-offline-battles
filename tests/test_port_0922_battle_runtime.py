@@ -26393,7 +26393,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         target.computeBaseInvisibility = lambda *unused: (0.0, 0.0)
         calls = []
 
-        def foliage_bonus(unused_observer, unused_target, fired_recently):
+        def foliage_bonus(unused_observer, unused_target, fired_recently, **unused):
             calls.append(fired_recently)
             return 0.0 if fired_recently else 0.60
 

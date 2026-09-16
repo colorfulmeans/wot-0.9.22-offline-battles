@@ -10,7 +10,8 @@ from unittest import mock
 
 from test_port_0922_garage import SNAPSHOT, _modules, _load, _request_modules
 from test_port_0922_postbattle import _receipt, _packed_vehicle, _Socket
-from test_port_0922_battle_runtime import _runtime, _Client, _effective_params_snapshot
+from test_port_0922_battle_runtime import (
+    _runtime, _Client, _Descriptor, _effective_params_snapshot)
 from effective_params_fixture import effective_params
 from gui.mods.offline_lan_0922 import battle_bonds, loadout, price_catalogue
 from gui.mods.offline_lan_0922 import effective_params as wire
@@ -355,7 +356,7 @@ class BondsAndDirectivesTests(unittest.TestCase):
         self.assertEqual(10.0, BotRuntime._designated_spot_duration(
             source, {'position': (100.0, 0.0, 0.0)}, snapshot))
 
-    def test_direct_artillery_feedback_uses_damage_instead_of_penetration(self):
+    def test_direct_he_feedback_uses_damage_instead_of_penetration(self):
         for splash, damage, result in ((False, 150, 1), (False, 0, 0),
                                        (False, 0, 2), (True, 100, 1)):
             runtime = _runtime()
@@ -363,8 +364,10 @@ class BondsAndDirectivesTests(unittest.TestCase):
             battle._avatar = runtime.bigworld.avatar
             battle._avatar.playerVehicleID = 10
             battle._synchronise_player_identity(10)
+            descriptor = _Descriptor()
+            descriptor.gun.shots[0].shell.kind = 'HIGH_EXPLOSIVE'
             runtime.bigworld.entities[10] = types.SimpleNamespace(
-                typeDescriptor=types.SimpleNamespace(type=types.SimpleNamespace(tags=('SPG',))))
+                typeDescriptor=descriptor)
             target = {'engine_id': 11, 'local': False, 'kind': 'bot',
                       'network_id': 2, 'state': {'team': 2}}
             attacker = {'engine_id': 10, 'local': True, 'kind': 'player',
