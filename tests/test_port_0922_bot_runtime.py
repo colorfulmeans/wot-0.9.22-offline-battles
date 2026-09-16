@@ -3952,6 +3952,7 @@ class BotRuntimeTests(unittest.TestCase):
         contact_reports = []
         runtime.navigator.report_blocked_step = (
             lambda *args: contact_reports.append(args))
+        runtime.navigator.bot_states[11] = {}
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=attempted_yaw,
                      speed=4.0, grounded_once=True)
@@ -3966,10 +3967,10 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([(11, attempted_yaw, 5.0)],
                          adapter.driver.calls)
         self.assertEqual(1, len(contact_reports))
-        realised_edge = (math.sin(attempted_yaw) * 4.0, 0.0,
-                         math.cos(attempted_yaw) * 4.0)
-        self.assertEqual((11, before_position, realised_edge, 1.0),
+        self.assertEqual((11, before_position, aim, 1.0),
                          contact_reports[0])
+        self.assertIn(
+            'hard_contact_episode', runtime.navigator.bot_states[11])
         self.assertEqual(1, len(adapter.calls))
 
         status[0] = 'clear'
@@ -3980,8 +3981,63 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(2, len(adapter.calls))
         self.assertIn(11, runtime._decision_cache)
         self.assertIn(11, runtime._motion_probe_cache)
+        self.assertNotIn(
+            'hard_contact_episode', runtime.navigator.bot_states[11])
 
-    def test_realised_hard_contact_reports_resolver_direction_while_braking(self):
+        # ``crushed`` is equally conclusive: the obstacle no longer owns the
+        # swept corridor, so no pending hard-contact episode may survive it.
+        current_position = (state['x'], state['y'], state['z'])
+        runtime.navigator.report_hard_contact(
+            11, current_position, aim, state['yaw'], 1.06)
+        self.assertIn(
+            'hard_contact_episode', runtime.navigator.bot_states[11])
+        status[0] = 'crushed'
+        runtime.update(.04, 1.08)
+        self.assertNotIn(
+            'hard_contact_episode', runtime.navigator.bot_states[11])
+        self.assertIsNone(runtime.navigator.bot_states[11].get(
+            'blocked_step_tracker'))
+
+    def test_repeated_runtime_hard_contacts_replan_despite_hull_yaw_wag(self):
+        target = (0.0, 0.0, 200.0)
+        command = {
+            'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': False, 'target_id': None,
+            'fire_range': 0.0, 'combat_mode': 'route',
+            'aim_position': target, 'face_position': target,
+            'move_position': target, 'recovery_mode': 'drive',
+            'movement_intent': True,
+        }
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+            direction_probe=lambda *unused: {
+                'clear': False, 'collision': True, 'water': False,
+                'slope': 0.0},
+            motion_resolver=lambda *unused, **unused_kwargs: 'hard',
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        runtime.navigator.bot_states[11] = {}
+        state = runtime.states[11]
+
+        for yaw, now in zip(
+                (0.45, -0.45, 0.70, -0.70),
+                (1.0, 1.34, 1.68, 2.02)):
+            state.update(x=0.0, y=0.0, z=0.0, yaw=yaw, speed=4.0,
+                         grounded_once=True)
+            runtime.update(.04, now)
+
+        nav_state = runtime.navigator.bot_states[11]
+        self.assertEqual(1, nav_state['blocked_step_replans'])
+        forward_edge = runtime.navigator.grid._edge_cells_for_segment(
+            (0.0, 0.0, 0.0), target)
+        self.assertIn(forward_edge, runtime.navigator.bot_failed_edges[11])
+        self.assertTrue(
+            nav_state['hard_contact_episode']['uses_navigation_target'])
+
+    def test_hard_contact_keeps_resolver_yaw_private_to_driver_while_braking(self):
         yaw = 0.25
         aim = (math.sin(yaw + 0.75) * 200.0, 0.0,
                math.cos(yaw + 0.75) * 200.0)
@@ -4024,6 +4080,7 @@ class BotRuntimeTests(unittest.TestCase):
                 reports = []
                 runtime.navigator.report_blocked_step = (
                     lambda *args: reports.append(args))
+                runtime.navigator.bot_states[11] = {}
                 state = runtime.states[11]
                 state.update(x=0.0, y=0.0, z=0.0, yaw=yaw,
                              speed=initial_speed, grounded_once=True)
@@ -4037,13 +4094,23 @@ class BotRuntimeTests(unittest.TestCase):
                                  1 if resolver_speed > 0.0 else -1)
                 report_yaw = (resolver_yaw if resolver_speed > 0.0 else
                               resolver_yaw + math.pi)
-                expected = (math.sin(report_yaw) * 4.0, 0.0,
-                            math.cos(report_yaw) * 4.0)
-                self.assertEqual(expected, reports[0][2])
+                if resolver_speed > 0.0:
+                    self.assertEqual(aim, reports[0][2])
+                    self.assertTrue(runtime.navigator.bot_states[11][
+                        'hard_contact_episode'][
+                            'uses_navigation_target'])
+                else:
+                    reverse_edge = (
+                        math.sin(report_yaw) * 8.0, 0.0,
+                        math.cos(report_yaw) * 8.0)
+                    self.assertEqual(reverse_edge, reports[0][2])
+                    self.assertFalse(runtime.navigator.bot_states[11][
+                        'hard_contact_episode'][
+                            'uses_navigation_target'])
                 self.assertEqual([(11, report_yaw, 5.0)],
                                  adapter.driver.calls)
 
-    def test_unresolved_hard_contact_reports_the_queried_travel_edge(self):
+    def test_unresolved_reverse_hard_contact_reports_a_stable_episode_edge(self):
         yaw = 0.25
         aim = (math.sin(yaw + 0.75) * 200.0, 0.0,
                math.cos(yaw + 0.75) * 200.0)
@@ -4068,15 +4135,19 @@ class BotRuntimeTests(unittest.TestCase):
         reports = []
         runtime.navigator.report_blocked_step = (
             lambda *args: reports.append(args))
+        runtime.navigator.bot_states[11] = {}
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=yaw, speed=6.0,
                      grounded_once=True)
 
         runtime.update(.04, 1.0)
 
-        expected = (math.sin(yaw + math.pi) * 4.0, 0.0,
-                    math.cos(yaw + math.pi) * 4.0)
+        reverse_yaw = yaw + math.pi
+        expected = (math.sin(reverse_yaw) * 8.0, 0.0,
+                    math.cos(reverse_yaw) * 8.0)
         self.assertEqual(expected, reports[0][2])
+        self.assertFalse(runtime.navigator.bot_states[11][
+            'hard_contact_episode']['uses_navigation_target'])
 
     def test_nonhard_realised_contacts_keep_cached_command_and_probe(self):
         command = {
@@ -8924,6 +8995,31 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(0.0, state['desired_gun_pitch'], places=9)
         self.assertGreater(state['gun_pitch'], -.30)
         self.assertFalse(state['gun_aligned'])
+
+    def test_point_blank_target_keeps_the_current_world_bearing(self):
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        state = runtime.states[11]
+        state.update(
+            x=0.0, y=0.0, z=0.0, yaw=0.0,
+            aim_yaw=0.65, turret_yaw=0.65, gun_pitch=0.0)
+        command = {
+            'aim_position': (1.0, 1.0, 0.0),
+            '_ballistic_solution': None,
+        }
+        target = {'kind': 'human', 'id': 2, 'alive': True,
+                  'position': (1.0, 0.0, 0.0)}
+        runtime._exact_shot_origin = lambda *unused: (0.0, 1.0, 0.0)
+
+        desired_yaw, horizontal = runtime._update_gun_aim(
+            state, command, target, .05)
+
+        self.assertAlmostEqual(.65, desired_yaw, places=9)
+        self.assertAlmostEqual(1.0, horizontal, places=9)
 
     def test_direct_aim_reuses_ballistic_muzzle_origin_within_tick(self):
         calls = []

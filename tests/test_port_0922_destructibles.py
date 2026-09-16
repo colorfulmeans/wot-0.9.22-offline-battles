@@ -94,6 +94,25 @@ class _ItemMatrix(object):
         return self.translation + self.applyVector(point)
 
 
+class _CatalogSignatureMatrix(object):
+    """Reproduce one quantized catalog transform without approximating it."""
+
+    def __init__(self, signature):
+        self.signature = tuple(signature)
+        self.translation = _Vector(*(
+            value / 1000.0 for value in self.signature[:3]))
+
+    def applyVector(self, point):
+        values = (point.x, point.y, point.z)
+        return _Vector(*[
+            sum(self.signature[3 + axis * 3 + row] * value
+                for axis, value in enumerate(values)) / 1000.0
+            for row in range(3)])
+
+    def applyPoint(self, point):
+        return self.translation + self.applyVector(point)
+
+
 class _Strict1513Component(object):
     """Attribute-only stand-in for #1513's ``NoLegacyStuff`` mixin."""
 
@@ -9102,6 +9121,262 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             first_queries, environment['matrix_calls'].count(wire))
 
+    def test_late_murovanka_layout_repair_reopens_only_the_exact_chunk(self):
+        catalog = json.loads((
+            ROOT / 'destructibles' / '11_murovanka.json').read_text())
+        destructibles_sensor.set_catalog(catalog)
+        prepared = destructibles_sensor._destructible_catalog
+        chunk_id = 32384
+        other_chunk = 32383
+        authored = prepared['baked_instances'][(chunk_id, 73)]
+        native_snapshot = {
+            'native_count': 85, 'names': ('first-load-snapshot',)}
+        other_snapshot = {'native_count': 1, 'names': ('other',)}
+        destructibles_sensor.g_offh_destr_native_name_lists = {
+            (1, chunk_id): native_snapshot,
+            (1, other_chunk): other_snapshot,
+        }
+        destructibles_sensor.g_offh_destr_item_names = {
+            (1, chunk_id): {'result': ({}, 'exact', ())},
+            (1, other_chunk): {'result': ({}, 'exact', ())},
+        }
+        destructibles_sensor.g_offh_destr_proved_layouts = {
+            (1, chunk_id): (85, {}), (1, other_chunk): (1, {})}
+        destructibles_sensor.g_offh_destr_catalog_tree_names = {
+            (1, chunk_id, 4): 85, (1, other_chunk, 4): 1}
+        destructibles_sensor.g_offh_destr_unresolved_obstacles = {
+            (chunk_id, 74): (85, 0, ()),
+            (other_chunk, 6): (1, 0, ('other-box',)),
+        }
+        destructibles_sensor.g_offh_destr_instances = {
+            (chunk_id, 74): {'bin_keys': ((1, 2),)},
+            (other_chunk, 6): {'bin_keys': ((1, 2),)},
+        }
+        destructibles_sensor.g_offh_destr_contact_bins = {
+            (1, 2): {(chunk_id, 74), (other_chunk, 6)}}
+        canonical = {(chunk_id, 1)}
+        publications = {(chunk_id, 2): {'event': 'tree'}}
+        destructibles_sensor.g_offh_tree_state = {
+            'chunks': {chunk_id: {'native_count': 85},
+                       other_chunk: {'native_count': 1}},
+            'native_committed': canonical,
+            'canonical_published': canonical,
+            'publish_pending': publications,
+        }
+        destructibles_sensor.g_offh_destr_catalog_published = {
+            (chunk_id, 2)}
+        destructibles_sensor.g_offh_destr_catalog_publish_pending = {
+            (1, chunk_id, 2): {'event': 'fragile'}}
+
+        self.assertTrue(destructibles_sensor._request_layout_repair_1513(
+            (chunk_id, 74), authored['signature']))
+
+        self.assertTrue(
+            destructibles_sensor._layout_repair_pending_1513(chunk_id))
+        self.assertEqual(
+            1, destructibles_sensor._layout_generation_1513(chunk_id))
+        self.assertIs(
+            native_snapshot,
+            destructibles_sensor.g_offh_destr_native_name_lists[
+                (1, chunk_id)])
+        self.assertIs(
+            other_snapshot,
+            destructibles_sensor.g_offh_destr_native_name_lists[
+                (1, other_chunk)])
+        for cache_name in ('g_offh_destr_item_names',
+                           'g_offh_destr_proved_layouts'):
+            cache = getattr(destructibles_sensor, cache_name)
+            self.assertNotIn((1, chunk_id), cache)
+            self.assertIn((1, other_chunk), cache)
+        self.assertNotIn(
+            (1, chunk_id, 4),
+            destructibles_sensor.g_offh_destr_catalog_tree_names)
+        self.assertNotIn(
+            (chunk_id, 74),
+            destructibles_sensor.g_offh_destr_unresolved_obstacles)
+        self.assertNotIn(
+            chunk_id, destructibles_sensor.g_offh_tree_state['chunks'])
+        self.assertIn(
+            other_chunk, destructibles_sensor.g_offh_tree_state['chunks'])
+        self.assertNotIn(
+            (chunk_id, 74), destructibles_sensor.g_offh_destr_instances)
+        self.assertEqual(
+            {(other_chunk, 6)},
+            destructibles_sensor.g_offh_destr_contact_bins[(1, 2)])
+        self.assertIs(
+            canonical,
+            destructibles_sensor.g_offh_tree_state['native_committed'])
+        self.assertIs(
+            publications,
+            destructibles_sensor.g_offh_tree_state['publish_pending'])
+        self.assertEqual(
+            {(chunk_id, 2)},
+            destructibles_sensor.g_offh_destr_catalog_published)
+        self.assertIn(
+            (1, chunk_id, 2),
+            destructibles_sensor.g_offh_destr_catalog_publish_pending)
+        self.assertGreater(
+            destructibles_sensor._spatial_revision_1513(), 0)
+
+    def test_real_murovanka_chunk_finishes_a_late_layout_repair(self):
+        catalog = json.loads((
+            ROOT / 'destructibles' / '11_murovanka.json').read_text())
+        destructibles_sensor.set_catalog(catalog)
+        prepared = destructibles_sensor._destructible_catalog
+        chunk_id = 32384
+        authored_rows = {}
+        for field in ('baked_instances', 'tree_instances'):
+            authored_rows.update((wire[1], record)
+                for wire, record in prepared[field].items()
+                if wire[0] == chunk_id)
+        self.assertEqual(84, len([record for record in authored_rows.values()
+                                 if record['kind'] != 'tree']))
+        self.assertEqual(29, len([record for record in authored_rows.values()
+                                 if record['kind'] == 'tree']))
+        snapshot = {'native_count': 115, 'names': ('first',)}
+        destructibles_sensor.g_offh_destr_native_name_lists = {
+            (1, chunk_id): snapshot}
+        self.assertTrue(destructibles_sensor._request_layout_repair_1513(
+            (chunk_id, 75), authored_rows[74]['signature']))
+        matches = dict((item if item <= 10 else item + 1,
+                        ((chunk_id, item), record))
+            for item, record in authored_rows.items())
+        entry = {
+            'fingerprint': (115, ()),
+            'layout_key': (1, chunk_id),
+            'placement_matches': matches,
+            'placement_conflicts': set(),
+            'ignored_items': set(),
+        }
+
+        mapping = destructibles_sensor._commit_proved_chunk_layout_1513(
+            entry, chunk_id)
+
+        self.assertIsNotNone(mapping)
+        self.assertFalse(
+            destructibles_sensor._layout_repair_pending_1513(chunk_id))
+        self.assertEqual(113, len(mapping))
+        self.assertEqual(102, sum(
+            authored_wire != (chunk_id, item)
+            for item, (authored_wire, unused_record) in matches.items()))
+        self.assertEqual(
+            authored_rows[10],
+            prepared['baked_instances'][(chunk_id, 10)])
+        self.assertEqual(
+            authored_rows[74],
+            prepared['baked_instances'][(chunk_id, 75)])
+        self.assertIn('gaf001_WoodFence', mapping[75])
+        self.assertEqual(
+            authored_rows[85],
+            prepared['tree_instances'][(chunk_id, 86)])
+        self.assertIn((chunk_id, 11), prepared['excluded_instances'])
+        self.assertIn((chunk_id, 12), prepared['excluded_instances'])
+        self.assertIs(
+            snapshot,
+            destructibles_sensor.g_offh_destr_native_name_lists[
+                (1, chunk_id)])
+        self.assertEqual(
+            (entry['fingerprint'][0], mapping),
+            destructibles_sensor.g_offh_destr_proved_layouts[
+                (1, chunk_id)])
+
+    def test_layout_conflicts_are_slot_local_and_end_the_repair(self):
+        catalog = json.loads((
+            ROOT / 'destructibles' / '11_murovanka.json').read_text())
+        destructibles_sensor.set_catalog(catalog)
+        prepared = destructibles_sensor._destructible_catalog
+        chunk_id = 32384
+        first = prepared['baked_instances'][(chunk_id, 30)]
+        second = prepared['baked_instances'][(chunk_id, 31)]
+        self.assertTrue(destructibles_sensor._request_layout_repair_1513(
+            (chunk_id, 31), first['signature']))
+        entry = {
+            'fingerprint': (36, ()),
+            'layout_key': (1, chunk_id),
+            'placement_matches': {
+                31: ((chunk_id, 30), first),
+                32: ((chunk_id, 30), first),
+                33: ((chunk_id, 31), second),
+            },
+            'placement_conflicts': {34},
+            'ignored_items': set(),
+        }
+        with mock.patch.object(sys, 'stdout', mock.Mock()):
+            mapping = destructibles_sensor._commit_proved_chunk_layout_1513(
+                entry, chunk_id)
+
+        self.assertFalse(
+            destructibles_sensor._layout_repair_pending_1513(chunk_id))
+        self.assertEqual(
+            {(chunk_id, 31), (chunk_id, 32), (chunk_id, 34)},
+            destructibles_sensor.g_offh_destr_isolated_slots)
+        self.assertNotIn(chunk_id, getattr(
+            destructibles_sensor, 'g_offh_destr_isolated_chunks', set()))
+        self.assertEqual({33: second['descriptor_filename']}, mapping)
+        self.assertEqual(
+            second, prepared['baked_instances'][(chunk_id, 33)])
+
+    def test_layout_generation_rejects_stale_unresolved_negative_cache(self):
+        catalog = json.loads((
+            ROOT / 'destructibles' / '11_murovanka.json').read_text())
+        destructibles_sensor.set_catalog(catalog)
+        prepared = destructibles_sensor._destructible_catalog
+        chunk_id = 32384
+        identity = (chunk_id, 74)
+        authored_wire = (chunk_id, 73)
+        authored = prepared['baked_instances'][authored_wire]
+        native_count = 85
+        manager = _Manager()
+        manager.space_id = 1
+        manager.set_chunk_count(chunk_id, native_count)
+        area = types.ModuleType('AreaDestructibles')
+        area.g_destructiblesManager = manager
+        bigworld = types.ModuleType('BigWorld')
+        bigworld.wg_getChunkMatrix = lambda *unused: types.SimpleNamespace(
+            translation=_Vector())
+        matrix_query = mock.Mock(return_value=
+            _CatalogSignatureMatrix(authored['signature']))
+        bigworld.wg_getDestructibleMatrix = matrix_query
+        math_module = types.ModuleType('Math')
+        math_module.Vector3 = _Vector
+        math_module.Matrix = lambda value: value
+
+        with mock.patch.dict(sys.modules, {
+                'AreaDestructibles': area, 'BigWorld': bigworld,
+                'Math': math_module}), \
+                mock.patch.object(sys, 'stdout', mock.Mock()):
+            first = destructibles_sensor._confirmed_unresolved_obstacle_1513(
+                1, identity)
+            self.assertEqual((), first)
+            self.assertTrue(
+                destructibles_sensor._layout_repair_pending_1513(chunk_id))
+            self.assertNotIn(identity, getattr(
+                destructibles_sensor,
+                'g_offh_destr_unresolved_obstacles', {}))
+            entry = {
+                'fingerprint': (native_count, ()),
+                'layout_key': (1, chunk_id),
+                'placement_matches': {74: (authored_wire, authored)},
+                'placement_conflicts': set(),
+                'ignored_items': set(),
+            }
+            destructibles_sensor._commit_proved_chunk_layout_1513(
+                entry, chunk_id)
+            destructibles_sensor.g_offh_destr_unresolved_obstacles[
+                identity] = (native_count, 0, ())
+            before = matrix_query.call_count
+            boxes = destructibles_sensor._confirmed_unresolved_obstacle_1513(
+                1, identity)
+
+        self.assertTrue(boxes)
+        self.assertGreater(matrix_query.call_count, before)
+        cached = destructibles_sensor.g_offh_destr_unresolved_obstacles[
+            identity]
+        self.assertEqual(
+            destructibles_sensor._layout_generation_1513(chunk_id),
+            cached[1])
+        self.assertEqual(boxes, cached[2])
+
     def test_malinovka_log_fence_streams_with_native_module_indices(self):
         catalog_path = ROOT / 'destructibles' / '02_malinovka.json'
         catalog = json.loads(catalog_path.read_text())
@@ -10283,6 +10558,68 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         self.assertEqual(1, counts['receipt_contact_misses'])
         self.assertEqual(1, counts['receipt_contact_stores'])
         self.assertEqual(1, counts['receipt_contact_entries'])
+
+    def test_hull_guard_reads_generation_cache_after_empty_receipt_reuse(self):
+        (unused_manager, unused_mapper, unused_area, unused_bigworld,
+         unused_math, descriptor) = self._empty_catalog_scan_fixture()
+        destructibles_sensor.g_offh_destr_instances = {}
+        destructibles_sensor.g_offh_destr_contact_bins = {}
+        authority = types.SimpleNamespace(
+            is_destroyed=lambda *unused: False)
+        identity = (22, 7)
+        boxes = (((0.0, 0.0, 3.0),
+                  ((0.5, 0.0, 0.0), (0.0, 1.0, 0.0),
+                   (0.0, 0.0, 0.5)), None),)
+
+        with mock.patch.object(
+                destructibles_sensor, '_get_destr_authority',
+                return_value=authority):
+            # The first empty scan installs the fast receipt used by player and
+            # Bot pose guards.  A later full sweep can prove an unidentified
+            # native model without adding it to the registered contact bins.
+            self.assertFalse(destructibles_sensor._catalog_hull_contact(
+                _Vector(), 0.0, 6.0, descriptor, 0.04))
+            destructibles_sensor.g_offh_destr_unresolved_obstacles = {
+                identity: (0, 0, boxes)}
+            self.assertTrue(destructibles_sensor._catalog_hull_contact(
+                _Vector(), 0.0, 6.0, descriptor, 0.04))
+            self.assertTrue(destructibles_sensor._catalog_hull_contact(
+                _Vector(), 0.0, 6.0, descriptor, 0.04))
+
+        counts = destructibles_sensor.registry_counts()
+        self.assertEqual(2, counts['receipt_contact_hits'])
+        self.assertEqual(1, counts['receipt_contact_misses'])
+
+    def test_hull_guard_legacy_unresolved_cache_expires_on_layout_change(self):
+        (unused_manager, unused_mapper, unused_area, unused_bigworld,
+         unused_math, descriptor) = self._empty_catalog_scan_fixture()
+        destructibles_sensor.g_offh_destr_instances = {}
+        destructibles_sensor.g_offh_destr_contact_bins = {}
+        authority = types.SimpleNamespace(
+            is_destroyed=lambda *unused: False)
+        identity = (22, 7)
+        boxes = (((0.0, 0.0, 3.0),
+                  ((0.5, 0.0, 0.0), (0.0, 1.0, 0.0),
+                   (0.0, 0.0, 0.5)), None),)
+
+        with mock.patch.object(
+                destructibles_sensor, '_get_destr_authority',
+                return_value=authority):
+            self.assertFalse(destructibles_sensor._catalog_hull_contact(
+                _Vector(), 0.0, 6.0, descriptor, 0.04))
+            # Pre-generation battles used exactly this two-field cache shape.
+            destructibles_sensor.g_offh_destr_unresolved_obstacles = {
+                identity: (0, boxes)}
+            self.assertTrue(destructibles_sensor._catalog_hull_contact(
+                _Vector(), 0.0, 6.0, descriptor, 0.04))
+            destructibles_sensor._advance_layout_generation_1513(22)
+            self.assertFalse(destructibles_sensor._catalog_hull_contact(
+                _Vector(), 0.0, 6.0, descriptor, 0.04))
+            # A malformed old entry must not pass an integer to the OBB loop.
+            destructibles_sensor.g_offh_destr_unresolved_obstacles = {
+                identity: (0, 1)}
+            self.assertFalse(destructibles_sensor._catalog_hull_contact(
+                _Vector(), 0.0, 6.0, descriptor, 0.04))
 
     def test_spatial_batch_publishes_partial_index_once_on_exception(self):
         destructibles_sensor.xrange = range

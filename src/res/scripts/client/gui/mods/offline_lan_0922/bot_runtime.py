@@ -12345,34 +12345,38 @@ class BotRuntime(object):
                         self._hard_contact_response(
                             state, position, state['yaw'], speed,
                             descriptor, step, now)
+                    report_hard_contact = getattr(
+                        self.navigator, 'report_hard_contact', None)
                     report_contact = getattr(
                         self.navigator, 'report_blocked_step', None)
                     contact_target = command.get('move_position')
-                    if (contact_target is not None and
-                            navigation_grid is not None):
-                        # A generic contact came from the pre-turn direction
-                        # probe.  A resolved one came from this exact hull yaw
-                        # and signed speed; a reversing command can still be
-                        # braking a forward-moving hull (or vice versa).
-                        contact_yaw = travel_yaw
-                        if realised_contact_yaw is not None:
-                            contact_yaw = realised_contact_yaw
-                        edge_length = _number(
-                            getattr(navigation_grid, 'cell_size', 0.0), 0.0)
-                        if edge_length > 0.0:
-                            contact_target = (
-                                position[0] + math.sin(
-                                    contact_yaw) * edge_length,
-                                position[1],
-                                position[2] + math.cos(
-                                    contact_yaw) * edge_length)
-                    if (callable(report_contact) and
-                            contact_target is not None):
+                    # The driver owns the realised heading failure above.
+                    # Navigation instead needs a stable first route edge: a
+                    # wedged hull's recovery yaw can alternate on every try
+                    # and would otherwise restart the replan verdict count.
+                    contact_yaw = travel_yaw
+                    if realised_contact_yaw is not None:
+                        contact_yaw = realised_contact_yaw
+                    if (callable(report_hard_contact) and
+                            contact_target is not None and
+                            command.get('movement_intent', True)):
+                        report_hard_contact(
+                            state['id'], position, contact_target,
+                            contact_yaw, now)
+                    elif (callable(report_contact) and
+                            contact_target is not None and
+                            command.get('movement_intent', True)):
                         report_contact(
                             state['id'], position,
                             contact_target, now)
                 elif motion_status in ('soft', 'cap_crushed'):
                     self._hard_contact_grinds[state['id']] = 1
+                if (resolved_motion and
+                        motion_status in ('clear', 'crushed')):
+                    clear_contact = getattr(
+                        self.navigator, 'clear_blocked_contact', None)
+                    if callable(clear_contact):
+                        clear_contact(state['id'])
                 if resolved_motion and callable(self.motion_report):
                     self.motion_report(
                         state['id'], motion_status, contact_v0, speed)
