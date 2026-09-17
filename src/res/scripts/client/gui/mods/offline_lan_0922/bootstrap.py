@@ -576,6 +576,8 @@ def _selected_vehicle(config, restore_saved=True):
         career = save_mode == port_config.SAVE_MODE_NEW_ACCOUNT
         prices = economy.price_index(vehicles, nations)
         shop_item_prices, not_in_shop_items = economy.shop_prices(prices)
+        shop_vehicle_offers = economy.retail_gold_vehicle_offers(
+            vehicles, nations, prices)
         owned_types = _owned_vehicle_types(
             vehicles, nations, career, prices, consult_save=restore_saved)
         restricted = owned_types is not None
@@ -740,6 +742,11 @@ def _selected_vehicle(config, restore_saved=True):
             'customizationItemCount': customization_count,
             'vehicleTypeCompactDescrs': vehicle_type_compact_descrs,
             'unlockItemCompactDescrs': unlock_item_compact_descrs,
+            # The server's offer entitlement is deliberately separate from
+            # persisted research.  data.stats merges it only into the native
+            # lobby view that #1513's vehicle shop uses for its UNLOCKED
+            # criterion; researching and save migration remain honest.
+            'shopVehicleOfferCompactDescrs': shop_vehicle_offers,
             'optionalDeviceCount': artefact_counts['optionalDevice'],
             'equipmentCount': artefact_counts['equipment'],
             'notInShopItems': not_in_shop_items,
@@ -760,6 +767,8 @@ def _selected_vehicle(config, restore_saved=True):
                              economy.SANDBOX_GARAGE_SLOTS),
             'accountBerths': (economy.CAREER_BARRACKS_BERTHS if career else
                               economy.SANDBOX_BARRACKS_BERTHS),
+            'premiumExpiryTime': 0,
+            'personalMissionSelections': {'regular': []},
             'tankmanCosts': (economy.CAREER_TANKMAN_COSTS if career else
                              economy.SANDBOX_TANKMAN_COSTS),
             'deviceRemovalCost': dict(

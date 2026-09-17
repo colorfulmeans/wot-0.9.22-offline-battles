@@ -12012,6 +12012,42 @@ class NativeItemNameContractTests(unittest.TestCase):
         self.assertEqual([0, 2], calls)
         self.assertNotIn('g_offh_destr_isolated_chunks', destructibles_sensor.__dict__)
 
+    def test_compacted_rebuild_retains_handlerless_isolated_slot_proof(self):
+        tree = 'speedtree/test/oak.spt'
+        self.descriptors[tree] = {'type': self.TREE, 'health': 10}
+        items = ((-1, None), (self.TREE, tree))
+        names, (mapping, status, unused) = self._align(items)
+        self.assertEqual('exact', status)
+        self.assertEqual({1: tree}, mapping)
+        self.assertEqual(
+            -1,
+            destructibles_sensor.g_offh_destr_isolated_name_types[
+                (1, 22)][0])
+
+        # Ruinberg exposed this order of events: a handlerless slot is proved,
+        # a later catalog/matrix check quarantines it, and a neighbouring
+        # destruction rebuilds the compacted filename alignment. The rebuild
+        # must retain the ``-1`` proof without calling into that slot again.
+        destructibles_sensor.g_offh_destr_isolated_slots = {(22, 0)}
+        destructibles_sensor.g_offh_destr_item_names = {}
+        calls = []
+        bigworld = types.ModuleType('BigWorld')
+
+        def category(unused_space, unused_chunk, item, unused_module):
+            calls.append(item)
+            self.assertNotEqual(0, item)
+            return self.TREE
+
+        bigworld.wg_getDestructibleEffectCategory = category
+        rebuilt, status = destructibles_sensor._chunk_native_names_1513(
+            bigworld, self._area(), 1, 22, len(items), names)
+
+        self.assertEqual('exact', status)
+        self.assertEqual({1: tree}, rebuilt)
+        self.assertEqual([1], calls)
+        self.assertNotIn(
+            'g_offh_destr_isolated_chunks', destructibles_sensor.__dict__)
+
     def test_short_list_with_empty_name_never_uses_list_positions(self):
         first = 'speedtree/test/first.spt'
         second = 'speedtree/test/second.spt'

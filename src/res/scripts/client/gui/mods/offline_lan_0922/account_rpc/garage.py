@@ -31,6 +31,7 @@ rebuild the descriptor from a stale copy and silently drop the other's change.
 import contextlib
 import copy
 import math
+import time
 from gui.mods.offline_lan_0922.vehicle_records import (
     MODULE_ATTRIBUTES, mounted_module_items)
 
@@ -2770,6 +2771,60 @@ class GarageState(object):
             self._snapshot.get('accountSlots', 0)) + 1
         self.revision += 1
         return self._snapshot['accountSlots']
+
+    def buy_premium(self, days, now=None):
+        """Buy one packet and extend the account from its current expiry.
+
+        ``CMD_PREMIUM`` carries the packet's day count. The shop table is the
+        authority for both the button and the debit; an unknown duration is
+        refused before the balance or expiry changes.
+        """
+        from gui.mods.offline_lan_0922.account_rpc import economy
+
+        days = _int(days)
+        price = economy.PREMIUM_COSTS.get(days)
+        if price is None:
+            raise GarageError('the shop does not offer %d premium days' % days)
+        if now is None:
+            now = int(time.time())
+        else:
+            now = max(0, _int(now))
+        self._charge({'gold': int(price)})
+        current = max(0, _int(
+            self._snapshot.get('premiumExpiryTime', 0)))
+        self._snapshot['premiumExpiryTime'] = (
+            max(now, current) + days * 24 * 60 * 60)
+        self.revision += 1
+        return self._snapshot['premiumExpiryTime']
+
+    def select_personal_missions(self, branch, mission_ids):
+        """Replace the active regular missions using #1513's chain rules."""
+        from gui.mods.offline_lan_0922.account_rpc import data
+
+        branch = _int(branch)
+        # The stock 0.9.22 personal-missions controller exposes only the
+        # regular campaign.  Branch 1 is legacy data and has zero selectable
+        # slots in this build.
+        if branch != 0:
+            raise GarageError('INVALID_PERSONAL_MISSION_BRANCH')
+        selected = []
+        selected_chains = set()
+        for value in mission_ids or ():
+            mission_id = _int(value)
+            chain_id = data.personal_mission_regular_chain_id(mission_id)
+            if chain_id is None:
+                raise GarageError('INVALID_PERSONAL_MISSION_REQUEST')
+            if mission_id in selected:
+                continue
+            if chain_id in selected_chains:
+                raise GarageError('TOO_MANY_QUESTS_IN_CHAIN')
+            selected.append(mission_id)
+            selected_chains.add(chain_id)
+        progress = self._snapshot.setdefault(
+            'personalMissionSelections', {})
+        progress['regular'] = selected
+        self.revision += 1
+        return selected
 
     def _default_vehicle_settings(self):
         """Return the settings mask a vehicle built at startup would carry.

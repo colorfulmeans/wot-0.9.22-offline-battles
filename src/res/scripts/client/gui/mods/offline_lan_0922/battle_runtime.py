@@ -8363,7 +8363,7 @@ class BattleRuntime(object):
         return False
 
     def _present_loader_intuition(self):
-        """Play the stock intuition notification for an instant shell swap."""
+        """Play the stock intuition notification for a successful shell swap."""
         status_group = getattr(
             self._runtime.constants, 'VEHICLE_MISC_STATUS', None)
         callback = getattr(self._avatar, 'updateVehicleMiscStatus', None)
@@ -8386,7 +8386,7 @@ class BattleRuntime(object):
         return True
 
     def _report_loader_intuition_commit(self, state, hud_presented):
-        """Report only after the instant shell transaction has committed."""
+        """Report only after the intuition shell transaction has committed."""
         try:
             detail = (
                 'result=committed hud=%s shell_index=%d clip=%d '
@@ -8437,9 +8437,8 @@ class BattleRuntime(object):
         entity = edge[0] if edge is not None else None
         previous_reload = state.reload_time
         previous_duration = state.reload_duration
-        # The pre-1.13 loader_intuition perk does not work with cassette
-        # guns.  Retail's server owned this eligibility decision even though
-        # #1513 keeps a generic client-side notification consumer.
+        # Keep the legacy cassette exclusion while applying the requested
+        # percentage-preserving shell swap to ordinary single-shot guns.
         instant = (
             state.clip_size <= 1 and state.burst_count <= 1 and
             self._roll_loader_intuition())
@@ -24147,10 +24146,29 @@ class BattleRuntime(object):
         entity = self._server_entity(record['engine_id'])
         if entity is None:
             raise RuntimeError('stunned LAN vehicle is unavailable')
+        local_gun = None
+        if record.get('local') and not self._worker_mode:
+            local_gun = self._gun_state
+            if local_gun is not None:
+                # Close the interval owned by the old stun factor first.
+                # The new factor starts at this snapshot edge, exactly as the
+                # stock server-owned reload parameter update does.
+                self._advance_local_gun_edge(local_gun)
         previous = getattr(entity, 'stunInfo', 0.0)
         entity.stunInfo = (
             self._server_clock() + remaining if remaining > 0.0 else 0.0)
         entity._offlineStunFactors = dict(factors) if remaining > 0.0 else {}
+        if local_gun is not None:
+            reload_rescaled = self._apply_current_reload_factor(
+                local_gun, entity)
+            if reload_rescaled:
+                self._publish_reload_event(
+                    local_gun.reload_time, local_gun.reload_duration,
+                    force=True)
+            # Stun also changes the exact #1513 aiming, dispersion and
+            # traverse parameters.  Publish that edge together with reload
+            # instead of waiting for the next 100 ms ammunition callback.
+            self._publish_targeting_info(entity, local_gun)
         if not self._worker_mode:
             native_callback = getattr(entity, 'set_stunInfo', None)
             if callable(native_callback):

@@ -441,6 +441,20 @@ class GunMechanicsParityTests(unittest.TestCase):
         self.assertEqual(1, state.clip)
         self.assertTrue(state.can_fire(True))
 
+    def test_loader_intuition_preserves_partial_reload_percentage(self):
+        state = self._loaded_state()
+        state.clip = 0
+        state.reload_duration = 10.0
+        state.reload_time = 7.0
+
+        self.assertTrue(state.sync_shell_index(2, instant=True))
+
+        self.assertEqual(2, state.shot_index)
+        self.assertEqual(0, state.clip)
+        self.assertAlmostEqual(state.reload * 0.7, state.reload_time)
+        self.assertEqual(state.reload, state.reload_duration)
+        self.assertFalse(state.can_fire(True))
+
     def test_loader_intuition_cannot_load_an_empty_shell_type(self):
         state = GunState(_descriptor(clip=(1, 1.0)),
                          ammo_layout={1: 20, 2: 0, 3: 5})

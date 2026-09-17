@@ -45,8 +45,9 @@ except NameError:
 # researched items, the per-vehicle experience and which vehicles are owned.
 # Schema 7 preserves module stock as well as consumables and the actual award
 # needed to replay a settlement after the post-battle file failed to commit.
-SCHEMA = 7
-READABLE_SCHEMAS = (3, 4, 5, 6, SCHEMA)
+# Schema 8 adds account premium expiry and personal-mission selections.
+SCHEMA = 8
+READABLE_SCHEMAS = (3, 4, 5, 6, 7, SCHEMA)
 STATE_FILE_NAME = 'garage_state.json'
 
 # ``repair`` is (outstanding cost, remaining health): a vehicle a battle left
@@ -136,6 +137,10 @@ def _ledger_payload(snapshot):
         encoded = _encode_bytes(compact_descr)
         if encoded is not None:
             recycled.append([encoded, _int_value(dismissed_at)])
+    selections = snapshot.get('personalMissionSelections')
+    selections = selections if isinstance(selections, dict) else {}
+    regular = data.personal_mission_regular_selection(
+        selections.get('regular', ()))
     return {
         'wallet': dict(
             (name, max(0, int(wallet.get(name, 0) or 0)))
@@ -146,6 +151,9 @@ def _ledger_payload(snapshot):
         'berths': max(0, int(snapshot.get('accountBerths', 0) or 0)),
         'barracks': sorted(barracks),
         'recycleBin': sorted(recycled),
+        'premiumExpiryTime': max(
+            0, _int_value(snapshot.get('premiumExpiryTime'))),
+        'personalMissions': {'regular': regular},
     }
 
 
@@ -282,6 +290,14 @@ def _apply_ledger(staged, stored):
     recycled = ledger.get('recycleBin')
     if isinstance(recycled, (list, tuple)):
         staged['recycleBinTankmen'] = _restored_recycle_bin(staged, recycled)
+    if 'premiumExpiryTime' in ledger:
+        staged['premiumExpiryTime'] = max(
+            0, _int_value(ledger.get('premiumExpiryTime')))
+    personal_missions = ledger.get('personalMissions')
+    if isinstance(personal_missions, dict):
+        regular = data.personal_mission_regular_selection(
+            personal_missions.get('regular', ()))
+        staged['personalMissionSelections'] = {'regular': regular}
     return True
 
 

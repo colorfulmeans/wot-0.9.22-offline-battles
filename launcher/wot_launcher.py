@@ -40,9 +40,11 @@ _BALANCE_LABELS = {
 }
 
 _SHOP_HELP = (
-    "Add a gold or reward vehicle to this save for free. It arrives on the "
-    "next game startup. Owned or queued vehicles cannot be added twice. "
-    "Close the game before adding vehicles.")
+    "Add a gold, bond, reward, or retired vehicle to this save for free. It "
+    "arrives on the next game startup. Bond rows follow the first official "
+    "bond-shop roster but include only vehicles this 0.9.22 client ships. "
+    "Owned or queued vehicles cannot be added twice. Close the game before "
+    "adding vehicles.")
 
 LAUNCHER_VERSION = "0.8.4"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
@@ -199,15 +201,28 @@ _CHINESE = {
     "The balances could not be read: %s": "余额读取失败：%s",
     "A balance must be a whole number.": "余额必须是整数。",
     "Garage vehicles": "车库坦克",
+    "Special offers": "特惠",
     "Add to garage": "添加到车库",
     "Gold and reward vehicle": "金币及奖励坦克",
+    "Special vehicle": "特惠坦克",
+    "Gold offer": "金币车",
+    "Bond offer": "债券车",
+    "Reward": "奖励车",
+    "Retired": "旧战车",
+    "Special": "特殊",
     "queued": "待添加",
     "%s - tier %d": "%s - %d级",
     "%s - tier %d (%s)": "%s - %d级（%s）",
-    "Add a gold or reward vehicle to this save for free. It arrives on the "
-    "next game startup. Owned or queued vehicles cannot be added twice. "
-    "Close the game before adding vehicles.":
-        "免费向此存档添加金币或奖励坦克，下次进入游戏时放入车库。已拥有或待添加的坦克不能重复添加；操作前请关闭游戏。",
+    "Add a gold, bond, reward, or retired vehicle to this save for free. It "
+    "arrives on the next game startup. Bond rows follow the first official "
+    "bond-shop roster but include only vehicles this 0.9.22 client ships. "
+    "Owned or queued vehicles cannot be added twice. Close the game before "
+    "adding vehicles.":
+        "免费向此存档添加金币车、债券车、奖励车或旧战车，下次进入游戏时放入车库。"
+        "债券车参考首批官方债券商店，但只列出此 0.9.22 客户端实际包含的车辆。"
+        "已拥有或待添加的坦克不能重复添加；操作前请关闭游戏。",
+    "%s - tier %d - %s": "%s - %d级 - %s",
+    "%s - tier %d - %s (%s)": "%s - %d级 - %s（%s）",
     "Added %s to the queue. It arrives on the next game startup.":
         "已将 %s 加入待添加列表，下次进入游戏时放入车库。",
     "The vehicle could not be added: %s": "添加失败：%s",
@@ -1012,8 +1027,8 @@ class LauncherWindow(object):
         self.account_help_label.config(text=self._t(
             "Edit this save's balances and battle earnings. Before the first "
             "game, these are its starting funds. Close the game before editing."))
-        self.shop_panel.config(text=self._t("Garage vehicles"))
-        self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
+        self.shop_panel.config(text=self._t("Special offers"))
+        self.gold_vehicle_label.config(text=self._t("Special vehicle"))
         self.buy_gold_vehicle_button.config(text=self._t("Add to garage"))
         self.shop_help_label.config(text=self._t(_SHOP_HELP))
         self._refresh_save_slots()
@@ -1445,10 +1460,31 @@ class LauncherWindow(object):
             state = self._t("queued")
         else:
             state = ""
+        offer_kinds = tuple(offer.get("offerKinds") or ())
+        # Tests, legacy extensions and an already-running launcher can supply
+        # the pre-category row shape. Preserve its exact labels so selection
+        # survives a refresh; freshly parsed 0.9.22 rows always carry kinds.
+        if not offer_kinds:
+            if state:
+                return self._t("%s - tier %d (%s)") % (
+                    offer["label"], offer["level"], state)
+            return self._t("%s - tier %d") % (
+                offer["label"], offer["level"])
+        kind_names = {
+            "gold": "Gold offer",
+            "bonds": "Bond offer",
+            "reward": "Reward",
+            "retired": "Retired",
+            "special": "Special",
+        }
+        kinds = " / ".join(
+            self._t(kind_names.get(kind, "Special"))
+            for kind in offer_kinds)
         if state:
-            return self._t("%s - tier %d (%s)") % (
-                offer["label"], offer["level"], state)
-        return self._t("%s - tier %d") % (offer["label"], offer["level"])
+            return self._t("%s - tier %d - %s (%s)") % (
+                offer["label"], offer["level"], kinds, state)
+        return self._t("%s - tier %d - %s") % (
+            offer["label"], offer["level"], kinds)
 
     def _gold_catalogue(self, game_root):
         """Return the client's gold vehicles, read once per game folder.

@@ -5,6 +5,8 @@ The numeric item indices come from the target client's exact
 wire shapes can be tested without importing BigWorld.
 """
 
+import time
+
 
 VEHICLE_ITEM_TYPE = 1
 TANKMAN_ITEM_TYPE = 8
@@ -38,6 +40,20 @@ BARRACKS_VEHICLE_ID = -1
 BATTLE_HERO_ACHIEVEMENTS = frozenset((
     'warrior', 'invader', 'sniper', 'sniper2', 'mainGun', 'defender',
     'steelwall', 'supporter', 'scout', 'evileye'))
+PREMIUM_ACCOUNT_ATTR = 4294967296
+# Exact #1513 data has four regular operations.  Every operation contains the
+# same five vehicle-class chains, with fifteen missions in each chain.  The
+# account may run one mission per chain, so ``slots`` is five; it is not a
+# garage-vehicle capacity despite the stock error key saying ``SLOTS``.
+PERSONAL_MISSION_REGULAR_CHAINS = (
+    'lightTank', 'heavyTank', 'mediumTank', 'AT-SPG', 'SPG')
+PERSONAL_MISSION_QUESTS_PER_CHAIN = 15
+PERSONAL_MISSION_REGULAR_OPERATIONS = 4
+PERSONAL_MISSION_REGULAR_SLOTS = len(PERSONAL_MISSION_REGULAR_CHAINS)
+PERSONAL_MISSION_REGULAR_MAX_ID = (
+    PERSONAL_MISSION_REGULAR_SLOTS *
+    PERSONAL_MISSION_QUESTS_PER_CHAIN *
+    PERSONAL_MISSION_REGULAR_OPERATIONS)
 
 
 DEFAULT_TANKMAN_COSTS = (
@@ -54,6 +70,41 @@ DEFAULT_TANKMAN_COSTS = (
         'baseRoleLoss': 0.0, 'classChangeRoleLoss': 0.0, 'isPremium': True,
     },
 )
+
+
+def personal_mission_regular_chain_id(mission_id):
+    """Return #1513's vehicle-class chain for a regular mission id.
+
+    ``potapov_quests/list.xml`` assigns regular ids 1..300 in blocks of
+    fifteen missions, five blocks per operation.  Chain ids repeat for every
+    operation because selecting a mission in a later operation replaces the
+    active mission for that same vehicle class.
+    """
+    try:
+        mission_id = int(mission_id)
+    except (TypeError, ValueError):
+        return None
+    if mission_id < 1 or mission_id > PERSONAL_MISSION_REGULAR_MAX_ID:
+        return None
+    return ((mission_id - 1) // PERSONAL_MISSION_QUESTS_PER_CHAIN %
+            PERSONAL_MISSION_REGULAR_SLOTS) + 1
+
+
+def personal_mission_regular_selection(values):
+    """Sanitize persisted regular missions to one valid id per chain."""
+    selected = []
+    selected_chains = set()
+    for value in values or ():
+        try:
+            mission_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        chain_id = personal_mission_regular_chain_id(mission_id)
+        if chain_id is None or chain_id in selected_chains:
+            continue
+        selected.append(mission_id)
+        selected_chains.add(chain_id)
+    return selected
 
 
 def _device_removal_cost(vehicle):
@@ -701,6 +752,11 @@ def stats(selected_vehicle=None, postbattle_progress=None):
             if record.get('vehicleTypeCompactDescr') is not None)
     unlocks = set(vehicle.get('unlockItemCompactDescrs', ()))
     unlocks.update(vehicle_types)
+    # #1513's stock ShopVehicleTab applies REQ_CRITERIA.UNLOCKED to premium
+    # offers too.  Retail server data exposes offered gold vehicles as
+    # buyable without turning them into persisted research; reproduce that
+    # presentation entitlement only on the wire.
+    unlocks.update(vehicle.get('shopVehicleOfferCompactDescrs', ()) or ())
     # The garage owns the balances: research spends vehicle experience and a
     # purchase spends credits, so the same file that records what the player
     # has must record what it cost. ``postbattle_progress`` keeps the battle
@@ -724,9 +780,13 @@ def stats(selected_vehicle=None, postbattle_progress=None):
                 continue
     # Sold vehicles retain experience and remain conversion candidates.
     elite = _elite_vehicles(vehicle_types | set(vehicle_xp), unlocks)
+    premium_expiry = max(0, int(vehicle.get('premiumExpiryTime', 0) or 0))
+    premium_active = premium_expiry > int(time.time())
     return {
         'account': {
-            'clanDBID': 0, 'attrs': 0, 'premiumExpiryTime': 0,
+            'clanDBID': 0,
+            'attrs': PREMIUM_ACCOUNT_ATTR if premium_active else 0,
+            'premiumExpiryTime': premium_expiry if premium_active else 0,
             'autoBanTime': 0, 'globalRating': 0,
         },
         'stats': {
@@ -776,12 +836,20 @@ def stats(selected_vehicle=None, postbattle_progress=None):
     }
 
 
-def personal_missions():
+def personal_missions(selected_vehicle=None):
     """#1513's _PersonalMissionsProgressRequester._response indexes
     ``value['potapovQuests']['compDescr']`` for every non-empty diff."""
+    vehicle = selected_vehicle if isinstance(selected_vehicle, dict) else {}
+    saved = vehicle.get('personalMissionSelections')
+    saved = saved if isinstance(saved, dict) else {}
+    regular = personal_mission_regular_selection(saved.get('regular', ()))
     return {
         'compDescr': '',
-        'regular': {'slots': 0, 'selected': [], 'lastIDs': {}},
+        'regular': {
+            'slots': PERSONAL_MISSION_REGULAR_SLOTS,
+            'selected': regular,
+            'lastIDs': {},
+        },
         'training': {'slots': 0, 'selected': [], 'lastIDs': {}},
     }
 
@@ -800,7 +868,7 @@ def sync_data(revision=0, selected_vehicle=None, int_user_settings=None,
         'rev': int(revision) + 1,
         'quests': {},
         'tokens': {},
-        'potapovQuests': personal_missions(),
+        'potapovQuests': personal_missions(selected_vehicle),
         'intUserSettings': dict(int_user_settings or {}),
         'goodies': {},
         'groupLocks': {'groupBattles': [], 'isGroupLocked': []},
@@ -834,16 +902,18 @@ def shop(revision=0, selected_vehicle=None):
     ``Shop.__onSyncDataReceived``; the remaining values keep read-only getters
     deterministic instead of leaving a half-synchronized cache.
     """
-    from gui.mods.offline_lan_0922.account_rpc import garage
+    from gui.mods.offline_lan_0922.account_rpc import economy, garage
 
     vehicle = selected_vehicle if isinstance(selected_vehicle, dict) else {}
     _validate_selected_vehicle(vehicle)
     item_prices = dict(vehicle.get('shopItemPrices', {}))
     nation_count = max(1, int(vehicle.get('shopNationCount', 16)))
+    not_in_shop_items = set(vehicle.get('notInShopItems', ()) or ())
+    not_in_shop_items.difference_update(
+        vehicle.get('shopVehicleOfferCompactDescrs', ()) or ())
     empty_items = {
         'itemPrices': item_prices,
-        'notInShopItems': set(
-            vehicle.get('notInShopItems', ()) or ()),
+        'notInShopItems': not_in_shop_items,
         'vehiclesNotToBuy': set(),
         'vehiclesRentPrices': {},
         'vehiclesToSellForGold': set(),
@@ -887,6 +957,7 @@ def shop(revision=0, selected_vehicle=None):
             # #1513 OptionalDevice.getRemovalPrice uses a separate Money
             # value for optional devices tagged ``deluxe``.
             'paidDeluxeRemovalCost': {'crystal': 200},
+            'premiumCost': dict(economy.PREMIUM_COSTS),
         },
         'goodies': dict(empty_goodies),
         # Prices are scalar gold amounts: ShopCommonStats wraps the helper's
@@ -904,7 +975,7 @@ def shop(revision=0, selected_vehicle=None):
         # carries the same table, so what the window shows is what the garage
         # charges.
         'tankmanCost': _tankman_costs(vehicle),
-        'premiumCost': {},
+        'premiumCost': dict(economy.PREMIUM_COSTS),
         # RefSystem.__update indexes posByXPinTeam directly.  Once this dict is
         # non-empty, its #1513 helpers also index the other three values, so
         # keep the entire native disabled/default shape together.

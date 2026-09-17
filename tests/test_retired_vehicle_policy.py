@@ -64,7 +64,38 @@ class RetiredVehiclePolicyTests(unittest.TestCase):
         self.assertTrue(RETIRED.issubset(by_name))
         for type_name in RETIRED:
             self.assertTrue(by_name[type_name]["retired"])
+            self.assertIn("retired", by_name[type_name]["offerKinds"])
         self.assertIn("germany:G01_Normal", by_name)
+
+    def test_special_offers_mark_every_client_available_official_bond_vehicle(self):
+        catalogue = []
+        for type_name in sorted(
+                gold_shop.OFFICIAL_BOND_VEHICLES_AVAILABLE_0922):
+            nation, vehicle = type_name.split(":", 1)
+            catalogue.append({
+                "name": type_name,
+                "label": vehicle,
+                "nation": nation,
+                "vehicleClass": "mediumTank",
+                "level": 8,
+                "gold": 1,
+                "notInShop": True,
+            })
+        with mock.patch.object(
+                gold_shop, "_ORIGINAL_LIST_GOLD_VEHICLES",
+                return_value=catalogue), mock.patch.object(
+                    gold_shop.vehicle_overlays, "list_vehicle_choices",
+                    return_value=[]):
+            offers = gold_shop._list_garage_vehicles("unused")
+
+        by_name = dict((row["name"], row) for row in offers)
+        self.assertEqual(
+            set(gold_shop.OFFICIAL_BOND_VEHICLES_AVAILABLE_0922),
+            set(by_name))
+        for type_name, price in (
+                gold_shop.OFFICIAL_BOND_VEHICLES_AVAILABLE_0922.items()):
+            self.assertEqual(price, by_name[type_name]["bondPrice"])
+            self.assertIn("bonds", by_name[type_name]["offerKinds"])
 
     def test_non_retired_hidden_vehicle_is_not_excluded_by_name_policy(self):
         self.assertTrue(bot_lineup_profiles.vehicle_choice_is_eligible({

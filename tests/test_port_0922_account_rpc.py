@@ -190,6 +190,76 @@ class AccountRpcTests(unittest.TestCase):
         self._run()
         self.assertEqual([(31, commands.RES_SUCCESS, '')], self.player.responses)
 
+    def test_premium_purchase_debits_gold_and_publishes_active_account(self):
+        snapshot = _full_garage_snapshot()
+        snapshot['wallet'] = {
+            'credits': 100000, 'gold': 5000, 'freeXP': 0, 'crystal': 0}
+        context = {
+            'garage': account_requests.garage.GarageState(snapshot),
+        }
+        server = FakeServer(
+            lambda: self.player,
+            lambda delay, fn: self.pending.append((delay, fn)), context)
+        now = 1700000000
+
+        with mock.patch.object(
+                account_requests.garage.time, 'time', return_value=now):
+            server.doCmdInt3(61, commands.CMD_PREMIUM, 17, 7, 0)
+            while self.pending:
+                self._run()
+
+        expiry = now + 7 * 24 * 60 * 60
+        self.assertEqual(
+            (61, commands.RES_SUCCESS, ''), self.player.responses[-1])
+        selected = server._context['selected_vehicle']
+        self.assertEqual(3750, selected['wallet']['gold'])
+        self.assertEqual(
+            expiry, selected['premiumExpiryTime'])
+        update = pickle.loads(self.player.updates[-1])
+        self.assertEqual({'gold': 3750}, update['stats'])
+        self.assertEqual(expiry, update['account']['premiumExpiryTime'])
+        self.assertTrue(
+            update['account']['attrs'] & account_data.PREMIUM_ACCOUNT_ATTR)
+
+    def test_personal_mission_selection_publishes_five_vehicle_class_chains(self):
+        snapshot = _full_garage_snapshot()
+        context = {
+            'garage': account_requests.garage.GarageState(snapshot),
+        }
+        server = FakeServer(
+            lambda: self.player,
+            lambda delay, fn: self.pending.append((delay, fn)), context)
+
+        server.doCmdIntArr(
+            62, commands.CMD_SELECT_POTAPOV_QUESTS,
+            [0, 1, 16, 31, 46, 61])
+        while self.pending:
+            self._run()
+
+        self.assertEqual(
+            (62, commands.RES_SUCCESS, ''), self.player.responses[-1])
+        progress = pickle.loads(self.player.updates[-1])['potapovQuests']
+        self.assertEqual(5, progress['regular']['slots'])
+        self.assertEqual([1, 16, 31, 46, 61],
+                         progress['regular']['selected'])
+        self.assertEqual(
+            {'regular': [1, 16, 31, 46, 61]},
+            server._context['selected_vehicle']['personalMissionSelections'])
+
+        before = copy.deepcopy(server._context['selected_vehicle'])
+        update_count = len(self.player.updates)
+        server.doCmdIntArr(
+            63, commands.CMD_SELECT_POTAPOV_QUESTS,
+            [0, 2, 3, 31, 46, 61])
+        while self.pending:
+            self._run()
+
+        self.assertEqual(commands.RES_FAILURE, self.player.responses[-1][1])
+        self.assertEqual(
+            'TOO_MANY_QUESTS_IN_CHAIN', self.player.responses[-1][2])
+        self.assertEqual(update_count, len(self.player.updates))
+        self.assertEqual(before, server._context['selected_vehicle'])
+
     def test_postbattle_progress_pushes_the_banked_ledger_now(self):
         """The garage banked the battle; the push reads what it banked.
 
@@ -1054,7 +1124,8 @@ class AccountRpcTests(unittest.TestCase):
             progress = personal_missions[quest_type]
             self.assertEqual(
                 set(pm_contract['progressDirectKeys']), set(progress))
-            self.assertEqual(0, progress['slots'])
+            self.assertEqual(
+                5 if quest_type == 'regular' else 0, progress['slots'])
             self.assertEqual([], progress['selected'])
             self.assertEqual({}, progress['lastIDs'])
 
@@ -1199,6 +1270,20 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual({50001, 50002}, stats['eliteVehicles'])
         self.assertTrue(
             garage['unlockItemCompactDescrs'].issubset(stats['unlocks']))
+
+    def test_gold_vehicle_offer_is_buyable_without_persisted_research(self):
+        garage = _full_garage_snapshot()
+        garage['shopVehicleOfferCompactDescrs'] = {60001}
+        garage['shopItemPrices'][60001] = {'gold': 12500}
+        garage['notInShopItems'] = {60001, 60002}
+
+        synced = account_data.sync_data(selected_vehicle=garage)
+        shop = account_data.shop(selected_vehicle=garage)
+
+        self.assertNotIn(60001, garage['unlockItemCompactDescrs'])
+        self.assertIn(60001, synced['stats']['unlocks'])
+        self.assertNotIn(60001, shop['items']['notInShopItems'])
+        self.assertIn(60002, shop['items']['notInShopItems'])
 
     def test_incomplete_selected_vehicle_is_rejected_before_hangar_build(self):
         with self.assertRaisesRegex(ValueError, 'one seat per role'):

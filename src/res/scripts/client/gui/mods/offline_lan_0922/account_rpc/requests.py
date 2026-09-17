@@ -54,7 +54,7 @@ def _garage(context):
     return state
 
 
-def _fitting(context, mutate, extension=None):
+def _fitting(context, mutate, extension=None, extra_diff=None):
     """Apply one fitting mutation and push the resulting inventory diff.
 
     #1513 refreshes the garage from ``PlayerAccount.update``, which unpickles
@@ -121,6 +121,10 @@ def _fitting(context, mutate, extension=None):
                     changed_stats[name] = added
         if changed_stats:
             diff['stats'] = changed_stats
+        if callable(extra_diff):
+            additional = extra_diff(state.snapshot(), outcome)
+            if isinstance(additional, dict):
+                diff.update(additional)
         if moved_recycled:
             # PlayerAccount._update hands every diff to the recycle bin, so
             # who was dismissed and who was hired back travel with the same
@@ -475,6 +479,32 @@ def _buy_berths(context, args):
     return _fitting(context, lambda state: state.buy_berths())
 
 
+def _buy_premium(context, args):
+    # Stats.upgradeToPremium -> _doCmdInt3(CMD_PREMIUM, shopRev, days,
+    # arenaUniqueID). The last value only attributes a battle purchase.
+    if len(args) < 2:
+        return Result(commands.RES_FAILURE, 'INVALID_PREMIUM_REQUEST')
+    return _fitting(
+        context, lambda state: state.buy_premium(args[1]),
+        extra_diff=lambda snapshot, unused_outcome: {
+            'account': data.stats(snapshot)['account'],
+        })
+
+
+def _select_personal_missions(context, args):
+    # Account.selectPersonalMissions -> intArr [branch, *missionIDs]. An empty
+    # tail is the stock "stop all missions in this branch" operation.
+    values = list(args[0] if args else ())
+    if not values:
+        return Result(commands.RES_FAILURE, 'INVALID_PERSONAL_MISSION_REQUEST')
+    return _fitting(
+        context,
+        lambda state: state.select_personal_missions(values[0], values[1:]),
+        extra_diff=lambda snapshot, unused_outcome: {
+            'potapovQuests': data.personal_missions(snapshot),
+        })
+
+
 def _vehicle_settings(context, args):
     # _doCmdInt3: (vehInvID, setting, isOn)
     if len(args) < 3:
@@ -780,6 +810,7 @@ HANDLERS = {
     commands.CMD_UNLOCK: _unlock,
     commands.CMD_EXCHANGE: _exchange,
     commands.CMD_FREE_XP_CONV: _convert_free_xp,
+    commands.CMD_PREMIUM: _buy_premium,
     commands.CMD_BUY_SLOT: _buy_slot,
     commands.CMD_BUY_BERTHS: _buy_berths,
     commands.CMD_BUY_VEHICLE: _buy_vehicle,
@@ -797,6 +828,7 @@ HANDLERS = {
     commands.CMD_ENQUEUE_RANDOM: _enqueue_random,
     commands.CMD_DEQUEUE_RANDOM: _dequeue_random,
     commands.CMD_SET_LANGUAGE: _set_language,
+    commands.CMD_SELECT_POTAPOV_QUESTS: _select_personal_missions,
     commands.CMD_COMPLETE_TUTORIAL: lambda context, args: Result(commands.RES_SUCCESS),
     commands.CMD_REQ_BATTLE_RESULTS: _request_battle_results,
     commands.CMD_BATTLE_RESULTS_RECEIVED: _battle_results_received,

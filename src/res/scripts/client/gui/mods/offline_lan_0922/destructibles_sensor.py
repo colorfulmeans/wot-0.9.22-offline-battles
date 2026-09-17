@@ -1051,15 +1051,16 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 			entry['placement_matches'][item_index] = match
 		elif placement_status == 'ambiguous':
 			entry['placement_conflicts'].add(item_index)
+		# A later matrix/catalog failure may quarantine this slot. Preserve every
+		# already-proved native group, including ``-1`` (the resolved group with no
+		# filename handler), so rebuilding a compacted name list never escalates one
+		# bad handlerless item into a whole-chunk outage.
+		globals().setdefault('g_offh_destr_isolated_name_types', {}).setdefault(
+			(int(space_id), int(chunk_id)), {})[item_index] = int(native_type)
 		if native_type == -1:
 			# This native group contributes no name to the compacted list, but
 			# its independently proved placement must survive a layout repair.
 			continue
-		# A later matrix/catalog failure may quarantine this slot. Preserve its
-		# already-proved name group before that can happen, so rebuilding the
-		# bounded alignment cache never escalates one bad item to a whole chunk.
-		globals().setdefault('g_offh_destr_isolated_name_types', {}).setdefault(
-			(int(space_id), int(chunk_id)), {})[item_index] = int(native_type)
 		entry['items_by_type'].setdefault(
 			int(native_type), []).append(item_index)
 	entry['next_item'] = end_item

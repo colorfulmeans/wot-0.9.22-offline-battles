@@ -151,7 +151,8 @@ class FakeServer(object):
             revision = int(getattr(player.syncData, 'revision', 0) or 0)
         except (AttributeError, TypeError, ValueError):
             revision = 0
-        diff.setdefault('potapovQuests', data.personal_missions())
+        diff.setdefault('potapovQuests', data.personal_missions(
+            self._context.get('selected_vehicle')))
         diff.setdefault('prevRev', revision)
         diff.setdefault('rev', revision + 1)
         payload = _pickle.dumps(diff, _pickle.HIGHEST_PROTOCOL)

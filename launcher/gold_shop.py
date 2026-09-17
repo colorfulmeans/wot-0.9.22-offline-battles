@@ -29,6 +29,23 @@ LEDGER_FILE_NAME = save_ledger.LEDGER_FILE_NAME
 # shopping list.  The client applies the same limit.
 MAX_PENDING_VEHICLES = 512
 
+# The first official permanent vehicle-for-bonds assortment (2019), reduced
+# to definitions physically shipped by the pinned 0.9.22 client.  T-34
+# shielded and M10 RBFM were released later and therefore cannot be built by
+# this client.  These annotations are presentation metadata only: the
+# launcher's special-offer compatibility page still adds a selected vehicle
+# for free, exactly like its reward and retired-vehicle rows.
+OFFICIAL_BOND_VEHICLES_AVAILABLE_0922 = {
+    "china:Ch25_121_mod_1971B": 15000,
+    "usa:A92_M60": 15000,
+    "uk:GB13_FV215b": 12000,
+    "france:F74_AMX_M4_1949_Liberte": 8000,
+    "usa:A117_T26E5_Patriot": 8000,
+    "germany:G119_Pz58_Mutz": 8000,
+    "ussr:R146_STG_Tday": 8000,
+    "germany:G70_PzIV_Hydro": 3000,
+}
+
 
 # Development/test reloads can import this module more than once. Retain the
 # real client catalogue underneath an already-installed augmentation instead
@@ -36,6 +53,25 @@ MAX_PENDING_VEHICLES = 512
 _ORIGINAL_LIST_GOLD_VEHICLES = getattr(
     vehicle_overlays.list_gold_vehicles, "_retired_vehicle_base",
     vehicle_overlays.list_gold_vehicles)
+
+
+def _annotate_special_offer(row):
+    """Attach stable categories used by the launcher's special-offer page."""
+    offer = dict(row)
+    name = str(offer.get("name") or "")
+    kinds = []
+    if int(offer.get("gold", 0) or 0) > 0:
+        kinds.append("gold")
+    bond_price = OFFICIAL_BOND_VEHICLES_AVAILABLE_0922.get(name)
+    if bond_price is not None:
+        kinds.append("bonds")
+        offer["bondPrice"] = int(bond_price)
+    if bool(offer.get("notInShop", False)):
+        kinds.append("reward")
+    if bool(offer.get("retired", False)):
+        kinds.append("retired")
+    offer["offerKinds"] = tuple(kinds or ("special",))
+    return offer
 
 
 def _list_garage_vehicles(game_root):
@@ -62,6 +98,7 @@ def _list_garage_vehicles(game_root):
             "retired": True,
         })
         offered.add(type_name)
+    offers = [_annotate_special_offer(row) for row in offers]
     return sorted(offers, key=lambda row: (
         str(row.get("nation") or ""), int(row.get("level", 0) or 0),
         str(row.get("label") or row.get("name") or "")))

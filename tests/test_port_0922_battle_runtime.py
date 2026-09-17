@@ -10276,7 +10276,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(12.0, checkpoint['reload_duration'])
         self.assertEqual(400.5, battle._gun_last_tick)
 
-    def test_loader_intuition_switch_closes_old_reload_and_stays_loaded(self):
+    def test_loader_intuition_switch_preserves_partial_reload_progress(self):
         battle, state, settings, client, unused_record = \
             self._pending_fire_shell_change_battle(clip_size=1, clip=0)
         state.reload = 6.0
@@ -10322,16 +10322,11 @@ class BattleRuntimeContractTests(unittest.TestCase):
                         unused_float_args):
             status = battle._runtime.constants.VEHICLE_MISC_STATUS
             self.assertEqual(status.LOADER_INTUITION_WAS_USED, code)
-            # This mirrors #1513 AmmoController.useLoaderIntuition: it only
-            # refills the selected cassette after native reload state is 0.
-            self.assertEqual(0.0, stock['reload'])
+            # #1513 AmmoController.useLoaderIntuition refills only when native
+            # reload state is zero. A partial percentage-preserving swap keeps
+            # this positive, so the notification cannot manufacture a round.
+            self.assertAlmostEqual(2.3, stock['reload'])
             self.assertEqual(102, stock['current'])
-            for compact_descr, (quantity, unused_clip) in list(
-                    stock['ammo'].items()):
-                stock['ammo'][compact_descr] = (quantity, 0)
-            quantity = stock['ammo'][stock['current']][0]
-            stock['ammo'][stock['current']] = (
-                quantity, min(state.clip_size, quantity))
             events.append(('intuition', stock['current']))
 
         battle._avatar.updateVehicleSetting = update_setting
@@ -10362,34 +10357,34 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([
             ('reload', 101, 0.0, 6.0),
             ('ammo', 101, 0),
-            ('ammo', 102, 1),
+            ('ammo', 102, 0),
             ('current', 102),
-            ('reload', 102, 0.0, 6.0),
-            ('intuition', 102),
-        ], events)
+        ], events[:4])
+        self.assertEqual(('reload', 102), events[4][:2])
+        self.assertAlmostEqual(2.3, events[4][2])
+        self.assertEqual(6.0, events[4][3])
+        self.assertEqual(('intuition', 102), events[5])
         self.assertEqual(input_count + 1, len(messages))
         self.assertEqual(1, state.shot_index)
         self.assertIsNone(state.pending_index)
-        self.assertEqual(1, state.clip)
-        self.assertEqual(0.0, state.reload_time)
+        self.assertEqual(0, state.clip)
+        self.assertAlmostEqual(2.3, state.reload_time)
         self.assertEqual(initial_ammo, tuple(state.ammo))
-        self.assertTrue(state.can_fire(True))
-        self.assertEqual((10, 1), stock['ammo'][102])
+        self.assertFalse(state.can_fire(True))
+        self.assertEqual((10, 0), stock['ammo'][102])
         self.assertEqual(1, payload['shell_index'])
         self.assertEqual(1, payload['next_shell_index'])
         self.assertFalse(payload['shell_change_pending'])
-        self.assertEqual(1, checkpoint['clip'])
+        self.assertEqual(0, checkpoint['clip'])
         self.assertEqual(1, checkpoint['clip_size'])
-        self.assertEqual(0.0, checkpoint['reload_time'])
+        self.assertAlmostEqual(2.3, checkpoint['reload_time'])
         self.assertEqual(6.0, checkpoint['reload_duration'])
 
         events[:] = []
         clock[0] = 501.3
         battle._advance_local_gun_to(battle._server_entity(10))
-        self.assertEqual([], [event for event in events
-                             if event[0] == 'reload' and event[2] > 0.0])
-        self.assertEqual(1, state.clip)
-        self.assertEqual(0.0, state.reload_time)
+        self.assertAlmostEqual(1.3, state.reload_time)
+        self.assertEqual(0, state.clip)
 
     def test_loader_intuition_is_not_rolled_for_an_autoloader(self):
         battle, state, settings, client, unused_record = \
@@ -33079,6 +33074,33 @@ class StunStateTests(unittest.TestCase):
             mock.call('stun', 0.0),
             runtime.bigworld.avatar.guiSessionProvider.
             invalidateVehicleState.call_args)
+
+    def test_local_stun_rescales_active_reload_immediately_by_percentage(self):
+        battle, runtime, record, entity = self._battle(True)
+        battle._server = types.SimpleNamespace(vehicle_id=10)
+        battle._projectile_server_time_ms = 15000
+        battle._projectile_server_local_time = 100.0
+        battle._gun_state = gun_mechanics.GunState(entity.typeDescriptor)
+        battle._gun_state.reload = 10.0
+        battle._gun_state.reload_duration = 10.0
+        battle._gun_state.reload_time = 6.0
+
+        self.assertTrue(battle._apply_stun_state(record, {
+            'stun_end_server_time_ms': 20000,
+            'stun_attacker_kind': 'bot', 'stun_attacker_id': 7,
+            'stun_factors': {'reload': 1.5}}))
+
+        self.assertEqual(15.0, battle._gun_state.reload_duration)
+        self.assertEqual(9.0, battle._gun_state.reload_time)
+        self.assertEqual((10, 9.0, 15.0), runtime.bigworld.avatar.reload)
+
+        self.assertTrue(battle._apply_stun_state(record, {
+            'stun_end_server_time_ms': 0,
+            'stun_attacker_kind': '', 'stun_attacker_id': 0}))
+
+        self.assertEqual(10.0, battle._gun_state.reload_duration)
+        self.assertEqual(6.0, battle._gun_state.reload_time)
+        self.assertEqual((10, 6.0, 10.0), runtime.bigworld.avatar.reload)
 
     def test_ordered_remote_stun_merges_before_native_feedback(self):
         battle, runtime, record, entity = self._battle(False)

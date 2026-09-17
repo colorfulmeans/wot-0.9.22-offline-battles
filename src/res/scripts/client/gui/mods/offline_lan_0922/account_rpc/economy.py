@@ -82,6 +82,19 @@ MAX_EARNINGS_PERCENT = 10000
 PREMIUM_VEHICLE_CREDITS_PERCENT = 150
 PREMIUM_VEHICLE_TAG = 'premium'
 
+# Offline shop policy. Premium packet prices are server data and are absent
+# from the packaged client; these are the standard legacy WoT gold packages
+# exposed by the #1513 PremiumWindow contract.
+PREMIUM_COSTS = {
+    1: 250,
+    3: 650,
+    7: 1250,
+    30: 2500,
+    90: 6500,
+    180: 10000,
+    360: 18000,
+}
+
 # What #1513's own ``ShopCommonStats`` falls back to when the shop stream does
 # not carry the key, in gold.  These are shipped client values, not policy, so
 # the offline shop publishes exactly them and the garage charges exactly them.
@@ -352,6 +365,29 @@ def shop_prices(index):
         if price[price_catalogue.NOT_IN_SHOP]:
             not_in_shop.add(compact_descr)
     return prices, not_in_shop
+
+
+def retail_gold_vehicle_offers(vehicles_module, nations_module, index):
+    """Return gold vehicles the stock #1513 shop actually offered.
+
+    The native vehicle shop applies ``REQ_CRITERIA.UNLOCKED`` even to a
+    premium vehicle and renders ``SHOP_ERRORS_UNLOCKNEEDED`` otherwise.  A
+    retail account receives those offer descriptors in its server-side
+    unlock view; they are purchasable offers, not researched tech-tree
+    progress.  Keep ``notInShop`` reward vehicles out of this set so hidden
+    event/reward definitions do not leak into the ordinary armory.
+    """
+    offers = set()
+    make = vehicles_module.makeIntCompactDescrByID
+    for nation_id in range(len(nations_module.NAMES)):
+        for vehicle_type_id in vehicles_module.g_list.getList(nation_id):
+            compact_descr = make('vehicle', nation_id, vehicle_type_id)
+            price = index.get(compact_descr)
+            if (price is not None and
+                    price[price_catalogue.GOLD] > 0 and
+                    not price[price_catalogue.NOT_IN_SHOP]):
+                offers.add(int(compact_descr))
+    return offers
 
 
 def cost(index, compact_descr, count=1):

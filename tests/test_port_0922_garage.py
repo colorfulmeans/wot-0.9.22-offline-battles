@@ -3027,6 +3027,24 @@ class GaragePersistenceTests(unittest.TestCase):
         snapshot['shopItemPrices'][50002] = {'credits': 0, 'gold': 0}
         return snapshot
 
+    def test_premium_and_personal_missions_survive_a_restart(self):
+        snapshot = copy.deepcopy(SNAPSHOT)
+        snapshot['wallet'] = {
+            'credits': 100000, 'gold': 5000, 'freeXP': 0, 'crystal': 0}
+        state = self._state(snapshot)
+        expiry = state.buy_premium(7, now=1700000000)
+        state.select_personal_missions(0, [1, 16])
+        store = self._store()
+        store.mark_dirty()
+        self.assertTrue(store.flush(state.snapshot()))
+
+        restored = self._restart()
+
+        self.assertEqual(expiry, restored['premiumExpiryTime'])
+        self.assertEqual(
+            {'regular': [1, 16]}, restored['personalMissionSelections'])
+        self.assertEqual(3750, restored['wallet']['gold'])
+
     def test_the_rounds_a_battle_fired_stay_spent_across_a_restart(self):
         """A restart that refilled the racks would be free ammunition."""
         state = self._state(self._matching_snapshot())

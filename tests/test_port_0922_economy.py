@@ -224,6 +224,27 @@ class PriceIndexTests(unittest.TestCase):
         # A free item is still an item; it is priced at nothing, not absent.
         self.assertEqual({'credits': 0}, prices[30])
 
+    def test_only_retail_gold_vehicles_receive_shop_offer_entitlement(self):
+        class _List(object):
+            def getList(self, nation_id):
+                return {7: object(), 8: object(), 9: object()}
+
+        vehicles = types.SimpleNamespace(
+            makeIntCompactDescrByID=lambda unused_kind, nation, item: (
+                nation * 100 + item),
+            g_list=_List())
+        nations = types.SimpleNamespace(NAMES=('ussr',))
+        prices = {
+            7: (0, 1500, False),
+            8: (0, 11500, True),
+            9: (100000, 0, False),
+        }
+
+        self.assertEqual(
+            {7},
+            ECONOMY.retail_gold_vehicle_offers(
+                vehicles, nations, prices))
+
 
 class PurchaseTests(unittest.TestCase):
     def test_buying_an_item_charges_the_catalogue_price(self):
@@ -800,6 +821,51 @@ class VehiclePurchaseTests(unittest.TestCase):
 
 
 class CurrencyTests(unittest.TestCase):
+    def test_premium_packet_charges_the_published_price_and_extends_time(self):
+        snapshot = _snapshot()
+        snapshot['wallet']['gold'] = 5000
+        snapshot['premiumExpiryTime'] = 1700003600
+        state = _state(snapshot)
+
+        expiry = state.buy_premium(7, now=1700000000)
+
+        self.assertEqual(3750, state.snapshot()['wallet']['gold'])
+        self.assertEqual(
+            1700003600 + 7 * 24 * 60 * 60, expiry)
+
+    def test_unoffered_or_unaffordable_premium_packet_is_atomic(self):
+        snapshot = _snapshot()
+        snapshot['wallet']['gold'] = 100
+        snapshot['premiumExpiryTime'] = 1700003600
+        state = _state(snapshot)
+        before = copy.deepcopy(state.snapshot())
+
+        with self.assertRaises(GARAGE.GarageError):
+            state.buy_premium(2, now=1700000000)
+        self.assertEqual(before, state.snapshot())
+        with self.assertRaises(GARAGE.GarageError):
+            state.buy_premium(7, now=1700000000)
+        self.assertEqual(before, state.snapshot())
+
+    def test_personal_missions_allow_one_active_quest_per_vehicle_class_chain(self):
+        state = _state()
+
+        selected = state.select_personal_missions(
+            0, [1, 1, 16, 31, 46, 61])
+
+        self.assertEqual([1, 16, 31, 46, 61], selected)
+        # The stock client sends the full replacement list: changing the LT
+        # mission replaces chain 1 while the other four stay active.
+        selected = state.select_personal_missions(
+            0, [2, 16, 31, 46, 61])
+        self.assertEqual([2, 16, 31, 46, 61], selected)
+        before = copy.deepcopy(state.snapshot())
+        with self.assertRaises(GARAGE.GarageError):
+            state.select_personal_missions(0, [1, 2, 16, 31, 46, 61])
+        with self.assertRaises(GARAGE.GarageError):
+            state.select_personal_missions(1, [1])
+        self.assertEqual(before, state.snapshot())
+
     def test_gold_converts_to_credits_at_the_published_rate(self):
         state = _state()
 
