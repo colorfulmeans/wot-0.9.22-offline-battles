@@ -1157,7 +1157,9 @@ def _persisted_result_receipt(value):
         if (isinstance(parsed, bool) or not isinstance(parsed, int) or
                 parsed < low or (high is not None and parsed > high)):
             raise ValueError("invalid persisted battle receipt number")
-    if not isinstance(value.get("premature_leave"), bool):
+    if (not isinstance(value.get("premature_leave"), bool) or
+            ("watched_battle_to_end" in value and not isinstance(
+                value["watched_battle_to_end"], bool))):
         raise ValueError("invalid persisted battle receipt leave state")
     stats = value.get("stats")
     rewards = value.get("rewards")
@@ -4382,12 +4384,28 @@ class BattleState:
                 return False
             if not player.participating:
                 return True
+            voluntary = message.get("voluntary", True)
+            if not isinstance(voluntary, bool):
+                return False
             was_alive = bool(player.alive)
+            overturn = self.player_overturn_state.get(player_id) or {}
+            # Avatar.isVehicleOverturned covers both CAUTION and DANGER;
+            # the server promotes level only after the native ignore delay.
+            overturned = int(overturn.get("level", 0)) in (1, 2)
             participant = self.round_participants.get(player.account_key)
             if participant is not None:
                 # Preserve the final participant state for the result receipt
                 # before the unobserved remainder is adjudicated from bot state.
                 participant["alive"] = was_alive
+                # Match the regular battle exit warning: a destroyed or
+                # overturned vehicle may return to the garage without
+                # deserting. Transport loss and native startup failure are
+                # not a voluntary confirmation of that warning either.
+                participant["premature_leave"] = bool(
+                    voluntary and was_alive and
+                    self.phase == "battle" and self.battle_result is None and
+                    self.battle_mode != "training" and
+                    not overturned)
                 participant["health"] = int(player.health)
                 participant["death_reason"] = int(player.death_reason)
                 participant["death_attacker_kind"] = str(
@@ -10421,8 +10439,10 @@ class BattleState:
                     "duration": max(0, int(round(
                         float(self.tick) / TICK_HZ))),
                     "premature_leave": bool(
-                        live_player is None or
-                        not live_player.participating),
+                        participant.get("premature_leave", False)),
+                    "watched_battle_to_end": bool(
+                        live_player is not None and live_player.connected and
+                        live_player.participating),
                     "stats": dict(public_row["stats"]),
                     "rewards": rewards,
                     "crystal_rewards": crystal_rewards,

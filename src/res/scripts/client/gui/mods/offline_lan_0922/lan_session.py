@@ -2399,7 +2399,7 @@ class LANSession(object):
         if bool(_message_value(message, 'lobby_restored', False)):
             leave = getattr(self.client, 'leave_battle', None)
             try:
-                if not callable(leave) or not leave():
+                if not callable(leave) or not leave(voluntary=False):
                     raise RuntimeError(
                         'LAN server did not accept failed battle leave')
             except Exception:
@@ -2700,7 +2700,10 @@ class LANSession(object):
                         returning['generation'] == self._client_generation and
                         _message_value(message, 'round_id') ==
                         returning['round_id'] and
-                        not _message_value(message, 'premature_leave', False)):
+                        _message_value(
+                            message, 'watched_battle_to_end',
+                            not _message_value(
+                                message, 'premature_leave', False))):
                     returning['arena_unique_id'] = _message_value(
                         message, 'arena_unique_id')
                 self._publish_postbattle_progress()

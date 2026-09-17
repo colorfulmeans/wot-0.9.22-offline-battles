@@ -3104,6 +3104,31 @@ class GaragePersistenceTests(unittest.TestCase):
         self.assertFalse(restored.get('firstWinDays'))
         self.assertFalse(restored.get('dailyMissions'))
 
+    def test_destroyed_exit_banks_daily_and_first_win_once_after_restart(self):
+        snapshot = self._matching_snapshot()
+        snapshot['dailyMissions'] = {
+            'day': 0, 'battles': 2, 'damage': 2999, 'wins': 0, 'claimed': []}
+        vehicles, tankmen = _modules()
+        arguments = dict(
+            tankmen_module=tankmen, vehicles_module=vehicles,
+            rewards={'credits': 1000, 'xp': 100, 'free_xp': 5},
+            health=0, battle_start=150,
+            daily_facts={'damage': 1, 'won': True, 'finished_at': 200,
+                         'premature_leave': False})
+        result = self._store().apply_battle_crew_xp(
+            snapshot, 'destroyed:1', 50001, 100, 1, **arguments)
+        self.assertTrue(result['income']['first_win'])
+        self.assertEqual(['battles', 'damage', 'wins'], result['daily_missions'])
+        self.assertEqual(['xp', 'credits', 'crew_xp'], result['daily_reserves'])
+        restored = self._restart(self._matching_snapshot())
+        before = copy.deepcopy(restored)
+        retry = self._store().apply_battle_crew_xp(
+            restored, 'destroyed:1', 50001, 100, 1, **arguments)
+        self.assertFalse(retry['applied'])
+        self.assertEqual(result['daily_missions'], retry['daily_missions'])
+        self.assertEqual(result['daily_reserves'], retry['daily_reserves'])
+        self.assertEqual(before, restored)
+
     def test_training_spends_ammunition_but_no_repair_rewards_or_daily_progress(self):
         snapshot = self._settling_snapshot()
         before_xp = snapshot['vehicles'][0]['tankmen'].copy()

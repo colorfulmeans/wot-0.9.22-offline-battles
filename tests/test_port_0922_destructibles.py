@@ -9189,7 +9189,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 handle(manager, 1, 22, 37)
             note.assert_not_called()
 
-    def test_fragile_native_replacement_survives_item_wide_broken_filter(self):
+    def test_fragile_native_callback_never_revives_broken_normal_materials(self):
         authority = self._ground_filter_fixture({(37, None)})
         destructibles_sensor.g_offh_destr_runtime_space = 1
         with mock.patch.object(destructibles_sensor, '_get_destr_authority',
@@ -9201,12 +9201,77 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             self.assertFalse(callback(71, 0, 37, 22))
         destructibles_sensor.note_native_fragile_replacement(1, 22, 37)
         for callback in filters:
-            self.assertTrue(callback(71, 0, 37, 22))
+            for material in (71, 72, 73, 75, 86):
+                for flags in (0, 0x80):
+                    self.assertFalse(callback(material, flags, 37, 22))
+                    # An intact neighbour or backing wall is not this item.
+                    self.assertTrue(callback(material, flags, 38, 22))
+                    self.assertTrue(callback(material, flags, 37, 23))
+            for material in (87, 90, 100):
+                self.assertTrue(callback(material, 0, 37, 22))
+            # Real replacement geometry may use an ordinary material. The
+            # native callback still releases that support for crushed cars.
             self.assertTrue(callback(2, 0, 37, 22))
         self.assertTrue(destructibles_sensor.native_replacement_bsp_active())
         destructibles_sensor._invalidate_chunk_native_names_1513(22)
         for callback in filters:
             self.assertFalse(callback(71, 0, 37, 22))
+            self.assertFalse(callback(2, 0, 37, 22))
+
+    def test_reported_flowerbeds_and_stone_fences_keep_broken_skin_hidden(self):
+        cases = (
+            ('08_ruinberg', 32637, 123,
+             (24.33201789855957, 0.8024803996086121, -186.6285400390625)),
+            ('08_ruinberg', 32637, 106,
+             (27.580198287963867, 0.918630063533783, -180.2846221923828)),
+            ('08_ruinberg', 32637, 102,
+             (31.397663116455078, 1.0067789554595947, -170.6769256591797)),
+            ('23_westfeld', 33153, 3,
+             (297.80621337890625, 15.135435104370117, 248.66091918945312)),
+            ('23_westfeld', 33409, 29,
+             (302.6313171386719, 15.091239929199219, 243.82839965820312)),
+        )
+        for map_name, chunk_id, item_index, point in cases:
+            with self.subTest(map=map_name, chunk=chunk_id, item=item_index):
+                data = json.loads((ROOT / 'destructibles' /
+                                   (map_name + '.json')).read_text())
+                destructibles_sensor.set_catalog(data)
+                row = next(row for row in data['instances']
+                           if row[14:16] == [chunk_id, item_index])
+                record = data['resources'][row[12]]
+                boxes = destructibles_sensor._baked_world_boxes_1513(
+                    record, row[:12], row[13], data['locator_quantization'])
+                # The actual report hit intersects this authored object. The
+                # report does not contain its native material; exercise the
+                # normal/damaged contract independently below.
+                self.assertTrue(any(destructibles_sensor._point_in_world_box(
+                    _Vector(point), box) for box in boxes))
+                identity = (chunk_id, item_index)
+                instance = {'filename': row[12].lower(), 'kind': 'fragile',
+                            'boxes': boxes, 'item_scale': row[16]}
+                destructibles_sensor.g_offh_destr_runtime_space = 1
+                destructibles_sensor.g_offh_destr_instances = {identity: instance}
+                destructibles_sensor.g_offh_destr_contact_bins = bins = {}
+                destructibles_sensor._index_catalog_instance_1513(
+                    bins, identity, instance)
+                authority = types.SimpleNamespace(
+                    destroyed_keys=lambda chunk: {(item_index, None)}
+                    if chunk == chunk_id else ())
+                with mock.patch.object(destructibles_sensor,
+                        '_get_destr_authority', return_value=authority):
+                    filters = (
+                        destructibles_sensor.ground_collision_filter(
+                            point[0], point[2]),
+                        destructibles_sensor.prepare_horizontal_collision_filter(
+                            _Vector(point[0] - 4, point[1], point[2] - 4),
+                            _Vector(point[0] + 4, point[1], point[2] + 4)))
+                    destructibles_sensor.note_native_fragile_replacement(
+                        1, chunk_id, item_index)
+                    for callback in filters:
+                        self.assertFalse(callback(73, 0, item_index, chunk_id))
+                        self.assertFalse(callback(73, 0x80, item_index, chunk_id))
+                        self.assertTrue(callback(87, 0, item_index, chunk_id))
+                        self.assertTrue(callback(2, 0, -1, -1))
 
     def test_stationary_multi_module_structure_crushes_each_module(self):
         detail, authority, unused_descriptor = (

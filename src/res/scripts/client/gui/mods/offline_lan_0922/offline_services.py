@@ -31,6 +31,10 @@ RETIRED_BOND_OFFERS = {
 }
 BOND_OFFERS = dict(OFFICIAL_BOND_OFFERS, **RETIRED_BOND_OFFERS)
 
+# Four resource categories share three simultaneous activation slots.
+# Keep the native readiness checks, slot panel and counter on this limit.
+MAX_ACTIVE_RESERVES = 3
+
 # WG API 2.40.0 response captured on 2016-04-26, before 0.9.22:
 # victor-lyan/wotwrap@931feede6d2f86e7f46973a25b6df6b233e261bd,
 # tests/json/encyclopedia.boosters.json. Each row is percent, hours, API ID.
@@ -312,7 +316,7 @@ def transact(state, action, key, now=None):
                 if (current is not None and
                         RESERVE_BY_ID[current].percent >= RESERVE_BY_ID[key].percent):
                     raise GarageError('This reserve type is already active.')
-                if current is None and len(active) >= 3:
+                if current is None and len(active) >= MAX_ACTIVE_RESERVES:
                     raise GarageError('Only three reserve types can be active.')
                 if reserves['counts'][key] < 1:
                     raise GarageError('No personal reserve of this type is owned.')

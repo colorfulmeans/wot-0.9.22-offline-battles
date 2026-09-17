@@ -3870,11 +3870,16 @@ premium/first-win replay matrix also covers 50/100/150/200 percent save income.
 
 Reports `20260918-002345-1049c84c783b` and
 `20260918-003256-afb94deeac69` identify the current launcher build, so this is
-not explained by a stale mod installation. A premature exit already reaches
-the durable receipt as `premature_leave`, but bootstrap omitted it from daily
-facts. Bootstrap now forwards it and both settlement and daily policy reject
-progress from such a battle. The first-win entitlement is retained as well.
-All battle-related daily labels explicitly require completion. Hashed daily
+not explained by a stale mod installation. Bootstrap forwards the durable
+receipt's `premature_leave` fact to daily policy, and settlement preserves the
+first-win entitlement for abandoned battles. The September 18 follow-up
+separates abandonment from returning to the garage after destruction: the
+server freezes voluntary, live, non-overturned abandonment at the leave
+boundary instead of treating every departed participant as a deserter.
+`watched_battle_to_end` separately owns result auto-opening and survival
+statistics; old receipts retain their historical presentation fallback. A
+destroyed participant can advance ordinary daily goals when the round settles.
+Connection loss and failed startup are not a confirmed abandonment warning. Hashed daily
 selection and reset remain at 00:00 UTC / 08:00 Beijing; receipt replay cannot
 grant the same reward again.
 
@@ -3882,8 +3887,11 @@ Badge cards use native achievement ownership and show unearned badges in the
 locked collection. The Account command validates ownership independently of
 the page. A saved verification marker distinguishes newly validated selection
 from the earlier unrestricted cosmetics; it does not manufacture campaign or
-ranked achievements. The 90-day premium packet reuses the existing 180-day
-artwork while keeping the 90-day product, duration and 6500-gold price.
+ranked achievements. The 90-day premium packet now bundles its own 98-pixel transparent
+90-day emblem instead of borrowing the 180-day image, keeping the 90-day
+product, duration and 6500-gold price. The legacy WG artwork was obtained
+from the third-party mirror documented in THIRD_PARTY_NOTICES.md; it is not
+claimed to be an extracted #1513 client asset.
 
 Premium sales now save a recovery entitlement with the hull's credit selling
 value plus 10%, independent of ammunition, equipment and crew sold with it.
@@ -3912,6 +3920,15 @@ visibility pass. The accordion hides and disables non-vehicle buttons,
 including keyboard selection; its native controller retains disposal ownership.
 It does not mutate the shared `FITTING_TYPES.STORE_SLOTS` array.
 
+The September 18 reports still showed the ordinary shop in Special Offers.
+The reference `StoreView` enables `ViewStack.cache`, whose key is the linkage,
+not the tab ID. Sharing `ShopUI` therefore suppressed `NEED_UPDATE` on a cache
+hit and prevented registration of `BondShop`. The adapter now disables this
+parent view's cache before `as_initS` creates its first component. Native
+`clearCurrentVew` unregisters and disposes the old tab before creating the next
+one. Regression coverage checks shop/offers/shop and offers/shop/offers;
+original tank artwork and duplicate-purchase protection remain in use.
+
 The public Flash SDK at `CH4MPi/GUIFlash` commit
 `78d711d336cf55d73e62d0ab996fc18bbfbd893f` provides the reviewed
 `StoreComponent`, `ShopVehicleView`, `VehicleView`, `Accordion` and
@@ -3936,7 +3953,15 @@ allows three resource types, and a stronger same-type reserve replaces the old
 one after the native confirmation. Replacement truncates the old historical
 interval, preserving late battle-start entitlement without future overlap.
 Catalogue shape, expiry, saved-state reload, replacement, rollback and
-cross-variant exclusion are covered. This preserved international catalogue
+cross-variant exclusion are covered. The three-slot policy is also installed
+into all three native imported `MAX_ACTIVE_BOOSTERS_COUNT` copies and the
+panel's prebuilt `_GUI_SLOTS_PROPS`; changing only the transaction limit would
+leave a regional one-slot UI at 1/1. Uninstall restores the original copies.
+The [2017 official guide](https://wargaming.net/support/en/products/wot/article/18943/)
+describes four resource types; the [three-type redesign](https://worldoftanks.com/en/news/updates/1-18-1-improved-personal-reserves/)
+arrived in 2022 and does not define this client's catalogue. Size depends on
+bonus strength, with duration independent; actual classification remains the
+installed client's `GUI_SETTINGS` rule, not a guessed universal threshold. This preserved international catalogue
 does not prove completeness for later China-only 0.9.22 event offers.
 
 The Ruinberg logs show a compacted-name rebuild failing with
@@ -3949,13 +3974,21 @@ wire, native category and installed descriptor. Regression coverage uses the
 reported Mercedes and motorcycle while another chunk owns exhausted scan
 budget and an unrelated slot is isolated.
 
-The stock `__setFragileDestroyed` callback now records successful native
-replacement for that space/chunk/item. Before it completes, original skins
-are filtered as before. Afterwards, actual replacement surfaces remain in
-ground and horizontal queries even if the accepted fragile key is item-wide.
-No car-shaped obstacle or fabricated support height is added. Chunk unload
-and battle reset clear the marker; the engine's actual destroyed-model BSP
-and material flags still determine whether a wreck supplies support.
+The stock `__setFragileDestroyed` callback records native delivery for that
+space/chunk/item, but its return does not prove that every remaining collision
+face belongs to a replacement. September 18 report coordinates intersect
+Ruinberg `env406_Flowerbed` items 123/106/102 in chunk 32637 and Westfield
+`gaf019_StoneFenceTile` items in chunks 33153/33409. The previous item-wide
+exception made original normal materials solid again after destruction. Both
+ground and horizontal filters now keep accepted 71--86 original materials
+hidden, retaining native damaged-module materials 87--100 and ordinary
+replacement materials after delivery. Unrelated walls and intact neighbours
+still block; no car-shaped obstacle or fabricated support height is added.
+Chunk unload and battle reset clear the delivery marker. Bounded hard-contact
+diagnostics observe existing callbacks and record up to 16 material/flags/item/
+chunk/keep candidates, without adding native queries or asserting callback
+order. The supplied reports did not include material IDs, so exact Windows
+traversal and retained wreck support remain required gameplay checks.
 
 Copied local Siege pose now snapshots body/ground relative offsets once at
 attachment. The previous live products kept importing two unsynchronized
@@ -3965,3 +3998,15 @@ body still share one copied provider. This removes a plausible drift path,
 but neither attached report records Strv S1 sinking, so reproduction and
 native acceptance remain outstanding. Ruinberg destruction, residual car
 support and Swedish Siege motion require the exact #1513 Windows client.
+
+The initial Siege-mode hint uses a separate GUI-ready cache seed. The vehicle
+starts in DISABLED without a change event; skipping that physical no-op must
+not leave `vehicleState` without a `SIEGE_MODE` value. A single local seed
+after `setClientReady` lets the indicator consume `(DISABLED, 0.0)` immediately
+or when it populates later. It does not invoke a fake hydraulic or descriptor
+transition. A reversible offline indicator adapter also prevents the original
+ten-transition tutorial budget from suppressing the requested persistent key
+hint; the saved account counter is preserved, and switching, death and
+observer visibility stay with the native implementation. The reference
+Python is regional #788 and the available Flash SDK is a historical reference;
+no complete Chinese #1513 installation is available for native acceptance.

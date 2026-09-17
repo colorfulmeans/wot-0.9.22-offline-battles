@@ -1229,16 +1229,99 @@ class PostBattleContractTests(unittest.TestCase):
         state.round_id = 7
         player = Player(1, _Socket(), ('127.0.0.1', 1), name='Alice',
                         vehicle='ussr:R11_MS-1', team=1, account_key='a' * 32)
-        player.participating = False
         state.players[1] = player
+        state._freeze_round_participants((player,))
         state._statistics_row('player', 1)['damage_dealt'] = 900
-        self.assertTrue(state._finish_battle(1, 'elimination'))
+        self.assertTrue(state.leave_battle(1, {'round_id': 7}))
         receipt = _latest_receipt(state, player.account_key)
         self.assertTrue(receipt['premature_leave'])
         self.assertEqual(state.round_start_time,
                          receipt['arena_unique_id'] & 0xffffffff)
         self.assertFalse(state._finish_battle(1, 'duplicate'))
         self.assertEqual(receipt, _latest_receipt(state, player.account_key))
+
+    def test_exit_warning_and_watching_are_separate_receipt_facts(self):
+        from gui.mods.offline_lan_0922 import offline_services
+
+        for action, alive, abandoned, watched in (
+                ('leave', True, True, False),
+                ('leave', False, False, False),
+                ('overturn_caution', True, False, False),
+                ('overturn_danger', True, False, False),
+                ('failure', True, False, False),
+                ('disconnect', True, False, False),
+                ('disconnect', False, False, False),
+                ('finish', True, False, True),
+                ('finish', False, False, True)):
+            with self.subTest(action=action, alive=alive):
+                state = BattleState(map_name='01_karelia')
+                state.client_build = CLIENT_BUILD_0922
+                state.phase = 'battle'
+                player = Player(1, _Socket(), ('127.0.0.1', 1),
+                                name='Alice', vehicle='ussr:R11_MS-1',
+                                team=1, account_key='a' * 32)
+                player.alive = alive
+                player.health = 100 if alive else 0
+                state.players[1] = player
+                state._freeze_round_participants((player,))
+                state._statistics_row('player', 1)['damage_dealt'] = 1
+                # Preserve a live remainder on both teams. The ordinary
+                # no-human adjudication selects the stronger allied team.
+                state.bot_manifest = [dict(
+                    id=index, team=index, slot=0, name='Bot-%d' % index,
+                    vehicle='ussr:R11_MS-1', max_health=100,
+                    health=100 if index == 1 else 50)
+                    for index in (1, 2)]
+                state.bot_states = dict((row['id'], dict(row, alive=True))
+                                        for row in state.bot_manifest)
+                if action == 'finish':
+                    self.assertTrue(state._finish_battle(1, 'elimination'))
+                elif action == 'disconnect':
+                    state.remove_player(1)
+                else:
+                    if action.startswith('overturn_'):
+                        state.player_overturn_state[1] = {
+                            'level': 1 if action == 'overturn_caution' else 2,
+                            'check': 1.0, 'time': 1.0}
+                    message = {'round_id': state.round_id,
+                               'voluntary': action != 'failure'}
+                    self.assertTrue(state.leave_battle(1, message))
+                    # Retrying leave after the server retires the vehicle
+                    # must not replace a live abandonment with a dead exit.
+                    self.assertTrue(state.leave_battle(1, message))
+                receipt = _latest_receipt(state, player.account_key)
+                self.assertEqual(abandoned, receipt['premature_leave'])
+                self.assertEqual(watched, receipt['watched_battle_to_end'])
+                self.assertTrue(lan_client_module._valid_battle_receipt(receipt))
+                self.assertEqual(receipt, lan_server_module.
+                                 _persisted_result_receipt(dict(receipt)))
+                snapshot = {'dailyMissions': {
+                    'day': 1, 'battles': 2, 'damage': 2999,
+                    'wins': 0, 'claimed': []}}
+                applied = []
+                store = postbattle_store.PostBattleStore(path=None)
+                store._account_key = player.account_key
+                def settle(row):
+                    applied.append(row['receipt_id'])
+                    return {'daily_reserves': offline_services.advance_daily(
+                        snapshot, {'premature_leave': row['premature_leave'],
+                                   'damage': row['stats']['damage'],
+                                   'won': row['winner'] == row['team']}, 86402)}
+                store.set_progress_applier(settle)
+                self.assertTrue(store.accept(receipt))
+                self.assertFalse(store.accept(receipt))
+                self.assertEqual([receipt['receipt_id']], applied)
+                self.assertEqual(2 if abandoned else 3,
+                                 snapshot['dailyMissions']['battles'])
+                self.assertEqual([] if abandoned else ['battles', 'damage', 'wins'],
+                                 snapshot['dailyMissions']['claimed'])
+                self.assertEqual(watched, store.should_show_immediately(
+                    receipt['arena_unique_id']))
+                stats = store.progress()['vehicles'][player.vehicle]
+                self.assertEqual(int(alive and watched), stats['survivedBattles'])
+                packed = _packed_vehicle(receipt)
+                self.assertEqual(abandoned, packed['isPrematureLeave'])
+                self.assertEqual(watched, packed['watchedBattleToTheEnd'])
 
     def test_server_receipt_reuses_complete_round_roster_and_statistics(self):
         state = BattleState(map_name='01_karelia', team_size=2)
@@ -1434,7 +1517,8 @@ class PostBattleContractTests(unittest.TestCase):
         state.remove_player(first.player_id)
         state._finish_battle(2, 'team_eliminated')
         original = _latest_receipt(state, first.account_key)
-        self.assertTrue(original['premature_leave'])
+        self.assertFalse(original['premature_leave'])
+        self.assertFalse(original['watched_battle_to_end'])
 
         state._reset_round()
         rejoined, error = state.add_player(
@@ -1495,7 +1579,8 @@ class PostBattleContractTests(unittest.TestCase):
 
             self.assertIsNotNone(state.battle_result)
             minted = _latest_receipt(state, account_key)
-            self.assertTrue(minted['premature_leave'])
+            self.assertFalse(minted['premature_leave'])
+            self.assertFalse(minted['watched_battle_to_end'])
             # The ledger is on disk before anything could have been sent.
             self.assertTrue(Path(ledger).is_file())
 

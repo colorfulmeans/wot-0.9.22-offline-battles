@@ -106,16 +106,35 @@ offers and save identities are preserved. New gold prices scale proportionally
 from those offline offers, not from a claimed historical retail price list.
 Up to three different resource types can run together; a stronger reserve can
 replace its type after confirmation. Timers continue offline and eligibility
-is fixed at battle start. The Missions tab selects three daily offline goals for completed
-standard battles, damage and completed victories. Early exit never advances
-these goals, including a later team victory, and cannot consume daily x2.
+is fixed at battle start. Both native reserve surfaces expose all three slots.
+The Missions tab selects three daily offline goals for completed standard
+battles, damage and victories. Returning to the garage after destruction still
+qualifies when the round settles. A voluntary exit that triggers the native
+abandonment warning cannot advance these goals or consume daily x2. Surviving
+and watching the battle to its end are separate facts.
 Each goal grants one reserve automatically; goals reset at 00:00 UTC and are
 selected from a fixed reward pool. These prices and daily goals are custom
 offline rules. Purchases, timers, rewards and receipt deduplication persist
 with the selected save.
 
+The preserved API names label the included bonus strengths as follows; this
+is a catalogue of named variants, not a claim about every later event offer or
+the exact Chinese client's continuous quality thresholds. Duration is a
+separate property.
+
+| Resource | Small | Medium | Large |
+| --- | --- | --- | --- |
+| Combat XP | 5% | 10% | 15%, 25%, 50%, 100% |
+| Crew XP | 25% | 50% | 75%, 100%, 200%, 300% |
+| Free XP | 20%, 50% | 75% | 100%, 200%, 300% |
+| Credits | 5% | 10% | 15%, 25%, 50% |
+
+The [2017 official guide](https://wargaming.net/support/en/products/wot/article/18943/)
+lists the four resource types. The [2022 redesign](https://worldoftanks.com/en/news/updates/1-18-1-improved-personal-reserves/)
+merged crew/free XP into the modern three-type system, which is not used here.
+
 The 90-day premium option retains its 6500-gold price and displays a duration
-label and the stock long-term premium emblem. The changed Flash layout still
+label and a dedicated transparent 90-day premium emblem bundled with the mod. The changed Flash layout still
 requires acceptance in the exact Windows client. Battle-result friendly-fire labels remain the installed client's own
 localization: credits have penalty and compensation rows; XP has only a
 penalty. Offline voice chat has no authenticated Vivox service and remains

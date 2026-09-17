@@ -98,6 +98,14 @@ class NativeServiceUITests(unittest.TestCase):
                         'price': (0, 0, 8000), 'currency': 'crystal'}
 
         class StoreView(object):
+            def __init__(self):
+                # StoreView.onPopulate sets this before Python's as_initS.
+                self.flashObject = types.SimpleNamespace(
+                    viewStack=types.SimpleNamespace(cache=True))
+
+            def _isDAAPIInited(self):
+                return True
+
             def as_initS(self, data):
                 self.data = data
 
@@ -143,8 +151,33 @@ class NativeServiceUITests(unittest.TestCase):
                 {'id': 'storeActions', 'linkage': 'StoreActionsViewUI'},
                 {'id': 'shop', 'linkage': 'ShopUI'}]}
             page.as_initS(tabs)
+            self.assertFalse(page.flashObject.viewStack.cache)
             self.assertEqual('ShopUI', page.data['buttonBarData'][0]['linkage'])
             self.assertEqual('StoreActionsViewUI', tabs['buttonBarData'][0]['linkage'])
+            # Model StoreView.clearCurrentVew / ViewStack.createView: the
+            # latter only dispatches NEED_UPDATE on a linkage-cache miss.
+            # The same ShopUI linkage must register a fresh controller for
+            # either direction of travel, and release the previous one.
+            for first, second in (('shop', 'storeActions'),
+                                  ('storeActions', 'shop')):
+                cached_views = {}
+                components = {}
+                previous = None
+                for alias in (first, second, first):
+                    if previous is not None and not page.flashObject.viewStack.cache:
+                        del components[previous]
+                    linkage = next(tab['linkage'] for tab in page.data['buttonBarData']
+                                   if tab['id'] == alias)
+                    if linkage not in cached_views:
+                        component = (current[alias].clazz() if alias == 'storeActions'
+                                     else Shop())
+                        components[alias] = component
+                        if page.flashObject.viewStack.cache:
+                            cached_views[linkage] = component
+                    self.assertEqual({alias}, set(components))
+                    self.assertEqual(alias == 'storeActions',
+                                     isinstance(components[alias], current['storeActions'].clazz))
+                    previous = alias
             shop = current['storeActions'].clazz()
             self.assertEqual('shop', shop.getName())
             self.assertFalse(account_settings.setFilter.called)
@@ -295,7 +328,11 @@ class NativeServiceUITests(unittest.TestCase):
                 pass
 
         exports = {
-            'gui.Scaleform.daapi.view.lobby.boosters.BoostersWindow': {'BoostersWindow': Boosters},
+            'gui.Scaleform.daapi.view.lobby.boosters.BoostersWindow': {
+                'BoostersWindow': Boosters, 'MAX_ACTIVE_BOOSTERS_COUNT': 1},
+            'gui.Scaleform.daapi.view.lobby.boosters.BoostersPanelComponent': {
+                'MAX_ACTIVE_BOOSTERS_COUNT': 1, '_GUI_SLOTS_PROPS': {'slotsCount': 1}},
+            'gui.goodies.goodie_items': {'MAX_ACTIVE_BOOSTERS_COUNT': 1},
             'gui.Scaleform.daapi.view.lobby.boosters.booster_tabs': {
                 'QuestsBoostersTab': Quests, 'TABS_IDS': types.SimpleNamespace(QUESTS=1, SHOP=2)},
             'gui.game_control.BoostersController': {'BoostersController': Controller},

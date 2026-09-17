@@ -1453,7 +1453,8 @@ class SimulationWorkerStateTests(unittest.TestCase):
         self.assertEqual(2, receipts[0]['death_reason'])
         self.assertEqual(1, receipts[0]['finish_reason'])
         self.assertEqual(123, receipts[0]['stats']['damage'])
-        self.assertTrue(receipts[0]['premature_leave'])
+        self.assertFalse(receipts[0]['premature_leave'])
+        self.assertFalse(receipts[0]['watched_battle_to_end'])
 
         result_events = len([
             event for event in state.pending_events

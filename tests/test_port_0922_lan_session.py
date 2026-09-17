@@ -94,8 +94,9 @@ class _Client(object):
         self.round_requests.append(round_seconds)
         return True
 
-    def leave_battle(self):
+    def leave_battle(self, voluntary=True):
         self.leave_calls += 1
+        self.last_leave_voluntary = voluntary
         return True
 
     def select_vehicle(self, vehicle, max_health, outfits=None,
@@ -937,7 +938,9 @@ class LANSessionTests(unittest.TestCase):
             def service_message_data(self, arena):
                 return {'arenaUniqueID': arena}
             def should_show_immediately(self, arena):
-                return not self.rows[arena].get('premature_leave', False)
+                return self.rows[arena].get(
+                    'watched_battle_to_end',
+                    not self.rows[arena].get('premature_leave', False))
 
         self.session._postbattle_store = Store()
         self.session._publish_postbattle_progress = mock.Mock()
@@ -1012,6 +1015,18 @@ class LANSessionTests(unittest.TestCase):
             self.emit('roster', {'phase': 'waiting', 'round_id': 1})
             self._result_receipt()
         self.assertEqual([(123, False, False, True)], requested)
+
+    def test_destroyed_exit_only_notifies_without_opening_results(self):
+        patch, requested = self._result_lifecycle()
+        with patch:
+            self._start_result_round()
+            self.session._on_local_battle_leave()
+            self.assertTrue(self.client.last_leave_voluntary)
+            self.emit('roster', {'phase': 'waiting', 'round_id': 1})
+            self._result_receipt(premature_leave=False,
+                                 watched_battle_to_end=False)
+        self.assertEqual([(123, False, False, True)], requested)
+        self.assertEqual(1, self.session._postbattle_store.progress()['battles'])
 
     def test_join_revokes_natural_return_popup_while_lobby_is_loading(self):
         patch, requested = self._result_lifecycle()
@@ -2313,7 +2328,7 @@ class LANSessionTests(unittest.TestCase):
             'round_id': 7, 'message': 'invalid entity property',
             'lobby_restored': True})
 
-        self.client.leave_battle.assert_called_once_with()
+        self.client.leave_battle.assert_called_once_with(voluntary=False)
         self.assertTrue(self.session._stopped)
         self.assertEqual(1, self.client.stop_calls)
         self.assertEqual([], self.battle_runtime.stopped)

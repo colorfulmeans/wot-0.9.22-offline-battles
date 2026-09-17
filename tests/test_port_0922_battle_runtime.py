@@ -7173,6 +7173,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             runtime = battle_runtime_module._load_runtime()
 
         self.assertIs(cameras, runtime.cameras)
+        self.assertIs(
+            modules['gui.Scaleform.daapi.view.battle.shared.indicators'].
+            SiegeModeIndicator, runtime.siege_mode_indicator_type)
 
     def test_local_state_falls_back_before_roster_publishes_the_player(self):
         battle = BattleRuntime(_runtime())
@@ -10602,6 +10605,137 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertFalse(
             battle.change_vehicle_setting(settings.NEXT_SHELLS, 999))
         self.assertIsNone(state.pending_index)
+
+    def _initial_siege_hud_battle(self):
+        runtime = _runtime()
+        runtime.vehicle_view_state.SIEGE_MODE = 'siege_mode'
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._avatar.playerVehicleID = 10
+        battle._client_ready_received = True
+        descriptor = _Descriptor('sweden:S11_Strv_103B')
+        descriptor.hasSiegeMode = True
+        entity = _Vehicle(
+            10, descriptor, _Vector(), (0, 0, 0), {'health': 500})
+        entity.siegeState = 0
+        runtime.bigworld.entities[10] = entity
+        record = {'engine_id': 10, 'local': True, 'ready': True}
+        return battle, runtime, record, entity
+
+    def test_initial_siege_hud_seeds_the_cache_for_a_late_indicator(self):
+        battle, runtime, record, entity = self._initial_siege_hud_battle()
+        cached = {}
+        shown = []
+        observing = [False]
+
+        def invalidate(state, value):
+            # Like the stock controller, cache the event even if the Flash
+            # indicator has not yet populated/started observing the vehicle.
+            self.assertTrue(battle._client_ready_received)
+            cached[state] = value
+            if observing[0]:
+                shown.append(value)
+
+        provider = battle._avatar.guiSessionProvider
+        provider.invalidateVehicleState.side_effect = invalidate
+        battle._binding = mock.Mock()
+
+        self.assertTrue(battle._seed_local_siege_hud(record))
+        self.assertEqual([], shown)
+        observing[0] = True
+        shown.append(cached['siege_mode'])
+        self.assertEqual([(0, 0.0)], shown)
+        self.assertFalse(battle._seed_local_siege_hud(record))
+        self.assertFalse(battle._apply_siege_state(record, {
+            'siege_state': 0, 'siege_time_left_ms': 0}))
+        provider.invalidateVehicleState.assert_called_once_with(
+            'siege_mode', (0, 0.0))
+        battle._binding.update_vehicle_siege_state.assert_not_called()
+        self.assertEqual(0, entity.siegeState)
+
+    def test_initial_siege_hud_waits_for_gui_and_local_vehicle_readiness(self):
+        battle, runtime, record, entity = self._initial_siege_hud_battle()
+        provider = battle._avatar.guiSessionProvider
+        battle._client_ready_received = False
+        self.assertFalse(battle._seed_local_siege_hud(record))
+        self.assertNotIn('initial_siege_hud_seeded', record)
+        battle._client_ready_received = True
+        record['ready'] = False
+        self.assertFalse(battle._seed_local_siege_hud(record))
+        record['ready'] = True
+        provider.invalidateVehicleState.assert_not_called()
+        self.assertTrue(battle._seed_local_siege_hud(record))
+        provider.invalidateVehicleState.assert_called_once_with(
+            'siege_mode', (0, 0.0))
+
+    def test_initial_siege_hud_excludes_other_vehicles_workers_and_later_modes(self):
+        for case in ('worker', 'remote', 'stale_identity', 'ordinary',
+                     'dead', 'switching', 'enabled'):
+            with self.subTest(case=case):
+                battle, runtime, record, entity = (
+                    self._initial_siege_hud_battle())
+                if case == 'worker':
+                    battle._worker_mode = True
+                elif case == 'remote':
+                    record['local'] = False
+                elif case == 'stale_identity':
+                    battle._avatar.playerVehicleID = 11
+                elif case == 'ordinary':
+                    entity.typeDescriptor.hasSiegeMode = False
+                elif case == 'dead':
+                    entity.health = 0
+                else:
+                    entity.siegeState = 1 if case == 'switching' else 2
+
+                self.assertFalse(battle._seed_local_siege_hud(record))
+                battle._avatar.guiSessionProvider.\
+                    invalidateVehicleState.assert_not_called()
+
+    def test_initial_siege_hud_hook_runs_once_after_native_client_ready(self):
+        runtime = _runtime()
+        runtime.bigworld.defer_vehicle_entry = True
+        battle = BattleRuntime(runtime)
+        seeded = []
+
+        def seed(record):
+            seeded.append((battle._client_ready_received,
+                           record['ready'], record['local'],
+                           battle._sync is None))
+
+        with mock.patch.object(battle, '_seed_local_siege_hud',
+                               side_effect=seed):
+            self.assertTrue(battle.start({
+                'map': '01_karelia', 'vehicle': 'ussr:R11_MS-1',
+                'name': 'Player'}, _minimal_start(), _Client()))
+            runtime.bigworld.callbacks.pop(0)()
+            self.assertEqual([], seeded)
+            runtime.bigworld.enter_pending_vehicle(battle._server.vehicle_id)
+            runtime.bigworld.callbacks.pop(0)()
+            self.assertEqual('running', battle.state)
+            self.assertEqual([(True, True, True, True)], seeded)
+
+    def test_persistent_siege_hint_runtime_restores_hooks_on_battle_quiesce(self):
+        battle, runtime, record, entity = self._initial_siege_hud_battle()
+        battle._local_descriptor = entity.typeDescriptor
+        original_hint = lambda unused_self: None
+        original_state = lambda unused_self, state, time_left: None
+        runtime.siege_mode_indicator_type = type('SiegeModeIndicator', (), {
+            '_SiegeModeIndicator__updateHintView': original_hint,
+            '_SiegeModeIndicator__updateSiegeState': original_state})
+        indicator_type = runtime.siege_mode_indicator_type
+
+        self.assertTrue(battle._enable_siege_hints())
+        self.assertFalse(battle._enable_siege_hints())
+        self.assertIsNot(original_hint, indicator_type.__dict__[
+            '_SiegeModeIndicator__updateHintView'])
+        battle._quiesce_native_presentations()
+        battle._quiesce_native_presentations()
+
+        self.assertIsNone(battle._siege_hints)
+        self.assertIs(original_hint, indicator_type.__dict__[
+            '_SiegeModeIndicator__updateHintView'])
+        self.assertIs(original_state, indicator_type.__dict__[
+            '_SiegeModeIndicator__updateSiegeState'])
 
     def test_siege_setting_is_sent_as_an_authoritative_input_request(self):
         runtime = _runtime()

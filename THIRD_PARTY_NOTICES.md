@@ -75,3 +75,10 @@ assets, trademarks, or other intellectual property.
 This work includes trademarks and/or copyrighted works that are the exclusive
 property of Wargaming. All rights reserved by Wargaming. This work is
 unofficial and is not endorsed by Wargaming.
+
+The bundled `src/res/gui/maps/icons/offline_lan/premium_90_98.png` uses
+legacy Wargaming 90-day Premium Account artwork obtained from the
+[PNGAAA mirror](https://image.pngaaa.com/376/380376.png). It was proportionally
+scaled onto a transparent 98-by-98 canvas without changing the artwork or
+duration. This is not claimed to be an asset extracted from the Chinese
+#1513 client, and the project's code license does not relicense the artwork.

@@ -53,6 +53,7 @@ from gui.mods.offline_lan_0922.projectile_runtime import (
     point_in_expanded_segment_bounds, point_segment_distance_sq,
     projectile_range_distance, trajectory_position)
 from gui.mods.offline_lan_0922.snapshot_sync import SnapshotSync
+from gui.mods.offline_lan_0922.siege_hud import PersistentSiegeHints
 from gui.mods.offline_lan_0922.spawn_planner import SpawnPlanner
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.worker_diagnostics import (
@@ -1407,6 +1408,7 @@ def _load_runtime():
     from gui.app_loader.settings import GUI_GLOBAL_SPACE_ID
     from gui.battle_control.battle_constants import FEEDBACK_EVENT_ID
     from gui.battle_control.battle_constants import VEHICLE_VIEW_STATE
+    from gui.Scaleform.daapi.view.battle.shared.indicators import SiegeModeIndicator
     from gui.mods.offline_lan_0922.compat import g_compatibility
     from gui.shared.utils import HangarSpace
     from items import vehicles
@@ -1453,6 +1455,7 @@ def _load_runtime():
     runtime.vehicles = vehicles
     runtime.feedback_event_id = FEEDBACK_EVENT_ID
     runtime.vehicle_view_state = VEHICLE_VIEW_STATE
+    runtime.siege_mode_indicator_type = SiegeModeIndicator
     return runtime
 
 
@@ -1777,6 +1780,7 @@ class BattleRuntime(object):
         self._local_yaw = 0.0
         self._last_health = {}
         self._client_ready_received = False
+        self._siege_hints = None
         self._local_descriptor = None
         self._bot_fire_seen = {}
         self._bot_fire_confirmations = {}
@@ -3512,6 +3516,11 @@ class BattleRuntime(object):
             self._configure_standard_space_visibility()
             record['ready'] = True
             self._attach_local_presentation()
+            self._run_optional_feature(
+                'persistent Siege mode hint', self._enable_siege_hints)
+            self._run_optional_feature(
+                'initial Siege mode indicator',
+                self._seed_local_siege_hud, (record,))
             if not self._worker_mode:
                 self._runtime.compatibility.set_control_mode_listener(
                     self._on_control_mode_changed)
@@ -24201,6 +24210,50 @@ class BattleRuntime(object):
         record['presented_stun_state'] = signature
         return True
 
+    def _enable_siege_hints(self):
+        if (self._worker_mode or self._avatar is None or
+                self._siege_hints is not None or
+                not bool(getattr(self._local_descriptor, 'hasSiegeMode', False))):
+            return False
+        self._siege_hints = PersistentSiegeHints(
+            self._runtime.siege_mode_indicator_type,
+            self._avatar.guiSessionProvider)
+        return self._siege_hints.install()
+
+    def _seed_local_siege_hud(self, record):
+        """Cache the initial mode after the native client-ready boundary.
+
+        Vehicle construction seeds DISABLED without a property-change event.
+        The stock indicator reads the session controller's SIEGE_MODE cache
+        when it starts observing a vehicle; an empty cache never initializes
+        its hint until the first real mode change.  Seed only that GUI cache,
+        leaving descriptor, gun and hydraulic ownership with the normal
+        snapshot path.  A later indicator population consumes the same cache.
+        """
+        if (self._worker_mode or not self._client_ready_received or
+                self._avatar is None or not record.get('local') or
+                not record.get('ready') or
+                record.get('initial_siege_hud_seeded')):
+            return False
+        engine_id = record['engine_id']
+        if engine_id != self._avatar.playerVehicleID:
+            return False
+        entity = self._server_entity(engine_id)
+        descriptor = getattr(entity, 'typeDescriptor', None)
+        if (not bool(getattr(descriptor, 'hasSiegeMode', False)) or
+                not entity.isAlive()):
+            return False
+        # This boundary precedes snapshot materialization: the newly created
+        # Vehicle is still in its initial travel mode.  Do not overwrite a
+        # real transition if a caller reaches this boundary again later.
+        disabled = self._runtime.constants.VEHICLE_SIEGE_STATE.DISABLED
+        if entity.siegeState != disabled:
+            return False
+        self._avatar.guiSessionProvider.invalidateVehicleState(
+            self._runtime.vehicle_view_state.SIEGE_MODE, (disabled, 0.0))
+        record['initial_siege_hud_seeded'] = True
+        return True
+
     def _apply_siege_state(self, record, state):
         """Apply a server-owned Siege transition through #1513's callback."""
         siege_states = self._runtime.constants.VEHICLE_SIEGE_STATE
@@ -24241,9 +24294,9 @@ class BattleRuntime(object):
                 self._local_siege_pending = None
         if record.get('presented_siege_state') == siege_state:
             return False
-        # Vehicle construction already seeds DISABLED.  Skipping that first
-        # no-op also keeps an additive snapshot field compatible with records
-        # created by older peers and authority-only test doubles.
+        # Vehicle construction already seeds DISABLED. Its initial HUD value
+        # is published separately after client-ready, so this no-op must not
+        # pretend to switch the descriptor, gun law or hydraulic pose.
         if (record.get('presented_siege_state') is None and
                 siege_state == disabled):
             record['presented_siege_state'] = disabled
@@ -26847,6 +26900,9 @@ class BattleRuntime(object):
     def _quiesce_native_presentations(self):
         """Release battle-scoped native visuals before Hangar takes over."""
         cleanup_error = None
+        if self._siege_hints is not None:
+            self._siege_hints.close()
+            self._siege_hints = None
         if self._server is not None:
             try:
                 # Close channel controllers while the current Avatar and

@@ -136,6 +136,9 @@ def _receipt(value):
         raise ValueError('battle receipt identity is invalid')
     if winner not in (0, 1, 2):
         raise ValueError('battle receipt winner is invalid')
+    if ('watched_battle_to_end' in value and not isinstance(
+            value['watched_battle_to_end'], bool)):
+        raise ValueError('battle receipt watched state is invalid')
     raw_stats = value.get('stats')
     raw_rewards = value.get('rewards')
     if not isinstance(raw_stats, dict) or not isinstance(raw_rewards, dict):
@@ -320,6 +323,10 @@ def _receipt(value):
             _int(value.get('death_reason'), -1), 255)),
         'duration': max(0, _int(value.get('duration'))),
         'premature_leave': bool(value.get('premature_leave', False)),
+        # Historical receipts used one flag for both facts. Preserve their
+        # saved presentation while new receipts distinguish death/retirement.
+        'watched_battle_to_end': value.get(
+            'watched_battle_to_end', not value.get('premature_leave', False)),
         'stats': stats,
         'rewards': rewards,
         'friendly_fire': friendly_fire.facts(value.get('friendly_fire')),
@@ -842,7 +849,7 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'autoEquipCost': (service['equipment_credits'],
                           service['equipment_gold'], service['equipment_crystal']),
         'isPrematureLeave': receipt['premature_leave'],
-        'watchedBattleToTheEnd': not receipt['premature_leave'],
+        'watchedBattleToTheEnd': receipt['watched_battle_to_end'],
         'isTeamKiller': False,
     }
     avatar = {
@@ -858,7 +865,7 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'avatarDamageDealt': 0,
         'avatarKills': 0,
         'isPrematureLeave': receipt['premature_leave'],
-        'watchedBattleToTheEnd': not receipt['premature_leave'],
+        'watchedBattleToTheEnd': receipt['watched_battle_to_end'],
     }
     common = {
         'arenaTypeID': _arena_type_id(receipt['map']),
@@ -1212,7 +1219,7 @@ class PostBattleStore(object):
                     receipt = archived
                     break
         return bool(receipt is not None and
-                    not receipt.get('premature_leave', False))
+                    receipt.get('watched_battle_to_end', False))
 
     def acknowledge(self, arena_unique_id):
         key = str(_int(arena_unique_id, -1))
@@ -1315,7 +1322,8 @@ class PostBattleStore(object):
             row[target_name] = int(row.get(target_name, 0)) + int(
                 stats[source_name])
         survived = int(receipt['death_reason'] < 0 and
-                       not receipt['premature_leave'])
+                       not receipt['premature_leave'] and
+                       receipt['watched_battle_to_end'])
         row['survivedBattles'] = int(row.get(
             'survivedBattles', 0)) + survived
         row['winAndSurvived'] = int(row.get('winAndSurvived', 0)) + int(

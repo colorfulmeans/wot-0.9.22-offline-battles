@@ -1416,6 +1416,79 @@ class WorldCollisionTests(unittest.TestCase):
             self.assertNotIn('reason', trace)
             self.assertNotIn('hit', trace)
 
+    def test_native_fragile_delivery_clears_original_skin_but_keeps_real_walls(self):
+        for blocker in (None, 'wall', 'damaged', 'ordinary_replacement'):
+            with self.subTest(blocker=blocker):
+                (bigworld, math_module, unused_area, unused_cache, authority,
+                 descriptor, normal) = self._soft_recast_fixture((2.0,))
+                descriptor.hull = _Strict1513Component(
+                    hitTester=types.SimpleNamespace(bbox=(
+                        (-1.5, -0.5, -3.5), (1.5, 1.6, 3.5))))
+                descriptor.chassis = _Strict1513Component(
+                    hullPosition=(0, 0, 0),
+                    hitTester=types.SimpleNamespace(bbox=(
+                        (-1.5, 0, -3.5), (1.5, 1, 3.5))))
+                authority.destroyed_keys = lambda chunk: (
+                    {(37, None)} if chunk == 22 else ())
+                destructibles_sensor.g_offh_destr_runtime_space = 1
+                destructibles_sensor.note_native_fragile_replacement(1, 22, 37)
+                surfaces = [(1.5, (73, 0x80, 37, 22))]
+                if blocker is not None:
+                    surface = {
+                        'wall': (2, 0, -1, -1),
+                        'damaged': (87, 0, 37, 22),
+                        'ordinary_replacement': (2, 0x80, 37, 22),
+                    }[blocker]
+                    surfaces.append((2.5, surface))
+
+                def collide(space, start, end, mask, callback=None):
+                    if _vertical_ray(start, end):
+                        return (_Vector(start.x, 0, start.z),
+                                _Vector(0, 1, 0), 0)
+                    for z, hit in surfaces:
+                        if (start.z <= z <= end.z and not hit[1] & mask and
+                                (callback is None or callback(*hit))):
+                            return (_Vector(start.x, start.y, z), normal, hit[0])
+                    return None
+
+                bigworld.wg_collideSegment = mock.Mock(side_effect=collide)
+                args = (bigworld, math_module, 1, _Vector(), 0.0, 1.0,
+                        descriptor, False, 0.04, True)
+                with mock.patch.object(destructibles_sensor,
+                        '_get_destr_authority', return_value=authority), \
+                        mock.patch.object(world_collision, '_destroy_and_recast',
+                                          return_value=False):
+                    trace = {}
+                    expected = 'clear' if blocker is None else 'hard'
+                    self.assertEqual(expected,
+                        world_collision.check_horizontal_collision(
+                            *args, commit_enabled=False))
+                    query_count = bigworld.wg_collideSegment.call_count
+                    bigworld.wg_collideSegment.reset_mock()
+                    self.assertEqual(expected,
+                        world_collision.check_horizontal_collision(
+                            *args, commit_enabled=False, trace=trace))
+                    self.assertEqual(query_count,
+                                     bigworld.wg_collideSegment.call_count)
+                    self.assertIn((73, 0x80, 37, 22, False),
+                                  trace['native_surface_candidates'])
+                    if blocker is not None:
+                        self.assertIn(surface + (True,),
+                                      trace['native_surface_candidates'])
+
+    def test_native_surface_trace_is_bounded_and_keeps_verdicts(self):
+        trace = {}
+        native_filter = mock.Mock(side_effect=lambda material, *unused: material % 2)
+        traced = world_collision._trace_collision_filter(native_filter, trace)
+        for repeat in range(2):
+            for index in range(24):
+                self.assertEqual(index % 2, traced(index, 0, index, 22))
+        self.assertEqual(48, native_filter.call_count)
+        self.assertEqual(16, len(trace['native_surface_candidates']))
+        self.assertIs(native_filter,
+                      world_collision._trace_collision_filter(native_filter, None))
+        self.assertIsNone(world_collision._trace_collision_filter(None, {}))
+
     def test_exact_ground_top_uses_one_millimetre_epsilon(self):
         point = _Vector(1.0, 2.0, 3.0)
         top_y = [point.y]

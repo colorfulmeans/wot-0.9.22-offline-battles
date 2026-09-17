@@ -21,6 +21,28 @@ _WORLD_SOFT_RECAST_BUDGET = 4
 _UNPREPARED_COLLISION_FILTER = object()
 
 
+def _trace_collision_filter(collision_filter, trace):
+    """Observe bounded native callback candidates without another query.
+
+    Candidates are not asserted to be the nearest returned hit: the native
+    callback supplies identity but no position or ordering guarantee.
+    """
+    if collision_filter is None or trace is None:
+        return collision_filter
+    candidates = []
+    trace['native_surface_candidates'] = candidates
+    trace['native_surface_columns'] = 'material,flags,item,chunk,keep'
+
+    def observed_filter(*hit):
+        keep = collision_filter(*hit)
+        if len(hit) == 4:
+            candidate = tuple(hit) + (bool(keep),)
+            if len(candidates) < 16 and candidate not in candidates:
+                candidates.append(candidate)
+        return keep
+    return observed_filter
+
+
 def _record_hard_contact(trace, reason, start, end, collision,
         ground_ahead=None, heights=()):
     """Copy existing query evidence; diagnostics must never change the verdict."""
@@ -622,6 +644,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		_sweep_filter = prepare_horizontal_collision_filter(
 			Math.Vector3(minimum_x, pos.y + 0.6, minimum_z),
 			Math.Vector3(maximum_x, pos.y + 1.6, maximum_z))
+		_sweep_filter = _trace_collision_filter(_sweep_filter, trace)
 		_crush_state = [False]
 		_kinetic_contact = False
 

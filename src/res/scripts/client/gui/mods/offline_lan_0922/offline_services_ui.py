@@ -379,6 +379,13 @@ def _install_shop():
         # StoreView registers the component using the tab ID. Bind that ID to
         # Shop's native Python controller before Flash creates ShopUI.
         _replace_component(VIEW_ALIAS.LOBBY_STORE_ACTIONS, BondShop)
+        if view._isDAAPIInited():
+            # StoreView.onPopulate enables caching, but ViewStack caches by
+            # linkage, not tab ID. Both tabs use ShopUI: a cached ordinary Shop
+            # skips NEED_UPDATE and never registers the BondShop controller.
+            # Set this before as_init creates the first view. The stock
+            # non-cache path unregisters/disposes the old tab on every switch.
+            view.flashObject.viewStack.cache = False
         data = dict(data)
         data['buttonBarData'] = [dict(tab) for tab in data['buttonBarData']]
         for tab in data['buttonBarData']:
@@ -448,10 +455,28 @@ def _install_vehicle_filters_and_recovery():
     _patch(Vehicle, 'restorePrice', property(restore_price))
 
 
+def _install_reserve_slots():
+    """Publish the offline limit to every native consumer's imported copy."""
+    import importlib
+    # Changing only goodie_items leaves already-imported window/panel copies
+    # and the prebuilt Flash layout at the regional client's old slot count.
+    modules = tuple(importlib.import_module(name) for name in (
+            'gui.goodies.goodie_items',
+            'gui.Scaleform.daapi.view.lobby.boosters.BoostersWindow',
+            'gui.Scaleform.daapi.view.lobby.boosters.BoostersPanelComponent'))
+    for module in modules:
+        _patch(module, 'MAX_ACTIVE_BOOSTERS_COUNT', policy.MAX_ACTIVE_RESERVES)
+    panel = modules[-1]
+    props = dict(panel._GUI_SLOTS_PROPS)
+    props['slotsCount'] = policy.MAX_ACTIVE_RESERVES
+    _patch(panel, '_GUI_SLOTS_PROPS', props)
+
+
 def _install_reserves():
     from gui.Scaleform.daapi.view.lobby.boosters.BoostersWindow import BoostersWindow
     from gui.Scaleform.daapi.view.lobby.boosters import booster_tabs
     from gui.game_control.BoostersController import BoostersController
+    _install_reserve_slots()
     original_init = BoostersWindow.__init__
 
     def boosters_init(view, ctx=None):
@@ -783,9 +808,9 @@ def _install_settings():
     def packet(view, period, cost, default_cost, gold, can_buy):
         result = original_packet(view, period, cost, default_cost, gold, can_buy)
         if int(period) == 90:
-            # #1513 has no 90-day packet artwork; reuse its stock long-term
-            # premium emblem. Duration, product ID and price remain 90 days.
-            result['image'] = '../maps/icons/windows/prem/icon_prem180_98.png'
+            # #1513 lacks this packet image. Ship a real 90-day emblem with
+            # the mod rather than displaying the stock 180-day product.
+            result['image'] = '../maps/icons/offline_lan/premium_90_98.png'
         return result
 
     def duration(view, period, cost, has_action, enough):

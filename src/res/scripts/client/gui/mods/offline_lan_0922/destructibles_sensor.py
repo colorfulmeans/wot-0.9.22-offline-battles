@@ -3917,11 +3917,12 @@ def note_destroyed(kind, chunkID, itemIndex, matKind=None, now=None):
 
 
 def note_native_fragile_replacement(space_id, chunk_id, item_index):
-	"""Retain real replacement surfaces after wg_destroyFragile completed.
+	"""Record native destruction without reviving the original collision skin.
 
-	The native replacement owns its geometry and material flags. An item-wide
-	accepted key hides only the original skin waiting for this callback; it
-	must not permanently erase a crushed car's replacement from ground rays.
+	The callback returning proves delivery, not that every BSP face with this
+	item identity now belongs to the replacement. Normal destructible materials
+	remain covered by the accepted broken key. Ordinary replacement materials
+	can supply real support, such as a crushed car, after this boundary.
 	"""
 	globals().setdefault('g_offh_destr_native_fragile_replacements', set()).add(
 		(int(space_id), int(chunk_id), int(item_index)))
@@ -3932,6 +3933,21 @@ def _native_fragile_replaced_1513(identity):
 	space_id = globals().get('g_offh_destr_runtime_space')
 	return (space_id, identity[0], identity[1]) in globals().get(
 		'g_offh_destr_native_fragile_replacements', ())
+
+
+def _native_fragile_replacement_surface_1513(identity, mat_kind):
+	"""Keep a delivered replacement, never its already-broken normal skin.
+
+	The client material contract reserves 71--86 for the original destructible
+	and 87--100 for damaged modules. The latter are preserved separately by both
+	filters. The same item can still expose original faces after the native
+	callback returns; treating the callback as an item-wide collider swap makes
+	those invisible faces solid again. Non-destructible replacement materials
+	retain their native geometry and flags instead of using a fabricated box.
+	"""
+	if isinstance(mat_kind, _INTEGER_TYPES) and 71 <= mat_kind <= 86:
+		return False
+	return _native_fragile_replaced_1513(identity)
 
 
 def native_replacement_bsp_active():
@@ -4363,7 +4379,7 @@ def _broken_collision_filter(members, accepted_trees=()):
 				identity + (None,)) not in broken:
 			return True
 		if (identity + (None,) in broken and
-				_native_fragile_replaced_1513(identity)):
+				_native_fragile_replacement_surface_1513(identity, hit[0])):
 			return True
 		globals()['g_offh_destr_ground_skips'] = globals().get(
 			'g_offh_destr_ground_skips', 0) + 1
@@ -4434,7 +4450,8 @@ def _live_broken_collision_filter_1513(members, accepted_trees=()):
 			broken = _broken_item_materials_1513(
 				authority, identity[0]).get(identity[1], ())
 			accepted = mat_kind in broken or None in broken
-			if (None in broken and _native_fragile_replaced_1513(identity)):
+			if (None in broken and
+					_native_fragile_replacement_surface_1513(identity, mat_kind)):
 				return keep_native_surface(hit, identity)
 			if (not accepted and
 					identity + (mat_kind,) not in predicted and

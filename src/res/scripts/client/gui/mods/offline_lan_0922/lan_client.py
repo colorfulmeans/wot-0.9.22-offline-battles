@@ -1320,6 +1320,9 @@ def _valid_battle_receipt(message):
             winner not in (0, 1, 2) or duration is None or duration < 0 or
             not isinstance(message.get('premature_leave'), bool)):
         return False
+    if ('watched_battle_to_end' in message and not isinstance(
+            message['watched_battle_to_end'], bool)):
+        return False
     if message.get('battle_mode', 'regular') not in ('regular', 'training'):
         return False
     stats = message.get('stats')
@@ -2081,13 +2084,14 @@ class LANClient(object):
                 self.player_id is not None and
                 self.player_id == self.host_player_id)
 
-    def leave_battle(self):
-        """Retire this player from the current round without closing TCP."""
+    def leave_battle(self, voluntary=True):
+        """Retire this round; native failures do not confirm desertion."""
         if not self.ready or self.phase not in ('loading', 'battle'):
             return False
         return self._send({
             'type': 'leave_battle',
             'round_id': self.round_id,
+            'voluntary': bool(voluntary),
         })
 
     def send_input(self, forward, turn, aim_yaw=0.0, gun_pitch=0.0,

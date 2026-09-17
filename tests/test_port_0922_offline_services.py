@@ -2,6 +2,7 @@
 
 import copy
 import json
+import struct
 import sys
 import types
 import unittest
@@ -367,7 +368,13 @@ class OfflineServicesTests(unittest.TestCase):
                 ui._install_settings()
                 packet = premium()._PremiumWindow__makePacketVO(90, 6500, 6500, 7000, True)
                 self.assertEqual(90, packet['id'])
-                self.assertEqual('../maps/icons/windows/prem/icon_prem180_98.png', packet['image'])
+                self.assertEqual('../maps/icons/offline_lan/premium_90_98.png', packet['image'])
+                # A valid packaged texture is required: substituting an absent
+                # stock 90-day filename only turns this into a missing icon.
+                texture = garage_fixture.ROOT / 'src' / 'res' / 'gui' / packet['image'][3:]
+                payload = texture.read_bytes()
+                self.assertEqual(b'\x89PNG\r\n\x1a\n', payload[:8])
+                self.assertEqual((98, 98, 8, 6), struct.unpack('>IIBB', payload[16:26]))
                 self.assertEqual('image-7', premium()._PremiumWindow__makePacketVO(
                     7, 1250, 1250, 7000, True)['image'])
                 view = settings()
