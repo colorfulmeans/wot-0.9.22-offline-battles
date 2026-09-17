@@ -30,7 +30,12 @@ LEDGER_FILE_NAME = save_ledger.LEDGER_FILE_NAME
 MAX_PENDING_VEHICLES = 512
 
 
-_ORIGINAL_LIST_GOLD_VEHICLES = vehicle_overlays.list_gold_vehicles
+# Development/test reloads can import this module more than once. Retain the
+# real client catalogue underneath an already-installed augmentation instead
+# of wrapping our own function recursively.
+_ORIGINAL_LIST_GOLD_VEHICLES = getattr(
+    vehicle_overlays.list_gold_vehicles, "_retired_vehicle_base",
+    vehicle_overlays.list_gold_vehicles)
 
 
 def _list_garage_vehicles(game_root):
@@ -65,6 +70,7 @@ def _list_garage_vehicles(game_root):
 # wot_launcher keeps one cached catalogue by calling vehicle_overlays directly.
 # Install the augmented listing once when this module is imported so that both
 # that UI cache and the validation below share exactly the same offer set.
+_list_garage_vehicles._retired_vehicle_base = _ORIGINAL_LIST_GOLD_VEHICLES
 vehicle_overlays.list_gold_vehicles = _list_garage_vehicles
 
 
