@@ -10,8 +10,9 @@ import json
 import os
 
 try:
-    from . import save_ledger, save_slots, vehicle_overlays
+    from . import retired_vehicles, save_ledger, save_slots, vehicle_overlays
 except ImportError:
+    import retired_vehicles
     import save_ledger
     import save_slots
     import vehicle_overlays
@@ -27,6 +28,50 @@ LEDGER_FILE_NAME = save_ledger.LEDGER_FILE_NAME
 # A save with more pending vehicles than this is a damaged file, not a
 # shopping list.  The client applies the same limit.
 MAX_PENDING_VEHICLES = 512
+
+
+# Development/test reloads can import this module more than once. Retain the
+# real client catalogue underneath an already-installed augmentation instead
+# of wrapping our own function recursively.
+_ORIGINAL_LIST_GOLD_VEHICLES = getattr(
+    vehicle_overlays.list_gold_vehicles, "_retired_vehicle_base",
+    vehicle_overlays.list_gold_vehicles)
+
+
+def _list_garage_vehicles(game_root):
+    """Add player-only retired definitions to the normal gold/reward list.
+
+    The five historical definitions are deliberately *not* made Bot-eligible.
+    They are read from the same #1513 catalogue parser as the vehicle editor,
+    so labels, tiers and classes remain client-authentic and we do not invent
+    metadata in the launcher.
+    """
+    offers = [dict(row) for row in _ORIGINAL_LIST_GOLD_VEHICLES(game_root)]
+    offered = set(str(row.get("name") or "") for row in offers)
+    for choice in vehicle_overlays.list_vehicle_choices(game_root):
+        type_name = "%s:%s" % (choice.get("nation"), choice.get("vehicle"))
+        if (type_name not in retired_vehicles.RETIRED_BOT_VEHICLES_0922 or
+                type_name in offered):
+            continue
+        offers.append({
+            "name": type_name,
+            "label": choice.get("label") or choice.get("vehicle") or type_name,
+            "nation": choice.get("nation"),
+            "vehicleClass": choice.get("vehicleClass"),
+            "level": int(choice.get("level", 0) or 0),
+            "retired": True,
+        })
+        offered.add(type_name)
+    return sorted(offers, key=lambda row: (
+        str(row.get("nation") or ""), int(row.get("level", 0) or 0),
+        str(row.get("label") or row.get("name") or "")))
+
+
+# wot_launcher keeps one cached catalogue by calling vehicle_overlays directly.
+# Install the augmented listing once when this module is imported so that both
+# that UI cache and the validation below share exactly the same offer set.
+_list_garage_vehicles._retired_vehicle_base = _ORIGINAL_LIST_GOLD_VEHICLES
+vehicle_overlays.list_gold_vehicles = _list_garage_vehicles
 
 
 def inbox_path(slot_id, game_root=None, environment=None, root=None):
@@ -82,7 +127,7 @@ def owned_vehicles(slot_id, game_root=None, environment=None, root=None):
 
 def list_offers(slot_id, game_root, environment=None, root=None,
                 catalogue=None):
-    """Return every gold vehicle with what this save can do about it.
+    """Return every launcher-addable vehicle with this save's state.
 
     ``catalogue`` lets a caller reuse a listing it already has. Reading it
     means opening the client's 50 MB package and parsing ten rosters, and it

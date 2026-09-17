@@ -11,6 +11,8 @@ import subprocess
 import sys
 import traceback
 
+from retired_vehicles import RETIRED_BOT_VEHICLES_0922
+
 SERVER_HOST = "0.0.0.0"
 SERVER_LOOPBACK_HOST = "127.0.0.1"
 SERVER_PORT = 28782
@@ -219,7 +221,17 @@ def _bot_lineup_from_environment(environment=None):
         raise ValueError("invalid exact Bot lineup JSON: %s" % error)
     if not isinstance(value, list):
         raise ValueError("the exact Bot lineup must be a JSON list")
-    return value
+    result = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            result.append(raw)
+            continue
+        entry = dict(raw)
+        if entry.get("vehicle") in RETIRED_BOT_VEHICLES_0922:
+            entry.pop("vehicle", None)
+        if "vehicle" in entry or "skill" in entry:
+            result.append(entry)
+    return result
 
 
 def _vehicle_overlay_root_from_environment(environment=None):
@@ -235,14 +247,15 @@ def _bot_excluded_vehicles_from_environment(environment=None):
     environment = os.environ if environment is None else environment
     raw_value = environment.get(SERVER_BOT_EXCLUDED_VEHICLES_ENV)
     if raw_value is None:
-        return []
-    try:
-        value = json.loads(raw_value)
-    except (TypeError, ValueError) as error:
-        raise ValueError("invalid Bot vehicle exclusions JSON: %s" % error)
-    if not isinstance(value, list):
-        raise ValueError("Bot vehicle exclusions must be a JSON list")
-    return value
+        value = []
+    else:
+        try:
+            value = json.loads(raw_value)
+        except (TypeError, ValueError) as error:
+            raise ValueError("invalid Bot vehicle exclusions JSON: %s" % error)
+        if not isinstance(value, list):
+            raise ValueError("Bot vehicle exclusions must be a JSON list")
+    return sorted(set(value).union(RETIRED_BOT_VEHICLES_0922))
 
 
 def _session_identity(environment=None):
