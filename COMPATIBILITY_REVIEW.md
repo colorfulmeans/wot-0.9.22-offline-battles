@@ -3756,3 +3756,7 @@ but the adapter treated that export as its module. Importing the class and
 its tab helpers explicitly from the module fixes installation. A focused
 test preserves that package/class distinction, exercises the sound tab and
 ordinary tab delegation, and verifies uninstall restores the original method.
+The older isolated bootstrap contract now includes the services adapter and
+asserts installation before Account connection and cleanup on shutdown. The
+combined bootstrap, Account RPC, services, economy and garage regression run
+passes 667 tests. Native Windows client startup remains a user retest boundary.

@@ -6675,6 +6675,11 @@ class BootstrapContractTests(unittest.TestCase):
         lobby_entry = mock.Mock()
         lobby_entry.attach_mock(session.install, 'install')
         lobby_entry.attach_mock(compatibility.connect, 'connect')
+        services_ui_module = types.ModuleType(
+            'gui.mods.offline_lan_0922.offline_services_ui')
+        services_ui_module.install = mock.Mock()
+        services_ui_module.uninstall = mock.Mock()
+        lobby_entry.attach_mock(services_ui_module.install, 'install_services')
         compatibility_module = types.ModuleType(
             'gui.mods.offline_lan_0922.compat')
         compatibility_module.g_compatibility = compatibility
@@ -6764,6 +6769,7 @@ class BootstrapContractTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.account_rpc.postbattle_store':
                 postbattle_module,
             'gui.mods.offline_lan_0922.lan_session': lan_session,
+            'gui.mods.offline_lan_0922.offline_services_ui': services_ui_module,
             'gui.mods.offline_lan_0922.lobby_ui': lobby_ui_module,
             'gui.mods.offline_lan_0922.worker_presentation':
                 worker_presentation_module,
@@ -6822,7 +6828,8 @@ class BootstrapContractTests(unittest.TestCase):
                 session.install.assert_called_once_with()
                 compatibility.connect.assert_called_once()
                 self.assertEqual(
-                    [mock.call.install(), mock.call.connect(
+                    [mock.call.install(), mock.call.install_services(),
+                     mock.call.connect(
                         show_lobby=True,
                         account_context={'selected_vehicle': {
                             'id': 1, 'compDescr': 12345},
@@ -6847,6 +6854,7 @@ class BootstrapContractTests(unittest.TestCase):
             module.fini()
             self.assertFalse(module._started)
             module._signal_player_ready.assert_called_once_with()
+            services_ui_module.uninstall.assert_called_once_with()
 
             # A lobby-stage timeout must fully undo the connection adapter
             # and listener, then allow a clean init.  Keep the hangar not
@@ -6938,6 +6946,7 @@ class BootstrapContractTests(unittest.TestCase):
             [expected_session, expected_session],
             lan_session.LANSession.call_args_list)
         self.assertEqual(2, session.install.call_count)
+        self.assertEqual(2, services_ui_module.install.call_count)
         self.assertEqual(2, announcement_ui.install.call_count)
         self.assertEqual(2, announcement_ui.uninstall.call_count)
         self.assertEqual(5, intro_skip.install.call_count)
