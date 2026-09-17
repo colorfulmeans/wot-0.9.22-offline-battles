@@ -11,7 +11,7 @@ import time
 from gui.mods.offline_lan_0922 import offline_services as policy
 from gui.mods.offline_lan_0922.ui_i18n import tr, as_text
 from gui.mods.offline_lan_0922.waiting_room_ui import (
-    WaitingRoomUI, _ControlScript, CONTROL_Z)
+    WaitingRoomUI, _ControlScript, CONTROL_Z, CONTROL_TEXT_COLOUR)
 
 TEXT_Z = 0.0
 
@@ -76,13 +76,13 @@ class ServicePanel(WaitingRoomUI):
                 role = '%s%d' % (verb, index)
                 self._make_control(role, (x, y, CONTROL_Z), 0.34, 0.16)
                 self._make_label(role, '', (x, y, TEXT_Z), 0.34, 0.14,
-                                 anchor='CENTER')
+                                 anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
         self._make_label('note', '', (-0.89, -0.50, TEXT_Z), 1.8, 0.12)
         self._make_label('message', '', (-0.89, -0.65, TEXT_Z), 1.8, 0.12)
         for role, text, x in (('switch', '', -0.45), ('close', tr('CLOSE'), 0.55)):
             self._make_control(role, (x, -0.85, CONTROL_Z), 0.75, 0.16)
             self._make_label(role, text, (x, -0.85, TEXT_Z), 0.75, 0.14,
-                             anchor='CENTER')
+                             anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
         for role, component in self._controls.items():
             component.script = _ServiceControl(self, role)
         return True
