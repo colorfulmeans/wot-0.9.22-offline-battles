@@ -159,7 +159,7 @@ class JoinButtonUITests(unittest.TestCase):
 
     def test_training_selector_enters_the_lan_waiting_room_directly(self):
         self.adapter.install()
-        item = _TrainingItem('training')
+        item = _TrainingItem('trainingList')
 
         self.assertIsNone(item.select())
 

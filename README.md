@@ -70,6 +70,35 @@ spawn groups and the large Grand Battle maps. The current package has neither
 the validated navigation/spawn data for those maps nor a 60-vehicle protocol
 and UI path. Raising the player limit alone would not make this mode playable.
 
+The Training selector opens a LAN training room. The host chooses teams, map,
+duration and whether to fill empty slots with Bots, then starts explicitly.
+Training awards no credits, XP, bonds, medals or mission progress. Repairs are
+free; ammunition and consumables still use the normal inventory and resupply.
+
+Armory Special Offers now lists bond vehicles with a garage slot and 100%
+crew. The permanent bond vehicle shop began in 2019, after 0.9.22; this offline
+extension uses the first official assortment intersected with client assets.
+The five retired definitions have explicit offline prices: tier VII
+Aufkl. Panther 6000, tier IX SU-122-54 12000, and tier X Object 430B,
+Object 263B and Waffentrager E 100 15000 bonds each. These are the old
+definitions, not their later replacements or alternate variants.
+
+Personal Reserves has purchase, activation, Close and Escape actions. Four
+one-hour types are offered: +50% combat XP (50 gold), +200% crew XP (100 gold),
++200% free XP (50 gold), and +50% credits (100 gold). Up to three different
+types can run together; timers continue offline and eligibility is fixed at
+battle start. The Missions tab also opens daily offline missions: play three
+standard battles, deal 3000 damage, and win once. Each grants one reserve
+automatically and resets at 00:00 UTC. These prices and daily goals are custom
+offline rules. Purchases, timers, rewards and receipt deduplication persist
+with the selected save.
+
+The 90-day premium option retains its 6500-gold price and displays a duration
+label. Battle-result friendly-fire labels remain the installed client's own
+localization: credits have penalty and compensation rows; XP has only a
+penalty. Offline voice chat has no authenticated Vivox service and remains
+unavailable; opening sound settings no longer retries that service.
+
 ## Saves
 
 The launcher's Saves tab keeps any number of independent saves. Each one owns

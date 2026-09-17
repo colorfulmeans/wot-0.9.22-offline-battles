@@ -499,6 +499,8 @@ class LANSession(object):
             self._effective_params_provider = \
                 _selected_vehicle_effective_params
         self._postbattle_store = postbattle_store
+        self._training_mode = False
+        self._training_bots = False
         self._room_preferences = port_config.load_waiting_room_state()
         self._restored_team_generation = None
         self._restored_team_sizes_generation = None
@@ -1098,6 +1100,7 @@ class LANSession(object):
         nor a message is what makes the button look dead after a round.
         """
         self._postbattle_return = None
+        self._training_mode = unused_action_name == 'training'
         if self._stopped or self.state in ('error', 'stopped'):
             sys.stdout.write(
                 '[Offline LAN 0.9.22] LAN session was %s; rebuilding it\n' %
@@ -1727,6 +1730,8 @@ class LANSession(object):
                     'on_map_selected': self._remember_map,
                     'open_map_picker': self._open_map_window,
                     'round_seconds': self._round_seconds_value,
+                    'training_status': lambda: (self._training_mode, self._training_bots),
+                    'toggle_training_bots': self._toggle_training_bots,
                 })
             room = self._room_factory(
                 self.request_start, self._map_pool_value, **options)
@@ -1893,9 +1898,11 @@ class LANSession(object):
             # The stock map window can only present the elected room host.
             return False
         # As in 0.8.2, the stock queue screen loads under the room.
-        screen = self._ensure_queue_screen()
+        screen = None if self._training_mode else self._ensure_queue_screen()
         if screen is not None:
             screen.open()
+        elif self._training_mode and self._queue_screen is not None:
+            self._leave_queue_screen()
         self._picker_open = bool(self._open_surface(surface))
         if self._picker_open:
             sys.stdout.write(
@@ -2078,6 +2085,11 @@ class LANSession(object):
             self._close_picker_after_event()
         return accepted
 
+    def _toggle_training_bots(self):
+        if self._is_local_host() and self._training_mode:
+            self._training_bots = not self._training_bots
+        return self._training_bots
+
     def _send_start_request(self, map_name):
         if _garage_inventory_refresh_pending():
             self._status_notifier(tr(
@@ -2088,6 +2100,10 @@ class LANSession(object):
         if not self._publish_selected_vehicle():
             self._status_notifier(tr(VEHICLE_SELECTION_WARNING))
             return False
+        if self._training_mode:
+            return bool(self.client.request_start(
+                map_name, self._round_seconds, battle_mode='training',
+                training_bots=self._training_bots))
         return bool(self.client.request_start(map_name, self._round_seconds))
 
     def _stop_active_round(self):

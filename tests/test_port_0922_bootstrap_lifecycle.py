@@ -62,6 +62,8 @@ def _economy_modules(package_stubs):
                         'gui.mods.offline_lan_0922.account_rpc.economy'))
             _ECONOMY_MODULES['gui.mods.offline_lan_0922.launcher_inbox'] = (
                 _real_module('launcher_inbox'))
+            _ECONOMY_MODULES['gui.mods.offline_lan_0922.offline_services'] = (
+                _real_module('offline_services'))
     return dict(_ECONOMY_MODULES)
 
 
@@ -328,6 +330,10 @@ class BootstrapLifecycleTests(unittest.TestCase):
         lan_session_module = types.ModuleType(
             'gui.mods.offline_lan_0922.lan_session')
         lan_session_module.LANSession = lambda *args, **kwargs: session
+        services_ui_module = types.ModuleType(
+            'gui.mods.offline_lan_0922.offline_services_ui')
+        services_ui_module.install = lambda: events.append('install_services')
+        services_ui_module.uninstall = lambda: None
         announcement_ui = types.SimpleNamespace(
             install=lambda: events.append('install_announcement_router'),
             uninstall=lambda: events.append('uninstall_announcement_router'))
@@ -612,6 +618,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.instance_guard': (
                 instance_guard_module),
             'gui.mods.offline_lan_0922.lan_session': lan_session_module,
+            'gui.mods.offline_lan_0922.offline_services_ui': services_ui_module,
             'gui.mods.offline_lan_0922.lobby_ui': lobby_ui_module,
             'gui.mods.offline_lan_0922.vehicle_blacklist': VEHICLE_BLACKLIST,
             'gui.mods.offline_lan_0922.vehicle_configuration': (
@@ -1434,7 +1441,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
                                      health=None, vehicles_module=None,
                                      shells_fired=None, equipment_used=None,
                                      auto_settings=None, friendly_fire_facts=None,
-                                     vehicle_type_name=None):
+                                     vehicle_type_name=None, battle_start=0,
+                                     daily_facts=None, training=False):
                 applied.append(snapshot)
                 self.assert_not_used = tankmen_module
                 # The vehicle's own repair/reload/restock switches are settled
@@ -1449,6 +1457,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 spent.append(shells_fired)
                 consumed.append(equipment_used)
                 misconduct.append((friendly_fire_facts, vehicle_type_name))
+                services.append((battle_start, daily_facts, training))
                 return {'vehicle_id': 1, 'applied': True}
 
         banked = []
@@ -1457,6 +1466,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         consumed = []
         misconduct = []
         switches = []
+        services = []
         bootstrap._postbattle_store = types.SimpleNamespace(
             set_progress_applier=lambda callback: bound.append(callback))
         compatibility.garage_state = lambda: types.SimpleNamespace(
@@ -1471,6 +1481,9 @@ class BootstrapLifecycleTests(unittest.TestCase):
             bound[0]({
                 'vehicle': 'ussr:R11_MS-1',
                 'receipt_id': 'server:1:1',
+                'arena_unique_id': (55 << 32) | 172800,
+                'stats': {'damage': 500}, 'duration': 300,
+                'winner': 1, 'team': 1,
                 'rewards': {'xp': 100},
                 'health': 40,
                 'shells_fired': {0: 12},
@@ -1485,6 +1498,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual([40], settled)
         self.assertEqual([{0: 12}], spent)
         self.assertEqual([[11001]], consumed)
+        self.assertEqual([(172800, {'damage': 500, 'finished_at': 173100,
+                                   'won': True}, False)], services)
         self.assertEqual([({'victims': [], 'received_damage': 10, 'xp_penalty': 0},
                            'ussr:R11_MS-1')], misconduct)
         self.assertEqual(
@@ -1633,7 +1648,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual(
             ['clear_entities_and_spaces', 'pin_dossier_cache',
              'install_announcement_router', 'install_battle_router',
-             'pin_account_settings', 'connect'],
+             'install_services', 'pin_account_settings', 'connect'],
             events)
         self.assertEqual(1, len(compatibility.connect_calls))
         self.assertTrue(compatibility.connect_calls[0][0])

@@ -142,6 +142,13 @@ def _bind_battle_progress(context):
             equipment_used=used,
             friendly_fire_facts=receipt.get('friendly_fire'),
             vehicle_type_name=receipt['vehicle'],
+            battle_start=int(receipt['arena_unique_id']) & 0xffffffff,
+            daily_facts=({'damage': receipt['stats']['damage'],
+                          'finished_at': (int(receipt['arena_unique_id']) & 0xffffffff) + receipt['duration'],
+                          'won': receipt['winner'] == receipt['team']}
+                         if receipt.get('battle_mode', 'regular') == 'regular'
+                         else None),
+            training=receipt.get('battle_mode') == 'training',
             auto_settings=(VEHICLE_SETTINGS_FLAG.AUTO_REPAIR,
                            VEHICLE_SETTINGS_FLAG.AUTO_LOAD,
                            VEHICLE_SETTINGS_FLAG.AUTO_EQUIP,
@@ -790,6 +797,8 @@ def _selected_vehicle(config, restore_saved=True):
             'nextInventoryID': len(records) + 1,
             'defaultVehicleSettings': default_settings,
         })
+        from gui.mods.offline_lan_0922 import offline_services
+        offline_services.publish_offers(result, vehicles)
         if restore_saved:
             result['wallet'].update(port_config.save_slot_initial_wallet())
         if not career:
@@ -915,6 +924,12 @@ def _cleanup_runtime():
 
     try:
         _remove_lobby_listener()
+    except Exception as error:
+        errors.append(error)
+
+    try:
+        from gui.mods.offline_lan_0922 import offline_services_ui
+        offline_services_ui.uninstall()
     except Exception as error:
         errors.append(error)
 
@@ -1148,6 +1163,8 @@ def _wait_for_login_space():
             # replace that cached callback. Own it before lobby creation.
             _install_announcement_ui()
             _install_lan_session()
+            from gui.mods.offline_lan_0922 import offline_services_ui
+            offline_services_ui.install()
             try:
                 # This must outlive every connect/disconnect: it decides which
                 # preferences profile the player's interface settings use.

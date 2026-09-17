@@ -112,6 +112,8 @@ def _receipt(value):
     """Return one bounded canonical receipt or raise ValueError."""
     if not isinstance(value, dict):
         raise ValueError('battle receipt must be an object')
+    if value.get('battle_mode', 'regular') not in ('regular', 'training'):
+        raise ValueError('battle receipt mode is invalid')
     required = ('receipt_id', 'arena_unique_id', 'round_id', 'account_key',
                 'player_name', 'vehicle', 'team', 'winner', 'map', 'stats',
                 'rewards')
@@ -303,6 +305,7 @@ def _receipt(value):
         interaction_targets.add(target)
     return {
         'receipt_id': receipt_id,
+        'battle_mode': value.get('battle_mode', 'regular'),
         'arena_unique_id': arena_unique_id,
         'round_id': round_id,
         'player_id': player_id,
@@ -846,8 +849,8 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'winnerTeam': receipt['winner'],
         'finishReason': receipt['finish_reason'],
         'duration': receipt['duration'],
-        'bonusType': 1,
-        'guiType': 1,
+        'bonusType': 2 if receipt.get('battle_mode') == 'training' else 1,
+        'guiType': 2 if receipt.get('battle_mode') == 'training' else 1,
         'bots': {},
     }
     _add_value_replays(packers, vehicle, replay_types=replay_types)
@@ -1205,6 +1208,8 @@ class PostBattleStore(object):
                 }
 
     def _apply_progress(self, receipt, vehicle_xp=None):
+        if receipt.get('battle_mode') == 'training':
+            return
         # The lifetime counters count what the account was given, which is
         # what its multipliers made of the battle rather than what the server
         # reported it did.
@@ -1504,7 +1509,8 @@ class PostBattleStore(object):
             # Reuse only still-present facts. Lifetime sums stay untouched;
             # a discarded result's totals are not its single-battle records.
             for receipt in list(pending.values()) + history:
-                if 'account_key' in receipt:
+                if ('account_key' in receipt and
+                        receipt.get('battle_mode') != 'training'):
                     row = self._progress.get('vehicles', {}).get(
                         receipt['vehicle'])
                     if isinstance(row, dict):

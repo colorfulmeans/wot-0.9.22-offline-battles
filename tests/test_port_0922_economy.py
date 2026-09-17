@@ -476,6 +476,38 @@ class VehiclePurchaseTests(unittest.TestCase):
                     package, 'vehicle_records', module, create=True):
             yield
 
+    def test_bond_offer_includes_slot_and_full_crew_and_rolls_back_if_unaffordable(self):
+        from unittest import mock
+        import test_port_0922_garage as crew_fixture
+        snapshot = _snapshot()
+        snapshot['accountSlots'] = 1
+        snapshot['wallet'].update(gold=0, crystal=6000)
+        snapshot['offlineVehicleOffers'] = [{'cd': SECOND_VEHICLE_CD}]
+        snapshot['shopItemPrices'][SECOND_VEHICLE_CD] = {'crystal': 6000}
+        vehicles = _vehicles()
+        vehicle_type = vehicles.getVehicleType(SECOND_VEHICLE_CD)
+        vehicle_type.crewRoles = (('commander',),)
+        vehicles.getVehicleType = lambda cd: vehicle_type
+        unused, tankmen = crew_fixture._modules()
+        state = GARAGE.GarageState(snapshot, vehicles_module=vehicles, tankmen_module=tankmen)
+        with self._built([]):
+            record = state.buy_vehicle(SECOND_VEHICLE_CD)
+        self.assertEqual(0, state.snapshot()['wallet']['gold'])
+        self.assertEqual(0, state.snapshot()['wallet']['crystal'])
+        self.assertEqual(2, state.snapshot()['accountSlots'])
+        self.assertEqual(b'tman:new:commander#100', record['tankmen'][record['crew'][0]])
+        before = copy.deepcopy(state.snapshot())
+        with self._built([]), self.assertRaises(GARAGE.GarageError):
+            state.buy_vehicle(SECOND_VEHICLE_CD)
+        self.assertEqual(before, state.snapshot())
+        poor = copy.deepcopy(snapshot)
+        poor['wallet']['crystal'] = 5999
+        poor_state = GARAGE.GarageState(poor, vehicles_module=vehicles, tankmen_module=tankmen)
+        before = copy.deepcopy(poor_state.snapshot())
+        with self._built([]), self.assertRaises(GARAGE.GarageError):
+            poor_state.buy_vehicle(SECOND_VEHICLE_CD)
+        self.assertEqual(before, poor_state.snapshot())
+
     def test_permanent_purchase_accepts_the_exact_client_sentinel(self):
         snapshot = _snapshot()
         snapshot['wallet']['gold'] = 20000

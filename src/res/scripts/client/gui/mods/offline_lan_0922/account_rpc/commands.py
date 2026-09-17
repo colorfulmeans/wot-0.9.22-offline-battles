@@ -64,6 +64,8 @@ CMD_REQ_BATTLE_RESULTS = 1500
 CMD_BATTLE_RESULTS_RECEIVED = 1501
 CMD_ADD_INT_USER_SETTINGS = 1600
 CMD_DEL_INT_USER_SETTINGS = 1601
+# Mod-owned command, carried by the existing Account string-request mailbox.
+CMD_OFFLINE_SERVICE = 19900
 
 # constants.pyc QUEUE_TYPE.RANDOMS, consumed by Account.onEnqueued/onDequeued.
 QUEUE_TYPE_RANDOMS = 1

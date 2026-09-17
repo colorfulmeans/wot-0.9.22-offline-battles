@@ -2332,6 +2332,8 @@ class BattleState:
         self._load_result_receipts()
         self.receipt_namespace = uuid.uuid4().hex
         self.receipt_arena_prefix = uuid.uuid4().int & 0xffffffff
+        self.battle_mode = "regular"
+        self.training_bots = False
         self.round_start_time = int(time.time())
         self.result_reset_tick = None
         self.roster_finalized = False
@@ -3604,7 +3606,8 @@ class BattleState:
             return None
 
     def request_start(self, player_id, requested_map=None,
-                      requested_round_seconds=None):
+                      requested_round_seconds=None, battle_mode="regular",
+                      training_bots=False):
         with self.lock:
             player = self.players.get(player_id)
             if player is None or not player.connected:
@@ -3613,6 +3616,8 @@ class BattleState:
                 return None, "already_started"
             if player_id != self.host_player_id:
                 return None, "host_only"
+            if battle_mode not in ("regular", "training") or not isinstance(training_bots, bool):
+                return None, "invalid_battle_mode"
             battle_duration_seconds = self._requested_battle_duration(
                 requested_round_seconds)
             if battle_duration_seconds is None:
@@ -3713,13 +3718,18 @@ class BattleState:
                 participant.participating = True
             self._freeze_round_participants(connected)
             occupied_slots = {(p.team, p.slot) for p in connected}
-            self.bot_roster = self._new_bot_roster(occupied_slots)
+            self.battle_mode = battle_mode
+            self.training_bots = training_bots
+            self.bot_roster = (self._new_bot_roster(occupied_slots)
+                               if battle_mode == "regular" or training_bots else [])
             self.roster_finalized = True
             self.phase = "loading"
             self._elect_bot_authority()
             self.state_revision += 1
             start_message = {
                 "type": "battle_start",
+                "battle_mode": self.battle_mode,
+                "training_bots": self.training_bots,
                 "protocol": PROTOCOL_VERSION,
                 "client_build": self.client_build,
                 "round_id": self.round_id,
@@ -4463,6 +4473,8 @@ class BattleState:
                 takeover_manifest.append(entry)
             message = {
                 "type": "battle_start",
+                "battle_mode": self.battle_mode,
+                "training_bots": self.training_bots,
                 "protocol": PROTOCOL_VERSION,
                 "round_id": self.round_id,
                 "state_revision": self.state_revision,
@@ -10338,6 +10350,10 @@ class BattleState:
             for row in public_results:
                 row["achievements"] = sorted(awards.get(
                     (row["actor_kind"], row["actor_id"]), ()))
+            if self.battle_mode == "training":
+                for row in public_results:
+                    row["xp"] = 0
+                    row["achievements"] = []
             public_by_player = dict(
                 (row["actor_id"], row) for row in public_results
                 if row["actor_kind"] == "player")
@@ -10380,8 +10396,14 @@ class BattleState:
                 rewards["crystal"] = sum(crystal_rewards.values())
                 friendly = self._friendly_fire_receipt(
                     ("player", player_id), rewards.pop("xp_penalty", 0))
+                if self.battle_mode == "training":
+                    rewards = dict((key, 0) for key in rewards)
+                    crystal_rewards = {}
+                    friendly = {"victims": [], "received_damage": 0,
+                                "xp_penalty": 0}
                 receipt = {
                     "type": "battle_receipt",
+                    "battle_mode": self.battle_mode,
                     "protocol": PROTOCOL_VERSION,
                     "receipt_id": "%s:%d:%d" % (
                         self.receipt_namespace, self.round_id, player_id),
@@ -14486,6 +14508,8 @@ class BattleState:
 
             if kind == "battle_start":
                 outgoing = dict(message)
+                outgoing["battle_mode"] = self.battle_mode
+                outgoing["training_bots"] = self.training_bots
                 connected = [
                     player for player in self.players.values()
                     if player.connected and player.participating]
@@ -15205,7 +15229,9 @@ class ClientHandler(socketserver.BaseRequestHandler):
                         elif message_type == "start_battle":
                             start_message, start_error = server.state.request_start(
                                 player.player_id, message.get("map"),
-                                message.get("round_seconds"))
+                                message.get("round_seconds"),
+                                message.get("battle_mode", "regular"),
+                                message.get("training_bots", False))
                             if start_message is None:
                                 player.send({
                                     "type": "start_denied",

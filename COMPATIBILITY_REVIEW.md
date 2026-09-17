@@ -3672,3 +3672,69 @@ archive, commit 487396ac2bec27127b8e03abca33bc961dc67021). This different region
 build is orientation, not #1513 ABI proof. Only a run of the resulting package
 on the supported China HD #1513 Windows client can establish native voice,
 Expert overlay, fourth-slot UI, timing and frame-pacing acceptance.
+
+## September 17 test-report follow-up
+
+The three supplied reports identify version 0.8.4 with build identity
+`colorfulmeans-35196027324-1`. Ruinberg reports include live but unidentified
+placements, a 52-name/84-slot disagreement, and catalog signature misses.
+These are distinct outcomes; the logs do not prove that every reported object
+has one cause. Moving actors no longer preempt the shared bounded name scan.
+Reviewed chunk-load/loss hooks retire that chunk's quarantine when its native
+lifetime ends. Ordinary cache invalidation still preserves quarantine, and
+ambiguous identities still cannot authorize destruction. Regression coverage
+includes a large name scan under competing actor requests and chunk reload.
+
+Expert now has one owner for the offline four-second focus state. Enabling the
+stock target monitor previously allowed its target-blur callback to clear the
+shared overlay despite continued offline silhouette focus. Its native monitor
+is disabled while the existing visibility/alive/perk guards remain. Pivot RPM
+uses the same descriptor-derived left/right track velocities as animation,
+instead of only center-of-hull speed. Audible turning and sustained Expert
+display still require Windows gameplay evidence.
+
+The bond vehicle shop did not exist in 0.9.22. WG's
+[October 28, 2019 announcement](https://worldoftanks.com/en/news/specials/tanks-for-bonds/)
+provides the first assortment, prices, included slot and trained crew. Eight
+definitions exist in the old client and are offered with those prices; the
+two later vehicles are omitted. The five explicitly requested retired
+definitions use offline tier brackets, not their residual tech-tree/placeholder
+prices. The tier VII/IX/X prices are 6000/12000/15000 bonds, respectively;
+these are not described as official 0.9.22 bond prices.
+
+The native store retains its card surface; purchases use the Account command,
+GarageState transaction, common vehicle purchase and durable garage ledger.
+Slot and crew entitlements are shared with native purchase consumers.
+Insufficient funds, duplicate purchases and failed save writes roll back.
+The 90-day premium duration supplies the missing label while preserving the
+native price template and existing 6500-gold purchase policy.
+
+No friendly-fire locale key is overridden. Public 0.9.22 result calculations
+use `details/calculations/friendlyFirePenalty` for credits and XP, and
+`details/calculations/friendlyFireCompensation` for credits only. Exact China
+0.9.22 text was not independently recovered in this workspace; the installed
+client owns those translations. No XP compensation field or row is added.
+
+Training mode travels from the selector through the host's explicit start to
+the authority, native arena types and durable receipt. Bot fill is optional;
+the mandatory hidden native worker remains the authority even without Bots.
+Training settlements preserve spent ammunition and consumables, repair for
+free, and cannot award XP, currency, medals, daily progress or lifetime stats.
+
+The reserve surface reuses the room's cursor, callback and root ownership,
+with explicit Close/Escape teardown. Reserve purchase and activation use
+durable transactions. Four legacy types remain separate, at most three can
+run, and bonuses use base earnings and battle-start eligibility. Expired
+activation intervals survive newer activations for late receipt replay.
+The [WG reserve guide](https://na.wargaming.net/support/en/products/wot/article/18943/)
+describes reserve types and acquisition via missions/events, but is updated
+after 0.9.22. The purchase prices and daily missions here are explicitly
+offline extensions, not a reconstruction of a particular historical event.
+Daily grants share the once-only receipt commit and cannot be re-awarded by
+retry or by replaying an older day after newer progress.
+
+The reports' Vivox failure reflects an unavailable online account service.
+The sound tab no longer requests reinitialization and reports offline voice
+unavailability. This does not implement a replacement voice server.
+Native store card rendering, reserve surface layering/closing, training arena
+transitions and sound-tab presentation require the exact Windows client.

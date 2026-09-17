@@ -1790,7 +1790,9 @@ class GarageState(object):
             if _int(record.get('vehicleTypeCompactDescr', 0)) == compact_descr:
                 raise GarageError('the account already owns this vehicle')
         slots = _int(self._snapshot.get('accountSlots', 0))
-        if slots and len(self._records()) >= slots:
+        bond_bundle = any(_int(row.get('cd')) == compact_descr for row in
+                          self._snapshot.get('offlineVehicleOffers', ()))
+        if not bond_bundle and slots and len(self._records()) >= slots:
             raise GarageError('every garage slot is occupied')
 
         from gui.mods.offline_lan_0922 import vehicle_records
@@ -1800,6 +1802,9 @@ class GarageState(object):
             vehicles = self._vehicles_module()
             tankmen = self._tankmen_module()
             vehicle_type = vehicles.getVehicleType(compact_descr)
+            if bond_bundle:
+                self._snapshot['accountSlots'] = (slots or len(self._records())) + 1
+                recruit_crew = True
             built = vehicle_records.build_record(
                 vehicles, tankmen, ITEM_TYPE_INDICES, tuple(vehicle_type.id),
                 self._next_inventory_id(), self._next_tankman_id(),
@@ -1830,7 +1835,8 @@ class GarageState(object):
                 nation_id, vehicle_type_id = vehicle_type.id
                 for slot, roles in enumerate(vehicle_type.crewRoles):
                     tankman_id, descriptor = self._recruit(
-                        nation_id, vehicle_type_id, roles[0], tman_cost_type_index)
+                        nation_id, vehicle_type_id, roles[0], tman_cost_type_index,
+                        included_cost={'roleLevel': 100} if bond_bundle else None)
                     record['crew'][slot] = tankman_id
                     record['tankmen'][tankman_id] = descriptor
                     self._touched_tankmen.add(tankman_id)
@@ -2107,9 +2113,11 @@ class GarageState(object):
         self.revision += 1
         return tankman_id
 
-    def _recruit(self, nation_id, vehicle_type_id, role, cost_type_index):
+    def _recruit(self, nation_id, vehicle_type_id, role, cost_type_index,
+                 included_cost=None):
         """Charge one recruitment and return the crew member it bought."""
-        cost = self._tankman_cost(cost_type_index)
+        cost = (self._tankman_cost(cost_type_index) if included_cost is None
+                else dict(included_cost))
         tankmen = self._tankmen_module()
         try:
             # generateTankmen's isPremium selects the premium name and icon

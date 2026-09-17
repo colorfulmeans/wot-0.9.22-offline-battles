@@ -1208,6 +1208,9 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 ticks[0] = float(tick)
                 detail = destructibles_sensor.prewarm_tree_registry(
                     1, _Vector(), 0.0, descriptor, ticks[0])
+                destructibles_sensor.prewarm_tree_registry(
+                    1, _Vector(100.0, 0.0, 0.0), 0.0, descriptor, ticks[0],
+                    priority_chunks=(32,))
                 category_counts.append(
                     bigworld.wg_getDestructibleEffectCategory.call_count)
             prewarm_mapped = set(mapped)
@@ -1218,7 +1221,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
 
         self.assertEqual('pending', detail['status'])
         self.assertEqual(
-            set((11, 12, 13, 21, 22, 23, 31, 32, 33)), prewarm_mapped)
+            set((11, 12, 13, 21, 22, 23, 31, 32, 33, 41, 42, 43)), prewarm_mapped)
         registry = destructibles_sensor.g_offh_tree_state['chunks'][23]
         self.assertEqual(100, registry['count'])
         self.assertEqual('crushed', proposal['status'])
@@ -11969,6 +11972,28 @@ class NativeItemNameContractTests(unittest.TestCase):
         self.assertEqual(
             {'category_abi'},
             destructibles_sensor.g_offh_destr_isolation_logs)
+
+    def test_real_chunk_reload_retires_old_slot_quarantine_but_cache_eviction_does_not(self):
+        tree = 'speedtree/test/oak.spt'
+        self.descriptors[tree] = {'type': self.TREE, 'health': 10}
+        area = self._area()
+        manager = types.SimpleNamespace(getSpaceID=lambda: 1)
+        area.g_destructiblesManager = manager
+        destructibles_sensor.g_offh_destr_isolated_slots = {(22, 0), (99, 1)}
+        destructibles_sensor._invalidate_chunk_native_names_1513(22)
+        self.assertIn((22, 0), destructibles_sensor.g_offh_destr_isolated_slots)
+        original = mock.Mock()
+        callback = destructibles_compat._chunk_identity_boundary(area, original)
+        callback(manager, 22, 2)
+        original.assert_called_once_with(manager, 22, 2)
+        self.assertNotIn((22, 0), destructibles_sensor.g_offh_destr_isolated_slots)
+        self.assertIn((99, 1), destructibles_sensor.g_offh_destr_isolated_slots)
+        bigworld = types.ModuleType('BigWorld')
+        bigworld.wg_getDestructibleEffectCategory = lambda s, c, i, m: self.TREE if i else -1
+        mapping, status = destructibles_sensor._chunk_native_names_1513(
+            bigworld, area, 1, 22, 2, (tree,))
+        self.assertEqual('exact', status)
+        self.assertEqual({1: tree}, mapping)
 
     def test_compacted_rebuild_with_unknown_isolated_slot_stays_unsafe(self):
         tree = 'speedtree/test/oak.spt'

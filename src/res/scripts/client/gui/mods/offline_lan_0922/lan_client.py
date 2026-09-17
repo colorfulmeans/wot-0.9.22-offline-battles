@@ -1320,6 +1320,8 @@ def _valid_battle_receipt(message):
             winner not in (0, 1, 2) or duration is None or duration < 0 or
             not isinstance(message.get('premature_leave'), bool)):
         return False
+    if message.get('battle_mode', 'regular') not in ('regular', 'training'):
+        return False
     stats = message.get('stats')
     rewards = message.get('rewards')
     stat_names = RECEIPT_STAT_NAMES
@@ -1826,11 +1828,16 @@ class LANClient(object):
                     if not is_alive():
                         self._sender_thread = None
 
-    def request_start(self, map_name=None, round_seconds=None):
+    def request_start(self, map_name=None, round_seconds=None,
+                      battle_mode='regular', training_bots=False):
         if (not self.ready or self.phase != 'waiting' or
                 self.player_id != self.host_player_id):
             return False
+        if battle_mode not in ('regular', 'training') or not isinstance(training_bots, bool):
+            return False
         message = {'type': 'start_battle', 'round_id': self.round_id}
+        if battle_mode == 'training':
+            message.update(battle_mode=battle_mode, training_bots=training_bots)
         if round_seconds is not None:
             round_seconds = _exact_int(round_seconds)
             if (round_seconds is None or

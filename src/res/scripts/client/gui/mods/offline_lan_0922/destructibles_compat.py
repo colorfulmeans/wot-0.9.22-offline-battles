@@ -127,6 +127,7 @@ def _chunk_identity_boundary(area_module, original):
             else:
                 destructibles_sensor._invalidate_chunk_native_names_1513(
                     chunk_id)
+            destructibles_sensor.retire_chunk_identity_1513(chunk_id)
         return original(manager, chunk_id, *args)
     return handle
 

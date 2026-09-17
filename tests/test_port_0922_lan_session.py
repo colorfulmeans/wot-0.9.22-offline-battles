@@ -1227,6 +1227,18 @@ class LANSessionTests(unittest.TestCase):
         self.assertEqual(1, screen.open_calls)
         self.assertTrue(self.session._picker_open)
 
+    def test_training_opens_a_room_without_queue_and_sends_host_options(self):
+        self.session.join(None, 'training')
+        self.emit('welcome', {'phase': 'waiting', 'map_pool': ['01_karelia']})
+        self.assertEqual([], self.queue_screens)
+        self.assertTrue(self.session._picker_open)
+        calls = []
+        self.client.request_start = lambda *args, **kwargs: calls.append((args, kwargs)) or True
+        self.assertTrue(self.session._toggle_training_bots())
+        self.assertTrue(self.session.request_start('01_karelia'))
+        self.assertEqual({'battle_mode': 'training', 'training_bots': True},
+                         calls[-1][1])
+
     def test_leave_room_leaves_the_stock_queue(self):
         self.emit('welcome', {'phase': 'waiting', 'map_pool': ['01_karelia']})
 

@@ -2403,9 +2403,10 @@ class BattleRuntime(object):
             constants = self._runtime.constants
             local_identity = self._local_state()
             self._runtime.compatibility.set_battle_network_client(self.client)
+            training = (self._start_message or {}).get('battle_mode') == 'training'
             self._runtime.compatibility.configure_battle(
-                getattr(constants.ARENA_GUI_TYPE, 'RANDOM', 0),
-                getattr(constants.ARENA_BONUS_TYPE, 'REGULAR', 0),
+                getattr(constants.ARENA_GUI_TYPE, 'TRAINING' if training else 'RANDOM', 0),
+                getattr(constants.ARENA_BONUS_TYPE, 'TRAINING' if training else 'REGULAR', 0),
                 local_identity.get('name', self.client.name),
                 int(local_identity.get('team', self.client.team)),
                 arena_type_id=getattr(arena_type, 'id', 0))
@@ -4451,6 +4452,14 @@ class BattleRuntime(object):
         if speed_range <= 0.0:
             raise RuntimeError('#1513 vehicle speed range is invalid')
         speed = abs(float(self._local_speed))
+        if self._local_physics is not None:
+            # A neutral turn drives the belts in opposite directions even
+            # though hull translation is zero. Feed the same descriptor-
+            # derived belt speed that the track animator receives into RPM.
+            left, right = vehicle_physics.track_scroll(
+                self._local_physics, self._local_speed,
+                self._local_turn_speed)
+            speed = max(speed, abs(left), abs(right))
         if speed < 0.05:
             return 0.0, 0
         gear = math.ceil(
@@ -7231,7 +7240,7 @@ class BattleRuntime(object):
                 self._ammo_tick()
 
     def _enable_expert_visibility(self):
-        """Enable #1513's native target-device monitor for Expert."""
+        """Give the offline silhouette target sole ownership of Expert."""
         if (not self._has_expert or self._expert_visibility_enabled or
                 self._worker_mode or self._avatar is None or
                 self._server is None):
@@ -7244,9 +7253,12 @@ class BattleRuntime(object):
         if status is None or not callable(callback):
             raise RuntimeError(
                 '#1513 Expert visibility boundary is unavailable')
-        # PlayerAvatar reads floatArgs[0] before dispatching the status even
-        # though this particular branch only consumes intArg.
-        callback(self._server.vehicle_id, int(status), 1, (0.0,))
+        # Stock targetBlur both clears the cell monitor and hides the panel.
+        # Its native target can flicker while our exact silhouette still
+        # holds the same vehicle. Disable that competing monitor; the offline
+        # target loop below owns the four-second delay and stock feedback.
+        # PlayerAvatar reads floatArgs[0] even for this integer-only status.
+        callback(self._server.vehicle_id, int(status), 0, (0.0,))
         self._expert_visibility_enabled = True
         return True
 

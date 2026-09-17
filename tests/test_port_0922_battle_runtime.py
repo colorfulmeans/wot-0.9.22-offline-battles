@@ -15688,7 +15688,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             10,
             runtime.constants.VEHICLE_MISC_STATUS.
             OTHER_VEHICLE_DAMAGED_DEVICES_VISIBLE,
-            1, (0.0,))], battle._avatar.misc_statuses)
+            0, (0.0,))], battle._avatar.misc_statuses)
 
     def test_expert_publishes_extra_indices_after_four_second_lock(self):
         runtime = _runtime()
@@ -22644,6 +22644,18 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             0.25, battle._binding.avatar_aux_physics.call_args.args[0])
         self.assertFalse(battle._publish_rpm(10.3))
+
+    def test_pivot_drives_engine_rpm_with_zero_centre_speed(self):
+        battle = BattleRuntime(_runtime())
+        battle._local_descriptor = _Descriptor()
+        battle._local_physics = {'trackCenter': 1.5, 'speedFwd': 15.0}
+        battle._local_speed = 0.0
+        battle._local_turn_speed = 0.8
+        rpm, gear = battle._simulated_rpm_and_gear()
+        self.assertGreater(rpm, 0)
+        self.assertGreater(gear, 0)
+        battle._local_turn_speed = 0.0
+        self.assertEqual((0.0, 0), battle._simulated_rpm_and_gear())
 
     def test_native_gun_stabilised_provider_tracks_copied_player_matrix(self):
         runtime = _runtime()

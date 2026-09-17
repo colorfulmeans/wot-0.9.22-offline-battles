@@ -24,6 +24,7 @@ import sys
 
 from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922 import friendly_fire
+from gui.mods.offline_lan_0922 import offline_services
 from gui.mods.offline_lan_0922.account_rpc import data, economy
 from gui.mods.offline_lan_0922.account_rpc.garage import (
     STOCKED_ITEM_TYPES, mirror_shells_layout)
@@ -154,6 +155,7 @@ def _ledger_payload(snapshot):
         'premiumExpiryTime': max(
             0, _int_value(snapshot.get('premiumExpiryTime'))),
         'personalMissions': {'regular': regular},
+        'offlineServices': offline_services.saved_fields(snapshot),
     }
 
 
@@ -294,6 +296,9 @@ def _apply_ledger(staged, stored):
         staged['premiumExpiryTime'] = max(
             0, _int_value(ledger.get('premiumExpiryTime')))
     personal_missions = ledger.get('personalMissions')
+    services = ledger.get('offlineServices')
+    if isinstance(services, dict):
+        staged.update(offline_services.saved_fields(services))
     if isinstance(personal_missions, dict):
         regular = data.personal_mission_regular_selection(
             personal_missions.get('regular', ()))
@@ -688,7 +693,8 @@ class GarageStore(object):
                              rewards=None, health=None, vehicles_module=None,
                              shells_fired=None, equipment_used=None,
                              auto_settings=None, friendly_fire_facts=None,
-                             vehicle_type_name=None):
+                             vehicle_type_name=None, battle_start=0,
+                             daily_facts=None, training=False):
         """Apply and persist one battle's whole settlement exactly once.
 
         The compact crew descriptors, the earnings, the damage the battle did
@@ -723,7 +729,7 @@ class GarageStore(object):
         # Resolve every victim's own native hull repair price before changing
         # the staged wallet. A missing descriptor leaves the receipt pending.
         friendly_prices = friendly_fire.price(
-            friendly_fire_facts, vehicle_type_name, vehicles_module)
+            None if training else friendly_fire_facts, vehicle_type_name, vehicles_module)
         # The receipt says what the battle did; what it is worth is the
         # account's business, so the two multipliers are applied here, once,
         # and everything downstream banks and shows the same numbers.
@@ -739,6 +745,13 @@ class GarageStore(object):
             rewards, credits_percent=credits_percent,
             experience_percent=experience_percent,
             bonds_percent=experience_percent)
+        bonuses = offline_services.reserve_bonuses(
+            snapshot, {} if training else (rewards or {}), int(battle_start))
+        if training:
+            awarded = dict((key, 0) for key in awarded)
+            battle_xp = 0
+        for name in ('credits', 'xp', 'free_xp'):
+            awarded[name] += bonuses[name]
         battle_xp = awarded.get('xp', battle_xp) if rewards else (
             max(0, int(battle_xp or 0)) * experience_percent // 100)
         # What the battle earned does not depend on the vehicle it was
@@ -754,11 +767,14 @@ class GarageStore(object):
             'weakest_tankman_id': 0,
             'xp_by_tankman': {},
         }
-        crew = _contained(
-            refused, 'crew experience',
-            lambda: state.award_battle_crew_xp(
-                vehicle_type_compact_descr, battle_xp, xp_to_tankman_flag),
-            GarageError)
+        crew = None
+        if not training:
+            crew = _contained(
+                refused, 'crew experience',
+                lambda: state.award_battle_crew_xp(
+                    vehicle_type_compact_descr, battle_xp + bonuses['crew_xp'],
+                    xp_to_tankman_flag),
+                GarageError)
         if crew is not None:
             result.update(crew)
         # Crew training owns crewXpFactor; bank the separate vehicle XP
@@ -767,8 +783,8 @@ class GarageStore(object):
             vehicles_module, vehicle_type_compact_descr)
         for name in ('xp', 'free_xp'):
             awarded[name] += economy.premium_xp_bonus(
-                awarded[name], premium_factor)
-        if health is not None:
+                awarded[name] - bonuses[name], premium_factor)
+        if health is not None and not training:
             result['repair'] = _contained(
                 refused, 'repair bill',
                 lambda: state.settle_battle_damage(
@@ -808,6 +824,9 @@ class GarageStore(object):
         result['refused'] = list(refused)
         result['service_costs'] = _settle_automatically(
             state, int(result['vehicle_id']), auto_settings, GarageError)
+        if daily_facts is not None and not training:
+            result['daily_reserves'] = offline_services.advance_daily(
+                state.snapshot(), daily_facts, daily_facts.get('finished_at'))
         # Every other field of this result is plain JSON, and the store hands
         # it straight to a caller that may well write it down.
         result['touched_items'] = dict(

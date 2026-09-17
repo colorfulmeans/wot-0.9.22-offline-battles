@@ -203,6 +203,26 @@ def _latest_receipt(state, account_key):
 
 
 class PostBattleContractTests(unittest.TestCase):
+    def test_training_receipt_has_no_rewards_medals_or_lifetime_progress(self):
+        state = BattleState(map_name='01_karelia')
+        state.client_build = CLIENT_BUILD_0922
+        state.phase = 'battle'
+        state.battle_mode = 'training'
+        player = Player(1, _Socket(), ('127.0.0.1', 1), name='Alice',
+                        vehicle='ussr:R11_MS-1', team=1, account_key='a' * 32)
+        state.players[1] = player
+        state._statistics_row('player', 1)['damage_dealt'] = 9000
+        self.assertTrue(state._finish_battle(1, 'elimination'))
+        receipt = _latest_receipt(state, player.account_key)
+        self.assertEqual('training', receipt['battle_mode'])
+        self.assertFalse(any(receipt['rewards'].values()))
+        self.assertEqual([], receipt['public_results'][0]['achievements'])
+        store = postbattle_store.PostBattleStore(path=None)
+        before = json.dumps(store._progress, sort_keys=True)
+        store._apply_progress(postbattle_store._receipt(receipt))
+        self.assertEqual(before, json.dumps(store._progress, sort_keys=True))
+
+
     def test_vehicle_dossier_uses_native_builder_and_change_time_filter(self):
         built = []
 

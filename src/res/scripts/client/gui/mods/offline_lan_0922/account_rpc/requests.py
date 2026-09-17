@@ -54,7 +54,8 @@ def _garage(context):
     return state
 
 
-def _fitting(context, mutate, extension=None, extra_diff=None):
+def _fitting(context, mutate, extension=None, extra_diff=None,
+             require_persistence=False):
     """Apply one fitting mutation and push the resulting inventory diff.
 
     #1513 refreshes the garage from ``PlayerAccount.update``, which unpickles
@@ -87,7 +88,9 @@ def _fitting(context, mutate, extension=None, extra_diff=None):
         # A fitting happens at click speed, so saving on each accepted change
         # costs nothing and a hard client kill cannot lose an applied change.
         store.mark_dirty()
-        store.flush(state.snapshot())
+        saved_ok = store.flush(state.snapshot())
+        if require_persistence and not saved_ok:
+            raise garage.GarageError('The transaction could not be saved.')
     saved = _clock()
     push = context.get('push_update')
     if not callable(push):
@@ -785,7 +788,25 @@ def _del_int_user_settings(context, args):
     return Result(commands.RES_SUCCESS)
 
 
+def _offline_service(context, args):
+    import json
+    from gui.mods.offline_lan_0922 import offline_services
+    try:
+        value = json.loads(args[0])
+        action, key = value['action'], value['key']
+    except (IndexError, KeyError, TypeError, ValueError):
+        return Result(commands.RES_FAILURE, 'INVALID_OFFLINE_SERVICE')
+    state = _garage(context)
+    try:
+        with state._transaction():
+            return _fitting(context, lambda owner: offline_services.transact(
+                owner, action, key), require_persistence=True)
+    except garage.GarageError as error:
+        return Result(commands.RES_FAILURE, str(error))
+
+
 HANDLERS = {
+    commands.CMD_OFFLINE_SERVICE: _offline_service,
     commands.CMD_SYNC_DATA: _sync_data,
     commands.CMD_EQUIP: _equip_component,
     commands.CMD_EQUIP_OPTDEV: _equip_optional_device,

@@ -752,6 +752,23 @@ def _release_item_name_query_focus_1513_for_chunk(chunk_id):
 		state.pop('focus_last_seen', None)
 
 
+def retire_chunk_identity_1513(chunk_id):
+	"""Retire quarantine only at the manager's real load/loose boundary.
+
+	A mapping-cache invalidation is not a new native lifetime. The exact
+	manager callback is: old slot failures must not poison a new provider
+	whose count, names and matrices will all be validated again.
+	"""
+	chunk_id = int(chunk_id)
+	globals().get('g_offh_destr_isolated_chunks', set()).discard(chunk_id)
+	for name in ('g_offh_destr_isolated_slots',
+			'g_offh_destr_name_unresolved_slots'):
+		values = globals().get(name, set())
+		for identity in list(values):
+			if identity[0] == chunk_id:
+				values.discard(identity)
+
+
 def _invalidate_chunk_native_names_1513(chunk_id):
 	"""Forget cached native-name evidence after a real chunk unload."""
 	chunk_id = int(chunk_id)
@@ -6286,12 +6303,9 @@ def _fell_trees_near(
 			if _priority_chunks:
 				cids.update(_priority_chunks)
 				_cid_order = sorted(cids)
-				_focus = globals().get(
-					'g_offh_destr_item_name_budget', {}).get('focus')
-				_valid_focus = set((int(spaceID), value)
-					for value in _priority_chunks)
-				if _focus is not None and _focus not in _valid_focus:
-					_release_item_name_query_focus_1513_for_chunk(_focus[1])
+				# Do not preempt another actor's incremental alignment. The shared
+				# allowance retires abandoned focus itself. Per-actor preemption let
+				# many moving bots repeatedly strand a large chunk at the same slot.
 			# Finish the occupied chunk first, then the most forward mapped
 			# neighbours.  This makes the single shared 16-query budget useful
 			# for the chunk the vehicle will enter instead of depending on opaque

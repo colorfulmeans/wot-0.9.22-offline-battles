@@ -154,9 +154,9 @@ class JoinButtonUI(object):
         def wrapped_training_select(item):
             # The stock selector enters retail's TrainingListRequester before
             # the fight button exists.  With no retail cell app that requester
-            # remains on "updating" forever, so route this entry point to the
-            # same LAN waiting room as the header button.
-            adapter._on_join(None, getattr(item, '_data', 'training'))
+            # remains on "updating" forever. The explicit mode must survive
+            # the selector's native "trainingList" action name.
+            adapter._on_join(None, 'training')
             return None
 
         self._fight_click_wrapper = wrapped_fight_click

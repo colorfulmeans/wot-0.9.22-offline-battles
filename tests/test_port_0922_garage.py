@@ -3027,6 +3027,47 @@ class GaragePersistenceTests(unittest.TestCase):
         snapshot['shopItemPrices'][50002] = {'credits': 0, 'gold': 0}
         return snapshot
 
+    def test_personal_reserves_and_daily_rewards_survive_restart_and_receipt_retry(self):
+        policy = self.store_module.offline_services
+        state = self._state(self._matching_snapshot())
+        state.snapshot()['wallet']['gold'] = 100
+        policy.transact(state, 'buy_reserve', 'xp', now=100)
+        policy.transact(state, 'activate_reserve', 'xp', now=100)
+        snapshot = state.snapshot()
+        vehicles, tankmen = _modules()
+        store = self._store()
+        kwargs = dict(tankmen_module=tankmen, vehicles_module=vehicles,
+                      rewards={'credits': 1000, 'xp': 100, 'free_xp': 5},
+                      battle_start=150, daily_facts={'damage': 3000, 'won': True,
+                                                   'finished_at': 200})
+        result = store.apply_battle_crew_xp(snapshot, 'reserve:1', 50001, 100, 1, **kwargs)
+        self.assertEqual(150, result['awarded']['xp'])
+        restored = self._restart(self._matching_snapshot())
+        reserves = policy.reserve_state(restored)
+        self.assertEqual([100, 3700], reserves['active']['xp'])
+        self.assertEqual(1, reserves['counts']['credits'])
+        self.assertEqual(1, reserves['counts']['crew_xp'])
+        self.assertEqual(50, restored['wallet']['gold'])
+        retry = self._store().apply_battle_crew_xp(restored, 'reserve:1', 50001, 100, 1, **kwargs)
+        self.assertFalse(retry['applied'])
+        self.assertEqual(reserves, policy.reserve_state(restored))
+
+    def test_training_spends_ammunition_but_no_repair_rewards_or_daily_progress(self):
+        snapshot = self._settling_snapshot()
+        before_xp = snapshot['vehicles'][0]['tankmen'].copy()
+        vehicles, tankmen = _modules()
+        result = self._store().apply_battle_crew_xp(
+            snapshot, 'training:1', 50001, 100, 1,
+            tankmen_module=tankmen, vehicles_module=vehicles,
+            health=1, shells_fired={0: 2}, auto_settings=(2, 4, 8),
+            rewards={'credits': 1000, 'xp': 100, 'free_xp': 5}, training=True,
+            daily_facts={'damage': 9000, 'won': True})
+        self.assertFalse(any(result['awarded'].values()))
+        self.assertEqual((0, 1000), snapshot['vehicles'][0]['repair'])
+        self.assertEqual(99800, snapshot['wallet']['credits'])
+        self.assertEqual(before_xp, snapshot['vehicles'][0]['tankmen'])
+        self.assertNotIn('dailyMissions', snapshot)
+
     def test_premium_and_personal_missions_survive_a_restart(self):
         snapshot = copy.deepcopy(SNAPSHOT)
         snapshot['wallet'] = {
