@@ -17498,8 +17498,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertIs(
             battle._local_matrix, battle._local_pose_matrix.a)
         body_relative = battle._local_siege_body_matrix.a
-        self.assertIs(native_body, body_relative.a)
-        self.assertIs(native_ground, body_relative.b.source)
+        self.assertIsInstance(body_relative, _Matrix)
+        self.assertIsNot(native_body, body_relative)
+        offset = tuple(body_relative.translation)
+        native_body.translation = _Vector(0, -30, 0)
+        native_ground.translation = _Vector(0, 15, 0)
+        self.assertEqual(offset, tuple(body_relative.translation))
         self.assertIs(
             battle._local_siege_aim_world_matrix,
             battle._local_siege_body_matrix.b)

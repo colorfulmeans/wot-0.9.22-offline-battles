@@ -9170,6 +9170,44 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             self.assertTrue(collision_filter(87, 0, 37, 22))
             self.assertTrue(collision_filter(75, 0, 38, 22))
 
+    def test_native_fragile_callback_marks_only_successful_current_space_swaps(self):
+        manager = types.SimpleNamespace(getSpaceID=lambda: 1)
+        area = types.SimpleNamespace(g_destructiblesManager=manager)
+        original = mock.Mock(return_value='done')
+        handle = destructibles_compat._fragile_collision_boundary(area, original)
+        with mock.patch.object(destructibles_sensor, 'note_native_fragile_replacement') as note:
+            self.assertEqual('done', handle(manager, 1, 22, 37, True, False, False,
+                                           None, delCallback=False))
+            original.assert_called_once_with(manager, 1, 22, 37, True, False, False,
+                                             None, delCallback=False)
+            note.assert_called_once_with(1, 22, 37)
+            note.reset_mock()
+            handle(manager, 2, 22, 37)
+            note.assert_not_called()
+            original.side_effect = RuntimeError('native swap failed')
+            with self.assertRaises(RuntimeError):
+                handle(manager, 1, 22, 37)
+            note.assert_not_called()
+
+    def test_fragile_native_replacement_survives_item_wide_broken_filter(self):
+        authority = self._ground_filter_fixture({(37, None)})
+        destructibles_sensor.g_offh_destr_runtime_space = 1
+        with mock.patch.object(destructibles_sensor, '_get_destr_authority',
+                               return_value=authority):
+            filters = (destructibles_sensor.ground_collision_filter(0, 4),
+                destructibles_sensor.prepare_horizontal_collision_filter(
+                    _Vector(-2, 0, -1), _Vector(2, 1, 10)))
+        for callback in filters:
+            self.assertFalse(callback(71, 0, 37, 22))
+        destructibles_sensor.note_native_fragile_replacement(1, 22, 37)
+        for callback in filters:
+            self.assertTrue(callback(71, 0, 37, 22))
+            self.assertTrue(callback(2, 0, 37, 22))
+        self.assertTrue(destructibles_sensor.native_replacement_bsp_active())
+        destructibles_sensor._invalidate_chunk_native_names_1513(22)
+        for callback in filters:
+            self.assertFalse(callback(71, 0, 37, 22))
+
     def test_stationary_multi_module_structure_crushes_each_module(self):
         detail, authority, unused_descriptor = (
             self._stationary_contact_status([{
@@ -9701,13 +9739,28 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 Matrix(prepared['baked_instances'][(chunk, item)]['signature'])))
         with mock.patch.dict(sys.modules, {'AreaDestructibles': area,
                 'BigWorld': bigworld, 'Math': types.SimpleNamespace(Vector3=_Vector, Matrix=lambda x: x)}):
+            # The new report has one previously isolated unnamed slot in a
+            # compacted list. That failed alignment must not quarantine the
+            # independent Mercedes/motorcycle proofs in the same chunk.
+            destructibles_sensor.g_offh_destr_isolated_slots = {(33151, 0)}
+            mapping, status = destructibles_sensor._chunk_native_names_1513(
+                bigworld, area, 1, 33151, 256, ())
+            self.assertIsNone(mapping)
+            self.assertEqual('isolated_item', status)
+            self.assertFalse(destructibles_sensor.is_isolated_1513(33151, 3))
             for index, wire in enumerate(wires):
                 bigworld._offh_item_name_budget_tick = index
+                # Exhaust the whole-map scan budget and retain another
+                # chunk's focus before every close-contact probe.
+                destructibles_sensor._release_item_name_query_focus_1513_for_chunk(33151)
+                destructibles_sensor._item_name_query_allowance_1513(bigworld, (1, 99), 16)
                 instance = destructibles_sensor._stream_baked_shot_instance_1513(1, wire)
                 self.assertIsNotNone(instance)
                 self.assertEqual('fragile', instance['kind'])
                 self.assertEqual(('exact', instance['descriptor_filename']),
                     destructibles_sensor.resolve_native_item_name_1513(1, *wire))
+                self.assertEqual((1, 99),
+                    destructibles_sensor.g_offh_destr_item_name_budget['focus'])
             self.assertEqual(set(wires), set(tuple(call.args[1:]) for call in
                 bigworld.wg_getDestructibleMatrix.call_args_list))
             # An unload expires independent proof even when the count is equal.

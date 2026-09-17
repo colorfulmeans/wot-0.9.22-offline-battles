@@ -67,6 +67,8 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
     """
     started = _clock()
     state = _garage(context)
+    from gui.mods.offline_lan_0922 import offline_services
+    previous_recovery = offline_services.vehicle_recovery_buffer(state.snapshot())
     previous_stats = data.stats(state.snapshot())['stats']
     state.touched_vehicles()
     state.touched_items()
@@ -82,6 +84,10 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
     # command may mutate the garage before publish runs; its new unlocks and
     # elite vehicles must belong only to its own notification delta.
     current_stats = data.stats(state.snapshot())['stats']
+    current_recovery = offline_services.vehicle_recovery_buffer(state.snapshot())
+    recovery_diff = dict((cd, current_recovery.get(cd)) for cd in
+                         set(previous_recovery) | set(current_recovery)
+                         if previous_recovery.get(cd) != current_recovery.get(cd))
     mutated = _clock()
     store = context.get('garage_store')
     if store is not None:
@@ -134,6 +140,9 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
             # push that moved them out of the barracks.
             diff['recycleBin'] = data.recycle_bin_diff(
                 state.snapshot(), moved_recycled)
+        if recovery_diff:
+            diff.setdefault('recycleBin', {})['vehicles'] = {
+                'buffer': recovery_diff}
         built = _clock()
         completed = [False]
 
@@ -403,6 +412,16 @@ def _unlock(context, args):
         context, lambda state: state.unlock(args[0], args[1]))
 
 
+def _durable_vehicle_fitting(context, mutate):
+    """Keep vehicle ownership, wallet and recovery entitlement atomic."""
+    state = _garage(context)
+    try:
+        with state._transaction():
+            return _fitting(context, mutate, require_persistence=True)
+    except garage.GarageError as error:
+        return Result(commands.RES_FAILURE, str(error))
+
+
 def _buy_vehicle(context, args):
     # Shop.buyVehicle -> _doCmdIntArr(CMD_BUY_VEHICLE,
     # [cacheRev, typeCompDescr, flags, tmanCostTypeIdx, rentPeriod]).
@@ -412,7 +431,7 @@ def _buy_vehicle(context, args):
     flags = _int(values[2])
     rent_period = values[4] if len(values) > 4 else -1
     tman_cost_type_index = values[3] if len(values) > 3 else 0
-    return _fitting(context, lambda state: state.buy_vehicle(
+    return _durable_vehicle_fitting(context, lambda state: state.buy_vehicle(
         values[1],
         buy_shells=bool(flags & BUY_VEHICLE_FLAG_SHELLS),
         recruit_crew=bool(flags & BUY_VEHICLE_FLAG_CREW),
@@ -439,7 +458,7 @@ def _sell_vehicle(context, args):
     if from_inventory_count < 0 or len(values) < end:
         return Result(commands.RES_FAILURE, 'INVALID_SALE_REQUEST')
     items_from_inventory = [_int(value) for value in values[tail + 1:end]]
-    return _fitting(context, lambda state: state.sell_vehicle(
+    return _durable_vehicle_fitting(context, lambda state: state.sell_vehicle(
         values[1], dismiss_crew=bool(_int(values[2])),
         items_from_vehicle=items_from_vehicle,
         items_from_inventory=items_from_inventory))

@@ -3036,6 +3036,7 @@ class GaragePersistenceTests(unittest.TestCase):
         snapshot = state.snapshot()
         snapshot['dailyMissions'] = {'day': 0, 'claimed': []}
         snapshot['selectedBadges'] = [17]
+        snapshot['badgeSelectionVerified'] = True
         vehicles, tankmen = _modules()
         store = self._store()
         kwargs = dict(tankmen_module=tankmen, vehicles_module=vehicles,
@@ -3085,6 +3086,23 @@ class GaragePersistenceTests(unittest.TestCase):
         self.assertEqual(202, tomorrow['awarded']['xp'])
         self.assertFalse(tomorrow['income']['premium'])
         self.assertEqual(101, settle('late', start=700, finish=800)['awarded']['xp'])
+
+    def test_early_exit_receipt_does_not_consume_first_win_or_daily_progress(self):
+        snapshot = self._matching_snapshot()
+        vehicles, tankmen = _modules()
+        store = self._store()
+        result = store.apply_battle_crew_xp(
+            snapshot, 'early:1', 50001, 100, 1,
+            tankmen_module=tankmen, vehicles_module=vehicles,
+            rewards={'credits': 1000, 'xp': 100, 'free_xp': 5}, battle_start=150,
+            daily_facts={'damage': 9000, 'won': True, 'finished_at': 200,
+                         'premature_leave': True})
+        self.assertFalse(result['income']['first_win'])
+        self.assertFalse(snapshot.get('firstWinDays'))
+        self.assertFalse(snapshot.get('dailyMissions'))
+        restored = self._restart(self._matching_snapshot())
+        self.assertFalse(restored.get('firstWinDays'))
+        self.assertFalse(restored.get('dailyMissions'))
 
     def test_training_spends_ammunition_but_no_repair_rewards_or_daily_progress(self):
         snapshot = self._settling_snapshot()

@@ -1523,6 +1523,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 'receipt_id': 'server:1:1',
                 'arena_unique_id': (55 << 32) | 172800,
                 'stats': {'damage': 500}, 'duration': 300,
+                'premature_leave': True,
                 'winner': 1, 'team': 1,
                 'rewards': {'xp': 100},
                 'health': 40,
@@ -1539,6 +1540,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual([{0: 12}], spent)
         self.assertEqual([[11001]], consumed)
         self.assertEqual([(172800, {'damage': 500, 'finished_at': 173100,
+                                   'premature_leave': True,
                                    'won': True}, False)], services)
         self.assertEqual([({'victims': [], 'received_damage': 10, 'xp_penalty': 0},
                            'ussr:R11_MS-1')], misconduct)

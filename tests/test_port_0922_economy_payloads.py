@@ -16,6 +16,7 @@ transactions; this one proves the payload reaches them with every value in the
 position the client actually sends it.
 """
 
+import contextlib
 import sys
 from pathlib import Path
 import unittest
@@ -49,6 +50,9 @@ class _RecordingGarage(object):
 
     def snapshot(self):
         return {}
+
+    def _transaction(self):
+        return contextlib.nullcontext()
 
     # Shop.buyTankman's callback reads the new id out of the response.
     RESULTS = {'buy_tankman': 100005, 'change_tankman_role': 0}

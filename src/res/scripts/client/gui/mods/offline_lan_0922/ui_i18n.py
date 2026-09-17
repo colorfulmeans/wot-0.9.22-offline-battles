@@ -45,16 +45,17 @@ _ZH = {
     'Buy %s for %d bonds?': u'购买 %s，花费 %d 债券？',
     'PERSONAL RESERVES': u'个人储备',
     'DAILY MISSIONS': u'每日任务',
-    'Play %d battles': u'完成%d场战斗',
-    'Deal %d damage': u'累计造成%d伤害',
-    'Win %d battles': u'赢得%d场战斗',
-    'Purchased personal reserve: %s +%d%%, 1 hour. Spent %d gold.':
-        u'已购买个人储备：%s +%d%%，持续1小时。花费%d金币。',
-    'Activated personal reserve: %s +%d%%, 1 hour.':
-        u'已启用个人储备：%s +%d%%，持续1小时。',
+    'Complete %d battles': u'完成%d场战斗',
+    'Complete battles and deal %d damage': u'完成战斗并累计造成%d伤害',
+    'Complete and win %d battles': u'完成并赢得%d场战斗',
+    'Purchased personal reserve: %s +%d%%, %d h. Spent %d gold.':
+        u'已购买个人储备：%s +%d%%，持续%d小时。花费%d金币。',
+    'Activated personal reserve: %s +%d%%, %d h.':
+        u'已启用个人储备：%s +%d%%，持续%d小时。',
     'Purchased %s for %d bonds. Includes a slot and 100%% crew.':
         u'已购买%s，花费%d债券，含车位和100%%熟练度成员。',
     'Badge selection saved.': u'徽章佩戴设置已保存。',
+    'Complete the required missions to earn this badge first.': u'请先完成对应任务并获得该勋章。',
     'Unknown badge.': u'该徽章不存在。',
     'Gold: %d   Active reserves: %d / 3': u'金币：%d    生效储备：%d / 3',
     '1 hour each. Up to 3 types. Timer continues offline.': u'每项持续1小时，最多同时启用3类，离线仍计时。',
@@ -68,9 +69,9 @@ _ZH = {
     'Crew XP': u'乘员经验',
     'Free XP': u'全局经验',
     'Credits': u'银币',
-    'Play 3 battles': u'完成3场战斗',
-    'Deal 3000 damage': u'累计造成3000伤害',
-    'Win 1 battle': u'赢得1场战斗',
+    'Complete 3 battles': u'完成3场战斗',
+    'Complete battles and deal 3000 damage': u'完成战斗并累计造成3000伤害',
+    'Complete and win 1 battle': u'完成并赢得1场战斗',
     '%s: %d/%d | Reward: %s x1%s': u'%s：%d/%d · 奖励：%s储备×1%s',
     ' (RECEIVED)': u'（已领取）',
     'Standard battles only. Rewards automatic. Resets at 00:00 UTC.': u'仅计标准战斗，完成自动发奖，每日北京时间08:00重置。',

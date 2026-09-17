@@ -82,19 +82,41 @@ The five retired definitions have explicit offline prices: tier VII
 Aufkl. Panther 6000, tier IX SU-122-54 12000, and tier X Object 430B,
 Object 263B and Waffentrager E 100 15000 bonds each. These are the old
 definitions, not their later replacements or alternate variants.
+The regular Shop excludes those bond offers. Vehicle checkboxes select
+unresearched, owned or rented vehicles; with none selected, the list contains
+available purchases. Multiple selected categories are combined.
+Special Offers shows only the tank section, class/tier filters and owned/rental
+checkboxes. Its filters are saved independently from the regular Shop.
 
-Personal Reserves has purchase, activation, Close and Escape actions. Four
-one-hour types are offered: +50% combat XP (50 gold), +200% crew XP (100 gold),
-+200% free XP (50 gold), and +50% credits (100 gold). Up to three different
-types can run together; timers continue offline and eligibility is fixed at
-battle start. The Missions tab also opens daily offline missions: play three
-standard battles, deal 3000 damage, and win once. Each grants one reserve
-automatically and resets at 00:00 UTC. These prices and daily goals are custom
+Premium vehicles sold from this build onward enter the native Shop recovery
+list. Recovery costs the hull's sale value plus 10% in credits and requires a
+free garage slot. Premiums offered in the regular shop can be recovered for
+72 hours; premiums outside its assortment have no deadline. Earlier sales
+cannot be reconstructed from saves that never recorded them. Badge selection
+now requires the native earned achievement; old unrestricted cosmetic
+selections are cleared. Original campaign completion remains unimplemented.
+
+Personal Reserves has purchase, activation, Close and Escape actions. It offers
+44 distinct historical bonus/duration combinations across combat XP, crew XP,
+free XP and credits, including small/medium/large bonuses and 1/2/4/6-hour
+timers. These come from a preserved April 2016 WG API catalogue; completeness
+against later China-only 0.9.22 event offers is not established. Native client
+quality filters and artwork classify the bonuses. The original four one-hour
+offers and save identities are preserved. New gold prices scale proportionally
+from those offline offers, not from a claimed historical retail price list.
+Up to three different resource types can run together; a stronger reserve can
+replace its type after confirmation. Timers continue offline and eligibility
+is fixed at battle start. The Missions tab selects three daily offline goals for completed
+standard battles, damage and completed victories. Early exit never advances
+these goals, including a later team victory, and cannot consume daily x2.
+Each goal grants one reserve automatically; goals reset at 00:00 UTC and are
+selected from a fixed reward pool. These prices and daily goals are custom
 offline rules. Purchases, timers, rewards and receipt deduplication persist
 with the selected save.
 
 The 90-day premium option retains its 6500-gold price and displays a duration
-label. Battle-result friendly-fire labels remain the installed client's own
+label and the stock long-term premium emblem. The changed Flash layout still
+requires acceptance in the exact Windows client. Battle-result friendly-fire labels remain the installed client's own
 localization: credits have penalty and compensation rows; XP has only a
 penalty. Offline voice chat has no authenticated Vivox service and remains
 unavailable; opening sound settings no longer retries that service.

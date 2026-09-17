@@ -744,6 +744,69 @@ class VehiclePurchaseTests(unittest.TestCase):
             state.buy_vehicle(SECOND_VEHICLE_CD)
         self.assertEqual(4321, state.snapshot()['vehicleXP'][SECOND_VEHICLE_CD])
 
+    def test_premium_sale_restore_uses_credits_slot_and_single_entitlement(self):
+        import json
+        from unittest import mock
+        from gui.mods.offline_lan_0922 import offline_services as policy
+        vehicles = _vehicles()
+        vehicle_type = vehicles.getVehicleType(SECOND_VEHICLE_CD)
+        vehicle_type.tags = frozenset(('premium',))
+        vehicles.getVehicleType = lambda cd: vehicle_type
+        state = _state(self._two_vehicles(), vehicles=vehicles)
+        with mock.patch.object(GARAGE.time, 'time', return_value=100):
+            state.sell_vehicle(10)
+        data = state.snapshot()
+        self.assertEqual({'soldAt': 100, 'credits': 2750000, 'limited': True},
+                         data['vehicleRecovery'][SECOND_VEHICLE_CD])
+        restored = json.loads(json.dumps(policy.saved_fields(data)))
+        self.assertEqual({SECOND_VEHICLE_CD: (0, 100)},
+                         policy.vehicle_recovery_buffer(restored))
+        self.assertIsNone(policy.vehicle_recovery_offer(restored, SECOND_VEHICLE_CD,
+                         100 + policy.VEHICLE_RESTORE_SECONDS))
+        data['accountSlots'] = 1
+        with mock.patch.object(policy.time, 'time', return_value=101):
+            before = copy.deepcopy(data)
+            with self.assertRaises(GARAGE.GarageError):
+                state.buy_vehicle(SECOND_VEHICLE_CD)
+            self.assertEqual(before, data)
+            data['accountSlots'] = 2
+            data['wallet']['credits'] = 3000000
+            gold = data['wallet']['gold']
+            with self._built([]):
+                record = state.buy_vehicle(SECOND_VEHICLE_CD)
+            self.assertEqual(250000, data['wallet']['credits'])
+            self.assertEqual(gold, data['wallet']['gold'])
+            self.assertEqual([None], record['crew'])
+            self.assertEqual({}, data['vehicleRecovery'])
+            before = copy.deepcopy(data)
+            with self.assertRaises(GARAGE.GarageError):
+                state.buy_vehicle(SECOND_VEHICLE_CD)
+            self.assertEqual(before, data)
+
+    def test_rare_premium_has_unlimited_recovery_but_regular_vehicle_has_none(self):
+        from unittest import mock
+        from gui.mods.offline_lan_0922 import offline_services as policy
+        for tags, rented, expected in ((('premium',), False, True),
+                ((), False, False), (('premium', 'unrecoverable'), False, False),
+                (('premium',), True, False)):
+            vehicles = _vehicles()
+            vehicle_type = vehicles.getVehicleType(SECOND_VEHICLE_CD)
+            vehicle_type.tags = frozenset(tags)
+            vehicles.getVehicleType = lambda cd: vehicle_type
+            data = self._two_vehicles()
+            if rented:
+                data['vehicles'][1]['rent'] = (1000,)
+            data['notInShopItems'] = {SECOND_VEHICLE_CD}
+            state = _state(data, vehicles=vehicles)
+            with mock.patch.object(GARAGE.time, 'time', return_value=100):
+                state.sell_vehicle(10)
+            offer = policy.vehicle_recovery_offer(
+                state.snapshot(), SECOND_VEHICLE_CD, 100000000)
+            self.assertEqual(expected, offer is not None)
+            if expected:
+                self.assertEqual({SECOND_VEHICLE_CD: (1, 0)},
+                    policy.vehicle_recovery_buffer(state.snapshot()))
+
     def test_the_last_vehicle_cannot_be_sold(self):
         state = _state()
 

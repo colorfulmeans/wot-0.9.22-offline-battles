@@ -33,6 +33,19 @@ def native_modules(exports):
         yield modules
 
 
+def bond_filter_controls():
+    positions = {'obtainingTypeBuyBtn': 0, 'obtainingTypeRestoreBtn': 20,
+        'obtainingTypeTradeInBtn': 40, 'vehTypeHeader': 68,
+        'listVehicleType': 90, 'vehLevelHeader': 118, 'listVehicleLevels': 140,
+        'vehicleFilterExtraName': 168, 'lockedChkBx': 188,
+        'inHangarChkBx': 208, 'rentalsChckBx': 228}
+    controls = types.SimpleNamespace(**{name: types.SimpleNamespace(
+        y=y, visible=True, mouseEnabled=True) for name, y in positions.items()})
+    controls.validateNow = lambda: None
+    controls.resync = lambda: None
+    return controls
+
+
 class NativeServiceUITests(unittest.TestCase):
     def setUp(self):
         self.ui = fixture._load_port_module('offline_services_ui')
@@ -45,15 +58,41 @@ class NativeServiceUITests(unittest.TestCase):
         self.addCleanup(patch.stop)
         self.addCleanup(self.ui.uninstall)
 
-    def test_shop_reuses_native_rows_and_groups_owned_vehicles_last(self):
+    def test_bond_shop_reuses_native_rows_and_filters_owned_vehicles(self):
         class Shop(object):
             def __init__(self):
                 pass
 
+            def getName(self):
+                return 'shop'
+
             def requestTableData(self, *args):
                 return args
 
+            def _setTableData(self, *args):
+                self.table_request = args
+
+            def as_initFiltersDataS(self, *args):
+                self.flashObject.form.menu.dataProvider[:] = [types.SimpleNamespace(
+                    fittingType=name, enabled=True) for name in
+                    ('vehicle', 'module', 'shell', 'equipment')]
+
+            def as_setFilterOptionsS(self, data):
+                self.filter_options = data
+                # The native setter restores checkbox visibility each time.
+                self.flashObject.form.menu.view.currentView.lockedChkBx.visible = True
+
+            def _isDAAPIInited(self):
+                return True
+
+            def _update(self):
+                self.updated = True
+
         class VehicleTab(object):
+            @classmethod
+            def getFilterInitData(cls):
+                return 'ShopVehiclesFiltersVO', True
+
             def itemWrapper(self, row):
                 return {'type': row[0].icon, 'disabled': False,
                         'price': (0, 0, 8000), 'currency': 'crystal'}
@@ -91,6 +130,11 @@ class NativeServiceUITests(unittest.TestCase):
             'gui.Scaleform.framework': {'g_entitiesFactories': factory},
             'gui.shared.utils': {'flashObject2Dict': dict},
             'gui.Scaleform.Waiting': {'Waiting': mock.Mock()},
+            'gui': {'GUI_NATIONS': ['ussr', 'germany']},
+            'gui.Scaleform': {'getVehicleTypeAssetPath': lambda name: name,
+                'getLevelsAssetPath': lambda name: name},
+            'gui.prb_control.settings': {'VEHICLE_LEVELS': range(1, 11)},
+            'gui.shared.utils.functions': {'makeTooltip': lambda *args: args},
         }
         with native_modules(exports):
             self.ui._install_shop()
@@ -102,27 +146,106 @@ class NativeServiceUITests(unittest.TestCase):
             self.assertEqual('ShopUI', page.data['buttonBarData'][0]['linkage'])
             self.assertEqual('StoreActionsViewUI', tabs['buttonBarData'][0]['linkage'])
             shop = current['storeActions'].clazz()
-            self.assertEqual('offline_bond', shop.getName())
+            self.assertEqual('shop', shop.getName())
             self.assertFalse(account_settings.setFilter.called)
+            # Flash uses the stock name to include the inHangar checkbox;
+            # persistence must nevertheless stay separate from regular Shop.
+            saved_filters = {
+                'offline_bond_current': (1, 'module', True),
+                'offline_bond_vehicle': {'selectedTypes': [False, True],
+                    'selectedLevels': [False] * 7 + [True, False, False],
+                    'obtainingType': 'restoreVehicle',
+                    'extra': ['locked', 'inHangar']},
+                'shop_current': (0, 'shell', True)}
+            account_settings.getFilter.side_effect = saved_filters.__getitem__
+            self.assertEqual((1, 'vehicle', False),
+                             shop._StoreComponent__getCurrentFilter())
+            shop._onTableUpdate()
+            self.assertEqual((1, 'vehicle', False, None), shop.table_request[1:])
+            self.assertEqual(['inHangar'], shop.table_request[0]['extra'])
+            self.assertEqual('vehicle', shop.table_request[0]['obtainingType'])
+            self.assertEqual({'offline_bond_current', 'offline_bond_vehicle'},
+                {call.args[0] for call in account_settings.setFilter.call_args_list})
+
+            controls = bond_filter_controls()
+            buttons = [types.SimpleNamespace(visible=True, enabled=True) for unused in range(4)]
+            menu = types.SimpleNamespace(dataProvider=[], getButtonAt=buttons.__getitem__,
+                validateNow=lambda: None, view=types.SimpleNamespace(currentView=controls))
+            shop.flashObject = types.SimpleNamespace(form=types.SimpleNamespace(menu=menu))
+            shop.as_initFiltersDataS([], '')
+            self.assertEqual(['vehicle'], [row.fittingType for index, row in enumerate(menu.dataProvider)
+                                          if buttons[index].visible])
+            self.assertEqual([True, False, False, False], [button.enabled for button in buttons])
+            self.assertEqual([True, False, False, False], [row.enabled for row in menu.dataProvider])
+            for unused in range(2):
+                shop._StoreComponent__updateFilterOptions('vehicle')
+                self.assertEqual([False, True],
+                    [row['selected'] for row in shop.filter_options['voData']['vehicleTypes']])
+                self.assertFalse(controls.lockedChkBx.visible)
+                self.assertFalse(controls.obtainingTypeBuyBtn.visible)
+                self.assertTrue(controls.inHangarChkBx.visible)
+                self.assertTrue(controls.rentalsChckBx.visible)
+                self.assertEqual(20, controls.rentalsChckBx.y - controls.inHangarChkBx.y)
+            self.assertEqual(controls.obtainingTypeBuyBtn.y, controls.vehTypeHeader.y)
             tab = shop._getTabClass('vehicle')()
             tab._nation = None
             tab._filterData = {'selectedTypes': [False, False],
                                'selectedLevels': [False] * 10}
             items = {cd: types.SimpleNamespace(intCD=cd, nationID=0,
-                     level=8, type='heavyTank', icon='garage-art-%d' % cd)
+                     level=8, isRented=False, type='heavyTank', icon='garage-art-%d' % cd)
                      for cd in (2, 3)}
             tab._items = types.SimpleNamespace(getItemByCD=items.get)
             rows = tab.buildItems([])
-            self.assertEqual([3, 2], [row[0].intCD for row in rows])
+            self.assertEqual([3], [row[0].intCD for row in rows])
             self.assertEqual('garage-art-3', tab.itemWrapper(rows[0])['type'])
             self.assertEqual('crystal', tab.itemWrapper(rows[0])['currency'])
-            self.assertTrue(tab.itemWrapper(rows[1])['disabled'])
+            tab._filterData['extra'] = ['inHangar']
+            owned_rows = tab.buildItems([])
+            self.assertEqual([2], [row[0].intCD for row in owned_rows])
+            self.assertTrue(tab.itemWrapper(owned_rows[0])['disabled'])
+            tab._filterData['extra'] = ['rentals']
+            self.assertEqual([], tab.buildItems([]))
             with mock.patch.object(self.ui, 'request') as request:
                 self.assertFalse(shop.buyItem('2'))
                 request.assert_not_called()
             self.ui.uninstall()
             self.assertIs(original, current['storeActions'])
             self.assertFalse(defaults['filters'])
+
+    def test_regular_shop_filters_and_recovery_confirmation_share_account_state(self):
+        class Vehicle(object):
+            restorePrice = property(lambda self: 'catalogue-price')
+
+        class Tab(object):
+            def _getExtraCriteria(self, *args):
+                raise AssertionError('old inclusive checkboxes')
+
+        class Criteria(object):
+            def __or__(self, predicate):
+                return predicate
+
+        exports = {
+            'gui.Scaleform.daapi.view.lobby.store.tabs.shop': {'ShopVehicleTab': Tab},
+            'gui.shared.utils.requesters': {'REQ_CRITERIA': types.SimpleNamespace(CUSTOM=lambda f: f)},
+            'gui.shared.gui_items.Vehicle': {'Vehicle': Vehicle},
+            'gui.shared.money': {'Money': lambda **kw: kw},
+        }
+        with native_modules(exports):
+            self.ui._install_vehicle_filters_and_recovery()
+            item = Vehicle()
+            item.intCD, item.isPurchased, item.isRented, item.isUnlocked = 4, True, False, True
+            matches = Tab()._getExtraCriteria(['inHangar'], Criteria(), [])
+            self.assertTrue(matches(item))
+            item.intCD = 2
+            self.assertFalse(matches(item))  # A bond offer belongs in Special Offers.
+            item.intCD = 4
+            self.data['vehicleRecovery'] = {
+                4: {'soldAt': 100, 'credits': 2750000, 'limited': False}}
+            self.assertEqual({'credits': 2750000}, item.restorePrice)
+            self.data['vehicleRecovery'].clear()
+            self.assertEqual('catalogue-price', item.restorePrice)
+            self.ui.uninstall()
+            self.assertEqual('catalogue-price', item.restorePrice)
 
     def test_purchase_confirmation_rechecks_ownership_before_sending(self):
         dialogs = []
@@ -140,6 +263,7 @@ class NativeServiceUITests(unittest.TestCase):
             self.assertFalse(view._offlineBuying)
 
     def test_boosters_keep_native_lifecycle_filters_and_route_paid_actions(self):
+        confirmations = []
         class Boosters(object):
             def __init__(self, ctx):
                 self.tab = 2
@@ -175,6 +299,14 @@ class NativeServiceUITests(unittest.TestCase):
             'gui.Scaleform.daapi.view.lobby.boosters.booster_tabs': {
                 'QuestsBoostersTab': Quests, 'TABS_IDS': types.SimpleNamespace(QUESTS=1, SHOP=2)},
             'gui.game_control.BoostersController': {'BoostersController': Controller},
+            'gui': {'DialogsInterface': types.SimpleNamespace(showDialog=
+                lambda meta, callback: confirmations.append((meta, callback)))},
+            'gui.Scaleform.daapi.view.dialogs': {
+                'I18nConfirmDialogMeta': lambda key, **kwargs: kwargs,
+                'DIALOG_BUTTON_ID': types.SimpleNamespace(CLOSE='close')},
+            'gui.Scaleform.genConsts.BOOSTER_CONSTANTS': {'BOOSTER_CONSTANTS':
+                types.SimpleNamespace(BOOSTER_ACTIVATION_CONFORMATION_TEXT_KEY='replace')},
+            'gui.shared.formatters': {'text_styles': types.SimpleNamespace(middleTitle=str)},
         }
         native_populate, native_dispose = Boosters._populate, Boosters._dispose
         with native_modules(exports), mock.patch.object(self.ui, 'request') as request:
@@ -192,6 +324,24 @@ class NativeServiceUITests(unittest.TestCase):
             window.tab = 0
             window.onBoosterActionBtnClick(uid, None)
             self.assertEqual(('activate_reserve', 'xp'), request.call_args.args[:2])
+            request.call_args.args[2](True, '')
+            request.reset_mock()
+            self.data['personalReserves'] = {'active': {'xp_5_6h': [100, 21700]}}
+            window._BoostersWindow__tabsContainer.currentTab.goodiesCache = types.SimpleNamespace(
+                getBooster=lambda uid: types.SimpleNamespace(description='reserve-%d' % uid))
+            with mock.patch.object(self.ui.policy, 'now_seconds', return_value=200):
+                window.onBoosterActionBtnClick(uid, None)
+                window.onBoosterActionBtnClick(uid, None)
+                self.assertEqual(1, len(confirmations))
+                self.assertEqual('close', confirmations[0][0]['focusedID'])
+                request.assert_not_called()
+                confirmations[0][1](False)
+                request.assert_not_called()
+                self.assertFalse(window._offlineBuying)
+                window.onBoosterActionBtnClick(uid, None)
+                confirmations[1][1](True)
+                request.assert_called_once()
+                self.assertEqual(('activate_reserve', 'xp'), request.call_args.args[:2])
             window._dispose()
             self.assertTrue(window.native_disposed)
             self.ui.uninstall()
@@ -258,7 +408,7 @@ class NativeServiceUITests(unittest.TestCase):
                 self.rows = data
 
             def as_setNotReceivedBadgesS(self, data):
-                pass
+                self.locked = data
 
             def as_setSelectedBadgeImgS(self, image):
                 self.selected = image
@@ -272,6 +422,9 @@ class NativeServiceUITests(unittest.TestCase):
                                       'BADGES_ICONS': types.SimpleNamespace(X48=48)},
             'gui.Scaleform.locale.RES_ICONS': {'RES_ICONS': types.SimpleNamespace(
                 MAPS_ICONS_LIBRARY_BADGES_48X48_BADGE_DEFAULT='default')},
+            'gui.Scaleform.locale.BADGE': {'BADGE': types.SimpleNamespace(
+                BADGESPAGE_BODY_UNCOLLECTED_TITLE='Not earned')},
+            'gui.shared.formatters': {'text_styles': types.SimpleNamespace(highTitle=lambda x: x)},
             'gui.Scaleform.daapi.settings.views': {'VIEW_ALIAS': types.SimpleNamespace(
                 BOOSTERS_WINDOW='reserves', BADGES_PAGE='badges')},
             'gui.shared': {'events': types.SimpleNamespace(LoadViewEvent=lambda alias, ctx: alias),
@@ -280,6 +433,7 @@ class NativeServiceUITests(unittest.TestCase):
         with native_modules(exports), mock.patch.object(self.ui, 'request') as request:
             self.ui._install_account()
             self.data['selectedBadges'] = [17]
+            self.data['badgeSelectionVerified'] = True
             popover = Popover(None)
             popover._populate()
             self.assertTrue(popover.live)
@@ -289,7 +443,9 @@ class NativeServiceUITests(unittest.TestCase):
             self.assertEqual(['popover_destroyed', 'badges'], events)
             page = Badges()
             page.itemsCache = types.SimpleNamespace(items=types.SimpleNamespace(
-                getBadges=lambda: {17: types.SimpleNamespace(badgeID=17, getWeight=lambda: 1)}))
+                getBadges=lambda: {
+                    17: types.SimpleNamespace(badgeID=17, isAchieved=True, getWeight=lambda: 1),
+                    18: types.SimpleNamespace(badgeID=18, isAchieved=False, getWeight=lambda: 2)}))
             page.selected = 'unchanged'
             page.onDeselectBadge()
             self.assertEqual('unchanged', page.selected)
@@ -297,6 +453,7 @@ class NativeServiceUITests(unittest.TestCase):
             request.call_args.args[2](True, '')
             self.assertEqual('', page.selected)
             self.assertTrue(page.rows['badgesData'][0]['enabled'])
+            self.assertFalse(page.locked['badgesData'][0]['enabled'])
             self.ui.uninstall()
 
     def test_daily_page_does_not_populate_retail_empty_tabs_or_arrows(self):

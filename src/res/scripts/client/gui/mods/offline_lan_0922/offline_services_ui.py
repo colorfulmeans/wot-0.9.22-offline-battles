@@ -124,11 +124,12 @@ def _notify(action, key, success, error):
     if action == 'expire_reserves':
         return
     if action in ('buy_reserve', 'activate_reserve'):
-        unused, label, percent, price = policy.RESERVE_BY_ID[key]
-        text = (tr('Purchased personal reserve: %s +%d%%, 1 hour. Spent %d gold.') %
-                (tr(label), percent, price) if action == 'buy_reserve' else
-                tr('Activated personal reserve: %s +%d%%, 1 hour.') %
-                (tr(label), percent))
+        row = policy.RESERVE_BY_ID[key]
+        hours = row.duration // 3600
+        text = (tr('Purchased personal reserve: %s +%d%%, %d h. Spent %d gold.') %
+                (tr(row.label), row.percent, hours, row.price) if action == 'buy_reserve' else
+                tr('Activated personal reserve: %s +%d%%, %d h.') %
+                (tr(row.label), row.percent, hours))
         kind = (SystemMessages.SM_TYPE.PurchaseForGold if action == 'buy_reserve'
                 else SystemMessages.SM_TYPE.Information)
     elif action == 'vehicle':
@@ -265,6 +266,10 @@ def _install_shop():
                     continue
                 if any(levels) and (len(levels) < item.level or not levels[item.level - 1]):
                     continue
+                if not policy.matches_vehicle_filters(
+                        self._filterData.get('extra'), item.intCD in owned,
+                        item.isRented, True, bond=True):
+                    continue
                 rows.append((item, None, 0))
             rows.sort(key=lambda row: (row[0].intCD in owned, row[0].level,
                                        row[0].nationID, row[0].intCD))
@@ -281,7 +286,60 @@ def _install_shop():
 
     class BondShop(Shop):
         def getName(self):
-            return prefix
+            # Flash VehicleView.onFitsArrayRequest compares this to 'shop'.
+            # A custom name selects inventory controls (including 'broken')
+            # and silently drops the owned-vehicle checkbox from its payload.
+            return Shop.getName(self)
+
+        def _StoreComponent__getCurrentFilter(self):
+            nation, unused_type, unused_actions = AccountSettings.getFilter(
+                prefix + '_current')
+            from gui import GUI_NATIONS
+            return (nation if nation < len(GUI_NATIONS) else -1,
+                    STORE_CONSTANTS.VEHICLE, False)
+
+        def _StoreComponent__updateFilterOptions(self, unused_type):
+            from gui.Scaleform import getVehicleTypeAssetPath, getLevelsAssetPath
+            from gui.prb_control.settings import VEHICLE_LEVELS
+            from gui.shared.utils.functions import makeTooltip
+            filters = copy.deepcopy(AccountSettings.getFilter(
+                prefix + '_' + STORE_CONSTANTS.VEHICLE))
+            filters['obtainingType'] = STORE_CONSTANTS.VEHICLE
+            filters['extra'] = [value for value in filters.get('extra', ())
+                                if value in ('inHangar', 'rentals')]
+            filters['vehicleTypes'] = [
+                {'value': getVehicleTypeAssetPath(name),
+                 'tooltip': makeTooltip('#menu:carousel_tank_filter/' + name,
+                     '#tank_carousel_filter:tooltip/vehicleTypes/body'),
+                 'selected': filters['selectedTypes'][index]}
+                for index, name in enumerate(VEHICLE_TYPES_ORDER)]
+            filters['levels'] = [
+                {'value': getLevelsAssetPath('level_%d' % level),
+                 'selected': filters['selectedLevels'][level - 1]}
+                for level in VEHICLE_LEVELS]
+            vo_class, show_extra = BondVehicleTab.getFilterInitData()
+            self.as_setFilterOptionsS({'voClassName': vo_class,
+                'showExtra': show_extra, 'voData': filters})
+            self._update()
+
+        def _onTableUpdate(self, *unused):
+            nation, item_type, actions = self._StoreComponent__getCurrentFilter()
+            self.requestTableData(nation, actions, item_type,
+                AccountSettings.getFilter(prefix + '_' + item_type))
+
+        def as_initFiltersDataS(self, nations, action_label):
+            result = Shop.as_initFiltersDataS(self, nations, action_label)
+            if self._isDAAPIInited():
+                _hide_bond_extra_categories(self.flashObject.form.menu)
+            return result
+
+        def as_setFilterOptionsS(self, data):
+            result = Shop.as_setFilterOptionsS(self, data)
+            if self._isDAAPIInited():
+                menu = self.flashObject.form.menu
+                _hide_bond_extra_categories(menu)
+                _layout_bond_vehicle_filters(menu.view.currentView)
+            return result
 
         def _getTabClass(self, unused_type):
             return BondVehicleTab
@@ -300,6 +358,9 @@ def _install_shop():
             if unused_type != STORE_CONSTANTS.VEHICLE:
                 filters = AccountSettings.getFilter(prefix + '_' + STORE_CONSTANTS.VEHICLE)
             filters = flashObject2Dict(filters)
+            filters['obtainingType'] = STORE_CONSTANTS.VEHICLE
+            filters['extra'] = [value for value in filters.get('extra', ())
+                                if value in ('inHangar', 'rentals')]
             AccountSettings.setFilter(prefix + '_current',
                                       (nation, STORE_CONSTANTS.VEHICLE, False))
             AccountSettings.setFilter(prefix + '_' + STORE_CONSTANTS.VEHICLE, filters)
@@ -328,6 +389,65 @@ def _install_shop():
     _patch(StoreView, 'as_initS', init_store)
 
 
+def _hide_bond_extra_categories(menu):
+    # DataProvider extends Array: PyGFxValue converts it to a Python list.
+    # Mutating that copy or calling .splice on it cannot change Flash.
+    # Hide/disable the stock buttons; Accordion retains disposal ownership.
+    # Its keyboard navigation skips disabled buttons as well.
+    menu.validateNow()
+    entries = menu.dataProvider
+    for index in range(1, len(entries)):
+        entries[index].enabled = False
+        button = menu.getButtonAt(index)
+        button.visible = False
+        button.enabled = False
+
+
+def _layout_bond_vehicle_filters(view):
+    """Trim the stock ShopVehicleView after its own layout and visibility pass."""
+    view.validateNow()
+    view.resync()
+    controls = ('vehTypeHeader', 'listVehicleType', 'vehLevelHeader',
+                'listVehicleLevels', 'vehicleFilterExtraName', 'lockedChkBx',
+                'inHangarChkBx', 'rentalsChckBx')
+    shift = max(0, view.vehTypeHeader.y - view.obtainingTypeBuyBtn.y)
+    for name in controls:
+        control = getattr(view, name)
+        control.y -= shift
+    for name in ('obtainingTypeBuyBtn', 'obtainingTypeRestoreBtn',
+                 'obtainingTypeTradeInBtn', 'lockedChkBx'):
+        control = getattr(view, name)
+        control.visible = False
+        control.mouseEnabled = False
+    # Reuse the authored checkbox spacing; repeated refreshes are idempotent.
+    step = view.rentalsChckBx.y - view.inHangarChkBx.y
+    view.inHangarChkBx.y = view.lockedChkBx.y
+    view.rentalsChckBx.y = view.inHangarChkBx.y + step
+
+
+def _install_vehicle_filters_and_recovery():
+    from gui.Scaleform.daapi.view.lobby.store.tabs.shop import ShopVehicleTab
+    from gui.shared.utils.requesters import REQ_CRITERIA
+    from gui.shared.gui_items.Vehicle import Vehicle
+    from gui.shared.money import Money
+    original_price = Vehicle.restorePrice
+
+    def extra_criteria(tab, extra, criteria, unused_inventory):
+        bond_vehicles = set(row['cd'] for row in snapshot().get('offlineVehicleOffers', ()))
+        return criteria | REQ_CRITERIA.CUSTOM(lambda item:
+            item.intCD not in bond_vehicles and
+            policy.matches_vehicle_filters(extra, item.isPurchased,
+                                           item.isRented, item.isUnlocked))
+
+    def restore_price(item):
+        offer = policy.vehicle_recovery_offer(snapshot(), item.intCD)
+        return (Money(credits=offer['credits']) if offer is not None
+                else original_price.fget(item))
+
+    _patch(ShopVehicleTab, '_getExtraCriteria', extra_criteria)
+    _patch(Vehicle, 'restorePrice', property(restore_price))
+
+
 def _install_reserves():
     from gui.Scaleform.daapi.view.lobby.boosters.BoostersWindow import BoostersWindow
     from gui.Scaleform.daapi.view.lobby.boosters import booster_tabs
@@ -354,12 +474,41 @@ def _install_reserves():
             if view._isDAAPIInited():
                 view._BoostersWindow__update()
 
-        try:
-            request('buy_reserve' if tab == booster_tabs.TABS_IDS.SHOP
-                    else 'activate_reserve', key, done)
-        except Exception:
-            view._offlineBuying = False
-            raise
+        def submit(accepted=True):
+            if not accepted:
+                view._offlineBuying = False
+                return
+            try:
+                request('buy_reserve' if tab == booster_tabs.TABS_IDS.SHOP
+                        else 'activate_reserve', key, done)
+            except Exception:
+                view._offlineBuying = False
+                raise
+
+        active = policy.reserve_state(snapshot())['active']
+        current = next((other for other, interval in active.items()
+            if interval[1] > policy.now_seconds() and
+               policy.RESERVE_BY_ID[other].kind == policy.RESERVE_BY_ID[key].kind), None)
+        if tab != booster_tabs.TABS_IDS.SHOP and current is not None:
+            from gui import DialogsInterface
+            from gui.Scaleform.daapi.view.dialogs import I18nConfirmDialogMeta, DIALOG_BUTTON_ID
+            from gui.Scaleform.genConsts.BOOSTER_CONSTANTS import BOOSTER_CONSTANTS
+            from gui.shared.formatters import text_styles
+            cache = view._BoostersWindow__tabsContainer.currentTab.goodiesCache
+            try:
+                DialogsInterface.showDialog(I18nConfirmDialogMeta(
+                    BOOSTER_CONSTANTS.BOOSTER_ACTIVATION_CONFORMATION_TEXT_KEY,
+                    messageCtx={
+                        'newBoosterName': text_styles.middleTitle(cache.getBooster(
+                            policy.RESERVE_IDS[key]).description),
+                        'curBoosterName': text_styles.middleTitle(cache.getBooster(
+                            policy.RESERVE_IDS[current]).description)},
+                    focusedID=DIALOG_BUTTON_ID.CLOSE), submit)
+            except Exception:
+                view._offlineBuying = False
+                raise
+        else:
+            submit()
 
     def daily_boosters(tab):
         daily = policy.daily_state(snapshot())
@@ -417,7 +566,7 @@ def _install_account():
 
     def account_data(view):
         import BigWorld
-        selected = snapshot().get('selectedBadges') or ()
+        selected = policy.selected_badges(snapshot())
         icon = (getBadgeIconPath(BADGES_ICONS.X48, selected[0]) if selected else
                 RES_ICONS.MAPS_ICONS_LIBRARY_BADGES_48X48_BADGE_DEFAULT)
         name = BigWorld.player().name
@@ -455,17 +604,20 @@ def _install_account():
 
     def update_badges(view):
         from gui.Scaleform.daapi.view.lobby.BadgesPage import _makeBadgeVO
-        selected = snapshot().get('selectedBadges') or ()
-        rows = []
-        # Offline cosmetics are selectable from the installed badge catalogue.
-        # This does not forge ranked/campaign achievements in the dossier.
+        selected = policy.selected_badges(snapshot())
+        rows, locked = [], []
         for badge in sorted(view.itemsCache.items.getBadges().values(),
                             key=lambda value: (value.getWeight(), value.badgeID)):
             row = _makeBadgeVO(badge)
-            row.update(enabled=True, selected=badge.badgeID in selected, isFirstLook=False)
-            rows.append(row)
+            row.update(enabled=badge.isAchieved,
+                       selected=badge.isAchieved and badge.badgeID in selected)
+            (rows if badge.isAchieved else locked).append(row)
         view.as_setReceivedBadgesS({'badgesData': rows})
-        view.as_setNotReceivedBadgesS({'title': '', 'badgesData': []})
+        from gui.Scaleform.locale.BADGE import BADGE
+        from gui.shared.formatters import text_styles
+        view.as_setNotReceivedBadgesS({
+            'title': text_styles.highTitle(BADGE.BADGESPAGE_BODY_UNCOLLECTED_TITLE),
+            'badgesData': locked})
         view.as_setSelectedBadgeImgS(
             getBadgeIconPath(BADGES_ICONS.X48, selected[0]) if selected else '')
 
@@ -626,6 +778,15 @@ def _install_settings():
         SettingsWindow, SETTINGS, _PAGES_INDICES, _setLastTabIndex)
     from account_helpers.settings_core.options import VOIPSupportSetting
     original_duration = premium.PremiumWindow._PremiumWindow__getDurationStr
+    original_packet = premium.PremiumWindow._PremiumWindow__makePacketVO
+
+    def packet(view, period, cost, default_cost, gold, can_buy):
+        result = original_packet(view, period, cost, default_cost, gold, can_buy)
+        if int(period) == 90:
+            # #1513 has no 90-day packet artwork; reuse its stock long-term
+            # premium emblem. Duration, product ID and price remain 90 days.
+            result['image'] = '../maps/icons/windows/prem/icon_prem180_98.png'
+        return result
 
     def duration(view, period, cost, has_action, enough):
         if int(period) != 90:
@@ -638,6 +799,7 @@ def _install_settings():
                                                        'price': price})
 
     _patch(premium.PremiumWindow, '_PremiumWindow__getDurationStr', duration)
+    _patch(premium.PremiumWindow, '_PremiumWindow__makePacketVO', packet)
     original_tab = SettingsWindow.onTabSelected
 
     def tab_selected(view, tab):
@@ -658,6 +820,7 @@ def install():
         return
     try:
         _install_shop()
+        _install_vehicle_filters_and_recovery()
         _install_reserves()
         _install_account()
         _install_daily()

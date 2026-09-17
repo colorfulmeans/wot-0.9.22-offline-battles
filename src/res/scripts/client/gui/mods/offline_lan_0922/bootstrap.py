@@ -144,6 +144,7 @@ def _bind_battle_progress(context):
             vehicle_type_name=receipt['vehicle'],
             battle_start=int(receipt['arena_unique_id']) & 0xffffffff,
             daily_facts=({'damage': receipt['stats']['damage'],
+                          'premature_leave': receipt['premature_leave'],
                           'finished_at': (int(receipt['arena_unique_id']) & 0xffffffff) + receipt['duration'],
                           'won': receipt['winner'] == receipt['team']}
                          if receipt.get('battle_mode', 'regular') == 'regular'

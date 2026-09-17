@@ -750,7 +750,8 @@ class GarageStore(object):
             awarded = dict((key, 0) for key in awarded)
             battle_xp = 0
         first_win = False
-        if daily_facts is not None and not training and daily_facts.get('won'):
+        if (daily_facts is not None and not training and daily_facts.get('won')
+                and not daily_facts.get('premature_leave', False)):
             day = int(daily_facts['finished_at']) // 86400
             first_wins = state.snapshot().setdefault('firstWinDays', {})
             key = str(int(vehicle_type_compact_descr))
@@ -834,7 +835,8 @@ class GarageStore(object):
         result['refused'] = list(refused)
         result['service_costs'] = _settle_automatically(
             state, int(result['vehicle_id']), auto_settings, GarageError)
-        if daily_facts is not None and not training:
+        if (daily_facts is not None and not training and
+                not daily_facts.get('premature_leave', False)):
             before_claimed = set(offline_services.daily_state(
                 state.snapshot(), daily_facts.get('finished_at'))['claimed'])
             result['daily_reserves'] = offline_services.advance_daily(

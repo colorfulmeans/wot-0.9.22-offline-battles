@@ -1789,8 +1789,11 @@ class GarageState(object):
         for record in self._records():
             if _int(record.get('vehicleTypeCompactDescr', 0)) == compact_descr:
                 raise GarageError('the account already owns this vehicle')
+        from gui.mods.offline_lan_0922 import offline_services
+        recovery = offline_services.vehicle_recovery_offer(
+            self._snapshot, compact_descr)
         slots = _int(self._snapshot.get('accountSlots', 0))
-        bond_bundle = any(_int(row.get('cd')) == compact_descr for row in
+        bond_bundle = recovery is None and any(_int(row.get('cd')) == compact_descr for row in
                           self._snapshot.get('offlineVehicleOffers', ()))
         if not bond_bundle and slots and len(self._records()) >= slots:
             raise GarageError('every garage slot is occupied')
@@ -1813,7 +1816,8 @@ class GarageState(object):
                 recruit_crew=False)
             record = built['record']
 
-            cost = self._item_cost(compact_descr)
+            cost = ({'credits': recovery['credits']} if recovery is not None
+                    else self._item_cost(compact_descr))
             shells = [_int(value) for value in (record.get('shells') or ())]
             if not buy_shells:
                 shells = [value if index % 2 == 0 else 0
@@ -1855,6 +1859,9 @@ class GarageState(object):
                     self._price(item_compact_descr)
                     unlocks.add(_int(item_compact_descr))
             self._snapshot.setdefault('vehicleXP', {}).setdefault(compact_descr, 0)
+            recoveries = offline_services.vehicle_recovery_state(self._snapshot)
+            recoveries.pop(compact_descr, None)
+            self._snapshot['vehicleRecovery'] = recoveries
             self._touched.add(_int(record['id']))
             self.revision += 1
             return record
@@ -1882,6 +1889,21 @@ class GarageState(object):
                 self._require_berths(len(crew_rows))
             compact_descr = _int(record.get('vehicleTypeCompactDescr', 0))
             refund = self._item_refund(compact_descr)
+            from gui.mods.offline_lan_0922 import offline_services
+            vehicle_type = self._vehicles_module().getVehicleType(compact_descr)
+            tags = getattr(vehicle_type, 'tags', ())
+            # Register only an actual permanent premium sale. Modules, shells
+            # and crew sold with the vehicle do not raise its restore price.
+            if ('premium' in tags and 'unrecoverable' not in tags and
+                    'premiumIGR' not in tags and not record.get('rent')):
+                recoveries = offline_services.vehicle_recovery_state(self._snapshot)
+                recoveries[compact_descr] = {
+                    'soldAt': int(time.time()),
+                    'credits': int(refund['credits'] *
+                                   offline_services.VEHICLE_RESTORE_FACTOR),
+                    'limited': compact_descr not in self._snapshot.get(
+                        'notInShopItems', ())}
+                self._snapshot['vehicleRecovery'] = recoveries
             remaining = [row for row in records
                          if _int(row.get('id', 0)) != _int(record.get('id', 0))]
             items_from_vehicle = [_int(value) for value in (items_from_vehicle or ())]

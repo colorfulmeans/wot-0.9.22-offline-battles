@@ -1712,6 +1712,7 @@ class SaleDiffTests(unittest.TestCase):
         snapshot['wallet'] = {'credits': 1000, 'gold': 0, 'freeXP': 0}
         state = account_requests.garage.GarageState(
             snapshot, vehicles_module=types.SimpleNamespace(
+                getVehicleType=lambda compact_descr: types.SimpleNamespace(tags=()),
                 getTypeOfCompactDescr=lambda compact_descr: 10,
                 VehicleDescr=lambda compactDescr: types.SimpleNamespace(
                     getDevices=lambda: ([], [], []))))

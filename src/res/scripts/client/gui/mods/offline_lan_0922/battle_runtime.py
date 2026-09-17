@@ -6302,7 +6302,7 @@ class BattleRuntime(object):
 
     def _prepare_local_siege_pose(self, entity, native_filter,
                                   native_stabilised):
-        """Transplant native hydraulic matrices onto the copied world pose."""
+        """Copy the initial hydraulic offsets onto the copied world pose."""
         self._local_pose_matrix = self._local_matrix
         self._local_stabilised_matrix = self._local_matrix
         self._local_steady_rotation_matrix = self._local_matrix
@@ -6325,8 +6325,10 @@ class BattleRuntime(object):
         # BigWorld uses row vectors. Exact #1513 Vehicle.getComponents()
         # relates body and chassis as body * inverse(ground). Strip the stale
         # client-only entity world pose with that same native relation, then
-        # apply it to the copied terrain pose. The filtered ground retains
-        # its distinct stock camera role.
+        # apply it to the copied terrain pose. Snapshot the relative offsets:
+        # this client-only WGVehicleFilter has no cell physics to keep its
+        # live body/ground providers synchronized while the copied tank moves.
+        # A live MatrixProduct here can import their vertical drift in Siege.
         inverse_ground = inverse_type(native_ground)
 
         aim_matrix = self._runtime.math.Matrix()
@@ -6336,16 +6338,13 @@ class BattleRuntime(object):
             aim_matrix, self._local_matrix)
         self._local_siege_aim_pitch = 0.0
 
-        body_relative = self._matrix_product(native_body, inverse_ground)
+        body_relative = self._runtime.math.Matrix(
+            self._matrix_product(native_body, inverse_ground))
         self._local_siege_flat_body_matrix = self._matrix_product(
             body_relative, self._local_matrix)
 
-        def transplant(source):
-            relative = self._matrix_product(source, inverse_ground)
-            return self._matrix_product(
-                relative, self._local_siege_aim_world_matrix)
-
-        self._local_siege_body_matrix = transplant(native_body)
+        self._local_siege_body_matrix = self._matrix_product(
+            body_relative, self._local_siege_aim_world_matrix)
         # A fixed-turret #1513 gun derives its marker and current shot ray
         # from ``filter.interpolateStabilisedMatrix()``, while the rendered
         # barrel inherits ``compoundModel.matrix``.  A client-created local
@@ -6355,8 +6354,10 @@ class BattleRuntime(object):
         # all share the same pose authority.
         self._local_siege_stabilised_matrix = (
             self._local_siege_body_matrix)
-        self._local_siege_ground_matrix = transplant(
-            native_ground_filtered)
+        ground_relative = self._runtime.math.Matrix(
+            self._matrix_product(native_ground_filtered, inverse_ground))
+        self._local_siege_ground_matrix = self._matrix_product(
+            ground_relative, self._local_siege_aim_world_matrix)
         self._local_pose_matrix = self._matrix_product(self._local_matrix)
         self._local_stabilised_matrix = self._matrix_product(
             self._local_matrix)

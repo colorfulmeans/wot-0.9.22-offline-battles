@@ -154,7 +154,11 @@ def _restore_config(vehicle):
             tankmen[name] = max(0, int(config.get(name, 0) or 0))
         except (TypeError, ValueError):
             tankmen[name] = 0
-    return {'tankmen': tankmen, 'vehicles': {}}
+    from gui.mods.offline_lan_0922 import offline_services
+    return {'tankmen': tankmen, 'vehicles': {
+        'premiumDuration': offline_services.VEHICLE_RESTORE_SECONDS,
+        'actionCooldown': 0,
+        'sellToRestoreFactor': offline_services.VEHICLE_RESTORE_FACTOR}}
 
 
 def _recycle_bin(vehicle):
@@ -175,7 +179,9 @@ def _recycle_bin(vehicle):
                     compact_descr, int(dismissed_at))
             except (TypeError, ValueError):
                 continue
-    return {'tankmen': {'buffer': buffer_rows}, 'vehicles': {'buffer': {}}}
+    from gui.mods.offline_lan_0922 import offline_services
+    return {'tankmen': {'buffer': buffer_rows}, 'vehicles': {
+        'buffer': offline_services.vehicle_recovery_buffer(vehicle)}}
 
 
 def recycle_bin_diff(vehicle, touched_tankmen):

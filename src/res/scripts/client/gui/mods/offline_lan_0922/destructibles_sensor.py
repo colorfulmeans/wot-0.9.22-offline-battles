@@ -682,7 +682,7 @@ def _finish_native_item_name_alignment_1513(
 	return mapping, status, anomalous
 
 
-def _item_name_query_allowance_1513(bigworld, work_key, requested):
+def _item_name_query_allowance_1513(bigworld, work_key, requested, contact=False):
 	"""Take native-name probes from one battle-local render-tick budget.
 
 	All callers that observe the same ``BigWorld.time()`` value share one
@@ -710,13 +710,20 @@ def _item_name_query_allowance_1513(bigworld, work_key, requested):
 	if stamp is None:
 		stamp = ('explicit', getattr(
 			bigworld, '_offh_item_name_budget_tick', id(bigworld)))
-	state = globals().setdefault('g_offh_destr_item_name_budget', {})
+	state = globals().setdefault('g_offh_destr_contact_name_budget' if contact
+		else 'g_offh_destr_item_name_budget', {})
 	# Battle reset clears this state.  Do not key the allowance by caller-supplied
 	# space ID: alternating IDs in one tick must not replenish the shared pool.
 	if state.get('stamp') != stamp:
 		state['stamp'] = stamp
 		state['tick_serial'] = int(state.get('tick_serial', 0)) + 1
-		state['remaining'] = _ITEM_NAME_QUERY_BUDGET
+		# Four independent close-contact proofs may supplement the bounded
+		# background scan. They must never acquire or release its chunk focus.
+		state['remaining'] = 4 if contact else _ITEM_NAME_QUERY_BUDGET
+	if contact:
+		allowance = min(requested, state['remaining'])
+		state['remaining'] -= allowance
+		return allowance
 	work_key = (int(work_key[0]), int(work_key[1]))
 	focus = state.get('focus')
 	if focus is not None and focus != work_key:
@@ -772,6 +779,9 @@ def retire_chunk_identity_1513(chunk_id):
 def _invalidate_chunk_native_names_1513(chunk_id):
 	"""Forget cached native-name evidence after a real chunk unload."""
 	chunk_id = int(chunk_id)
+	for identity in list(globals().get('g_offh_destr_native_fragile_replacements', ())):
+		if identity[1] == chunk_id:
+			globals()['g_offh_destr_native_fragile_replacements'].discard(identity)
 	if _destructible_catalog is not None:
 		_destructible_catalog.setdefault(
 			'layout_repairs', set()).discard(chunk_id)
@@ -1193,10 +1203,18 @@ def _chunk_native_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 						native_type, len(names), native_count))
 		return mapping, 'exact'
 	if mapping is None or anomalous or status != 'exact':
-		_isolate_destructible_1513(
-			'name_alignment', chunk_id,
-			detail='status=%s types=%r names=%s count=%s' % (
-				status, anomalous, len(names), native_count))
+		# Failure to align a compacted list invalidates that proof only. A
+		# separately proved model in this chunk still has its own exact native
+		# type, complete transform, descriptor and unchanged wire identity.
+		# Quarantining the chunk here erased those independent proofs whenever
+		# one unnamed tree failed (Ruinberg reports: status=isolated_item).
+		detail = 'status=%s types=%r names=%s count=%s' % (
+			status, anomalous, len(names), native_count)
+		if status == 'isolated_item':
+			_log_destructible_validation_1513(
+				'name_alignment', 'unresolved', chunk_id, None, detail=detail)
+		else:
+			_isolate_destructible_1513('name_alignment', chunk_id, detail=detail)
 		return None, status
 	return mapping, status
 
@@ -1282,7 +1300,7 @@ def _resolve_catalog_model_name_1513(bigworld, area, space_id, chunk_id,
 	cache = globals().setdefault('g_offh_destr_catalog_model_names', {})
 	if cache.get(key) == int(native_count):
 		return baked['descriptor_filename']
-	if _item_name_query_allowance_1513(bigworld, key[:2], 1) < 1:
+	if _item_name_query_allowance_1513(bigworld, key[:2], 1, contact=True) < 1:
 		return None
 	try:
 		native_type = bigworld.wg_getDestructibleEffectCategory(
@@ -1297,7 +1315,8 @@ def _resolve_catalog_model_name_1513(bigworld, area, space_id, chunk_id,
 	if match is None or match[0] != wire or match[1] != baked:
 		return None
 	cache[key] = int(native_count)
-	_release_item_name_query_focus_1513(space_id, chunk_id)
+	globals().setdefault('g_offh_destr_isolated_name_types', {}).setdefault(
+		key[:2], {})[int(item_index)] = int(native_type)
 	return baked['descriptor_filename']
 
 
@@ -1581,6 +1600,8 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_isolated_name_types',
 			'g_offh_destr_native_name_lists',
 			'g_offh_destr_item_name_budget',
+			'g_offh_destr_contact_name_budget',
+			'g_offh_destr_native_fragile_replacements',
 			'g_offh_destr_item_name_cache_serial',
 			'g_offh_destr_isolated_chunks',
 			'g_offh_destr_isolated_slots',
@@ -3895,6 +3916,24 @@ def note_destroyed(kind, chunkID, itemIndex, matKind=None, now=None):
 	return True
 
 
+def note_native_fragile_replacement(space_id, chunk_id, item_index):
+	"""Retain real replacement surfaces after wg_destroyFragile completed.
+
+	The native replacement owns its geometry and material flags. An item-wide
+	accepted key hides only the original skin waiting for this callback; it
+	must not permanently erase a crushed car's replacement from ground rays.
+	"""
+	globals().setdefault('g_offh_destr_native_fragile_replacements', set()).add(
+		(int(space_id), int(chunk_id), int(item_index)))
+	globals()['g_offh_destr_native_replacement_bsp_active'] = True
+
+
+def _native_fragile_replaced_1513(identity):
+	space_id = globals().get('g_offh_destr_runtime_space')
+	return (space_id, identity[0], identity[1]) in globals().get(
+		'g_offh_destr_native_fragile_replacements', ())
+
+
 def native_replacement_bsp_active():
 	"""Whether this battle can contain a solid damaged replacement BSP."""
 	return bool(globals().get(
@@ -4323,6 +4362,9 @@ def _broken_collision_filter(members, accepted_trees=()):
 				identity + (hit[0],)) not in broken and (
 				identity + (None,)) not in broken:
 			return True
+		if (identity + (None,) in broken and
+				_native_fragile_replaced_1513(identity)):
+			return True
 		globals()['g_offh_destr_ground_skips'] = globals().get(
 			'g_offh_destr_ground_skips', 0) + 1
 		return False
@@ -4392,6 +4434,8 @@ def _live_broken_collision_filter_1513(members, accepted_trees=()):
 			broken = _broken_item_materials_1513(
 				authority, identity[0]).get(identity[1], ())
 			accepted = mat_kind in broken or None in broken
+			if (None in broken and _native_fragile_replaced_1513(identity)):
+				return keep_native_surface(hit, identity)
 			if (not accepted and
 					identity + (mat_kind,) not in predicted and
 					identity + (None,) not in predicted):

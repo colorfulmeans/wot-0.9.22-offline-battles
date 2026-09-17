@@ -3785,8 +3785,8 @@ and Inventory components retain their classes and filter values.
 
 The account popover retains AbstractPopOverView's hide/destroy lifecycle while
 populating local account/badge data without online clan/tutorial initialization.
-The native badge page permits selection from the installed badges.xml catalogue
-as offline cosmetics; it does not grant dossier achievements. Selection uses
+The native badge page now gates selection on the installed Badge.isAchieved
+dossier result; merely existing in badges.xml is insufficient. Selection uses
 the same persistent Account transaction and badges sync field, so a failed
 write cannot visually equip an unsaved badge. The daily page no longer builds
 retail mission tabs; its separate opaque panel owns its close/cursor lifecycle.
@@ -3835,7 +3835,7 @@ the existing once-only result-notification path. This is the offline daily
 goal system, not completion support for the original campaign personal
 missions. The existing campaign code only selects missions; the full mission
 conditions and authoritative battle telemetry needed for those rewards have
-not been implemented. Badge cosmetics likewise do not award campaign medals.
+not been implemented. Badge selection does not award campaign medals.
 
 The same report repeatedly blocks Ruinberg's old Mercedes (chunk 33151,
 item 3), motorcycle (33151/89), bench (32385/7) and other small objects while
@@ -3865,3 +3865,103 @@ share the existing booster row, with the same stepwise account-factor rounding
 in banking and native replays. The original 667 gross / 67 penalty / 600 extra
 fixture again displays 1200 total XP across save failure and restart. The
 premium/first-win replay matrix also covers 50/100/150/200 percent save income.
+
+## September 18 follow-up: completed battles, recovery and collision ownership
+
+Reports `20260918-002345-1049c84c783b` and
+`20260918-003256-afb94deeac69` identify the current launcher build, so this is
+not explained by a stale mod installation. A premature exit already reaches
+the durable receipt as `premature_leave`, but bootstrap omitted it from daily
+facts. Bootstrap now forwards it and both settlement and daily policy reject
+progress from such a battle. The first-win entitlement is retained as well.
+All battle-related daily labels explicitly require completion. Hashed daily
+selection and reset remain at 00:00 UTC / 08:00 Beijing; receipt replay cannot
+grant the same reward again.
+
+Badge cards use native achievement ownership and show unearned badges in the
+locked collection. The Account command validates ownership independently of
+the page. A saved verification marker distinguishes newly validated selection
+from the earlier unrestricted cosmetics; it does not manufacture campaign or
+ranked achievements. The 90-day premium packet reuses the existing 180-day
+artwork while keeping the 90-day product, duration and 6500-gold price.
+
+Premium sales now save a recovery entitlement with the hull's credit selling
+value plus 10%, independent of ammunition, equipment and crew sold with it.
+The rule and vacant-slot requirement follow WG's
+[restoration policy](https://wargaming.net/support/en/products/wot/article/23829/).
+The mod uses its own published 0.9.22 selling values, not modern vehicle price
+tables. The native `restore_config.vehicles` and
+`recycleBin.vehicles.buffer` carry PREMIUM=0 with a 72-hour timestamp, or
+ACTION=1 with timestamp zero for a premium outside the shop assortment.
+Purchase and sale persist wallet, inventory and recovery state together;
+failure rolls back and successful restoration removes the native buffer row
+using an explicit None diff. All price consumers use the same saved credit
+quote. Ordinary, rental and unrecoverable vehicles receive no entitlement.
+No historical sale record can be invented for an older save.
+
+Shop vehicle extras now select the union of the checked categories, with
+normal available purchases when nothing is checked. Class, nation and tier
+criteria remain native. Bond offers stay in Special Offers, whose inventory
+and rental filters now work, and are excluded from the regular purchase tab.
+The native Python component identity must remain `shop`: Flash's
+`VehicleView.onFitsArrayRequest` compares that exact string to include the
+owned checkbox. Bond-only persistence now overrides the StoreComponent filter
+read/update boundaries rather than changing that identity. The native vehicle
+view hides purchase/restore/trade-in/unresearched controls after its own
+visibility pass. The accordion hides and disables non-vehicle buttons,
+including keyboard selection; its native controller retains disposal ownership.
+It does not mutate the shared `FITTING_TYPES.STORE_SLOTS` array.
+
+The public Flash SDK at `CH4MPi/GUIFlash` commit
+`78d711d336cf55d73e62d0ab996fc18bbfbd893f` provides the reviewed
+`StoreComponent`, `ShopVehicleView`, `VehicleView`, `Accordion` and
+`ButtonBarEx` members. The historical SDK is orientation, not an exact #1513
+asset audit. `DataProvider` extends Array, and the published BigWorld
+`PyGFxValue` bridge converts arrays to Python lists; editing that list would
+not change the native provider. The implementation instead edits the referenced
+entry VOs and their public buttons, resynchronizing filter controls after native
+layout. Focused fakes preserve this array-copy distinction and exercise repeated
+refresh, independent saved filters, owned rows and disabled category buttons.
+Actual rendering and resize behavior remain a #1513 Windows acceptance item.
+
+Personal reserves now include all 44 distinct manual, non-expiring combinations
+in the [WG API response captured on April 26, 2016](https://github.com/victor-lyan/wotwrap/blob/931feede6d2f86e7f46973a25b6df6b233e261bd/tests/json/encyclopedia.boosters.json).
+The source has 61 IDs: expired 2015 events are omitted and equal resource,
+bonus and duration variants are deduplicated. Percentages and 1/2/4/6-hour
+durations are preserved; the installed client's `Booster.quality` and GUI
+settings classify them. The four old keys/IDs remain stable, so saved counts,
+active clocks and daily rewards survive the expansion. Gold prices remain an
+explicit offline extension, scaled from the existing four offers. Activation
+allows three resource types, and a stronger same-type reserve replaces the old
+one after the native confirmation. Replacement truncates the old historical
+interval, preserving late battle-start entitlement without future overlap.
+Catalogue shape, expiry, saved-state reload, replacement, rollback and
+cross-variant exclusion are covered. This preserved international catalogue
+does not prove completeness for later China-only 0.9.22 event offers.
+
+The Ruinberg logs show a compacted-name rebuild failing with
+`status=isolated_item`, followed by independently position-proved cars and
+fences remaining blocked. That status no longer quarantines the entire chunk.
+Other terminal ABI/descriptor failures retain quarantine. Contact proof has
+its own four-query render-tick budget, cannot acquire or release the
+background scan's focus, and still requires exact unique placement, unchanged
+wire, native category and installed descriptor. Regression coverage uses the
+reported Mercedes and motorcycle while another chunk owns exhausted scan
+budget and an unrelated slot is isolated.
+
+The stock `__setFragileDestroyed` callback now records successful native
+replacement for that space/chunk/item. Before it completes, original skins
+are filtered as before. Afterwards, actual replacement surfaces remain in
+ground and horizontal queries even if the accepted fragile key is item-wide.
+No car-shaped obstacle or fabricated support height is added. Chunk unload
+and battle reset clear the marker; the engine's actual destroyed-model BSP
+and material flags still determine whether a wreck supplies support.
+
+Copied local Siege pose now snapshots body/ground relative offsets once at
+attachment. The previous live products kept importing two unsynchronized
+providers from a client-only WGVehicleFilter without cell physics; the copied
+terrain/aim matrices now own subsequent movement. Gun, shot ray and rendered
+body still share one copied provider. This removes a plausible drift path,
+but neither attached report records Strv S1 sinking, so reproduction and
+native acceptance remain outstanding. Ruinberg destruction, residual car
+support and Swedish Siege motion require the exact #1513 Windows client.
