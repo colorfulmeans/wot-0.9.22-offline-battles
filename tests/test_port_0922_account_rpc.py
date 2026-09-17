@@ -308,6 +308,39 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual(600, update['stats']['vehTypeXP'][50001])
         self.assertEqual(1, self.player.dossier_resyncs)
 
+    def test_carousel_first_win_state_hides_one_vehicle_then_resets_all(self):
+        selected = _full_garage_snapshot()
+        server = FakeServer(
+            lambda: self.player,
+            lambda delay, fn: self.pending.append((delay, fn)), {
+                'selected_vehicle': selected,
+                'postbattle_store': types.SimpleNamespace(progress=lambda: {}),
+            })
+        vehicles_module = types.ModuleType('items.vehicles')
+        vehicles_module.getVehicleType = lambda cd: types.SimpleNamespace(unlocksDescrs=())
+        items_module = types.ModuleType('items')
+        items_module.vehicles = vehicles_module
+        with mock.patch.dict(sys.modules, {
+                'items': items_module, 'items.vehicles': vehicles_module}), \
+                mock.patch.object(account_data.time, 'time', return_value=172799) as clock:
+            initial = account_data.stats(selected)
+            self.assertFalse(initial['stats']['multipliedXPVehs'])
+            self.assertTrue(initial['account']['attrs'] & 2048)
+            self.assertEqual(2, account_data.shop(selected_vehicle=selected)['dailyXPFactor'])
+            # The native carousel maps an unconsumed factor to bonus_x2.
+            # Only the tank that won is included in the consumed set.
+            selected['firstWinDays'] = {'50001': 1}
+            self.assertTrue(server.publish_postbattle_progress())
+            self._run()
+            current = pickle.loads(self.player.updates[-1])['stats']
+            self.assertEqual({50001}, current[('multipliedXPVehs', '_r')])
+            clock.return_value = 172800
+            self.assertTrue(server.publish_postbattle_progress())
+            self._run()
+            next_day = pickle.loads(self.player.updates[-1])['stats']
+            # Replacement, not a growing-set union, restores both markers.
+            self.assertEqual(set(), next_day[('multipliedXPVehs', '_r')])
+
     def test_postbattle_progress_publishes_the_depot_rows_it_moved(self):
         """A battle spends rounds and consumables and may buy them back.
 

@@ -3822,6 +3822,11 @@ retries retain the original premium/first-win inputs, and older receipts
 cannot reset a newer day's marker. Account updates replace (rather than
 union) multipliedXPVehs with its stock tuple-key protocol, so the carousel
 can recover its x2 markers at midnight or upon returning to the lobby.
+The retail carousel maps an available dailyXPFactor to its existing bonus_x2
+asset and clears xpImgSource after consumption. The account's native daily-XP
+attribute also enables the matching tooltip. A focused Account test verifies
+initial entitlement, removal for only the winning tank and next-day set
+replacement, alongside the existing durable-settlement and lobby-timer tests.
 Existing archived results are not retroactively repriced or re-awarded.
 
 Daily completion IDs are stored with the settlement receipt. They produce

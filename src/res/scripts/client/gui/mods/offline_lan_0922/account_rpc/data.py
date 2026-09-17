@@ -41,6 +41,7 @@ BATTLE_HERO_ACHIEVEMENTS = frozenset((
     'warrior', 'invader', 'sniper', 'sniper2', 'mainGun', 'defender',
     'steelwall', 'supporter', 'scout', 'evileye'))
 PREMIUM_ACCOUNT_ATTR = 4294967296
+DAILY_MULTIPLIED_XP_ATTR = 2048
 # Exact #1513 data has four regular operations.  Every operation contains the
 # same five vehicle-class chains, with fifteen missions in each chain.  The
 # account may run one mission per chain, so ``slots`` is five; it is not a
@@ -785,7 +786,10 @@ def stats(selected_vehicle=None, postbattle_progress=None):
     return {
         'account': {
             'clanDBID': 0,
-            'attrs': PREMIUM_ACCOUNT_ATTR if premium_active else 0,
+            # The carousel reads dailyXPFactor; its tooltip additionally
+            # requires the account's native daily-multiplier entitlement.
+            'attrs': DAILY_MULTIPLIED_XP_ATTR | (
+                PREMIUM_ACCOUNT_ATTR if premium_active else 0),
             'premiumExpiryTime': premium_expiry if premium_active else 0,
             'autoBanTime': 0, 'globalRating': 0,
         },

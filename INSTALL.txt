@@ -102,6 +102,9 @@ bonus to actual battle income, including crew training. Native results show
 the separate standard and premium columns. Each tank's first standard-battle
 victory of the day earns double experience; the reset is 00:00 UTC, and the
 garage's first-win indicators refresh when the account returns to the lobby.
+Each garage vehicle card uses the native x2 badge until that tank wins, then
+shows its ordinary artwork until the next reset. Losses and draws do not
+consume the bonus. The native vehicle tooltip shows the daily multiplier too.
 Premium eligibility is fixed at battle start. These rules apply to newly
 settled battles; previously saved results are not recalculated or paid again.
 Friendly-fire result labels come from the installed client localization;
