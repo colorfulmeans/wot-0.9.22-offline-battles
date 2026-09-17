@@ -15,6 +15,12 @@ class OfflineServicesTests(unittest.TestCase):
     def setUp(self):
         self.requests, self.commands, self.garage = garage_fixture._request_modules()
         self.policy = garage_fixture._load_port_module('offline_services')
+        # The policy imports this lazily; keep it on the same module graph as
+        # the handlers when other suites have loaded independent fixtures.
+        module_scope = mock.patch.dict(sys.modules, {
+            'gui.mods.offline_lan_0922.account_rpc.garage': self.garage})
+        module_scope.start()
+        self.addCleanup(module_scope.stop)
         self.state = self.garage.GarageState({
             'wallet': {'gold': 1000, 'credits': 0, 'crystal': 0, 'freeXP': 0}})
 
@@ -114,6 +120,66 @@ class OfflineServicesTests(unittest.TestCase):
             panel.activate('close')
             self.assertEqual([True, True], closed)
             self.assertFalse(surface.roots)
+
+    def test_lobby_install_accepts_settings_package_class_export(self):
+        ui = garage_fixture._load_port_module('offline_services_ui')
+        called, notices, selected_tabs = [], [], []
+
+        def native_tab(view, tab):
+            called.append(tab)
+
+        def noop(*args, **kwargs):
+            return None
+
+        store = type('StoreActions', (object,), dict(
+            _StoreActions__update=noop, actionSelect=noop, onActionSeen=noop))
+        boosters = type('BoostersWindow', (object,), dict(
+            __init__=noop, _populate=noop, _dispose=noop,
+            requestBoostersArray=noop, onBoosterActionBtnClick=noop,
+            onFiltersChange=noop, onResetFilters=noop))
+        missions = type('MissionsPage', (object,), dict(_populate=noop, _dispose=noop))
+        premium = type('PremiumWindow', (object,), dict(_PremiumWindow__getDurationStr=noop))
+        settings = type('SettingsWindow', (object,), dict(onTabSelected=native_tab))
+        voip = type('VOIPSupportSetting', (object,), dict(_VOIPSupportSetting__isSupported=noop))
+        exports = {
+            'gui.Scaleform.daapi.view.lobby.store.StoreActions': {'StoreActions': store},
+            'gui.Scaleform.daapi.view.lobby.boosters.BoostersWindow': {'BoostersWindow': boosters},
+            'gui.Scaleform.daapi.view.lobby.missions.regular.missions_page': {'MissionsPage': missions},
+            'gui.Scaleform.daapi.view.lobby.PremiumWindow': {'PremiumWindow': premium},
+            # settings/__init__.py re-exports the class under the same name as
+            # its module. Treating that package attribute as a module prevents
+            # the visible client from reaching Account creation.
+            'gui.Scaleform.daapi.view.common.settings': {'SettingsWindow': settings},
+            'gui.Scaleform.daapi.view.common.settings.SettingsWindow': {
+                'SettingsWindow': settings, '_setLastTabIndex': selected_tabs.append,
+                '_PAGES_INDICES': {'sound': 2},
+                'SETTINGS': types.SimpleNamespace(SOUNDTITLE='sound')},
+            'account_helpers.settings_core.options': {'VOIPSupportSetting': voip},
+            'gui': {'SystemMessages': types.SimpleNamespace(pushMessage=notices.append)},
+        }
+        modules = {}
+        for name in exports:
+            parts = name.split('.')
+            for end in range(1, len(parts) + 1):
+                full = '.'.join(parts[:end])
+                if full not in modules:
+                    modules[full] = types.ModuleType(full)
+                    modules[full].__path__ = []
+        for name, values in exports.items():
+            modules[name].__dict__.update(values)
+        with mock.patch.dict(sys.modules, modules), mock.patch.object(ui, 'tr', side_effect=lambda text: text):
+            try:
+                ui.install()
+                view = settings()
+                view.onTabSelected('graphics')
+                view.onTabSelected('sound')
+                view.onTabSelected('sound')
+                self.assertEqual(['graphics'], called)
+                self.assertEqual([2, 2], selected_tabs)
+                self.assertEqual(['Voice chat is unavailable in offline mode.'], notices)
+            finally:
+                ui.uninstall()
+        self.assertIs(native_tab, settings.onTabSelected)
 
 
 if __name__ == '__main__':

@@ -3738,3 +3738,21 @@ The sound tab no longer requests reinitialization and reports offline voice
 unavailability. This does not implement a replacement voice server.
 Native store card rendering, reserve surface layering/closing, training arena
 transitions and sound-tab presentation require the exact Windows client.
+
+The subsequent `20260917-214608-a4c3f99dd823` report identified a startup
+regression in build `colorfulmeans-35227105547-1`: the server was listening,
+but the worker's initial Account sync rejected its vehicle catalogue before
+the launcher could open the visible client. Bond-offer publication had added
+unowned definitions to `vehicleTypeCompactDescrs`, which must exactly match
+complete garage records. Offers now only extend shop prices and purchase
+entitlements. The common purchase still establishes ownership when successful;
+the inventory validator is unchanged. The regression test follows the actual
+bootstrap -> full Account sync path with an available offer absent from the
+garage, for both account modes and with/without saved-state restoration.
+
+The same startup audit reproduced a second failure in the visible lobby
+adapter: the stock settings package re-exports `SettingsWindow` as a class,
+but the adapter treated that export as its module. Importing the class and
+its tab helpers explicitly from the module fixes installation. A focused
+test preserves that package/class distinction, exercises the sound tab and
+ordinary tab delegation, and verifies uninstall restores the original method.

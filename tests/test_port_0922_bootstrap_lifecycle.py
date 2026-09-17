@@ -656,6 +656,46 @@ class BootstrapLifecycleTests(unittest.TestCase):
         return self._build(
             save_mode='new_account', starters=self.STARTER_NAMES)
 
+    def test_bond_offers_survive_full_account_sync_without_granting_ownership(self):
+        # The launcher waits for the worker's full Account sync before opening
+        # the visible client. Include a real offer name absent from the garage;
+        # a catalogue with no matching offers cannot catch this startup fault.
+        for mode in ('unlocked', 'new_account'):
+            for restore_saved in (False, True):
+                with self.subTest(mode=mode, restore_saved=restore_saved):
+                    (bootstrap, unused_callbacks, unused_compatibility,
+                     unused_app_loader, unused_spaces, unused_events,
+                     modules) = self._load(
+                        save_mode=mode, starters=self.STARTER_NAMES)
+                    vehicles = modules['items'].vehicles
+                    original_descriptor = vehicles.VehicleDescr
+                    offer = original_descriptor(typeID=(1, 8))
+                    offer.type.level = 10
+                    offer.type.userString = 'M60'
+                    offer_cd = vehicles.makeIntCompactDescrByID('vehicle', 1, 8)
+
+                    def descriptor(**kwargs):
+                        if kwargs.get('typeName') == 'usa:A92_M60':
+                            return offer
+                        return original_descriptor(**kwargs)
+
+                    with mock.patch.dict(sys.modules, modules), mock.patch.object(
+                            vehicles, 'VehicleDescr', side_effect=descriptor):
+                        snapshot = bootstrap._selected_vehicle(
+                            {'vehicle': 'ussr:R11_MS-1'}, restore_saved=restore_saved)
+                        # Follow the real failing sync_data -> inventory ->
+                        # _validate_selected_vehicle path from the report.
+                        synced = ACCOUNT_DATA.sync_data(selected_vehicle=snapshot)
+                    owned = set(row['vehicleTypeCompactDescr']
+                                for row in snapshot['vehicles'])
+                    self.assertEqual(owned, snapshot['vehicleTypeCompactDescrs'])
+                    self.assertNotIn(offer_cd, owned)
+                    self.assertEqual({'crystal': 15000},
+                                     snapshot['shopItemPrices'][offer_cd])
+                    self.assertIn(offer_cd, synced['stats']['unlocks'])
+                    if mode == 'new_account':
+                        self.assertNotIn(offer_cd, snapshot['unlockItemCompactDescrs'])
+
     def _with_saved_garage(self, owned, **kwargs):
         """Build a garage against a save that owns exactly ``owned``."""
         (bootstrap, unused_callbacks, unused_compatibility,

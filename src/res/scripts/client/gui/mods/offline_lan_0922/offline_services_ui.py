@@ -242,7 +242,9 @@ def install():
     from gui.Scaleform.daapi.view.lobby.boosters.BoostersWindow import BoostersWindow
     from gui.Scaleform.daapi.view.lobby.missions.regular.missions_page import MissionsPage
     from gui.Scaleform.daapi.view.lobby import PremiumWindow as premium
-    from gui.Scaleform.daapi.view.common.settings import SettingsWindow as settings
+    # The settings package re-exports SettingsWindow as a class, not a module.
+    from gui.Scaleform.daapi.view.common.settings.SettingsWindow import (
+        SettingsWindow, SETTINGS, _PAGES_INDICES, _setLastTabIndex)
     from account_helpers.settings_core.options import VOIPSupportSetting
 
     def update_offers(view):
@@ -348,20 +350,20 @@ def install():
                                                        'price': price})
 
     _patch(premium.PremiumWindow, '_PremiumWindow__getDurationStr', duration)
-    original_tab = settings.SettingsWindow.onTabSelected
+    original_tab = SettingsWindow.onTabSelected
 
     def tab_selected(view, tab):
-        if tab != settings.SETTINGS.SOUNDTITLE:
+        if tab != SETTINGS.SOUNDTITLE:
             return original_tab(view, tab)
         # Offline accounts have no authenticated Vivox domain. Never claim a
         # successful initialization or repeatedly ask an unavailable service.
-        settings._setLastTabIndex(settings._PAGES_INDICES[tab])
+        _setLastTabIndex(_PAGES_INDICES[tab])
         if not getattr(view, '_offlineVoiceNotice', False):
             from gui import SystemMessages
             SystemMessages.pushMessage(tr('Voice chat is unavailable in offline mode.'))
             view._offlineVoiceNotice = True
 
-    _patch(settings.SettingsWindow, 'onTabSelected', tab_selected)
+    _patch(SettingsWindow, 'onTabSelected', tab_selected)
     _patch(VOIPSupportSetting, '_VOIPSupportSetting__isSupported', lambda unused: False)
 
 

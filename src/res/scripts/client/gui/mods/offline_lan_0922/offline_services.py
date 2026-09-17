@@ -94,7 +94,9 @@ def publish_offers(snapshot, vehicles):
         snapshot.setdefault('shopItemPrices', {})[cd] = {'crystal': price}
         snapshot.setdefault('notInShopItems', set()).discard(cd)
         snapshot.setdefault('shopVehicleOfferCompactDescrs', set()).add(cd)
-        snapshot.setdefault('vehicleTypeCompactDescrs', set()).add(cd)
+        # Offers grant purchase access, not inventory ownership. Account sync
+        # requires vehicleTypeCompactDescrs to match complete garage records;
+        # GarageState.buy_vehicle adds that ownership only after a purchase.
         rows.append({'name': name, 'cd': cd, 'price': price,
                      'level': int(vehicle_type.level),
                      'label': vehicle_type.userString,
