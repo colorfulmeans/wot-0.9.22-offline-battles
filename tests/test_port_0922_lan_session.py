@@ -1110,15 +1110,21 @@ class LANSessionTests(unittest.TestCase):
                     onReceiveSysMessage=received.append))))
         messenger = types.ModuleType('messenger')
         messenger.MessengerEntry = messenger_entry
+        services_ui = types.ModuleType('gui.mods.offline_lan_0922.offline_services_ui')
+        services_ui.notify_missions = mock.Mock()
         with mock.patch.dict(sys.modules, {
                 'chat_shared': chat_shared, 'messenger': messenger,
-                'messenger.MessengerEntry': messenger_entry}):
+                'messenger.MessengerEntry': messenger_entry,
+                'gui.mods.offline_lan_0922.offline_services_ui': services_ui}):
             self.assertTrue(self.session._publish_battle_service_message(
-                123, {'arenaUniqueID': 123, 'credits': 7}))
+                123, {'arenaUniqueID': 123, 'credits': 7,
+                      'offlineDailyMissions': ['damage', 'wins']}))
             self.assertFalse(self.session._publish_battle_service_message(
-                123, {'arenaUniqueID': 123, 'credits': 7}))
+                123, {'arenaUniqueID': 123, 'credits': 7,
+                      'offlineDailyMissions': ['damage', 'wins']}))
 
         self.assertEqual(1, len(received))
+        services_ui.notify_missions.assert_called_once_with(['damage', 'wins'])
         action = received[0]
         self.assertEqual(123, action['data']['messageID'])
         self.assertEqual(17, action['data']['type'])

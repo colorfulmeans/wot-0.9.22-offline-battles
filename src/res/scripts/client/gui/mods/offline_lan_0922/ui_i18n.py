@@ -31,6 +31,8 @@ def tr(source):
 
 
 _ZH = {
+    'Mission completed': u'任务完成',
+    'Mission completed: %s. Reward: %s x1.': u'任务完成：%s。奖励：%s ×1。',
     'The transaction could not be saved.': u'无法保存此次操作，未扣除货币，请检查存档目录。',
     'Insufficient currency for this purchase.': u'货币不足，无法购买。',
     'TRAINING BOTS: ON': u'训练电脑：开启（点击切换）',
@@ -43,6 +45,17 @@ _ZH = {
     'Buy %s for %d bonds?': u'购买 %s，花费 %d 债券？',
     'PERSONAL RESERVES': u'个人储备',
     'DAILY MISSIONS': u'每日任务',
+    'Play %d battles': u'完成%d场战斗',
+    'Deal %d damage': u'累计造成%d伤害',
+    'Win %d battles': u'赢得%d场战斗',
+    'Purchased personal reserve: %s +%d%%, 1 hour. Spent %d gold.':
+        u'已购买个人储备：%s +%d%%，持续1小时。花费%d金币。',
+    'Activated personal reserve: %s +%d%%, 1 hour.':
+        u'已启用个人储备：%s +%d%%，持续1小时。',
+    'Purchased %s for %d bonds. Includes a slot and 100%% crew.':
+        u'已购买%s，花费%d债券，含车位和100%%熟练度成员。',
+    'Badge selection saved.': u'徽章佩戴设置已保存。',
+    'Unknown badge.': u'该徽章不存在。',
     'Gold: %d   Active reserves: %d / 3': u'金币：%d    生效储备：%d / 3',
     '1 hour each. Up to 3 types. Timer continues offline.': u'每项持续1小时，最多同时启用3类，离线仍计时。',
     '%s +%d%% | Owned: %d | %d min': u'%s +%d%% · 库存%d · 剩余%d分钟',

@@ -295,6 +295,40 @@ def award_record(value):
     return result
 
 
+def battle_income(base, reserves, premium=False, first_win=False,
+                  vehicle_xp_factor=0, xp_penalty=0):
+    """One 0.9.22 income calculation shared by banking and result replays.
+
+    The native results factors use tenths for account/first-win bonuses and
+    hundredths for vehicle XP. Reserve bonuses are additive to the first-win
+    bonus, and account premium scales both. Repair and ammunition costs and
+    bonds are outside these factors. Round at each native ValueReplay step.
+    """
+    account = 150 if premium else 100
+    daily = 200 if first_win else 100
+    result = dict(base)
+    for key in ('credits', 'xp', 'free_xp'):
+        value = premium_xp_bonus(base.get(key, 0), account)
+        if key == 'xp':
+            value = (premium_xp_bonus(base.get(key, 0) + xp_penalty, account) -
+                     premium_xp_bonus(xp_penalty, account))
+        if key != 'credits':
+            value = premium_xp_bonus(value, daily)
+            value = premium_xp_bonus(value, 100 + vehicle_xp_factor)
+        result[key] = value + premium_xp_bonus(reserves.get(key, 0), account)
+    crew = (premium_xp_bonus(base.get('xp', 0) + xp_penalty, account) -
+            premium_xp_bonus(xp_penalty, account))
+    crew = premium_xp_bonus(crew, daily)
+    crew += premium_xp_bonus(reserves.get('xp', 0), account)
+    crew += premium_xp_bonus(reserves.get('crew_xp', 0), account)
+    record = dict((key, max(0, int(base.get(key, 0))))
+                  for key in ('credits', 'xp', 'free_xp'))
+    record.update({'premium': bool(premium), 'first_win': bool(first_win),
+                   'vehicle_xp_factor': int(vehicle_xp_factor),
+                   'reserves': dict(reserves)})
+    return result, crew, record
+
+
 def price_index(vehicles_module, nations_module):
     """Return ``{compactDescr: (credits, gold, not_in_shop[, crystal])}``.
 

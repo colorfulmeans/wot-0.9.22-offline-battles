@@ -241,6 +241,10 @@ class FakeServer(object):
         stats = snapshot['stats']
         diff = {'stats': dict((name, stats[name]) for name in (
             'credits', 'gold', 'crystal', 'freeXP', 'vehTypeXP', 'dossier'))}
+        diff['stats'][('multipliedXPVehs', '_r')] = stats['multipliedXPVehs']
+        from gui.mods.offline_lan_0922 import offline_services
+        diff.update(offline_services.service_diff(
+            self._context.get('selected_vehicle') or {}))
         touched = self._context.get('postbattle_touched_vehicles')
         touched = set(touched or ())
         # A battle spends rounds and consumables, and the vehicle's own

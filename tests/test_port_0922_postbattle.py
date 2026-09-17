@@ -92,9 +92,24 @@ class _Replay(object):
         # embedded CPython 2.7, which rounds a half away from zero.
         self.connector.values[self.record_name] = int(
             self.connector.values[self.record_name] *
-            self.connector.values[other] / 100.0 + 0.5)
+            self.connector.values[other] /
+            (100.0 if 'Factor100' in other else 10.0) + 0.5)
         self.chain.append('MUL:%s' % other)
         _Replay.steps.append((self.record_name, 'MUL', other))
+        return self
+
+    def addMultipliedValue(self, other, factor):
+        value = int(self.connector.values[other] *
+                    self.connector.values[factor] / 10.0 + 0.5)
+        self.connector.values[self.record_name] += value
+        self.chain.append('ADDCOEFF:%s:%s' % (other, factor))
+        return self
+
+    def subMultipliedValue(self, other, factor):
+        value = int(self.connector.values[other] *
+                    self.connector.values[factor] / 10.0 + 0.5)
+        self.connector.values[self.record_name] -= value
+        self.chain.append('SUBCOEFF:%s:%s' % (other, factor))
         return self
 
     def __add__(self, other):
@@ -203,6 +218,28 @@ def _latest_receipt(state, account_key):
 
 
 class PostBattleContractTests(unittest.TestCase):
+
+    def test_native_premium_first_win_replays_equal_durable_awards(self):
+        # Exercise half-integer rounding, reserve stacking, premium vehicles
+        # and penalties together; the replay must bank the exact same total.
+        for premium in (False, True):
+            for first_win in (False, True):
+                for penalty in (0, 1, 2):
+                    receipt = _receipt()
+                    base = {'credits': 1001, 'xp': 101, 'free_xp': 5, 'crystal': 0}
+                    reserves = {'credits': 500, 'xp': 50, 'free_xp': 10, 'crew_xp': 202}
+                    awarded, crew, income = postbattle_store.economy.battle_income(
+                        base, reserves, premium, first_win, 10, penalty)
+                    receipt.update({'awarded': awarded, 'income': income,
+                        'friendly_fire': {'victims': [], 'received_damage': 0,
+                                          'xp_penalty': penalty}})
+                    vehicle = _packed_vehicle(receipt)
+                    self.assertEqual(premium, vehicle['isPremium'])
+                    self.assertEqual(20 if first_win else 10, vehicle['dailyXPFactor10'])
+                    for key, native in (('credits', 'credits'), ('xp', 'xp'), ('free_xp', 'freeXP')):
+                        self.assertEqual(awarded[key], vehicle[native])
+                    self.assertIn('appliedPremiumXPFactor10', vehicle['xpReplay'].decode())
+
     def test_training_receipt_has_no_rewards_medals_or_lifetime_progress(self):
         state = BattleState(map_name='01_karelia')
         state.client_build = CLIENT_BUILD_0922
@@ -497,7 +534,7 @@ class PostBattleContractTests(unittest.TestCase):
                     'arenaTypeID', 'arenaCreateTime', 'playerVehicles',
                     'xp', 'credits', 'crystal', 'creditsToDraw',
                     'isWinner', 'team', 'winnerIfDraw', 'guiType',
-                    'arenaUniqueID',
+                    'arenaUniqueID', 'offlineDailyMissions',
                 }, set(service_data))
                 self.assertEqual(receipt['arena_unique_id'],
                                  service_data['arenaUniqueID'])

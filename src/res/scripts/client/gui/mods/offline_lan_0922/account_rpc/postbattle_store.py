@@ -334,6 +334,9 @@ def _receipt(value):
         # ``None`` means nothing multiplied it, which is what every receipt
         # written before the multiplier existed says.
         'awarded': awarded,
+        'income': copy.deepcopy(value.get('income')),
+        'daily_reserves': list(value.get('daily_reserves') or ()),
+        'daily_missions': list(value.get('daily_missions') or ()),
         # By the shell's index in the gun's own shot order: only the client
         # can turn that into a shell, and only the client owns its price.
         'shells_fired': shells_fired,
@@ -575,12 +578,25 @@ def _add_value_replays(packers, vehicle, replay_types=None):
             ('crystal', 'originalCrystal', None, None, 'crystalReplay')):
         replay = ValueReplay(
             connector, recordName=record_name, startRecordName=start_name)
-        if record_name == 'xp' and vehicle.get('originalXPPenalty'):
+        account_factor = ('appliedPremiumCreditsFactor10' if
+                          record_name == 'credits' else 'appliedPremiumXPFactor10')
+        native_income = account_factor in vehicle and record_name in (
+            'credits', 'xp', 'freeXP')
+        if native_income:
+            replay = replay * account_factor
+        if native_income and record_name == 'xp' and vehicle.get('originalXPPenalty'):
+            replay.subMultipliedValue('originalXPPenalty', account_factor)
+        elif record_name == 'xp' and vehicle.get('originalXPPenalty'):
             replay = replay - 'originalXPPenalty'
+        if native_income and record_name in ('xp', 'freeXP'):
+            replay = replay * 'dailyXPFactor10'
         if factor_name is not None and _int(vehicle.get(factor_name)) > 100:
             replay = replay * factor_name
         if bonus_name is not None and vehicle[bonus_name]:
-            replay = replay + bonus_name
+            if native_income:
+                replay.addMultipliedValue(bonus_name, account_factor)
+            else:
+                replay = replay + bonus_name
         if record_name == 'credits':
             for name in ('originalCreditsContributionOut', 'originalCreditsPenalty'):
                 if vehicle.get(name):
@@ -830,6 +846,9 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'isTeamKiller': False,
     }
     avatar = {
+        'questsProgress': dict(('offline_daily_' + key,
+            (0, {'bonusCount': 0}, {'bonusCount': 1}))
+            for key in receipt.get('daily_missions', ())),
         'accountDBID': account_dbid, 'team': receipt['team'],
         'credits': rewards['credits'], 'xp': rewards['xp'],
         'freeXP': rewards['free_xp'], 'crystal': rewards['crystal'],
@@ -853,6 +872,23 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'guiType': 2 if receipt.get('battle_mode') == 'training' else 1,
         'bots': {},
     }
+    income = receipt.get('income')
+    if isinstance(income, dict):
+        premium = bool(income.get('premium'))
+        account_factor = 15 if premium else 10
+        vehicle.update({
+            'isPremium': premium,
+            'premiumXPFactor10': 15, 'premiumCreditsFactor10': 15,
+            'appliedPremiumXPFactor10': account_factor,
+            'appliedPremiumCreditsFactor10': account_factor,
+            'dailyXPFactor10': 20 if income.get('first_win') else 10,
+            'premiumVehicleXPFactor100': 100 + int(income.get('vehicle_xp_factor', 0)),
+        })
+        for key, native in (('credits', 'Credits'), ('xp', 'XP'), ('free_xp', 'FreeXP')):
+            vehicle['original' + native] = int(income.get(key, 0))
+            vehicle['booster' + native] = int((income.get('reserves') or {}).get(key, 0))
+        vehicle['originalXP'] += xp_penalty
+        vehicle['xpPenalty'] = economy.premium_xp_bonus(xp_penalty, account_factor * 10)
     _add_value_replays(packers, vehicle, replay_types=replay_types)
     avatar_packed = packers.AVATAR_FULL_RESULTS.pack(avatar)
     personal_identity = ('player', receipt['player_id'])
@@ -1077,6 +1113,9 @@ class PostBattleStore(object):
         receipt['service_costs'] = economy.service_costs(policy.get('service_costs'))
         receipt['friendly_fire_costs'] = friendly_fire.costs(
             policy.get('friendly_fire_costs'))
+        receipt['income'] = copy.deepcopy(policy.get('income'))
+        receipt['daily_reserves'] = list(policy.get('daily_reserves') or ())
+        receipt['daily_missions'] = list(policy.get('daily_missions') or ())
         awarded = policy.get('awarded')
         if isinstance(awarded, dict):
             receipt['awarded'] = economy.award_record(awarded)
@@ -1157,6 +1196,7 @@ class PostBattleStore(object):
             'isWinner': result_key, 'team': receipt['team'],
             'winnerIfDraw': 0, 'guiType': 1,
             'arenaUniqueID': receipt['arena_unique_id'],
+            'offlineDailyMissions': list(receipt.get('daily_missions') or ()),
         }
 
     def should_show_immediately(self, arena_unique_id):

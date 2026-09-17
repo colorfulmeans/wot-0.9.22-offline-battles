@@ -750,9 +750,22 @@ class GarageStore(object):
         if training:
             awarded = dict((key, 0) for key in awarded)
             battle_xp = 0
-        for name in ('credits', 'xp', 'free_xp'):
-            awarded[name] += bonuses[name]
-        battle_xp = awarded.get('xp', battle_xp) if rewards else (
+        first_win = False
+        if daily_facts is not None and not training and daily_facts.get('won'):
+            day = int(daily_facts['finished_at']) // 86400
+            first_wins = state.snapshot().setdefault('firstWinDays', {})
+            key = str(int(vehicle_type_compact_descr))
+            if int(first_wins.get(key, -1)) < day:
+                first_wins[key] = day
+                first_win = True
+        premium_active = (not training and int(battle_start) > 0 and
+            int(snapshot.get('premiumExpiryTime', 0) or 0) > int(battle_start))
+        premium_factor = economy.premium_vehicle_xp_factor_100(
+            vehicles_module, vehicle_type_compact_descr)
+        awarded, crew_xp, income = economy.battle_income(
+            awarded, bonuses, premium_active, first_win, premium_factor,
+            int((friendly_fire_facts or {}).get('xp_penalty', 0)))
+        battle_xp = crew_xp if rewards else (
             max(0, int(battle_xp or 0)) * experience_percent // 100)
         # What the battle earned does not depend on the vehicle it was
         # fought in beyond the multipliers above, so no per-vehicle step may
@@ -766,24 +779,20 @@ class GarageStore(object):
                 _int_value(vehicle_type_compact_descr)), 0),
             'weakest_tankman_id': 0,
             'xp_by_tankman': {},
+            'income': income,
         }
         crew = None
         if not training:
             crew = _contained(
                 refused, 'crew experience',
                 lambda: state.award_battle_crew_xp(
-                    vehicle_type_compact_descr, battle_xp + bonuses['crew_xp'],
+                    vehicle_type_compact_descr, battle_xp,
                     xp_to_tankman_flag),
                 GarageError)
         if crew is not None:
             result.update(crew)
-        # Crew training owns crewXpFactor; bank the separate vehicle XP
-        # bonus exactly once without multiplying the crew award again.
-        premium_factor = economy.premium_vehicle_xp_factor_100(
-            vehicles_module, vehicle_type_compact_descr)
-        for name in ('xp', 'free_xp'):
-            awarded[name] += economy.premium_xp_bonus(
-                awarded[name] - bonuses[name], premium_factor)
+        # battle_income keeps the separate vehicle XP factor out of crew
+        # training, which applies the descriptor's own crewXpFactor.
         if health is not None and not training:
             result['repair'] = _contained(
                 refused, 'repair bill',
@@ -825,8 +834,13 @@ class GarageStore(object):
         result['service_costs'] = _settle_automatically(
             state, int(result['vehicle_id']), auto_settings, GarageError)
         if daily_facts is not None and not training:
+            before_claimed = set(offline_services.daily_state(
+                state.snapshot(), daily_facts.get('finished_at'))['claimed'])
             result['daily_reserves'] = offline_services.advance_daily(
                 state.snapshot(), daily_facts, daily_facts.get('finished_at'))
+            result['daily_missions'] = [key for key in
+                state.snapshot()['dailyMissions']['claimed']
+                if result['daily_reserves'] and key not in before_claimed]
         # Every other field of this result is plain JSON, and the store hands
         # it straight to a caller that may well write it down.
         result['touched_items'] = dict(
@@ -842,6 +856,9 @@ class GarageStore(object):
             marker['awarded'] = dict(result['awarded'])
         marker['touched_items'] = copy.deepcopy(result['touched_items'])
         marker['service_costs'] = dict(result['service_costs'])
+        marker['income'] = copy.deepcopy(result['income'])
+        marker['daily_reserves'] = list(result.get('daily_reserves') or ())
+        marker['daily_missions'] = list(result.get('daily_missions') or ())
         if 'friendly_fire_costs' in result:
             marker['friendly_fire_costs'] = dict(result['friendly_fire_costs'])
         next_receipts = (list(self._battle_receipts) + [marker])[
@@ -1073,6 +1090,10 @@ class GarageStore(object):
                     # prevents paying or charging this battle a second time.
                     pass
             row['service_costs'] = economy.service_costs(raw.get('service_costs'))
+            if isinstance(raw.get('income'), dict):
+                row['income'] = copy.deepcopy(raw['income'])
+            row['daily_reserves'] = list(raw.get('daily_reserves') or ())
+            row['daily_missions'] = list(raw.get('daily_missions') or ())
             touched = raw.get('touched_items')
             if isinstance(touched, dict):
                 row['touched_items'] = dict(

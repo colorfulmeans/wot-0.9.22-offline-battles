@@ -3034,6 +3034,8 @@ class GaragePersistenceTests(unittest.TestCase):
         policy.transact(state, 'buy_reserve', 'xp', now=100)
         policy.transact(state, 'activate_reserve', 'xp', now=100)
         snapshot = state.snapshot()
+        snapshot['dailyMissions'] = {'day': 0, 'claimed': []}
+        snapshot['selectedBadges'] = [17]
         vehicles, tankmen = _modules()
         store = self._store()
         kwargs = dict(tankmen_module=tankmen, vehicles_module=vehicles,
@@ -3041,16 +3043,48 @@ class GaragePersistenceTests(unittest.TestCase):
                       battle_start=150, daily_facts={'damage': 3000, 'won': True,
                                                    'finished_at': 200})
         result = store.apply_battle_crew_xp(snapshot, 'reserve:1', 50001, 100, 1, **kwargs)
-        self.assertEqual(150, result['awarded']['xp'])
+        self.assertEqual(250, result['awarded']['xp'])
         restored = self._restart(self._matching_snapshot())
         reserves = policy.reserve_state(restored)
         self.assertEqual([100, 3700], reserves['active']['xp'])
         self.assertEqual(1, reserves['counts']['credits'])
         self.assertEqual(1, reserves['counts']['crew_xp'])
         self.assertEqual(50, restored['wallet']['gold'])
+        self.assertEqual([17], restored['selectedBadges'])
+        self.assertEqual({'50001': 0}, restored['firstWinDays'])
         retry = self._store().apply_battle_crew_xp(restored, 'reserve:1', 50001, 100, 1, **kwargs)
         self.assertFalse(retry['applied'])
+        self.assertEqual(result['income'], retry['income'])
         self.assertEqual(reserves, policy.reserve_state(restored))
+
+    def test_premium_first_win_per_vehicle_day_and_failed_write(self):
+        snapshot = self._two_vehicle_snapshot()
+        snapshot['premiumExpiryTime'] = 500
+        vehicles, tankmen = _modules()
+        store = self._store()
+        def settle(identity, cd=50001, start=100, finish=600, won=True):
+            return store.apply_battle_crew_xp(
+                snapshot, identity, cd, 101, 1,
+                tankmen_module=tankmen, vehicles_module=vehicles,
+                rewards={'credits': 1001, 'xp': 101, 'free_xp': 5, 'crystal': 7},
+                battle_start=start,
+                daily_facts={'damage': 0, 'won': won, 'finished_at': finish})
+        with mock.patch.object(store, '_write_state', return_value=False):
+            with self.assertRaises(RuntimeError):
+                settle('failed')
+        self.assertNotIn('firstWinDays', snapshot)
+        first = settle('first')
+        self.assertEqual({'credits': 1502, 'xp': 304, 'free_xp': 16, 'crystal': 7},
+                         first['awarded'])
+        self.assertTrue(first['income']['premium'])
+        self.assertTrue(first['income']['first_win'])
+        self.assertEqual(152, settle('second')['awarded']['xp'])
+        self.assertEqual(304, settle('other', cd=50002)['awarded']['xp'])
+        self.assertEqual(101, settle('loss', start=86410, finish=86500, won=False)['awarded']['xp'])
+        tomorrow = settle('tomorrow', start=86510, finish=86600)
+        self.assertEqual(202, tomorrow['awarded']['xp'])
+        self.assertFalse(tomorrow['income']['premium'])
+        self.assertEqual(101, settle('late', start=700, finish=800)['awarded']['xp'])
 
     def test_training_spends_ammunition_but_no_repair_rewards_or_daily_progress(self):
         snapshot = self._settling_snapshot()

@@ -75,15 +75,35 @@ Armory Special Offers includes the five retired vehicles and compatible
 vehicles from the first official bond shop (2019). The retired prices are
 offline settings: Aufkl. Panther 6000, SU-122-54 12000, Object 430B,
 Object 263B and Waffentrager E 100 15000 bonds each. Every offer includes a
-garage slot and 100% crew. Owned vehicles cannot be purchased again.
+garage slot and 100% crew. Offers use the native Shop rows and vehicle artwork,
+with bond prices. Owned vehicles follow the available ones and cannot be
+purchased again. The offer filters are separate from the regular Shop filters.
 
-Personal Reserves offers four one-hour bonuses with purchase and activation
-buttons. Close or Escape returns to the garage. Up to three different types
-may be active together. The Missions tab also opens daily offline missions;
-rewards are automatic and progress resets at 00:00 UTC (08:00 Beijing time).
-Reserve prices and these daily goals are custom offline rules.
+Personal Reserves uses the native inventory, missions and purchase tabs with
+four one-hour bonuses. Active reserves appear in the three slots in both the
+window and account popover. Purchases and activation produce system messages.
+Close or Escape returns to the garage. Up to three different types may be
+active together. The Missions tab opens three daily offline goals, randomly
+selected from fixed-reward templates at 00:00 UTC (08:00 Beijing time).
+Reopening or restarting cannot reroll that day's selection or claim it twice.
+An existing fixed set keeps its progress until the next reset. Reserve prices
+and these daily goals are custom offline rules. Completed daily goals appear
+in the lower-left battle-result area, with one combined reward popup per
+battle and a system message. Original campaign personal missions (such as the
+T-55A missions) still only support selection, not completion or reward grants.
+
+The badge slot in the account popover opens the native badge page. Built-in
+client badges can be selected as offline cosmetics, and the selection is saved
+with the account. This does not award historical ranked or campaign medals.
 
 The 90-day premium option displays its duration and keeps its 6500-gold price.
+An active premium account now applies the legacy 50% credit and experience
+bonus to actual battle income, including crew training. Native results show
+the separate standard and premium columns. Each tank's first standard-battle
+victory of the day earns double experience; the reset is 00:00 UTC, and the
+garage's first-win indicators refresh when the account returns to the lobby.
+Premium eligibility is fixed at battle start. These rules apply to newly
+settled battles; previously saved results are not recalculated or paid again.
 Friendly-fire result labels come from the installed client localization;
 credits include penalty and compensation, while XP includes penalty only.
 Voice chat is unavailable offline because the client has no Vivox account

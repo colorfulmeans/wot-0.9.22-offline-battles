@@ -822,7 +822,9 @@ def stats(selected_vehicle=None, postbattle_progress=None):
             'globalVehicleLocks': {}, 'refSystem': {'referrals': {}},
             'unlocks': unlocks,
             'eliteVehicles': elite,
-            'multipliedXPVehs': set(),
+            'multipliedXPVehs': set(int(key) for key, day in
+                (vehicle.get('firstWinDays') or {}).items()
+                if int(day) == int(time.time()) // 86400),
         },
         'cache': {
             'isFinPswdVerified': True,
@@ -856,6 +858,7 @@ def personal_missions(selected_vehicle=None):
 
 def sync_data(revision=0, selected_vehicle=None, int_user_settings=None,
               postbattle_progress=None):
+    from gui.mods.offline_lan_0922 import offline_services
     # These are deliberately present even when empty.  #1513's account
     # helpers only create a requester cache entry when the corresponding key
     # exists in the sync diff; several lobby requesters then index that entry
@@ -882,6 +885,7 @@ def sync_data(revision=0, selected_vehicle=None, int_user_settings=None,
     }
     result.update(inventory(selected_vehicle))
     result.update(stats(selected_vehicle, postbattle_progress))
+    result.update(offline_services.service_diff(selected_vehicle or {}))
     return result
 
 
@@ -934,7 +938,8 @@ def shop(revision=0, selected_vehicle=None):
         'vehicleCamouflagePriceFactors': {},
         'vehicleHornPriceFactors': {},
     }
-    empty_goodies = {'prices': {}, 'notInShop': set(), 'goodies': {}}
+    from gui.mods.offline_lan_0922 import offline_services
+    empty_goodies = offline_services.reserve_catalogue()
     return {
         'rev': int(revision) + 1,
         'prevRev': int(revision),
@@ -991,7 +996,7 @@ def shop(revision=0, selected_vehicle=None):
         # exact #1513 shop field so the requester does not use its retail
         # crystal-price fallback.
         'paidDeluxeRemovalCost': {'crystal': 200},
-        'dailyXPFactor': 1,
+        'dailyXPFactor': 2,
         # The crew shop.  These three are #1513's own ShopCommonStats
         # fallbacks rather than offline policy, and the garage charges the
         # same numbers the player is shown here.

@@ -777,6 +777,7 @@ def _invalidate_chunk_native_names_1513(chunk_id):
 			'layout_repairs', set()).discard(chunk_id)
 	for cache_name in ('g_offh_destr_item_names',
 			'g_offh_destr_proved_layouts',
+			'g_offh_destr_catalog_model_names',
 			'g_offh_destr_native_name_lists',
 			'g_offh_destr_isolated_name_types'):
 		cache = globals().get(cache_name, {})
@@ -808,7 +809,7 @@ def _invalidate_chunk_layout_1513(chunk_id):
 	"""
 	chunk_id = int(chunk_id)
 	for cache_name in ('g_offh_destr_item_names',
-			'g_offh_destr_proved_layouts'):
+			'g_offh_destr_proved_layouts', 'g_offh_destr_catalog_model_names'):
 		cache = globals().get(cache_name, {})
 		for key in list(cache):
 			if key[1] == chunk_id:
@@ -1241,6 +1242,11 @@ def resolve_native_item_name_1513(space_id, chunk_id, item_index):
 			native_count, names)
 	if names is None:
 		return ('pending' if status == 'pending' else 'invalid'), None
+	model_name = _resolve_catalog_model_name_1513(
+		BigWorld, AreaDestructibles, space_id, chunk_id, item_index,
+		native_count, names)
+	if model_name is not None:
+		return 'exact', model_name
 	mapping, unused_status = _chunk_native_names_1513(
 		BigWorld, AreaDestructibles, space_id, chunk_id, native_count, names)
 	if unused_status == 'pending_alignment':
@@ -1253,6 +1259,46 @@ def resolve_native_item_name_1513(space_id, chunk_id, item_index):
 			BigWorld, AreaDestructibles, space_id, chunk_id, item_index,
 			native_count, names)
 	return 'exact', mapping.get(item_index)
+
+
+def _resolve_catalog_model_name_1513(bigworld, area, space_id, chunk_id,
+		item_index, native_count, names):
+	"""Prove a contacted model without waiting for unrelated chunk items.
+
+	Ruinberg contacts can remain in the solid unidentified path while whole
+	chunk alignment competes with all Bot scans. The v9 authored index permits
+	the same independent proof used for trees: unique complete transform, exact
+	unchanged wire, live effect category and installed resource descriptor.
+	Never infer an offset, consume a compacted list by position, or probe the
+	unsafe scalar filename API. A remap or ambiguity retains full alignment.
+	"""
+	catalog = _destructible_catalog or {}
+	wire = (int(chunk_id), int(item_index))
+	baked = catalog.get('baked_instances', {}).get(wire)
+	if (not catalog.get('layout_repair_supported') or baked is None or
+			_layout_repair_pending_1513(chunk_id) or _destructible_isolated_1513(*wire)):
+		return None
+	key = (int(space_id), int(chunk_id), int(item_index))
+	cache = globals().setdefault('g_offh_destr_catalog_model_names', {})
+	if cache.get(key) == int(native_count):
+		return baked['descriptor_filename']
+	if _item_name_query_allowance_1513(bigworld, key[:2], 1) < 1:
+		return None
+	try:
+		native_type = bigworld.wg_getDestructibleEffectCategory(
+			space_id, chunk_id, item_index, -1)
+		if isinstance(native_type, bool) or not isinstance(native_type, _INTEGER_TYPES):
+			return None
+		match = _probe_authored_placement_1513(
+			bigworld, area, space_id, chunk_id, item_index, native_type,
+			names, native_count)
+	except Exception:
+		return None
+	if match is None or match[0] != wire or match[1] != baked:
+		return None
+	cache[key] = int(native_count)
+	_release_item_name_query_focus_1513(space_id, chunk_id)
+	return baked['descriptor_filename']
 
 
 def _resolve_catalog_tree_name_1513(bigworld, area, space_id, chunk_id,
@@ -1531,6 +1577,7 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_item_names',
 			'g_offh_destr_proved_layouts',
 			'g_offh_destr_catalog_tree_names',
+			'g_offh_destr_catalog_model_names',
 			'g_offh_destr_isolated_name_types',
 			'g_offh_destr_native_name_lists',
 			'g_offh_destr_item_name_budget',
@@ -2699,8 +2746,14 @@ def _stream_baked_shot_instance_1513(spaceID, identity):
 		BigWorld, spaceID, chunk_id, native_count)
 	if names is None:
 		return None
-	item_names, names_status = _chunk_native_names_1513(
-		BigWorld, AreaDestructibles, spaceID, chunk_id, native_count, names)
+	model_name = _resolve_catalog_model_name_1513(
+		BigWorld, AreaDestructibles, spaceID, chunk_id, item_index,
+		native_count, names)
+	if model_name is not None:
+		item_names, names_status = {item_index: model_name}, 'exact_placement'
+	else:
+		item_names, names_status = _chunk_native_names_1513(
+			BigWorld, AreaDestructibles, spaceID, chunk_id, native_count, names)
 	if names_status == 'pending_alignment':
 		return None
 	if item_names is None or _destructible_isolated_1513(

@@ -857,6 +857,12 @@ class LANSession(object):
                 arena_unique_id, error)
             return False
         self._notified_results.add(arena_unique_id)
+        if result_data.get('offlineDailyMissions'):
+            try:
+                from gui.mods.offline_lan_0922.offline_services_ui import notify_missions
+                notify_missions(result_data['offlineDailyMissions'])
+            except Exception as error:
+                self._report_postbattle_notification_error(arena_unique_id, error)
         return True
 
     def _publish_postbattle_progress(self):

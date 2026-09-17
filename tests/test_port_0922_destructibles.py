@@ -9657,17 +9657,66 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             ((33411, 13, 73), (33411, 13, 75)), detail['token'])
         self.assertIn(
             (33411, 13), destructibles_sensor.g_offh_destr_instances)
-        # Version 9 proves the initial native placement scan before the
-        # proposal resolves its own exact module geometry.
+        # Version 9 proves only the contacted placement, then resolves its
+        # exact module geometry without scanning unrelated chunk items.
         self.assertEqual(
-            [mock.call(1, 33411, item) for item in range(14)] +
-            [mock.call(1, 33411, 13)],
+            [mock.call(1, 33411, 13)] * 2,
             bigworld.wg_getDestructibleMatrix.call_args_list)
         self.assertEqual(
-            ([mock.call(1, 33411, item, -1) for item in range(14)] +
+            ([mock.call(1, 33411, 13, -1)] +
              [mock.call(1, 33411, 13, material)
               for material in (0, 1, 2)]),
             bigworld.wg_getDestructibleEffectCategory.call_args_list)
+
+    def test_reported_ruinberg_models_do_not_wait_for_whole_chunk_alignment(self):
+        destructibles_sensor.xrange = range
+        catalog = json.loads((ROOT / 'destructibles' / '08_ruinberg.json').read_text())
+        destructibles_sensor.set_catalog(catalog)
+        prepared = destructibles_sensor._destructible_catalog
+        wires = ((32385, 7), (32385, 6), (33151, 3), (33151, 89))
+        class Matrix(object):
+            def __init__(self, signature):
+                self.signature = signature
+                self.translation = _Vector(*(value / 1000.0 for value in signature[:3]))
+            def applyVector(self, vector):
+                xyz = (vector.x, vector.y, vector.z)
+                basis = self.signature[3:]
+                return _Vector(*(sum(xyz[axis] * basis[axis * 3 + dim]
+                                    for axis in range(3)) / 1000.0 for dim in range(3)))
+            def applyPoint(self, vector):
+                return self.translation + self.applyVector(vector)
+        manager = _Manager()
+        manager.space_id = 1
+        for chunk, unused in wires:
+            manager.set_chunk_count(chunk, 256)
+        area = types.SimpleNamespace(g_destructiblesManager=manager,
+            DESTR_TYPE_TREE=0, DESTR_TYPE_FALLING_ATOM=1,
+            DESTR_TYPE_FRAGILE=2, DESTR_TYPE_STRUCTURE=3,
+            g_cache=types.SimpleNamespace(getDescByFilename=lambda name: {'type': 2}))
+        bigworld = types.SimpleNamespace(
+            wg_getChunkDestrFilenames=mock.Mock(return_value=()),
+            wg_getDestructibleEffectCategory=mock.Mock(return_value=-1),
+            wg_getChunkMatrix=lambda *args: types.SimpleNamespace(translation=_Vector()),
+            wg_getDestructibleMatrix=mock.Mock(side_effect=lambda space, chunk, item:
+                Matrix(prepared['baked_instances'][(chunk, item)]['signature'])))
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area,
+                'BigWorld': bigworld, 'Math': types.SimpleNamespace(Vector3=_Vector, Matrix=lambda x: x)}):
+            for index, wire in enumerate(wires):
+                bigworld._offh_item_name_budget_tick = index
+                instance = destructibles_sensor._stream_baked_shot_instance_1513(1, wire)
+                self.assertIsNotNone(instance)
+                self.assertEqual('fragile', instance['kind'])
+                self.assertEqual(('exact', instance['descriptor_filename']),
+                    destructibles_sensor.resolve_native_item_name_1513(1, *wire))
+            self.assertEqual(set(wires), set(tuple(call.args[1:]) for call in
+                bigworld.wg_getDestructibleMatrix.call_args_list))
+            # An unload expires independent proof even when the count is equal.
+            chunk, item = wires[-1]
+            destructibles_sensor._invalidate_chunk_native_names_1513(chunk)
+            bigworld._offh_item_name_budget_tick = 10
+            bigworld.wg_getDestructibleMatrix.side_effect = lambda *args: _ItemMatrix(_Vector(9999, 0, 9999))
+            self.assertIsNone(destructibles_sensor._resolve_catalog_model_name_1513(
+                bigworld, area, 1, chunk, item, 256, ()))
 
     def _prohorovka_wagon_environment(self, descriptor_available=False):
         """Build the exact #1513 girder flatcar the player drove through."""
@@ -9807,7 +9856,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             'rw004_Carriage1.model' in line
             for line in writes))
 
-    def test_pending_name_alignment_blocks_before_the_crush_law_owns_it(self):
+    def test_exact_placement_avoids_pending_names_before_crush(self):
         """A damaged wagon still blocks movement through its replacement body."""
         environment = self._prohorovka_wagon_environment(
             descriptor_available=True)
@@ -9825,7 +9874,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 break
 
         self.assertEqual('hard', details[0]['status'])
-        self.assertIn('unidentified', details[0]['kinds'])
+        self.assertNotIn('unidentified', details[0]['kinds'])
         self.assertEqual('hard', details[-1]['status'])
         self.assertNotIn('unidentified', details[-1]['kinds'])
         self.assertEqual(((32637, 56, None),), details[-1]['token'])

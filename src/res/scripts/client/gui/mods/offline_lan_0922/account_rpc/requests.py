@@ -800,7 +800,8 @@ def _offline_service(context, args):
     try:
         with state._transaction():
             return _fitting(context, lambda owner: offline_services.transact(
-                owner, action, key), require_persistence=True)
+                owner, action, key), extra_diff=offline_services.service_diff,
+                require_persistence=True)
     except garage.GarageError as error:
         return Result(commands.RES_FAILURE, str(error))
 

@@ -3760,3 +3760,95 @@ The older isolated bootstrap contract now includes the services adapter and
 asserts installation before Account connection and cleanup on shutdown. The
 combined bootstrap, Account RPC, services, economy and garage regression run
 passes 667 tests. Native Windows client startup remains a user retest boundary.
+
+The `20260917-223308-04b90c87b1e8` report reached the native hangar on build
+`colorfulmeans-35230599345-1`. Its screenshots show why the service overlays
+were insufficient: the retail mission empty-state text and controls remained
+underneath them, and native reserve slots still consumed an empty goodies
+cache. This follow-up removes the reserve overlay and restores the retail
+BoostersWindow/TabsContainer lifecycle. The shop now publishes four mod-owned
+GoodieData definitions (nine fields including nested target/resource tuples),
+and Account sync and paid-service updates publish their three-field
+GoodieVariable values. Native GoodiesCache, booster tooltips, filters and both
+BoostersPanelComponent instances therefore consume the same IDs, counts and
+expiration timestamps. Expiry retires the active interval while retaining its
+battle-start entitlement history. System messages follow durable purchase or
+activation acknowledgement; a failed save cannot emit a purchase success.
+
+The offers tab selects the existing ShopUI linkage and binds its component ID
+to a Shop subclass before Flash registration. Rows use the original vehicle
+wrapper and item.icon, crystal prices, separate offer filters, and ownership
+sorting with disabled owned rows at the bottom. Ownership is checked before
+opening the confirmation, again after confirmation, and inside the transaction.
+Factory settings and filter defaults are restored on teardown. Regular Shop
+and Inventory components retain their classes and filter values.
+
+The account popover retains AbstractPopOverView's hide/destroy lifecycle while
+populating local account/badge data without online clan/tutorial initialization.
+The native badge page permits selection from the installed badges.xml catalogue
+as offline cosmetics; it does not grant dossier achievements. Selection uses
+the same persistent Account transaction and badges sync field, so a failed
+write cannot visually equip an unsaved badge. The daily page no longer builds
+retail mission tabs; its separate opaque panel owns its close/cursor lifecycle.
+Three daily templates are selected deterministically from a hashed day and
+template ID, with one battle-count, damage and victory goal. Rewards belong to
+the templates, not a second reward roll. Existing same-day fixed missions keep
+their progress/claims; the next day gets the new selection.
+
+The additional native UI producer/consumer contracts were reviewed in public
+0.9.22 reference Python (regional #788), alongside the #1513 screenshots/logs;
+the exact client's scripts.pkg is not available in this workspace. Regression
+coverage checks native row/slot wire shapes, controller lifecycle preservation,
+duplicate clicks, confirmation races, durable badge publication, notification
+ordering, daily rollover and legacy receipt replay. These checks do not prove
+Flash layout, component binding or input behavior on #1513; that remains the
+next Windows gameplay acceptance boundary.
+
+The `20260917-225717-1dc3e2c245c8` report and new screenshots show a 90-day
+premium account with identical standard/premium results columns. The public
+0.9.22 reference defines account factors 10 and 15 and replays both columns
+from the applied premium factor. The supplied historical screenshot agrees:
+39157/58736 credits and 918/1377 battle XP. New receipts now freeze premium
+eligibility at battle start and persist the same factor inputs used to bank
+income. Native ValueReplay chains consume those inputs for credits, XP and
+free XP, with the client's rounding at each step. Premium also reaches crew
+training; it does not multiply bonds, repair costs or ammunition costs.
+Reserve income remains additive to the daily first-win bonus. The default
+first victory is x2, not the historical video's temporary x5 event.
+
+First wins are tracked per vehicle and UTC day in the garage transaction.
+A failed write consumes neither the reward nor its entitlement. Receipt
+retries retain the original premium/first-win inputs, and older receipts
+cannot reset a newer day's marker. Account updates replace (rather than
+union) multipliedXPVehs with its stock tuple-key protocol, so the carousel
+can recover its x2 markers at midnight or upon returning to the lobby.
+Existing archived results are not retroactively repriced or re-awarded.
+
+Daily completion IDs are stored with the settlement receipt. They produce
+native lower-left result rows and a single combined reward dialog through
+the existing once-only result-notification path. This is the offline daily
+goal system, not completion support for the original campaign personal
+missions. The existing campaign code only selects missions; the full mission
+conditions and authoritative battle telemetry needed for those rewards have
+not been implemented. Badge cosmetics likewise do not award campaign medals.
+
+The same report repeatedly blocks Ruinberg's old Mercedes (chunk 33151,
+item 3), motorcycle (33151/89), bench (32385/7) and other small objects while
+waiting for full-chunk name alignment. A focused registration path now
+checks a contacted catalog model independently under the existing query
+budget. It requires the exact wire ID, unique complete authored transform,
+supported catalog revision and compatible native category. Unresolved,
+isolated or remapped layouts continue through the existing conservative path.
+It never calls the unsafe native filename helper or weakens crush strength.
+The proof cache is discarded on chunk unload, layout invalidation and arena
+teardown. A regression uses the report's actual Ruinberg catalog records,
+including a stale-transform rejection after unload. Native #1513 contact and
+projectile behavior still requires a Windows gameplay retest.
+
+Regression coverage additionally checks premium/first-win replay totals against
+durable awards, rounding with XP penalties and reserve bonuses, per-vehicle
+and cross-day first wins, disk-failure rollback, late receipt replay and
+combined mission notifications. Public Python contracts and historical
+screenshots support these changes; an exact official China 0.9.22 web copy of
+the premium/help pages was not recovered. The package does not import modern
+WoT Premium Account features or claim native gameplay validation from mocks.
