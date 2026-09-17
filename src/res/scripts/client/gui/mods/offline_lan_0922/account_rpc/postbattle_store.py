@@ -884,9 +884,10 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
             'dailyXPFactor10': 20 if income.get('first_win') else 10,
             'premiumVehicleXPFactor100': 100 + int(income.get('vehicle_xp_factor', 0)),
         })
+        boosters = income.get('boosters', income.get('reserves')) or {}
         for key, native in (('credits', 'Credits'), ('xp', 'XP'), ('free_xp', 'FreeXP')):
             vehicle['original' + native] = int(income.get(key, 0))
-            vehicle['booster' + native] = int((income.get('reserves') or {}).get(key, 0))
+            vehicle['booster' + native] = int(boosters.get(key, 0))
         vehicle['originalXP'] += xp_penalty
         vehicle['xpPenalty'] = economy.premium_xp_bonus(xp_penalty, account_factor * 10)
     _add_value_replays(packers, vehicle, replay_types=replay_types)

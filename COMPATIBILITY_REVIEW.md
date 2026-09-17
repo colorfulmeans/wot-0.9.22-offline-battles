@@ -3857,3 +3857,11 @@ combined mission notifications. Public Python contracts and historical
 screenshots support these changes; an exact official China 0.9.22 web copy of
 the premium/help pages was not recovered. The package does not import modern
 WoT Premium Account features or claim native gameplay validation from mocks.
+
+Full CI exposed one additional regression in the friendly-fire settlement
+test: save-owned extra XP had moved into originalXP. Settlement now persists
+the battle basis separately from extra earnings and reserves; the latter
+share the existing booster row, with the same stepwise account-factor rounding
+in banking and native replays. The original 667 gross / 67 penalty / 600 extra
+fixture again displays 1200 total XP across save failure and restart. The
+premium/first-win replay matrix also covers 50/100/150/200 percent save income.

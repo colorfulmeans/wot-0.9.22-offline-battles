@@ -735,12 +735,11 @@ class GarageStore(object):
         # and everything downstream banks and shows the same numbers.
         experience_percent = economy.earnings_percent(
             snapshot.get('earningsPercent'))
-        credits_percent = experience_percent
+        vehicle_credits_percent = 100
         if (vehicles_module is not None and economy.is_premium_vehicle(
                 vehicles_module, vehicle_type_compact_descr)):
-            credits_percent = (
-                credits_percent * economy.PREMIUM_VEHICLE_CREDITS_PERCENT
-                // 100)
+            vehicle_credits_percent = economy.PREMIUM_VEHICLE_CREDITS_PERCENT
+        credits_percent = experience_percent * vehicle_credits_percent // 100
         awarded = economy.scale_rewards(
             rewards, credits_percent=credits_percent,
             experience_percent=experience_percent,
@@ -764,7 +763,9 @@ class GarageStore(object):
             vehicles_module, vehicle_type_compact_descr)
         awarded, crew_xp, income = economy.battle_income(
             awarded, bonuses, premium_active, first_win, premium_factor,
-            int((friendly_fire_facts or {}).get('xp_penalty', 0)))
+            int((friendly_fire_facts or {}).get('xp_penalty', 0)),
+            original=economy.scale_rewards(
+                rewards, credits_percent=vehicle_credits_percent))
         battle_xp = crew_xp if rewards else (
             max(0, int(battle_xp or 0)) * experience_percent // 100)
         # What the battle earned does not depend on the vehicle it was

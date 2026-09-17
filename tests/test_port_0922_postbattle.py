@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import itertools
 import os
 import pickle
 import shutil
@@ -221,24 +222,29 @@ class PostBattleContractTests(unittest.TestCase):
 
     def test_native_premium_first_win_replays_equal_durable_awards(self):
         # Exercise half-integer rounding, reserve stacking, premium vehicles
-        # and penalties together; the replay must bank the exact same total.
-        for premium in (False, True):
-            for first_win in (False, True):
-                for penalty in (0, 1, 2):
-                    receipt = _receipt()
-                    base = {'credits': 1001, 'xp': 101, 'free_xp': 5, 'crystal': 0}
-                    reserves = {'credits': 500, 'xp': 50, 'free_xp': 10, 'crew_xp': 202}
-                    awarded, crew, income = postbattle_store.economy.battle_income(
-                        base, reserves, premium, first_win, 10, penalty)
-                    receipt.update({'awarded': awarded, 'income': income,
-                        'friendly_fire': {'victims': [], 'received_damage': 0,
-                                          'xp_penalty': penalty}})
-                    vehicle = _packed_vehicle(receipt)
-                    self.assertEqual(premium, vehicle['isPremium'])
-                    self.assertEqual(20 if first_win else 10, vehicle['dailyXPFactor10'])
-                    for key, native in (('credits', 'credits'), ('xp', 'xp'), ('free_xp', 'freeXP')):
-                        self.assertEqual(awarded[key], vehicle[native])
-                    self.assertIn('appliedPremiumXPFactor10', vehicle['xpReplay'].decode())
+        # and penalties with save multipliers; the replay must match banking
+        # while keeping extra earnings out of the original gross XP row.
+        for premium, first_win, penalty, percent in itertools.product(
+                (False, True), (False, True), (0, 1, 2), (50, 100, 150, 200)):
+            with self.subTest(premium=premium, first_win=first_win,
+                              penalty=penalty, percent=percent):
+                receipt = _receipt()
+                original = {'credits': 1001, 'xp': 101, 'free_xp': 5, 'crystal': 0}
+                base = postbattle_store.economy.scale_rewards(
+                    original, credits_percent=percent, experience_percent=percent)
+                reserves = {'credits': 500, 'xp': 50, 'free_xp': 10, 'crew_xp': 202}
+                awarded, crew, income = postbattle_store.economy.battle_income(
+                    base, reserves, premium, first_win, 10, penalty, original)
+                receipt.update({'awarded': awarded, 'income': income,
+                    'friendly_fire': {'victims': [], 'received_damage': 0,
+                                      'xp_penalty': penalty}})
+                vehicle = _packed_vehicle(receipt)
+                self.assertEqual(min(101, base['xp']) + penalty, vehicle['originalXP'])
+                self.assertEqual(premium, vehicle['isPremium'])
+                self.assertEqual(20 if first_win else 10, vehicle['dailyXPFactor10'])
+                for key, native in (('credits', 'credits'), ('xp', 'xp'), ('free_xp', 'freeXP')):
+                    self.assertEqual(awarded[key], vehicle[native])
+                self.assertIn('appliedPremiumXPFactor10', vehicle['xpReplay'].decode())
 
     def test_training_receipt_has_no_rewards_medals_or_lifetime_progress(self):
         state = BattleState(map_name='01_karelia')

@@ -296,7 +296,7 @@ def award_record(value):
 
 
 def battle_income(base, reserves, premium=False, first_win=False,
-                  vehicle_xp_factor=0, xp_penalty=0):
+                  vehicle_xp_factor=0, xp_penalty=0, original=None):
     """One 0.9.22 income calculation shared by banking and result replays.
 
     The native results factors use tenths for account/first-win bonuses and
@@ -306,26 +306,38 @@ def battle_income(base, reserves, premium=False, first_win=False,
     """
     account = 150 if premium else 100
     daily = 200 if first_win else 100
+    original = base if original is None else original
+    basis = dict((key, min(base.get(key, 0), original.get(key, 0)))
+                 for key in ('credits', 'xp', 'free_xp'))
+    extras = dict((key, max(0, base.get(key, 0) - basis[key]))
+                  for key in basis)
+    boosters = {}
     result = dict(base)
     for key in ('credits', 'xp', 'free_xp'):
-        value = premium_xp_bonus(base.get(key, 0), account)
+        value = premium_xp_bonus(basis[key], account)
         if key == 'xp':
-            value = (premium_xp_bonus(base.get(key, 0) + xp_penalty, account) -
+            value = (premium_xp_bonus(basis[key] + xp_penalty, account) -
                      premium_xp_bonus(xp_penalty, account))
+        extra = extras[key]
         if key != 'credits':
             value = premium_xp_bonus(value, daily)
             value = premium_xp_bonus(value, 100 + vehicle_xp_factor)
-        result[key] = value + premium_xp_bonus(reserves.get(key, 0), account)
-    crew = (premium_xp_bonus(base.get('xp', 0) + xp_penalty, account) -
+            extra = premium_xp_bonus(extra, daily)
+            extra = premium_xp_bonus(extra, 100 + vehicle_xp_factor)
+        # Save-owned extra income shares the native boosters row. Keep the
+        # battle's original gross XP intact for penalties and both columns.
+        boosters[key] = extra + reserves.get(key, 0)
+        result[key] = value + premium_xp_bonus(boosters[key], account)
+    crew = (premium_xp_bonus(basis['xp'] + xp_penalty, account) -
             premium_xp_bonus(xp_penalty, account))
     crew = premium_xp_bonus(crew, daily)
-    crew += premium_xp_bonus(reserves.get('xp', 0), account)
+    crew += premium_xp_bonus(premium_xp_bonus(extras['xp'], daily) +
+                             reserves.get('xp', 0), account)
     crew += premium_xp_bonus(reserves.get('crew_xp', 0), account)
-    record = dict((key, max(0, int(base.get(key, 0))))
-                  for key in ('credits', 'xp', 'free_xp'))
+    record = dict(basis)
     record.update({'premium': bool(premium), 'first_win': bool(first_win),
                    'vehicle_xp_factor': int(vehicle_xp_factor),
-                   'reserves': dict(reserves)})
+                   'boosters': boosters})
     return result, crew, record
 
 
