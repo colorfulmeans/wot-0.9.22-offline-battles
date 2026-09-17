@@ -1175,6 +1175,38 @@ def _destructible_rotation_interval_bbox(bbox, half_angle):
     )
 
 
+def _destructible_posed_bbox(bbox, pitch=0.0, roll=0.0):
+    """Enclose one height-posed body in its zero-yaw collision frame.
+
+    #1513's horizontal lanes retain the complete yaw-only X/Z footprint and
+    apply pitch/roll only to their height.  Pose that native collision shear
+    once before the analytical yaw interval, so a rotating sweep keeps the
+    raised nose/side without shrinking its horizontal coverage or applying
+    pitch and roll twice in the catalog resolver.
+    """
+    minimum, maximum = bbox[:2]
+    cos_pitch = math.cos(float(pitch))
+    sin_pitch = math.sin(float(pitch))
+    cos_roll = math.cos(float(roll))
+    sin_roll = math.sin(float(roll))
+    right_y = cos_pitch * sin_roll
+    up_y = cos_pitch * cos_roll
+    forward_y = -sin_pitch
+    points = []
+    for x in (float(minimum[0]), float(maximum[0])):
+        for y in (float(minimum[1]), float(maximum[1])):
+            for z in (float(minimum[2]), float(maximum[2])):
+                points.append((
+                    x,
+                    right_y * x + up_y * y + forward_y * z,
+                    z,
+                ))
+    return (
+        tuple(min(point[axis] for point in points) for axis in range(3)),
+        tuple(max(point[axis] for point in points) for axis in range(3)),
+    )
+
+
 def _destructible_sweep_descriptor(descriptor, bbox):
     """Retain kinetic inputs while replacing only the sensor's hull bbox."""
     physics = (descriptor.get('physics') if isinstance(descriptor, dict) else
@@ -1182,6 +1214,29 @@ def _destructible_sweep_descriptor(descriptor, bbox):
     return {
         'physics': physics,
         'hull': {'hitTester': _DestructibleSweepHitTester(bbox)},
+    }
+
+
+def _destructible_world_sweep_descriptor(descriptor, bbox):
+    """Expose one complete body envelope to the native world-lane probe.
+
+    ``world_collision`` normally unions the mounted hull and chassis itself.
+    A rotation slice has already done that work and analytically enlarged the
+    result for every yaw in its interval, so present the same box as both
+    components at a zero mount offset.  Native collision filtering still owns
+    the ray: accepted 73--85 skins are skipped, while damaged-model 87--100
+    BSPs and unrelated backing walls remain solid.
+    """
+    physics = (descriptor.get('physics') if isinstance(descriptor, dict) else
+               getattr(descriptor, 'physics', None))
+    hit_tester = _DestructibleSweepHitTester(bbox)
+    return {
+        'physics': physics,
+        'hull': {'hitTester': hit_tester},
+        'chassis': {
+            'hitTester': hit_tester,
+            'hullPosition': (0.0, 0.0, 0.0),
+        },
     }
 
 
@@ -3515,6 +3570,7 @@ class BattleRuntime(object):
                 arena_bounds=self._arena_bounds,
                 cover_probe=self._sample_bot_cover,
                 motion_resolver=self._resolve_bot_motion,
+                rotation_resolver=self._resolve_bot_rotation,
                 motion_report=self._report_bot_destructible_contact,
                 turret_motion_probe=self._turret_motion_is_clear,
                 turret_hulls_provider=self._turret_navigation_hulls,
@@ -7541,13 +7597,18 @@ class BattleRuntime(object):
         ``g_currentVehicle`` stops answering once the battle Avatar exists.
         #1513 ``gui_items.Vehicle`` carries ``Shell`` items with ``intCD`` and
         ``count``, and a ``VehicleEquipment`` whose regular consumables read
-        back an empty slot as the caller's default.
+        back an empty slot as the caller's default.  The fourth-slot battle
+        booster is a separate collection; freeze it here too, while the
+        garage Account still exists.
         """
         if self._garage_loadout is not None:
             return self._garage_loadout
         item = self._garage_item()
+        vehicle_equipment = getattr(item, 'equipment', None)
         consumables = getattr(
-            getattr(item, 'equipment', None), 'regularConsumables', None)
+            vehicle_equipment, 'regularConsumables', None)
+        booster_slots = getattr(
+            vehicle_equipment, 'battleBoosterConsumables', None)
         shells = None if item is None else {}
         if shells is not None:
             for shell in (getattr(item, 'shells', None) or ()):
@@ -7568,6 +7629,8 @@ class BattleRuntime(object):
             'equipment_ids': equipment_ids,
             'equipments': (() if consumables is None else
                            tuple(consumables.getInstalledItems())),
+            'battle_boosters': (() if booster_slots is None else
+                                tuple(booster_slots.getInstalledItems())),
             'crew': tuple(getattr(item, 'crew', None) or ()),
             'camouflage_id': self._garage_camouflage_id(item),
             'outfit': self._garage_outfit(item),
@@ -7701,7 +7764,10 @@ class BattleRuntime(object):
                                  'shotDispersionFactors', (0.0, 0.0)) or (
                                      0.0, 0.0)
         snapshot_crew_increase = 0.0
-        for equipment in snapshot['equipments']:
+        factor_equipments = (
+            tuple(snapshot['equipments']) +
+            tuple(snapshot.get('battle_boosters', ())))
+        for equipment in factor_equipments:
             increase = _field(equipment, 'crewLevelIncrease', None)
             if increase is None:
                 increase = _field(
@@ -7815,11 +7881,18 @@ class BattleRuntime(object):
     def _local_loadout(self, descriptor):
         """Build the passive modifier bundle for the player's own vehicle.
 
-        Optional devices come from the battle descriptor, which #1513 builds
-        from the account's mounted compact descriptor.  Consumables and crew
-        skills come from the captured garage snapshot.
+        The garage client already donated this final bundle and the server
+        accepted it before the round started.  Prefer that immutable row so
+        the visible gun clock consumes exactly the same directive-adjusted
+        value as the hidden authority worker.  The captured garage snapshot
+        remains a startup/test fallback and supplies native factors used by
+        local physics and diagnostics.
         """
         if self._local_loadout_cache is not None:
+            return self._local_loadout_cache
+        if self._local_effective_params is not None:
+            self._local_loadout_cache = dict(
+                self._local_effective_params['loadout'])
             return self._local_loadout_cache
         snapshot = self._garage_loadout_snapshot()
         crew = snapshot['crew']
@@ -16043,10 +16116,16 @@ class BattleRuntime(object):
                     float(contact.get('end_x')), float(contact.get('end_y')),
                     float(contact.get('end_z')))
                 end_yaw = float(contact.get('end_yaw'))
+                pitch = float(contact.get('pitch', 0.0))
+                roll = float(contact.get('roll', 0.0))
             except (TypeError, ValueError, OverflowError):
                 continue
             if (token is None or player_id <= 0 or seq <= 0 or
-                    not 0.0 < dt <= 0.1):
+                    not 0.0 < dt <= 0.1 or
+                    math.isnan(pitch) or math.isinf(pitch) or
+                    math.isnan(roll) or math.isinf(roll) or
+                    abs(pitch) > GROUND_RAW_TILT_RADIANS or
+                    abs(roll) > GROUND_RAW_TILT_RADIANS):
                 continue
             requested = set(token)
             tree_classifier = getattr(
@@ -16139,14 +16218,16 @@ class BattleRuntime(object):
                     proposal = self._destructible_pose_sweep(
                         position, yaw, end_position, end_yaw, speed,
                         descriptor, now, dt,
-                        rotation_speed_cap=rotation_speed_cap)
+                        rotation_speed_cap=rotation_speed_cap,
+                        pitch=pitch, roll=roll)
                 else:
                     proposal = (
                         self._destructibles._catalog_motion_proposal(
                             self._avatar.spaceID, self._vector(position),
                             yaw, speed, descriptor, now, dt=dt,
                             kinetic_speed=kinetic_speed,
-                            motion_yaw=catalog_motion_yaw))
+                            motion_yaw=catalog_motion_yaw,
+                            pitch=pitch, roll=roll))
                 proposed_token = self._destructible_contact_token(
                     proposal.get('token')) \
                     if isinstance(proposal, dict) else None
@@ -16180,14 +16261,16 @@ class BattleRuntime(object):
                     committed = self._destructible_pose_sweep(
                         position, yaw, end_position, end_yaw, speed,
                         descriptor, now, dt, commit_enabled=True,
-                        rotation_speed_cap=rotation_speed_cap)
+                        rotation_speed_cap=rotation_speed_cap,
+                        pitch=pitch, roll=roll)
                 else:
                     committed = self._destructibles._catalog_motion_blocked(
                         self._avatar.spaceID, self._vector(position), yaw,
                         speed, descriptor, now, dt=dt,
                         kinetic_speed=kinetic_speed, return_detail=True,
                         kinetic_commit=True, commit_enabled=True,
-                        motion_yaw=catalog_motion_yaw)
+                        motion_yaw=catalog_motion_yaw,
+                        pitch=pitch, roll=roll)
                 committed_token = (
                     self._destructible_contact_token(
                         committed.get('token'))
@@ -18306,7 +18389,7 @@ class BattleRuntime(object):
     def _destructible_pose_sweep(
             self, start_position, start_yaw, end_position, end_yaw,
             speed, descriptor, now, dt, commit_enabled=False,
-            rotation_speed_cap=None):
+            rotation_speed_cap=None, pitch=0.0, roll=0.0):
         """Resolve the complete translating and rotating catalog hull sweep.
 
         Each slice is a fixed-orientation zonotope understood by the pinned
@@ -18338,6 +18421,7 @@ class BattleRuntime(object):
             # Narrow test/extension adapters may expose a dynamic attribute in
             # place of the pinned sensor function.  It is not hull evidence.
             return clear
+        posed_bbox = _destructible_posed_bbox(bbox, pitch, roll)
         resolver_name = ('_catalog_motion_blocked' if commit_enabled else
                          '_catalog_motion_proposal')
         resolver = getattr(self._destructibles, resolver_name, None)
@@ -18363,8 +18447,8 @@ class BattleRuntime(object):
         corner_radius = max(math.sqrt(
             float(local_x) * float(local_x) +
             float(local_z) * float(local_z))
-            for local_x in (bbox[0][0], bbox[1][0])
-            for local_z in (bbox[0][2], bbox[1][2]))
+            for local_x in (posed_bbox[0][0], posed_bbox[1][0])
+            for local_z in (posed_bbox[0][2], posed_bbox[1][2]))
         if rotation_speed_cap is None:
             rotation_kinetic_speed = None
         else:
@@ -18408,9 +18492,11 @@ class BattleRuntime(object):
             slice_end = tuple(
                 start[axis] + (end[axis] - start[axis]) * upper
                 for axis in range(3))
+            slice_start_yaw = float(start_yaw) + yaw_delta * lower
+            slice_end_yaw = float(start_yaw) + yaw_delta * upper
             slice_yaw = float(start_yaw) + yaw_delta * middle
             interval_bbox = _destructible_rotation_interval_bbox(
-                bbox, abs(yaw_delta) * 0.5 / float(steps))
+                posed_bbox, abs(yaw_delta) * 0.5 / float(steps))
             sweep_descriptor = _destructible_sweep_descriptor(
                 descriptor, interval_bbox)
             move_x = slice_end[0] - slice_start[0]
@@ -18424,6 +18510,9 @@ class BattleRuntime(object):
             # preserves that path; the sensor's normal contact skin remains.
             slice_dt = (move_distance / impact_magnitude
                         if move_distance > 1.0e-8 else 0.0)
+            replacement_motion = (
+                slice_start, slice_start_yaw,
+                slice_end, slice_end_yaw, posed_bbox)
             if commit_enabled:
                 detail = resolver(
                     self._avatar.spaceID, self._vector(slice_start),
@@ -18431,13 +18520,17 @@ class BattleRuntime(object):
                     dt=slice_dt, kinetic_speed=rotation_kinetic_speed,
                     return_detail=True,
                     kinetic_commit=True, commit_enabled=True,
-                    motion_yaw=motion_yaw)
+                    motion_yaw=motion_yaw,
+                    travel_reach=move_distance,
+                    replacement_motion=replacement_motion)
             else:
                 detail = resolver(
                     self._avatar.spaceID, self._vector(slice_start),
                     slice_yaw, impact_speed, sweep_descriptor, now,
                     dt=slice_dt, kinetic_speed=rotation_kinetic_speed,
-                    motion_yaw=motion_yaw)
+                    motion_yaw=motion_yaw,
+                    travel_reach=move_distance,
+                    replacement_motion=replacement_motion)
             if isinstance(detail, bool):
                 detail = {'status': 'hard' if detail else 'clear'}
             elif isinstance(detail, str):
@@ -18571,7 +18664,8 @@ class BattleRuntime(object):
         catalog_detail = self._destructible_pose_sweep(
             start_position, start_yaw, end_position, end_yaw, speed,
             entity.typeDescriptor, now, dt,
-            rotation_speed_cap=rotation_speed_cap)
+            rotation_speed_cap=rotation_speed_cap,
+            pitch=self._local_pitch, roll=self._local_roll)
         tree_detail = self._tree_motion_proposal(
             start_position, start_yaw, end_position, end_yaw,
             speed, entity.typeDescriptor, now, dt)
@@ -18602,6 +18696,11 @@ class BattleRuntime(object):
             if tree_contact is not None:
                 self._send_pending_local_destructible_contacts_at_pose(
                     start_position, start_yaw)
+            if (status in ('clear', 'crushed', 'approach') and
+                    not self._native_world_rotation_is_clear(
+                        start_position, start_yaw, end_yaw,
+                        entity.typeDescriptor)):
+                return False
             return status in ('clear', 'crushed', 'approach')
         token = self._destructible_contact_token(detail.get('token'))
         if token is None:
@@ -18627,7 +18726,103 @@ class BattleRuntime(object):
         # bound to the translated rotation start.
         self._send_pending_local_destructible_contacts_at_pose(
             start_position, start_yaw)
+        committed_catalog = self._destructible_contact_token(
+            detail.get('_catalog_token') or detail.get('token'))
+        catalog_kinds = set(value for value in str(
+            detail.get('kinds', '-')).split(',') if value and value != '-')
+        if (status in ('clear', 'crushed', 'approach') and
+                not self._native_world_rotation_is_clear(
+                    start_position, start_yaw, end_yaw,
+                    entity.typeDescriptor)):
+            return False
+        if (status == 'crushed' and 'structure' in catalog_kinds and
+                committed_catalog is not None and
+                any(row[2] is not None for row in committed_catalog)):
+            # The native module replacement is not atomic with its logical
+            # destroy receipt.  Hold this pre-contact pose for the first swap
+            # frame; the sensor keeps subsequent frames outside for the
+            # complete bounded hiding interval.
+            self._local_motion_soft_block = True
+            self._local_motion_status = 'pending'
+            return False
         return status in ('clear', 'crushed', 'approach')
+
+    def _native_world_rotation_is_clear(
+            self, position, start_yaw, end_yaw, descriptor,
+            pitch=None, roll=None, record_local=True):
+        """Recast every rotating body slice against the live native BSP.
+
+        The catalog owns each destructible's original shape.  Once a structure
+        module or a retained-collision fragile is destroyed, however, #1513
+        may replace it with a different compiled BSP which can extend outside
+        the old catalog OBB.  Therefore even a catalog ``clear`` must ask the
+        native world before accepting an in-place turn, or a corner can rotate
+        into that replacement and become trapped on the following frame.
+
+        Each midpoint descriptor analytically encloses the complete yaw
+        interval.  Probing it in both longitudinal directions covers the
+        occupied front and rear halves.  ``commit_enabled=False`` makes this a
+        read-only recast through the ordinary broken-skin filter, preserving
+        both backing walls and damaged-model materials.
+        """
+        active_reader = getattr(
+            self._destructibles, 'native_replacement_bsp_active', None)
+        if callable(active_reader) and not active_reader():
+            # Before the first accepted retained replacement there is no
+            # damaged BSP to find.  The ordinary catalog/baked guards own live
+            # objects without paying for two native sweeps per slice.
+            return True
+        if pitch is None:
+            pitch = self._local_pitch
+        if roll is None:
+            roll = self._local_roll
+        bbox_reader = getattr(
+            self._destructibles, '_vehicle_body_bbox', None)
+        if not callable(bbox_reader):
+            bbox_reader = getattr(
+                self._destructibles, '_vehicle_hull_bbox', None)
+        if not callable(bbox_reader):
+            # Production always exposes the typed body reader.  Keep narrow
+            # test/extension adapters on their established catalog-only seam.
+            return True
+        bbox = bbox_reader(descriptor)
+        if (not isinstance(bbox, (list, tuple)) or len(bbox) < 2):
+            return True
+        yaw_delta = _angle_delta(float(start_yaw), float(end_yaw))
+        if abs(yaw_delta) <= 1.0e-8:
+            return True
+        steps = int(math.ceil(
+            abs(yaw_delta) / DESTRUCTIBLE_POSE_MAX_ANGLE_STEP))
+        if not 1 <= steps <= DESTRUCTIBLE_POSE_MAX_SWEEP_STEPS:
+            raise RuntimeError(
+                'native world rotation sweep exceeds its bound')
+        for index in range(steps):
+            lower = float(index) / float(steps)
+            upper = float(index + 1) / float(steps)
+            middle = (lower + upper) * 0.5
+            slice_yaw = float(start_yaw) + yaw_delta * middle
+            interval_bbox = _destructible_rotation_interval_bbox(
+                bbox, abs(yaw_delta) * 0.5 / float(steps))
+            sweep_descriptor = _destructible_world_sweep_descriptor(
+                descriptor, interval_bbox)
+            for probe_speed in (1.0e-6, -1.0e-6):
+                trace = {}
+                world_status = world_collision.check_horizontal_collision(
+                    self._runtime.bigworld, self._runtime.math,
+                    self._avatar.spaceID, self._vector(position),
+                    slice_yaw, probe_speed, sweep_descriptor, False, 0.0,
+                    True, False, None, commit_enabled=False,
+                    pitch=pitch, roll=roll,
+                    trace=trace, exact_footprint=True)
+                if isinstance(world_status, bool):
+                    world_status = 'hard' if world_status else 'clear'
+                if world_status != 'clear':
+                    if record_local:
+                        self._local_world_collision_trace = trace
+                        self._local_motion_kinds = 'world'
+                        self._local_motion_status = 'hard'
+                    return False
+        return True
 
     def _motion_is_clear(self, entity, position, yaw, speed, dt,
                          allow_crush_drive=False, hull_yaw=None):
@@ -18648,9 +18843,12 @@ class BattleRuntime(object):
         world_hull_yaw = yaw if hull_yaw is None else hull_yaw
         world_motion_yaw = (None if hull_yaw is None else
                             yaw if speed >= 0.0 else yaw + math.pi)
-        destructible_motion = ({}
-                               if world_motion_yaw is None else
-                               {'motion_yaw': world_motion_yaw})
+        destructible_motion = {
+            'pitch': self._local_pitch,
+            'roll': self._local_roll,
+        }
+        if world_motion_yaw is not None:
+            destructible_motion['motion_yaw'] = world_motion_yaw
         kinetic_speed = None
         if allow_crush_drive:
             params = self._local_physics
@@ -18740,6 +18938,16 @@ class BattleRuntime(object):
                         self._send_pending_local_destructible_contacts()
                     return False
                 self._send_pending_local_destructible_contacts()
+                committed_catalog = self._destructible_contact_token(
+                    proposal.get('_catalog_token') or proposal.get('token'))
+                catalog_kinds = set(value for value in str(
+                    proposal.get('kinds', '-')).split(',')
+                    if value and value != '-')
+                structure_swap_hold = (
+                    proposal.get('status') == 'crushed' and
+                    'structure' in catalog_kinds and
+                    committed_catalog is not None and
+                    any(row[2] is not None for row in committed_catalog))
                 world_status = world_collision.check_horizontal_collision(
                     self._runtime.bigworld, self._runtime.math,
                     self._avatar.spaceID, self._vector(position),
@@ -18753,6 +18961,14 @@ class BattleRuntime(object):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status not in ('clear', 'kinetic'):
                     self._local_motion_status = 'hard'
+                    return False
+                if structure_swap_hold:
+                    # Preserve the last outside pose while #1513 exchanges
+                    # the live module for its destroyed model.  The native
+                    # recast above still gets first say about an unrelated
+                    # backing wall in this same frame.
+                    self._local_motion_soft_block = True
+                    self._local_motion_status = 'pending'
                     return False
                 return proposal.get('status') in (
                     'clear', 'crushed', 'approach')
@@ -18809,6 +19025,10 @@ class BattleRuntime(object):
         self._local_motion_kinds = str(detail.get('kinds', '-'))
         self._local_motion_status = status
         if status == 'hard':
+            if detail.get('swap_pending') is True:
+                self._local_motion_soft_block = True
+                self._local_motion_kinds = 'broken'
+                self._local_motion_status = 'pending'
             return False
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
@@ -18828,6 +19048,70 @@ class BattleRuntime(object):
         if status == 'soft':
             self._local_motion_soft_block = True
         return status in ('clear', 'crushed')
+
+    def _resolve_bot_rotation(
+            self, bot_id, position, start_yaw, end_yaw, descriptor, dt, now,
+            rotation_speed_cap):
+        """Keep a Bot's complete pivot outside live and damaged structures."""
+        bot_state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
+        pitch = _number(bot_state.get(
+            'terrain_pitch', bot_state.get('pitch')))
+        roll = _number(bot_state.get('roll'))
+        detail = self._destructible_pose_sweep(
+            position, start_yaw, position, end_yaw, 0.0,
+            descriptor, now, dt,
+            rotation_speed_cap=rotation_speed_cap,
+            pitch=pitch, roll=roll)
+        status = detail.get('status')
+        if status not in (
+                'clear', 'crushed', 'soft', 'hard', 'approach',
+                'kinetic', 'pending'):
+            raise RuntimeError(
+                'bot rotation resolver returned an invalid status')
+        self._bot_motion_kinds[int(bot_id)] = str(detail.get('kinds', '-'))
+        if bool(detail.get('requires_commit', False)):
+            proposal_token = self._destructible_contact_token(
+                detail.get('token'))
+            if proposal_token is None:
+                raise RuntimeError(
+                    'bot rotation proposal lost its exact token')
+            detail = self._destructible_pose_sweep(
+                position, start_yaw, position, end_yaw, 0.0,
+                descriptor, now, dt, commit_enabled=True,
+                rotation_speed_cap=rotation_speed_cap,
+                pitch=pitch, roll=roll)
+            committed_token = self._destructible_contact_token(
+                detail.get('token'))
+            if (committed_token is None or
+                    not set(proposal_token).issubset(set(committed_token))):
+                raise RuntimeError(
+                    'bot rotation commit lost its proposal token')
+            status = detail.get('status')
+            if status not in (
+                    'clear', 'crushed', 'soft', 'hard', 'approach',
+                    'kinetic', 'pending'):
+                raise RuntimeError(
+                    'bot rotation commit returned an invalid status')
+            self._bot_motion_kinds[int(bot_id)] = str(
+                detail.get('kinds', '-'))
+        if status not in ('clear', 'crushed', 'approach'):
+            return False
+        token = self._destructible_contact_token(detail.get('token'))
+        kinds = set(value for value in str(
+            detail.get('kinds', '-')).split(',') if value and value != '-')
+        if (bool(detail.get('accepted_now', False)) and
+                'structure' in kinds and token is not None and
+                any(row[2] is not None for row in token)):
+            # The accepted native module starts an asynchronous model swap.
+            # Commit its exact event, but keep this Bot outside for the first
+            # frame; later frames remain blocked by the catalog deadline.
+            return False
+        clear = self._native_world_rotation_is_clear(
+            position, start_yaw, end_yaw, descriptor,
+            pitch=pitch, roll=roll, record_local=False)
+        if not clear:
+            self._bot_motion_kinds[int(bot_id)] = 'world'
+        return clear
 
     def _resolve_bot_motion(self, bot_id, position, yaw, speed,
                             descriptor, dt, now, commit_enabled=True,
@@ -18867,9 +19151,15 @@ class BattleRuntime(object):
                     bot_state, contact_end, yaw), descriptor):
             self._bot_motion_kinds[int(bot_id)] = 'detached_turret'
             return 'hard'
-        destructible_motion = (
-            {} if motion_yaw is None else
-            {'motion_yaw': float(motion_yaw)})
+        pose_pitch = _number(bot_state.get(
+            'terrain_pitch', bot_state.get('pitch')))
+        pose_roll = _number(bot_state.get('roll'))
+        destructible_motion = {
+            'pitch': pose_pitch,
+            'roll': pose_roll,
+        }
+        if motion_yaw is not None:
+            destructible_motion['motion_yaw'] = float(motion_yaw)
         if (self._destructibles is not None and not airborne and
                 movement_dir * float(speed) > 0.0 and rotation_dir == 0 and
                 abs(turn_speed) <= 0.01 and callable(corridor_reusable) and
@@ -18904,9 +19194,7 @@ class BattleRuntime(object):
             self._avatar.spaceID, pos, yaw, speed, descriptor, airborne, dt,
             True, allow_crush_drive, kinetic_speed,
             commit_enabled=commit_enabled,
-            pitch=_number(bot_state.get(
-                'terrain_pitch', bot_state.get('pitch'))),
-            roll=_number(bot_state.get('roll')),
+            pitch=pose_pitch, roll=pose_roll,
             motion_yaw=motion_yaw, trace=contact_trace)
         if isinstance(world_status, bool):
             world_status = 'hard' if world_status else 'clear'
@@ -18944,6 +19232,9 @@ class BattleRuntime(object):
                 'bot motion resolver returned an invalid status')
         self._bot_motion_kinds[int(bot_id)] = str(detail.get('kinds', '-'))
         if status == 'hard':
+            if detail.get('swap_pending') is True:
+                self._bot_motion_kinds[int(bot_id)] = 'broken'
+                return 'soft'
             return 'hard'
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
@@ -24449,8 +24740,11 @@ class BattleRuntime(object):
             # leave the trigger-only Removed RPM Limiter permanently on.
             # Until its activation and engine-damage lifecycle is modelled,
             # omit that one item rather than granting a silent 10% power buff.
+            factor_equipments = (
+                tuple(snapshot['equipments']) +
+                tuple(snapshot.get('battle_boosters', ())))
             equipments = tuple(
-                equipment for equipment in snapshot['equipments']
+                equipment for equipment in factor_equipments
                 if not any(
                     'removedrpmlimiter' in name for name in
                     loadout_law.equipment_names((equipment,))))

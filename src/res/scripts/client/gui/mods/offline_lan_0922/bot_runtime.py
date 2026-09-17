@@ -1991,7 +1991,8 @@ class BotRuntime(object):
                  bot_equipment_resolver=None,
                  destructible_body_scan=None, control_seconds=None,
                  incoming_lane_probe=None, combat_diagnostics=None,
-                 turret_motion_probe=None, turret_hulls_provider=None):
+                 turret_motion_probe=None, turret_hulls_provider=None,
+                 rotation_resolver=None):
         self.local_player_id = local_player_id
         self._combat_diagnostics = combat_diagnostics
         self.descriptor_resolver = descriptor_resolver or (lambda unused: {})
@@ -2073,6 +2074,8 @@ class BotRuntime(object):
         self.native_motion = bool(native_motion)
         self.motion_resolver = motion_resolver
         self.motion_report = motion_report
+        self.rotation_resolver = (
+            rotation_resolver if callable(rotation_resolver) else None)
         self._turret_motion_probe = turret_motion_probe
         self._turret_hulls_provider = turret_hulls_provider
         self._turret_pending_landing_impacts = None
@@ -12199,17 +12202,42 @@ class BotRuntime(object):
                         # Preserve the motor command. The contact solver must
                         # spend this track torque even when actual yaw is held.
                         state['_rotation_contact_blocked'] = True
-                if (not self._baked_pose_progress_clear(
+                yaw_changed = abs(_angle_delta(
+                    candidate_hull_yaw, old_hull_yaw)) > 1.0e-8
+                rotation_blocked = (
+                    not self._baked_pose_progress_clear(
                         state, position, old_hull_yaw,
                         position, candidate_hull_yaw) or
-                        (abs(_angle_delta(candidate_hull_yaw,
-                                          old_hull_yaw)) > 1.0e-8 and
-                         not self._turret_pose_is_clear(
-                             state, position, old_hull_yaw,
-                             position, candidate_hull_yaw))):
+                    (yaw_changed and not self._turret_pose_is_clear(
+                        state, position, old_hull_yaw,
+                        position, candidate_hull_yaw)))
+                if (not rotation_blocked and yaw_changed and
+                        not state.get('airborne', False) and
+                        self.rotation_resolver is not None):
+                    if not self._probe_timing_enabled():
+                        rotation_clear = timed_call(
+                            self._combat_diagnostics, 'bot.physics',
+                            self.rotation_resolver,
+                            state['id'], position, old_hull_yaw,
+                            candidate_hull_yaw, descriptor, step, now,
+                            params['rotSpd'])
+                    else:
+                        probe_started = self._probe_started()
+                        try:
+                            rotation_clear = timed_call(
+                                self._combat_diagnostics, 'bot.physics',
+                                self.rotation_resolver,
+                                state['id'], position, old_hull_yaw,
+                                candidate_hull_yaw, descriptor, step, now,
+                                params['rotSpd'])
+                        finally:
+                            self._probe_finished(4, probe_started)
+                    rotation_blocked = not bool(rotation_clear)
+                if rotation_blocked:
                     # Turning is a pose change even without translation. Keep
                     # the prior legal OBB until the hull first moves far enough
-                    # inward to rotate without crossing a red line or turret.
+                    # inward to rotate without crossing a red line, turret or
+                    # a damaged structure replacement BSP.
                     turn_speed = 0.0
                     candidate_hull_yaw = old_hull_yaw
                     state['rotation_dir'] = 0

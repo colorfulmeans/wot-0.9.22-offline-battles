@@ -970,6 +970,63 @@ class WorldCollisionTests(unittest.TestCase):
             for actual, expected in zip(lane_positions, (-1.6, 0.0, 1.6)):
                 self.assertAlmostEqual(expected, actual)
 
+    def test_exact_footprint_rotation_probe_has_no_translation_lookahead(self):
+        descriptor = _Strict1513Component(
+            hull=_Strict1513Component(
+                hitTester=_Strict1513Component(bbox=(
+                    (-1.7, -1.0, -3.5),
+                    (1.7, 1.0, 3.2), None))))
+
+        def run(velocity, exact_footprint, wall_z=None):
+            horizontal = []
+
+            def collide(unused_space, start, end, unused_mask):
+                if _vertical_ray(start, end):
+                    return None
+                horizontal.append((start, end))
+                if wall_z is None:
+                    return None
+                low = min(start.z, end.z)
+                high = max(start.z, end.z)
+                if low <= wall_z <= high:
+                    return (_Vector(start.x, start.y, wall_z),
+                            _Vector(0.0, 0.0, -1.0), 0)
+                return None
+
+            bigworld = types.SimpleNamespace(
+                wg_collideSegment=collide,
+                wg_getMatInfoNearPoint=_miss_mat_info_1513)
+            with mock.patch.object(
+                    world_collision, '_destroy_and_recast',
+                    return_value=False):
+                blocked = world_collision.check_horizontal_collision(
+                    bigworld, types.SimpleNamespace(Vector3=_Vector),
+                    1, _Vector(), 0.0, velocity, descriptor, False, 0.0,
+                    exact_footprint=exact_footprint)
+            lower = [(start, end) for start, end in horizontal
+                     if abs(start.y - 0.6) < 0.001]
+            return blocked, lower
+
+        default_forward = run(1.0e-6, False)[1]
+        default_reverse = run(-1.0e-6, False)[1]
+        exact_forward = run(1.0e-6, True)[1]
+        exact_reverse = run(-1.0e-6, True)[1]
+        self.assertAlmostEqual(3.6, max(end.z for unused, end in
+                                       default_forward))
+        self.assertAlmostEqual(-3.9, min(end.z for unused, end in
+                                        default_reverse))
+        self.assertAlmostEqual(3.2, max(end.z for unused, end in
+                                       exact_forward))
+        self.assertAlmostEqual(-3.5, min(end.z for unused, end in
+                                        exact_reverse))
+
+        # A wall in the ordinary 0.4 m translation look-ahead must not stop a
+        # pivot which stays inside the exact continuous-yaw envelope.
+        self.assertTrue(run(1.0e-6, False, 3.4)[0])
+        self.assertFalse(run(1.0e-6, True, 3.4)[0])
+        # A wall actually inside that envelope remains a hard contact.
+        self.assertTrue(run(1.0e-6, True, 3.1)[0])
+
     def test_slow_frame_sweep_reaches_wall_beyond_old_lookahead_cap(self):
         wall_z = [5.0]
         horizontal_ends = []

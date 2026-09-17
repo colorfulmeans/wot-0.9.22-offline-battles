@@ -783,8 +783,13 @@ Damage does not imply removal of collision. The compiled BSMO destroyed-model
 reference identifies modules with a solid replacement BSP; map catalogs retain
 that per-box fact. Such contacts cannot skip the original whole-item OBB, and
 destroyed-model materials 87–100 remain eligible for native motion, support and
-shell queries even after an item-wide destruction receipt. After replacement,
-the native BSP, rather than the original bounding box, owns collision.
+shell queries even after an item-wide destruction receipt. The native BSP still
+owns the replacement's exact shape, but #1513 exposes no volume-overlap query for
+it. Copied vehicle motion therefore keeps the source module box as a conservative
+no-entry envelope only for catalog boxes proved to retain collision, supplements
+that envelope with native rays for protrusions, and permits a historical overlap
+only through bounded outward-progress intervals. Collision-free destroyed
+modules do not retain the source box and therefore do not become invisible walls.
 
 For physical fragile/module crushing, the exact stock manager starts effects
 before scheduling its collision replacement after 0.2 seconds. The adapter

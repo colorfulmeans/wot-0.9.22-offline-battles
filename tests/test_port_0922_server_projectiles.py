@@ -771,6 +771,9 @@ class ServerProjectileLedgerTests(unittest.TestCase):
                         _player_destructible_contact(x=True)]),
                     ('destructible_contacts', [
                         _player_destructible_contact(x=2001.0)]),
+                    ('destructible_contacts', [
+                        _player_destructible_contact(
+                            pitch=0.14, roll=-0.08)]),
                 )
                 for field, value in malformed:
                     with self.subTest(condition=condition, field=field):
@@ -813,19 +816,25 @@ class ServerProjectileLedgerTests(unittest.TestCase):
             relayed.append(dict(message)) or True)
         contact = _player_destructible_contact(
             speed=0.0, end_z=0.0, end_yaw=0.2)
+        self.assertNotIn('pitch', contact)
+        self.assertNotIn('roll', contact)
 
         self.assertTrue(_update_player_input(
             state, 1, forward=0.0, turn=1.0, speed=0.0,
+            pitch=0.146789, roll=-0.083216,
             destructible_contacts=[contact]))
 
         self.assertEqual([1], list(player.destructible_contacts))
         admitted = player.destructible_contacts[1]
-        self.assertEqual((0.0, 0.2), (
-            admitted['speed'], admitted['end_yaw']))
+        self.assertEqual((0.0, 0.2, 0.14679, -0.08322), (
+            admitted['speed'], admitted['end_yaw'],
+            admitted['pitch'], admitted['roll']))
         self.assertEqual(0.0, admitted['forward'])
         self.assertEqual('player_destructible_contact', relayed[0]['type'])
-        self.assertEqual(0.2, relayed[0]['player']
-                         ['destructible_contacts'][0]['end_yaw'])
+        relayed_contact = relayed[0]['player']['destructible_contacts'][0]
+        self.assertEqual((0.2, 0.14679, -0.08322), (
+            relayed_contact['end_yaw'], relayed_contact['pitch'],
+            relayed_contact['roll']))
 
     def test_driving_destructible_contact_binds_to_preceding_render_pose(self):
         state = _state(players=1)

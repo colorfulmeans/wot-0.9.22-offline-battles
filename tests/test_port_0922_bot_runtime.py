@@ -13747,6 +13747,61 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.update(0.04, 1.04)
         self.assertGreater(state['yaw'], 0.0)
 
+    def test_damaged_bsp_blocks_stationary_bot_pivot_before_yaw_commit(self):
+        command = self._stationary_command()
+        command.update(turn=1.0, target_yaw=1.0)
+        rotation = mock.Mock(return_value=False)
+        motion = mock.Mock(return_value='clear')
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused: _FixedAdapter(command),
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph(),
+            motion_resolver=motion, rotation_resolver=rotation)
+        runtime.battle_start(self.start)
+        state = runtime.states[11]
+        state.update(x=2.0, y=3.0, z=4.0, yaw=0.0, speed=0.0,
+                     pitch=0.14, roll=-0.08, grounded_once=True)
+
+        runtime.update(0.04, 1.0)
+
+        self.assertEqual(0.0, state['yaw'])
+        self.assertEqual(0.0, runtime._turn_speeds[11])
+        self.assertEqual(0, state['rotation_dir'])
+        rotation.assert_called_once()
+        (bot_id, position, old_yaw, candidate_yaw, descriptor, dt, now,
+         rotation_speed_cap) = (
+            rotation.call_args.args)
+        self.assertEqual(11, bot_id)
+        self.assertEqual((2.0, 3.0, 4.0), position)
+        self.assertEqual(0.0, old_yaw)
+        self.assertGreater(candidate_yaw, old_yaw)
+        self.assertIs(runtime._descriptors[11], descriptor)
+        self.assertEqual(0.04, dt)
+        self.assertEqual(1.0, now)
+        self.assertGreater(rotation_speed_cap, 0.0)
+        motion.assert_not_called()
+
+        clear_rotation = mock.Mock(return_value=True)
+        clear_runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused: _FixedAdapter(command),
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph(),
+            motion_resolver=motion, rotation_resolver=clear_rotation)
+        clear_runtime.battle_start(self.start)
+        clear_state = clear_runtime.states[11]
+        clear_state.update(
+            x=2.0, y=3.0, z=4.0, yaw=0.0, speed=0.0,
+            pitch=0.14, roll=-0.08, grounded_once=True)
+        clear_runtime.update(0.04, 1.0)
+        self.assertGreater(clear_state['yaw'], 0.0)
+        clear_rotation.assert_called_once()
+
     def test_landed_turret_blocks_bot_residual_push_with_real_descriptor(self):
         clear = mock.Mock(return_value=False)
         self.runtime._turret_motion_probe = clear

@@ -501,7 +501,8 @@ def check_horizontal_collision(bigworld, math_module, *args, **kwargs):
 def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		airborne=False, dt=0.04, return_status=False,
 		allow_kinetic=False, kinetic_speed=None, commit_enabled=True,
-		motion_yaw=None, pitch=0.0, roll=0.0, trace=None):
+		motion_yaw=None, pitch=0.0, roll=0.0, trace=None,
+		exact_footprint=False):
 	import math, BigWorld, Math
 	try:
 		hw = 1.5
@@ -524,7 +525,13 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		# the wall and trickled down instead of flying a ballistic arc.
 		# Grounded: just enough to not tunnel at speed. Airborne: only the
 		# distance actually travelled this tick - contact stops, proximity not.
-		if airborne:
+		if exact_footprint:
+			# A continuous-yaw caller already enlarged the descriptor to the
+			# complete occupied interval.  Keep both signed probes inside that
+			# exact envelope; the normal 0.4 m translation look-ahead would make
+			# a tank which stopped short of a wall unable to rotate away from it.
+			_ahead = 0.0
+		elif airborne:
 			_ahead = abs(vel) * dt + 0.2
 		else:
 			# Cover the complete copied-pose translation of this frame.  A fixed

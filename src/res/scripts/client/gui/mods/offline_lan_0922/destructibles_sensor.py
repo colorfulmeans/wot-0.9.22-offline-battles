@@ -21,6 +21,8 @@ _SOLID_CONTACT_NORMAL_DOT_1513 = 0.5
 _TREE_SWEEP_ANGLE_STEP_1513 = 3.141592653589793 / 36.0
 _TREE_SWEEP_TRANSLATION_STEP_1513 = 8.0
 _TREE_SWEEP_MAX_SEGMENTS_1513 = 128
+_REPLACEMENT_PROGRESS_ANGLE_STEP_1513 = 3.141592653589793 / 180.0
+_REPLACEMENT_PROGRESS_TRANSLATION_STEP_1513 = 0.5
 _TREE_CONTACT_TOKEN_LIMIT_1513 = 64
 _CATALOG_POINT_EPSILON = 0.075
 _SHOT_RAY_EPSILON = 1.0e-4
@@ -1501,6 +1503,7 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_chunks', 'g_offh_destr_instances',
 			'g_offh_destr_contact_bins', 'g_offh_destr_pending',
 			'g_offh_destr_speculative',
+			'g_offh_destr_native_replacement_bsp_active',
 			'g_offh_destr_catalog_published',
 			'g_offh_destr_catalog_publish_pending',
 			'g_offh_destr_falling_active', 'g_offh_destr_ground_skips',
@@ -2379,15 +2382,20 @@ def _box_face_axes(half_axes):
 
 
 def _boxes_intersect(left, right):
-	left_center, left_half_axes = left[:2]
-	right_center, right_half_axes = right[:2]
+	left_center = left[0]
+	right_center = right[0]
+	# Keep every generator.  Vehicle sweeps are general zonotopes (posed body,
+	# independent contact guards and translation), not only three-axis OBBs.
+	# Materialising the iterables also lets the Python 2.7 sums below traverse
+	# them once per separating axis without consuming a caller's generator.
+	left_half_axes = tuple(left[1])
+	right_half_axes = tuple(right[1])
 	delta = tuple(right_center[index] - left_center[index]
 		for index in range(3))
-	# A translated OBB is a four-generator zonotope: its three original
-	# half-axes plus half of the translation.  The separating axes for two
-	# zonotopes are the cross products of every generator pair.  Ordinary
-	# three-axis OBBs therefore retain the same 15 SAT axes, while a swept hull
-	# can preserve its real orientation without collapsing into a lossy box.
+	# The separating axes for two 3-D zonotopes are the cross products of every
+	# pair in their combined generator set.  Ordinary three-axis OBBs retain the
+	# same 15 SAT axes, while extra sweep/guard generators remain exact instead
+	# of being collapsed into a lossy box.
 	generators = tuple(left_half_axes) + tuple(right_half_axes)
 	axes = (_vector_cross(generators[left_index], generators[right_index])
 		for left_index in range(len(generators))
@@ -2404,6 +2412,81 @@ def _boxes_intersect(left, right):
 				1.0e-7 * length_squared ** 0.5):
 			return False
 	return True
+
+
+def _boxes_signed_clearance(left, right):
+	"""Return the greatest normalized SAT gap; larger means farther apart.
+
+	A positive value proves separation.  Intersecting zonotopes return a
+	non-positive maximum separating-axis gap.  The caller combines it with
+	fixed-face and centre-plane progress; this scalar alone is not a continuous
+	path proof.
+	"""
+	left_center = left[0]
+	right_center = right[0]
+	left_half_axes = tuple(left[1])
+	right_half_axes = tuple(right[1])
+	delta = tuple(right_center[index] - left_center[index]
+		for index in range(3))
+	generators = left_half_axes + right_half_axes
+	best = None
+	for left_index in range(len(generators)):
+		for right_index in range(left_index + 1, len(generators)):
+			axis = _vector_cross(
+				generators[left_index], generators[right_index])
+			length_squared = _vector_dot(axis, axis)
+			if length_squared <= 1.0e-16:
+				continue
+			left_radius = sum(abs(_vector_dot(axis, half_axis))
+				for half_axis in left_half_axes)
+			right_radius = sum(abs(_vector_dot(axis, half_axis))
+				for half_axis in right_half_axes)
+			clearance = (
+				abs(_vector_dot(delta, axis)) - left_radius - right_radius
+				) / length_squared ** 0.5
+			if best is None or clearance > best:
+				best = clearance
+	if best is None:
+		raise RuntimeError('catalog SAT clearance axes are unavailable')
+	return best
+
+
+def _box_face_clearances(left, right):
+	"""Return signed gaps on the fixed box's three face normals."""
+	left_center = left[0]
+	right_center = right[0]
+	left_half_axes = tuple(left[1])
+	right_half_axes = tuple(right[1])
+	delta = tuple(right_center[index] - left_center[index]
+		for index in range(3))
+	result = []
+	for axis in _box_face_axes(right_half_axes):
+		length_squared = _vector_dot(axis, axis)
+		if length_squared <= 1.0e-16:
+			raise RuntimeError('catalog box face axis is unavailable')
+		length = length_squared ** 0.5
+		left_radius = sum(abs(_vector_dot(axis, half_axis))
+			for half_axis in left_half_axes)
+		right_radius = sum(abs(_vector_dot(axis, half_axis))
+			for half_axis in right_half_axes)
+		result.append((abs(_vector_dot(delta, axis)) -
+			left_radius - right_radius) / length)
+	return tuple(result)
+
+
+def _box_face_center_offsets(left, right):
+	"""Project the moving centre onto the fixed box's oriented axes."""
+	left_center = left[0]
+	right_center = right[0]
+	delta = tuple(left_center[index] - right_center[index]
+		for index in range(3))
+	result = []
+	for axis in _box_face_axes(tuple(right[1])):
+		length_squared = _vector_dot(axis, axis)
+		if length_squared <= 1.0e-16:
+			raise RuntimeError('catalog box face axis is unavailable')
+		result.append(_vector_dot(delta, axis) / length_squared ** 0.5)
+	return tuple(result)
 
 
 def _point_in_world_box(point, world_box):
@@ -3042,11 +3125,35 @@ def _stream_baked_motion_instances_1513(spaceID, vehicle_box):
 	return tuple(unresolved)
 
 
+def _vehicle_pose_axes(yaw, pitch=0.0, roll=0.0):
+	"""Return #1513's collision-lane right/up/forward generators.
+
+	The native horizontal collision lanes keep their full yaw-only X/Z hull
+	footprint and apply pitch/roll only to occupied height.  Mirror that shear
+	here: a full 3-D rotation would shorten the catalog footprint by roughly
+	half a metre at the allowed pitch limit and could let a native hard contact
+	escape catalog revalidation.  Keeping the body level, on the other hand,
+	misses a raised nose/side and lets a tank enter below a live upper module.
+	"""
+	import math
+	cos_yaw = math.cos(float(yaw))
+	sin_yaw = math.sin(float(yaw))
+	cos_pitch = math.cos(float(pitch))
+	sin_pitch = math.sin(float(pitch))
+	cos_roll = math.cos(float(roll))
+	sin_roll = math.sin(float(roll))
+	return (
+		(cos_yaw, sin_roll * cos_pitch, -sin_yaw),
+		(0.0, cos_roll * cos_pitch, 0.0),
+		(sin_yaw, -sin_pitch, cos_yaw))
+
+
 def _vehicle_swept_box(pos, yaw, vel, bbox, travel_reach=None,
-		motion_yaw=None):
+		motion_yaw=None, pitch=0.0, roll=0.0):
 	import math
 	minimum, maximum = bbox[:2]
-	half_width = max(abs(minimum[0]), abs(maximum[0])) + 0.5
+	body_half_width = max(abs(minimum[0]), abs(maximum[0]))
+	horizontal_guard = 0.5
 	back = abs(minimum[2])
 	front = abs(maximum[2])
 	if travel_reach is None:
@@ -3055,30 +3162,45 @@ def _vehicle_swept_box(pos, yaw, vel, bbox, travel_reach=None,
 		reach = 0.8 + min(abs(vel) * 0.25, 1.2)
 	else:
 		reach = max(0.0, float(travel_reach))
+	right, up, forward_axis = _vehicle_pose_axes(yaw, pitch, roll)
+	if (motion_yaw is None and
+			(float(pitch) != 0.0 or float(roll) != 0.0)):
+		# The body is pitched, but its integration step still translates over
+		# the horizontal X/Z plane.  Keep that travel as an independent
+		# generator instead of extending the raised local-forward axis.  The
+		# zero-pose branch below intentionally retains its historical three-axis
+		# representation for exact compatibility with existing callers.
+		motion_yaw = float(yaw) if vel >= 0.0 else float(yaw) + math.pi
 	if motion_yaw is not None:
 		# Ram separation, slope slip and wall deflection translate the chassis
 		# independently of its orientation.  Preserve the real hull OBB and add
 		# half of the translation as a fourth zonotope generator.  This is the
 		# exact swept volume for a fixed-orientation OBB; rotating the hull to the
 		# travel direction would lose the long front/rear corners.
-		cos_y = math.cos(yaw)
-		sin_y = math.sin(yaw)
 		center_forward = (front - back) * 0.5
 		half_forward = (front + back) * 0.5
 		motion_sin = math.sin(float(motion_yaw))
 		motion_cos = math.cos(float(motion_yaw))
 		travel_x = motion_sin * reach
 		travel_z = motion_cos * reach
-		center_y = pos.y + (minimum[1] + maximum[1]) * 0.5
+		center_up = (minimum[1] + maximum[1]) * 0.5
 		half_y = (maximum[1] - minimum[1]) * 0.5
 		center = (
-			pos.x + sin_y * center_forward + travel_x * 0.5,
-			center_y,
-			pos.z + cos_y * center_forward + travel_z * 0.5)
+			pos.x + up[0] * center_up +
+			forward_axis[0] * center_forward + travel_x * 0.5,
+			pos.y + up[1] * center_up +
+			forward_axis[1] * center_forward,
+			pos.z + up[2] * center_up +
+			forward_axis[2] * center_forward + travel_z * 0.5)
 		half_axes = (
-			(cos_y * half_width, 0.0, -sin_y * half_width),
-			(0.0, half_y, 0.0),
-			(sin_y * half_forward, 0.0, cos_y * half_forward),
+			# Preserve the three physical pose generators.  Sharing a single
+			# coefficient between a rolled right axis and its horizontal guard
+			# cuts real opposite-sign body corners out of the zonotope.
+			tuple(value * body_half_width for value in right),
+			tuple(value * half_y for value in up),
+			tuple(value * half_forward for value in forward_axis),
+			(right[0] * horizontal_guard, 0.0,
+				right[2] * horizontal_guard),
 			(travel_x * 0.5, 0.0, travel_z * 0.5))
 		return center, half_axes
 	if vel < 0.0:
@@ -3087,17 +3209,21 @@ def _vehicle_swept_box(pos, yaw, vel, bbox, travel_reach=None,
 	else:
 		minimum_forward = -back
 		maximum_forward = front + reach
-	cos_y = math.cos(yaw)
-	sin_y = math.sin(yaw)
 	center_forward = (minimum_forward + maximum_forward) * 0.5
 	half_forward = (maximum_forward - minimum_forward) * 0.5
-	center_y = pos.y + (minimum[1] + maximum[1]) * 0.5
+	center_up = (minimum[1] + maximum[1]) * 0.5
 	half_y = (maximum[1] - minimum[1]) * 0.5
-	center = (pos.x + sin_y * center_forward, center_y,
-		pos.z + cos_y * center_forward)
-	half_axes = ((cos_y * half_width, 0.0, -sin_y * half_width),
-		(0.0, half_y, 0.0),
-		(sin_y * half_forward, 0.0, cos_y * half_forward))
+	center = (
+		pos.x + up[0] * center_up + forward_axis[0] * center_forward,
+		pos.y + up[1] * center_up + forward_axis[1] * center_forward,
+		pos.z + up[2] * center_up + forward_axis[2] * center_forward)
+	half_axes = (
+		tuple(value * body_half_width for value in right),
+		tuple(value * half_y for value in up),
+		tuple(value * half_forward for value in forward_axis),
+		# Preserve the complete horizontal lane guard without lifting it.
+		(right[0] * horizontal_guard, 0.0,
+			right[2] * horizontal_guard))
 	return center, half_axes
 
 
@@ -3348,7 +3474,7 @@ def _tree_candidates_for_sweeps_1513(
 
 
 def _vehicle_contact_box(pos, yaw, bbox, epsilon=0.075, travel=0.0,
-		motion_yaw=None):
+		motion_yaw=None, pitch=0.0, roll=0.0):
 	"""Return the complete current hull plus only this frame's real travel."""
 	import math
 	minimum, maximum = bbox[:2]
@@ -3359,9 +3485,11 @@ def _vehicle_contact_box(pos, yaw, bbox, epsilon=0.075, travel=0.0,
 	minimum_forward = float(minimum[2]) - margin
 	maximum_forward = float(maximum[2]) + margin
 	center_x = (minimum_x + maximum_x) * 0.5
-	half_width = (maximum_x - minimum_x) * 0.5
+	body_half_width = (
+		float(maximum[0]) - float(minimum[0])) * 0.5
 	center_forward = (minimum_forward + maximum_forward) * 0.5
-	half_forward = (maximum_forward - minimum_forward) * 0.5
+	body_half_forward = (
+		float(maximum[2]) - float(minimum[2])) * 0.5
 	if motion_yaw is None:
 		travel_yaw = float(yaw) if travel >= 0.0 else float(yaw) + math.pi
 	else:
@@ -3369,19 +3497,212 @@ def _vehicle_contact_box(pos, yaw, bbox, epsilon=0.075, travel=0.0,
 	travel_distance = abs(travel)
 	travel_x = math.sin(travel_yaw) * travel_distance
 	travel_z = math.cos(travel_yaw) * travel_distance
-	cos_y = math.cos(yaw)
-	sin_y = math.sin(yaw)
-	center_y = pos.y + (float(minimum[1]) + float(maximum[1])) * 0.5
-	half_y = (float(maximum[1]) - float(minimum[1])) * 0.5 + margin
+	right, up, forward_axis = _vehicle_pose_axes(yaw, pitch, roll)
+	center_up = (float(minimum[1]) + float(maximum[1])) * 0.5
+	body_half_y = (float(maximum[1]) - float(minimum[1])) * 0.5
 	center = (
-		pos.x + cos_y * center_x + sin_y * center_forward + travel_x * 0.5,
-		center_y,
-		pos.z - sin_y * center_x + cos_y * center_forward + travel_z * 0.5)
-	half_axes = ((cos_y * half_width, 0.0, -sin_y * half_width),
-		(0.0, half_y, 0.0),
-		(sin_y * half_forward, 0.0, cos_y * half_forward),
+		pos.x + right[0] * center_x + up[0] * center_up +
+		forward_axis[0] * center_forward + travel_x * 0.5,
+		pos.y + right[1] * center_x + up[1] * center_up +
+		forward_axis[1] * center_forward,
+		pos.z + right[2] * center_x + up[2] * center_up +
+		forward_axis[2] * center_forward + travel_z * 0.5)
+	half_axes = (
+		# The physical pose and each world-space skin direction need
+		# independent coefficients.  Otherwise roll/pitch couples the skin to
+		# one body-corner sign and opens holes at the opposite-sign corners.
+		tuple(value * body_half_width for value in right),
+		tuple(value * body_half_y for value in up),
+		tuple(value * body_half_forward for value in forward_axis),
+		(right[0] * margin, 0.0, right[2] * margin),
+		(forward_axis[0] * margin, 0.0,
+			forward_axis[2] * margin),
+		(0.0, margin, 0.0),
 		(travel_x * 0.5, 0.0, travel_z * 0.5))
 	return center, half_axes
+
+
+def _replacement_motion_geometry_1513(pos, yaw, vel, bbox, dt,
+		motion_yaw=None, pitch=0.0, roll=0.0,
+		replacement_motion=None):
+	"""Build bounded exact-pose intervals for retained replacement escape."""
+	import math
+	import Math
+	if replacement_motion is not None:
+		try:
+			start_raw, start_yaw, end_raw, end_yaw, posed_bbox = (
+				replacement_motion)
+			values = tuple(_finite_tree_motion_value_1513(value) for value in (
+				start_raw[0], start_raw[1], start_raw[2], start_yaw,
+				end_raw[0], end_raw[1], end_raw[2], end_yaw))
+			if any(value is None for value in values):
+				return None
+			(sx, sy, sz, start_yaw,
+				ex, ey, ez, end_yaw) = values
+			start = Math.Vector3(
+				sx, sy, sz)
+			end = Math.Vector3(
+				ex, ey, ez)
+			minimum, maximum = posed_bbox[:2]
+			bounds = tuple(_finite_tree_motion_value_1513(value)
+				for value in tuple(minimum[:3]) + tuple(maximum[:3]))
+			if (any(value is None for value in bounds) or
+					any(bounds[index] > bounds[index + 3]
+						for index in range(3))):
+				return None
+			minimum = bounds[:3]
+			maximum = bounds[3:]
+			margin = _CATALOG_POINT_EPSILON
+			expanded_bbox = (
+				tuple(value - margin for value in minimum),
+				tuple(value + margin for value in maximum), None)
+			posed_bbox = (minimum, maximum)
+		except (IndexError, TypeError, ValueError, OverflowError):
+			return None
+		dx = float(end.x) - float(start.x)
+		dy = float(end.y) - float(start.y)
+		dz = float(end.z) - float(start.z)
+		distance = (dx * dx + dy * dy + dz * dz) ** 0.5
+		yaw_delta = ((end_yaw - start_yaw + math.pi) %
+			(2.0 * math.pi)) - math.pi
+		steps = max(1,
+			int(math.ceil(
+				distance / _REPLACEMENT_PROGRESS_TRANSLATION_STEP_1513)),
+			int(math.ceil(
+				abs(yaw_delta) / _REPLACEMENT_PROGRESS_ANGLE_STEP_1513)))
+		if steps > _TREE_SWEEP_MAX_SEGMENTS_1513:
+			return None
+		intervals = []
+		for index in range(steps):
+			lower = float(index) / float(steps)
+			upper = float(index + 1) / float(steps)
+			interval_start = Math.Vector3(
+				float(start.x) + dx * lower,
+				float(start.y) + dy * lower,
+				float(start.z) + dz * lower)
+			interval_end = Math.Vector3(
+				float(start.x) + dx * upper,
+				float(start.y) + dy * upper,
+				float(start.z) + dz * upper)
+			interval_start_yaw = start_yaw + yaw_delta * lower
+			interval_end_yaw = start_yaw + yaw_delta * upper
+			sweeps = _tree_pose_sweep_boxes_1513(
+				interval_start, interval_start_yaw,
+				interval_end, interval_end_yaw, expanded_bbox)
+			if not sweeps:
+				return None
+			intervals.append((
+				_vehicle_contact_box(
+					interval_start, interval_start_yaw, posed_bbox,
+					epsilon=_CATALOG_POINT_EPSILON),
+				_vehicle_contact_box(
+					interval_end, interval_end_yaw, posed_bbox,
+					epsilon=_CATALOG_POINT_EPSILON),
+				tuple(sweeps)))
+		return tuple(intervals)
+
+	try:
+		duration = max(0.0, float(dt))
+		travel = float(vel) * duration
+		travel_yaw = (float(motion_yaw) if motion_yaw is not None else
+			float(yaw) if travel >= 0.0 else float(yaw) + math.pi)
+		distance = abs(travel)
+		end = Math.Vector3(
+			float(pos.x) + math.sin(travel_yaw) * distance,
+			float(pos.y),
+			float(pos.z) + math.cos(travel_yaw) * distance)
+	except (AttributeError, TypeError, ValueError, OverflowError):
+		return None
+	start_box = _vehicle_contact_box(
+		pos, yaw, bbox, epsilon=_CATALOG_POINT_EPSILON,
+		pitch=pitch, roll=roll)
+	end_box = _vehicle_contact_box(
+		end, yaw, bbox, epsilon=_CATALOG_POINT_EPSILON,
+		pitch=pitch, roll=roll)
+	sweep_box = _vehicle_contact_box(
+		pos, yaw, bbox, epsilon=_CATALOG_POINT_EPSILON,
+		travel=travel, motion_yaw=motion_yaw,
+		pitch=pitch, roll=roll)
+	return ((start_box, end_box, (sweep_box,)),)
+
+
+def _candidate_world_boxes_1513(candidate):
+	instance = globals().get('g_offh_destr_instances', {}).get(candidate[:2])
+	if not isinstance(instance, dict):
+		return ()
+	if candidate[4] != 'structure':
+		return tuple(instance.get('boxes') or ())
+	return tuple(world_box for world_box in instance.get('boxes') or ()
+		if world_box[2] == candidate[2])
+
+
+def _replacement_escape_progress_1513(start_box, end_box, world_box):
+	"""Prove one overlapping interval moves outward without changing sides."""
+	tolerance = 1.0e-7
+	start_clearance = _boxes_signed_clearance(start_box, world_box)
+	end_clearance = _boxes_signed_clearance(end_box, world_box)
+	if end_clearance < start_clearance - tolerance:
+		return False
+	start_offsets = _box_face_center_offsets(start_box, world_box)
+	end_offsets = _box_face_center_offsets(end_box, world_box)
+	# Crossing a retained box's centre plane can turn one large frame into a
+	# tunnel from one side to the other even when the endpoint is farther away.
+	if any(start_value * end_value < -tolerance * tolerance
+			for start_value, end_value in zip(start_offsets, end_offsets)):
+		return False
+	start_center = start_box[0]
+	end_center = end_box[0]
+	world_center = world_box[0]
+	start_delta = tuple(start_center[index] - world_center[index]
+		for index in range(3))
+	movement = tuple(end_center[index] - start_center[index]
+		for index in range(3))
+	start_distance_squared = _vector_dot(start_delta, start_delta)
+	end_delta = tuple(end_center[index] - world_center[index]
+		for index in range(3))
+	end_distance_squared = _vector_dot(end_delta, end_delta)
+	center_outward = (
+		_vector_dot(start_delta, movement) >= -tolerance and
+		end_distance_squared > start_distance_squared + tolerance)
+	# A centred/asymmetric hull can also rotate out without translating its
+	# entity origin. Admit that only when every fixed obstacle-face gap is
+	# non-worsening and at least one improves; rotating farther in fails here.
+	start_faces = _box_face_clearances(start_box, world_box)
+	end_faces = _box_face_clearances(end_box, world_box)
+	face_outward = (
+		all(end_value >= start_value - tolerance
+			for start_value, end_value in zip(start_faces, end_faces)) and
+		any(end_value > start_value + tolerance
+			for start_value, end_value in zip(start_faces, end_faces)))
+	return center_outward or face_outward
+
+
+def _replacement_motion_blocked_1513(motion_geometry, world_boxes):
+	"""Fail closed on entry while permitting bounded outward escape."""
+	if motion_geometry is None or not world_boxes:
+		return True
+	for world_box in world_boxes:
+		escaped_on_previous_interval = False
+		for start_box, end_box, sweep_boxes in motion_geometry:
+			start_overlaps = _boxes_intersect(start_box, world_box)
+			end_overlaps = _boxes_intersect(end_box, world_box)
+			if not any(_boxes_intersect(sweep_box, world_box)
+					for sweep_box in sweep_boxes):
+				escaped_on_previous_interval = (
+					start_overlaps and not end_overlaps)
+				continue
+			# A previously legal pose may not enter or sweep through the retained
+			# replacement.  A clear interval is admitted only as the conservative
+			# sweep tail immediately after the preceding interval crossed outward;
+			# once fully clear, a later corner-cut in the same frame is blocked too.
+			if not start_overlaps and not escaped_on_previous_interval:
+				return True
+			if not _replacement_escape_progress_1513(
+					start_box, end_box, world_box):
+				return True
+			escaped_on_previous_interval = (
+				start_overlaps and not end_overlaps)
+	return False
 
 
 @observed('destructible.intersections')
@@ -3403,6 +3724,50 @@ def _native_hide_delay():
 	except (TypeError, ValueError):
 		delay = _NATIVE_HIDE_MIN_SECONDS
 	return max(_NATIVE_HIDE_MIN_SECONDS, delay)
+
+
+def _fragile_may_retain_native_collision_1513(chunkID, itemIndex):
+	"""Fail safe unless this exact fragile is proved to leave no solid BSP."""
+	instance = globals().get('g_offh_destr_instances', {}).get(
+		(int(chunkID), int(itemIndex)))
+	if not isinstance(instance, dict):
+		return True
+	filename = instance.get('filename')
+	if not filename:
+		return True
+	record = (_destructible_catalog or {}).get('resources', {}).get(
+		_normalized_filename(filename))
+	if not record or record.get('kind') != 'fragile':
+		return True
+	retained = record.get('retained_collision_boxes')
+	if not retained:
+		return False
+	box_index = instance.get('box_index')
+	if box_index is None and len(record.get('boxes') or ()) == 1:
+		box_index = 0
+	if type(box_index) not in _INTEGER_TYPES:
+		return True
+	return box_index in retained
+
+
+def _structure_module_may_retain_native_collision_1513(
+		chunkID, itemIndex, matKind):
+	"""Read the exact compiled destroyed-collider fact, failing safe."""
+	instance = globals().get('g_offh_destr_instances', {}).get(
+		(int(chunkID), int(itemIndex)))
+	if not isinstance(instance, dict) or instance.get('kind') != 'structure':
+		return True
+	filename = instance.get('filename')
+	record = ((_destructible_catalog or {}).get('resources', {}).get(
+		_normalized_filename(filename)) if filename else None)
+	if not record or record.get('kind') != 'structure':
+		return True
+	try:
+		mat_kind = int(matKind)
+	except (TypeError, ValueError, OverflowError):
+		return True
+	return any(record['boxes'][index][6] == mat_kind
+		for index in record.get('retained_collision_boxes') or ())
 
 
 def note_destroyed(kind, chunkID, itemIndex, matKind=None, now=None):
@@ -3438,12 +3803,31 @@ def note_destroyed(kind, chunkID, itemIndex, matKind=None, now=None):
 		if identity not in active:
 			active[identity] = {'last_refresh': None}
 		return True
+	if ((kind == 'module' and
+			_structure_module_may_retain_native_collision_1513(
+				chunkID, itemIndex, matKind)) or
+			(kind == 'fragile' and
+				_fragile_may_retain_native_collision_1513(
+					chunkID, itemIndex))):
+		# A #1513 structure module can replace the complete native model with a
+		# damaged BSP whose footprint is not bounded by the old material OBB;
+		# selected fragile resources (for example railway vehicles) retain a
+		# solid destroyed replacement too.  An unresolved remote fragile is
+		# deliberately fail-safe because its exact catalog box may stream later.
+		# Once enabled, rotation retains the native-world recast until reset.
+		globals()['g_offh_destr_native_replacement_bsp_active'] = True
 	key = (int(chunkID), int(itemIndex),
 		int(matKind) if matKind is not None else None)
 	pending = globals().setdefault('g_offh_destr_pending', {})
 	if key not in pending:
 		pending[key] = float(now) + _native_hide_delay()
 	return True
+
+
+def native_replacement_bsp_active():
+	"""Whether this battle can contain a solid damaged replacement BSP."""
+	return bool(globals().get(
+		'g_offh_destr_native_replacement_bsp_active', False))
 
 
 def begin_local_prediction(token):
@@ -3691,8 +4075,8 @@ def _catalog_retains_collision_1513(candidate):
 	if not record or not record.get('retained_collision_boxes'):
 		return False
 	if record['kind'] == 'structure':
-		return any(record['boxes'][index][6] == candidate[2]
-			for index in record['retained_collision_boxes'])
+		return _structure_module_may_retain_native_collision_1513(
+			candidate[0], candidate[1], candidate[2])
 	instance = globals().get('g_offh_destr_instances', {}).get(candidate[:2], {})
 	index = instance.get('box_index', 0 if len(record['boxes']) == 1 else None)
 	return index in record['retained_collision_boxes']
@@ -4030,7 +4414,7 @@ def take_ground_skip_count():
 
 
 def _catalog_pending_at_hull(pos, yaw, vel, td, now, dt=0.04,
-		motion_yaw=None):
+		motion_yaw=None, pitch=0.0, roll=0.0):
 	"""Return whether a fragile/module hide window still covers the hull.
 
 	This is classification only.  Callers keep the pose blocked while the native
@@ -4043,15 +4427,28 @@ def _catalog_pending_at_hull(pos, yaw, vel, td, now, dt=0.04,
 		return False
 	vehicle_box = _vehicle_swept_box(
 		pos, yaw, vel, bbox, _motion_travel_reach(vel, dt),
-		motion_yaw=motion_yaw)
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
 	pending = globals().get('g_offh_destr_pending', {})
 	ready = getattr(_get_destr_authority(), 'contact_collision_ready', None)
+	saw_pending = False
 	for candidate in _catalog_contact_candidates(vehicle_box):
 		deadline = pending.get((candidate[0], candidate[1], candidate[2]))
-		if (deadline is not None and float(now) < float(deadline) and
-				not (callable(ready) and ready(*candidate[:3]))):
-			return True
-	return False
+		is_pending = (
+			deadline is not None and float(now) < float(deadline) and
+				(candidate[4] == 'structure' or
+				 not (callable(ready) and ready(*candidate[:3]))))
+		if is_pending:
+			# A structure replacement can enter the native collision world one
+			# frame after its Python hide callback completes.  Keep its complete
+			# bounded swap window; fragiles may still release as soon as the
+			# callback proves their collision transition complete.
+			saw_pending = True
+			continue
+		# The native hard result cannot be attributed only to a swapping
+		# module when another catalog body or module occupies the same hull.
+		# Preserve hard braking/replanning for that mixed contact.
+		return False
+	return saw_pending
 
 
 def _unidentified_hull_contact_1513(unresolved, vehicle_box, authority):
@@ -4067,14 +4464,14 @@ def _unidentified_hull_contact_1513(unresolved, vehicle_box, authority):
 
 @observed('destructible.hull_guard')
 def _catalog_hull_contact(pos, yaw, vel, td, dt=0.04,
-		motion_yaw=None):
+		motion_yaw=None, pitch=0.0, roll=0.0):
 	"""Cheap contact-bin guard for the copied player/Bot pose integrators."""
 	bbox = _vehicle_body_bbox(td)
 	if _destructible_catalog is None or bbox is None:
 		return False
 	vehicle_box = _vehicle_swept_box(
 		pos, yaw, vel, bbox, _motion_travel_reach(vel, dt),
-		motion_yaw=motion_yaw)
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
 	if _catalog_contact_candidates(vehicle_box):
 		return True
 	# A receipt-reuse caller must not step past a model the full sweep already
@@ -4100,7 +4497,7 @@ def _catalog_hull_contact(pos, yaw, vel, td, dt=0.04,
 
 def _catalog_motion_result(status, token=None, accepted_now=False,
 		used_kinetic_speed=False, return_status=False, return_detail=False,
-		kinds=None, requires_commit=None):
+		kinds=None, requires_commit=None, swap_pending=False):
 	"""Keep the legacy status seam while exposing an exact commit receipt."""
 	if return_detail:
 		result = {
@@ -4112,6 +4509,11 @@ def _catalog_motion_result(status, token=None, accepted_now=False,
 		}
 		if requires_commit is not None:
 			result['requires_commit'] = bool(requires_commit)
+		if swap_pending:
+			# A hard result with this bit has no independent solid blocker.  The
+			# caller must keep the pose outside, but may preserve momentum while
+			# the native structure model completes its bounded replacement.
+			result['swap_pending'] = True
 		return result
 	# ``approach`` is meaningful only to the combined world+catalog resolver.
 	# Older callers must continue to fail closed on a non-contact lookahead.
@@ -4123,7 +4525,8 @@ def _catalog_motion_result(status, token=None, accepted_now=False,
 def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		return_status=False, dt=0.04, kinetic_speed=None,
 		return_detail=False, kinetic_commit=False, commit_enabled=True,
-		proposal_only=False, motion_yaw=None):
+		proposal_only=False, motion_yaw=None, pitch=0.0, roll=0.0,
+		travel_reach=None, replacement_motion=None):
 	"""Resolve exact streamed OBB contact before committing local movement."""
 	if proposal_only and (not return_detail or not kinetic_commit):
 		raise ValueError(
@@ -4146,9 +4549,22 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 	import Math
 	auth = _get_destr_authority()
 	_refresh_destroyed_falling_instances_1513(spaceID, auth, now)
+	if travel_reach is None:
+		sweep_reach = _motion_travel_reach(vel, dt)
+	else:
+		import math
+		try:
+			sweep_reach = float(travel_reach)
+		except (TypeError, ValueError, OverflowError):
+			raise ValueError('catalog travel reach is invalid')
+		if (sweep_reach < 0.0 or math.isnan(sweep_reach) or
+				math.isinf(sweep_reach)):
+			raise ValueError('catalog travel reach is invalid')
 	vehicle_box = _vehicle_swept_box(
-		pos, yaw, vel, bbox, _motion_travel_reach(vel, dt),
-		motion_yaw=motion_yaw)
+		pos, yaw, vel, bbox, sweep_reach,
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
+	replacement_geometry = None
+	replacement_geometry_ready = False
 	# The visible player does not run the authority Bot scan that normally
 	# populates the live item registry.  Admit only checksum-pinned wires in the
 	# current hull bins through the same read-only native validation as shells.
@@ -4171,9 +4587,11 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 	instances = globals().get('g_offh_destr_instances', {})
 	contact_box = (_vehicle_contact_box(
 		pos, yaw, bbox, travel=float(vel) * max(0.0, float(dt)),
-		motion_yaw=motion_yaw)
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
 		if kinetic_speed is not None else None)
 	blocked = bool(unidentified)
+	other_blocked = bool(unidentified)
+	swap_blocked = False
 	crushed = False
 	kinetic = False
 	approach = False
@@ -4209,13 +4627,43 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 					note_destroyed(
 						'module' if mat_kind is not None else 'fragile',
 						chunk_id, item_index, mat_kind, now)
-				if (_catalog_retains_collision_1513(candidate) and
-						float(now) < globals().get('g_offh_destr_pending', {}).get(key, 0.0) and
-						not (callable(getattr(auth, 'contact_collision_ready', None)) and
-							auth.contact_collision_ready(*key))):
-					# Keep outside the old body until the native replacement is
-					# installed. After that, its actual BSP owns motion/support.
+				pending_deadline = globals().get(
+					'g_offh_destr_pending', {}).get(key, 0.0)
+				swap_pending = (
+					float(now) < pending_deadline and
+					(kind == 'structure' or (
+						_catalog_retains_collision_1513(candidate) and
+						not (callable(getattr(
+							auth, 'contact_collision_ready', None)) and
+								auth.contact_collision_ready(*key)))))
+				if swap_pending:
+					# A structure can materialise a destroyed-model BSP after its
+					# logical module receipt, even when the stock callback already
+					# reports complete. Keep the hull outside for the complete native
+					# hiding interval; the replacement's actual BSP owns motion after
+					# that bounded hand-off. Fragiles retain their narrower proved
+					# replacement rule.
 					blocked = True
+					swap_blocked = True
+				elif _catalog_retains_collision_1513(candidate):
+					# #1513 exposes only segment queries for the replacement BSP.
+					# Only a box whose compiled destroyed-model reference proves a
+					# solid replacement keeps its source module envelope.  Applying
+					# this to every destroyed structure would create invisible walls
+					# where the compiled replacement is collision-free.
+					if not replacement_geometry_ready:
+						replacement_geometry = \
+							_replacement_motion_geometry_1513(
+								pos, yaw, vel, bbox, dt,
+								motion_yaw=motion_yaw,
+								pitch=pitch, roll=roll,
+								replacement_motion=replacement_motion)
+						replacement_geometry_ready = True
+					if _replacement_motion_blocked_1513(
+							replacement_geometry,
+							_candidate_world_boxes_1513(candidate)):
+						blocked = True
+						other_blocked = True
 				crushed = True
 				if contact_candidate:
 					exact_token.add(key)
@@ -4235,6 +4683,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 				# A legal cosmetic break does not admit translation through the
 				# replacement body during the native hiding callback window.
 				blocked = True
+				other_blocked = True
 			mat_info = _synthetic_mat_info(candidate, Math)
 			physical_crushable = _stock_crushable_1513(
 				mat_info, vel, td, candidate[5])
@@ -4251,12 +4700,14 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 					approach = True
 				else:
 					blocked = True
+					other_blocked = True
 				continue
 			if physical_crushable and commit_enabled:
 				commit_candidates.append((candidate, vel, False))
 			elif physical_crushable:
 				exact_token.add(key)
 				blocked = True
+				other_blocked = True
 			elif cap_crushable:
 				# Cap-only admission reaches here only for exact current-hull
 				# contact; planning look-ahead returned ``approach`` above.
@@ -4267,6 +4718,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 					kinetic = True
 			else:
 				blocked = True
+				other_blocked = True
 			_diagnostic_contact_1513(
 				('swept_kinetic_hold' if cap_crushable else
 				'swept_kinetic_reject'), chunk_id, item_index,
@@ -4308,6 +4760,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			event_kind = 'column'
 		else:
 			blocked = True
+			other_blocked = True
 			continue
 		if not accepted:
 			raise RuntimeError(
@@ -4319,6 +4772,12 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		exact_token.add((chunk_id, item_index, mat_kind))
 		note_destroyed(
 			event_kind, chunk_id, item_index, mat_kind, now)
+		if event_kind == 'module':
+			# Do not advance into a structure in the same tick that starts its
+			# native model swap. Subsequent sweeps take the destroyed branch
+			# above until the bounded hiding interval has elapsed.
+			blocked = True
+			swap_blocked = True
 		_publish_catalog_once_1513(
 				event_kind, chunk_id, item_index, point, yaw, vel,
 				mat_kind if event_kind == 'module' else None)
@@ -4337,17 +4796,22 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 	return _catalog_motion_result(
 		status, exact_token, accepted_now,
 		used_kinetic_speed, return_status, return_detail, contact_kinds,
-		requires_commit if proposal_only else None)
+		requires_commit if proposal_only else None,
+		swap_pending=(blocked and swap_blocked and not other_blocked))
 
 
 def _catalog_motion_proposal(spaceID, pos, yaw, vel, td, now,
-		dt=0.04, kinetic_speed=None, motion_yaw=None):
+		dt=0.04, kinetic_speed=None, motion_yaw=None,
+		pitch=0.0, roll=0.0, travel_reach=None,
+		replacement_motion=None):
 	"""Return a mutation-free exact hull-sweep proposal for worker review."""
 	return _catalog_motion_blocked(
 		spaceID, pos, yaw, vel, td, now, dt=dt,
 		kinetic_speed=kinetic_speed, return_detail=True,
 		kinetic_commit=True, commit_enabled=True, proposal_only=True,
-		motion_yaw=motion_yaw)
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll,
+		travel_reach=travel_reach,
+		replacement_motion=replacement_motion)
 
 
 def _catalog_instance_boxes(chunkID, itemIndex, filename, kind,
