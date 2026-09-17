@@ -4993,6 +4993,33 @@ def _catalog_candidate_at_contact(contact_pt):
 	return candidates[0] if len(candidates) == 1 else None
 
 
+def destroyed_vehicle_prop_at(contact_pt):
+	"""Identify a delivered road-vehicle prop for bounded support diagnostics.
+
+	These authored families occur in the shipped map catalogs. This is only a
+	log selector: neither their original bounds nor their names define a
+	destroyed collision shape.
+	"""
+	candidate = _catalog_candidate_at_contact(contact_pt)
+	if candidate is None or candidate[4] != 'fragile':
+		return None
+	parts = _normalized_filename(candidate[3]).split('/')
+	if len(parts) < 3 or parts[:2] != ['content', 'environment']:
+		return None
+	if parts[2] not in (
+			'env418_oldgmercedes', 'env419_oldgtruck', 'env420_oldglightvan',
+			'env608_sovbus', 'envaf_008_truck', 'envam_010_cars',
+			'envam_011_truck', 'envam_047_oldamericancar',
+			'enveu_010_cars', 'enveu_011_bus'):
+		return None
+	if not _native_fragile_replaced_1513(candidate[:2]):
+		return None
+	if not _get_destr_authority().is_destroyed(candidate[0], candidate[1]):
+		return None
+	return {'chunk': candidate[0], 'item': candidate[1],
+		'filename': candidate[3]}
+
+
 def _catalog_candidate_for_native_identity_1513(
 		chunk_id, item_index, mat_kind, contact_pt):
 	"""Recover an anonymous native material hit without guessing identity."""

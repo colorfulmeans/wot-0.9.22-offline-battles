@@ -9,6 +9,7 @@ if CLIENT_ROOT not in sys.path:
     sys.path.insert(0, CLIENT_ROOT)
 
 from gui.mods.offline_lan_0922.siege_hud import PersistentSiegeHints
+from gui.mods.offline_lan_0922 import siege_mechanics
 
 
 def _indicator_type():
@@ -26,11 +27,20 @@ def _indicator_type():
             self._isObserver = False
             self._isEnabled = True
             self._siegeState = 0
+            self._switchTime = 0.0
+            self._switchTimeTable = {
+                state: {'normal': duration, 'critical': duration * 2.0,
+                        'destroyed': 0.0}
+                for state, duration in ((0, 2.0), (1, 2.0),
+                                        (2, 1.3), (3, 1.3))}
+            self._devices = {'engine': 'normal'}
             self._isHintShown = False
             self.key = 'X'
             self.calls = []
             self.persisted = []
             self.fail_hint = False
+            self.view_calls = []
+            self.displayed_time = '- -'
 
         def __updateHintView(self):
             if self._isInPostmortem or self._isObserver:
@@ -49,6 +59,19 @@ def _indicator_type():
                 if not self._isObserver and not self._isInPostmortem:
                     self._hintsLeft = max(0, self._hintsLeft - 1)
             self._siegeState = state
+            self._switchTime = time_left
+            self.__updateIndicatorView()
+
+        def __updateIndicatorView(self, is_smooth=False):
+            engine = self._devices['engine']
+            total_time = self._switchTimeTable[self._siegeState][engine]
+            self.view_calls.append((total_time, self._switchTime,
+                                    self._siegeState, engine, is_smooth))
+            # SiegeModePanel.setEngineAndTime uses the SECOND argument for
+            # both the next-switch label and an active countdown.
+            self.displayed_time = (
+                '%.1f' % self._switchTime
+                if engine != 'destroyed' and self._switchTime > 0 else '- -')
             self.__updateHintView()
 
         def on_state(self, state, time_left=0.0):
@@ -127,9 +150,10 @@ class PersistentSiegeHintTests(unittest.TestCase):
         self.assertFalse(indicator._isHintShown)
         self.assertEqual(0, indicator._hintsLeft)
 
-    def test_exception_restores_counter_and_unload_restores_both_methods(self):
+    def test_exception_restores_counter_and_unload_restores_all_methods(self):
         methods = (PersistentSiegeHints._HINT_METHOD,
-                   PersistentSiegeHints._STATE_METHOD)
+                   PersistentSiegeHints._STATE_METHOD,
+                   PersistentSiegeHints._VIEW_METHOD)
         original = {name: self.indicator_type.__dict__[name]
                     for name in methods}
         indicator = self.indicator_type(self.provider, 7)
@@ -145,6 +169,58 @@ class PersistentSiegeHintTests(unittest.TestCase):
             self.assertIs(original[name], self.indicator_type.__dict__[name])
         indicator.on_state(3)
         self.assertEqual(6, indicator._hintsLeft)
+
+    def test_stable_modes_show_the_next_descriptor_duration_for_all_siege_tds(self):
+        self.hints.install()
+        for name, params in siege_mechanics.VEHICLE_PARAMS.items():
+            with self.subTest(vehicle=name):
+                indicator = self.indicator_type(self.provider, 0)
+                for state, duration in ((0, params[0]), (1, params[0]),
+                                        (2, params[1]), (3, params[1])):
+                    indicator._switchTimeTable[state]['normal'] = duration
+                indicator.on_state(0, 0.0)
+                self.assertEqual('2.0', indicator.displayed_time)
+                self.assertEqual(0.0, indicator._switchTime)
+                indicator.on_state(2, 0.0)
+                self.assertEqual('2.0' if 'UDES' in name else '1.3',
+                                 indicator.displayed_time)
+                self.assertEqual(0.0, indicator._switchTime)
+
+    def test_switching_modes_preserve_the_authoritative_remaining_time(self):
+        indicator = self.indicator_type(self.provider, 0)
+        self.hints.install()
+        for state, remaining in ((1, 1.6), (3, 0.8)):
+            indicator.on_state(state, remaining)
+            self.assertEqual(remaining, indicator.view_calls[-1][1])
+            self.assertEqual(remaining, indicator._switchTime)
+            self.assertEqual('%.1f' % remaining, indicator.displayed_time)
+
+    def test_timer_uses_engine_state_and_the_native_destroyed_guard(self):
+        indicator = self.indicator_type(self.provider, 0)
+        self.hints.install()
+        indicator._devices['engine'] = 'critical'
+        indicator.on_state(0)
+        self.assertEqual('4.0', indicator.displayed_time)
+        indicator.on_state(2)
+        self.assertEqual('2.6', indicator.displayed_time)
+        indicator._devices['engine'] = 'destroyed'
+        indicator.on_state(2)
+        self.assertEqual('- -', indicator.displayed_time)
+
+    def test_timer_has_no_effect_on_other_sessions_and_restores_after_exception(self):
+        self.hints.install()
+        indicator = self.indicator_type(object(), 0)
+        indicator.on_state(0)
+        self.assertEqual('- -', indicator.displayed_time)
+        indicator = self.indicator_type(self.provider, 0)
+        indicator.fail_hint = True
+        with self.assertRaisesRegex(RuntimeError, 'Flash dispatch failed'):
+            indicator.on_state(0)
+        self.assertEqual(0.0, indicator._switchTime)
+        self.hints.close()
+        indicator.fail_hint = False
+        indicator.on_state(0)
+        self.assertEqual('- -', indicator.displayed_time)
 
     def test_unload_preserves_a_later_hook_and_retires_our_retained_wrapper(self):
         self.hints.install()

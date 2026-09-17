@@ -2662,6 +2662,103 @@ class RemotePresentationWriteTests(unittest.TestCase):
         def reset_counts(self):
             self.rotation_writes = self.translation_writes = 0
 
+    class AngleGuardMatrix(CountingMatrix):
+        """Reject unwrapped/non-finite inputs instead of accepting everything.
+
+        The Windows report proves the setRotateYPR angle rejection and its
+        error shape, not the rejected value or #1513's exact numeric limits.
+        Requiring principal angles here exercises the stricter contract our
+        adapter promises without claiming a native range audit.
+        """
+
+        def setRotateYPR(self, value):
+            for index, angle in enumerate(value):
+                if (not math.isfinite(angle) or
+                        not -math.pi <= angle <= math.pi):
+                    raise TypeError(
+                        '() argument 1 element %s must be a valid angle' %
+                        index)
+            super().setRotateYPR(value)
+
+    def _angle_guard_vehicles(self, rotation=(0.0, 0.0, 0.0)):
+        runtime = _runtime()
+        runtime.math.Matrix = self.AngleGuardMatrix
+        native = _NativeRemoteState(
+            runtime.bigworld, runtime.math, runtime.compatibility, None,
+            _Vector(), rotation, interpolate_motion=True)
+        copied = RemoteVehicle(
+            1000, _Descriptor(), {'publicInfo': {'team': 2}, 'health': 500},
+            _Vector(), rotation, runtime.math)
+        copied.attach_visual(
+            types.SimpleNamespace(model=None), 7, _Model())
+        return native, copied
+
+    def test_pose_rekeys_wrap_all_three_mirrored_angles_before_native_write(self):
+        for sign in (-1.0, 1.0):
+            initial = sign * (math.pi - 0.02)
+            target = -sign * (math.pi - 0.04)
+            for vehicle in self._angle_guard_vehicles((initial,) * 3):
+                with self.subTest(adapter=type(vehicle).__name__, sign=sign):
+                    vehicle.set_pose(
+                        _Vector(1, 2, 3), (target,) * 3,
+                        relax_time=0.10, now=100.0)
+                    # Midway through a seam crossing, the mirror produces
+                    # pi+0.01 (or -pi-0.01) even with wrapped endpoints.
+                    vehicle.set_pose(
+                        _Vector(2, 3, 4), (target + sign * 0.01,) * 3,
+                        relax_time=0.10, now=100.05)
+                    mirrored = initial + sign * 0.03
+                    for angle in (vehicle._key_from.yaw,
+                                  vehicle._key_from.pitch,
+                                  vehicle._key_from.roll):
+                        self.assertLessEqual(abs(angle), math.pi)
+                        self.assertAlmostEqual(math.sin(mirrored), math.sin(angle))
+                        self.assertAlmostEqual(math.cos(mirrored), math.cos(angle))
+
+    def test_pose_aliases_keep_the_same_rotation_and_continuous_turn_speed(self):
+        initial = math.pi - 0.05
+        for vehicle in self._angle_guard_vehicles((0.0, 0.0, initial)):
+            with self.subTest(adapter=type(vehicle).__name__):
+                vehicle.set_pose(_Vector(), (0.0, 0.0, initial), now=1.0)
+                wrapped = -math.pi + 0.05
+                vehicle.set_pose(
+                    _Vector(1, 2, 3),
+                    (-18.0 * math.pi + 0.2, 12.0 * math.pi - 0.3,
+                     24.0 * math.pi + wrapped), now=1.1)
+                for actual, expected in (
+                        (vehicle.matrix.yaw, wrapped),
+                        (vehicle.matrix.pitch, -0.3),
+                        (vehicle.matrix.roll, 0.2)):
+                    self.assertAlmostEqual(expected, actual)
+                self.assertEqual((1.0, 2.0, 3.0),
+                                 tuple(vehicle.matrix.translation))
+                if isinstance(vehicle, _NativeRemoteState):
+                    self.assertAlmostEqual(1.0, vehicle.turn_speed)
+
+    def test_nonfinite_rotation_is_rejected_without_poisoning_pose_or_cache(self):
+        for vehicle in self._angle_guard_vehicles():
+            with self.subTest(adapter=type(vehicle).__name__):
+                vehicle.set_pose(
+                    _Vector(1, 2, 3), (0.1, 0.2, 0.3), now=1.0)
+                previous = vehicle._matrix_pose
+                render = vehicle._render_pose
+                for index in range(3):
+                    for invalid in (float('nan'), float('inf'), -float('inf')):
+                        rotation = [0.4, 0.5, 0.6]
+                        rotation[index] = invalid
+                        with self.assertRaises(ValueError):
+                            vehicle.set_pose(
+                                _Vector(4, 5, 6), rotation, now=2.0)
+                        self.assertEqual((1.0, 2.0, 3.0), tuple(vehicle.position))
+                        self.assertEqual((0.3, 0.2, 0.1),
+                                         (vehicle.yaw, vehicle.pitch, vehicle.roll))
+                        self.assertIs(previous, vehicle._matrix_pose)
+                        self.assertEqual(render, vehicle._render_pose)
+                        self.assertEqual(1.0, vehicle._last_pose_time)
+                vehicle.set_pose(
+                    _Vector(2, 2, 3), (0.1, 0.2, 0.3), now=2.0)
+                self.assertEqual((2.0, 2.0, 3.0), tuple(vehicle.position))
+
     def _vehicles(self):
         runtime = _runtime()
         runtime.math.Matrix = self.CountingMatrix
@@ -10719,9 +10816,11 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_descriptor = entity.typeDescriptor
         original_hint = lambda unused_self: None
         original_state = lambda unused_self, state, time_left: None
+        original_view = lambda unused_self, is_smooth=False: None
         runtime.siege_mode_indicator_type = type('SiegeModeIndicator', (), {
             '_SiegeModeIndicator__updateHintView': original_hint,
-            '_SiegeModeIndicator__updateSiegeState': original_state})
+            '_SiegeModeIndicator__updateSiegeState': original_state,
+            '_SiegeModeIndicator__updateIndicatorView': original_view})
         indicator_type = runtime.siege_mode_indicator_type
 
         self.assertTrue(battle._enable_siege_hints())
@@ -10736,6 +10835,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
             '_SiegeModeIndicator__updateHintView'])
         self.assertIs(original_state, indicator_type.__dict__[
             '_SiegeModeIndicator__updateSiegeState'])
+        self.assertIs(original_view, indicator_type.__dict__[
+            '_SiegeModeIndicator__updateIndicatorView'])
 
     def test_siege_setting_is_sent_as_an_authoritative_input_request(self):
         runtime = _runtime()
@@ -10755,6 +10856,27 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._sender.send_current.assert_called_once_with(
             siege_enabled=True)
         self.assertEqual((True, 17), battle._local_siege_pending)
+
+    def test_siege_edge_diagnostic_is_bounded_and_reads_current_controls(self):
+        battle = BattleRuntime(_runtime())
+        battle._local_physics = {'speedFwd': 50.0 / 3.6,
+                                 'speedBwd': 45.0 / 3.6}
+        battle._local_speed = 8.0
+        battle._local_siege_pending = (False, 17)
+        battle._sender = types.SimpleNamespace(
+            forward=1.0, turn=0.0, handbrake=False)
+        battle._local_siege_edge_reports = 127
+        with mock.patch('sys.stdout.write') as write:
+            self.assertTrue(battle._report_local_siege_edge(
+                'request', 2, input_seq=17))
+            self.assertFalse(battle._report_local_siege_edge(
+                'state', 3, 1300, 17))
+        write.assert_called_once()
+        text = write.call_args[0][0]
+        self.assertIn('pending=(False, 17)', text)
+        self.assertIn('speed_mps=8.0', text)
+        self.assertIn('input=(1.0,0.0,False)', text)
+        self.assertEqual((False, 17), battle._local_siege_pending)
 
     def test_siege_request_locks_drive_until_its_authoritative_echo(self):
         runtime = _runtime()
@@ -10844,6 +10966,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_physics = {'speedFwd': 19.0}
         battle._local_factors = mock.Mock(return_value={'engine/power': 1.0})
         battle._targeting_signature = ('old',)
+        battle._report_local_siege_edge = mock.Mock()
         record = {'engine_id': 10, 'local': True}
 
         with mock.patch.object(
@@ -10862,6 +10985,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
             descriptor, {'engine/power': 1.0})
         self.assertEqual({'speedFwd': 5.0 / 3.6}, battle._local_physics)
         self.assertIsNone(battle._targeting_signature)
+        battle._report_local_siege_edge.assert_called_once_with(
+            'state', 1, 2000, None)
 
     def test_switching_off_keeps_the_enabled_local_hydraulic_pose(self):
         runtime = _runtime()
@@ -25011,20 +25136,85 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_speed = 4.0
         battle._local_support_rise_blocked = False
         battle._local_world_collision_trace = {}
+        battle._sender = types.SimpleNamespace(forward=1.0, turn=-1.0, handbrake=False)
+        battle._local_physics = {'speedFwd': 15.0, 'speedBwd': 6.0}
+        entity = types.SimpleNamespace(siegeState=0,
+            typeDescriptor=types.SimpleNamespace(hasSiegeMode=False))
         first = {'reason': 'ground_profile', 'hit': [1.0, 2.0, 3.0]}
         with mock.patch('sys.stdout') as output:
             self.assertTrue(battle._report_local_motion_stall(
                 (0.0, 0.0, 0.0), (0.0, 0.0, 0.08), 0.02, 1.0,
-                'deflect', 10.0, 10.1, 0.0, first))
+                'deflect', 10.0, 10.1, 0.0, first, entity=entity))
         text = ''.join(call.args[0] for call in output.write.call_args_list)
         self.assertIn('before=10.0000 drive=10.1000 final=4.0000', text)
         self.assertIn('"reason": "ground_profile"', text)
+        self.assertIn('"input": [1.0, -1.0, false]', text)
+        self.assertIn('"siege_state": 0', text)
+        self.assertIn('"siege_drive_locked": false', text)
+        self.assertIn('"limits_mps": [15.0, 6.0]', text)
+        self.assertIn('"world_reason": "ground_profile"', text)
         battle._next_local_stall_report = 0.0
         with mock.patch('sys.stdout') as output:
             self.assertFalse(battle._report_local_motion_stall(
                 (0.0, 0.0, 0.0), (0.0, 0.0, 0.08), 0.02, 1.0,
                 'advance', 4.0, 4.0, 0.0))
         output.write.assert_not_called()
+
+    def test_destroyed_car_support_report_reuses_probes_and_existing_cadence(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        native_query = mock.Mock(side_effect=AssertionError('diagnostic queried native world'))
+        runtime.bigworld.wg_collideSegment = native_query
+        prop = {'chunk': 33407, 'item': 36,
+                'filename': 'content/Environment/env418_OldGMercedes/normal/lod0/'
+                            'env418_OldGMercedes1.model'}
+        reader = mock.Mock(return_value=prop)
+        battle._destructibles = types.SimpleNamespace(destroyed_vehicle_prop_at=reader)
+        probes = ((340.0, 45.0, 13.0, 14.0, 13.7, 13.7, 13.9,
+                   ((13.7, 1.0, 'support'),)),)
+        battle._local_suspension_probe_trace = probes
+        battle._local_motion_status = 'crushed'
+        battle._local_motion_kinds = 'fragile'
+        battle._local_speed = 0.1
+        battle._local_support_rise_blocked = False
+        args = ((340.0, 13.7, 45.0), (340.001, 13.7, 45.0),
+                0.01, 1.0, 'advance', 0.0, 0.1, 0.0)
+        with mock.patch('sys.stdout') as output:
+            self.assertTrue(battle._report_local_motion_stall(*args))
+            self.assertFalse(battle._report_local_motion_stall(*args))
+        text = ''.join(call.args[0] for call in output.write.call_args_list)
+        self.assertEqual(1, text.count('LOCAL PROP SUPPORT'))
+        self.assertIn('env418_OldGMercedes1.model', text)
+        self.assertIn('"spring_probes":', text)
+        reader.assert_called_once()
+        native_query.assert_not_called()
+        self.assertEqual(probes, battle._local_suspension_probe_trace)
+        # An ordinary terrain/fence slowdown must not emit the extra payload.
+        battle._next_local_stall_report = 0.0
+        reader.return_value = None
+        with mock.patch('sys.stdout') as output:
+            self.assertTrue(battle._report_local_motion_stall(*args))
+        text = ''.join(call.args[0] for call in output.write.call_args_list)
+        self.assertNotIn('LOCAL PROP SUPPORT', text)
+        # A normal constant-speed crossing needs evidence too. Its separate
+        # cadence cannot consume or postpone the original stall deadline.
+        battle._next_local_prop_support_report = 0.0
+        stall_deadline = battle._next_local_stall_report
+        reader.return_value = prop
+        reader.reset_mock()
+        battle._local_speed = 2.0
+        battle._local_motion_status = 'clear'
+        with mock.patch('sys.stdout') as output:
+            for expected in (True, False):
+                self.assertEqual(expected, battle._report_local_motion_stall(
+                    (340.0, 13.7, 45.0), (340.04, 13.7, 45.0),
+                    0.02, 1.0, 'advance', 2.0, 2.0, 0.0))
+        text = ''.join(call.args[0] for call in output.write.call_args_list)
+        self.assertEqual(1, text.count('LOCAL PROP SUPPORT'))
+        self.assertNotIn('LOCAL DRIVE', text)
+        self.assertEqual(stall_deadline, battle._next_local_stall_report)
+        reader.assert_called_once()
+        native_query.assert_not_called()
 
     def test_supported_tracks_do_not_use_trench_floor_as_drive_grade(self):
         runtime = _runtime()
@@ -25304,6 +25494,114 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertAlmostEqual(0.15, collision_pose['turret_yaw'])
         self.assertEqual(-0.1, collision_pose['gun_pitch'])
         self.assertEqual(1, collision_pose['siege_state'])
+
+    def test_one_native_bot_pose_rejection_keeps_other_bots_and_retries(self):
+        for boundary in ('set_vehicle_pose', 'settle_vehicle_motion',
+                         'update_vehicle_aim'):
+            with self.subTest(boundary=boundary):
+                battle = BattleRuntime(_runtime())
+                battle.state = 'running'
+                battle._worker_mode = True
+                battle._binding = mock.Mock()
+                battle._records = {
+                    'bot:%s' % bot_id: {
+                        'engine_id': bot_id + 100, 'kind': 'bot',
+                        'network_id': bot_id, 'ready': True}
+                    for bot_id in (17, 18)}
+                states = [{
+                    'id': bot_id, 'alive': True, 'health': 500,
+                    'x': float(bot_id), 'y': 2.0, 'z': 9.0,
+                    'yaw': 0.75, 'pitch': 0.2, 'roll': -0.3,
+                    'speed': 0.0, 'aim_yaw': 0.9, 'gun_pitch': -0.1}
+                    for bot_id in (17, 18)]
+
+                def reject_first_bot(engine_id, *unused_args, **unused_kwargs):
+                    if engine_id == 117:
+                        raise TypeError(
+                            '() argument 1 element 0 must be a valid angle')
+
+                setter = getattr(battle._binding, boundary)
+                setter.side_effect = reject_first_bot
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual((2,), battle._present_authority_bot_poses(
+                        lambda unused_now: states, 1.0))
+                    # Repeated failures remain local and the log is bounded.
+                    battle._present_authority_bot_poses(
+                        lambda unused_now: states, 1.1)
+                self.assertEqual(1, output.getvalue().count('valid angle'))
+                failed_key = ('_authority_aim_signature' if boundary ==
+                              'update_vehicle_aim' else '_authority_pose_signature')
+                self.assertNotIn(failed_key, battle._records['bot:17'])
+                self.assertIn(failed_key, battle._records['bot:18'])
+                self.assertEqual('running', battle.state)
+                self.assertFalse(battle._disabled_optional_features)
+                # A drawing failure must not retain spawn-pose projectile
+                # geometry for the authority state that was still accepted.
+                self.assertEqual(17.0, battle._records['bot:17'][
+                    'projectile_collision_pose']['x'])
+                self.assertEqual(18.0, battle._records['bot:18'][
+                    'projectile_collision_pose']['x'])
+                setter.side_effect = None
+                setter.reset_mock()
+                self.assertTrue(battle._apply_authority_bot_poses(states))
+                self.assertIn(failed_key, battle._records['bot:17'])
+                self.assertEqual([117], [call.args[0]
+                                        for call in setter.call_args_list])
+
+    def test_nonfinite_bot_sample_retains_last_valid_collision_pose(self):
+        battle = BattleRuntime(_runtime())
+        battle._worker_mode = True
+        battle._binding = mock.Mock()
+        battle._records = {
+            'bot:17': {'engine_id': 117, 'kind': 'bot', 'network_id': 17,
+                       'ready': True}}
+        state = {'id': 17, 'alive': True, 'health': 500,
+                 'x': 17.0, 'y': 2.0, 'z': 9.0,
+                 'yaw': 0.75, 'pitch': 0.2, 'roll': -0.3,
+                 'speed': 0.0, 'aim_yaw': 0.9, 'gun_pitch': -0.1}
+        battle._apply_authority_bot_poses([state])
+        record = battle._records['bot:17']
+        previous = record['projectile_collision_pose']
+        battle._binding.reset_mock()
+        for field in ('x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
+                      'gun_pitch', 'turret_yaw'):
+            for invalid in (float('nan'), float('inf'), -float('inf'), None):
+                with self.subTest(field=field, invalid=invalid):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertFalse(battle._apply_authority_bot_poses([
+                            dict(state, **{field: invalid})]))
+                    self.assertIs(previous, record['projectile_collision_pose'])
+        battle._binding.set_vehicle_pose.assert_not_called()
+        battle._binding.update_vehicle_aim.assert_not_called()
+        self.assertTrue(battle._apply_authority_bot_poses([state]))
+        battle._binding.set_vehicle_pose.assert_called_once()
+
+    def test_authority_angle_aliases_share_normalized_projectile_geometry(self):
+        battle = BattleRuntime(_runtime())
+        battle._worker_mode = True
+        battle._binding = mock.Mock()
+        battle._records = {
+            'bot:17': {'engine_id': 117, 'kind': 'bot', 'network_id': 17,
+                       'ready': True}}
+        state = {'id': 17, 'alive': True, 'health': 500,
+                 'x': 17.0, 'y': 2.0, 'z': 9.0,
+                 'yaw': 8 * math.pi + 0.75,
+                 'pitch': -8 * math.pi + 0.2, 'roll': 8 * math.pi - 0.3,
+                 'speed': 0.0, 'aim_yaw': -8 * math.pi + 0.9,
+                 'gun_pitch': 8 * math.pi - 0.1}
+        original = dict(state)
+        self.assertTrue(battle._apply_authority_bot_poses([state]))
+        collision = battle._records['bot:17']['projectile_collision_pose']
+        for field, expected in (('yaw', 0.75), ('pitch', 0.2), ('roll', -0.3),
+                                ('turret_yaw', 0.15), ('gun_pitch', -0.1)):
+            self.assertAlmostEqual(expected, collision[field])
+        native_rotation = battle._binding.set_vehicle_pose.call_args.args[2]
+        self.assertEqual((collision['roll'], collision['pitch'], collision['yaw']),
+                         native_rotation)
+        aim = battle._binding.update_vehicle_aim.call_args.args[1:]
+        for actual, expected in zip(aim, (0.75, 0.9, -0.1)):
+            self.assertAlmostEqual(expected, actual)
+        self.assertEqual(original, state)
 
     def test_authority_reuses_only_an_exact_projectile_collision_pose(self):
         def prepared_battle():

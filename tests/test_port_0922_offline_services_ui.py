@@ -59,15 +59,44 @@ class NativeServiceUITests(unittest.TestCase):
         self.addCleanup(self.ui.uninstall)
 
     def test_bond_shop_reuses_native_rows_and_filters_owned_vehicles(self):
-        class Shop(object):
+        class UnboundMethod(object):
+            def __init__(self, function):
+                self.im_func = function
+
+            def __call__(self, *args, **kwargs):
+                return self.im_func(*args, **kwargs)
+
+            def __get__(self, instance, owner):
+                return (self if instance is None else
+                        self.im_func.__get__(instance, owner))
+
+        class Python2ShopType(type):
+            def __getattribute__(cls, name):
+                value = super().__getattribute__(name)
+                if name == 'requestTableData' and isinstance(value, types.FunctionType):
+                    # Python 2 class access wraps a function in an unbound
+                    # method. Identity guards must inspect the raw class dict.
+                    return UnboundMethod(value)
+                return value
+
+        class Shop(object, metaclass=Python2ShopType):
             def __init__(self):
-                pass
+                self.disposed = False
+                self.native_table_alive = True
+                self.navigation = []
 
             def getName(self):
                 return 'shop'
 
-            def requestTableData(self, *args):
-                return args
+            def requestTableData(self, nation, actions, item_type, filters):
+                account_settings.setFilter('shop_current', (nation, item_type, actions))
+                account_settings.setFilter('shop_' + item_type, dict(filters))
+                return nation, actions, item_type, filters
+
+            def fireEvent(self, event, scope):
+                self.navigation.append((event, scope, copy.deepcopy(saved_filters)))
+                self.native_table_alive = False
+                self.disposed = True
 
             def _setTableData(self, *args):
                 self.table_request = args
@@ -83,7 +112,7 @@ class NativeServiceUITests(unittest.TestCase):
                 self.flashObject.form.menu.view.currentView.lockedChkBx.visible = True
 
             def _isDAAPIInited(self):
-                return True
+                return not self.disposed
 
             def _update(self):
                 self.updated = True
@@ -123,12 +152,18 @@ class NativeServiceUITests(unittest.TestCase):
                                         removeSettings=current.pop, addSettings=add)
         account_settings = mock.Mock()
         account_settings.getFilter.return_value = (-1, 'vehicle', False)
-        account_settings.getFilterDefault.return_value = {}
+        default_vehicle_filter = {'selectedTypes': [False, False],
+            'selectedLevels': [False] * 10, 'obtainingType': 'vehicle',
+            'extra': ['locked']}
+        account_settings.getFilterDefault.return_value = default_vehicle_filter
+        pending_callbacks = []
+        account = [object()]
         defaults = {'filters': {}}
         exports = {
             'account_helpers.AccountSettings': {'AccountSettings': account_settings,
                 'DEFAULT_VALUES': defaults, 'KEY_FILTERS': 'filters'},
-            'gui.Scaleform.daapi.settings.views': {'VIEW_ALIAS': types.SimpleNamespace(LOBBY_STORE_ACTIONS='storeActions')},
+            'gui.Scaleform.daapi.settings.views': {'VIEW_ALIAS': types.SimpleNamespace(
+                LOBBY_STORE_ACTIONS='storeActions', LOBBY_STORE='store')},
             'gui.Scaleform.daapi.view.lobby.store.StoreView': {'StoreView': StoreView},
             'gui.Scaleform.daapi.view.lobby.store.Shop': {'Shop': Shop},
             'gui.Scaleform.daapi.view.lobby.store.tabs.shop': {'ShopVehicleTab': VehicleTab},
@@ -143,9 +178,16 @@ class NativeServiceUITests(unittest.TestCase):
                 'getLevelsAssetPath': lambda name: name},
             'gui.prb_control.settings': {'VEHICLE_LEVELS': range(1, 11)},
             'gui.shared.utils.functions': {'makeTooltip': lambda *args: args},
+            'BigWorld': {'player': lambda: account[0],
+                'callback': lambda delay, callback: pending_callbacks.append(callback)},
+            'gui.shared': {'events': types.SimpleNamespace(
+                LoadViewEvent=lambda alias, ctx: types.SimpleNamespace(alias=alias, ctx=ctx)),
+                'EVENT_BUS_SCOPE': types.SimpleNamespace(LOBBY='lobby')},
         }
         with native_modules(exports):
             self.ui._install_shop()
+            self.assertIsNot(Shop.requestTableData,
+                             Shop.__dict__['requestTableData'])
             page = StoreView()
             tabs = {'buttonBarData': [
                 {'id': 'storeActions', 'linkage': 'StoreActionsViewUI'},
@@ -191,6 +233,7 @@ class NativeServiceUITests(unittest.TestCase):
                     'extra': ['locked', 'inHangar']},
                 'shop_current': (0, 'shell', True)}
             account_settings.getFilter.side_effect = saved_filters.__getitem__
+            account_settings.setFilter.side_effect = saved_filters.__setitem__
             self.assertEqual((1, 'vehicle', False),
                              shop._StoreComponent__getCurrentFilter())
             shop._onTableUpdate()
@@ -204,8 +247,13 @@ class NativeServiceUITests(unittest.TestCase):
             buttons = [types.SimpleNamespace(visible=True, enabled=True) for unused in range(4)]
             menu = types.SimpleNamespace(dataProvider=[], getButtonAt=buttons.__getitem__,
                 validateNow=lambda: None, view=types.SimpleNamespace(currentView=controls))
-            shop.flashObject = types.SimpleNamespace(form=types.SimpleNamespace(menu=menu))
+            actions = types.SimpleNamespace(visible=True, mouseEnabled=True, mouseChildren=True)
+            shop.flashObject = types.SimpleNamespace(form=types.SimpleNamespace(menu=menu),
+                                                     actionsFilterView=actions)
             shop.as_initFiltersDataS([], '')
+            self.assertFalse(actions.visible)
+            self.assertFalse(actions.mouseEnabled)
+            self.assertFalse(actions.mouseChildren)
             self.assertEqual(['vehicle'], [row.fittingType for index, row in enumerate(menu.dataProvider)
                                           if buttons[index].visible])
             self.assertEqual([True, False, False, False], [button.enabled for button in buttons])
@@ -219,6 +267,7 @@ class NativeServiceUITests(unittest.TestCase):
                 self.assertTrue(controls.inHangarChkBx.visible)
                 self.assertTrue(controls.rentalsChckBx.visible)
                 self.assertEqual(20, controls.rentalsChckBx.y - controls.inHangarChkBx.y)
+                self.assertFalse(actions.visible)
             self.assertEqual(controls.obtainingTypeBuyBtn.y, controls.vehTypeHeader.y)
             tab = shop._getTabClass('vehicle')()
             tab._nation = None
@@ -241,7 +290,62 @@ class NativeServiceUITests(unittest.TestCase):
             with mock.patch.object(self.ui, 'request') as request:
                 self.assertFalse(shop.buyItem('2'))
                 request.assert_not_called()
+
+            regular = Shop()
+            regular_filters = {'selectedTypes': [True, False],
+                'selectedLevels': [True] + [False] * 9, 'extra': ['inHangar'],
+                'obtainingType': 'vehicle'}
+            regular.requestTableData(1, False, 'vehicle', regular_filters)
+            self.assertEqual([], pending_callbacks)
+            for unused in range(2):
+                regular.requestTableData(1, True, 'vehicle', regular_filters)
+            self.assertEqual(1, len(pending_callbacks))
+            self.assertEqual([], regular.navigation)
+            # The native Flash caller accesses storeTable after Python's
+            # requestTableData returns. Navigation cannot dispose it yet.
+            self.assertTrue(regular.native_table_alive)
+            self.assertEqual((1, 'vehicle', False), saved_filters['shop_current'])
+            self.assertEqual(regular_filters, saved_filters['shop_vehicle'])
+            pending_callbacks.pop(0)()
+            self.assertFalse(regular.native_table_alive)
+            event, scope, filters_at_navigation = regular.navigation[0]
+            self.assertEqual(('store', {'tabId': 'storeActions'}, 'lobby'),
+                             (event.alias, event.ctx, scope))
+            self.assertEqual((-1, 'vehicle', False),
+                             filters_at_navigation['offline_bond_current'])
+            reset_filter = filters_at_navigation['offline_bond_vehicle']
+            self.assertEqual([False, False], reset_filter['selectedTypes'])
+            self.assertEqual([False] * 10, reset_filter['selectedLevels'])
+            self.assertEqual([], reset_filter['extra'])
+            self.assertEqual('vehicle', reset_filter['obtainingType'])
+            self.assertEqual(['locked'], default_vehicle_filter['extra'])
+            self.assertEqual(regular_filters, saved_filters['shop_vehicle'])
+
+            # A closed page or a changed account must not navigate later or
+            # overwrite that account's filters from a queued click.
+            for stale_reason in ('disposed', 'changed_account'):
+                regular = Shop()
+                regular.requestTableData(1, True, 'vehicle', regular_filters)
+                before_callback = copy.deepcopy(saved_filters)
+                if stale_reason == 'disposed':
+                    regular.disposed = True
+                else:
+                    account[0] = object()
+                pending_callbacks.pop(0)()
+                self.assertEqual([], regular.navigation)
+                self.assertEqual(before_callback, saved_filters)
+            regular = Shop()
+            regular.requestTableData(1, True, 'vehicle', regular_filters)
             self.ui.uninstall()
+            before_callback = copy.deepcopy(saved_filters)
+            pending_callbacks.pop(0)()
+            self.assertEqual([], regular.navigation)
+            self.assertEqual(before_callback, saved_filters)
+            # Restoring the original unbound method must preserve instance
+            # binding as it does on the embedded Python 2 runtime.
+            self.assertEqual((1, True, 'vehicle', regular_filters),
+                             regular.requestTableData(1, True, 'vehicle', regular_filters))
+            self.assertEqual([], pending_callbacks)
             self.assertIs(original, current['storeActions'])
             self.assertFalse(defaults['filters'])
 

@@ -86,7 +86,9 @@ The regular Shop excludes those bond offers. Vehicle checkboxes select
 unresearched, owned or rented vehicles; with none selected, the list contains
 available purchases. Multiple selected categories are combined.
 Special Offers shows only the tank section, class/tier filters and owned/rental
-checkboxes. Its filters are saved independently from the regular Shop.
+checkboxes. Its filters are saved independently from the regular Shop. The
+regular Shop's special-offers selector opens the complete bond catalogue with
+those filters cleared; the redundant selector is hidden inside Special Offers.
 
 Premium vehicles sold from this build onward enter the native Shop recovery
 list. Recovery costs the hull's sale value plus 10% in credits and requires a

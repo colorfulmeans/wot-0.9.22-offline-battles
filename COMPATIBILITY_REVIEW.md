@@ -3889,9 +3889,10 @@ the page. A saved verification marker distinguishes newly validated selection
 from the earlier unrestricted cosmetics; it does not manufacture campaign or
 ranked achievements. The 90-day premium packet now bundles its own 98-pixel transparent
 90-day emblem instead of borrowing the 180-day image, keeping the 90-day
-product, duration and 6500-gold price. The legacy WG artwork was obtained
-from the third-party mirror documented in THIRD_PARTY_NOTICES.md; it is not
-claimed to be an extracted #1513 client asset.
+product, duration and 6500-gold price. The current single-coin emblem uses
+the original transparent IMGBIN PNG subsequently supplied by the user,
+proportionally scaled for packaging. Provenance is recorded in
+THIRD_PARTY_NOTICES.md; it is not claimed to be an extracted #1513 asset.
 
 Premium sales now save a recovery entitlement with the hull's credit selling
 value plus 10%, independent of ammunition, equipment and crew sold with it.
@@ -4010,3 +4011,94 @@ hint; the saved account counter is preserved, and switching, death and
 observer visibility stay with the native implementation. The reference
 Python is regional #788 and the available Flash SDK is a historical reference;
 no complete Chinese #1513 installation is available for native acceptance.
+
+## September 18 playtest: Siege timing and worker failure
+
+Reports `20260918-070333-f76f320bea1c` and
+`20260918-070836-29c3e83712cd` both identify the installed
+`colorfulmeans-35282925222-1` package. The premium screenshot proves the
+bundled 90-day texture loads, but its three-game ribbons do not match the
+other World of Tanks duration emblems. This is an artwork mismatch rather
+than evidence of a missing resource in that package.
+
+The reference premium-window resource rule is
+`gui/maps/icons/windows/prem/icon_prem{days}_98.png`; its standard duration
+labels omit 90 days. That does not prove the Chinese #1513 resource archives
+lack `icon_prem90_98.png`: the reports do not contain their file lists. The
+offline override is explicitly packaged at
+`res/gui/maps/icons/offline_lan/premium_90_98.png` inside
+`mods/0.9.22.0.1/org.colorfulmeans.offline_lan_0922_0.8.4.wotmod`. The new
+image uses the user's subsequently supplied original PNG,
+`imgbin_a143b4df7f0b82ff3a4a238833081688.png`, with actual alpha transparency.
+The earlier JPEG's baked checkerboard and the temporary generated extraction
+are not shipped.
+
+The Strv S1 report records a Python exception at 07:03:19, not an unexplained
+native process crash: `_present_authority_bot_poses` reaches
+`RemoteVehicle._write_pose`, where the native orientation setter raises
+`TypeError: () argument 1 element 0 must be a valid angle`. The exception
+escapes the frame, closes the mandatory simulation worker connection and
+ends the round with `worker_disconnected`. The rendering failure and the
+reported travel-mode motion need separate treatment; a display failure is
+not evidence that the authoritative round itself has become invalid.
+
+Both copied and native remote presentations now convert finite angles to an
+equivalent principal rotation at the native matrix boundary. Shortest-arc
+interpolation remains unwrapped internally so turn-speed differences stay
+continuous across the seam. The captured exception does not record its
+rejected value, so multiple-turn accumulation is a covered failure path,
+not a claim about the exact observed value. A per-actor presentation boundary
+logs a failed matrix/aim update, leaves its successful-write cache unset and
+allows other actors and combat events to continue; the next frame retries.
+Finite authoritative geometry still feeds projectiles independently of
+rendering. Non-finite samples are rejected before writes and preserve the
+last coherent collision pose. Tests use a matrix fake that rejects invalid
+angles rather than an always-successful setter.
+
+The Siege reticle's stable states carry zero remaining transition time. The
+reference Flash `SiegeModePanel.setEngineAndTime` renders this second time
+argument as `- -`, even though the native Python indicator separately holds
+the descriptor's next-switch duration. The battle-scoped adapter now uses
+`_switchTimeTable[state][engineState]` only while rendering a stable-mode
+indicator and restores `_switchTime` immediately afterwards. Switching
+states retain their authoritative remaining time; engine critical/destroyed
+handling, observers, postmortem and disposal remain native. This displays
+2.0/1.3 seconds for Strv S1/103/103B and 2.0/2.0 for UDES without changing
+their physical mode transitions or hard-coding a shared display duration.
+
+The native Shop's upper-right `actionsFilterView` sends its selection through
+`requestTableData`; it is not a separate hyperlink callback. In Special Offers
+the redundant selector is hidden and its mouse interaction disabled. In the
+regular Shop a selected request preserves the normal shop filters, saves the
+discount flag as false and schedules navigation to the native Offers tab with
+its independent filters reset. Navigation runs after the Flash callback has
+finished accessing `storeTable`, avoiding disposal of an in-use component.
+Repeated clicks coalesce; disposal, account changes or adapter removal retire
+the queued navigation without changing filters.
+
+The later Ruinberg report locates the crushed-car observation at
+`env418_OldGMercedes1.model`, chunk 33407 / item 36, around
+`(340.126, 13.579, 46.447)`. Its suspension-plane residuals of 0.129 and
+0.091 metres are not measurements of visual penetration. Existing support
+layers were logged only for a hard contact, while this traversal remained
+clear. `LOCAL PROP SUPPORT` now samples at a separate two-second cadence,
+including constant-speed travel, only over a locally identified,
+authoritatively destroyed road vehicle with native destruction delivered.
+It reuses the existing wheel samples and local catalogue; it adds no native
+queries or guessed geometry and preserves the original stall-report cadence.
+The supplied reports and local resource references do not contain the
+damaged visual/BSP or this car's wheel support layers, so a contour-matching
+collision change remains unproved and is not claimed by this patch. Restoring
+the original intact-car bounds would reintroduce an invisible obstacle.
+
+The Strv S1 travel complaint remains a native acceptance item. The report
+contains intermittent `world=pending`/`soft_hold` intervals while destructible
+structure models change; it does not prove one continuous half-second stall
+or a bad engine coefficient. Repeated stable Siege snapshots already skip
+descriptor/velocity resets, and a destroyed structure's hold deadline is
+written once rather than extended by each query. New Siege request, ack and
+state-edge diagnostics record input sequence, drive input, pending mode,
+actual speed and descriptor limits, capped at 128 records per round. Existing
+throttled movement diagnostics provide the contact context. This adds
+evidence for the next Windows run without changing physical coefficients,
+collision safety or the model-switch wait interval.

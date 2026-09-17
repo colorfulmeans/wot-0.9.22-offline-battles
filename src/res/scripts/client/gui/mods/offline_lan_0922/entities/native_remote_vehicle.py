@@ -15,7 +15,7 @@ import sys
 
 from gui.mods.offline_lan_0922.entities.remote_vehicle import (
     _RemoteShotPresenter, _blend_angle, _component_aim_angles,
-    _write_changed_pose,
+    _write_changed_pose, _native_ypr,
     clear_ground_decal_visibility_state, close_stock_presentation_extras,
     set_model_attachment_visibility)
 
@@ -207,9 +207,8 @@ class _NativeRemoteState(object):
         self._data_links = data_links
         self._authority_geometry = bool(authority_geometry)
         self.position = math_module.Vector3(position)
-        self.roll = float(rotation[0])
-        self.pitch = float(rotation[1])
-        self.yaw = float(rotation[2])
+        self.yaw, self.pitch, self.roll = _native_ypr(
+            (rotation[2], rotation[1], rotation[0]))
         self.speed = 0.0
         self.turn_speed = 0.0
         # Keep stable callable objects alive for the native #1513 data-link
@@ -445,7 +444,7 @@ class _NativeRemoteState(object):
 
     @staticmethod
     def _write_pose(matrix, pose):
-        matrix.setRotateYPR((pose[3], pose[4], pose[5]))
+        matrix.setRotateYPR(_native_ypr((pose[3], pose[4], pose[5])))
         matrix.translation = (pose[0], pose[1], pose[2])
 
     def _mirror_pose(self, now):
@@ -782,12 +781,14 @@ class _NativeRemoteState(object):
         return entity
 
     def set_pose(self, position, rotation, relax_time=None, now=None):
+        yaw, pitch, roll = _native_ypr(
+            (rotation[2], rotation[1], rotation[0]))
         previous_position = self.position
         previous_yaw = self.yaw
         self.position = self._math.Vector3(position)
-        self.roll = float(rotation[0])
-        self.pitch = float(rotation[1])
-        self.yaw = float(rotation[2])
+        self.roll = roll
+        self.pitch = pitch
+        self.yaw = yaw
         self._write_matrix(self.matrix)
         self._retarget(relax_time, now)
         self._update_motion(previous_position, previous_yaw, now)

@@ -330,6 +330,12 @@ def _install_shop():
         def as_initFiltersDataS(self, nations, action_label):
             result = Shop.as_initFiltersDataS(self, nations, action_label)
             if self._isDAAPIInited():
+                # The native ShopUI includes its discount selector even when
+                # reused for Offers. All rows here are already bond offers.
+                actions = self.flashObject.actionsFilterView
+                actions.visible = False
+                actions.mouseEnabled = False
+                actions.mouseChildren = False
                 _hide_bond_extra_categories(self.flashObject.form.menu)
             return result
 
@@ -373,6 +379,47 @@ def _install_shop():
         def buyItem(self, itemCD, unused_trade_in=False):
             return _buy_vehicle(self, itemCD)
 
+    original_table_request = Shop.requestTableData
+
+    def request_shop_table(view, nation, actions_selected, item_type, filters):
+        # ActionsFilterView.SELECT reaches Python through requestTableData.
+        # Keep the regular shop's saved selection usable when returning here;
+        # the offline control opens Offers instead of filtering retail sales.
+        result = original_table_request(
+            view, nation, False if actions_selected else actions_selected,
+            item_type, filters)
+        if (not actions_selected or not view._isDAAPIInited() or
+                getattr(view, '_offlineOffersPending', False)):
+            return result
+        import BigWorld
+        account = BigWorld.player()
+        view._offlineOffersPending = True
+
+        def open_offers():
+            view._offlineOffersPending = False
+            if (not view._isDAAPIInited() or BigWorld.player() is not account or
+                    Shop.__dict__.get('requestTableData') is not request_shop_table):
+                return
+            from gui.shared import events, EVENT_BUS_SCOPE
+            all_vehicles = copy.deepcopy(AccountSettings.getFilterDefault(
+                'shop_' + STORE_CONSTANTS.VEHICLE))
+            all_vehicles['obtainingType'] = STORE_CONSTANTS.VEHICLE
+            all_vehicles['extra'] = []
+            AccountSettings.setFilter(prefix + '_current',
+                                      (-1, STORE_CONSTANTS.VEHICLE, False))
+            AccountSettings.setFilter(prefix + '_' + STORE_CONSTANTS.VEHICLE,
+                                      all_vehicles)
+            view.fireEvent(events.LoadViewEvent(VIEW_ALIAS.LOBBY_STORE,
+                ctx={'tabId': STORE_CONSTANTS.STORE_ACTIONS}),
+                scope=EVENT_BUS_SCOPE.LOBBY)
+
+        # StoreComponent.updateTable still accesses its table after this
+        # Python callback returns. Let that Flash stack finish before the
+        # non-cached StoreView destroys Shop and creates BondShop.
+        BigWorld.callback(0.0, open_offers)
+        return result
+
+    _patch(Shop, 'requestTableData', request_shop_table)
     original_init = StoreView.as_initS
 
     def init_store(view, data):
@@ -808,8 +855,8 @@ def _install_settings():
     def packet(view, period, cost, default_cost, gold, can_buy):
         result = original_packet(view, period, cost, default_cost, gold, can_buy)
         if int(period) == 90:
-            # #1513 lacks this packet image. Ship a real 90-day emblem with
-            # the mod rather than displaying the stock 180-day product.
+            # Keep the 90-day artwork explicit for the offline shop packet.
+            # Other durations keep the client's own resource selection.
             result['image'] = '../maps/icons/offline_lan/premium_90_98.png'
         return result
 
