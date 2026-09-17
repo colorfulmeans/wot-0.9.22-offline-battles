@@ -775,7 +775,9 @@ class VehicleOverlayTest(unittest.TestCase):
             record("HiddenCreditTank", 1000, 0, True, 3),
         ]
         with mock.patch.object(vehicle_overlays, "_vehicle_roster_from_archive",
-                               return_value=records):
+                               return_value=records), \
+                mock.patch.object(vehicle_overlays, "list_vehicle_choices",
+                                  return_value=[]):
             rows = vehicle_overlays.list_gold_vehicles(self.game)
         self.assertEqual(["germany:G04_PzVI_Tiger_IA"],
                          [row["name"] for row in rows])
@@ -798,7 +800,9 @@ class VehicleOverlayTest(unittest.TestCase):
                         credits=0, notInShop=False)
                    for nation, vehicle, tags in unavailable]
         with mock.patch.object(vehicle_overlays, "_vehicle_roster_from_archive",
-                               return_value=records):
+                               return_value=records), \
+                mock.patch.object(vehicle_overlays, "list_vehicle_choices",
+                                  return_value=[]):
             self.assertEqual([], vehicle_overlays.list_gold_vehicles(self.game))
 
     def test_vehicle_browser_resolves_shared_topology_and_impact(self):
