@@ -2891,8 +2891,7 @@ class GarageState(object):
                 completed_ids) for initial in initial_ids):
             raise GarageError('NOT_UNLOCKED_QUEST')
         cost = 4 if mission.isFinal else 1
-        balance = data.personal_mission_orders(
-            self._snapshot.get('personalMissionOrders', 0))
+        balance = personal_campaign.order_balance(self._snapshot)
         if balance < cost:
             raise GarageError('NOT_ENOUGH_FREE_TOKENS')
         with self._transaction():

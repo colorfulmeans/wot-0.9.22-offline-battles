@@ -334,14 +334,74 @@ def _earned_order_count(definition):
                if value(row, 'id') == 'free_award_list')
 
 
+def order_balance(snapshot):
+    """Available orders are earned final rewards less still-pledged orders.
+
+    A legacy manually entered balance is not an entitlement. Excess legacy
+    pledges remain attached to completed missions, but their later refund can
+    only release real earned orders, never manufacture a positive balance.
+    """
+    progress = data.personal_mission_completed(snapshot.get('personalMissionProgress'))
+    journal = snapshot.get('personalMissionRewardJournal') or {}
+    earned = 0
+    for mission_id in range(15, 301, 15):
+        key = str(mission_id)
+        if progress.get(key) == 2:
+            row = journal.get('orders:' + key) or {}
+            earned += max(0, int(row.get('count', 0)))
+    pledged = sum(int(count) for count in
+                  (snapshot.get('personalMissionPawned') or {}).values())
+    return max(0, earned - pledged)
+
+
+def _reconcile_order_balance(state):
+    snapshot = state.snapshot()
+    balance = order_balance(snapshot)
+    if snapshot.get('personalMissionOrders', 0) != balance:
+        snapshot['personalMissionOrders'] = balance
+        state.revision += 1
+    return balance
+
+
+def _reconcile_order_sources(state, definitions=None, open_section=None):
+    """Restore missing legacy receipts and validate counts against live XML."""
+    snapshot = state.snapshot()
+    progress = data.personal_mission_completed(snapshot.get('personalMissionProgress'))
+    rewarded = data.personal_mission_completed(snapshot.get('personalMissionRewarded'))
+    journal = dict(snapshot.get('personalMissionRewardJournal') or {})
+    for key in list(journal):
+        if key.startswith('orders:'):
+            del journal[key]
+    for mission_id in range(15, 301, 15):
+        key = str(mission_id)
+        if progress.get(key) != 2 or rewarded.get(key, 0) < 2:
+            continue
+        definition = (definitions[mission_id] if definitions is not None
+                      else mission_definition(mission_id, open_section))
+        count = _earned_order_count(definition)
+        if count:
+            journal['orders:' + key] = {'count': count}
+    if journal != (snapshot.get('personalMissionRewardJournal') or {}):
+        snapshot['personalMissionRewardJournal'] = journal
+        state.revision += 1
+    _reconcile_order_balance(state)
+
+
 def settle(state, now=None, definitions=None, open_section=None):
     """Pay permanent stages once; resettable orders and crew have provenance."""
     now = int(time.time() if now is None else now)
+    granted, pending = [], []
+    # Normalize before a reset checks its available refund budget. A save
+    # without completed missions still needs to lose its old manual balance.
+    _reconcile_order_balance(state)
+    try:
+        _reconcile_order_sources(state, definitions, open_section)
+    except Exception as error:
+        pending.append(('orders', str(error)))
     reset_error = _apply_requested_progress(state)
     snapshot = state.snapshot()
     progress = data.personal_mission_completed(snapshot.get('personalMissionProgress'))
     rewarded = data.personal_mission_completed(snapshot.get('personalMissionRewarded'))
-    granted, pending = [], []
     for key in sorted(progress, key=int):
         level, paid = progress[key], rewarded.get(key, 0)
         order_key = 'orders:' + key
@@ -349,7 +409,8 @@ def settle(state, now=None, definitions=None, open_section=None):
         # Only final missions earn an order. Unchanged ordinary missions need
         # no resource read on every later battle settlement.
         order_may_be_due = level == 2 and int(key) % 15 == 0 and order_key not in journal
-        if paid >= level and not order_may_be_due:
+        pawn_may_be_due = level == 2 and key in snapshot.get('personalMissionPawned', {})
+        if paid >= level and not order_may_be_due and not pawn_may_be_due:
             continue
         try:
             definition = (definitions[int(key)] if definitions is not None
@@ -360,7 +421,8 @@ def settle(state, now=None, definitions=None, open_section=None):
                     if stage == 1 and key in snapshot.get('personalMissionPawned', {}):
                         stage_name = 'main_award_list'
                     _grant_bonus(state, child(definition[stage_name], 'bonus'), now)
-                earned_orders = _earned_order_count(definition) if level == 2 else 0
+                earned_orders = (_earned_order_count(definition)
+                                 if level == 2 and int(key) % 15 == 0 else 0)
                 if earned_orders and order_key not in journal:
                     if paid >= 2:
                         # A prior reset retained the credits/items receipt but
@@ -389,6 +451,7 @@ def settle(state, now=None, definitions=None, open_section=None):
     except Exception as error:
         pending.append(('operation', str(error)))
         operation_rewards = []
+    _reconcile_order_balance(state)
     return {'completed': granted, 'operation_rewards': operation_rewards,
             'pending': pending, 'reset_error': reset_error}
 

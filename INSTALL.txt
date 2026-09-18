@@ -95,12 +95,18 @@ battle conditions and mission rewards separately. The launcher can edit all
 honors. Missing rewards arrive on the next garage load. Female crew rewards
 use the game's own nationality, vehicle and role chooser. Resetting main
 completion reclaims its female crew; resetting honors withdraws earned orders.
+Clearing any main completion resets its chain's final and all five classes in
+every later operation. Clearing honors alone changes no other task.
 Other rewards remain claimed and cannot be earned twice. A failed order
 withdrawal leaves the original progress and property unchanged and reports the
 reason in the launcher mission editor. Owned reward tanks are retained; first
 operation completion compensates an already owned tank once at its stock
 credit sale value, an explicit offline rule.
 Orders come from mission honors rewards; the launcher has no order-count input.
+The balance is derived from honored-final claims minus current pledges; old
+manually supplied extras are removed. Four operations can earn 20 orders in
+total. Cancelling and redoing missions or reclaiming pledges cannot exceed
+those earned entitlements.
 
 The badge slot in the account popover opens the native badge page. Acquired
 badges can be selected, and ownership and selection are saved with the account.

@@ -657,6 +657,125 @@ class BootstrapLifecycleTests(unittest.TestCase):
         return self._build(
             save_mode='new_account', starters=self.STARTER_NAMES)
 
+    def _campaign_modules(self, modules):
+        """Use the real campaign/store with the native resource read shape."""
+        import xml.etree.ElementTree as ET
+
+        def section(element):
+            return types.SimpleNamespace(
+                asString=element.text or '',
+                items=lambda: [(child.tag, section(child))
+                               for child in element])
+
+        resource_root = 'scripts/item_defs/potapov_quests/'
+        resources = {
+            resource_root + 'list.xml': ET.fromstring(
+                '<root><regular_1_1_1/></root>'),
+            resource_root + 'regular/tile_1/chain_1/regular_1_1_1.xml':
+                ET.fromstring('<root><quests>' + ''.join(
+                    '<potapovQuest><id>regular_1_1_1_%s</id><bonus>%s'
+                    '</bonus></potapovQuest>' % (
+                        stage, '<credits>1234</credits>'
+                        if stage == 'main' else '')
+                    for stage in ('main', 'main_award_list',
+                                  'add', 'add_award_list')) +
+                    '</quests></root>'),
+        }
+        modules['ResMgr'] = types.SimpleNamespace(
+            openSection=lambda path: (section(resources[path])
+                                      if path in resources else None))
+        config = modules['gui.mods.offline_lan_0922.config']
+        config.rotate_state_backup = lambda path: None
+        # These modules retain the config/data objects they import. Load them
+        # inside this client's isolated package, not another test's globals.
+        with mock.patch.dict(sys.modules, modules):
+            for relative in ('account_rpc/garage', 'personal_campaign',
+                             'personal_campaign_ledger', 'friendly_fire',
+                             'account_rpc/garage_store'):
+                name = 'gui.mods.offline_lan_0922.' + relative.replace('/', '.')
+                modules[name] = _real_module(relative, name)
+        return modules['gui.mods.offline_lan_0922.account_rpc.garage_store']
+
+    def test_queued_campaign_edit_is_settled_saved_and_published_at_startup(self):
+        bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
+            unused_spaces, unused_events, modules = self._load()
+        store_module = self._campaign_modules(modules)
+        with mock.patch.dict(sys.modules, modules):
+            snapshot = bootstrap._selected_vehicle(
+                {'vehicle': 'ussr:R11_MS-1'}, restore_saved=False)
+            credits = snapshot['wallet']['credits']
+            snapshot['personalMissionRequestedCompleted'] = {'1': 1}
+            snapshot['personalMissionRequestedRegular'] = [2]
+            store = store_module.GarageStore()
+            store.mark_dirty()
+            self.assertTrue(store.flush(snapshot))
+
+            # A new process reads the pending request from the real save and
+            # passes both native descriptors and relational publication checks.
+            bootstrap._store = store_module.GarageStore()
+            settled = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
+            published = ACCOUNT_DATA.stats(settled)
+            inventory = ACCOUNT_DATA.inventory(settled)['inventory']
+            with open(store._path, encoding='utf-8') as stream:
+                saved = json.load(stream)['ledger']
+
+            self.assertEqual({'1': 1}, settled['personalMissionProgress'])
+            self.assertEqual({'1': 1}, settled['personalMissionRewarded'])
+            self.assertNotIn('personalMissionRequestedCompleted', settled)
+            self.assertEqual([2], settled['personalMissionSelections']['regular'])
+            self.assertEqual(credits + 1234, published['stats']['credits'])
+            self.assertEqual(len(settled['vehicles']),
+                             len(inventory[1]['compDescr']))
+            self.assertEqual({'1': 1}, saved['personalMissions']['completed'])
+            self.assertNotIn('requestedCompleted', saved['personalMissions'])
+            self.assertEqual(credits + 1234, saved['wallet']['credits'])
+
+            # Recreating the Account from the committed file must not pay it
+            # again or resurrect the launcher's consumed request.
+            bootstrap._store = store_module.GarageStore()
+            restarted = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
+            self.assertEqual(credits + 1234, restarted['wallet']['credits'])
+            self.assertNotIn('personalMissionRequestedCompleted', restarted)
+
+    def test_campaign_edit_stays_pending_when_the_save_cannot_be_committed(self):
+        bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
+            unused_spaces, unused_events, modules = self._load()
+        store_module = self._campaign_modules(modules)
+        with mock.patch.dict(sys.modules, modules):
+            snapshot = bootstrap._selected_vehicle(
+                {'vehicle': 'ussr:R11_MS-1'}, restore_saved=False)
+            credits = snapshot['wallet']['credits']
+            snapshot['personalMissionRequestedCompleted'] = {'1': 1}
+            bootstrap._store = store_module.GarageStore()
+            config = modules['gui.mods.offline_lan_0922.config']
+            with mock.patch.object(config, 'write_json',
+                                   side_effect=OSError('disk full')) as writer:
+                bootstrap._settle_launcher_campaign(
+                    snapshot, modules['items'].vehicles, modules['items'].tankmen)
+            writer.assert_called_once()
+            self.assertEqual({'1': 1}, snapshot['personalMissionRequestedCompleted'])
+            self.assertEqual(credits, snapshot['wallet']['credits'])
+            self.assertFalse(snapshot.get('personalMissionProgress'))
+
+    def test_startup_reconciles_legacy_orders_even_without_any_mission_progress(self):
+        bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
+            unused_spaces, unused_events, modules = self._load()
+        store_module = self._campaign_modules(modules)
+        with mock.patch.dict(sys.modules, modules):
+            snapshot = bootstrap._selected_vehicle(
+                {'vehicle': 'ussr:R11_MS-1'}, restore_saved=False)
+            snapshot['personalMissionOrders'] = 21
+            store = store_module.GarageStore()
+            store.mark_dirty()
+            self.assertTrue(store.flush(snapshot))
+
+            bootstrap._store = store_module.GarageStore()
+            restored = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
+            self.assertEqual(0, restored['personalMissionOrders'])
+            with open(store._path, encoding='utf-8') as stream:
+                saved = json.load(stream)['ledger']['personalMissions']
+            self.assertEqual(0, saved['orders'])
+
     def test_bond_offers_survive_full_account_sync_without_granting_ownership(self):
         # The launcher waits for the worker's full Account sync before opening
         # the visible client. Include a real offer name absent from the garage;
@@ -1491,7 +1610,9 @@ class BootstrapLifecycleTests(unittest.TestCase):
         initial = {'vehicles': [{'id': 1, 'compDescr': b'stock'},
                                 {'id': 2, 'compDescr': b'stock'}]}
         live = {'vehicles': [{'id': 1, 'compDescr': b'stock'},
-                             {'id': 2, 'compDescr': b'top-fitting'}]}
+                             {'id': 2, 'compDescr': b'top-fitting'}],
+                'vehicleTypeCompactDescrs': {90011},
+                'unlockItemCompactDescrs': {90011, 2002}}
         applied = []
         bound = []
 
@@ -1520,6 +1641,11 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 consumed.append(equipment_used)
                 misconduct.append((friendly_fire_facts, vehicle_type_name))
                 services.append((battle_start, daily_facts, training))
+                # An operation can award a new tank in this same receipt.
+                # Exercise the real data.stats call that computes research
+                # additions; unchanged research would skip the broken path.
+                snapshot['vehicleTypeCompactDescrs'].add(90012)
+                snapshot['unlockItemCompactDescrs'].add(90012)
                 return {'vehicle_id': 1, 'applied': True}
 
         banked = []
@@ -1568,6 +1694,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
                            'ussr:R11_MS-1')], misconduct)
         self.assertEqual(
             b'top-fitting', live['vehicles'][1]['compDescr'])
+        self.assertEqual({90012}, context['postbattle_added_unlocks'])
+        self.assertEqual({90012}, context['postbattle_added_eliteVehicles'])
 
     def test_the_ammunition_layout_mirrors_the_loaded_shells(self):
         (bootstrap, unused_callbacks, unused_compatibility,

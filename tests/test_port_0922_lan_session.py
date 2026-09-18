@@ -1,5 +1,6 @@
 from collections import OrderedDict
 import importlib.util
+import io
 import os
 from pathlib import Path
 import sys
@@ -1092,6 +1093,37 @@ class LANSessionTests(unittest.TestCase):
         self.assertEqual({'0': 12}, accepted[0]['shells_fired'])
         self.assertEqual([11001], accepted[0]['equipment_used'])
         self.assertEqual(40, accepted[0]['health'])
+
+    def test_rejected_receipt_remains_unacknowledged_and_retry_is_logged_once(self):
+        store = mock.Mock(account_key='account')
+        store.progress.return_value = {'battles': 0}
+        store.accept.side_effect = [RuntimeError('missing campaign data'),
+                                    True, False]
+        session = self.module.LANSession(
+            {}, postbattle_store=store, lobby_ready=lambda: True)
+        session.client = self.client
+        session._publish_postbattle_progress = mock.Mock(return_value=True)
+        session._publish_postbattle_results = mock.Mock(return_value=True)
+        output = io.StringIO()
+        with mock.patch.object(self.module.sys, 'stdout', output), \
+                mock.patch.object(self.module.time, 'time',
+                                  side_effect=[10.0, 10.25, 11.0, 11.5, 12.0]):
+            session._on_event('battle_receipt', {'receipt_id': 'r1'})
+            self.assertEqual([], self.client.receipt_acks)
+            session._publish_postbattle_progress.assert_not_called()
+            session._publish_postbattle_results.assert_not_called()
+            session._on_event('battle_receipt', {'receipt_id': 'r1'})
+            session._on_event('battle_receipt', {'receipt_id': 'r1'})
+
+        self.assertEqual(['r1', 'r1'], self.client.receipt_acks)
+        session._publish_postbattle_progress.assert_called_once_with()
+        self.assertEqual(2, session._publish_postbattle_results.call_count)
+        text = output.getvalue()
+        self.assertIn('receipt_id=r1 elapsed_ms=250.000', text)
+        self.assertIn('Traceback (most recent call last)', text)
+        self.assertIn('RuntimeError: missing campaign data', text)
+        self.assertEqual(1, text.count('battle receipt accepted'))
+        self.assertIn('receipt_id=r1 elapsed_ms=500.000', text)
 
     def test_lobby_view_notification_starts_postbattle_drain_without_retry(self):
         store = mock.Mock()

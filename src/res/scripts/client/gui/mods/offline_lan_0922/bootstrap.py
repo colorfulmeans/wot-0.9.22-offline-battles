@@ -12,7 +12,7 @@ from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922 import instance_guard
 from gui.mods.offline_lan_0922 import vehicle_blacklist
 from gui.mods.offline_lan_0922 import vehicle_records
-from gui.mods.offline_lan_0922.account_rpc import economy
+from gui.mods.offline_lan_0922.account_rpc import data, economy
 from gui.mods.offline_lan_0922.vehicle_records import (
     STOCKED_ITEM_TYPES,
     default_consumables, default_vehicle_settings, offers_in_random_battle,
@@ -265,7 +265,6 @@ def _validate_restored_garage(snapshot):
     validates the relational snapshot. A saved fitting can differ from the
     initial stock descriptor without invalidating the player's whole garage.
     """
-    from gui.mods.offline_lan_0922.account_rpc import data
     from items import customizations, tankmen, vehicles
     records = snapshot.get('vehicles')
     if not isinstance(records, (list, tuple)):
@@ -451,7 +450,6 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
     may succeed once the reason is understood.
     """
     from gui.mods.offline_lan_0922 import launcher_inbox
-    from gui.mods.offline_lan_0922.account_rpc import data
     from items import ITEM_TYPE_INDICES
 
     try:
@@ -530,6 +528,9 @@ def _settle_launcher_campaign(snapshot, vehicles, tankmen):
     """Deliver edited completion and its reward markers in one durable save."""
     if not (snapshot.get('personalMissionProgress') or
             snapshot.get('personalMissionTokens') or
+            snapshot.get('personalMissionOrders') or
+            snapshot.get('personalMissionPawned') or
+            snapshot.get('personalMissionRewardJournal') or
             'personalMissionRequestedCompleted' in snapshot):
         return
     from gui.mods.offline_lan_0922 import personal_campaign

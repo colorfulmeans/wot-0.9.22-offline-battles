@@ -60,13 +60,16 @@ class RewardsTests(unittest.TestCase):
 
     def test_spent_order_rejects_whole_reset_and_consumes_failed_request(self):
         state = fixture._state()
-        state.snapshot().update(personalMissionProgress={'15': 2},
+        state.snapshot().update(personalMissionProgress={'15': 2, '1': 1},
             personalMissionRewarded={'15': 2}, personalMissionOrders=0,
+            personalMissionPawned={'1': 1},
             personalMissionRewardJournal={'orders:15': {'count': 1}},
-            personalMissionRequestedCompleted={})
-        definition = {15: {'main': quest(node()), 'add': quest(node(token=token('free_award_list')))}}
+            personalMissionRequestedCompleted={'1': 1})
+        definition = {1: {'main': quest(node()), 'main_award_list': quest(node()),
+                          'add': quest(node())},
+                      15: {'main': quest(node()), 'add': quest(node(token=token('free_award_list')))}}
         result = campaign.settle(state, now=100, definitions=definition)
-        self.assertEqual({'15': 2}, state.snapshot()['personalMissionProgress'])
+        self.assertEqual({'15': 2, '1': 1}, state.snapshot()['personalMissionProgress'])
         self.assertEqual(0, state.snapshot()['personalMissionOrders'])
         self.assertEqual('PERSONAL_MISSION_RESET_ORDERS_SPENT', result['reset_error'])
         self.assertNotIn('personalMissionRequestedCompleted', state.snapshot())
@@ -78,10 +81,13 @@ class RewardsTests(unittest.TestCase):
             personalMissionPawned={'30': 4},
             personalMissionRewardJournal={'orders:15': {'count': 1}},
             personalMissionRequestedCompleted={})
-        result = campaign.settle(state, now=100, definitions={})
+        definition = {15: {'main': quest(node()), 'add': quest(node(token=token('free_award_list')))}}
+        result = campaign.settle(state, now=100, definitions=definition)
         self.assertEqual('', result['reset_error'])
         self.assertEqual({}, state.snapshot()['personalMissionProgress'])
-        self.assertEqual(3, state.snapshot()['personalMissionOrders'])
+        # The old four-order pledge exceeded the one earned order. Returning
+        # it and withdrawing that one reward leaves no phantom free orders.
+        self.assertEqual(0, state.snapshot()['personalMissionOrders'])
 
     def test_crew_provenance_survives_duplicate_descriptors_and_new_inventory_ids(self):
         from gui.mods.offline_lan_0922.account_rpc import garage_store
@@ -127,7 +133,7 @@ class RewardsTests(unittest.TestCase):
         self.assertEqual({801: b'one'}, state.snapshot()['vehicles'][0]['tankmen'])
 
 
-    def test_order_honors_refunds_pawn_and_keeps_manually_supplied_balance(self):
+    def test_order_honors_refunds_pawn_and_discards_manually_supplied_balance(self):
         state = fixture._state()
         state.snapshot().update(personalMissionProgress={'270': 2},
             personalMissionRewarded={'270': 1}, personalMissionPawned={'270': 4},
@@ -135,10 +141,101 @@ class RewardsTests(unittest.TestCase):
         definition = {270: {'main': quest(node()), 'add': quest(node(
             token=token('free_award_list'), credits=node(500000)))}}
         campaign.settle(state, now=100, definitions=definition)
-        self.assertEqual(26, state.snapshot()['personalMissionOrders'])
+        self.assertEqual(1, state.snapshot()['personalMissionOrders'])
         self.assertEqual({}, state.snapshot()['personalMissionPawned'])
         campaign.settle(state, now=101, definitions=definition)
-        self.assertEqual(26, state.snapshot()['personalMissionOrders'])
+        self.assertEqual(1, state.snapshot()['personalMissionOrders'])
+
+    def test_all_final_honors_repeated_resets_and_full_cascade_never_inflate_orders(self):
+        state = fixture._state()
+        definitions = dict((qid, {'main': quest(node(credits=node(100))),
+            'add': quest(node(token=token('free_award_list'), credits=node(200)))})
+            for qid in range(15, 301, 15))
+        all_honors = dict((str(qid), 2) for qid in definitions)
+        state.snapshot().update(personalMissionProgress=all_honors.copy(),
+                                personalMissionOrders=21)
+        campaign.settle(state, now=100, definitions=definitions)
+        self.assertEqual(20, state.snapshot()['personalMissionOrders'])
+        paid_credits = state.snapshot()['wallet']['credits']
+        for unused in range(3):
+            for key in sorted(all_honors, key=int):
+                requested = all_honors.copy()
+                requested[key] = 1
+                state.snapshot()['personalMissionRequestedCompleted'] = requested
+                campaign.settle(state, now=101, definitions=definitions)
+                self.assertEqual(19, state.snapshot()['personalMissionOrders'])
+                state.snapshot()['personalMissionRequestedCompleted'] = all_honors.copy()
+                campaign.settle(state, now=102, definitions=definitions)
+                self.assertEqual(20, state.snapshot()['personalMissionOrders'])
+        state.snapshot()['personalMissionRequestedCompleted'] = {}
+        campaign.settle(state, now=103, definitions=definitions)
+        self.assertEqual(0, state.snapshot()['personalMissionOrders'])
+        self.assertEqual({}, state.snapshot()['personalMissionProgress'])
+        state.snapshot()['personalMissionRequestedCompleted'] = all_honors.copy()
+        campaign.settle(state, now=104, definitions=definitions)
+        self.assertEqual(20, state.snapshot()['personalMissionOrders'])
+        self.assertEqual(paid_credits, state.snapshot()['wallet']['credits'])
+
+    def test_old_empty_save_cannot_retain_manual_orders(self):
+        state = fixture._state()
+        state.snapshot()['personalMissionOrders'] = 21
+        result = campaign.settle(state, now=100, definitions={})
+        self.assertFalse(result['pending'])
+        self.assertEqual(0, state.snapshot()['personalMissionOrders'])
+
+    def test_legacy_paid_honors_rebuild_unique_sources_from_resource_counts(self):
+        state = fixture._state()
+        definitions = {15: {'main': quest(node()),
+            'add': quest(node(token=token('free_award_list', 3)))}}
+        state.snapshot().update(personalMissionProgress={'15': 2},
+            personalMissionRewarded={'15': 2}, personalMissionOrders=21,
+            personalMissionRewardJournal={'orders:15': {'count': 100},
+                'orders:1': {'count': 50}, 'orders:30': {'count': 50}})
+        campaign.settle(state, now=100, definitions=definitions)
+        self.assertEqual(3, state.snapshot()['personalMissionOrders'])
+        self.assertEqual({'orders:15': {'count': 3}},
+                         state.snapshot()['personalMissionRewardJournal'])
+        state.snapshot()['personalMissionRewardJournal'] = {}
+        campaign.settle(state, now=101, definitions=definitions)
+        self.assertEqual(3, state.snapshot()['personalMissionOrders'])
+        self.assertEqual(100000, state.snapshot()['wallet']['credits'])
+
+    def test_legacy_excess_pledges_absorb_earnings_until_cleared(self):
+        state = fixture._state()
+        definitions = dict((qid, {'main': quest(node()),
+            'main_award_list': quest(node()),
+            'add': quest(node(token=token('free_award_list')))})
+            for qid in (15, 30, 45, 60, 75))
+        progress = {'15': 1, '30': 2}
+        state.snapshot().update(personalMissionProgress=progress.copy(),
+            personalMissionRewarded=progress.copy(), personalMissionOrders=21,
+            personalMissionPawned={'15': 4})
+        campaign.settle(state, now=100, definitions=definitions)
+        self.assertEqual(0, state.snapshot()['personalMissionOrders'])
+        self.assertEqual({'15': 4}, state.snapshot()['personalMissionPawned'])
+        for qid in (45, 60, 75):
+            state.snapshot()['personalMissionProgress'][str(qid)] = 2
+            campaign.settle(state, now=101, definitions=definitions)
+            self.assertEqual(0, state.snapshot()['personalMissionOrders'])
+        state.snapshot()['personalMissionProgress']['15'] = 2
+        campaign.settle(state, now=102, definitions=definitions)
+        self.assertEqual(5, state.snapshot()['personalMissionOrders'])
+        self.assertEqual({}, state.snapshot()['personalMissionPawned'])
+        campaign.settle(state, now=103, definitions=definitions)
+        self.assertEqual(5, state.snapshot()['personalMissionOrders'])
+
+    def test_paid_honors_migration_also_releases_old_pledges_once(self):
+        state = fixture._state()
+        definitions = {15: {'main': quest(node()),
+            'add': quest(node(token=token('free_award_list')))}}
+        state.snapshot().update(personalMissionProgress={'15': 2},
+            personalMissionRewarded={'15': 2}, personalMissionOrders=21,
+            personalMissionPawned={'15': 4})
+        campaign.settle(state, now=100, definitions=definitions)
+        self.assertEqual({}, state.snapshot()['personalMissionPawned'])
+        self.assertEqual(1, state.snapshot()['personalMissionOrders'])
+        campaign.settle(state, now=101, definitions=definitions)
+        self.assertEqual(1, state.snapshot()['personalMissionOrders'])
 
     def test_reward_failure_rolls_back_whole_stage_and_remains_pending(self):
         state = fixture._state()

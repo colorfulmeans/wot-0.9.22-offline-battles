@@ -215,12 +215,14 @@ _CHINESE = {
     "INVALID_PERSONAL_MISSION_REWARD_JOURNAL":
         "任务奖励记录异常，原进度和奖励已保留。",
     "Account badges saved.": "账号勋章已保存。",
-    "Required earlier missions are completed automatically, without honors. "
-    "Edits and rewards are applied on the next game launch. Resets reclaim mission "
-    "orders and female crew; other rewards remain claimed and cannot be issued twice. "
+    "Completing a later mission fills required earlier tasks without honors. "
+    "Clearing completion resets this chain's final and every later operation. "
+    "Clearing honors affects only this task. Earned orders and female crew are "
+    "reclaimed; tanks and other paid rewards remain. Changes apply on next game launch. "
     "Close the game before saving.":
-        "勾选后自动完成必要前置任务（不自动完美完成）；取消前置也会取消依赖它的后续任务。"
-        "下次启动游戏时结算：回收取消任务对应的女乘员和奖励通行令，其他已领奖励保留且不重复发放。保存前请关闭游戏。",
+        "勾选后自动完成必要前置任务，不自动完美完成。取消完成会取消本列第15项及后续所有奖励车的全部任务；"
+        "仅取消完美完成不影响其他任务。回收对应女乘员和奖励通行令，坦克及其他已领奖励保留且不重复发放。"
+        "下次启动游戏时结算，保存前请关闭游戏。",
     "Close World of Tanks before editing personal missions.": "修改前请关闭坦克世界。",
     "Customize save...": "自定义存档…",
     "Customize save: %s": "自定义存档：%s",

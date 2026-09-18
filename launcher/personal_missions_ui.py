@@ -58,9 +58,10 @@ class PersonalMissionsDialog(object):
             tk.Button(actions, text=tr(text), command=lambda v=value: self.set_chain(v)).pack(
                 side="left", fill="x", expand=True)
         tk.Label(self.window, text=tr(
-            "Required earlier missions are completed automatically, without honors. "
-            "Edits and rewards are applied on the next game launch. Resets reclaim mission "
-            "orders and female crew; other rewards remain claimed and cannot be issued twice. "
+            "Completing a later mission fills required earlier tasks without honors. "
+            "Clearing completion resets this chain's final and every later operation. "
+            "Clearing honors affects only this task. Earned orders and female crew are "
+            "reclaimed; tanks and other paid rewards remain. Changes apply on next game launch. "
             "Close the game before saving."),
             wraplength=520, justify="left").pack(
                 fill="x", padx=12, pady=4)

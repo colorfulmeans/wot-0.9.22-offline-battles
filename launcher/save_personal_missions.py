@@ -58,10 +58,11 @@ def prerequisites(mission):
     return ()
 
 
-def complete_prerequisites(progress):
+def complete_prerequisites(progress, newly_completed=None):
     """Add required main completions without upgrading any task to honors."""
     result = normalize(progress)
-    pending = [int(key) for key in result]
+    pending = ([int(key) for key in result] if newly_completed is None
+               else list(newly_completed))
     while pending:
         for required in prerequisites(pending.pop()):
             key = str(required)
@@ -77,23 +78,28 @@ def edit_progress(progress, mission_ids, value):
     if type(value) is not int or value not in (0, 1, 2):
         raise ValueError("Invalid personal-mission state.")
     ids = set(mission_ids)
+    newly_completed = []
     for mission in ids:
         prerequisites(mission)
         if value:
+            if str(mission) not in result:
+                newly_completed.append(mission)
             result[str(mission)] = value
         else:
             result.pop(str(mission), None)
     if value:
-        return complete_prerequisites(result)
-    removed = set(ids)
-    while True:
-        dependents = {int(key) for key in result
-                      if removed.intersection(prerequisites(int(key)))}
-        if not dependents:
-            return result
-        for mission in dependents:
-            result.pop(str(mission), None)
-        removed.update(dependents)
+        # Downgrading honors changes no other task, including a final that
+        # was legitimately completed with orders instead of its fourteen tasks.
+        return complete_prerequisites(result, newly_completed)
+    if not ids:
+        return result
+    # Include absent intermediate finals: an older or order-skipped save can
+    # contain later operations without every prerequisite completion flag.
+    # A main reset invalidates every class in every later operation.
+    finals = {((mission - 1) // 15 + 1) * 15 for mission in ids}
+    last_allowed = (min((mission - 1) // 75 for mission in ids) + 1) * 75
+    return {key: level for key, level in result.items()
+            if int(key) not in finals and int(key) <= last_allowed}
 
 
 def _target(slot_id, game_root=None, environment=None, root=None):
@@ -133,9 +139,14 @@ def write_progress(slot_id, progress, game_root=None, environment=None,
     normalized = normalize(progress)
     if normalized != progress:
         raise save_ledger.SaveLedgerError("Invalid personal-mission progress.")
-    normalized = complete_prerequisites(normalized)
     path, state, previous, has_garage = _target(
         slot_id, game_root, environment, root)
+    previous = normalize(previous)
+    removed = [int(key) for key in previous if key not in normalized]
+    if removed:
+        normalized = edit_progress(normalized, removed, 0)
+    normalized = complete_prerequisites(normalized,
+        [int(key) for key in normalized if key not in previous])
     if has_garage:
         missions = state.setdefault("ledger", {}).setdefault("personalMissions", {})
         # The native client can identify granted crew and settle orders. Keep

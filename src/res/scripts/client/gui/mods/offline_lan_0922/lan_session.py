@@ -6,6 +6,7 @@ import base64
 import math
 import sys
 import time
+import traceback
 
 from gui.mods.offline_lan_0922.ui_i18n import as_text, tr
 
@@ -2680,13 +2681,23 @@ class LANSession(object):
             store = self._postbattle_store
             if store is None:
                 return
+            started = time.time()
             try:
                 accepted = store.accept(message)
             except Exception as error:
                 sys.stdout.write(
-                    '[Offline LAN 0.9.22] battle receipt was rejected: %s\n'
-                    % error)
+                    '[Offline LAN 0.9.22] battle receipt was rejected: %s '
+                    'receipt_id=%s elapsed_ms=%.3f\n' % (
+                        error, _message_value(message, 'receipt_id'),
+                        max(0.0, time.time() - started) * 1000.0))
+                traceback.print_exc(file=sys.stdout)
                 return
+            if accepted:
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] battle receipt accepted '
+                    'receipt_id=%s elapsed_ms=%.3f\n' % (
+                        _message_value(message, 'receipt_id'),
+                        max(0.0, time.time() - started) * 1000.0))
             # Store.accept() returns only after its atomic JSON replacement.
             # Ack duplicates too: they already exist in durable local state,
             # and the server may be retrying because an earlier ACK was lost.

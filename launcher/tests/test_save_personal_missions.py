@@ -147,6 +147,40 @@ class PersonalMissionEditingTests(unittest.TestCase):
         self.assertTrue(all(int(key) <= 75 for key in reset))
         self.assertEqual(1, reset["75"])
 
+    def test_every_main_reset_clears_its_final_and_all_five_later_classes(self):
+        progress = {str(qid): 2 for qid in range(1, 301)}
+        for qid in range(1, 301):
+            with self.subTest(qid=qid):
+                final = ((qid - 1) // 15 + 1) * 15
+                last_allowed = ((qid - 1) // 75 + 1) * 75
+                expected = {str(other): 2 for other in range(1, last_allowed + 1)
+                            if other not in (qid, final)}
+                self.assertEqual(expected, missions.edit_progress(progress, [qid], 0))
+                expected_honors = dict(progress, **{str(qid): 1})
+                self.assertEqual(expected_honors, missions.edit_progress(progress, [qid], 1))
+
+    def test_sparse_old_progress_cannot_leave_later_classes_after_main_reset(self):
+        progress = {"1": 1, "16": 2, "90": 2, "180": 1, "270": 2, "300": 1}
+        self.assertEqual({"16": 2}, missions.edit_progress(progress, [1], 0))
+        with open(self.path, "w") as stream:
+            json.dump({"schema": 5, "ledger": {"personalMissions": {
+                "completed": progress}}}, stream)
+        # Persistence also enforces the rule for callers outside the dialog.
+        requested = dict(progress)
+        requested.pop("1")
+        self.assertEqual({"16": 2}, missions.write_progress("career", requested, **self.kwargs))
+        self.assertEqual({"16": 2}, missions.read_progress("career", root=self.root))
+
+    def test_honors_downgrade_preserves_order_skipped_progress_on_save(self):
+        progress = {"15": 2, "90": 2, "270": 2}
+        expected = dict(progress, **{"15": 1})
+        with open(self.path, "w") as stream:
+            json.dump({"schema": 5, "ledger": {"personalMissions": {
+                "completed": progress}}}, stream)
+        self.assertEqual(expected, missions.edit_progress(progress, [15], 1))
+        self.assertEqual(expected, missions.write_progress("career", expected, **self.kwargs))
+        self.assertEqual(expected, missions.read_progress("career", root=self.root))
+
     def test_reset_mt15_queues_selection_and_preserves_committed_rewards_until_withdrawal(self):
         progress = missions.edit_progress({}, [270], 2)
         state = {"schema": 5, "ledger": {"wallet": {"credits": 987},
@@ -187,7 +221,7 @@ class PersonalMissionEditingTests(unittest.TestCase):
         self.assertEqual({"pending": True, "error": ""},
                          missions.read_edit_status("career", root=self.root))
 
-    def test_removing_order_editor_preserves_existing_saved_balances(self):
+    def test_launcher_leaves_balance_for_client_entitlement_reconciliation(self):
         state = {"schema": 5, "ledger": {"personalMissions": {"orders": 22}}}
         with open(self.path, "w") as stream:
             json.dump(state, stream)

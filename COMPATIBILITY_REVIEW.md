@@ -4117,8 +4117,10 @@ under `personalMissions.completed` as 1 (main complete) or 2 (honors), while
 `personalMissions.regular` remains the selection list. Omission is incomplete.
 The editor closes the required-unlock graph without granting honors:
 tasks 1..14 are unordered, finals require their fourteen tasks, and later
-operations require the previous operation's five finals. Resetting a
-prerequisite resets dependent completions. A reset mission replaces an older
+operations require the previous operation's five finals. Resetting a main
+completion clears its chain's final and every class in every later operation,
+even when a sparse old save omits an intermediate final. Downgrading honors
+changes no other task and does not fill skipped prerequisites. A reset mission replaces an older
 selection of the same vehicle class so it can be replayed. The producer uses
 installed `PMStorage`/`PM_STATE`, retaining native reward-needed states for
 unclaimed female crew choices.
@@ -4155,8 +4157,12 @@ coverage.
 
 Orders are `personalMissions.orders`, published as the stock
 `tokens['free_award_list'] = (4104777660, count)` tuple. The standalone launcher
-quantity editor was removed at the user's request. Existing balances remain;
-new orders are issued by mission honors. Command 10019 records a one-order
+quantity editor was removed at the user's request. The available balance is
+derived from unique honored-final reward claims minus current pawns. Old
+manually supplied extras are removed; old excessive pawns retain their mission
+state but provide no free balance until covered or cancelled. Resource-defined
+order counts are used, yielding 20 earned orders for the four regular
+operations. Command 10019 records a one-order
 ordinary or four-order final pawn and publishes its native marker. Honors
 completion refunds that pawn; resetting it in the editor refunds it once.
 The regional reference's unused constant 21 is not treated as a token balance
@@ -4168,6 +4174,35 @@ statistics are fabricated. The launcher parses `scripts/item_defs/badges.xml`
 from the installed `scripts.pkg` using a dedicated read-only accessor, not the
 vehicle-edit path whitelist, and reads `res/text/LC_MESSAGES/badge.mo`.
 Removing the selected badge also removes its saved selection.
+
+Report `20260918-112918-91f01e7610db` identifies a startup failure in build
+`colorfulmeans-35301539662-1`: `personal mission rewards could not be published:
+global name 'data' is not defined`. The account data import was local to other
+functions, so the startup validator rejected the staged edit before any flush;
+the same omission affected post-battle reward-vehicle research publication.
+Bootstrap now imports that dependency at module scope. Regression coverage
+executes save restoration, resource parsing, settlement, native-shaped garage
+validation, durable flush, publication and restart, including a refused flush.
+
+Report `20260918-114203-26519828ce40` confirms the same missing import during
+post-battle reward-vehicle research publication: the server ends the round at
+11:41:44 and the visible client rejects its receipt at 11:41:49.813. Pending
+launcher rewards were consequently retried during battle settlement. This is
+a plausible contributor to the reported end-of-battle stall, but the server's
+five-second round-reset delay is not itself proof of a five-second Python
+stall. Receipt diagnostics now record settlement elapsed time and rejection
+tracebacks. The client restores its lobby Account at 11:41:50.590 and enters
+`game.fini` at 11:42:00; the report has no native exception event or dump. The
+exit cause and final frame pacing still require Windows reproduction. No Bot
+cadence, physics coefficient or rendering setting is changed for this report.
+
+The [official 9.20.1 release notes](https://worldoftanks.eu/en/content/docs/release_notes/release-notes-9201/)
+document the five final-mission components, one order per honored final,
+one-/four-order skip costs and refunds after honors. They explicitly allow
+spending four orders on a final before its fourteen preceding tasks. The
+launcher's cascading reset is a user-requested offline editing rule; it is
+not a retail operation. Retained reward tanks do not replace completion flags
+when deciding whether later missions remain available.
 
 Before the first garage, corresponding initial values live in `save.json`;
 restoring an existing garage ledger takes priority. Writes reject a running

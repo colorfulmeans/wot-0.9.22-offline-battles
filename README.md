@@ -144,7 +144,9 @@ Each mission can be incomplete, completed, or completed with honors. Honors
 also checks completion; clearing completion also clears honors. Changes stay
 in the editor when switching operations and vehicle classes; **Save** applies
 them to the selected save. Required earlier missions are completed automatically
-without honors. Resetting a prerequisite also resets dependent later missions.
+without honors. Clearing a main completion also clears that chain's final and
+every mission in all five classes of every later operation. Clearing honors
+alone changes no other mission or operation, including order-skipped finals.
 Edits are settled when the game next opens the garage. Resetting main completion
 reclaims that mission's female crew; resetting honors reclaims its earned
 orders. An eligible reset mission replaces the previous selection of its class.
@@ -167,7 +169,14 @@ catalogue. Removing an equipped badge clears its selection. Close the game
 before saving these edits; new saves use the edited values on first startup.
 There is no separate order-quantity editor. Orders come from the corresponding
 mission honors rewards, whether earned in battle or checked in the mission
-editor. Existing saved balances are retained. Spending orders records the amount assigned to each mission;
+editor. The available balance is rebuilt from unique honored-final reward
+claims minus orders assigned to missions. Unsupported quantities from the old
+manual input are removed; repeating completion or refunding a pledge cannot
+create a new entitlement. The four regular operations can earn 20 orders in
+total (five honored finals per operation), including orders currently assigned.
+Old pledges remain recorded even when they exceed legitimate earnings, with
+no free orders available until the shortfall is covered or the pledges reset.
+Spending orders records the amount assigned to each mission;
 honors completion returns those orders. Resetting that mission also returns
 its assigned orders once, independently of withdrawing earned honor orders.
 

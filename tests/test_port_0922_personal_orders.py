@@ -16,11 +16,12 @@ def node(value='', **children):
     return {'value': str(value), 'children': list(children.items())}
 
 
-def definition():
+def definition(mission_id=15):
     credits = node(bonus=node(credits=node(100)))
     return {'main': credits, 'main_award_list': credits,
             'add': node(bonus=node(token=node(id=node('free_award_list'),
-                                             count=node(1))))}
+                                             count=node(1))))
+                   if mission_id % 15 == 0 else node(bonus=node())}
 
 
 class NativeCache:
@@ -58,7 +59,13 @@ class PersonalOrderTests(unittest.TestCase):
 
     def state(self, **fields):
         snapshot = copy.deepcopy(fixture.SELECTED_VEHICLE)
-        snapshot.update(personalMissionOrders=21,
+        earned = dict((str(qid), 2) for qid in (30, 45, 60, 75))
+        snapshot.update(personalMissionOrders=4,
+                        personalMissionProgress=earned.copy(),
+                        personalMissionRewarded=earned.copy(),
+                        personalMissionTankwomen=dict((key, True) for key in earned),
+                        personalMissionRewardJournal=dict(('orders:' + key, {'count': 1})
+                                                         for key in earned),
                         wallet={'credits': 0, 'gold': 0, 'freeXP': 0, 'crystal': 0})
         snapshot.update(fields)
         return requests.garage.GarageState(snapshot)
@@ -66,7 +73,7 @@ class PersonalOrderTests(unittest.TestCase):
     def settle_patch(self):
         original = personal_campaign.settle
         return mock.patch.object(personal_campaign, 'settle', side_effect=
-            lambda state: original(state, definitions={qid: definition()
+            lambda state: original(state, definitions={qid: definition(qid)
                                     for qid in range(1, 301)}))
 
     def test_pawn_uses_event_type_and_debits_native_one_or_four_order_cost(self):
@@ -76,9 +83,9 @@ class PersonalOrderTests(unittest.TestCase):
                 result = requests.dispatch(requests.commands.CMD_PAWN_FREE_AWARD_LIST, {'garage': state}, ([8, mission_id],))
             self.assertEqual(requests.commands.RES_SUCCESS, result.result_id)
             saved = state.snapshot()
-            self.assertEqual(21 - cost, saved['personalMissionOrders'])
+            self.assertEqual(4 - cost, saved['personalMissionOrders'])
             self.assertEqual({str(mission_id): cost}, saved['personalMissionPawned'])
-            self.assertEqual({str(mission_id): 1}, saved['personalMissionProgress'])
+            self.assertEqual(1, saved['personalMissionProgress'][str(mission_id)])
             self.assertEqual(100, saved['wallet']['credits'])
             self.assertEqual((4104777660, 1), data.personal_mission_tokens(saved)[
                 'mission_%d_main_award_list' % mission_id])
@@ -90,7 +97,9 @@ class PersonalOrderTests(unittest.TestCase):
 
     def test_later_operation_and_insufficient_balance_reject_without_mutation(self):
         for fields, request in (({}, [8, 270]),
-                                ({'personalMissionOrders': 3}, [8, 15]),
+                                ({'personalMissionProgress': {'30': 2, '45': 2, '60': 2}}, [8, 15]),
+                                ({'personalMissionOrders': 21,
+                                  'personalMissionProgress': {}}, [8, 15]),
                                 ({}, [0, 15])):
             state = self.state(**fields)
             before = copy.deepcopy(state.snapshot())
@@ -109,10 +118,10 @@ class PersonalOrderTests(unittest.TestCase):
         result.before_response()
         self.assertEqual(1, len(updates))
         self.assertEqual(100, updates[0]['stats']['credits'])
-        self.assertEqual((4104777660, 17), updates[0]['tokens']['free_award_list'])
+        self.assertEqual((4104777660, 0), updates[0]['tokens']['free_award_list'])
         self.assertEqual((4104777660, 1),
                          updates[0]['tokens']['mission_15_main_award_list'])
-        self.assertEqual(b'[(15, (0, 2))]', updates[0]['potapovQuests']['compDescr'])
+        self.assertIn(b'(15, (0, 2))', updates[0]['potapovQuests']['compDescr'])
 
     def test_failed_reward_or_save_rolls_back_orders_completion_and_cash(self):
         state = self.state()
@@ -129,8 +138,8 @@ class PersonalOrderTests(unittest.TestCase):
         self.assertEqual(requests.commands.RES_FAILURE, failed.result_id)
         self.assertEqual(before, state.snapshot())
 
-    def test_honors_adds_to_manual_balance_and_returns_committed_orders_once(self):
-        for initial, pawned, expected in ((21, {}, 22), (17, {'15': 4}, 22)):
+    def test_honors_replaces_manual_balance_and_returns_only_earned_orders_once(self):
+        for initial, pawned, expected in ((21, {}, 1), (17, {'15': 4}, 1)):
             state = self.state(personalMissionOrders=initial,
                 personalMissionProgress={'15': 2}, personalMissionRewarded={'15': 1},
                 personalMissionPawned=pawned)
@@ -144,7 +153,8 @@ class PersonalOrderTests(unittest.TestCase):
             self.assertEqual(expected, state.snapshot()['personalMissionOrders'])
 
     def test_final_mission_keeps_native_crew_claim_pending_until_selected(self):
-        state = self.state(personalMissionProgress={'15': 1, '30': 2})
+        state = self.state(personalMissionProgress={'15': 1, '30': 2},
+                           personalMissionRewarded={}, personalMissionTankwomen={})
         self.assertEqual(b'[(15, (0, 2)), (30, (0, 5))]',
                          data.personal_missions(state.snapshot())['compDescr'])
         state.snapshot()['personalMissionTankwomen'] = {'15': True, '30': True}
@@ -176,7 +186,7 @@ class PersonalOrderTests(unittest.TestCase):
                                 data.personal_missions(fields)['compDescr'])
 
     def test_retry_claim_settles_unpaid_stage_and_rejects_duplicate_payment(self):
-        for completed, paid, cash, orders in ((1, 0, 100, 21), (2, 1, 0, 22)):
+        for completed, paid, cash, orders in ((1, 0, 100, 0), (2, 1, 0, 0)):
             state = self.state(personalMissionProgress={'1': completed},
                 personalMissionRewarded={'1': paid} if paid else {})
             with self.settle_patch():
@@ -254,7 +264,7 @@ class PersonalOrderTests(unittest.TestCase):
             result = requests.dispatch(command, {'garage': state}, args)
             self.assertEqual(requests.commands.RES_FAILURE, result.result_id)
 
-    def test_custom_balance_and_tokens_survive_the_publication_shape(self):
+    def test_committed_balance_and_tokens_survive_the_publication_shape(self):
         snapshot = self.state(personalMissionOrders=22,
             personalMissionTokens={'operation_done': [4104777660, 3]}).snapshot()
         tokens = data.personal_mission_tokens(snapshot)
