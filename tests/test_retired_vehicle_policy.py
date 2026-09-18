@@ -1,8 +1,7 @@
 """Retired hidden vehicles stay player-accessible but never enter Bot lineups."""
 import unittest
-from unittest import mock
 
-from launcher import bot_lineup_profiles, gold_shop, retired_vehicles
+from launcher import bot_lineup_profiles, retired_vehicles
 
 
 RETIRED = retired_vehicles.RETIRED_BOT_VEHICLES_0922
@@ -36,66 +35,6 @@ class RetiredVehiclePolicyTests(unittest.TestCase):
                     "vehicle": vehicle,
                     "tags": ["mediumTank"],
                 }))
-
-    def test_garage_catalogue_adds_all_retired_definitions(self):
-        choices = []
-        for index, type_name in enumerate(sorted(RETIRED)):
-            nation, vehicle = type_name.split(":", 1)
-            choices.append({
-                "nation": nation,
-                "vehicle": vehicle,
-                "label": "Retired %d" % index,
-                "vehicleClass": "mediumTank",
-                "level": 7 + index % 4,
-            })
-        with mock.patch.object(
-                gold_shop, "_ORIGINAL_LIST_GOLD_VEHICLES",
-                return_value=[{
-                    "name": "germany:G01_Normal",
-                    "label": "Normal",
-                    "nation": "germany",
-                    "vehicleClass": "heavyTank",
-                    "level": 10,
-                }]), mock.patch.object(
-                    gold_shop.vehicle_overlays, "list_vehicle_choices",
-                    return_value=choices):
-            offers = gold_shop._list_garage_vehicles("unused")
-        by_name = dict((row["name"], row) for row in offers)
-        self.assertTrue(RETIRED.issubset(by_name))
-        for type_name in RETIRED:
-            self.assertTrue(by_name[type_name]["retired"])
-            self.assertIn("retired", by_name[type_name]["offerKinds"])
-        self.assertIn("germany:G01_Normal", by_name)
-
-    def test_special_offers_mark_every_client_available_official_bond_vehicle(self):
-        catalogue = []
-        for type_name in sorted(
-                gold_shop.OFFICIAL_BOND_VEHICLES_AVAILABLE_0922):
-            nation, vehicle = type_name.split(":", 1)
-            catalogue.append({
-                "name": type_name,
-                "label": vehicle,
-                "nation": nation,
-                "vehicleClass": "mediumTank",
-                "level": 8,
-                "gold": 1,
-                "notInShop": True,
-            })
-        with mock.patch.object(
-                gold_shop, "_ORIGINAL_LIST_GOLD_VEHICLES",
-                return_value=catalogue), mock.patch.object(
-                    gold_shop.vehicle_overlays, "list_vehicle_choices",
-                    return_value=[]):
-            offers = gold_shop._list_garage_vehicles("unused")
-
-        by_name = dict((row["name"], row) for row in offers)
-        self.assertEqual(
-            set(gold_shop.OFFICIAL_BOND_VEHICLES_AVAILABLE_0922),
-            set(by_name))
-        for type_name, price in (
-                gold_shop.OFFICIAL_BOND_VEHICLES_AVAILABLE_0922.items()):
-            self.assertEqual(price, by_name[type_name]["bondPrice"])
-            self.assertIn("bonds", by_name[type_name]["offerKinds"])
 
     def test_non_retired_hidden_vehicle_is_not_excluded_by_name_policy(self):
         self.assertTrue(bot_lineup_profiles.vehicle_choice_is_eligible({

@@ -22,13 +22,16 @@ if __package__ in (None, ""):
     import i18n
     import gold_shop
     import save_ledger
+    import save_personal_missions
+    import personal_missions_ui
     import save_slots
     import vehicle_editor_ui
     import vehicle_overlays
 else:
     from . import (
         bot_lineup_profiles, bot_lineup_ui, core, error_reports, gold_shop,
-        i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays)
+        i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
+        save_personal_missions, personal_missions_ui)
 
 
 # The account balances a save carries, in the order the panel shows them.
@@ -40,11 +43,9 @@ _BALANCE_LABELS = {
 }
 
 _SHOP_HELP = (
-    "Add a gold, bond, reward, or retired vehicle to this save for free. It "
-    "arrives on the next game startup. Bond rows follow the first official "
-    "bond-shop roster but include only vehicles this 0.9.22 client ships. "
-    "Owned or queued vehicles cannot be added twice. Close the game before "
-    "adding vehicles.")
+    "Add a gold or reward vehicle to this save for free. It arrives on the "
+    "next game startup. Owned or queued vehicles cannot be added twice. "
+    "Close the game before adding vehicles.")
 
 LAUNCHER_VERSION = "0.8.4"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
@@ -180,6 +181,33 @@ _CHINESE = {
     "Light tank": "轻型坦克", "Medium tank": "中型坦克",
     "Heavy tank": "重型坦克", "Tank destroyer": "坦克歼击车",
     "SPG": "自行火炮",
+    "Personal missions": "个人任务",
+    "Edit mission progress...": "调整完成进度…",
+    "Account badges": "账号勋章",
+    "Edit account badges...": "编辑勋章获取情况…",
+    "Orders (0-21)": "通行令（0–21）",
+    "Acquired": "已获取",
+    "Operation": "章节",
+    "Mission": "任务",
+    "Completed": "完成",
+    "Completed with honors": "完美完成",
+    "StuG IV": "四号突击炮",
+    "T28 Concept": "T28 概念车",
+    "T 55A": "T55A",
+    "Object 260": "260 工程",
+    "LT": "轻坦",
+    "HT": "重坦",
+    "MT": "中坦",
+    "TD": "坦歼",
+    "Complete this chain": "本组全部完成",
+    "Honor this chain": "本组全部完美完成",
+    "Reset this chain": "清空本组",
+    "Personal-mission progress saved.": "个人任务进度已保存。",
+    "Account badges saved.": "账号勋章已保存。",
+    "Edits completion only; does not grant or remove mission rewards. "
+    "Close the game before saving.": "修改完成状态，不补发或回收任务奖励；保存前请关闭游戏。",
+    "Close World of Tanks before editing personal missions.": "修改前请关闭坦克世界。",
+    "Orders must be a whole number from 0 to 21.": "通行令数量必须是 0 到 21 的整数。",
     "Customize save...": "自定义存档…",
     "Customize save: %s": "自定义存档：%s",
     "Close": "关闭",
@@ -201,28 +229,15 @@ _CHINESE = {
     "The balances could not be read: %s": "余额读取失败：%s",
     "A balance must be a whole number.": "余额必须是整数。",
     "Garage vehicles": "车库坦克",
-    "Special offers": "特惠",
     "Add to garage": "添加到车库",
     "Gold and reward vehicle": "金币及奖励坦克",
-    "Special vehicle": "特惠坦克",
-    "Gold offer": "金币车",
-    "Bond offer": "债券车",
-    "Reward": "奖励车",
-    "Retired": "旧战车",
-    "Special": "特殊",
     "queued": "待添加",
     "%s - tier %d": "%s - %d级",
     "%s - tier %d (%s)": "%s - %d级（%s）",
-    "Add a gold, bond, reward, or retired vehicle to this save for free. It "
-    "arrives on the next game startup. Bond rows follow the first official "
-    "bond-shop roster but include only vehicles this 0.9.22 client ships. "
-    "Owned or queued vehicles cannot be added twice. Close the game before "
-    "adding vehicles.":
-        "免费向此存档添加金币车、债券车、奖励车或旧战车，下次进入游戏时放入车库。"
-        "债券车参考首批官方债券商店，但只列出此 0.9.22 客户端实际包含的车辆。"
-        "已拥有或待添加的坦克不能重复添加；操作前请关闭游戏。",
-    "%s - tier %d - %s": "%s - %d级 - %s",
-    "%s - tier %d - %s (%s)": "%s - %d级 - %s（%s）",
+    "Add a gold or reward vehicle to this save for free. It arrives on the "
+    "next game startup. Owned or queued vehicles cannot be added twice. "
+    "Close the game before adding vehicles.":
+        "免费向此存档添加金币或奖励坦克，下次进入游戏时放入车库。已拥有或待添加的坦克不能重复添加；操作前请关闭游戏。",
     "Added %s to the queue. It arrives on the next game startup.":
         "已将 %s 加入待添加列表，下次进入游戏时放入车库。",
     "The vehicle could not be added: %s": "添加失败：%s",
@@ -710,6 +725,11 @@ class LauncherWindow(object):
         self.account_panel.pack(fill="x", padx=12, pady=(12, 6))
         self.shop_panel = tk.LabelFrame(self.save_dialog, padx=10, pady=10)
         self.shop_panel.pack(fill="x", padx=12, pady=6)
+        self.personal_missions_panel = tk.LabelFrame(self.save_dialog, padx=10, pady=10)
+        self.personal_missions_panel.pack(fill="x", padx=12, pady=6)
+        self.edit_personal_missions_button = tk.Button(
+            self.personal_missions_panel, command=self._open_personal_missions)
+        self.edit_personal_missions_button.pack(fill="x")
         self.save_dialog_feedback = tk.Label(
             self.save_dialog, text="", anchor="w", justify="left", wraplength=620)
         self.save_dialog_feedback.pack(fill="x", padx=12, pady=6)
@@ -802,6 +822,10 @@ class LauncherWindow(object):
             padx=(6, 0), pady=(0, 4))
         self.earnings_entry = tk.Entry(earnings_row, width=8)
         self.earnings_entry.pack(side="left")
+        self.orders_label = tk.Label(earnings_row, text="")
+        self.orders_label.pack(side="left", padx=(18, 6))
+        self.orders_entry = tk.Entry(earnings_row, width=8)
+        self.orders_entry.pack(side="left")
         account_actions = tk.Frame(self.account_panel)
         account_actions.grid(
             row=len(save_ledger.CURRENCIES) + 1, column=0, columnspan=2,
@@ -809,6 +833,8 @@ class LauncherWindow(object):
         self.save_account_button = tk.Button(
             account_actions, text="", command=self._apply_account)
         self.save_account_button.pack(side="left", fill="x", expand=True)
+        self.edit_badges_button = tk.Button(account_actions, command=self._open_account_badges)
+        self.edit_badges_button.pack(side="left", fill="x", expand=True)
         self.account_help_label = tk.Label(
             self.account_panel, text="", anchor="w", justify="left",
             wraplength=620)
@@ -1027,8 +1053,12 @@ class LauncherWindow(object):
         self.account_help_label.config(text=self._t(
             "Edit this save's balances and battle earnings. Before the first "
             "game, these are its starting funds. Close the game before editing."))
-        self.shop_panel.config(text=self._t("Special offers"))
-        self.gold_vehicle_label.config(text=self._t("Special vehicle"))
+        self.orders_label.config(text=self._t("Orders (0-21)"))
+        self.edit_badges_button.config(text=self._t("Edit account badges..."))
+        self.personal_missions_panel.config(text=self._t("Personal missions"))
+        self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
+        self.shop_panel.config(text=self._t("Garage vehicles"))
+        self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
         self.buy_gold_vehicle_button.config(text=self._t("Add to garage"))
         self.shop_help_label.config(text=self._t(_SHOP_HELP))
         self._refresh_save_slots()
@@ -1343,6 +1373,24 @@ class LauncherWindow(object):
         self.save_dialog.lift()
         return True
 
+    def _open_personal_editor(self, dialog_type):
+        if self._busy or self._maintenance_busy:
+            self._log("Wait for the current launcher operation to finish.")
+            return False
+        try:
+            self._personal_editor = dialog_type(self)
+        except (save_ledger.SaveLedgerError, save_slots.SaveSlotError,
+                vehicle_overlays.VehicleOverlayError, OSError, ValueError) as error:
+            self._log(str(error))
+            return False
+        return True
+
+    def _open_personal_missions(self):
+        return self._open_personal_editor(personal_missions_ui.PersonalMissionsDialog)
+
+    def _open_account_badges(self):
+        return self._open_personal_editor(personal_missions_ui.BadgesDialog)
+
     def _close_save_dialog(self):
         self.save_dialog.grab_release()
         self.save_dialog.withdraw()
@@ -1361,6 +1409,13 @@ class LauncherWindow(object):
             if hasattr(self, "log_view"):
                 self._log("The balances could not be read: %s" % error)
             balances = None
+        try:
+            fields = save_personal_missions.read_account_fields(self._save_slot_id, game_root or None)
+            self.orders_entry.delete(0, "end")
+            self.orders_entry.insert(0, str(fields["orders"]))
+        except (save_ledger.SaveLedgerError, save_slots.SaveSlotError, ValueError, TypeError):
+            self.orders_entry.delete(0, "end")
+            self.orders_entry.insert(0, "0")
         editable = balances is not None
         for name, entry in self.balance_entries.items():
             entry.config(state="normal")
@@ -1415,6 +1470,13 @@ class LauncherWindow(object):
                          self._earnings_text(save_slots.MAX_EARNINGS_PERCENT)))
             self._refresh_earnings()
             return False
+        try:
+            orders = int(self.orders_entry.get().strip())
+            if not 0 <= orders <= 21:
+                raise ValueError()
+        except ValueError:
+            self._log("Orders must be a whole number from 0 to 21.")
+            return False
         wanted = {}
         for name, entry in self.balance_entries.items():
             raw = entry.get().strip()
@@ -1434,6 +1496,11 @@ class LauncherWindow(object):
         except save_ledger.SaveLedgerError as error:
             self._log("The balances could not be saved: %s" % error)
             self._refresh_balances()
+            return False
+        try:
+            save_personal_missions.write_account_fields(self._save_slot_id, game_root or None, orders=orders)
+        except (save_ledger.SaveLedgerError, save_slots.SaveSlotError) as error:
+            self._log(str(error))
             return False
         try:
             save_slots.set_earnings_percent(
@@ -1460,31 +1527,10 @@ class LauncherWindow(object):
             state = self._t("queued")
         else:
             state = ""
-        offer_kinds = tuple(offer.get("offerKinds") or ())
-        # Tests, legacy extensions and an already-running launcher can supply
-        # the pre-category row shape. Preserve its exact labels so selection
-        # survives a refresh; freshly parsed 0.9.22 rows always carry kinds.
-        if not offer_kinds:
-            if state:
-                return self._t("%s - tier %d (%s)") % (
-                    offer["label"], offer["level"], state)
-            return self._t("%s - tier %d") % (
-                offer["label"], offer["level"])
-        kind_names = {
-            "gold": "Gold offer",
-            "bonds": "Bond offer",
-            "reward": "Reward",
-            "retired": "Retired",
-            "special": "Special",
-        }
-        kinds = " / ".join(
-            self._t(kind_names.get(kind, "Special"))
-            for kind in offer_kinds)
         if state:
-            return self._t("%s - tier %d - %s (%s)") % (
-                offer["label"], offer["level"], kinds, state)
-        return self._t("%s - tier %d - %s") % (
-            offer["label"], offer["level"], kinds)
+            return self._t("%s - tier %d (%s)") % (
+                offer["label"], offer["level"], state)
+        return self._t("%s - tier %d") % (offer["label"], offer["level"])
 
     def _gold_catalogue(self, game_root):
         """Return the client's gold vehicles, read once per game folder.

@@ -3152,6 +3152,9 @@ class GaragePersistenceTests(unittest.TestCase):
         state = self._state(snapshot)
         expiry = state.buy_premium(7, now=1700000000)
         state.select_personal_missions(0, [1, 16])
+        state.snapshot()['personalMissionProgress'] = {'1': 1, '300': 2}
+        state.snapshot()['personalMissionOrders'] = 7
+        state.snapshot()['accountBadges'] = {'1': 1700000000}
         store = self._store()
         store.mark_dirty()
         self.assertTrue(store.flush(state.snapshot()))
@@ -3162,6 +3165,9 @@ class GaragePersistenceTests(unittest.TestCase):
         self.assertEqual(
             {'regular': [1, 16]}, restored['personalMissionSelections'])
         self.assertEqual(3750, restored['wallet']['gold'])
+        self.assertEqual({'1': 1, '300': 2}, restored['personalMissionProgress'])
+        self.assertEqual(7, restored['personalMissionOrders'])
+        self.assertEqual({'1': 1700000000}, restored['accountBadges'])
 
     def test_the_rounds_a_battle_fired_stay_spent_across_a_restart(self):
         """A restart that refilled the racks would be free ammunition."""

@@ -10,9 +10,8 @@ import json
 import os
 
 try:
-    from . import retired_vehicles, save_ledger, save_slots, vehicle_overlays
+    from . import save_ledger, save_slots, vehicle_overlays
 except ImportError:
-    import retired_vehicles
     import save_ledger
     import save_slots
     import vehicle_overlays
@@ -28,87 +27,6 @@ LEDGER_FILE_NAME = save_ledger.LEDGER_FILE_NAME
 # A save with more pending vehicles than this is a damaged file, not a
 # shopping list.  The client applies the same limit.
 MAX_PENDING_VEHICLES = 512
-
-# The first official permanent vehicle-for-bonds assortment (2019), reduced
-# to definitions physically shipped by the pinned 0.9.22 client.  T-34
-# shielded and M10 RBFM were released later and therefore cannot be built by
-# this client.  These annotations are presentation metadata only: the
-# launcher's special-offer compatibility page still adds a selected vehicle
-# for free, exactly like its reward and retired-vehicle rows.
-OFFICIAL_BOND_VEHICLES_AVAILABLE_0922 = {
-    "china:Ch25_121_mod_1971B": 15000,
-    "usa:A92_M60": 15000,
-    "uk:GB13_FV215b": 12000,
-    "france:F74_AMX_M4_1949_Liberte": 8000,
-    "usa:A117_T26E5_Patriot": 8000,
-    "germany:G119_Pz58_Mutz": 8000,
-    "ussr:R146_STG_Tday": 8000,
-    "germany:G70_PzIV_Hydro": 3000,
-}
-
-
-# Development/test reloads can import this module more than once. Retain the
-# real client catalogue underneath an already-installed augmentation instead
-# of wrapping our own function recursively.
-_ORIGINAL_LIST_GOLD_VEHICLES = getattr(
-    vehicle_overlays.list_gold_vehicles, "_retired_vehicle_base",
-    vehicle_overlays.list_gold_vehicles)
-
-
-def _annotate_special_offer(row):
-    """Attach stable categories used by the launcher's special-offer page."""
-    offer = dict(row)
-    name = str(offer.get("name") or "")
-    kinds = []
-    if int(offer.get("gold", 0) or 0) > 0:
-        kinds.append("gold")
-    bond_price = OFFICIAL_BOND_VEHICLES_AVAILABLE_0922.get(name)
-    if bond_price is not None:
-        kinds.append("bonds")
-        offer["bondPrice"] = int(bond_price)
-    if bool(offer.get("notInShop", False)):
-        kinds.append("reward")
-    if bool(offer.get("retired", False)):
-        kinds.append("retired")
-    offer["offerKinds"] = tuple(kinds or ("special",))
-    return offer
-
-
-def _list_garage_vehicles(game_root):
-    """Add player-only retired definitions to the normal gold/reward list.
-
-    The five historical definitions are deliberately *not* made Bot-eligible.
-    They are read from the same #1513 catalogue parser as the vehicle editor,
-    so labels, tiers and classes remain client-authentic and we do not invent
-    metadata in the launcher.
-    """
-    offers = [dict(row) for row in _ORIGINAL_LIST_GOLD_VEHICLES(game_root)]
-    offered = set(str(row.get("name") or "") for row in offers)
-    for choice in vehicle_overlays.list_vehicle_choices(game_root):
-        type_name = "%s:%s" % (choice.get("nation"), choice.get("vehicle"))
-        if (type_name not in retired_vehicles.RETIRED_BOT_VEHICLES_0922 or
-                type_name in offered):
-            continue
-        offers.append({
-            "name": type_name,
-            "label": choice.get("label") or choice.get("vehicle") or type_name,
-            "nation": choice.get("nation"),
-            "vehicleClass": choice.get("vehicleClass"),
-            "level": int(choice.get("level", 0) or 0),
-            "retired": True,
-        })
-        offered.add(type_name)
-    offers = [_annotate_special_offer(row) for row in offers]
-    return sorted(offers, key=lambda row: (
-        str(row.get("nation") or ""), int(row.get("level", 0) or 0),
-        str(row.get("label") or row.get("name") or "")))
-
-
-# wot_launcher keeps one cached catalogue by calling vehicle_overlays directly.
-# Install the augmented listing once when this module is imported so that both
-# that UI cache and the validation below share exactly the same offer set.
-_list_garage_vehicles._retired_vehicle_base = _ORIGINAL_LIST_GOLD_VEHICLES
-vehicle_overlays.list_gold_vehicles = _list_garage_vehicles
 
 
 def inbox_path(slot_id, game_root=None, environment=None, root=None):
@@ -164,7 +82,7 @@ def owned_vehicles(slot_id, game_root=None, environment=None, root=None):
 
 def list_offers(slot_id, game_root, environment=None, root=None,
                 catalogue=None):
-    """Return every launcher-addable vehicle with this save's state.
+    """Return every gold vehicle with what this save can do about it.
 
     ``catalogue`` lets a caller reuse a listing it already has. Reading it
     means opening the client's 50 MB package and parsing ten rosters, and it

@@ -1130,7 +1130,7 @@ class AccountRpcTests(unittest.TestCase):
         sync_contract = CONTRACT['syncData']
         self.assertTrue(set(sync_contract['directKeys']).issubset(value))
         self.assertEqual({}, value['quests'])
-        self.assertEqual({}, value['tokens'])
+        self.assertEqual({'free_award_list': (4104777660, 0)}, value['tokens'])
         self.assertEqual(
             set(sync_contract['groupLocksDirectKeys']),
             set(value['groupLocks']))

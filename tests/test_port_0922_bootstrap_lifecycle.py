@@ -302,6 +302,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         config_module.save_slot_earnings_percent = lambda: (
             100 if earnings_percent is None else earnings_percent)
         config_module.save_slot_initial_wallet = lambda: dict(initial_wallet or {})
+        config_module.save_slot_initial_personal_progress = lambda: {}
         config_module.ACTIVE_SAVE_SLOT = object()
         config_module.active_save_slot = lambda: 'default'
         # No inbox file exists unless a test writes one, so the launcher

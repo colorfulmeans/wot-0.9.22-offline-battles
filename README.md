@@ -135,6 +135,20 @@ The [2017 official guide](https://wargaming.net/support/en/products/wot/article/
 lists the four resource types. The [2022 redesign](https://worldoftanks.com/en/news/updates/1-18-1-improved-personal-reserves/)
 merged crew/free XP into the modern three-type system, which is not used here.
 
+The launcher's **Customize save** window keeps the v0.8.4 **Garage vehicles**
+list and simple vehicle/tier labels. Its **Personal missions** editor covers
+all 300 regular campaign missions (StuG IV, T28 Concept, T 55A and Object 260).
+Each mission can be incomplete, completed, or completed with honors. Honors
+also checks completion; clearing completion also clears honors. Changes stay
+in the editor when switching operations and vehicle classes; **Save** applies
+them to the selected save. This changes completion without issuing or removing
+rewards. Daily missions are separate and unchanged.
+
+The account panel also edits personal-mission orders (0–21) and account badge
+ownership. Badge choices and translated names come from the installed client's
+catalogue. Removing an equipped badge clears its selection. Close the game
+before saving these edits; new saves use the edited values on first startup.
+
 Premium purchases use the original six durations: 360, 180, 30, 7, 3 and 1 day,
 with the installed client's own icons and labels. Battle-result friendly-fire
 labels remain the installed client's own localization: credits have penalty and compensation rows; XP has only a

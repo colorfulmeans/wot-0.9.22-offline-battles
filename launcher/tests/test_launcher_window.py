@@ -260,6 +260,15 @@ class WindowTest(unittest.TestCase):
         self.window.game_root.set(game_root)
         return game_root
 
+    def test_custom_save_restores_original_vehicle_labels_and_exposes_progress_editors(self):
+        self.assertEqual("Garage vehicles", self.window.shop_panel.cget("text"))
+        self.assertEqual("Gold and reward vehicle", self.window.gold_vehicle_label.cget("text"))
+        self.assertEqual("Personal missions", self.window.personal_missions_panel.cget("text"))
+        self.assertEqual("Orders (0-21)", self.window.orders_label.cget("text"))
+        self.assertEqual("Lowe - tier 8", self.window._gold_offer_label({
+            "label": "Lowe", "level": 8, "owned": False, "pending": False,
+            "offerKinds": ("gold", "reward")}))
+
     def test_layout_separates_play_vehicle_and_repair_controls(self):
         self.assertEqual("0.8.4", wot_launcher.LAUNCHER_VERSION)
         self.assertEqual(

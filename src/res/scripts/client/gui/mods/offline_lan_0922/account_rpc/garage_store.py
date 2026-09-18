@@ -154,7 +154,10 @@ def _ledger_payload(snapshot):
         'recycleBin': sorted(recycled),
         'premiumExpiryTime': max(
             0, _int_value(snapshot.get('premiumExpiryTime'))),
-        'personalMissions': {'regular': regular},
+        'personalMissions': {'regular': regular,
+            'completed': data.personal_mission_completed(snapshot.get('personalMissionProgress')),
+            'orders': data.personal_mission_orders(snapshot.get('personalMissionOrders', 0))},
+        'accountBadges': data.account_badges(snapshot.get('accountBadges')),
         'offlineServices': offline_services.saved_fields(snapshot),
     }
 
@@ -303,6 +306,12 @@ def _apply_ledger(staged, stored):
         regular = data.personal_mission_regular_selection(
             personal_missions.get('regular', ()))
         staged['personalMissionSelections'] = {'regular': regular}
+        staged['personalMissionProgress'] = data.personal_mission_completed(
+            personal_missions.get('completed'))
+        staged['personalMissionOrders'] = data.personal_mission_orders(
+            personal_missions.get('orders', 0))
+    if 'accountBadges' in ledger:
+        staged['accountBadges'] = data.account_badges(ledger['accountBadges'])
     return True
 
 

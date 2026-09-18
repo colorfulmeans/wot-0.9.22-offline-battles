@@ -802,6 +802,7 @@ def _selected_vehicle(config, restore_saved=True):
         offline_services.publish_offers(result, vehicles)
         if restore_saved:
             result['wallet'].update(port_config.save_slot_initial_wallet())
+            result.update(port_config.save_slot_initial_personal_progress())
         if not career:
             # A sandbox has researched everything, so its tech tree is elite
             # by the same derived rule a career uses rather than by assertion.

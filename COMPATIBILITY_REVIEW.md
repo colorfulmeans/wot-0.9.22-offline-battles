@@ -4102,3 +4102,44 @@ actual speed and descriptor limits, capped at 128 records per round. Existing
 throttled movement diagnostics provide the contact context. This adds
 evidence for the next Windows run without changing physical coefficients,
 collision safety or the model-switch wait interval.
+
+
+## Launcher campaign, orders and badge editing (2026-09-18)
+
+The launcher-only vehicle catalogue and labels are restored from tag v0.8.4:
+no special-offer categories, bond annotations or retired-vehicle augmentation.
+The in-client bond shop remains independent.
+
+The completion editor uses regular mission IDs 1..300, four operations of
+five fifteen-mission chains in LT/HT/MT/TD/SPG order. The ledger stores these
+under `personalMissions.completed` as 1 (main complete) or 2 (honors), while
+`personalMissions.regular` remains the selection list. Omission is incomplete.
+The producer calls the installed `personal_missions.PMStorage(storage=...)`
+and its `makeCompDescr`, using native `PM_STATE.MAIN_REWARD_GOTTEN` and
+`ALL_REWARDS_GOTTEN`. This explicitly sets completion without queuing rewards;
+it does not implement campaign reward settlement or order spending. Honored
+missions are removed from active selections. The client owns availability
+and prerequisite presentation; editing a later mission does not silently
+complete its prerequisites.
+
+Orders are `personalMissions.orders`, published as the stock
+`tokens['free_award_list'] = (4104777660, count)` tuple. The editor observes the
+reference's 21-order limit. Account badge ownership is `ledger.accountBadges`,
+a badge-ID/acquisition-time map, written into the native account dossier's
+`playerBadges` block. Native Badge objects consequently expose acquisition to
+both the gallery and selection validation. No battle medal counters or combat
+statistics are fabricated. The launcher parses `scripts/item_defs/badges.xml`
+from the installed `scripts.pkg` and reads `res/text/LC_MESSAGES/badge.mo`.
+Removing the selected badge also removes its saved selection.
+
+Before the first garage, corresponding initial values live in `save.json`;
+restoring an existing garage ledger takes priority. Writes reject a running
+game and use the existing atomic replacement helper. Completion writes preserve
+orders, badges, wallet, vehicles, daily goals and unrelated save fields.
+
+Producer/consumer orientation for PMStorage, states, tokens and Badge comes
+from regional #788 Python; the existing #1513 contract pins `potapovQuests`
+and its requester keys. New native serialization, badge rendering and the
+Tk dialog's final Windows layout still require #1513 Windows acceptance.
+Local tests cover storage round trips, checkbox dependencies, all 300 IDs,
+invalid/running writes, atomic failure, badge removal and publication fields.
