@@ -51,7 +51,7 @@ def snapshot():
 
 def mission_reward_text(key):
     row = policy.MISSION_BY_ID[key]
-    return tr('Mission completed: %s. Reward: %s x1.') % (
+    return tr('Mission completed: %s. Reward: %s reserve x1.') % (
         mission_label(row), tr(policy.RESERVE_BY_ID[row[4]][1]))
 
 
@@ -840,7 +840,7 @@ class ServicePanel(WaitingRoomUI):
         daily = policy.daily_state(snapshot())
         for index, key in enumerate(daily['missions']):
             row = policy.MISSION_BY_ID[key]
-            self._set_text('row%d' % index, tr('%s: %d/%d | Reward: %s x1%s') % (
+            self._set_text('row%d' % index, tr('%s: %d/%d | Reward: %s reserve x1%s') % (
                 mission_label(row), daily[key], row[3],
                 tr(policy.RESERVE_BY_ID[row[4]][1]),
                 tr(' (RECEIVED)') if key in daily['claimed'] else ''))
