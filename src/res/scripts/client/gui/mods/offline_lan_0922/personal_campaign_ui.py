@@ -62,6 +62,30 @@ def _vehicle_name(row):
     return tr('Reward vehicle')
 
 
+def _badge_name(identifier):
+    try:
+        from gui.Scaleform.locale.BADGE import BADGE
+        from helpers import i18n
+        key = BADGE.badgeName(int(identifier))
+        name = i18n.makeString(key)
+        if name and name != key:
+            return _label(name)
+    except Exception:
+        pass
+    return None
+
+
+def queue_notification(snapshot, settlement):
+    """Commit the notice with its assets; native delivery happens in lobby."""
+    if not messages(settlement):
+        return False
+    import copy
+    import uuid
+    snapshot.setdefault('personalMissionNotifications', []).append({
+        'id': uuid.uuid4().hex, 'settlement': copy.deepcopy(settlement)})
+    return True
+
+
 def _reward_parts(bonuses):
     """Render only assets actually included in newly paid stages.
 
@@ -109,9 +133,14 @@ def _payout_parts(rows):
         if kind in ('vehicle', 'vehicle_restored'):
             parts.append(tr('Vehicle: %s') % _vehicle_name(row))
         elif kind == 'compensation':
-            parts.append(tr('Vehicle compensation: %d credits') % int(row.get('credits', 0)))
+            parts.append(tr('Vehicle compensation: %d credits (%s)') %
+                         (int(row.get('credits', 0)), _vehicle_name(row)))
         elif kind == 'badge':
-            parts.append(tr('Badges: %d') % int(row.get('count', 0)))
+            name = _badge_name(row.get('id'))
+            parts.append((tr('Badge: %s') % name) if name else
+                         tr('Badges: %d') % int(row.get('count', 0)))
+        elif kind == 'crew':
+            parts.append(tr('Crew members: %d') % int(row.get('count', 0)))
         elif kind == 'customization':
             # The reward ledger currently accepts camouflage only and stores
             # the native numeric customization type rather than its XML name.
@@ -224,6 +253,9 @@ def messages(settlement):
             details.append(tr('Orders withdrawn: %d.') % orders_revoked)
         if tankwomen_revoked > 0:
             details.append(tr('Female crew members withdrawn: %d.') % tankwomen_revoked)
+        if row.get('tankwomen_already_dismissed'):
+            details.append(tr('Female crew members already permanently dismissed: %d. No crew withdrawal needed.') %
+                           int(row['tankwomen_already_dismissed']))
         if row.get('tankwoman_pending') and not revoked:
             details.append(tr('Female crew member available: choose her nation, vehicle and role in Personal Missions.'))
         lines.append(u' '.join(details))
@@ -233,6 +265,12 @@ def messages(settlement):
             title = ('Personal mission operation rewards withdrawn: %s.'
                      if row.get('phase') == 'revoked' else
                      'Personal mission operation rewards granted: %s.')
+            lines.append(tr(title) % u', '.join(rewards))
+    for row in settlement.get('account_changes', ()):
+        rewards = _paid_parts(row.get('rewards', ()))
+        if rewards:
+            title = ('Account assets removed: %s.' if row.get('phase') == 'revoked'
+                     else 'Account assets received: %s.')
             lines.append(tr(title) % u', '.join(rewards))
     return lines
 

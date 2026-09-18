@@ -85,17 +85,52 @@ class CampaignRewardResetTests(unittest.TestCase):
         self.assertEqual([], duplicate['operations'])
         self.assertEqual(before_duplicate, self.state.snapshot())
 
-    def test_spent_operation_reward_refuses_entire_edit_without_partial_revoke(self):
+    def test_spent_operation_reward_resets_and_reports_only_the_remaining_balance(self):
         self.settle({'15': 2})
         self.state.snapshot()['wallet']['credits'] = 600
-        before = copy.deepcopy(self.state.snapshot())
         result = self.settle({}, now=101)
-        self.assertTrue(result['reset_error'])
-        self.assertEqual([], result['missions'])
-        self.assertEqual([], result['operations'])
-        after = copy.deepcopy(self.state.snapshot())
-        after.pop('personalMissionResetError')
-        self.assertEqual(before, after)
+        self.assertEqual('', result['reset_error'])
+        self.assertEqual(0, self.state._wallet()['credits'])
+        self.assertEqual({}, self.state.snapshot()['personalMissionProgress'])
+        self.assertEqual({}, self.state.snapshot()['personalMissionRewarded'])
+        self.assertEqual(600, sum(reward['count'] for row in
+            result['missions'] + result['operations'] for reward in row['rewards']
+            if reward['kind'] == 'credits'))
+        self.assertEqual(30, self.state.snapshot()['accountSlots'])
+        self.assertEqual([], self.settle(now=102)['missions'])
+
+    def test_owned_vehicle_spent_compensation_and_free_xp_reset_then_regrant_once(self):
+        for credits_left, xp_left in ((0, 0), (1000, 200), (9000000, 45001)):
+            self.state = vehicle_fixture.state_with_reward()
+            if not any(tag == 'vehicle' for tag, row in campaign.child(
+                    campaign.children(campaign.child(self.tiles, 'quests'), 'tokenQuest')[0],
+                    'bonus')['children']):
+                self.add_operation_vehicle()
+                self.definitions[15]['main']['children'][0][1]['children'].append(
+                    ('freeXP', node(45000)))
+            original = copy.deepcopy(self.state.snapshot()['vehicles'])
+            with mock.patch.object(vehicles, 'full_price_credits', return_value=6100000):
+                self.settle({'15': 1})
+            self.state._wallet().update(credits=credits_left, freeXP=xp_left)
+            result = self.settle({}, now=101)
+            self.assertEqual('', result['reset_error'])
+            self.assertEqual(max(0, credits_left - 6100600), self.state._wallet()['credits'])
+            self.assertEqual(max(0, xp_left - 45000), self.state._wallet()['freeXP'])
+            self.assertEqual(original, self.state.snapshot()['vehicles'])
+            rows = [reward for row in result['missions'] + result['operations']
+                    for reward in row['rewards']]
+            total = sum(row.get('credits', 0) if row['kind'] == 'compensation'
+                        else row.get('count', 0) if row['kind'] == 'credits' else 0
+                        for row in rows)
+            self.assertEqual(min(credits_left, 6100600), total)
+            self.assertEqual(min(xp_left, 45000), sum(row['count'] for row in rows
+                                                   if row['kind'] == 'freeXP'))
+            before = dict(self.state._wallet())
+            with mock.patch.object(vehicles, 'full_price_credits', return_value=6100000):
+                self.assertEqual([], self.settle({'15': 1}, now=102)['pending'])
+            self.assertEqual(before['credits'] + 6100600, self.state._wallet()['credits'])
+            self.assertEqual(before['freeXP'] + 45000, self.state._wallet()['freeXP'])
+            self.assertEqual([], self.settle(now=103)['missions'])
 
     def test_component_notifications_use_the_receipted_token_delta(self):
         self.tiles['children'] = []

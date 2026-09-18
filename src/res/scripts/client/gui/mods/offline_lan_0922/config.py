@@ -651,13 +651,19 @@ def save_slot_initial_personal_progress(slot=None, user_data_dir=None):
     if not isinstance(value, dict):
         return {}
     from gui.mods.offline_lan_0922.account_rpc import data
-    return {
+    result = {
         'personalMissionProgress': data.personal_mission_completed(
             value.get('initial_personal_missions')),
         'personalMissionOrders': data.personal_mission_orders(
             value.get('initial_personal_orders', 0)),
         'accountBadges': data.account_badges(value.get('initial_account_badges')),
     }
+    notifications = value.get('initial_account_notifications')
+    if isinstance(notifications, list):
+        result['personalMissionNotifications'] = [row for row in notifications
+            if isinstance(row, dict) and row.get('id') and
+            isinstance(row.get('settlement'), dict)]
+    return result
 
 
 def save_slot_earnings_percent(slot=None, user_data_dir=None):

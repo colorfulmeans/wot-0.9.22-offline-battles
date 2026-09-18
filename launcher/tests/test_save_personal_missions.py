@@ -74,8 +74,39 @@ class PersonalMissionEditingTests(unittest.TestCase):
             missions.write_account_fields("career", badges=[2], **self.kwargs)
             self.assertEqual({"2": 200}, self.read()["ledger"]["accountBadges"])
             self.assertEqual([], self.read()["ledger"]["offlineServices"]["selectedBadges"])
+            notices = self.read()['ledger']['personalMissions']['notifications']
+            self.assertEqual([{'phase': 'revoked', 'rewards': [
+                {'kind': 'badge', 'id': '1', 'count': 1}]}],
+                notices[0]['settlement']['account_changes'])
+            missions.write_account_fields('career', badges=[2], **self.kwargs)
+            self.assertEqual(notices, self.read()['ledger']['personalMissions']['notifications'])
             with self.assertRaises(save_ledger.SaveLedgerError):
                 missions.write_account_fields("career", badges=[999], **self.kwargs)
+
+    def test_initial_badge_and_wallet_changes_share_a_durable_notice_queue(self):
+        with mock.patch.object(missions, 'badge_catalogue', return_value=[{'id': 1}]):
+            missions.write_account_fields('career', badges=[1], **self.kwargs)
+            save_ledger.write_balances('career', {'credits': 1234}, **self.kwargs)
+            missions.write_account_fields('career', badges=[1], **self.kwargs)
+        metadata = self.read('save.json')
+        notices = metadata['initial_account_notifications']
+        self.assertEqual(2, len(notices))
+        self.assertNotEqual(notices[0]['id'], notices[1]['id'])
+        self.assertEqual([{'kind': 'badge', 'id': '1', 'count': 1}],
+            notices[0]['settlement']['account_changes'][0]['rewards'])
+        self.assertEqual([{'kind': 'credits', 'count': 100000000 - 1234}],
+            notices[1]['settlement']['account_changes'][0]['rewards'])
+        self.assertEqual('revoked', notices[1]['settlement']['account_changes'][0]['phase'])
+
+    def test_failed_badge_save_writes_neither_ownership_nor_notification(self):
+        original = {'schema': 5, 'ledger': {'accountBadges': {'1': 100}}}
+        with open(self.path, 'w') as stream:
+            json.dump(original, stream)
+        with mock.patch.object(missions, 'badge_catalogue', return_value=[{'id': 1}, {'id': 2}]), \
+                mock.patch.object(save_ledger.os, 'replace', side_effect=OSError('busy')):
+            with self.assertRaises(save_ledger.SaveLedgerError):
+                missions.write_account_fields('career', badges=[2], **self.kwargs)
+        self.assertEqual(original, self.read())
 
     def test_failed_atomic_replace_preserves_original(self):
         missions.write_progress("career", {"1": 1}, **self.kwargs)

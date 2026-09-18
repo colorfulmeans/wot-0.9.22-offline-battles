@@ -217,6 +217,20 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
         self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
 
+    def test_launcher_asset_notice_uses_native_publisher_without_reapplying_assets(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        state.snapshot()['personalMissionNotifications'][0]['settlement'] = {
+            'account_changes': [{'phase': 'granted', 'rewards': [
+                {'kind': 'credits', 'count': 4321}, {'kind': 'crew', 'count': 4}]}]}
+        delivered = set()
+        self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
+        self.assertEqual((0, False), server.publish_campaign_notifications(delivered))
+        system.pushMessage.assert_called_once()
+        self.assertIn('4321', system.pushMessage.call_args[0][0])
+        self.assertEqual('info', system.pushMessage.call_args[1]['type'])
+        self.assertEqual([], saved[0]['personalMissionNotifications'])
+        self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
+
     def test_campaign_outbox_failed_ack_retries_after_account_replacement_without_push(self):
         server, state, store, system, saved, context = self._campaign_outbox((False, True))
         delivered = set()

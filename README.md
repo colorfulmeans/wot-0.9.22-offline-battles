@@ -154,8 +154,12 @@ An eligible reset mission replaces the previous selection of its class.
 The durable reward journal records the actual payout, so a successful withdrawal
 allows that reward to be earned again without duplicating property. A failed
 withdrawal preserves the original progress and property and shows its reason
-in the mission editor and system messages. Spent currency, missing items,
-unknown crew provenance or insufficient storage can prevent a complete reset.
+in the mission editor and system messages. Credits and free XP are reclaimed
+only up to the remaining balance; spending them never blocks a reset or makes
+the balance negative. Other missing assets, unknown crew provenance or
+insufficient storage can still prevent a complete reset. A reward woman
+permanently removed from the recovery list no longer blocks her mission reset;
+the claim is cleared without removing another crew member.
 Elapsed premium time cannot be undone; only the remaining earned interval is
 withdrawn. Daily missions remain separate.
 
@@ -179,6 +183,16 @@ mission for the current tank class and tier. Battle results carry personal
 mission progress in the native lower-left quest area, while system messages
 list actual rewards, vehicle compensation and withdrawals. Launcher changes
 queue these messages for the next garage load and retain undelivered notices.
+Manual vehicle additions, badge ownership edits and wallet changes also queue
+native system messages with the actual vehicles, crew, badges and amounts.
+Repeated unchanged saves do not produce new notices. Vehicle construction,
+its notice and its inbox acknowledgement commit only after the garage saves.
+
+Dismissed crew recovery holds at most 100 members, keeping the newest. The
+offline policy charges 100 gold immediately and expires seven days after
+dismissal. At that deadline or when pushed out by newer entries,
+the member is permanently dismissed. These server-supplied durations are
+offline policy, not a verified historical Chinese server configuration.
 
 The account panel also edits account badge ownership.
 Badge choices and translated names come from the installed client's

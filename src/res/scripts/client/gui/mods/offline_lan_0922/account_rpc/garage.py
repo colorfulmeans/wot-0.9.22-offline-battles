@@ -2322,19 +2322,44 @@ class GarageState(object):
         """
         import time
 
+        now = int(time.time())
+        self.expire_recycled_tankmen(now)
         config = self._restore_config()
         limit = config.get('limit', 0)
         bin_rows = self._recycle_bin()
-        bin_rows[_int(tankman_id)] = (compact_descr, int(time.time()))
+        bin_rows[_int(tankman_id)] = (compact_descr, now)
         self._touched_recycled.add(_int(tankman_id))
         if limit > 0 and len(bin_rows) > limit:
             # The bin is a fixed-length buffer in #1513 as well; the oldest
             # dismissal is the one that falls out of it.
             for oldest in sorted(
-                    bin_rows, key=lambda key: _int(bin_rows[key][1]))[
+                    (key for key in bin_rows if key != _int(tankman_id)),
+                    key=lambda key: (_int(bin_rows[key][1]), _int(key)))[
                         :len(bin_rows) - limit]:
-                del bin_rows[oldest]
-                self._touched_recycled.add(_int(oldest))
+                self._forget_recycled_tankman(oldest)
+
+    def _forget_recycled_tankman(self, tankman_id):
+        """Keep a terminal receipt when a reward woman's recovery ends."""
+        self._recycle_bin().pop(tankman_id, None)
+        self._touched_recycled.add(_int(tankman_id))
+        for key, effect in (self._snapshot.get(
+                'personalMissionRewardJournal') or {}).items():
+            if (key.startswith('crew:') and isinstance(effect, dict) and
+                    _int(effect.get('tankman')) == _int(tankman_id)):
+                effect['permanently_dismissed'] = True
+
+    def expire_recycled_tankmen(self, now=None):
+        """Apply the same recovery deadline as the native barracks list."""
+        import time
+        now = int(time.time() if now is None else now)
+        window = self._restore_config().get('goldDuration', 0)
+        expired = [key for key, row in self._recycle_bin().items()
+                   if window > 0 and now - _int(row[1]) >= window]
+        for key in expired:
+            self._forget_recycled_tankman(key)
+        if expired:
+            self.revision += 1
+        return expired
 
     def restore_tankman(self, tankman_inventory_id):
         """Hire one dismissed crew member back into the barracks.

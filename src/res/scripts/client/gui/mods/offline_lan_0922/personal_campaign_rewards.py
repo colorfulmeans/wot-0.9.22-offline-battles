@@ -300,8 +300,8 @@ def revoke(state, receipt, now):
     """Withdraw exact economic assets; return actual withdrawal message rows.
 
 The caller must remove reward vehicles and crew first, making their slots and
-berths free. Any conflict raises GarageError; the caller's enclosing reset
-transaction also rolls back those earlier operations and claim markers.
+berths free. Spent credits and free XP are withdrawn only up to the remaining
+balance. Other conflicts roll back the enclosing reset and its claim markers.
 """
     if not isinstance(receipt, dict) or receipt.get('version') != 1:
         raise GarageError('INVALID_PERSONAL_MISSION_REWARD_JOURNAL')
@@ -319,9 +319,14 @@ transaction also rolls back those earlier operations and claim markers.
                 if name not in WALLET_NAMES:
                     raise GarageError('INVALID_PERSONAL_MISSION_REWARD_JOURNAL')
                 available = state._balances()[name]
-                if available < count:
+                if name in ('credits', 'freeXP'):
+                    count = min(count, max(0, available))
+                    effect['count'] = count
+                elif available < count:
                     _unavailable('wallet', count, available, name)
                 state._wallet()[name] = available - count
+                if not count:
+                    continue
             elif kind == 'item':
                 item_type = _count(effect['item_type'])
                 compact_descr = _count(effect['compact_descr'])

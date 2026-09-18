@@ -209,6 +209,14 @@ def write_account_fields(slot_id, game_root=None, badges=None,
         previous = previous if isinstance(previous, dict) else {}
         container[key] = {str(badge): previous.get(str(badge), int(time.time()))
                           for badge in badges}
+        changes = []
+        for phase, changed in (('granted', set(container[key]) - set(previous)),
+                               ('revoked', set(previous) - set(container[key]))):
+            if changed:
+                changes.append({'phase': phase, 'rewards': [
+                    {'kind': 'badge', 'id': identifier, 'count': 1}
+                    for identifier in sorted(changed, key=int)]})
+        save_ledger.queue_account_changes(container, changes, has_garage)
         if has_garage:
             services = container.get("offlineServices", {})
             if isinstance(services, dict):

@@ -2196,6 +2196,58 @@ class CrewShopTests(unittest.TestCase):
 
         self.assertEqual(2, len(state.snapshot()['recycleBinTankmen']))
 
+    def test_current_recovery_policy_charges_immediately_and_expires_at_seven_days(self):
+        from gui.mods.offline_lan_0922.account_rpc import economy, data
+        day = 86400
+        for elapsed, cost in ((0, 100), (7 * day - 1, 100), (7 * day, None)):
+            state = self._state(gold=1000)
+            state.snapshot()['tankmenRestoreConfig'] = dict(economy.TANKMEN_RESTORE_CONFIG)
+            with mock.patch('time.time', return_value=100):
+                state.dismiss_tankman(201)
+            before = copy.deepcopy(state.snapshot())
+            with mock.patch('time.time', return_value=100 + elapsed):
+                if cost is None:
+                    with self.assertRaises(self.garage.GarageError):
+                        state.restore_tankman(201)
+                    self.assertEqual(before, state.snapshot())
+                else:
+                    state.restore_tankman(201)
+                    self.assertEqual(1000 - cost, state._wallet()['gold'])
+                    self.assertIn(201, state.snapshot()['barracksTankmen'])
+            published = data._restore_config(state.snapshot())['tankmen']
+            self.assertEqual(0, published['freeDuration'])
+            self.assertEqual(7 * day, published['goldDuration'])
+
+    def test_hundred_entry_limit_preserves_newest_and_records_terminal_reward_source(self):
+        state = self._state(barracks={500: b'reward-woman'})
+        state.snapshot()['personalMissionRewardJournal'] = {
+            'crew:15': {'tankman': 500, 'descriptor': 'cmV3YXJkLXdvbWFu'}}
+        with mock.patch('time.time', return_value=100):
+            state.dismiss_tankman(500)
+            for identity in range(501, 601):
+                state._barracks()[identity] = b'other-crew'
+                state.dismiss_tankman(identity)
+            # A restored member with an older, smaller ID is still newest.
+            state._barracks()[201] = b'newest-dismissal'
+            state.dismiss_tankman(201)
+        self.assertEqual(100, len(state._recycle_bin()))
+        self.assertIn(201, state._recycle_bin())
+        self.assertNotIn(500, state._recycle_bin())
+        self.assertTrue(state.snapshot()['personalMissionRewardJournal'][
+            'crew:15']['permanently_dismissed'])
+
+    def test_expired_recovery_records_are_pruned_before_they_displace_live_crew(self):
+        state = self._state(barracks={500: b'reward-woman', 501: b'new'})
+        state.snapshot()['personalMissionRewardJournal'] = {'crew:15': {'tankman': 500}}
+        state.snapshot()['tankmenRestoreConfig'].update(limit=1, goldDuration=10)
+        with mock.patch('time.time', return_value=100):
+            state.dismiss_tankman(500)
+        with mock.patch('time.time', return_value=110):
+            state.dismiss_tankman(501)
+        self.assertEqual({501}, set(state._recycle_bin()))
+        self.assertTrue(state.snapshot()['personalMissionRewardJournal'][
+            'crew:15']['permanently_dismissed'])
+
     def test_a_sold_vehicles_dismissed_crew_lands_in_the_bin(self):
         """#1513 counts these separately but recovers them the same way."""
         state = self._state()

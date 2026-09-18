@@ -64,6 +64,8 @@ def _economy_modules(package_stubs):
                 _real_module('launcher_inbox'))
             _ECONOMY_MODULES['gui.mods.offline_lan_0922.offline_services'] = (
                 _real_module('offline_services'))
+            for name in ('ui_i18n', 'personal_campaign_ui'):
+                _ECONOMY_MODULES['gui.mods.offline_lan_0922.' + name] = _real_module(name)
     return dict(_ECONOMY_MODULES)
 
 
@@ -752,6 +754,27 @@ class BootstrapLifecycleTests(unittest.TestCase):
             self.assertNotIn('personalMissionRequestedCompleted', restarted)
             self.assertEqual(notifications, restarted['personalMissionNotifications'])
 
+    def test_initial_asset_notice_is_not_resurrected_after_durable_acknowledgement(self):
+        import copy
+        bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
+            unused_spaces, unused_events, modules = self._load()
+        store_module = self._campaign_modules(modules)
+        notice = {'id': 'initial-wallet', 'settlement': {'account_changes': [
+            {'phase': 'granted', 'rewards': [{'kind': 'credits', 'count': 1234}]}]}}
+        config = modules['gui.mods.offline_lan_0922.config']
+        config.save_slot_initial_personal_progress = lambda: {
+            'personalMissionNotifications': [copy.deepcopy(notice)]}
+        with mock.patch.dict(sys.modules, modules):
+            snapshot = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
+            self.assertEqual([notice], snapshot['personalMissionNotifications'])
+            store = store_module.GarageStore()
+            snapshot['personalMissionNotifications'] = []
+            store.mark_dirty()
+            self.assertTrue(store.flush(snapshot))
+            bootstrap._store = store_module.GarageStore()
+            restarted = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
+            self.assertEqual([], restarted['personalMissionNotifications'])
+
     def test_campaign_edit_stays_pending_when_the_save_cannot_be_committed(self):
         bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
             unused_spaces, unused_events, modules = self._load()
@@ -773,7 +796,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             self.assertFalse(snapshot.get('personalMissionProgress'))
             self.assertFalse(snapshot.get('personalMissionNotifications'))
 
-    def test_rejected_launcher_reset_persists_a_readable_notification_without_rewards(self):
+    def test_spent_credit_reset_persists_success_without_fictitious_withdrawal(self):
         bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
             unused_spaces, unused_events, modules = self._load()
         store_module = self._campaign_modules(modules)
@@ -790,12 +813,14 @@ class BootstrapLifecycleTests(unittest.TestCase):
             snapshot['personalMissionRequestedCompleted'] = {}
             bootstrap._settle_launcher_campaign(
                 snapshot, modules['items'].vehicles, modules['items'].tankmen)
-            self.assertEqual({'1': 1}, snapshot['personalMissionProgress'])
+            self.assertEqual({}, snapshot['personalMissionProgress'])
             self.assertEqual(0, snapshot['wallet']['credits'])
             notices = snapshot['personalMissionNotifications']
             self.assertEqual(1, len(notices))
-            self.assertIn('WALLET_UNAVAILABLE', notices[0]['settlement']['reset_error'])
-            self.assertEqual([], notices[0]['settlement']['missions'])
+            self.assertEqual('', notices[0]['settlement']['reset_error'])
+            mission = notices[0]['settlement']['missions'][0]
+            self.assertEqual('revoked', mission['phase'])
+            self.assertEqual([], mission['rewards'])
             with open(bootstrap._store._path, encoding='utf-8') as stream:
                 saved = json.load(stream)['ledger']['personalMissions']
             self.assertEqual(notices, saved['notifications'])
@@ -984,7 +1009,6 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual({}, snapshot['recycleBinTankmen'])
 
     def test_no_crew_price_the_shop_publishes_is_zero(self):
-        """"Nothing is free" is a property of the numbers, not of the code."""
         (bootstrap, unused_callbacks, unused_compatibility,
          unused_app_loader, unused_spaces, unused_events,
          modules) = self._load()
@@ -1000,7 +1024,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual(0, restore['freeDuration'])
         self.assertGreater(restore['goldCost'], 0)
         # ItemsRequester.getTankmen hides everyone older than this.
-        self.assertGreater(restore['goldDuration'], 0)
+        self.assertEqual(7 * 86400, restore['goldDuration'])
         # The cheapest skill reset is paid for in crew experience instead.
         self.assertEqual(
             0.0, snapshot['dropSkillsCosts'][0]['xpReuseFraction'])
@@ -1112,7 +1136,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
     # somewhere to land.
     OWNED_ONE = ('nation-0:vehicle-11', 90011)
 
-    def _with_inbox(self, names, owned=(OWNED_ONE,), validator=None, **kwargs):
+    def _with_inbox(self, names, owned=(OWNED_ONE,), validator=None, flush_ok=True, **kwargs):
         """Start a client with the launcher's shop having bought ``names``."""
         (bootstrap, unused_callbacks, unused_compatibility,
          unused_app_loader, unused_spaces, unused_events,
@@ -1140,7 +1164,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
 
             def flush(self, candidate):
                 self.flushed = candidate
-                return True
+                return flush_ok
 
         store = _Store()
         bootstrap._store = store
@@ -1171,7 +1195,12 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual(0, snapshot['vehicleXP'][90012])
         # A delivery that is never written is delivered again next start,
         # against an inbox entry that is already gone.
-        self.assertIs(snapshot, store.flushed)
+        self.assertEqual(snapshot, store.flushed)
+        notices = snapshot['personalMissionNotifications']
+        self.assertEqual(1, len(notices))
+        rewards = notices[0]['settlement']['account_changes'][0]['rewards']
+        self.assertEqual(90012, rewards[0]['vehicle_type'])
+        self.assertTrue(any(row['kind'] == 'crew' and row['count'] > 0 for row in rewards))
         self.assertFalse(os.path.exists(path))
 
     def test_a_delivered_vehicle_arrives_stock_and_without_consumables(self):
@@ -1188,6 +1217,15 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 for item_type in range(2, 8)
                 for compact_descr in record['inventoryItems'][item_type]))
 
+    def test_failed_delivery_save_retains_inbox_without_grant_or_notice(self):
+        snapshot, store, path, inbox = self._with_inbox(
+            ['nation-0:vehicle-12'], flush_ok=False)
+        self.assertEqual(['nation-0:vehicle-12'], inbox.pending_vehicles(path))
+        self.assertEqual([90011], [row['vehicleTypeCompactDescr']
+                                  for row in snapshot['vehicles']])
+        self.assertFalse(snapshot.get('personalMissionNotifications'))
+        self.assertTrue(store.flushed.get('personalMissionNotifications'))
+
     def test_a_vehicle_the_save_already_owns_is_not_delivered_twice(self):
         snapshot, unused_store, path, unused_inbox = self._with_inbox(
             ['nation-0:vehicle-11'])
@@ -1196,6 +1234,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             1, sum(1 for record in snapshot['vehicles']
                    if record['vehicleTypeName'] == 'nation-0:vehicle-11'))
         self.assertFalse(os.path.exists(path))
+        self.assertFalse(snapshot.get('personalMissionNotifications'))
 
     def test_a_new_crew_never_takes_an_id_the_barracks_already_holds(self):
         """A reused id makes the whole restored garage invalid, not one car."""

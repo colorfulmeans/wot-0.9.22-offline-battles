@@ -46,7 +46,10 @@ def revoke_tankwoman(state, effect):
     if not isinstance(effect, dict):
         raise GarageError('INVALID_PERSONAL_MISSION_REWARD_JOURNAL')
     tankman_id = _count(effect.get('tankman', 0))
-    if not tankman_id:
+    permanently_dismissed = (effect.get('permanently_dismissed') is True or
+        ((effect.get('location') or {}).get('kind') == 'missing' and
+         bool(effect.get('descriptor'))))
+    if not tankman_id and not permanently_dismissed:
         raise GarageError('PERSONAL_MISSION_RESET_CREW_SOURCE_UNAVAILABLE')
     dossier_delta = _count(effect.get('dossier_count', 1))
     snapshot = state.snapshot()
@@ -59,25 +62,27 @@ def revoke_tankwoman(state, effect):
         rows = record.get('tankmen') or {}
         if tankman_id in rows:
             found.append(('vehicle', rows, record))
-    if len(found) != 1:
+    if len(found) != 1 and not (not found and permanently_dismissed):
         raise GarageError('PERSONAL_MISSION_RESET_CREW_SOURCE_UNAVAILABLE')
     dossier = snapshot.get('personalMissionDossier') or {}
     dossier_count = _count(dossier.get(TANKWOMAN_DOSSIER_KEY, 0))
     if dossier_count < dossier_delta:
         raise GarageError('PERSONAL_MISSION_RESET_CREW_DOSSIER_CHANGED')
 
-    kind, rows, record = found[0]
-    del rows[tankman_id]
-    if kind == 'vehicle':
-        record['crew'] = [None if value == tankman_id else value
-                          for value in (record.get('crew') or ())]
-        state._touched.add(int(record['id']))
-    elif kind == 'recycleBinTankmen':
-        state._touched_recycled.add(tankman_id)
+    if found:
+        kind, rows, record = found[0]
+        del rows[tankman_id]
+        if kind == 'vehicle':
+            record['crew'] = [None if value == tankman_id else value
+                              for value in (record.get('crew') or ())]
+            state._touched.add(int(record['id']))
+        elif kind == 'recycleBinTankmen':
+            state._touched_recycled.add(tankman_id)
     if dossier_delta:
         snapshot['personalMissionDossier'][TANKWOMAN_DOSSIER_KEY] = (
             dossier_count - dossier_delta)
-    state._touched_tankmen.add(tankman_id)
+    if tankman_id:
+        state._touched_tankmen.add(tankman_id)
     for record in state._records():
         previous = record.get('lastCrew')
         if isinstance(previous, (list, tuple)) and tankman_id in previous:
@@ -85,4 +90,4 @@ def revoke_tankwoman(state, effect):
                                   for value in previous]
             state._touched.add(int(record['id']))
     state.revision += 1
-    return tankman_id
+    return tankman_id if found else 0

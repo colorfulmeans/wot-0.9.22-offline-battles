@@ -442,13 +442,7 @@ def _owned_vehicle_types(vehicles, nations, career, prices,
 
 
 def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
-    """Build the vehicles the launcher's gold shop already charged for.
-
-    The launcher takes the gold and leaves the names, because only a client
-    can produce a garage record.  A name this client refuses stays pending and
-    says why: the player has already paid for it, and a build that fails today
-    may succeed once the reason is understood.
-    """
+    """Commit launcher-added vehicles and their system notices together."""
     from gui.mods.offline_lan_0922 import launcher_inbox
     from items import ITEM_TYPE_INDICES
 
@@ -462,11 +456,13 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
         return 0
     if not pending:
         return 0
+    from gui.mods.offline_lan_0922.personal_campaign_ui import queue_notification
     owned = set(
         str(record.get('vehicleTypeName') or '')
         for record in (snapshot.get('vehicles') or ()))
     delivered = []
     unbuilt = []
+    working = copy.deepcopy(snapshot)
     for name in pending:
         if name in owned:
             # The launcher refuses to sell a vehicle a save already owns, so
@@ -480,9 +476,9 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
         # client can build but cannot publish would otherwise be flushed, and
         # the next start discards an unpublishable save whole -- one refused
         # vehicle would cost the player the entire career.
-        staged = copy.deepcopy(snapshot)
+        staged = copy.deepcopy(working)
         try:
-            _build_purchased_vehicle(
+            compact_descr = _build_purchased_vehicle(
                 staged, vehicles, tankmen, ITEM_TYPE_INDICES, settings, name)
         except Exception as error:
             unbuilt.append(name)
@@ -500,17 +496,28 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
                 'a publishable garage, it stays pending: %s\n'
                 % (name, error))
             continue
-        snapshot.clear()
-        snapshot.update(staged)
+        record = next(row for row in staged['vehicles']
+                      if row.get('vehicleTypeCompactDescr') == compact_descr)
+        rewards = [{'kind': 'vehicle', 'vehicle': name,
+                    'vehicle_type': compact_descr}]
+        if record.get('tankmen'):
+            rewards.append({'kind': 'crew', 'count': len(record['tankmen'])})
+        queue_notification(staged, {'account_changes': [
+            {'phase': 'granted', 'rewards': rewards}]})
+        working = staged
         owned.add(name)
         delivered.append(name)
     if delivered:
         # A delivered vehicle that is never flushed is delivered again on the
         # next start, against an inbox entry that is already gone.
         store = _garage_store()
-        if store is not None:
-            store.mark_dirty()
-            store.flush(snapshot)
+        if store is None:
+            return 0
+        store.mark_dirty()
+        if not store.flush(working):
+            return 0
+        snapshot.clear()
+        snapshot.update(working)
         for name in delivered:
             sys.stdout.write(
                 '[Offline LAN 0.9.22] delivered the purchased vehicle %s\n'
@@ -549,11 +556,8 @@ def _settle_launcher_campaign(snapshot, vehicles, tankmen):
     # Keep the message and reward mutation in the same durable commit. The
     # first lobby may not exist yet, so publishing here would lose both the
     # native notification and its retry intent on an Account transition.
-    from gui.mods.offline_lan_0922.personal_campaign_ui import messages
-    if messages(result):
-        import uuid
-        state.snapshot().setdefault('personalMissionNotifications', []).append({
-            'id': uuid.uuid4().hex, 'settlement': copy.deepcopy(result)})
+    from gui.mods.offline_lan_0922.personal_campaign_ui import queue_notification
+    if queue_notification(state.snapshot(), result):
         state.revision += 1
     if not state.revision:
         return

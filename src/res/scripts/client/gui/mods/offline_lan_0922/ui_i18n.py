@@ -45,6 +45,13 @@ _ZH = {
     'Committed orders returned: %d.': u'返还已投入的通行令：%d 枚。',
     'Orders withdrawn: %d.': u'已回收通行令：%d 枚。',
     'Female crew members withdrawn: %d.': u'已回收女成员：%d 名。',
+    'Female crew members already permanently dismissed: %d. No crew withdrawal needed.':
+        u'女成员已被彻底解雇：%d 名，本次无需回收成员。',
+    'Account assets received: %s.': u'已获得：%s。',
+    'Account assets removed: %s.': u'已扣除：%s。',
+    'Badge: %s': u'勋章：%s',
+    'Crew members: %d': u'乘员：%d 名',
+    'Vehicle compensation: %d credits (%s)': u'战车补偿：%d 银币（%s）',
     'Female crew member available: choose her nation, vehicle and role in Personal Missions.':
         u'可招募一名女成员：请在个人任务界面选择国籍、车辆和职位。',
     'Gold': u'金币',

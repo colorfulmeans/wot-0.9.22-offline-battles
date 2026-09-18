@@ -78,6 +78,21 @@ class ReversibleRewardsTests(unittest.TestCase):
         self.assertEqual(before, state.snapshot())
         self.assertEqual(revision, state.revision)
 
+    def test_duplicate_spent_currency_rows_share_the_remaining_balance(self):
+        state = fixture._state()
+        state._wallet().update(credits=70, freeXP=5)
+        receipt = {'version': 1, 'effects': [
+            {'kind': 'wallet', 'name': 'credits', 'count': 50},
+            {'kind': 'wallet', 'name': 'credits', 'count': 50},
+            {'kind': 'wallet', 'name': 'freeXP', 'count': 10}]}
+        rows = rewards.revoke(state, receipt, 100)
+        self.assertEqual([{'kind': 'credits', 'count': 50},
+                          {'kind': 'credits', 'count': 20},
+                          {'kind': 'freeXP', 'count': 5}], rows)
+        self.assertEqual(0, state._wallet()['credits'])
+        self.assertEqual(0, state._wallet()['freeXP'])
+        self.assertEqual([], rewards.revoke(state, receipt, 101))
+
     def test_spent_and_installed_items_refuse_without_removing_other_assets(self):
         for mounted in (False, True):
             state = fixture._state()
@@ -206,7 +221,7 @@ class ReversibleRewardsTests(unittest.TestCase):
         receipt = self.grant(state, bonus)
         self.assertIn({'kind': 'credits', 'count': 300}, receipt['rewards'])
         self.assertIn({'kind': 'item', 'id': 9001, 'count': 3}, receipt['rewards'])
-        bad = {'version': 1, 'effects': [{'kind': 'wallet', 'name': 'credits', 'count': 70000}] * 2}
+        bad = {'version': 1, 'effects': [{'kind': 'wallet', 'name': 'gold', 'count': 700}] * 2}
         before = copy.deepcopy(state.snapshot())
         with self.assertRaises(rewards.GarageError):
             rewards.revoke(state, bad, 100)

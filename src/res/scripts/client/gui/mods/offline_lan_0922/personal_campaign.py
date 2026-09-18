@@ -184,6 +184,16 @@ def _reward_rows(receipt, economic_rows=None, vehicle_rows=None):
                          else economic_rows)
     vehicles = copy.deepcopy(receipt.get('vehicles', ()) if vehicle_rows is None
                              else vehicle_rows)
+    # A reset can reclaim only the credits left after spending. Attribute
+    # that actual withdrawal to compensation before ordinary credit rewards.
+    available = sum(int(row.get('count', 0)) for row in rows
+                    if row.get('kind') == 'credits')
+    for row in vehicles:
+        if row.get('kind') == 'compensation':
+            row['credits'] = min(available, max(0, int(row.get('credits', 0))))
+            available -= row['credits']
+    vehicles = [row for row in vehicles if row.get('kind') != 'compensation'
+                or row.get('credits')]
     compensation = sum(int(row.get('credits', 0)) for row in vehicles
                        if row.get('kind') == 'compensation')
     for row in rows:
@@ -473,13 +483,16 @@ def _apply_requested_progress(state, now=None, definitions=None,
             # releases their barracks seats for other crew returned by the
             # same atomic reset; berth rewards are reversed only afterwards.
             revoked_crew = {}
+            removed_crew = {}
+            state.expire_recycled_tankmen(now)
             for key in list(snapshot.get('personalMissionTankwomen', {})):
                 if requested.get(key, 0):
                     continue
                 crew_key = 'crew:' + key
                 if crew_key not in journal:
                     raise GarageError('PERSONAL_MISSION_CREW_PROVENANCE_MISSING: ' + key)
-                personal_campaign_ledger.revoke_tankwoman(state, journal[crew_key])
+                removed_crew[key] = bool(personal_campaign_ledger.revoke_tankwoman(
+                    state, journal[crew_key]))
                 del journal[crew_key]
                 snapshot['personalMissionTankwomen'].pop(key, None)
                 bonus_key = 'crewBonus:' + key
@@ -528,7 +541,7 @@ def _apply_requested_progress(state, now=None, definitions=None,
                             state, journal[order_key]['count'])
                         del journal[order_key]
                 if key in revoked_crew:
-                    tankwomen_revoked = 1
+                    tankwomen_revoked = int(removed_crew[key])
                     rows.extend(_revoke_reward(state, revoked_crew[key], now))
                     journal.pop('crewBonus:' + key, None)
                 for stage in range(paid, target, -1):
@@ -550,7 +563,9 @@ def _apply_requested_progress(state, now=None, definitions=None,
                     'paid_after': min(paid, target), 'paid_stages': [],
                     'rewards': rows, 'orders_revoked': orders_revoked,
                     'orders_refunded': returned_orders.get(key, 0),
-                    'tankwomen_revoked': tankwomen_revoked})
+                    'tankwomen_revoked': tankwomen_revoked,
+                    'tankwomen_already_dismissed': int(key in removed_crew and
+                                                     not removed_crew[key])})
             snapshot['personalMissionRewarded'] = rewarded
             snapshot['personalMissionProgress'] = requested
             if 'personalMissionRequestedRegular' in snapshot:

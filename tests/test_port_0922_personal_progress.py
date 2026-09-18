@@ -47,15 +47,19 @@ class PersonalProgressTests(unittest.TestCase):
 
     def test_new_save_metadata_initializes_all_three_editors(self):
         from gui.mods.offline_lan_0922 import config
+        notice = {'id': 'initial-badge', 'settlement': {'account_changes': [
+            {'phase': 'granted', 'rewards': [{'kind': 'badge', 'id': 1, 'count': 1}]}]}}
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / config.SAVE_METADATA_FILE_NAME
             path.write_text(json.dumps({'initial_personal_missions': {'1': 1, '300': 2},
-                'initial_personal_orders': 8, 'initial_account_badges': {'1': 1700000000}}))
+                'initial_personal_orders': 8, 'initial_account_badges': {'1': 1700000000},
+                'initial_account_notifications': [notice, None, {'id': 'invalid'}]}))
             with mock.patch.object(config, 'save_slot_dir', return_value=root):
                 result = config.save_slot_initial_personal_progress()
         self.assertEqual({'1': 1, '300': 2}, result['personalMissionProgress'])
         self.assertEqual(8, result['personalMissionOrders'])
         self.assertEqual({'1': 1700000000}, result['accountBadges'])
+        self.assertEqual([notice], result['personalMissionNotifications'])
 
 
 if __name__ == '__main__':

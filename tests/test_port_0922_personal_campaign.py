@@ -168,6 +168,53 @@ class RewardsTests(unittest.TestCase):
         self.assertEqual([801, None], state.snapshot()['vehicles'][0]['crew'])
         self.assertEqual({801: b'one'}, state.snapshot()['vehicles'][0]['tankmen'])
 
+    def test_permanently_dismissed_reward_allows_reset_after_save_and_restart(self):
+        from gui.mods.offline_lan_0922.account_rpc import garage_store
+        for reason in ('capacity', 'expiry', 'legacy_missing'):
+            snapshot = fixture._snapshot()
+            snapshot.update(accountBerths=31, personalMissionProgress={'15': 1},
+                personalMissionRewarded={'15': 1},
+                barracksTankmen={701: b'female', 702: b'female'},
+                personalMissionTankwomen={'15': True},
+                personalMissionDossier={'achievements:tankwomenProgress': 1},
+                tankmenRestoreConfig={'freeDuration': 0, 'goldDuration': 10,
+                                      'goldCost': 100, 'limit': 100},
+                personalMissionRewardJournal={'crew:15': {'tankman': 701,
+                    'descriptor': 'ZmVtYWxl', 'dossier_count': 1}, 'crewBonus:15': True})
+            state = fixture._state(snapshot)
+            with mock.patch('time.time', return_value=100):
+                state.dismiss_tankman(701)
+                if reason == 'capacity':
+                    for identifier in range(800, 900):
+                        state._barracks()[identifier] = b'ordinary-crew'
+                        state.dismiss_tankman(identifier)
+                elif reason == 'expiry':
+                    state.expire_recycled_tankmen(110)
+                else:
+                    state._recycle_bin().clear()
+            serialized = json.loads(json.dumps(garage_store._ledger_payload(state.snapshot())))
+            restored = fixture._snapshot()
+            garage_store._apply_ledger(restored, {'ledger': serialized})
+            state = fixture._state(restored)
+            other_crew = dict(state._barracks())
+            state.snapshot()['personalMissionRequestedCompleted'] = {}
+            definitions = {15: {'main': node(bonus=node(), bonusDelayed=node(berths=node(1))),
+                                'add': quest(node())}}
+            result = campaign.settle(state, now=111, definitions=definitions)
+            self.assertEqual('', result['reset_error'], reason)
+            self.assertEqual(other_crew, state._barracks())
+            self.assertEqual(30, state.snapshot()['accountBerths'])
+            self.assertEqual({}, state.snapshot()['personalMissionTankwomen'])
+            self.assertEqual({}, state.snapshot()['personalMissionRewarded'])
+            self.assertEqual(0, state.snapshot()['personalMissionDossier'][
+                'achievements:tankwomenProgress'])
+            self.assertEqual(0, result['missions'][0]['tankwomen_revoked'])
+            self.assertEqual(1, result['missions'][0]['tankwomen_already_dismissed'])
+            state.snapshot()['personalMissionRequestedCompleted'] = {'15': 1}
+            self.assertEqual('', campaign.settle(state, now=112,
+                definitions=definitions)['reset_error'])
+            self.assertEqual({'15': 1}, state.snapshot()['personalMissionRewarded'])
+
 
     def test_order_honors_refunds_pawn_and_discards_manually_supplied_balance(self):
         state = fixture._state()

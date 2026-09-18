@@ -4135,13 +4135,18 @@ detached transaction before committing an edit. Markers are cleared only after
 successful withdrawal, allowing replay to grant the reward once again. A
 rejected withdrawal clears the pending request, preserves the old progress and
 property, and publishes `resetError` to the editor and a durable notification.
-Spent property or unresolvable legacy provenance rejects the whole withdrawal.
+Credits and free XP withdrawals stop at zero; notices record only the actual
+debit, including the recovered portion of duplicate-vehicle compensation.
+Other spent property or unresolvable legacy provenance rejects the withdrawal.
 Elapsed premium time is not reversible; only the remaining earned interval is
 removed without consuming separately purchased time.
 
-Crew provenance survives inventory-ID reconstruction across restarts. A missing
-or ambiguous reward crew member rejects the edit rather than identifying an
-unrelated crew member by a reused ID. Reward vehicles also carry a persisted
+Crew provenance survives inventory-ID reconstruction across restarts. A
+permanent dismissal recorded at recycle-bin eviction/expiry, or the prior
+serializer's explicit missing-owner location with its reward descriptor,
+allows reset without another crew removal. Unverified or ambiguous provenance
+still rejects the edit; no similar-descriptor search selects unrelated crew.
+Reward vehicles also carry a persisted
 source marker. Withdrawal returns crew and fitted items to storage and keeps
 a reversible record of the hull. A later purchase of the same type is not
 silently removed in place of a sold mission vehicle. Old operation claims
@@ -4252,6 +4257,25 @@ native `SystemMessages.pushMessage` call per settlement. Personal-notice retry
 does not replay an already accepted battle or daily notice. Launcher settlement
 queues messages in the same garage save as the assets; successful delivery is
 acknowledged persistently.
+
+Launcher vehicle delivery now stages the vehicle and an `account_changes`
+notice together, preserves the inbox on a failed save, and consumes it only
+after commit. Badge and wallet editors append actual deltas through the same
+durable notification queue; initial-save metadata hands it off once to the
+garage ledger. Native badge and vehicle names are resolved for presentation.
+The existing Account-ready publisher and session acknowledgement suppress
+duplicate notices after unchanged edits, reconnects and failed ack writes.
+
+The dismissed-crew buffer already had a limit of 100. Expired entries now
+leave a terminal campaign crew receipt, and equal-time eviction always keeps
+the newly dismissed member. The confirmed offline policy retains an immediate
+100-gold charge and seven-day lifetime in both the shop and mutation owner.
+Region-specific `ShopRequester.tankmenRestoreConfig`,
+`getTankmenRestoreInfo` and `RecycleBinRequester.getTankmen` confirm the field
+roles as source orientation. The old Chinese server's numerical configuration
+is not audited: official guide pages could not be read in this investigation.
+Clock-controlled tests cover immediate/last-second/expired recovery and 101 dismissals;
+they do not prove native dialog rendering or real-time callback behavior.
 
 Badge eligibility is recomputed from the enabled token-quest dependency graph,
 not permanent historical token-reward markers. Missing main or honors

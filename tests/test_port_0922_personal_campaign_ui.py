@@ -229,6 +229,28 @@ class PersonalCampaignMessageTests(unittest.TestCase):
         self.assertIn('Vehicle: Reward vehicle', result[1])
         self.assertIn('Credits: 1000', result[1])
 
+    def test_launcher_account_changes_include_localized_assets_and_actual_currency(self):
+        with mock.patch.object(self.ui, '_vehicle_name', return_value='Object 260'), \
+                mock.patch.object(self.ui, '_badge_name', return_value='Campaign champion'):
+            result = self.ui.messages({'account_changes': [
+                {'phase': 'granted', 'rewards': [
+                    {'kind': 'vehicle', 'vehicle': 'ussr:R110_Object_260'},
+                    {'kind': 'crew', 'count': 4},
+                    {'kind': 'badge', 'id': '10', 'count': 1},
+                    {'kind': 'compensation', 'vehicle': 'ussr:R110_Object_260', 'credits': 1000}]},
+                {'phase': 'revoked', 'rewards': [{'kind': 'freeXP', 'count': 200}]}]})
+        self.assertEqual(2, len(result))
+        for expected in ('Account assets received:', 'Object 260', 'Crew members: 4',
+                         'Badge: Campaign champion', 'Vehicle compensation: 1000 credits'):
+            self.assertIn(expected, result[0])
+        self.assertIn('Account assets removed: Free XP: 200', result[1])
+
+    def test_permanently_dismissed_woman_is_not_reported_as_withdrawn(self):
+        result = self.message(mission(before=1, after=0, paid_stages=[],
+            phase='revoked', tankwomen_revoked=0, tankwomen_already_dismissed=1))
+        self.assertIn('already permanently dismissed: 1', result)
+        self.assertNotIn('Female crew members withdrawn:', result)
+
     def test_unexplained_operation_ids_and_internal_tokens_do_not_invent_awards(self):
         self.assertEqual([], self.ui.messages({
             'operation_rewards': ['operation:4'],
