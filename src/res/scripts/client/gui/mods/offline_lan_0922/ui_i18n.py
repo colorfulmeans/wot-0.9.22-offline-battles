@@ -83,7 +83,6 @@ _ZH = {
     'No personal reserve of this type is owned.': u'没有该类储备，请先购买或完成任务。',
     'the account already owns this vehicle': u'已拥有这辆战车。',
     'every garage slot is occupied': u'车位已满，请先购买车位。',
-    '90 days': u'90天',
     'Voice chat is unavailable in offline mode.': u'单机模式未提供语音聊天服务，其他游戏音效可正常设置。',
     'TRAINING ROOM': u'训练房间',
     'TRAINING ROOM - BOTS': u'训练房间（含电脑）',

@@ -845,33 +845,9 @@ def _install_daily():
 
 
 def _install_settings():
-    from gui.Scaleform.daapi.view.lobby import PremiumWindow as premium
     from gui.Scaleform.daapi.view.common.settings.SettingsWindow import (
         SettingsWindow, SETTINGS, _PAGES_INDICES, _setLastTabIndex)
     from account_helpers.settings_core.options import VOIPSupportSetting
-    original_duration = premium.PremiumWindow._PremiumWindow__getDurationStr
-    original_packet = premium.PremiumWindow._PremiumWindow__makePacketVO
-
-    def packet(view, period, cost, default_cost, gold, can_buy):
-        result = original_packet(view, period, cost, default_cost, gold, can_buy)
-        if int(period) == 90:
-            # Keep the 90-day artwork explicit for the offline shop packet.
-            # Other durations keep the client's own resource selection.
-            result['image'] = '../maps/icons/offline_lan/premium_90_98.png'
-        return result
-
-    def duration(view, period, cost, has_action, enough):
-        if int(period) != 90:
-            return original_duration(view, period, cost, has_action, enough)
-        price = '' if has_action else premium.makeHtmlString(
-            'html_templates:lobby/dialogs/premium', 'gold' if enough else 'goldAlert',
-            ctx={'value': premium.BigWorld.wg_getGoldFormat(cost)})
-        return premium.makeHtmlString('html_templates:lobby/dialogs/premium',
-                                      'duration', ctx={'duration': tr('90 days'),
-                                                       'price': price})
-
-    _patch(premium.PremiumWindow, '_PremiumWindow__getDurationStr', duration)
-    _patch(premium.PremiumWindow, '_PremiumWindow__makePacketVO', packet)
     original_tab = SettingsWindow.onTabSelected
 
     def tab_selected(view, tab):

@@ -3706,8 +3706,7 @@ The native store retains its card surface; purchases use the Account command,
 GarageState transaction, common vehicle purchase and durable garage ledger.
 Slot and crew entitlements are shared with native purchase consumers.
 Insufficient funds, duplicate purchases and failed save writes roll back.
-The 90-day premium duration supplies the missing label while preserving the
-native price template and existing 6500-gold purchase policy.
+Premium purchases use the native six durations and stock price templates.
 
 No friendly-fire locale key is overridden. Public 0.9.22 result calculations
 use `details/calculations/friendlyFirePenalty` for credits and XP, and
@@ -3887,12 +3886,7 @@ Badge cards use native achievement ownership and show unearned badges in the
 locked collection. The Account command validates ownership independently of
 the page. A saved verification marker distinguishes newly validated selection
 from the earlier unrestricted cosmetics; it does not manufacture campaign or
-ranked achievements. The 90-day premium packet now bundles its own 98-pixel transparent
-90-day emblem instead of borrowing the 180-day image, keeping the 90-day
-product, duration and 6500-gold price. The current single-coin emblem uses
-the original transparent IMGBIN PNG subsequently supplied by the user,
-proportionally scaled for packaging. Provenance is recorded in
-THIRD_PARTY_NOTICES.md; it is not claimed to be an extracted #1513 asset.
+ranked achievements.
 
 Premium sales now save a recovery entitlement with the hull's credit selling
 value plus 10%, independent of ammunition, equipment and crew sold with it.
@@ -4021,17 +4015,23 @@ bundled 90-day texture loads, but its three-game ribbons do not match the
 other World of Tanks duration emblems. This is an artwork mismatch rather
 than evidence of a missing resource in that package.
 
-The reference premium-window resource rule is
-`gui/maps/icons/windows/prem/icon_prem{days}_98.png`; its standard duration
-labels omit 90 days. That does not prove the Chinese #1513 resource archives
-lack `icon_prem90_98.png`: the reports do not contain their file lists. The
-offline override is explicitly packaged at
-`res/gui/maps/icons/offline_lan/premium_90_98.png` inside
-`mods/0.9.22.0.1/org.colorfulmeans.offline_lan_0922_0.8.4.wotmod`. The new
-image uses the user's subsequently supplied original PNG,
-`imgbin_a143b4df7f0b82ff3a4a238833081688.png`, with actual alpha transparency.
-The earlier JPEG's baked checkerboard and the temporary generated extraction
-are not shipped.
+The premium-window resource rule is
+`gui/maps/icons/windows/prem/icon_prem{days}_98.png`. The user's subsequent
+extracted-resource screenshot confirms 1, 3, 7, 30, 180 and 360 days. The
+erroneously added 90-day offer, duration/image monkey patches and bundled
+artwork have been removed. The shared shop catalogue now offers exactly
+360, 180, 30, 7, 3 and 1 day; the Account command rejects 90 without charging
+or changing existing premium expiry. One day costs the retained 250 gold.
+
+Report `20260918-083042-e3e156565014` identifies build
+`colorfulmeans-35288390043-1`. Three car-support records have current wheel
+coordinates and retain every direct support sample (world-height spans
+approximately 0.17, 0.49 and 0.35 metres). These are wheel-height differences,
+not measurements of the wreck's height above terrain. Two later records
+incorrectly reuse old spring traces after switching to hydraulic suspension;
+these are invalid height evidence. Suspension reset/disable paths now clear
+that diagnostic trace. Collision geometry and support calculations remain
+unchanged, consistent with the user's improved visual acceptance.
 
 The Strv S1 report records a Python exception at 07:03:19, not an unexplained
 native process crash: `_present_authority_bot_poses` reaches

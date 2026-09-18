@@ -1824,12 +1824,12 @@ class BattleRuntime(object):
         self._ram_bot_lookup_cache = {}
         self._local_physics = None
         self._local_suspension_params = None
+        self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
         self._local_suspension_failed_this_tick = False
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
-        self._local_suspension_probe_trace = ()
         self._suspension_ground_probe_layers = ()
         self._local_frame_stages = None
         self._local_pitch = 0.0
@@ -2162,6 +2162,7 @@ class BattleRuntime(object):
         self._ram_bot_lookup_cache = {}
         self._local_physics = None
         self._local_suspension_params = None
+        self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
         self._local_suspension_failed_this_tick = False
@@ -6541,6 +6542,7 @@ class BattleRuntime(object):
         # tick. A malformed detailed chassis descriptor can then fall back to
         # the existing support path without aborting local-vehicle startup.
         self._local_suspension_params = None
+        self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
         self._local_suspension_failed_this_tick = False
@@ -20726,6 +20728,7 @@ class BattleRuntime(object):
         """Lazily enable the descriptor-backed ten-spring trial."""
         if vehicle_physics.suspension_trial_excluded(descriptor):
             self._local_suspension_params = None
+            self._local_suspension_probe_trace = ()
             self._local_suspension_disabled = True
             self._local_spring_ground_memory = None
             self._local_pseudo_ground_memory = None
@@ -20742,6 +20745,7 @@ class BattleRuntime(object):
                     vehicle_physics.derive_suspension_params(descriptor)
             except Exception as error:
                 self._local_suspension_params = None
+                self._local_suspension_probe_trace = ()
                 self._local_suspension_disabled = True
                 self._local_spring_ground_memory = None
                 self._local_pseudo_ground_memory = None
@@ -20793,6 +20797,7 @@ class BattleRuntime(object):
     def _disable_local_suspension_trial(self, error):
         """Retire the trial after rolling back its failing physics tick."""
         self._local_suspension_params = None
+        self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = True
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
@@ -24464,6 +24469,7 @@ class BattleRuntime(object):
                 entity.typeDescriptor,
                 self._local_factors(entity.typeDescriptor))
             self._local_suspension_params = None
+            self._local_suspension_probe_trace = ()
             self._local_suspension_disabled = False
             self._local_suspension_report = None
             self._local_suspension_failed_this_tick = False
@@ -27335,6 +27341,7 @@ class BattleRuntime(object):
         self._local_push_z = 0.0
         self._local_physics = None
         self._local_suspension_params = None
+        self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
         self._local_suspension_failed_this_tick = False

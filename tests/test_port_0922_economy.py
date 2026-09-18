@@ -928,6 +928,21 @@ class CurrencyTests(unittest.TestCase):
         self.assertEqual(
             1700003600 + 7 * 24 * 60 * 60, expiry)
 
+    def test_original_premium_durations_and_one_day_purchase(self):
+        self.assertEqual([360, 180, 30, 7, 3, 1],
+                         sorted(ECONOMY.PREMIUM_COSTS, reverse=True))
+        snapshot = _snapshot()
+        snapshot['wallet']['gold'] = 5000
+        snapshot['premiumExpiryTime'] = 1700003600
+        state = _state(snapshot)
+        before = copy.deepcopy(state.snapshot())
+        with self.assertRaises(GARAGE.GarageError):
+            state.buy_premium(90, now=1700000000)
+        self.assertEqual(before, state.snapshot())
+        self.assertEqual(1700003600 + 86400,
+                         state.buy_premium(1, now=1700000000))
+        self.assertEqual(4750, state.snapshot()['wallet']['gold'])
+
     def test_unoffered_or_unaffordable_premium_packet_is_atomic(self):
         snapshot = _snapshot()
         snapshot['wallet']['gold'] = 100

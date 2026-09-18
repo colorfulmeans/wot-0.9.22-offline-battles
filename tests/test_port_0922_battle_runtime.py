@@ -24558,10 +24558,16 @@ class BattleRuntimeContractTests(unittest.TestCase):
         entity = _Vehicle(
             10, descriptor, _Vector(), (0, 0, 0), {'health': 500})
 
+        # Switching from a conventional tank must retire its diagnostic samples.
+        battle._local_suspension_probe_trace = ((355.0, 85.0, 13.8),)
         position = battle._update_vertical_motion(
             entity, (0.0, 0.0, 0.0), 0.0, 0.04)
 
         self.assertEqual((0.0, 0.0, 0.0), position)
+        self.assertEqual((), battle._local_suspension_probe_trace)
+        with mock.patch('sys.stdout') as output:
+            self.assertFalse(battle._report_local_prop_support(position, 100.0))
+        output.write.assert_not_called()
         self.assertIsNone(battle._local_suspension_params)
         self.assertTrue(battle._local_suspension_disabled)
         self.assertIn(

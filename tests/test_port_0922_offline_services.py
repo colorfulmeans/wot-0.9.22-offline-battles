@@ -2,13 +2,10 @@
 
 import copy
 import json
-import struct
 import sys
 import types
 import unittest
 from unittest import mock
-
-from PIL import Image
 
 import test_port_0922_garage as garage_fixture
 import test_port_0922_waiting_room_ui as room_fixture
@@ -368,19 +365,10 @@ class OfflineServicesTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, modules), mock.patch.object(ui, 'tr', side_effect=lambda text: text):
             try:
                 ui._install_settings()
-                packet = premium()._PremiumWindow__makePacketVO(90, 6500, 6500, 7000, True)
-                self.assertEqual(90, packet['id'])
-                self.assertEqual('../maps/icons/offline_lan/premium_90_98.png', packet['image'])
-                # The bundled override must exist in the mod's resource tree;
-                # a filename alone does not prove a client has that texture.
-                texture = garage_fixture.ROOT / 'src' / 'res' / 'gui' / packet['image'][3:]
-                payload = texture.read_bytes()
-                self.assertEqual(b'\x89PNG\r\n\x1a\n', payload[:8])
-                self.assertEqual((98, 98, 8, 6), struct.unpack('>IIBB', payload[16:26]))
-                with Image.open(texture) as icon:
-                    self.assertEqual((0, 255), icon.getchannel('A').getextrema())
-                self.assertEqual('image-7', premium()._PremiumWindow__makePacketVO(
-                    7, 1250, 1250, 7000, True)['image'])
+                for days in (360, 180, 30, 7, 3, 1):
+                    self.assertEqual('image-%s' % days,
+                        premium()._PremiumWindow__makePacketVO(
+                            days, 250, 250, 7000, True)['image'])
                 view = settings()
                 view.onTabSelected('graphics')
                 view.onTabSelected('sound')

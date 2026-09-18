@@ -75,14 +75,3 @@ assets, trademarks, or other intellectual property.
 This work includes trademarks and/or copyrighted works that are the exclusive
 property of Wargaming. All rights reserved by Wargaming. This work is
 unofficial and is not endorsed by Wargaming.
-
-The bundled `src/res/gui/maps/icons/offline_lan/premium_90_98.png` comes from
-the user-supplied transparent IMGBIN source
-`imgbin_a143b4df7f0b82ff3a4a238833081688.png`, from the
-[World of Tanks image category](https://imgbin.com/free-png/world-of-tanks).
-It depicts the legacy gold 90-day emblem with a single round Wargaming
-medallion. Only empty outer margins were trimmed, followed by proportional
-downscaling and centering on a transparent 98-by-98 RGBA canvas. The artwork
-was not redrawn, and no generated replacement image is shipped. It is not
-claimed to be an asset extracted from the Chinese #1513 client. The project's
-code license does not relicense Wargaming's artwork.

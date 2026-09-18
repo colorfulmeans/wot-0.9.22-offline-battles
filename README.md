@@ -135,10 +135,9 @@ The [2017 official guide](https://wargaming.net/support/en/products/wot/article/
 lists the four resource types. The [2022 redesign](https://worldoftanks.com/en/news/updates/1-18-1-improved-personal-reserves/)
 merged crew/free XP into the modern three-type system, which is not used here.
 
-The 90-day premium option retains its 6500-gold price and displays a duration
-label and a dedicated transparent 90-day premium emblem bundled with the mod. The changed Flash layout still
-requires acceptance in the exact Windows client. Battle-result friendly-fire labels remain the installed client's own
-localization: credits have penalty and compensation rows; XP has only a
+Premium purchases use the original six durations: 360, 180, 30, 7, 3 and 1 day,
+with the installed client's own icons and labels. Battle-result friendly-fire
+labels remain the installed client's own localization: credits have penalty and compensation rows; XP has only a
 penalty. Offline voice chat has no authenticated Vivox service and remains
 unavailable; opening sound settings no longer retries that service.
 
