@@ -816,6 +816,19 @@ lower replacement while preserving damaged faces, vehicle-only obstacles,
 unbroken sibling materials and unrelated walls. These tests establish adapter
 behavior, not the exact client's destroyed mesh or gameplay feel.
 
+Report `20260919-000847-92a20042a102` also runs the original v0.9.0 build
+`colorfulmeans-35356845247-1`. Stalingrad's reported hard/deflected positions
+intersect the retained two-module warehouse at chunk 31614/item 49 and
+four-module sheds at items 23 and 6. Those exact poses reproduce the obsolete
+envelope block and pass once the modules are destroyed and swapped. A second
+regression sweeps all 18 retained fragile prop models in this map in both
+directions, including GazMM trucks, SdKfz251, trams and railway vehicles.
+These tests establish catalogue release, not permission to drive through a
+solid part of a native wreck. The separate native hit near (-301, 0.84, -228)
+has only unordered material candidates in this old build; it cannot be
+identified as a destroyed object from that evidence. The new point-distance
+diagnostics cover it without suppressing unidentified or solid map geometry.
+
 For physical fragile/module crushing, the exact stock manager starts effects
 before scheduling its collision replacement after 0.2 seconds. The adapter
 completes only the matching current-space bound callback immediately, then

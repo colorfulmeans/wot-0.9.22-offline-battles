@@ -8202,6 +8202,76 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                         self.assertNotIn('swap_pending', detail)
                 authority.destroy_module.assert_not_called()
 
+    def _assert_destroyed_stalingrad_item_releases_envelope(
+            self, data, row, position=None, yaw=0.0, speed=1.0):
+        record = data['resources'][row[12]]
+        (bigworld, math_module, area, cache, authority,
+         descriptor) = self._direction_catalog_fixture(
+             kind=record['kind'], destroyed=True)
+        destructibles_sensor.set_catalog(data)
+        boxes = destructibles_sensor._baked_world_boxes_1513(
+            record, row[:12], row[13], data['locator_quantization'])
+        identity = tuple(row[14:16])
+        instance = {
+            'filename': row[12].lower(), 'kind': record['kind'],
+            'boxes': boxes, 'item_scale': row[16], 'box_index': row[13],
+        }
+        destructibles_sensor.g_offh_destr_instances = {identity: instance}
+        destructibles_sensor.g_offh_destr_contact_bins = bins = {}
+        destructibles_sensor._index_catalog_instance_1513(bins, identity, instance)
+        destructibles_sensor.g_offh_destr_pending = {}
+        authority.contact_collision_ready = mock.Mock(return_value=True)
+        # Probe towards the intact box's centre, so the obsolete outward-only
+        # escape rule cannot mask this false block. This is not wreck geometry.
+        if position is None:
+            centre = boxes[0][0]
+            position = (centre[0], centre[1],
+                        centre[2] - (0.5 if speed > 0.0 else -0.5))
+        with mock.patch.dict(sys.modules, {
+                'BigWorld': bigworld, 'Math': math_module,
+                'AreaDestructibles': area, 'DestructiblesCache': cache}), \
+                mock.patch.object(destructibles_sensor,
+                    '_stream_baked_motion_instances_1513', return_value=()), \
+                mock.patch.object(destructibles_sensor,
+                    '_get_destr_authority', return_value=authority):
+            detail = destructibles_sensor._catalog_motion_proposal(
+                1, _Vector(position), yaw, speed, descriptor, 10.3,
+                dt=0.04, kinetic_speed=20.0)
+        self.assertEqual('crushed', detail['status'])
+        self.assertEqual(record['kind'], detail['kinds'])
+        self.assertFalse(detail['requires_commit'])
+        self.assertNotIn('swap_pending', detail)
+        authority.destroy_module.assert_not_called()
+        authority.destroy_fragile.assert_not_called()
+
+    def test_stalingrad_report_warehouse_and_sheds_release_intact_envelopes(self):
+        data = json.loads((ROOT / 'destructibles' / '92_stalingrad.json').read_text())
+        # Hard/deflected poses in report 20260919-000847-92a20042a102.
+        for item, position, yaw, speed in (
+                (49, (-349.834, 0.043, -7.404), -3.013, 0.064),
+                (23, (-382.174, 0.290, -65.227), -3.044, 1.903),
+                (6, (-380.215, 0.514, -80.844), 2.793, 2.083)):
+            with self.subTest(item=item):
+                row = next(row for row in data['instances']
+                           if row[14:16] == [31614, item])
+                self.assertEqual('structure', data['resources'][row[12]]['kind'])
+                self.assertTrue(data['resources'][row[12]]['retained_collision_boxes'])
+                self._assert_destroyed_stalingrad_item_releases_envelope(
+                    data, row, position, yaw, speed)
+
+    def test_stalingrad_retained_props_release_boxes_across_vehicle_families(self):
+        data = json.loads((ROOT / 'destructibles' / '92_stalingrad.json').read_text())
+        names = {name for name, record in data['resources'].items()
+                 if record['kind'] == 'fragile' and record.get('retained_collision_boxes')}
+        for family in ('GazMM', 'SdKfz251', 'Tram', 'Carriage'):
+            self.assertTrue(any(family in name for name in names), family)
+        for name in sorted(names):
+            row = next(row for row in data['instances'] if row[12] == name)
+            for speed in (-1.0, 1.0):
+                with self.subTest(model=name, speed=speed):
+                    self._assert_destroyed_stalingrad_item_releases_envelope(
+                        data, row, speed=speed)
+
     def test_broken_structure_module_does_not_release_its_live_sibling(self):
         (bigworld, math_module, area, cache, authority,
          descriptor) = self._direction_catalog_fixture(kind='structure')
