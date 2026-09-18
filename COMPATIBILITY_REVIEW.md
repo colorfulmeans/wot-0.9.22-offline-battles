@@ -4511,3 +4511,75 @@ still block. Adapter tests cover both stable Siege states and retain hydraulic
 trial exclusion. This is local Python/geometric evidence, not an exact Cliff
 mesh or Windows playtest. Actual #1513 Strv S1/UDES 03/Strv 103 downhill motion,
 body pose and feel remain native acceptance work.
+
+## September 19 personal-mission event settlement reports
+
+Reports `20260919-010918-4729b816ce4d` (build
+`colorfulmeans-35367691860-1`) and `20260919-012209-5bf66ea2381c`
+(build `colorfulmeans-35356845247-1`) identify the supported Chinese HD
+0.9.22.0.1 #1513 client. The first selects mission 61 (SPG-1), including
+the completed Lakeville round. The second selects mission 32 (MT-2) in
+rounds 4 and 5; their server logs contain respectively 24 and 16 positive
+enemy HP-damage events, with four and five kills. These are selected missions,
+not absent selections. The reports do not contain complete receipt/save
+bodies or individual stun-duration evidence, so they cannot reconstruct
+missing stun totals or justify retroactive reward grants.
+
+Two shared omissions prevented settlement: the authoritative server never
+incremented its already-declared interaction `stun_num`/`stun_duration`
+fields, and the campaign evaluator rejected damage `eventCount` and the
+stun conditions. Total HP damage, direct hits and distinct damaged vehicles
+cannot substitute for damage events. This affected MT-2 and other chains,
+as well as SPG-1 and several additional/honours conditions.
+
+The worker now carries its descriptor-computed imposed stun milliseconds
+with the existing absolute end timer. Only admitted internal-authority
+terminals record the event, and only against living enemies surviving the
+hit. The existing projectile tombstones and duplicate-target admission own
+replay protection. Per-target counts, fractional seconds, distinct targets,
+and two-/three-target shot counts survive receipt validation and JSON
+persistence. Each qualifying shot counts once at each recorded threshold;
+separate single-target hits cannot form a multi-target shot. Shorter overlap
+still leaves the existing live stun/assist owner untouched, while retaining
+the new hit's statistical evidence. Healing/expiry do not erase imposed hit
+duration. Late effects whose stun has already elapsed remain harmless to HP
+settlement and do not create a live stun or stun event. An older terminal
+without duration metadata records only its known remaining interval.
+
+Positive enemy HP changes now count damage events. Live track/stun owners
+also receive assisted-kill facts once per target, including a zero-HP-loss
+crew knockout. Existing critical-transition totals and ever-spotted state
+are projected into receipts for the remaining SPG conditions. Native result
+packing retains its existing interaction serializer and carries stun totals;
+receipt-only event fields are never written into that native serializer.
+Durations preserve milliseconds, and malformed/nonfinite values are rejected.
+Older receipts remain readable but missing event evidence is not invented.
+Task thresholds, tiers, prerequisites, wins and honours continue to come from
+the installed mission resources; the existing atomic reward/replay owner is
+unchanged. Unsupported-condition reasons now appear in the error-report log.
+
+An audit of all 300 regional 0.9.22 reference main/add expressions finds a
+supported solo main path for 203 (previously 149), and both main/honours for
+198 (previously 136). The 60 SPG expression pairs have supported solo paths.
+This is grammar/evidence coverage, not 300 actual #1513 completions, and the
+regional source is not promoted to an exact-client API contract. The new
+fixture stores only reference condition expressions, never production rules.
+Remaining gaps include distance and limited-time filters, invisibility and
+full-health event history, immobilized/ignited/higher-tier victim filters,
+internal-module events and received critical history, penetration streaks,
+spotting-before-detection/invisible spotting assistance, radio-assisted kills,
+own-HP comparisons and mandatory native platoon aggregation. Such conditions
+remain explicitly unsupported; this change does not claim all personal
+missions are repaired. The reports also contain rejected critical proposals
+with `critical crew roster changed mid-round`; that separate combat-profile
+issue is not repaired or masked by counting unaccepted critical effects.
+
+Focused regression coverage includes the real worker-to-server stun adapter,
+wire/durable/native result projections, all 60 reference SPG pairs, all four
+MT-2 thresholds, repeated-target vs distinct-target/multi-shot semantics,
+fractional boundaries, zero HP, friendly/dead/expired targets, overlap and
+healing, assisted kills, spotting history, malformed and legacy receipts,
+and MT-2 rewards across duplicate delivery and restart. 875 related local
+tests pass. Exact Windows #1513 SPG-1/MT-2 completion, result-card appearance,
+and further native gameplay acceptance remain to be checked with the new
+package. Existing completed receipts are not replayed as new battles.

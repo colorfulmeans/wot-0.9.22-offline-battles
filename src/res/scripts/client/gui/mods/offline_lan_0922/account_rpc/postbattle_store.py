@@ -75,6 +75,10 @@ INTERACTION_FIELDS = (
     ('no_damage_direct_hits_received', 'noDamageDirectHitsReceived',
      0, 65535),
     ('target_kills', 'targetKills', 0, 255),
+    # Receipt-only event evidence; never invent fields in the native packer.
+    ('damage_events', None, 0, 65535),
+    ('kills_assisted_stun', None, 0, 1),
+    ('kills_assisted_track', None, 0, 1),
 )
 
 
@@ -283,9 +287,13 @@ def _receipt(value):
         raise ValueError('battle receipt interaction details are invalid')
     interaction_keys = set(field[0] for field in INTERACTION_FIELDS) | {
         'target_kind', 'target_id'}
+    required_interactions = set(field[0] for field in INTERACTION_FIELDS
+                                if field[1] is not None) | {
+        'target_kind', 'target_id'}
     interaction_targets = set()
     for raw in raw_interactions:
-        if not isinstance(raw, dict) or set(raw) != interaction_keys:
+        if (not isinstance(raw, dict) or set(raw) - interaction_keys or
+                not required_interactions.issubset(raw)):
             raise ValueError('battle receipt interaction row is invalid')
         target = (
             _bounded_text(raw.get('target_kind'), 8),
@@ -299,13 +307,18 @@ def _receipt(value):
             'target_kind': target[0], 'target_id': target[1],
         }
         for field_name, unused_native, minimum, maximum in INTERACTION_FIELDS:
+            if field_name not in raw and unused_native is None:
+                continue
             raw_value = raw.get(field_name)
+            number = float if field_name == 'stun_duration' else int
+            number_types = (integer_types + (float,) if number is float
+                            else integer_types)
             if (isinstance(raw_value, bool) or
-                    not isinstance(raw_value, integer_types) or
-                    raw_value < minimum or raw_value > maximum):
+                    not isinstance(raw_value, number_types) or
+                    not minimum <= raw_value <= maximum):
                 raise ValueError(
                     'battle receipt interaction value is invalid')
-            interaction[field_name] = int(raw_value)
+            interaction[field_name] = number(raw_value)
         interactions.append(interaction)
         interaction_targets.add(target)
     return {
@@ -634,7 +647,8 @@ def _pack_interaction_details(receipt, vehicle_ids, vehicle_type_cds,
             vehicle_ids[identity], vehicle_type_cds[identity])]
         for field_name, native_name, unused_minimum, unused_maximum in (
                 INTERACTION_FIELDS):
-            record[native_name] = interaction[field_name]
+            if native_name is not None:
+                record[native_name] = interaction[field_name]
     return details.pack()
 
 
@@ -803,6 +817,9 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'damageAssistedTrack': stats['assist_track'],
         'damageAssistedRadio': stats['assist_radio'],
         'damageAssistedStun': stats['assist_stun'],
+        'stunNum': stats['stun_num'],
+        'stunDuration': stats['stun_duration_ms'] / 1000.0,
+        'stunned': stats['stunned'],
         'damaged': stats['damaged'],
         'kills': stats['kills'],
         'spotted': stats['spotted'],
@@ -985,6 +1002,8 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
             'damageAssistedTrack': row_stats['assist_track'],
             'damageAssistedRadio': row_stats['assist_radio'],
             'damageAssistedStun': row_stats['assist_stun'],
+            'stunNum': row_stats['stun_num'],
+            'stunDuration': row_stats['stun_duration_ms'] / 1000.0,
             'damaged': row_stats['damaged'],
             'kills': row_stats['kills'],
             'spotted': row_stats['spotted'],

@@ -146,6 +146,9 @@ RESULT_INTERACTION_LIMITS = {
     'ricochets_received': (0, 65535),
     'no_damage_direct_hits_received': (0, 65535),
     'target_kills': (0, 255),
+    'damage_events': (0, 65535),
+    'kills_assisted_stun': (0, 1),
+    'kills_assisted_track': (0, 1),
 }
 BOT_TIER_MODES = frozenset((
     'random', 'same', 'minus1_0', '0_plus1', 'minus1_plus1'))
@@ -977,6 +980,8 @@ def _strict_projectile_effect(value):
     stun_fields = frozenset(('stun_end_server_time_ms',))
     if 'stun_factors' in value:
         stun_fields |= frozenset(('stun_factors',))
+    if 'stun_duration_ms' in value:
+        stun_fields |= frozenset(('stun_duration_ms',))
     target_pose_fields = frozenset(('target_x', 'target_y', 'target_z'))
     damage_sticker_fields = frozenset(('damage_sticker',))
     potential_fields = frozenset(('potential_damage',))
@@ -1058,6 +1063,11 @@ def _strict_projectile_effect(value):
         if stun_end is None:
             return None
         result['stun_end_server_time_ms'] = stun_end
+        if 'stun_duration_ms' in value:
+            duration = _projectile_int_range(value['stun_duration_ms'], 0, stun_end)
+            if duration is None:
+                return None
+            result['stun_duration_ms'] = duration
         if 'stun_factors' in value:
             try:
                 result['stun_factors'] = stun_mechanics.canonical_factors(
@@ -1430,10 +1440,14 @@ def _valid_battle_receipt(message):
         return False
     interaction_keys = set(RESULT_INTERACTION_LIMITS) | {
         'target_kind', 'target_id'}
+    optional_interactions = {'damage_events', 'kills_assisted_stun',
+                             'kills_assisted_track'}
+    required_interactions = interaction_keys - optional_interactions
     interaction_targets = set()
     for interaction in interactions:
         if (not isinstance(interaction, dict) or
-                set(interaction) != interaction_keys):
+                set(interaction) - interaction_keys or
+                not required_interactions.issubset(interaction)):
             return False
         target = (
             interaction.get('target_kind'),
@@ -1443,7 +1457,17 @@ def _valid_battle_receipt(message):
                 row_teams[target] == team):
             return False
         for name, (minimum, maximum) in RESULT_INTERACTION_LIMITS.items():
-            field = _exact_int(interaction.get(name))
+            if name in optional_interactions and name not in interaction:
+                continue
+            raw = interaction.get(name)
+            if name == 'stun_duration':
+                if (isinstance(raw, bool) or
+                        not isinstance(raw, integer_types + (float,)) or
+                        not minimum <= raw <= maximum):
+                    return False
+                field = float(raw)
+            else:
+                field = _exact_int(raw)
             if field is None or field < minimum or field > maximum:
                 return False
         interaction_targets.add(target)

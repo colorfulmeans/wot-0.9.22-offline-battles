@@ -50,7 +50,9 @@ RECEIPT_STAT_NAMES = (
     "piercings_received", "no_damage_direct_hits_received",
     "explosion_hits_received", "explosion_hits", "sniper_damage",
     "team_hits", "team_damage", "team_kills", "mileage", "life_time",
-    "team_crits",
+    "team_crits", "stun_num", "stun_duration_ms", "stunned",
+    "kills_assisted_stun", "kills_assisted_track", "critical_hits",
+    "not_spotted", "stun_shots_2", "stun_shots_3",
 )
 
 # The #1513 table holds 62 entries across every game mode this build ever

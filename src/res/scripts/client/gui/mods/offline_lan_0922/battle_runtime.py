@@ -15336,6 +15336,9 @@ class BattleRuntime(object):
             if end <= impact_time:
                 return False
             effect['stun_end_server_time_ms'] = end
+            # Preserve the imposed duration at the impact, before transport
+            # latency or a later consumable changes the live stun timer.
+            effect['stun_duration_ms'] = end - impact_time
             effect['stun_factors'] = factors
             return True
         except Exception as error:
