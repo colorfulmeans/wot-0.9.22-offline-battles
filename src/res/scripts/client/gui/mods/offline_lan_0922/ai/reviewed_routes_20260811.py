@@ -382,7 +382,11 @@ REVIEWED_ROUTE_POINTS = {
 	},
 	'47_canada_a': {
 		'west_hills': (
-			(-126.0, -306.0), (-250.0, -242.0), (-410.0, -38.0),
+			# The direct projection to (-250, -242) crossed the parked railway
+			# consist near (-214, -264).  This south-west road hold keeps the
+			# corridor north of the train before it turns toward the hills.
+			(-126.0, -306.0), (-190.0, -230.0), (-250.0, -242.0),
+			(-410.0, -38.0),
 			(-442.0, 86.0), (-410.0, 262.0), (-354.0, 310.0),
 			(-50.0, 418.0), (70.0, 410.0), (166.0, 370.0),
 			(214.0, 330.0),

@@ -25,6 +25,14 @@ BOT_TEAM_SLOT_COUNT = 15
 RECOVERY_TIMING_STRIDE = 7
 RECOVERY_YAW_OFFSET = 0.85
 RECOVERY_SWEEP_FRACTIONS = (0.25, 0.50, 0.75, 1.0)
+# Every short recovery consumer must prove exactly the same longitudinal hull
+# sweep. Keeping this ratio behind one helper prevents the adapter's selected
+# exit and the runtime's final motion probe from silently using two horizons.
+RECOVERY_SWEEP_LENGTH_FACTOR = 1.6
+
+
+def recovery_probe_distance(half_length):
+	return max(0.0, float(half_length)) * RECOVERY_SWEEP_LENGTH_FACTOR
 
 
 def _angle_delta(target, current):
@@ -362,7 +370,7 @@ class LocalDriver(object):
 		second of every other one, so an unchecked reverse recovery drives each
 		hull straight into the one behind it and the whole formation grinds.
 		"""
-		reverse_distance = half_length * 1.6
+		reverse_distance = recovery_probe_distance(half_length)
 		# Translating an OBB along its longitudinal axis sweeps one exact longer
 		# OBB. Sampling only the final pose misses a hull at the current or an
 		# intermediate reachable position.
@@ -435,7 +443,7 @@ class LocalDriver(object):
 		about to enter, not a long-range forecast, so a wreck further along the
 		route never withdraws a heading that is still usable.
 		"""
-		reach = half_length * 1.6
+		reach = recovery_probe_distance(half_length)
 		sweep = (
 			float(position[0]) + math.sin(candidate_yaw) * reach * 0.5,
 			float(position[1]),
@@ -719,7 +727,7 @@ class LocalDriver(object):
 			# travel horizon rejects the rear of every gateway and alley on the
 			# map and leaves an in-place turn as the only recovery in exactly
 			# the places where a hull cannot turn.
-			escape_distance = own_half_length * 1.6
+			escape_distance = recovery_probe_distance(own_half_length)
 			reverse_clear = self._clear(
 				direction_clear, float(yaw) + math.pi, escape_distance)
 			reverse_blocker = None

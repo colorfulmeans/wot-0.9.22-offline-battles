@@ -31,6 +31,7 @@ rebuild the descriptor from a stale copy and silently drop the other's change.
 import contextlib
 import copy
 import math
+import time
 from gui.mods.offline_lan_0922.vehicle_records import (
     MODULE_ATTRIBUTES, mounted_module_items)
 
@@ -500,6 +501,14 @@ class GarageState(object):
         # replace a live crew member in the barracks with a dismissed one.
         used.update(_int(value) for value in self._barracks())
         used.update(_int(value) for value in self._recycle_bin())
+        # A dismissed campaign reward may outlive its recycle-bin entry.
+        # Its provenance ID must never be reassigned to an unrelated recruit.
+        for key, effect in (self._snapshot.get(
+                'personalMissionRewardJournal') or {}).items():
+            if key.startswith('crew:') and isinstance(effect, dict):
+                identity = _int(effect.get('tankman', 0))
+                if identity > 0:
+                    used.add(identity)
         return (max(used) + 1) if used else 100001
 
     # ---- barracks -------------------------------------------------------
@@ -1788,8 +1797,13 @@ class GarageState(object):
         for record in self._records():
             if _int(record.get('vehicleTypeCompactDescr', 0)) == compact_descr:
                 raise GarageError('the account already owns this vehicle')
+        from gui.mods.offline_lan_0922 import offline_services
+        recovery = offline_services.vehicle_recovery_offer(
+            self._snapshot, compact_descr)
         slots = _int(self._snapshot.get('accountSlots', 0))
-        if slots and len(self._records()) >= slots:
+        bond_bundle = recovery is None and any(_int(row.get('cd')) == compact_descr for row in
+                          self._snapshot.get('offlineVehicleOffers', ()))
+        if not bond_bundle and slots and len(self._records()) >= slots:
             raise GarageError('every garage slot is occupied')
 
         from gui.mods.offline_lan_0922 import vehicle_records
@@ -1799,6 +1813,9 @@ class GarageState(object):
             vehicles = self._vehicles_module()
             tankmen = self._tankmen_module()
             vehicle_type = vehicles.getVehicleType(compact_descr)
+            if bond_bundle:
+                self._snapshot['accountSlots'] = (slots or len(self._records())) + 1
+                recruit_crew = True
             built = vehicle_records.build_record(
                 vehicles, tankmen, ITEM_TYPE_INDICES, tuple(vehicle_type.id),
                 self._next_inventory_id(), self._next_tankman_id(),
@@ -1807,7 +1824,8 @@ class GarageState(object):
                 recruit_crew=False)
             record = built['record']
 
-            cost = self._item_cost(compact_descr)
+            cost = ({'credits': recovery['credits']} if recovery is not None
+                    else self._item_cost(compact_descr))
             shells = [_int(value) for value in (record.get('shells') or ())]
             if not buy_shells:
                 shells = [value if index % 2 == 0 else 0
@@ -1829,7 +1847,8 @@ class GarageState(object):
                 nation_id, vehicle_type_id = vehicle_type.id
                 for slot, roles in enumerate(vehicle_type.crewRoles):
                     tankman_id, descriptor = self._recruit(
-                        nation_id, vehicle_type_id, roles[0], tman_cost_type_index)
+                        nation_id, vehicle_type_id, roles[0], tman_cost_type_index,
+                        included_cost={'roleLevel': 100} if bond_bundle else None)
                     record['crew'][slot] = tankman_id
                     record['tankmen'][tankman_id] = descriptor
                     self._touched_tankmen.add(tankman_id)
@@ -1848,6 +1867,9 @@ class GarageState(object):
                     self._price(item_compact_descr)
                     unlocks.add(_int(item_compact_descr))
             self._snapshot.setdefault('vehicleXP', {}).setdefault(compact_descr, 0)
+            recoveries = offline_services.vehicle_recovery_state(self._snapshot)
+            recoveries.pop(compact_descr, None)
+            self._snapshot['vehicleRecovery'] = recoveries
             self._touched.add(_int(record['id']))
             self.revision += 1
             return record
@@ -1875,6 +1897,21 @@ class GarageState(object):
                 self._require_berths(len(crew_rows))
             compact_descr = _int(record.get('vehicleTypeCompactDescr', 0))
             refund = self._item_refund(compact_descr)
+            from gui.mods.offline_lan_0922 import offline_services
+            vehicle_type = self._vehicles_module().getVehicleType(compact_descr)
+            tags = getattr(vehicle_type, 'tags', ())
+            # Register only an actual permanent premium sale. Modules, shells
+            # and crew sold with the vehicle do not raise its restore price.
+            if ('premium' in tags and 'unrecoverable' not in tags and
+                    'premiumIGR' not in tags and not record.get('rent')):
+                recoveries = offline_services.vehicle_recovery_state(self._snapshot)
+                recoveries[compact_descr] = {
+                    'soldAt': int(time.time()),
+                    'credits': int(refund['credits'] *
+                                   offline_services.VEHICLE_RESTORE_FACTOR),
+                    'limited': compact_descr not in self._snapshot.get(
+                        'notInShopItems', ())}
+                self._snapshot['vehicleRecovery'] = recoveries
             remaining = [row for row in records
                          if _int(row.get('id', 0)) != _int(record.get('id', 0))]
             items_from_vehicle = [_int(value) for value in (items_from_vehicle or ())]
@@ -2106,9 +2143,11 @@ class GarageState(object):
         self.revision += 1
         return tankman_id
 
-    def _recruit(self, nation_id, vehicle_type_id, role, cost_type_index):
+    def _recruit(self, nation_id, vehicle_type_id, role, cost_type_index,
+                 included_cost=None):
         """Charge one recruitment and return the crew member it bought."""
-        cost = self._tankman_cost(cost_type_index)
+        cost = (self._tankman_cost(cost_type_index) if included_cost is None
+                else dict(included_cost))
         tankmen = self._tankmen_module()
         try:
             # generateTankmen's isPremium selects the premium name and icon
@@ -2283,19 +2322,44 @@ class GarageState(object):
         """
         import time
 
+        now = int(time.time())
+        self.expire_recycled_tankmen(now)
         config = self._restore_config()
         limit = config.get('limit', 0)
         bin_rows = self._recycle_bin()
-        bin_rows[_int(tankman_id)] = (compact_descr, int(time.time()))
+        bin_rows[_int(tankman_id)] = (compact_descr, now)
         self._touched_recycled.add(_int(tankman_id))
         if limit > 0 and len(bin_rows) > limit:
             # The bin is a fixed-length buffer in #1513 as well; the oldest
             # dismissal is the one that falls out of it.
             for oldest in sorted(
-                    bin_rows, key=lambda key: _int(bin_rows[key][1]))[
+                    (key for key in bin_rows if key != _int(tankman_id)),
+                    key=lambda key: (_int(bin_rows[key][1]), _int(key)))[
                         :len(bin_rows) - limit]:
-                del bin_rows[oldest]
-                self._touched_recycled.add(_int(oldest))
+                self._forget_recycled_tankman(oldest)
+
+    def _forget_recycled_tankman(self, tankman_id):
+        """Keep a terminal receipt when a reward woman's recovery ends."""
+        self._recycle_bin().pop(tankman_id, None)
+        self._touched_recycled.add(_int(tankman_id))
+        for key, effect in (self._snapshot.get(
+                'personalMissionRewardJournal') or {}).items():
+            if (key.startswith('crew:') and isinstance(effect, dict) and
+                    _int(effect.get('tankman')) == _int(tankman_id)):
+                effect['permanently_dismissed'] = True
+
+    def expire_recycled_tankmen(self, now=None):
+        """Apply the same recovery deadline as the native barracks list."""
+        import time
+        now = int(time.time() if now is None else now)
+        window = self._restore_config().get('goldDuration', 0)
+        expired = [key for key, row in self._recycle_bin().items()
+                   if window > 0 and now - _int(row[1]) >= window]
+        for key in expired:
+            self._forget_recycled_tankman(key)
+        if expired:
+            self.revision += 1
+        return expired
 
     def restore_tankman(self, tankman_inventory_id):
         """Hire one dismissed crew member back into the barracks.
@@ -2770,6 +2834,141 @@ class GarageState(object):
             self._snapshot.get('accountSlots', 0)) + 1
         self.revision += 1
         return self._snapshot['accountSlots']
+
+    def buy_premium(self, days, now=None):
+        """Buy one packet and extend the account from its current expiry.
+
+        ``CMD_PREMIUM`` carries the packet's day count. The shop table is the
+        authority for both the button and the debit; an unknown duration is
+        refused before the balance or expiry changes.
+        """
+        from gui.mods.offline_lan_0922.account_rpc import economy
+
+        days = _int(days)
+        price = economy.PREMIUM_COSTS.get(days)
+        if price is None:
+            raise GarageError('the shop does not offer %d premium days' % days)
+        if now is None:
+            now = int(time.time())
+        else:
+            now = max(0, _int(now))
+        self._charge({'gold': int(price)})
+        current = max(0, _int(
+            self._snapshot.get('premiumExpiryTime', 0)))
+        self._snapshot['premiumExpiryTime'] = (
+            max(now, current) + days * 24 * 60 * 60)
+        self.revision += 1
+        return self._snapshot['premiumExpiryTime']
+
+    def select_personal_missions(self, branch, mission_ids):
+        """Replace the active regular missions using #1513's chain rules."""
+        from gui.mods.offline_lan_0922.account_rpc import data
+
+        branch = _int(branch)
+        # The stock 0.9.22 personal-missions controller exposes only the
+        # regular campaign.  Branch 1 is legacy data and has zero selectable
+        # slots in this build.
+        if branch != 0:
+            raise GarageError('INVALID_PERSONAL_MISSION_BRANCH')
+        selected = []
+        selected_chains = set()
+        for value in mission_ids or ():
+            mission_id = _int(value)
+            chain_id = data.personal_mission_regular_chain_id(mission_id)
+            if chain_id is None:
+                raise GarageError('INVALID_PERSONAL_MISSION_REQUEST')
+            if mission_id in selected:
+                continue
+            if chain_id in selected_chains:
+                raise GarageError('TOO_MANY_QUESTS_IN_CHAIN')
+            selected.append(mission_id)
+            selected_chains.add(chain_id)
+        progress = self._snapshot.setdefault(
+            'personalMissionSelections', {})
+        progress['regular'] = selected
+        self.revision += 1
+        return selected
+
+    def pawn_personal_mission(self, event_type, mission_id):
+        """Complete a main objective by committing refundable native orders."""
+        from gui.mods.offline_lan_0922.account_rpc import data
+        from gui.mods.offline_lan_0922 import personal_campaign
+        import personal_missions
+
+        mission_id = _int(mission_id)
+        if (_int(event_type) != 8 or
+                data.personal_mission_regular_chain_id(mission_id) is None):
+            raise GarageError('INVALID_PERSONAL_MISSION_REQUEST')
+        cache = personal_missions.g_cache
+        mission = cache.questByPersonalMissionID(mission_id)
+        if mission.branch != 0:
+            raise GarageError('INVALID_PERSONAL_MISSION_BRANCH')
+        completed = data.personal_mission_completed(
+            self._snapshot.get('personalMissionProgress'))
+        if str(mission_id) in completed:
+            raise GarageError('CANNOT_BE_PAWNED')
+        completed_ids = set(int(key) for key in completed)
+        # The native controller permits orders anywhere in an unlocked
+        # operation; a later individually selectable quest is insufficient.
+        initial_ids = [cache.initialMissionQuestIDByOperationIDChainID(
+            mission.tileID, chain) for chain in range(1, 6)]
+        if not any(cache.questByPersonalMissionID(initial).maySelectQuest(
+                completed_ids) for initial in initial_ids):
+            raise GarageError('NOT_UNLOCKED_QUEST')
+        cost = 4 if mission.isFinal else 1
+        balance = personal_campaign.order_balance(self._snapshot)
+        if balance < cost:
+            raise GarageError('NOT_ENOUGH_FREE_TOKENS')
+        with self._transaction():
+            self._snapshot['personalMissionOrders'] = balance - cost
+            pawned = self._snapshot.setdefault('personalMissionPawned', {})
+            pawned[str(mission_id)] = cost
+            completed[str(mission_id)] = 1
+            self._snapshot['personalMissionProgress'] = completed
+            settlement = personal_campaign.settle(self)
+            for key, error in settlement.get('pending', ()):
+                if key == mission_id or key == 'operation':
+                    raise GarageError('PERSONAL_MISSION_REWARD_PENDING: ' + str(error))
+            self.revision += 1
+        return {'missionID': mission_id, 'orders': cost}
+
+    def claim_personal_mission_reward(self, branch, mission_id, need_tankman,
+                                     nation_id, vehicle_id, role_id):
+        """Retry unpaid rewards and resolve the native female-crew chooser."""
+        from gui.mods.offline_lan_0922 import personal_campaign
+        from gui.mods.offline_lan_0922.account_rpc import data
+        if _int(branch) != 0:
+            raise GarageError('INVALID_PERSONAL_MISSION_BRANCH')
+        mission_id, need_tankman = _int(mission_id), _int(need_tankman)
+        if (data.personal_mission_regular_chain_id(mission_id) is None or
+                need_tankman not in (0, 1)):
+            raise GarageError('INVALID_PERSONAL_MISSION_REQUEST')
+        key = str(mission_id)
+        completed = data.personal_mission_completed(
+            self._snapshot.get('personalMissionProgress'))
+        target = completed.get(key, 0)
+        if not target:
+            raise GarageError('PERSONAL_MISSION_NOT_COMPLETE')
+        paid = data.personal_mission_completed(
+            self._snapshot.get('personalMissionRewarded')).get(key, 0)
+        if not need_tankman and paid >= target:
+            raise GarageError('NO_REWARD')
+        with self._transaction():
+            settlement = personal_campaign.settle(self)
+            for pending_key, error in settlement.get('pending', ()):
+                if pending_key == mission_id or pending_key == 'operation':
+                    raise GarageError('PERSONAL_MISSION_REWARD_PENDING: ' + str(error))
+            paid = data.personal_mission_completed(
+                self._snapshot.get('personalMissionRewarded')).get(key, 0)
+            if paid < target:
+                raise GarageError('PERSONAL_MISSION_REWARD_PENDING')
+            result = None
+            if need_tankman:
+                result = personal_campaign.claim_tankwoman(
+                    self, mission_id, _int(nation_id), _int(vehicle_id),
+                    _int(role_id))
+            self.revision += 1
+        return result
 
     def _default_vehicle_settings(self):
         """Return the settings mask a vehicle built at startup would carry.

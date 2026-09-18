@@ -22,13 +22,16 @@ if __package__ in (None, ""):
     import i18n
     import gold_shop
     import save_ledger
+    import save_personal_missions
+    import personal_missions_ui
     import save_slots
     import vehicle_editor_ui
     import vehicle_overlays
 else:
     from . import (
         bot_lineup_profiles, bot_lineup_ui, core, error_reports, gold_shop,
-        i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays)
+        i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
+        save_personal_missions, personal_missions_ui)
 
 
 # The account balances a save carries, in the order the panel shows them.
@@ -44,7 +47,7 @@ _SHOP_HELP = (
     "next game startup. Owned or queued vehicles cannot be added twice. "
     "Close the game before adding vehicles.")
 
-LAUNCHER_VERSION = "0.8.4"
+LAUNCHER_VERSION = "0.9.0"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
@@ -178,6 +181,83 @@ _CHINESE = {
     "Light tank": "轻型坦克", "Medium tank": "中型坦克",
     "Heavy tank": "重型坦克", "Tank destroyer": "坦克歼击车",
     "SPG": "自行火炮",
+    "Personal missions": "个人任务",
+    "Edit mission progress...": "调整完成进度…",
+    "Account badges": "账号勋章",
+    "Edit account badges...": "编辑勋章获取情况…",
+    "Acquired": "已获取",
+    "Operation": "章节",
+    "Mission": "任务",
+    "Completed": "完成",
+    "Completed with honors": "完美完成",
+    "StuG IV": "四号突击炮",
+    "T28 Concept": "T28 概念车",
+    "T 55A": "T55A",
+    "Object 260": "260 工程",
+    "LT": "轻坦",
+    "HT": "重坦",
+    "MT": "中坦",
+    "TD": "坦歼",
+    "Complete this chain": "本组全部完成",
+    "Honor this chain": "本组全部完美完成",
+    "Reset this chain": "清空本组",
+    "Personal-mission progress saved.": "个人任务进度已保存。",
+    "Mission edits will be applied on the next game launch.": "任务修改已保存，将在下次启动游戏时结算。",
+    "Mission edit was not applied: %s": "任务修改未生效：%s",
+    "PERSONAL_MISSION_RESET_ORDERS_SPENT":
+        "可用通行令不足以回收任务奖励。请先取消使用了通行令的任务，再保存。",
+    "PERSONAL_MISSION_RESET_CREW_SOURCE_UNAVAILABLE":
+        "无法确认该任务女乘员的来源，原进度和乘员已保留。",
+    "PERSONAL_MISSION_RESET_CREW_DOSSIER_CHANGED":
+        "女乘员领取记录不一致，原进度和乘员已保留。",
+    "PERSONAL_MISSION_CREW_PROVENANCE_MISSING":
+        "旧存档缺少该任务女乘员的来源记录，原进度和乘员已保留。任务编号",
+    "INVALID_PERSONAL_MISSION_REWARD_JOURNAL":
+        "任务奖励记录异常，原进度和奖励已保留。",
+    "PERSONAL_MISSION_RESET_WALLET_UNAVAILABLE":
+        "余额不足，无法撤回已发放的奖励；原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_ITEM_UNAVAILABLE":
+        "所需奖励物品已消耗或装在其他车辆上，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_SLOTS_UNAVAILABLE":
+        "车位已被占用，无法回收奖励车位；原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_BERTHS_UNAVAILABLE":
+        "床位已被占用，无法回收奖励床位；原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_PREMIUM_UNAVAILABLE":
+        "高级账号奖励记录与当前时长不一致，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_PREMIUM_PROVENANCE_MISSING":
+        "旧存档无法区分任务奖励与其他高级账号时长，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_DOSSIER_PROVENANCE_MISSING":
+        "旧存档缺少这项任务奖励的来源记录，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_DOSSIER_CHANGED":
+        "任务奖励记录已发生变化，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_CUSTOMIZATION_UNAVAILABLE":
+        "奖励涂装不足，无法完成回收；原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_VEHICLE_SOURCE_UNAVAILABLE":
+        "找不到对应的奖励坦克或历史补偿记录，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_VEHICLE_SOURCE_CHANGED":
+        "车库中的同型坦克不是原任务奖励车，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_LAST_VEHICLE":
+        "奖励坦克是车库最后一辆车，请先添加其他车辆再取消任务。",
+    "PERSONAL_MISSION_RESET_DUPLICATE_CREW_SOURCE":
+        "车组来源记录冲突，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_VEHICLE_MODULES_UNAVAILABLE":
+        "奖励坦克的模块记录不完整，原进度和资产已保留。",
+    "PERSONAL_MISSION_REWARD_SOURCE_UNAVAILABLE":
+        "旧存档的奖励来源无法确认，原进度和资产已保留。",
+    "PERSONAL_MISSION_VEHICLE_PRICE_UNAVAILABLE":
+        "无法读取坦克原始价格，奖励补偿尚未发放。",
+    "PERSONAL_MISSION_RESTORE_NO_GARAGE_SLOT":
+        "没有空闲车位，任务奖励坦克暂未恢复。",
+    "Account badges saved.": "账号勋章已保存。",
+    "Completing a later mission fills required earlier tasks without honors. "
+    "Clearing completion resets this chain's final and every later operation. "
+    "Clearing honors affects only this task. Corresponding rewards, including "
+    "tanks, are withdrawn. Changes apply on next game launch. "
+    "Close the game before saving.":
+        "勾选后自动完成必要前置任务，不自动完美完成。取消完成会取消本列第15项及后续所有奖励车的全部任务；"
+        "仅取消完美完成不影响其他任务。对应的全部奖励（包括坦克）都会撤回，成功撤回后可重新完成领取。"
+        "下次启动游戏时结算，保存前请关闭游戏。",
+    "Close World of Tanks before editing personal missions.": "修改前请关闭坦克世界。",
     "Customize save...": "自定义存档…",
     "Customize save: %s": "自定义存档：%s",
     "Close": "关闭",
@@ -695,6 +775,11 @@ class LauncherWindow(object):
         self.account_panel.pack(fill="x", padx=12, pady=(12, 6))
         self.shop_panel = tk.LabelFrame(self.save_dialog, padx=10, pady=10)
         self.shop_panel.pack(fill="x", padx=12, pady=6)
+        self.personal_missions_panel = tk.LabelFrame(self.save_dialog, padx=10, pady=10)
+        self.personal_missions_panel.pack(fill="x", padx=12, pady=6)
+        self.edit_personal_missions_button = tk.Button(
+            self.personal_missions_panel, command=self._open_personal_missions)
+        self.edit_personal_missions_button.pack(fill="x")
         self.save_dialog_feedback = tk.Label(
             self.save_dialog, text="", anchor="w", justify="left", wraplength=620)
         self.save_dialog_feedback.pack(fill="x", padx=12, pady=6)
@@ -794,6 +879,8 @@ class LauncherWindow(object):
         self.save_account_button = tk.Button(
             account_actions, text="", command=self._apply_account)
         self.save_account_button.pack(side="left", fill="x", expand=True)
+        self.edit_badges_button = tk.Button(account_actions, command=self._open_account_badges)
+        self.edit_badges_button.pack(side="left", fill="x", expand=True)
         self.account_help_label = tk.Label(
             self.account_panel, text="", anchor="w", justify="left",
             wraplength=620)
@@ -1012,6 +1099,9 @@ class LauncherWindow(object):
         self.account_help_label.config(text=self._t(
             "Edit this save's balances and battle earnings. Before the first "
             "game, these are its starting funds. Close the game before editing."))
+        self.edit_badges_button.config(text=self._t("Edit account badges..."))
+        self.personal_missions_panel.config(text=self._t("Personal missions"))
+        self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
         self.shop_panel.config(text=self._t("Garage vehicles"))
         self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
         self.buy_gold_vehicle_button.config(text=self._t("Add to garage"))
@@ -1327,6 +1417,25 @@ class LauncherWindow(object):
         self.save_dialog.grab_set()
         self.save_dialog.lift()
         return True
+
+    def _open_personal_editor(self, dialog_type):
+        if self._busy or self._maintenance_busy:
+            self._log("Wait for the current launcher operation to finish.")
+            return False
+        try:
+            self._personal_editor = dialog_type(self)
+        except (save_ledger.SaveLedgerError, save_slots.SaveSlotError,
+                vehicle_overlays.VehicleOverlayError, OSError, ValueError) as error:
+            self._log(str(error))
+            self.save_dialog_feedback.config(text=self._t(str(error)))
+            return False
+        return True
+
+    def _open_personal_missions(self):
+        return self._open_personal_editor(personal_missions_ui.PersonalMissionsDialog)
+
+    def _open_account_badges(self):
+        return self._open_personal_editor(personal_missions_ui.BadgesDialog)
 
     def _close_save_dialog(self):
         self.save_dialog.grab_release()

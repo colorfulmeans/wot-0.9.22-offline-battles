@@ -12,7 +12,7 @@ from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922 import instance_guard
 from gui.mods.offline_lan_0922 import vehicle_blacklist
 from gui.mods.offline_lan_0922 import vehicle_records
-from gui.mods.offline_lan_0922.account_rpc import economy
+from gui.mods.offline_lan_0922.account_rpc import data, economy
 from gui.mods.offline_lan_0922.vehicle_records import (
     STOCKED_ITEM_TYPES,
     default_consumables, default_vehicle_settings, offers_in_random_battle,
@@ -90,6 +90,19 @@ def _battle_results_store():
     return _postbattle_store
 
 
+def _research_snapshot(snapshot):
+    """Copy only the fields that determine native unlock and elite sets."""
+    types = set(snapshot.get('vehicleTypeCompactDescrs') or ())
+    if not types:
+        records = snapshot.get('vehicles') or (snapshot,)
+        types.update(record['vehicleTypeCompactDescr'] for record in records
+                     if record.get('vehicleTypeCompactDescr') is not None)
+    return {'vehicleTypeCompactDescrs': types,
+            'unlockItemCompactDescrs': set(snapshot.get('unlockItemCompactDescrs') or ()),
+            'shopVehicleOfferCompactDescrs': set(snapshot.get('shopVehicleOfferCompactDescrs') or ()),
+            'vehicleXP': dict((key, 0) for key in (snapshot.get('vehicleXP') or {}))}
+
+
 def _bind_battle_progress(context):
     """Bind durable result receipts to the equally durable garage crew."""
     garage_store = context.get('garage_store')
@@ -133,6 +146,7 @@ def _bind_battle_progress(context):
         used = list(receipt.get('equipment_used') or ())
         if receipt.get('battle_booster'):
             used.append(int(receipt['battle_booster']))
+        research_before = _research_snapshot(snapshot)
         result = garage_store.apply_battle_crew_xp(
             snapshot, receipt['receipt_id'], vehicle_type_cd,
             receipt['rewards']['xp'], VEHICLE_SETTINGS_FLAG.XP_TO_TMAN,
@@ -142,12 +156,32 @@ def _bind_battle_progress(context):
             equipment_used=used,
             friendly_fire_facts=receipt.get('friendly_fire'),
             vehicle_type_name=receipt['vehicle'],
+            battle_start=int(receipt['arena_unique_id']) & 0xffffffff,
+            daily_facts=({'damage': receipt['stats']['damage'],
+                          'premature_leave': receipt['premature_leave'],
+                          'finished_at': (int(receipt['arena_unique_id']) & 0xffffffff) + receipt['duration'],
+                          'won': receipt['winner'] == receipt['team']}
+                         if receipt.get('battle_mode', 'regular') == 'regular'
+                         else None),
+            training=receipt.get('battle_mode') == 'training',
+            campaign_receipt=receipt,
             auto_settings=(VEHICLE_SETTINGS_FLAG.AUTO_REPAIR,
                            VEHICLE_SETTINGS_FLAG.AUTO_LOAD,
                            VEHICLE_SETTINGS_FLAG.AUTO_EQUIP,
                            VEHICLE_SETTINGS_FLAG.AUTO_EQUIP_BOOSTER))
         context['selected_vehicle'] = snapshot
+        research_after = _research_snapshot(snapshot)
+        if result.get('applied', True) and research_after != research_before:
+            # Mission reward tanks can grant genuinely new research. Derive
+            # only those additions; replaying the account's whole elite set
+            # makes the native client reopen every historical elite dialog.
+            before_stats = data.stats(research_before)['stats']
+            after_stats = data.stats(research_after)['stats']
+            for name in ('unlocks', 'eliteVehicles'):
+                context.setdefault('postbattle_added_' + name, set()).update(
+                    set(after_stats[name]) - set(before_stats[name]))
         touched.add(int(result['vehicle_id']))
+        touched.update(int(vehicle_id) for vehicle_id in result.get('touched_vehicles', ()))
         # The depot changed too: a battle spends rounds and consumables, and
         # the vehicle's own switches may have bought them back.  The client
         # only drops what the diff names.
@@ -231,7 +265,6 @@ def _validate_restored_garage(snapshot):
     validates the relational snapshot. A saved fitting can differ from the
     initial stock descriptor without invalidating the player's whole garage.
     """
-    from gui.mods.offline_lan_0922.account_rpc import data
     from items import customizations, tankmen, vehicles
     records = snapshot.get('vehicles')
     if not isinstance(records, (list, tuple)):
@@ -409,15 +442,8 @@ def _owned_vehicle_types(vehicles, nations, career, prices,
 
 
 def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
-    """Build the vehicles the launcher's gold shop already charged for.
-
-    The launcher takes the gold and leaves the names, because only a client
-    can produce a garage record.  A name this client refuses stays pending and
-    says why: the player has already paid for it, and a build that fails today
-    may succeed once the reason is understood.
-    """
+    """Commit launcher-added vehicles and their system notices together."""
     from gui.mods.offline_lan_0922 import launcher_inbox
-    from gui.mods.offline_lan_0922.account_rpc import data
     from items import ITEM_TYPE_INDICES
 
     try:
@@ -430,11 +456,13 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
         return 0
     if not pending:
         return 0
+    from gui.mods.offline_lan_0922.personal_campaign_ui import queue_notification
     owned = set(
         str(record.get('vehicleTypeName') or '')
         for record in (snapshot.get('vehicles') or ()))
     delivered = []
     unbuilt = []
+    working = copy.deepcopy(snapshot)
     for name in pending:
         if name in owned:
             # The launcher refuses to sell a vehicle a save already owns, so
@@ -448,9 +476,9 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
         # client can build but cannot publish would otherwise be flushed, and
         # the next start discards an unpublishable save whole -- one refused
         # vehicle would cost the player the entire career.
-        staged = copy.deepcopy(snapshot)
+        staged = copy.deepcopy(working)
         try:
-            _build_purchased_vehicle(
+            compact_descr = _build_purchased_vehicle(
                 staged, vehicles, tankmen, ITEM_TYPE_INDICES, settings, name)
         except Exception as error:
             unbuilt.append(name)
@@ -468,17 +496,28 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
                 'a publishable garage, it stays pending: %s\n'
                 % (name, error))
             continue
-        snapshot.clear()
-        snapshot.update(staged)
+        record = next(row for row in staged['vehicles']
+                      if row.get('vehicleTypeCompactDescr') == compact_descr)
+        rewards = [{'kind': 'vehicle', 'vehicle': name,
+                    'vehicle_type': compact_descr}]
+        if record.get('tankmen'):
+            rewards.append({'kind': 'crew', 'count': len(record['tankmen'])})
+        queue_notification(staged, {'account_changes': [
+            {'phase': 'granted', 'rewards': rewards}]})
+        working = staged
         owned.add(name)
         delivered.append(name)
     if delivered:
         # A delivered vehicle that is never flushed is delivered again on the
         # next start, against an inbox entry that is already gone.
         store = _garage_store()
-        if store is not None:
-            store.mark_dirty()
-            store.flush(snapshot)
+        if store is None:
+            return 0
+        store.mark_dirty()
+        if not store.flush(working):
+            return 0
+        snapshot.clear()
+        snapshot.update(working)
         for name in delivered:
             sys.stdout.write(
                 '[Offline LAN 0.9.22] delivered the purchased vehicle %s\n'
@@ -490,6 +529,53 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
             '[Offline LAN 0.9.22] launcher purchases could not be cleared: '
             '%s\n' % error)
     return len(delivered)
+
+
+def _settle_launcher_campaign(snapshot, vehicles, tankmen):
+    """Deliver edited completion and its reward markers in one durable save."""
+    if not (snapshot.get('personalMissionProgress') or
+            snapshot.get('personalMissionTokens') or
+            snapshot.get('personalMissionOrders') or
+            snapshot.get('personalMissionPawned') or
+            snapshot.get('personalMissionRewardJournal') or
+            snapshot.get('personalMissionTokenRewards') or
+            snapshot.get('accountBadges') or
+            snapshot.get('selectedBadges') or
+            'personalMissionRequestedCompleted' in snapshot):
+        return
+    from gui.mods.offline_lan_0922 import personal_campaign
+    from gui.mods.offline_lan_0922.account_rpc.garage import GarageState
+    state = GarageState(snapshot, vehicles_module=vehicles, tankmen_module=tankmen)
+    result = personal_campaign.settle(state)
+    if result.get('reset_error'):
+        sys.stdout.write('[Offline LAN 0.9.22] personal mission edit rejected: %s\n'
+                         % result['reset_error'])
+    for mission_id, error in result['pending']:
+        sys.stdout.write('[Offline LAN 0.9.22] personal mission %s reward '
+                         'remains pending: %s\n' % (mission_id, error))
+    # Keep the message and reward mutation in the same durable commit. The
+    # first lobby may not exist yet, so publishing here would lose both the
+    # native notification and its retry intent on an Account transition.
+    from gui.mods.offline_lan_0922.personal_campaign_ui import queue_notification
+    if queue_notification(state.snapshot(), result):
+        state.revision += 1
+    if not state.revision:
+        return
+    staged = state.snapshot()
+    try:
+        _validate_restored_garage(staged)
+        data._validate_selected_vehicle(staged)
+    except Exception as error:
+        sys.stdout.write('[Offline LAN 0.9.22] personal mission rewards '
+                         'could not be published: %s\n' % error)
+        return
+    store = _garage_store()
+    if store is None:
+        return
+    store.mark_dirty()
+    if store.flush(staged):
+        snapshot.clear()
+        snapshot.update(staged)
 
 
 def _stocked_total(item_type, published, count):
@@ -556,9 +642,20 @@ def _next_tankman_id(snapshot):
     # A crew member in the barracks still holds their inventory id. Handing it
     # out twice does not break one vehicle, it makes the whole garage
     # unrestorable on the next start.
-    for tankman_id in (snapshot.get('barracksTankmen') or ()):
+    for field in ('barracksTankmen', 'recycleBinTankmen'):
+        for tankman_id in (snapshot.get(field) or ()):
+            try:
+                used.append(int(tankman_id))
+            except (TypeError, ValueError):
+                continue
+    # A dismissed campaign reward may have left the recycle bin while its
+    # reset receipt still identifies it. Do not let a delivered tank's crew
+    # take that identity and become the target of a later reward clawback.
+    for key, effect in (snapshot.get('personalMissionRewardJournal') or {}).items():
+        if not key.startswith('crew:') or not isinstance(effect, dict):
+            continue
         try:
-            used.append(int(tankman_id))
+            used.append(int(effect.get('tankman', 0)))
         except (TypeError, ValueError):
             continue
     return max(used) + 1
@@ -576,6 +673,8 @@ def _selected_vehicle(config, restore_saved=True):
         career = save_mode == port_config.SAVE_MODE_NEW_ACCOUNT
         prices = economy.price_index(vehicles, nations)
         shop_item_prices, not_in_shop_items = economy.shop_prices(prices)
+        shop_vehicle_offers = economy.retail_gold_vehicle_offers(
+            vehicles, nations, prices)
         owned_types = _owned_vehicle_types(
             vehicles, nations, career, prices, consult_save=restore_saved)
         restricted = owned_types is not None
@@ -740,6 +839,11 @@ def _selected_vehicle(config, restore_saved=True):
             'customizationItemCount': customization_count,
             'vehicleTypeCompactDescrs': vehicle_type_compact_descrs,
             'unlockItemCompactDescrs': unlock_item_compact_descrs,
+            # The server's offer entitlement is deliberately separate from
+            # persisted research.  data.stats merges it only into the native
+            # lobby view that #1513's vehicle shop uses for its UNLOCKED
+            # criterion; researching and save migration remain honest.
+            'shopVehicleOfferCompactDescrs': shop_vehicle_offers,
             'optionalDeviceCount': artefact_counts['optionalDevice'],
             'equipmentCount': artefact_counts['equipment'],
             'notInShopItems': not_in_shop_items,
@@ -760,6 +864,8 @@ def _selected_vehicle(config, restore_saved=True):
                              economy.SANDBOX_GARAGE_SLOTS),
             'accountBerths': (economy.CAREER_BARRACKS_BERTHS if career else
                               economy.SANDBOX_BARRACKS_BERTHS),
+            'premiumExpiryTime': 0,
+            'personalMissionSelections': {'regular': []},
             'tankmanCosts': (economy.CAREER_TANKMAN_COSTS if career else
                              economy.SANDBOX_TANKMAN_COSTS),
             'deviceRemovalCost': dict(
@@ -781,8 +887,11 @@ def _selected_vehicle(config, restore_saved=True):
             'nextInventoryID': len(records) + 1,
             'defaultVehicleSettings': default_settings,
         })
+        from gui.mods.offline_lan_0922 import offline_services
+        offline_services.publish_offers(result, vehicles)
         if restore_saved:
             result['wallet'].update(port_config.save_slot_initial_wallet())
+            result.update(port_config.save_slot_initial_personal_progress())
         if not career:
             # A sandbox has researched everything, so its tech tree is elite
             # by the same derived rule a career uses rather than by assertion.
@@ -793,6 +902,7 @@ def _selected_vehicle(config, restore_saved=True):
             _restore_garage(result)
             _deliver_launcher_purchases(
                 result, vehicles, tankmen, default_settings)
+            _settle_launcher_campaign(result, vehicles, tankmen)
         return result
     except Exception:
         # _run_once owns startup error reporting.  Returning an empty snapshot
@@ -906,6 +1016,12 @@ def _cleanup_runtime():
 
     try:
         _remove_lobby_listener()
+    except Exception as error:
+        errors.append(error)
+
+    try:
+        from gui.mods.offline_lan_0922 import offline_services_ui
+        offline_services_ui.uninstall()
     except Exception as error:
         errors.append(error)
 
@@ -1139,6 +1255,8 @@ def _wait_for_login_space():
             # replace that cached callback. Own it before lobby creation.
             _install_announcement_ui()
             _install_lan_session()
+            from gui.mods.offline_lan_0922 import offline_services_ui
+            offline_services_ui.install()
             try:
                 # This must outlive every connect/disconnect: it decides which
                 # preferences profile the player's interface settings use.

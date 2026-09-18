@@ -218,6 +218,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                      'g_offh_destr_contact_bins',
                      'g_offh_destr_pending',
                      'g_offh_destr_speculative',
+                     'g_offh_destr_native_replacement_bsp_active',
                      'g_offh_destr_catalog_published',
                      'g_offh_destr_catalog_publish_pending',
                      'g_offh_destr_falling_active',
@@ -246,6 +247,72 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             destructibles_sensor.__dict__.pop(name, None)
         destructibles_authority.reset()
         destructibles_compat.reset_safe_descriptor_cache()
+
+    def test_native_replacement_gate_uses_exact_fragile_catalog_evidence(self):
+        area = types.ModuleType('AreaDestructibles')
+        area.DESTRUCTIBLE_HIDING_DELAY = 0.2
+        destructibles_sensor._clear_runtime_registry()
+        self._direction_catalog_fixture()
+        self.assertFalse(
+            destructibles_sensor.native_replacement_bsp_active())
+
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area}):
+            self.assertTrue(destructibles_sensor.note_destroyed(
+                'fragile', 22, 37, None, 1.0))
+            self.assertFalse(
+                destructibles_sensor.native_replacement_bsp_active())
+            record = next(iter(
+                destructibles_sensor._destructible_catalog[
+                    'resources'].values()))
+            record['retained_collision_boxes'] = frozenset((0,))
+            self.assertTrue(destructibles_sensor.note_destroyed(
+                'fragile', 22, 37, None, 1.1))
+
+        self.assertTrue(
+            destructibles_sensor.native_replacement_bsp_active())
+        destructibles_sensor._clear_runtime_registry()
+        self.assertFalse(
+            destructibles_sensor.native_replacement_bsp_active())
+
+    def test_native_replacement_gate_fails_safe_without_fragile_box(self):
+        area = types.ModuleType('AreaDestructibles')
+        area.DESTRUCTIBLE_HIDING_DELAY = 0.2
+        destructibles_sensor._clear_runtime_registry()
+
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area}):
+            self.assertTrue(destructibles_sensor.note_destroyed(
+                'fragile', 22, 37, None, 1.0))
+            self.assertTrue(
+                destructibles_sensor.native_replacement_bsp_active())
+            destructibles_sensor._clear_runtime_registry()
+            self.assertFalse(
+                destructibles_sensor.native_replacement_bsp_active())
+            self.assertTrue(destructibles_sensor.note_destroyed(
+                'module', 22, 38, 73, 1.0))
+
+        self.assertTrue(
+            destructibles_sensor.native_replacement_bsp_active())
+
+    def test_native_replacement_gate_uses_exact_structure_module_evidence(self):
+        area = types.ModuleType('AreaDestructibles')
+        area.DESTRUCTIBLE_HIDING_DELAY = 0.2
+        destructibles_sensor._clear_runtime_registry()
+        self._direction_catalog_fixture(kind='structure')
+
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area}):
+            self.assertTrue(destructibles_sensor.note_destroyed(
+                'module', 22, 37, 73, 1.0))
+            self.assertFalse(
+                destructibles_sensor.native_replacement_bsp_active())
+            record = next(iter(
+                destructibles_sensor._destructible_catalog[
+                    'resources'].values()))
+            record['retained_collision_boxes'] = frozenset((0,))
+            self.assertTrue(destructibles_sensor.note_destroyed(
+                'module', 22, 37, 73, 1.1))
+
+        self.assertTrue(
+            destructibles_sensor.native_replacement_bsp_active())
 
     def test_restores_only_names_moved_by_1513(self):
         area = types.ModuleType('AreaDestructibles')
@@ -1141,6 +1208,9 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 ticks[0] = float(tick)
                 detail = destructibles_sensor.prewarm_tree_registry(
                     1, _Vector(), 0.0, descriptor, ticks[0])
+                destructibles_sensor.prewarm_tree_registry(
+                    1, _Vector(100.0, 0.0, 0.0), 0.0, descriptor, ticks[0],
+                    priority_chunks=(32,))
                 category_counts.append(
                     bigworld.wg_getDestructibleEffectCategory.call_count)
             prewarm_mapped = set(mapped)
@@ -1151,7 +1221,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
 
         self.assertEqual('pending', detail['status'])
         self.assertEqual(
-            set((11, 12, 13, 21, 22, 23, 31, 32, 33)), prewarm_mapped)
+            set((11, 12, 13, 21, 22, 23, 31, 32, 33, 41, 42, 43)), prewarm_mapped)
         registry = destructibles_sensor.g_offh_tree_state['chunks'][23]
         self.assertEqual(100, registry['count'])
         self.assertEqual('crushed', proposal['status'])
@@ -6461,7 +6531,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         self.assertEqual(4, len(state['seen_pending']))
         self.assertEqual(24, len(state['seen_chunks']))
 
-    def test_blank_v4_ambiguous_slot_is_permanently_isolated(self):
+    def test_blank_v4_distinct_ambiguous_slot_is_permanently_isolated(self):
         unique = 'content/test/normal/lod0/unique.model'
         ambiguous = 'content/test/normal/lod0/ambiguous.model'
         chunk_translation = _Vector()
@@ -6484,7 +6554,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 'boxes': [[-1, 0, -1, 1, 3, 1, None]],
             },
         }, [list(other_signature) + [unique, 0, 23, 0, 1.0]], [
-            list(signature) + [[[ambiguous, 0], [ambiguous, 0]]],
+            list(signature) + [[[ambiguous, 0], [unique, 0]]],
         ])
         destructibles_sensor.set_catalog(catalog)
         manager = _Manager()
@@ -6535,6 +6605,98 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         bigworld.wg_getDestructibleMatrix.assert_called_once_with(1, 22, 0)
         bigworld.wg_getDestructibleEffectCategory.assert_called_once_with(
             1, 22, 0, -1)
+
+    def test_duplicate_identical_candidates_use_the_live_native_wire(self):
+        """A repeated compiled row is identity-equivalent, not ambiguous."""
+        filename = 'content/test/normal/lod0/pak40.model'
+        chunk_translation = _Vector()
+        matrix = _ItemMatrix(_Vector(2.0, 0.0, 4.0), scale=0.94)
+        other = _ItemMatrix(_Vector(50.0, 0.0, 50.0))
+        math_module = types.ModuleType('Math')
+        math_module.Vector3 = _Vector
+        signature = destructibles_sensor._locator_signature(
+            matrix, chunk_translation, math_module, 1000)
+        other_signature = destructibles_sensor._locator_signature(
+            other, chunk_translation, math_module, 1000)
+        catalog = _catalog({
+            filename: {
+                'kind': 'fragile',
+                'boxes': [[-1, 0, -1, 1, 2, 1, None]],
+            },
+        }, [list(other_signature) + [filename, 0, 23, 0, 1.0]], [
+            list(signature) + [[[filename, 0], [filename, 0]]],
+        ])
+
+        destructibles_sensor.set_catalog(catalog)
+        prepared = destructibles_sensor._destructible_catalog
+        self.assertNotIn(signature, prepared['ambiguous_instances'])
+        self.assertIn(signature, prepared['equivalent_instances'])
+
+        live_signature, located = (
+            destructibles_sensor._catalog_instance_for_matrix_1513(
+                matrix, chunk_translation, math_module, (32897, 51)))
+        self.assertEqual(signature, live_signature)
+        self.assertEqual(filename.lower(), located['filename'])
+        self.assertEqual(0, located['box_index'])
+        self.assertEqual((32897, 51), located['wire'])
+
+        # Without a streamed native wire the duplicate cannot enter the baked
+        # broad phase; it remains unavailable rather than inventing an id.
+        unused_signature, unbound = (
+            destructibles_sensor._catalog_instance_for_matrix_1513(
+                matrix, chunk_translation, math_module))
+        self.assertEqual(signature, unused_signature)
+        self.assertIsNone(unbound)
+
+    def test_duplicate_equivalent_signature_is_rejected_fail_closed(self):
+        filename = 'content/test/normal/lod0/pak40.model'
+        signature = (2, 0, 4, 1000, 0, 0, 0, 1000, 0, 0, 0, 1000)
+        other_signature = (50, 0, 50, 1000, 0, 0, 0, 1000, 0, 0, 0, 1000)
+        duplicate = list(signature) + [
+            [[filename, 0], [filename, 0]]]
+        catalog = _catalog({
+            filename: {
+                'kind': 'fragile',
+                'boxes': [[-1, 0, -1, 1, 2, 1, None]],
+            },
+        }, [list(other_signature) + [filename, 0, 23, 0, 1.0]], [
+            duplicate, duplicate,
+        ])
+
+        with self.assertRaisesRegex(
+                ValueError, 'ambiguous destructible instance row is invalid'):
+            destructibles_sensor.set_catalog(catalog)
+
+    def test_dday_reported_pak40_duplicate_uses_observed_live_wire(self):
+        """Pin the decorative cannon from report 20260916-174916."""
+        data = json.loads((ROOT / 'destructibles' / '101_dday.json').read_text(
+            encoding='utf-8'))
+        signature = (
+            183774, 74948, 208831, 313, 1, 886,
+            -72, 937, 24, -884, -76, 312)
+        filename = (
+            'content/MilitaryEnvironment/mleSU_05_03_Pak40/normal/lod0/'
+            'mleSU_05_03_Pak40_1.model')
+        row = next(row for row in data['ambiguous_instances']
+                   if tuple(row[:12]) == signature)
+        self.assertEqual([[filename, 0], [filename, 0]], row[12])
+
+        destructibles_sensor.set_catalog(data)
+        prepared = destructibles_sensor._destructible_catalog
+        self.assertNotIn(signature, prepared['ambiguous_instances'])
+        self.assertEqual(filename.lower(),
+                         prepared['equivalent_instances'][signature][
+                             'filename'])
+
+        math_module = types.ModuleType('Math')
+        math_module.Vector3 = _Vector
+        matrix = _CatalogSignatureMatrix(signature)
+        live_signature, located = (
+            destructibles_sensor._catalog_instance_for_matrix_1513(
+                matrix, _Vector(), math_module, (32897, 51)))
+        self.assertEqual(signature, live_signature)
+        self.assertEqual(filename.lower(), located['filename'])
+        self.assertEqual((32897, 51), located['wire'])
 
     def test_v4_signature_miss_isolates_named_and_unnamed_slots(self):
         type_descriptor = _Strict1513Component(
@@ -7816,18 +7978,260 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 1, _Vector(), 0.0, 20.0, descriptor, 10.0,
                 dt=0.04, kinetic_speed=20.0)
             self.assertEqual('hard', during_hide['status'])
-            # After the swap the native replacement BSP, not the original
-            # whole-item box, decides whether its wreckage blocks this ray.
+            # Compiled metadata proves this item keeps a solid damaged model.
+            # Its exact catalog box remains the conservative no-entry volume;
+            # the native BSP recast can additionally see replacement protrusions.
             after_hide = destructibles_sensor._catalog_motion_proposal(
                 1, _Vector(), 0.0, 20.0, descriptor, 10.3,
                 dt=0.04, kinetic_speed=20.0)
-            self.assertEqual('crushed', after_hide['status'])
+            self.assertEqual('hard', after_hide['status'])
             self.assertFalse(destructibles_sensor._catalog_soft_static_path(
                 1, _Vector(), _Vector(0.0, 0.7, 10.0), hit, 20.0, descriptor,
                 require_pending_first=True))
             self.assertIsNone(destructibles_sensor._broken_shot_surface_key_1513(
                 22, 37, 87))
         bigworld.wg_collideSegment.assert_not_called()
+
+    def test_structure_swap_holds_hull_for_the_complete_hide_window(self):
+        (bigworld, math_module, area, cache, authority,
+         descriptor) = self._direction_catalog_fixture(
+             kind='structure', destroyed=True)
+        authority.contact_collision_ready = mock.Mock(return_value=True)
+        with mock.patch.dict(sys.modules, {
+                'BigWorld': bigworld, 'Math': math_module,
+                'AreaDestructibles': area, 'DestructiblesCache': cache}), \
+                mock.patch.object(
+                    destructibles_sensor, '_get_destr_authority',
+                    return_value=authority):
+            at_contact = destructibles_sensor._catalog_motion_proposal(
+                1, _Vector(), 0.0, 20.0, descriptor, 10.0,
+                dt=0.04, kinetic_speed=20.0)
+            before_swap_deadline = \
+                destructibles_sensor._catalog_motion_proposal(
+                    1, _Vector(), 0.0, 20.0, descriptor, 10.199,
+                    dt=0.04, kinetic_speed=20.0)
+            after_swap_deadline = \
+                destructibles_sensor._catalog_motion_proposal(
+                    1, _Vector(), 0.0, 20.0, descriptor, 10.201,
+                    dt=0.04, kinetic_speed=20.0)
+            self.assertTrue(
+                destructibles_sensor._catalog_pending_at_hull(
+                    _Vector(), 0.0, 20.0, descriptor, 10.199, dt=0.04))
+            self.assertFalse(
+                destructibles_sensor._catalog_pending_at_hull(
+                    _Vector(), 0.0, 20.0, descriptor, 10.201, dt=0.04))
+
+        self.assertEqual('hard', at_contact['status'])
+        self.assertEqual('hard', before_swap_deadline['status'])
+        # This synthetic module has no compiled retained-collision evidence.
+        # Once the bounded native hand-off ends, keeping its old OBB would
+        # create an invisible wall where the destroyed model is collision-free.
+        self.assertEqual('crushed', after_swap_deadline['status'])
+        self.assertTrue(at_contact['swap_pending'])
+        self.assertTrue(before_swap_deadline['swap_pending'])
+        self.assertNotIn('swap_pending', after_swap_deadline)
+        authority.contact_collision_ready.assert_not_called()
+
+    def test_retained_structure_forbids_entry_but_allows_translation_escape(
+            self):
+        (bigworld, math_module, area, cache, authority,
+         descriptor) = self._direction_catalog_fixture(
+             kind='structure', destroyed=True)
+        record = next(iter(
+            destructibles_sensor._destructible_catalog[
+                'resources'].values()))
+        record['retained_collision_boxes'] = frozenset((0,))
+        destructibles_sensor.g_offh_destr_pending = {
+            (22, 37, 73): 10.2,
+        }
+
+        with mock.patch.dict(sys.modules, {
+                'BigWorld': bigworld, 'Math': math_module,
+                'AreaDestructibles': area, 'DestructiblesCache': cache}), \
+                mock.patch.object(
+                    destructibles_sensor, '_get_destr_authority',
+                    return_value=authority):
+            entering = destructibles_sensor._catalog_motion_proposal(
+                1, _Vector(0.0, 0.0, -0.3), 0.0, 20.0,
+                descriptor, 10.3, dt=0.04, kinetic_speed=20.0)
+            escaping = destructibles_sensor._catalog_motion_proposal(
+                1, _Vector(), 0.0, -20.0,
+                descriptor, 10.3, dt=0.04, kinetic_speed=20.0)
+
+        self.assertEqual('hard', entering['status'])
+        self.assertEqual('crushed', escaping['status'])
+
+    def test_retained_structure_narrow_post_blocks_rotation_entry_but_escape(
+            self):
+        (bigworld, math_module, area, cache, authority,
+         unused_descriptor) = self._direction_catalog_fixture(
+             kind='structure', destroyed=True)
+        record = next(iter(
+            destructibles_sensor._destructible_catalog[
+                'resources'].values()))
+        record['retained_collision_boxes'] = frozenset((0,))
+        posed_bbox = (
+            (-1.7, -1.0, -3.5), (1.7, 1.0, 3.2), None)
+        interval_bbox = \
+            destructibles_sensor._tree_rotation_interval_bbox_1513(
+                posed_bbox, 0.04)
+        descriptor = _Strict1513Component(
+            physics={'weight': 10000.0},
+            hull=_Strict1513Component(
+                hitTester=types.SimpleNamespace(bbox=interval_bbox)))
+        instance = destructibles_sensor.g_offh_destr_instances[(22, 37)]
+        # A 3 cm post lies between the three native longitudinal lanes.  The
+        # continuous catalog volume, rather than a chosen ray grid, owns it.
+        instance['boxes'] = (((-0.8, 0.8, 3.31), (
+            (0.015, 0.0, 0.0), (0.0, 1.0, 0.0),
+            (0.0, 0.0, 0.015)), 73),)
+        destructibles_sensor.g_offh_destr_contact_bins = {}
+        destructibles_sensor._index_catalog_instance_1513(
+            destructibles_sensor.g_offh_destr_contact_bins,
+            (22, 37), instance)
+        destructibles_sensor.g_offh_destr_pending = {
+            (22, 37, 73): 10.2,
+        }
+        origin = (0.0, 0.0, 0.0)
+
+        with mock.patch.dict(sys.modules, {
+                'BigWorld': bigworld, 'Math': math_module,
+                'AreaDestructibles': area, 'DestructiblesCache': cache}), \
+                mock.patch.object(
+                    destructibles_sensor, '_get_destr_authority',
+                    return_value=authority):
+            entering = destructibles_sensor._catalog_motion_proposal(
+                1, _Vector(), 0.04, 1.0, descriptor, 10.3,
+                dt=0.0, kinetic_speed=1.0, travel_reach=0.0,
+                replacement_motion=(
+                    origin, 0.0, origin, 0.08, posed_bbox))
+            escaping = destructibles_sensor._catalog_motion_proposal(
+                1, _Vector(), 0.04, 1.0, descriptor, 10.3,
+                dt=0.0, kinetic_speed=1.0, travel_reach=0.0,
+                replacement_motion=(
+                    origin, 0.08, origin, 0.0, posed_bbox))
+
+        self.assertEqual('hard', entering['status'])
+        self.assertEqual('crushed', escaping['status'])
+
+    def test_retained_replacement_escape_cannot_cross_to_opposite_side(self):
+        math_module = types.ModuleType('Math')
+        math_module.Vector3 = _Vector
+        bbox = ((-0.4, -0.4, -0.4), (0.4, 0.4, 0.4), None)
+        world_box = ((0.0, 0.0, 0.0), (
+            (0.5, 0.0, 0.0), (0.0, 0.5, 0.0),
+            (0.0, 0.0, 0.5)), None)
+
+        with mock.patch.dict(sys.modules, {'Math': math_module}):
+            motion = destructibles_sensor._replacement_motion_geometry_1513(
+                _Vector(-0.85, 0.0, 0.0), math.pi * 0.5, 20.0,
+                bbox, 0.1, motion_yaw=math.pi * 0.5)
+
+        self.assertLess(
+            destructibles_sensor._boxes_signed_clearance(
+                motion[0][0], world_box), 0.0)
+        self.assertGreater(
+            destructibles_sensor._boxes_signed_clearance(
+                motion[0][1], world_box), 0.0)
+        self.assertTrue(
+            destructibles_sensor._replacement_motion_blocked_1513(
+                motion, (world_box,)))
+
+    def test_retained_replacement_escape_cannot_cut_corner_from_legal_pose(
+            self):
+        math_module = types.ModuleType('Math')
+        math_module.Vector3 = _Vector
+        bbox = ((-0.4, -0.4, -0.4), (0.4, 0.4, 0.4), None)
+        world_box = ((0.0, 0.0, 0.0), (
+            (0.5, 0.0, 0.0), (0.0, 0.5, 0.0),
+            (0.0, 0.0, 0.5)), None)
+        start = _Vector(1.0, 0.0, 0.8)
+        end = _Vector(0.8, 0.0, 1.1)
+
+        with mock.patch.dict(sys.modules, {'Math': math_module}):
+            motion = destructibles_sensor._replacement_motion_geometry_1513(
+                start, 0.0, 0.0, bbox, 0.0,
+                replacement_motion=(
+                    (start.x, start.y, start.z), 0.0,
+                    (end.x, end.y, end.z), 0.0, bbox))
+
+        self.assertFalse(
+            destructibles_sensor._boxes_intersect(
+                motion[0][0], world_box))
+        self.assertFalse(
+            destructibles_sensor._boxes_intersect(
+                motion[0][1], world_box))
+        self.assertTrue(any(
+            destructibles_sensor._boxes_intersect(sweep, world_box)
+            for sweep in motion[0][2]))
+        self.assertTrue(
+            destructibles_sensor._replacement_motion_blocked_1513(
+                motion, (world_box,)))
+
+    def test_structure_swap_pending_requires_every_catalog_contact_pending(self):
+        (unused_bigworld, unused_math, unused_area, unused_cache, authority,
+         descriptor) = self._direction_catalog_fixture(kind='structure')
+        instance = destructibles_sensor.g_offh_destr_instances[(22, 37)]
+        module = instance['boxes'][0]
+        instance['boxes'] = module, (module[0], module[1], 74)
+        destructibles_sensor.g_offh_destr_contact_bins = {}
+        destructibles_sensor._index_catalog_instance_1513(
+            destructibles_sensor.g_offh_destr_contact_bins,
+            (22, 37), instance)
+        destructibles_sensor.g_offh_destr_pending = {
+            (22, 37, 73): 10.2,
+        }
+
+        with mock.patch.object(
+                destructibles_sensor, '_get_destr_authority',
+                return_value=authority):
+            self.assertFalse(
+                destructibles_sensor._catalog_pending_at_hull(
+                    _Vector(), 0.0, 20.0, descriptor, 10.1, dt=0.04))
+
+    def test_ready_fragile_skin_releases_before_hide_deadline(self):
+        (bigworld, math_module, area, cache, authority,
+         descriptor) = self._direction_catalog_fixture(
+             kind='fragile', destroyed=True)
+        authority.contact_collision_ready = mock.Mock(return_value=True)
+        with mock.patch.dict(sys.modules, {
+                'BigWorld': bigworld, 'Math': math_module,
+                'AreaDestructibles': area, 'DestructiblesCache': cache}), \
+                mock.patch.object(
+                    destructibles_sensor, '_get_destr_authority',
+                    return_value=authority):
+            detail = destructibles_sensor._catalog_motion_proposal(
+                1, _Vector(), 0.0, 20.0, descriptor, 10.0,
+                dt=0.04, kinetic_speed=20.0)
+            pending = destructibles_sensor._catalog_pending_at_hull(
+                _Vector(), 0.0, 20.0, descriptor, 10.1, dt=0.04)
+
+        self.assertEqual('crushed', detail['status'])
+        self.assertFalse(pending)
+        authority.contact_collision_ready.assert_called_once_with(
+            22, 37, None)
+
+    def test_new_structure_commit_stays_outside_while_model_swaps(self):
+        (bigworld, math_module, area, cache, authority,
+         descriptor) = self._direction_catalog_fixture(kind='structure')
+        with mock.patch.dict(sys.modules, {
+                'BigWorld': bigworld, 'Math': math_module,
+                'AreaDestructibles': area, 'DestructiblesCache': cache}), \
+                mock.patch.object(
+                    destructibles_sensor, '_get_destr_authority',
+                    return_value=authority):
+            detail = destructibles_sensor._catalog_motion_blocked(
+                1, _Vector(), 0.0, 20.0, descriptor, 10.0,
+                dt=0.04, kinetic_speed=20.0, return_detail=True,
+                kinetic_commit=True, commit_enabled=True)
+
+        self.assertEqual('hard', detail['status'])
+        self.assertTrue(detail['accepted_now'])
+        self.assertTrue(detail['swap_pending'])
+        self.assertEqual(((22, 37, 73),), detail['token'])
+        self.assertAlmostEqual(
+            10.2,
+            destructibles_sensor.g_offh_destr_pending[(22, 37, 73)])
 
     def test_broken_skin_covering_ray_endpoint_never_recasts_backwards(self):
         import struct
@@ -7988,6 +8392,187 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         self.assertAlmostEqual(-4.2, reverse_min)
         self.assertAlmostEqual(4.0, reverse_max)
 
+    def test_explicit_zero_catalog_reach_excludes_drive_lookahead(self):
+        (bigworld, math_module, area, cache, authority,
+         descriptor) = self._direction_catalog_fixture()
+        just_outside_hull = _Vector(0.0, 0.0, -0.15)
+
+        with mock.patch.dict(
+                sys.modules, {'BigWorld': bigworld, 'Math': math_module,
+                              'AreaDestructibles': area,
+                              'DestructiblesCache': cache}), \
+                mock.patch.object(
+                    destructibles_sensor, '_get_destr_authority',
+                    return_value=authority):
+            exact_gap = destructibles_sensor._catalog_motion_proposal(
+                1, just_outside_hull, 0.0, 0.0, descriptor, 10.0,
+                dt=0.04, travel_reach=0.0)
+            legacy_lookahead = destructibles_sensor._catalog_motion_proposal(
+                1, just_outside_hull, 0.0, 0.0, descriptor, 10.0,
+                dt=0.04)
+            exact_contact = destructibles_sensor._catalog_motion_blocked(
+                1, _Vector(), 0.0, 0.0, descriptor, 10.0,
+                dt=0.04, travel_reach=0.0)
+
+        self.assertEqual('clear', exact_gap['status'])
+        self.assertEqual('hard', legacy_lookahead['status'])
+        self.assertTrue(exact_contact)
+        authority.destroy_fragile.assert_not_called()
+
+    def test_posed_catalog_body_keeps_the_native_horizontal_footprint(self):
+        bbox = ((-1.382558, 0.002, -2.86745),
+                (1.382558, 1.520463, 2.789793), None)
+        position = _Vector(17.0, 4.0, -9.0)
+
+        for yaw in (-2.4, 0.0, 1.7):
+            for speed in (-12.0, 12.0):
+                motion_yaw = yaw if speed >= 0.0 else yaw + math.pi
+                flat = destructibles_sensor._vehicle_swept_box(
+                    position, yaw, speed, bbox, 1.2,
+                    motion_yaw=motion_yaw)
+                for pitch, roll in ((-0.61, 0.0), (0.61, -0.61),
+                                    (0.35, 0.61)):
+                    posed = destructibles_sensor._vehicle_swept_box(
+                        position, yaw, speed, bbox, 1.2,
+                        motion_yaw=motion_yaw, pitch=pitch, roll=roll)
+                    with self.subTest(
+                            yaw=yaw, speed=speed,
+                            pitch=pitch, roll=roll):
+                        self.assertEqual(
+                            destructibles_sensor._box_xz_bounds(flat),
+                            destructibles_sensor._box_xz_bounds(posed))
+                        self.assertEqual(
+                            tuple((axis[0], axis[2])
+                                  for axis in flat[1]),
+                            tuple((axis[0], axis[2])
+                                  for axis in posed[1]))
+
+        flat_contact = destructibles_sensor._vehicle_contact_box(
+            position, 0.73, bbox, travel=1.1, motion_yaw=-0.4)
+        posed_contact = destructibles_sensor._vehicle_contact_box(
+            position, 0.73, bbox, travel=1.1, motion_yaw=-0.4,
+            pitch=-0.61, roll=0.61)
+        self.assertEqual(
+            destructibles_sensor._box_xz_bounds(flat_contact),
+            destructibles_sensor._box_xz_bounds(posed_contact))
+
+        pitch, roll = -0.61, 0.61
+        right, up, forward_axis = destructibles_sensor._vehicle_pose_axes(
+            0.0, pitch, roll)
+        local_y = [
+            right[1] * x + up[1] * y + forward_axis[1] * z
+            for x in (bbox[0][0], bbox[1][0])
+            for y in (bbox[0][1], bbox[1][1])
+            for z in (bbox[0][2], bbox[1][2])
+        ]
+        preposed_bbox = (
+            (bbox[0][0], min(local_y), bbox[0][2]),
+            (bbox[1][0], max(local_y), bbox[1][2]), None)
+
+        def y_bounds(box):
+            radius = sum(abs(axis[1]) for axis in box[1])
+            return box[0][1] - radius, box[0][1] + radius
+
+        direct = destructibles_sensor._vehicle_swept_box(
+            position, 0.73, 12.0, bbox, 1.2, motion_yaw=-0.4,
+            pitch=pitch, roll=roll)
+        rotation_style = destructibles_sensor._vehicle_swept_box(
+            position, 0.73, 12.0, preposed_bbox, 1.2,
+            motion_yaw=-0.4)
+        for expected, actual in zip(
+                y_bounds(rotation_style), y_bounds(direct)):
+            self.assertAlmostEqual(expected, actual, places=12)
+
+        direct_contact = destructibles_sensor._vehicle_contact_box(
+            position, 0.73, bbox, travel=1.1, motion_yaw=-0.4,
+            pitch=pitch, roll=roll)
+        rotation_contact = destructibles_sensor._vehicle_contact_box(
+            position, 0.73, preposed_bbox, travel=1.1,
+            motion_yaw=-0.4)
+        for expected, actual in zip(
+                y_bounds(rotation_contact), y_bounds(direct_contact)):
+            self.assertAlmostEqual(expected, actual, places=12)
+
+    def test_rolled_vehicle_zonotopes_keep_physical_and_guard_corners(self):
+        bbox = ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0), None)
+        position = _Vector(4.0, 5.0, -6.0)
+        yaw = 0.37
+        roll = 0.61
+        epsilon = 0.075
+        right, up, forward_axis = destructibles_sensor._vehicle_pose_axes(
+            yaw, 0.0, roll)
+        swept = destructibles_sensor._vehicle_swept_box(
+            position, yaw, 0.0, bbox, 0.0, pitch=0.0, roll=roll)
+        contact = destructibles_sensor._vehicle_contact_box(
+            position, yaw, bbox, epsilon=epsilon,
+            pitch=0.0, roll=roll)
+
+        def physical_corner(right_sign, up_sign, forward_sign):
+            return tuple(
+                (position.x, position.y, position.z)[axis] +
+                right_sign * right[axis] + up_sign * up[axis] +
+                forward_sign * forward_axis[axis]
+                for axis in range(3))
+
+        def small_cube(center):
+            return (center, ((0.002, 0.0, 0.0),
+                             (0.0, 0.002, 0.0),
+                             (0.0, 0.0, 0.002)), None)
+
+        signs = tuple(
+            (right_sign, up_sign, forward_sign)
+            for right_sign in (-1.0, 1.0)
+            for up_sign in (-1.0, 1.0)
+            for forward_sign in (-1.0, 1.0))
+        for right_sign, up_sign, forward_sign in signs:
+            corner = physical_corner(
+                right_sign, up_sign, forward_sign)
+            with self.subTest(
+                    volume='physical', right=right_sign,
+                    up=up_sign, forward=forward_sign):
+                self.assertTrue(destructibles_sensor._boxes_intersect(
+                    swept, small_cube(corner)))
+                self.assertTrue(destructibles_sensor._boxes_intersect(
+                    contact, small_cube(corner)))
+
+            # The 0.5 m collision-lane guard must vary independently of the
+            # rolled body axis.  Coupling both to one generator drops the
+            # opposite-sign corner/guard combinations.
+            for guard_sign in (-1.0, 1.0):
+                guarded_corner = (
+                    corner[0] + guard_sign * 0.5 * right[0],
+                    corner[1],
+                    corner[2] + guard_sign * 0.5 * right[2])
+                with self.subTest(
+                        volume='sweep_guard', right=right_sign,
+                        up=up_sign, forward=forward_sign,
+                        guard=guard_sign):
+                    self.assertTrue(destructibles_sensor._boxes_intersect(
+                        swept, small_cube(guarded_corner)))
+
+            # Contact skin is the Minkowski sum of the real posed body and
+            # independent yaw-right, yaw-forward and world-up guards.
+            for guard_right in (-1.0, 1.0):
+                for guard_up in (-1.0, 1.0):
+                    for guard_forward in (-1.0, 1.0):
+                        guarded_corner = (
+                            corner[0] + epsilon * (
+                                guard_right * right[0] +
+                                guard_forward * forward_axis[0]),
+                            corner[1] + epsilon * guard_up,
+                            corner[2] + epsilon * (
+                                guard_right * right[2] +
+                                guard_forward * forward_axis[2]))
+                        with self.subTest(
+                                volume='contact_guard', right=right_sign,
+                                up=up_sign, forward=forward_sign,
+                                guard_right=guard_right,
+                                guard_up=guard_up,
+                                guard_forward=guard_forward):
+                            self.assertTrue(
+                                destructibles_sensor._boxes_intersect(
+                                    contact, small_cube(guarded_corner)))
+
     def test_direction_soft_path_drives_through_a_felled_column(self):
         (bigworld, math_module, area, cache, authority,
          descriptor) = self._direction_catalog_fixture(
@@ -8134,17 +8719,21 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                         1, _Vector(), 0.2, 20.0, descriptor, 10.0,
                         dt=0.04, kinetic_speed=20.0)
 
-                self.assertEqual('crushed', committed['status'])
+                self.assertEqual(
+                    'hard' if kind == 'structure' else 'crushed',
+                    committed['status'])
                 self.assertEqual((key,), committed['token'])
                 self.assertTrue(committed['accepted_now'])
                 self.assertEqual(
-                    'clear' if kind == 'falling' else 'crushed',
+                    ('clear' if kind == 'falling' else
+                     'hard' if kind == 'structure' else 'crushed'),
                     retry['status'])
                 self.assertEqual(
                     None if kind == 'falling' else (key,), retry['token'])
                 self.assertFalse(retry['requires_commit'])
                 self.assertEqual(
-                    'clear' if kind == 'falling' else 'crushed',
+                    ('clear' if kind == 'falling' else
+                     'hard' if kind == 'structure' else 'crushed'),
                     published['status'])
                 self.assertEqual(
                     None if kind == 'falling' else (key,),
@@ -8157,6 +8746,13 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 self.assertEqual(event_kind,
                                  events[0]['destructible_kind'])
                 self.assertEqual(mat_kind, events[0].get('mat_kind'))
+                if kind == 'structure':
+                    self.assertTrue(committed['swap_pending'])
+                    self.assertTrue(retry['swap_pending'])
+                    self.assertTrue(published['swap_pending'])
+                    self.assertAlmostEqual(
+                        10.2,
+                        destructibles_sensor.g_offh_destr_pending[key])
                 self.assertNotIn(
                     key, getattr(
                         destructibles_sensor,
@@ -8574,6 +9170,109 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             self.assertTrue(collision_filter(87, 0, 37, 22))
             self.assertTrue(collision_filter(75, 0, 38, 22))
 
+    def test_native_fragile_callback_marks_only_successful_current_space_swaps(self):
+        manager = types.SimpleNamespace(getSpaceID=lambda: 1)
+        area = types.SimpleNamespace(g_destructiblesManager=manager)
+        original = mock.Mock(return_value='done')
+        handle = destructibles_compat._fragile_collision_boundary(area, original)
+        with mock.patch.object(destructibles_sensor, 'note_native_fragile_replacement') as note:
+            self.assertEqual('done', handle(manager, 1, 22, 37, True, False, False,
+                                           None, delCallback=False))
+            original.assert_called_once_with(manager, 1, 22, 37, True, False, False,
+                                             None, delCallback=False)
+            note.assert_called_once_with(1, 22, 37)
+            note.reset_mock()
+            handle(manager, 2, 22, 37)
+            note.assert_not_called()
+            original.side_effect = RuntimeError('native swap failed')
+            with self.assertRaises(RuntimeError):
+                handle(manager, 1, 22, 37)
+            note.assert_not_called()
+
+    def test_fragile_native_callback_never_revives_broken_normal_materials(self):
+        authority = self._ground_filter_fixture({(37, None)})
+        destructibles_sensor.g_offh_destr_runtime_space = 1
+        with mock.patch.object(destructibles_sensor, '_get_destr_authority',
+                               return_value=authority):
+            filters = (destructibles_sensor.ground_collision_filter(0, 4),
+                destructibles_sensor.prepare_horizontal_collision_filter(
+                    _Vector(-2, 0, -1), _Vector(2, 1, 10)))
+        for callback in filters:
+            self.assertFalse(callback(71, 0, 37, 22))
+        destructibles_sensor.note_native_fragile_replacement(1, 22, 37)
+        for callback in filters:
+            for material in (71, 72, 73, 75, 86):
+                for flags in (0, 0x80):
+                    self.assertFalse(callback(material, flags, 37, 22))
+                    # An intact neighbour or backing wall is not this item.
+                    self.assertTrue(callback(material, flags, 38, 22))
+                    self.assertTrue(callback(material, flags, 37, 23))
+            for material in (87, 90, 100):
+                self.assertTrue(callback(material, 0, 37, 22))
+            # Real replacement geometry may use an ordinary material. The
+            # native callback still releases that support for crushed cars.
+            self.assertTrue(callback(2, 0, 37, 22))
+        self.assertTrue(destructibles_sensor.native_replacement_bsp_active())
+        destructibles_sensor._invalidate_chunk_native_names_1513(22)
+        for callback in filters:
+            self.assertFalse(callback(71, 0, 37, 22))
+            self.assertFalse(callback(2, 0, 37, 22))
+
+    def test_reported_flowerbeds_and_stone_fences_keep_broken_skin_hidden(self):
+        cases = (
+            ('08_ruinberg', 32637, 123,
+             (24.33201789855957, 0.8024803996086121, -186.6285400390625)),
+            ('08_ruinberg', 32637, 106,
+             (27.580198287963867, 0.918630063533783, -180.2846221923828)),
+            ('08_ruinberg', 32637, 102,
+             (31.397663116455078, 1.0067789554595947, -170.6769256591797)),
+            ('23_westfeld', 33153, 3,
+             (297.80621337890625, 15.135435104370117, 248.66091918945312)),
+            ('23_westfeld', 33409, 29,
+             (302.6313171386719, 15.091239929199219, 243.82839965820312)),
+        )
+        for map_name, chunk_id, item_index, point in cases:
+            with self.subTest(map=map_name, chunk=chunk_id, item=item_index):
+                data = json.loads((ROOT / 'destructibles' /
+                                   (map_name + '.json')).read_text())
+                destructibles_sensor.set_catalog(data)
+                row = next(row for row in data['instances']
+                           if row[14:16] == [chunk_id, item_index])
+                record = data['resources'][row[12]]
+                boxes = destructibles_sensor._baked_world_boxes_1513(
+                    record, row[:12], row[13], data['locator_quantization'])
+                # The actual report hit intersects this authored object. The
+                # report does not contain its native material; exercise the
+                # normal/damaged contract independently below.
+                self.assertTrue(any(destructibles_sensor._point_in_world_box(
+                    _Vector(point), box) for box in boxes))
+                identity = (chunk_id, item_index)
+                instance = {'filename': row[12].lower(), 'kind': 'fragile',
+                            'boxes': boxes, 'item_scale': row[16]}
+                destructibles_sensor.g_offh_destr_runtime_space = 1
+                destructibles_sensor.g_offh_destr_instances = {identity: instance}
+                destructibles_sensor.g_offh_destr_contact_bins = bins = {}
+                destructibles_sensor._index_catalog_instance_1513(
+                    bins, identity, instance)
+                authority = types.SimpleNamespace(
+                    destroyed_keys=lambda chunk: {(item_index, None)}
+                    if chunk == chunk_id else ())
+                with mock.patch.object(destructibles_sensor,
+                        '_get_destr_authority', return_value=authority):
+                    filters = (
+                        destructibles_sensor.ground_collision_filter(
+                            point[0], point[2]),
+                        destructibles_sensor.prepare_horizontal_collision_filter(
+                            _Vector(point[0] - 4, point[1], point[2] - 4),
+                            _Vector(point[0] + 4, point[1], point[2] + 4)))
+                    destructibles_sensor.note_native_fragile_replacement(
+                        1, chunk_id, item_index)
+                    for callback in filters:
+                        self.assertFalse(callback(73, 0, item_index, chunk_id))
+                        self.assertFalse(callback(73, 0x80, item_index, chunk_id))
+                        self.assertTrue(callback(87, 0, item_index, chunk_id))
+                        self.assertTrue(callback(2, 0, -1, -1))
+
     def test_stationary_multi_module_structure_crushes_each_module(self):
         detail, authority, unused_descriptor = (
             self._stationary_contact_status([{
@@ -8584,9 +9283,35 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 ],
             }], return_detail=True, kinetic_commit=True))
 
-        self.assertEqual('crushed', detail['status'])
+        self.assertEqual('hard', detail['status'])
         self.assertEqual('structure', detail['kinds'])
+        self.assertTrue(detail['swap_pending'])
         self.assertEqual(2, authority.destroy_module.call_count)
+        self.assertEqual(
+            {(22, 37, 73), (22, 37, 74)},
+            set(destructibles_sensor.g_offh_destr_pending))
+
+    def test_structure_swap_does_not_mask_a_hard_sibling(self):
+        detail, authority, unused_descriptor = (
+            self._stationary_contact_status([{
+                'kind': 'structure',
+                'boxes': [
+                    [-1.0, -0.2, -0.5, 1.0, 2.0, 0.5, 73],
+                ],
+            }, {
+                'kind': 'structure', 'health': 100,
+                'boxes': [
+                    [-1.0, -0.2, -0.5, 1.0, 2.0, 0.5, 74],
+                ],
+            }], return_detail=True, kinetic_commit=True))
+
+        self.assertEqual('hard', detail['status'])
+        self.assertEqual(((22, 37, 73),), detail['token'])
+        self.assertTrue(detail['accepted_now'])
+        self.assertNotIn('swap_pending', detail)
+        authority.destroy_module.assert_called_once()
+        self.assertIn(
+            (22, 37, 73), destructibles_sensor.g_offh_destr_pending)
 
     def test_catalog_motion_contact_clears_once_the_item_is_broken(self):
         destructibles_sensor.xrange = range
@@ -8743,6 +9468,202 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         event_sink.assert_called_once()
         self.assertEqual(73, event_sink.call_args[0][0]['mat_kind'])
 
+    def test_vehicle_body_bbox_mounts_hull_and_keeps_raw_hull_contract(self):
+        raw_hull = (
+            (-1.08788, -0.392689, -2.86745),
+            (1.08921, 0.637632, 2.71439), None)
+        descriptor = _Strict1513Component(
+            hull=_Strict1513Component(
+                hitTester=types.SimpleNamespace(bbox=raw_hull)),
+            chassis=_Strict1513Component(
+                hitTester=types.SimpleNamespace(bbox=(
+                    (-1.382557988, 0.002, -2.789793),
+                    (1.382557988, 1.175, 2.789793), None)),
+                hullPosition=_Vector(0.0, 0.882831, 0.0)))
+
+        self.assertIs(raw_hull,
+                      destructibles_sensor._vehicle_hull_bbox(descriptor))
+        body = destructibles_sensor._vehicle_body_bbox(descriptor)
+
+        expected = ((-1.382557988, 0.002, -2.86745),
+                    (1.382557988, 1.520463, 2.789793), None)
+        for actual_point, expected_point in zip(body[:2], expected[:2]):
+            for actual, wanted in zip(actual_point, expected_point):
+                self.assertAlmostEqual(wanted, actual, places=6)
+        self.assertIsNone(body[2])
+
+    def test_dday_vshed_live_upper_module_blocks_mounted_wz132_body(self):
+        catalog = json.loads((
+            ROOT / 'destructibles' / '101_dday.json').read_text())
+        row = next(
+            value for value in catalog['instances']
+            if value[14:16] == [32896, 55])
+        filename = row[12]
+        self.assertTrue(filename.endswith('bld_101_05_VShed02.model'))
+        record = catalog['resources'][filename]
+        self.assertEqual(
+            [73, 74, 75], [box[6] for box in record['boxes']])
+        math_module = types.ModuleType('Math')
+        math_module.Vector3 = _Vector
+        boxes = destructibles_sensor._world_catalog_boxes(
+            record, _CatalogSignatureMatrix(row[:12]), _Vector(),
+            math_module)
+        instance = {
+            'filename': filename,
+            'descriptor_filename': filename,
+            'kind': 'structure',
+            'boxes': boxes,
+            'item_scale': row[16],
+        }
+        raw_hull = (
+            (-1.08788, -0.392689, -2.86745),
+            (1.08921, 0.637632, 2.71439), None)
+        descriptor = _Strict1513Component(
+            physics={'weight': 24312.0},
+            hull=_Strict1513Component(
+                hitTester=types.SimpleNamespace(bbox=raw_hull)),
+            chassis=_Strict1513Component(
+                hitTester=types.SimpleNamespace(bbox=(
+                    (-1.382557988, 0.002, -2.789793),
+                    (1.382557988, 1.175, 2.789793), None)),
+                hullPosition=_Vector(0.0, 0.882831, 0.0)))
+        body_bbox = destructibles_sensor._vehicle_body_bbox(descriptor)
+        # First native hard-contact pose from the attached 23:30 D-Day
+        # reproduction.  The level catalog box misses the live upper module
+        # by 11.5 mm, while the native -8.5 degree body pitch raises the front
+        # of this 2.8 m hull through that module.  Using a later, higher pose
+        # would hide the pitch/roll regression behind a level-box hit.
+        report_position = _Vector(
+            127.6112289428711, 75.79566955566406, 152.52215576171875)
+        report_yaw = -2.8417213227910043
+        report_pitch = -0.1477471205088672
+        report_roll = -0.030620713052814226
+        report_speed = 17.663220654751136
+        report_dt = 0.009002685546875
+        report_reach = destructibles_sensor._motion_travel_reach(
+            report_speed, report_dt)
+        level_sweep = destructibles_sensor._vehicle_swept_box(
+            report_position, report_yaw, report_speed, body_bbox,
+            report_reach)
+        posed_sweep = destructibles_sensor._vehicle_swept_box(
+            report_position, report_yaw, report_speed, body_bbox,
+            report_reach, pitch=report_pitch, roll=report_roll)
+        level_materials = set(
+            box[2] for box in boxes
+            if destructibles_sensor._boxes_intersect(level_sweep, box))
+        posed_materials = set(
+            box[2] for box in boxes
+            if destructibles_sensor._boxes_intersect(posed_sweep, box))
+        native_hit = _Vector(
+            128.0406951904297, 77.80744171142578, 149.23081970214844)
+        hit_materials = set(
+            box[2] for box in boxes
+            if destructibles_sensor._point_in_world_box(native_hit, box))
+
+        self.assertEqual({75}, level_materials)
+        self.assertEqual({73, 75}, posed_materials)
+        self.assertEqual({73, 75}, hit_materials)
+        level_top = level_sweep[0][1] + sum(
+            abs(axis[1]) for axis in level_sweep[1])
+        posed_top = posed_sweep[0][1] + sum(
+            abs(axis[1]) for axis in posed_sweep[1])
+        self.assertAlmostEqual(77.3161325557, level_top, places=6)
+        self.assertAlmostEqual(77.7514155239, posed_top, places=6)
+        self.assertLess(level_top, min(
+            box[0][1] - sum(abs(axis[1]) for axis in box[1])
+            for box in boxes if box[2] == 73))
+
+        # First hard-contact pose from the attached 22:22 D-Day report.
+        position = _Vector(126.4777527, 76.0503082, 146.2113342)
+        yaw = 0.12306468
+        speed = 13.3189335
+        dt = 0.0109863
+        reach = destructibles_sensor._motion_travel_reach(speed, dt)
+        raw_sweep = destructibles_sensor._vehicle_swept_box(
+            position, yaw, speed, raw_hull, reach)
+        body_sweep = destructibles_sensor._vehicle_swept_box(
+            position, yaw, speed, body_bbox, reach)
+        raw_materials = set(
+            box[2] for box in boxes
+            if destructibles_sensor._boxes_intersect(raw_sweep, box))
+        body_materials = set(
+            box[2] for box in boxes
+            if destructibles_sensor._boxes_intersect(body_sweep, box))
+
+        self.assertNotIn(73, raw_materials)
+        self.assertIn(73, body_materials)
+        body_top = position.y + body_bbox[1][1]
+        above_body = (
+            (position.x, body_top + 0.11, position.z),
+            ((0.1, 0.0, 0.0), (0.0, 0.1, 0.0),
+             (0.0, 0.0, 0.1)), None)
+        self.assertFalse(destructibles_sensor._boxes_intersect(
+            body_sweep, above_body))
+
+        destructibles_sensor.xrange = range
+        destructibles_sensor.set_catalog(catalog)
+        destructibles_sensor.g_offh_destr_instances = {
+            (32896, 55): instance}
+        destructibles_sensor.g_offh_destr_contact_bins = {}
+        destructibles_sensor._index_catalog_instance_1513(
+            destructibles_sensor.g_offh_destr_contact_bins,
+            (32896, 55), instance)
+        area = types.ModuleType('AreaDestructibles')
+        area.DESTR_TYPE_TREE = 1
+        area.DESTR_TYPE_FALLING_ATOM = 2
+        area.DESTR_TYPE_FRAGILE = 3
+        area.DESTR_TYPE_STRUCTURE = 4
+        area.g_cache = types.SimpleNamespace(
+            unitVehicleMass=10000.0,
+            getDescByFilename=lambda value: ({
+                'type': 4,
+                'modules': {
+                    73: {'health': 100000},
+                    74: {'health': 100000},
+                    75: {'health': 100000},
+                },
+            } if value == filename else None))
+        cache = types.ModuleType('DestructiblesCache')
+        cache.scaledDestructibleHealth = lambda scale, health: scale * health
+        authority = types.SimpleNamespace(
+            is_destroyed=lambda unused_chunk, unused_item, material:
+                material in (74, 75),
+            destroy_module=mock.Mock(side_effect=AssertionError(
+                'the live upper module is not crushable')))
+
+        with mock.patch.dict(sys.modules, {
+                'AreaDestructibles': area,
+                'DestructiblesCache': cache,
+                'Math': math_module}), \
+                mock.patch.object(
+                    destructibles_sensor, '_get_destr_authority',
+                    return_value=authority), \
+                mock.patch.object(
+                    destructibles_sensor,
+                    '_stream_baked_motion_instances_1513', return_value=()):
+            report_detail = destructibles_sensor._catalog_motion_proposal(
+                1, report_position, report_yaw, report_speed, descriptor,
+                10.0, dt=report_dt, kinetic_speed=report_speed,
+                pitch=report_pitch, roll=report_roll)
+            detail = destructibles_sensor._catalog_motion_proposal(
+                1, position, yaw, speed, descriptor, 10.0,
+                dt=dt, kinetic_speed=speed)
+
+        self.assertEqual('hard', report_detail['status'])
+        self.assertEqual('structure', report_detail['kinds'])
+        self.assertNotIn((32896, 55, 73), report_detail['token'] or ())
+        self.assertFalse(report_detail['accepted_now'])
+        self.assertFalse(report_detail['requires_commit'])
+        self.assertEqual('hard', detail['status'])
+        self.assertEqual('structure', detail['kinds'])
+        self.assertNotIn((32896, 55, 73), detail['token'] or ())
+        self.assertLessEqual(
+            set(detail['token'] or ()),
+            {(32896, 55, 74), (32896, 55, 75)})
+        self.assertFalse(detail['accepted_now'])
+        self.assertFalse(detail['requires_commit'])
+        authority.destroy_module.assert_not_called()
+
     def test_karelia_player_proposal_streams_exact_multi_module_structure(self):
         catalog_path = ROOT / 'destructibles' / '01_karelia.json'
         catalog = json.loads(catalog_path.read_text())
@@ -8839,17 +9760,81 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             ((33411, 13, 73), (33411, 13, 75)), detail['token'])
         self.assertIn(
             (33411, 13), destructibles_sensor.g_offh_destr_instances)
-        # Version 9 proves the initial native placement scan before the
-        # proposal resolves its own exact module geometry.
+        # Version 9 proves only the contacted placement, then resolves its
+        # exact module geometry without scanning unrelated chunk items.
         self.assertEqual(
-            [mock.call(1, 33411, item) for item in range(14)] +
-            [mock.call(1, 33411, 13)],
+            [mock.call(1, 33411, 13)] * 2,
             bigworld.wg_getDestructibleMatrix.call_args_list)
         self.assertEqual(
-            ([mock.call(1, 33411, item, -1) for item in range(14)] +
+            ([mock.call(1, 33411, 13, -1)] +
              [mock.call(1, 33411, 13, material)
               for material in (0, 1, 2)]),
             bigworld.wg_getDestructibleEffectCategory.call_args_list)
+
+    def test_reported_ruinberg_models_do_not_wait_for_whole_chunk_alignment(self):
+        destructibles_sensor.xrange = range
+        catalog = json.loads((ROOT / 'destructibles' / '08_ruinberg.json').read_text())
+        destructibles_sensor.set_catalog(catalog)
+        prepared = destructibles_sensor._destructible_catalog
+        wires = ((32385, 7), (32385, 6), (33151, 3), (33151, 89))
+        class Matrix(object):
+            def __init__(self, signature):
+                self.signature = signature
+                self.translation = _Vector(*(value / 1000.0 for value in signature[:3]))
+            def applyVector(self, vector):
+                xyz = (vector.x, vector.y, vector.z)
+                basis = self.signature[3:]
+                return _Vector(*(sum(xyz[axis] * basis[axis * 3 + dim]
+                                    for axis in range(3)) / 1000.0 for dim in range(3)))
+            def applyPoint(self, vector):
+                return self.translation + self.applyVector(vector)
+        manager = _Manager()
+        manager.space_id = 1
+        for chunk, unused in wires:
+            manager.set_chunk_count(chunk, 256)
+        area = types.SimpleNamespace(g_destructiblesManager=manager,
+            DESTR_TYPE_TREE=0, DESTR_TYPE_FALLING_ATOM=1,
+            DESTR_TYPE_FRAGILE=2, DESTR_TYPE_STRUCTURE=3,
+            g_cache=types.SimpleNamespace(getDescByFilename=lambda name: {'type': 2}))
+        bigworld = types.SimpleNamespace(
+            wg_getChunkDestrFilenames=mock.Mock(return_value=()),
+            wg_getDestructibleEffectCategory=mock.Mock(return_value=-1),
+            wg_getChunkMatrix=lambda *args: types.SimpleNamespace(translation=_Vector()),
+            wg_getDestructibleMatrix=mock.Mock(side_effect=lambda space, chunk, item:
+                Matrix(prepared['baked_instances'][(chunk, item)]['signature'])))
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area,
+                'BigWorld': bigworld, 'Math': types.SimpleNamespace(Vector3=_Vector, Matrix=lambda x: x)}):
+            # The new report has one previously isolated unnamed slot in a
+            # compacted list. That failed alignment must not quarantine the
+            # independent Mercedes/motorcycle proofs in the same chunk.
+            destructibles_sensor.g_offh_destr_isolated_slots = {(33151, 0)}
+            mapping, status = destructibles_sensor._chunk_native_names_1513(
+                bigworld, area, 1, 33151, 256, ())
+            self.assertIsNone(mapping)
+            self.assertEqual('isolated_item', status)
+            self.assertFalse(destructibles_sensor.is_isolated_1513(33151, 3))
+            for index, wire in enumerate(wires):
+                bigworld._offh_item_name_budget_tick = index
+                # Exhaust the whole-map scan budget and retain another
+                # chunk's focus before every close-contact probe.
+                destructibles_sensor._release_item_name_query_focus_1513_for_chunk(33151)
+                destructibles_sensor._item_name_query_allowance_1513(bigworld, (1, 99), 16)
+                instance = destructibles_sensor._stream_baked_shot_instance_1513(1, wire)
+                self.assertIsNotNone(instance)
+                self.assertEqual('fragile', instance['kind'])
+                self.assertEqual(('exact', instance['descriptor_filename']),
+                    destructibles_sensor.resolve_native_item_name_1513(1, *wire))
+                self.assertEqual((1, 99),
+                    destructibles_sensor.g_offh_destr_item_name_budget['focus'])
+            self.assertEqual(set(wires), set(tuple(call.args[1:]) for call in
+                bigworld.wg_getDestructibleMatrix.call_args_list))
+            # An unload expires independent proof even when the count is equal.
+            chunk, item = wires[-1]
+            destructibles_sensor._invalidate_chunk_native_names_1513(chunk)
+            bigworld._offh_item_name_budget_tick = 10
+            bigworld.wg_getDestructibleMatrix.side_effect = lambda *args: _ItemMatrix(_Vector(9999, 0, 9999))
+            self.assertIsNone(destructibles_sensor._resolve_catalog_model_name_1513(
+                bigworld, area, 1, chunk, item, 256, ()))
 
     def _prohorovka_wagon_environment(self, descriptor_available=False):
         """Build the exact #1513 girder flatcar the player drove through."""
@@ -8989,7 +9974,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             'rw004_Carriage1.model' in line
             for line in writes))
 
-    def test_pending_name_alignment_blocks_before_the_crush_law_owns_it(self):
+    def test_exact_placement_avoids_pending_names_before_crush(self):
         """A damaged wagon still blocks movement through its replacement body."""
         environment = self._prohorovka_wagon_environment(
             descriptor_available=True)
@@ -9007,7 +9992,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 break
 
         self.assertEqual('hard', details[0]['status'])
-        self.assertIn('unidentified', details[0]['kinds'])
+        self.assertNotIn('unidentified', details[0]['kinds'])
         self.assertEqual('hard', details[-1]['status'])
         self.assertNotIn('unidentified', details[-1]['kinds'])
         self.assertEqual(((32637, 56, None),), details[-1]['token'])
@@ -11155,6 +12140,28 @@ class NativeItemNameContractTests(unittest.TestCase):
             {'category_abi'},
             destructibles_sensor.g_offh_destr_isolation_logs)
 
+    def test_real_chunk_reload_retires_old_slot_quarantine_but_cache_eviction_does_not(self):
+        tree = 'speedtree/test/oak.spt'
+        self.descriptors[tree] = {'type': self.TREE, 'health': 10}
+        area = self._area()
+        manager = types.SimpleNamespace(getSpaceID=lambda: 1)
+        area.g_destructiblesManager = manager
+        destructibles_sensor.g_offh_destr_isolated_slots = {(22, 0), (99, 1)}
+        destructibles_sensor._invalidate_chunk_native_names_1513(22)
+        self.assertIn((22, 0), destructibles_sensor.g_offh_destr_isolated_slots)
+        original = mock.Mock()
+        callback = destructibles_compat._chunk_identity_boundary(area, original)
+        callback(manager, 22, 2)
+        original.assert_called_once_with(manager, 22, 2)
+        self.assertNotIn((22, 0), destructibles_sensor.g_offh_destr_isolated_slots)
+        self.assertIn((99, 1), destructibles_sensor.g_offh_destr_isolated_slots)
+        bigworld = types.ModuleType('BigWorld')
+        bigworld.wg_getDestructibleEffectCategory = lambda s, c, i, m: self.TREE if i else -1
+        mapping, status = destructibles_sensor._chunk_native_names_1513(
+            bigworld, area, 1, 22, 2, (tree,))
+        self.assertEqual('exact', status)
+        self.assertEqual({1: tree}, mapping)
+
     def test_compacted_rebuild_with_unknown_isolated_slot_stays_unsafe(self):
         tree = 'speedtree/test/oak.spt'
         self.descriptors[tree] = {'type': self.TREE, 'health': 10}
@@ -11196,6 +12203,42 @@ class NativeItemNameContractTests(unittest.TestCase):
         self.assertEqual({0: tree, 2: tree}, mapping)
         self.assertEqual([0, 2], calls)
         self.assertNotIn('g_offh_destr_isolated_chunks', destructibles_sensor.__dict__)
+
+    def test_compacted_rebuild_retains_handlerless_isolated_slot_proof(self):
+        tree = 'speedtree/test/oak.spt'
+        self.descriptors[tree] = {'type': self.TREE, 'health': 10}
+        items = ((-1, None), (self.TREE, tree))
+        names, (mapping, status, unused) = self._align(items)
+        self.assertEqual('exact', status)
+        self.assertEqual({1: tree}, mapping)
+        self.assertEqual(
+            -1,
+            destructibles_sensor.g_offh_destr_isolated_name_types[
+                (1, 22)][0])
+
+        # Ruinberg exposed this order of events: a handlerless slot is proved,
+        # a later catalog/matrix check quarantines it, and a neighbouring
+        # destruction rebuilds the compacted filename alignment. The rebuild
+        # must retain the ``-1`` proof without calling into that slot again.
+        destructibles_sensor.g_offh_destr_isolated_slots = {(22, 0)}
+        destructibles_sensor.g_offh_destr_item_names = {}
+        calls = []
+        bigworld = types.ModuleType('BigWorld')
+
+        def category(unused_space, unused_chunk, item, unused_module):
+            calls.append(item)
+            self.assertNotEqual(0, item)
+            return self.TREE
+
+        bigworld.wg_getDestructibleEffectCategory = category
+        rebuilt, status = destructibles_sensor._chunk_native_names_1513(
+            bigworld, self._area(), 1, 22, len(items), names)
+
+        self.assertEqual('exact', status)
+        self.assertEqual({1: tree}, rebuilt)
+        self.assertEqual([1], calls)
+        self.assertNotIn(
+            'g_offh_destr_isolated_chunks', destructibles_sensor.__dict__)
 
     def test_short_list_with_empty_name_never_uses_list_positions(self):
         first = 'speedtree/test/first.spt'

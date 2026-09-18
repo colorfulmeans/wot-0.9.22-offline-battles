@@ -1717,6 +1717,21 @@ class TerrainNavigator(object):
 		return self.report_blocked_step(
 			bot_id, current, episode['report_target'], now)
 
+	def report_blocked_corridor(self, bot_id, current, target,
+			realised_yaw, now):
+		"""Accumulate a terrain veto on one stable semantic route edge.
+
+		A steep/world probe is sampled along the driver's realised heading,
+		which may wag while the hull is stationary.  It is the same identity
+		problem as a hard contact: when that heading still closes on the route
+		target, pin the navigation first edge; when recovery travels away from
+		it, pin a separate realised edge.  Reusing the episode state also keeps
+		hard and terrain evidence for the same continuously blocked corridor
+		from restarting one another's verdict count.
+		"""
+		return self.report_hard_contact(
+			bot_id, current, target, realised_yaw, now)
+
 	def report_blocked_step(self, bot_id, current, target, now):
 		"""Escalate a repeated contact or planner veto into a bot-local replan."""
 		bot_id = int(bot_id)

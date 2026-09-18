@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.8.4** — [更新说明](docs/releases/v0.8.4.md).
+Current release: **v0.9.0** — [Release notes](docs/releases/v0.9.0.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.8.4-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.9.0-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -60,15 +60,172 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
-The [v0.8.4 release notes](docs/releases/v0.8.4.md) describe the latest combat
-feedback, artillery stun, spotting and radio, Bot navigation, destructible
-scenery, garage-economy and stability updates.
+The [v0.9.0 release notes](docs/releases/v0.9.0.md) cover all changes since
+v0.8.4: campaigns, garage services, combat feedback, Bot navigation,
+destructible scenery, battle income and stability updates.
 
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
 spawn groups and the large Grand Battle maps. The current package has neither
 the validated navigation/spawn data for those maps nor a 60-vehicle protocol
 and UI path. Raising the player limit alone would not make this mode playable.
+
+The Training selector opens a LAN training room. The host chooses teams, map,
+duration and whether to fill empty slots with Bots, then starts explicitly.
+Training awards no credits, XP, bonds, medals or mission progress. Repairs are
+free; ammunition and consumables still use the normal inventory and resupply.
+
+Armory Special Offers now lists bond vehicles with a garage slot and 100%
+crew. The permanent bond vehicle shop began in 2019, after 0.9.22; this offline
+extension uses the first official assortment intersected with client assets.
+The five retired definitions have explicit offline prices: tier VII
+Aufkl. Panther 6000, tier IX SU-122-54 12000, and tier X Object 430B,
+Object 263B and Waffentrager E 100 15000 bonds each. These are the old
+definitions, not their later replacements or alternate variants.
+The regular Shop excludes those bond offers. Vehicle checkboxes select
+unresearched, owned or rented vehicles; with none selected, the list contains
+available purchases. Multiple selected categories are combined.
+Special Offers shows only the tank section, class/tier filters and owned/rental
+checkboxes. Its filters are saved independently from the regular Shop. The
+regular Shop's special-offers selector opens the complete bond catalogue with
+those filters cleared; the redundant selector is hidden inside Special Offers.
+Shop and Inventory complete missing category filters from the client's saved
+selection and native defaults, including when returning from vehicle recovery.
+Reopening repairs incomplete saved filters; a failed table update releases its
+loading overlay so the page can be used again.
+
+Premium vehicles sold from this build onward enter the native Shop recovery
+list. Recovery costs the hull's sale value plus 10% in credits and requires a
+free garage slot. Premiums offered in the regular shop can be recovered for
+72 hours; premiums outside its assortment have no deadline. Earlier sales
+cannot be reconstructed from saves that never recorded them. Badge selection
+now requires the native earned achievement; old unrestricted cosmetic
+selections are cleared. Personal campaigns settle supported battle conditions
+and their corresponding rewards as described below.
+
+Personal Reserves has purchase, activation, Close and Escape actions. It offers
+44 distinct historical bonus/duration combinations across combat XP, crew XP,
+free XP and credits, including small/medium/large bonuses and 1/2/4/6-hour
+timers. These come from a preserved April 2016 WG API catalogue; completeness
+against later China-only 0.9.22 event offers is not established. Native client
+quality filters and artwork classify the bonuses. The original four one-hour
+offers and save identities are preserved. New gold prices scale proportionally
+from those offline offers, not from a claimed historical retail price list.
+Up to three different resource types can run together; a stronger reserve can
+replace its type after confirmation. Timers continue offline and eligibility
+is fixed at battle start. Both native reserve surfaces expose all three slots.
+The Missions tab selects three daily offline goals for completed standard
+battles, damage and victories. Returning to the garage after destruction still
+qualifies when the round settles. A voluntary exit that triggers the native
+abandonment warning cannot advance these goals or consume daily x2. Surviving
+and watching the battle to its end are separate facts.
+Each goal grants one reserve automatically; goals reset at 00:00 UTC and are
+selected from a fixed reward pool. These prices and daily goals are custom
+offline rules. Purchases, timers, rewards and receipt deduplication persist
+with the selected save.
+
+The preserved API names label the included bonus strengths as follows; this
+is a catalogue of named variants, not a claim about every later event offer or
+the exact Chinese client's continuous quality thresholds. Duration is a
+separate property.
+
+| Resource | Small | Medium | Large |
+| --- | --- | --- | --- |
+| Combat XP | 5% | 10% | 15%, 25%, 50%, 100% |
+| Crew XP | 25% | 50% | 75%, 100%, 200%, 300% |
+| Free XP | 20%, 50% | 75% | 100%, 200%, 300% |
+| Credits | 5% | 10% | 15%, 25%, 50% |
+
+The [2017 official guide](https://wargaming.net/support/en/products/wot/article/18943/)
+lists the four resource types. The [2022 redesign](https://worldoftanks.com/en/news/updates/1-18-1-improved-personal-reserves/)
+merged crew/free XP into the modern three-type system, which is not used here.
+
+The launcher's **Customize save** window keeps the v0.8.4 **Garage vehicles**
+list and simple vehicle/tier labels, including the five supported retired
+vehicles (Aufkl. Panther, Waffentrager E 100, SU-122-54, Object 263B and
+Object 430B). Its **Personal missions** editor covers
+all 300 regular campaign missions (StuG IV, T28 Concept, T 55A and Object 260).
+Each mission can be incomplete, completed, or completed with honors. Honors
+also checks completion; clearing completion also clears honors. Changes stay
+in the editor when switching operations and vehicle classes; **Save** applies
+them to the selected save. Required earlier missions are completed automatically
+without honors. Clearing a main completion also clears that chain's final and
+every mission in all five classes of every later operation. Clearing honors
+alone changes no other mission or operation, including order-skipped finals.
+Edits are settled when the game next opens the garage. Resetting main completion
+withdraws the corresponding main and honors rewards, including dependent
+operation rewards; resetting honors withdraws only its additional rewards.
+An eligible reset mission replaces the previous selection of its class.
+The durable reward journal records the actual payout, so a successful withdrawal
+allows that reward to be earned again without duplicating property. A failed
+withdrawal preserves the original progress and property and shows its reason
+in the mission editor and system messages. Currency, consumables and other
+quantity rewards are reclaimed only up to the remaining balance or depot
+stock; spending them never blocks a reset or makes the count negative.
+Mounted items, occupied slots/bunks and orders pledged to other missions are
+retained. Unknown reward provenance or insufficient room for crew returned
+from a reward tank can still prevent a complete reset. A reward woman
+permanently removed from the recovery list no longer blocks her mission reset;
+the claim is cleared without removing another crew member.
+Elapsed premium time cannot be undone; only the remaining earned interval is
+withdrawn. Daily missions remain separate.
+
+Before each operation tank grant, the garage is checked for the same vehicle.
+An already owned vehicle receives its **full original vehicle value in credits**,
+using the catalogue's credit price plus any gold price at the account exchange
+rate, without the selling discount or custom bond-shop price. This compensation
+is an explicit offline policy, not a verified historical KongZhong rule.
+Cancellation reverses the recorded compensation, leaving the pre-existing tank
+alone. A tank actually granted by the mission is withdrawn; its crew and fitted
+items return to the barracks/depot. A saved vehicle source marker prevents a
+later purchased replacement from being mistaken for the original reward.
+Old operation claims without vehicle provenance cannot establish whether a
+tank or compensation was originally paid; those resets are refused rather
+than taking a purchased vehicle or leaving an unknown cash payout behind.
+
+Personal-mission account badges follow the current completion and honors
+requirements. Cancelling those requirements also removes the corresponding
+badge and its equipped selection. The original battle TAB receives the active
+mission for the current tank class and tier. Battle results carry personal
+mission progress in the native lower-left quest area, while system messages
+list actual rewards, vehicle compensation and withdrawals. Launcher changes
+queue these messages for the next garage load and retain undelivered notices.
+Manual vehicle additions, badge ownership edits and wallet changes also queue
+native system messages with the actual vehicles, crew, badges and amounts.
+Repeated unchanged saves do not produce new notices. Vehicle construction,
+its notice and its inbox acknowledgement commit only after the garage saves.
+
+Dismissed crew recovery holds at most 100 members, keeping the newest. The
+offline policy charges 100 gold immediately and expires seven days after
+dismissal. At that deadline or when pushed out by newer entries,
+the member is permanently dismissed. These server-supplied durations are
+offline policy, not a verified historical Chinese server configuration.
+
+The account panel also edits account badge ownership.
+Badge choices and translated names come from the installed client's
+catalogue. Removing an equipped badge clears its selection. Close the game
+before saving these edits; new saves use the edited values on first startup.
+There is no separate order-quantity editor. Orders come from the corresponding
+mission honors rewards, whether earned in battle or checked in the mission
+editor. The available balance is rebuilt from unique honored-final reward
+claims minus orders assigned to missions. Unsupported quantities from the old
+manual input are removed; repeating completion or refunding a pledge cannot
+create a new entitlement. The four regular operations can earn 20 orders in
+total (five honored finals per operation), including orders currently assigned.
+Old pledges remain recorded even when they exceed legitimate earnings, with
+no free orders available until the shortfall is covered or the pledges reset.
+Spending orders records the amount assigned to each mission;
+honors completion returns those orders. Resetting that mission also returns
+its assigned orders once, independently of withdrawing earned honor orders.
+
+Premium purchases use the original six durations: 360, 180, 30, 7, 3 and 1 day,
+with the installed client's own icons and labels. Battle-result friendly-fire
+labels remain the installed client's own localization: credits have penalty and compensation rows; XP has only a
+penalty. Offline voice chat has no authenticated Vivox service and remains
+unavailable; opening sound settings no longer retries that service.
+Standard and Commander voice settings apply immediately in battle, including
+after preview cancellation. The attached vehicle's native refresh selects
+the language and special crew voices; commander gender remains preserved.
 
 ## Saves
 
@@ -255,6 +412,14 @@ whose profile changed after it started must be restarted first.
   itself retired, cancelled before release, or that need data this
   reconstruction does not own are listed with their reason in
   `battle_achievements.py` rather than guessed.
+- The small battle-result commendations also settle into their native records:
+  Shellproof, Fire for Effect, Fighter, Duelist, Demolition Expert, Arsonist,
+  Bruiser, Hand of God, Eye for an Eye, Spotter and Battle Buddy. Battle Buddy
+  counts 50 consecutive battles without friendly HP or module damage across
+  vehicles; Spotter keeps each vehicle's best qualifying assist result.
+- Completed offline daily missions use the native completed tick and reward
+  block. Both Standard (localized Chinese) and Commander national voices use
+  the mounted commander's gender, including after changing voice settings.
 - Battle payments follow the published structure: Credits are a base amount
   per vehicle tier that alone carries the 1.85 victory multiplier, a
   tier-independent amount per point of damage, double for detecting artillery,

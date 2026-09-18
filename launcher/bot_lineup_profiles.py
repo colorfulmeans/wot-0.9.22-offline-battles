@@ -113,8 +113,8 @@ def _vehicle_type_name(value):
     return value
 
 
-def vehicle_choice_is_eligible(choice):
-    """Mirror the server/hidden-worker admissible stock vehicle set."""
+def vehicle_choice_is_standard(choice):
+    """The v0.8.4 standard-battle/resource filter, before Bot exclusions."""
     type_name = vehicle_type_name(choice)
     tags = choice.get("tags") or ()
     if not isinstance(tags, (list, tuple, set, frozenset)):
@@ -126,8 +126,13 @@ def vehicle_choice_is_eligible(choice):
             type_name in NON_BATTLE_ENTITY_BOT_VEHICLES_0922):
         return False
     return (not NON_STANDARD_BOT_TAGS_0922.intersection(tags) and
-            type_name not in UNUSABLE_BOT_VEHICLES_0922 and
-            type_name not in retired_vehicles.RETIRED_BOT_VEHICLES_0922)
+            type_name not in UNUSABLE_BOT_VEHICLES_0922)
+
+
+def vehicle_choice_is_eligible(choice):
+    """Mirror the server/hidden-worker admissible stock vehicle set."""
+    return (vehicle_choice_is_standard(choice) and vehicle_type_name(choice)
+            not in retired_vehicles.RETIRED_BOT_VEHICLES_0922)
 
 
 def eligible_vehicle_choices(choices):

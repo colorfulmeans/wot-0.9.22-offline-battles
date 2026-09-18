@@ -2196,6 +2196,58 @@ class CrewShopTests(unittest.TestCase):
 
         self.assertEqual(2, len(state.snapshot()['recycleBinTankmen']))
 
+    def test_current_recovery_policy_charges_immediately_and_expires_at_seven_days(self):
+        from gui.mods.offline_lan_0922.account_rpc import economy, data
+        day = 86400
+        for elapsed, cost in ((0, 100), (7 * day - 1, 100), (7 * day, None)):
+            state = self._state(gold=1000)
+            state.snapshot()['tankmenRestoreConfig'] = dict(economy.TANKMEN_RESTORE_CONFIG)
+            with mock.patch('time.time', return_value=100):
+                state.dismiss_tankman(201)
+            before = copy.deepcopy(state.snapshot())
+            with mock.patch('time.time', return_value=100 + elapsed):
+                if cost is None:
+                    with self.assertRaises(self.garage.GarageError):
+                        state.restore_tankman(201)
+                    self.assertEqual(before, state.snapshot())
+                else:
+                    state.restore_tankman(201)
+                    self.assertEqual(1000 - cost, state._wallet()['gold'])
+                    self.assertIn(201, state.snapshot()['barracksTankmen'])
+            published = data._restore_config(state.snapshot())['tankmen']
+            self.assertEqual(0, published['freeDuration'])
+            self.assertEqual(7 * day, published['goldDuration'])
+
+    def test_hundred_entry_limit_preserves_newest_and_records_terminal_reward_source(self):
+        state = self._state(barracks={500: b'reward-woman'})
+        state.snapshot()['personalMissionRewardJournal'] = {
+            'crew:15': {'tankman': 500, 'descriptor': 'cmV3YXJkLXdvbWFu'}}
+        with mock.patch('time.time', return_value=100):
+            state.dismiss_tankman(500)
+            for identity in range(501, 601):
+                state._barracks()[identity] = b'other-crew'
+                state.dismiss_tankman(identity)
+            # A restored member with an older, smaller ID is still newest.
+            state._barracks()[201] = b'newest-dismissal'
+            state.dismiss_tankman(201)
+        self.assertEqual(100, len(state._recycle_bin()))
+        self.assertIn(201, state._recycle_bin())
+        self.assertNotIn(500, state._recycle_bin())
+        self.assertTrue(state.snapshot()['personalMissionRewardJournal'][
+            'crew:15']['permanently_dismissed'])
+
+    def test_expired_recovery_records_are_pruned_before_they_displace_live_crew(self):
+        state = self._state(barracks={500: b'reward-woman', 501: b'new'})
+        state.snapshot()['personalMissionRewardJournal'] = {'crew:15': {'tankman': 500}}
+        state.snapshot()['tankmenRestoreConfig'].update(limit=1, goldDuration=10)
+        with mock.patch('time.time', return_value=100):
+            state.dismiss_tankman(500)
+        with mock.patch('time.time', return_value=110):
+            state.dismiss_tankman(501)
+        self.assertEqual({501}, set(state._recycle_bin()))
+        self.assertTrue(state.snapshot()['personalMissionRewardJournal'][
+            'crew:15']['permanently_dismissed'])
+
     def test_a_sold_vehicles_dismissed_crew_lands_in_the_bin(self):
         """#1513 counts these separately but recovers them the same way."""
         state = self._state()
@@ -3026,6 +3078,148 @@ class GaragePersistenceTests(unittest.TestCase):
         snapshot['vehicleTypeCompactDescrs'] = {50001, 50002}
         snapshot['shopItemPrices'][50002] = {'credits': 0, 'gold': 0}
         return snapshot
+
+    def test_personal_reserves_and_daily_rewards_survive_restart_and_receipt_retry(self):
+        policy = self.store_module.offline_services
+        state = self._state(self._matching_snapshot())
+        state.snapshot()['wallet']['gold'] = 100
+        policy.transact(state, 'buy_reserve', 'xp', now=100)
+        policy.transact(state, 'activate_reserve', 'xp', now=100)
+        snapshot = state.snapshot()
+        snapshot['dailyMissions'] = {'day': 0, 'claimed': []}
+        snapshot['selectedBadges'] = [17]
+        snapshot['badgeSelectionVerified'] = True
+        vehicles, tankmen = _modules()
+        store = self._store()
+        kwargs = dict(tankmen_module=tankmen, vehicles_module=vehicles,
+                      rewards={'credits': 1000, 'xp': 100, 'free_xp': 5},
+                      battle_start=150, daily_facts={'damage': 3000, 'won': True,
+                                                   'finished_at': 200})
+        result = store.apply_battle_crew_xp(snapshot, 'reserve:1', 50001, 100, 1, **kwargs)
+        self.assertEqual(250, result['awarded']['xp'])
+        restored = self._restart(self._matching_snapshot())
+        reserves = policy.reserve_state(restored)
+        self.assertEqual([100, 3700], reserves['active']['xp'])
+        self.assertEqual(1, reserves['counts']['credits'])
+        self.assertEqual(1, reserves['counts']['crew_xp'])
+        self.assertEqual(50, restored['wallet']['gold'])
+        self.assertEqual([17], restored['selectedBadges'])
+        self.assertEqual({'50001': 0}, restored['firstWinDays'])
+        retry = self._store().apply_battle_crew_xp(restored, 'reserve:1', 50001, 100, 1, **kwargs)
+        self.assertFalse(retry['applied'])
+        self.assertEqual(result['income'], retry['income'])
+        self.assertEqual(reserves, policy.reserve_state(restored))
+
+    def test_premium_first_win_per_vehicle_day_and_failed_write(self):
+        snapshot = self._two_vehicle_snapshot()
+        snapshot['premiumExpiryTime'] = 500
+        vehicles, tankmen = _modules()
+        store = self._store()
+        def settle(identity, cd=50001, start=100, finish=600, won=True):
+            return store.apply_battle_crew_xp(
+                snapshot, identity, cd, 101, 1,
+                tankmen_module=tankmen, vehicles_module=vehicles,
+                rewards={'credits': 1001, 'xp': 101, 'free_xp': 5, 'crystal': 7},
+                battle_start=start,
+                daily_facts={'damage': 0, 'won': won, 'finished_at': finish})
+        with mock.patch.object(store, '_write_state', return_value=False):
+            with self.assertRaises(RuntimeError):
+                settle('failed')
+        self.assertNotIn('firstWinDays', snapshot)
+        first = settle('first')
+        self.assertEqual({'credits': 1502, 'xp': 304, 'free_xp': 16, 'crystal': 7},
+                         first['awarded'])
+        self.assertTrue(first['income']['premium'])
+        self.assertTrue(first['income']['first_win'])
+        self.assertEqual(152, settle('second')['awarded']['xp'])
+        self.assertEqual(304, settle('other', cd=50002)['awarded']['xp'])
+        self.assertEqual(101, settle('loss', start=86410, finish=86500, won=False)['awarded']['xp'])
+        tomorrow = settle('tomorrow', start=86510, finish=86600)
+        self.assertEqual(202, tomorrow['awarded']['xp'])
+        self.assertFalse(tomorrow['income']['premium'])
+        self.assertEqual(101, settle('late', start=700, finish=800)['awarded']['xp'])
+
+    def test_early_exit_receipt_does_not_consume_first_win_or_daily_progress(self):
+        snapshot = self._matching_snapshot()
+        vehicles, tankmen = _modules()
+        store = self._store()
+        result = store.apply_battle_crew_xp(
+            snapshot, 'early:1', 50001, 100, 1,
+            tankmen_module=tankmen, vehicles_module=vehicles,
+            rewards={'credits': 1000, 'xp': 100, 'free_xp': 5}, battle_start=150,
+            daily_facts={'damage': 9000, 'won': True, 'finished_at': 200,
+                         'premature_leave': True})
+        self.assertFalse(result['income']['first_win'])
+        self.assertFalse(snapshot.get('firstWinDays'))
+        self.assertFalse(snapshot.get('dailyMissions'))
+        restored = self._restart(self._matching_snapshot())
+        self.assertFalse(restored.get('firstWinDays'))
+        self.assertFalse(restored.get('dailyMissions'))
+
+    def test_destroyed_exit_banks_daily_and_first_win_once_after_restart(self):
+        snapshot = self._matching_snapshot()
+        snapshot['dailyMissions'] = {
+            'day': 0, 'battles': 2, 'damage': 2999, 'wins': 0, 'claimed': []}
+        vehicles, tankmen = _modules()
+        arguments = dict(
+            tankmen_module=tankmen, vehicles_module=vehicles,
+            rewards={'credits': 1000, 'xp': 100, 'free_xp': 5},
+            health=0, battle_start=150,
+            daily_facts={'damage': 1, 'won': True, 'finished_at': 200,
+                         'premature_leave': False})
+        result = self._store().apply_battle_crew_xp(
+            snapshot, 'destroyed:1', 50001, 100, 1, **arguments)
+        self.assertTrue(result['income']['first_win'])
+        self.assertEqual(['battles', 'damage', 'wins'], result['daily_missions'])
+        self.assertEqual(['xp', 'credits', 'crew_xp'], result['daily_reserves'])
+        restored = self._restart(self._matching_snapshot())
+        before = copy.deepcopy(restored)
+        retry = self._store().apply_battle_crew_xp(
+            restored, 'destroyed:1', 50001, 100, 1, **arguments)
+        self.assertFalse(retry['applied'])
+        self.assertEqual(result['daily_missions'], retry['daily_missions'])
+        self.assertEqual(result['daily_reserves'], retry['daily_reserves'])
+        self.assertEqual(before, restored)
+
+    def test_training_spends_ammunition_but_no_repair_rewards_or_daily_progress(self):
+        snapshot = self._settling_snapshot()
+        before_xp = snapshot['vehicles'][0]['tankmen'].copy()
+        vehicles, tankmen = _modules()
+        result = self._store().apply_battle_crew_xp(
+            snapshot, 'training:1', 50001, 100, 1,
+            tankmen_module=tankmen, vehicles_module=vehicles,
+            health=1, shells_fired={0: 2}, auto_settings=(2, 4, 8),
+            rewards={'credits': 1000, 'xp': 100, 'free_xp': 5}, training=True,
+            daily_facts={'damage': 9000, 'won': True})
+        self.assertFalse(any(result['awarded'].values()))
+        self.assertEqual((0, 1000), snapshot['vehicles'][0]['repair'])
+        self.assertEqual(99800, snapshot['wallet']['credits'])
+        self.assertEqual(before_xp, snapshot['vehicles'][0]['tankmen'])
+        self.assertNotIn('dailyMissions', snapshot)
+
+    def test_premium_and_personal_missions_survive_a_restart(self):
+        snapshot = copy.deepcopy(SNAPSHOT)
+        snapshot['wallet'] = {
+            'credits': 100000, 'gold': 5000, 'freeXP': 0, 'crystal': 0}
+        state = self._state(snapshot)
+        expiry = state.buy_premium(7, now=1700000000)
+        state.select_personal_missions(0, [1, 16])
+        state.snapshot()['personalMissionProgress'] = {'1': 1, '300': 2}
+        state.snapshot()['personalMissionOrders'] = 7
+        state.snapshot()['accountBadges'] = {'1': 1700000000}
+        store = self._store()
+        store.mark_dirty()
+        self.assertTrue(store.flush(state.snapshot()))
+
+        restored = self._restart()
+
+        self.assertEqual(expiry, restored['premiumExpiryTime'])
+        self.assertEqual(
+            {'regular': [1, 16]}, restored['personalMissionSelections'])
+        self.assertEqual(3750, restored['wallet']['gold'])
+        self.assertEqual({'1': 1, '300': 2}, restored['personalMissionProgress'])
+        self.assertEqual(7, restored['personalMissionOrders'])
+        self.assertEqual({'1': 1700000000}, restored['accountBadges'])
 
     def test_the_rounds_a_battle_fired_stay_spent_across_a_restart(self):
         """A restart that refilled the racks would be free ammunition."""
@@ -4047,9 +4241,16 @@ class NarrowInventoryDiffTests(unittest.TestCase):
         full = self.data.inventory(snapshot)
 
         tankmen = full['inventory'][self.data.TANKMAN_ITEM_TYPE]
-        self.assertEqual(b'tman:201', tankmen['compDescr'][201])
+        # ItemsRequester.getTankmen enumerates this complete compDescr map.
+        # Barracks then applies its location criterion: positive foreign keys
+        # are the "in tanks" rows and -1 is the "in barracks" row.  Publishing
+        # the latter must never replace or duplicate the seated crew.
         self.assertEqual(
-            self.data.BARRACKS_VEHICLE_ID, tankmen['vehicle'][201])
+            {101: b'tman:101', 102: b'tman:102', 201: b'tman:201'},
+            tankmen['compDescr'])
+        self.assertEqual(
+            {101: 9, 102: 9, 201: self.data.BARRACKS_VEHICLE_ID},
+            tankmen['vehicle'])
 
     def test_a_barracks_larger_than_its_berths_is_refused(self):
         snapshot = copy.deepcopy(SNAPSHOT)

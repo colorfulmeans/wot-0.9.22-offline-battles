@@ -86,6 +86,13 @@ EXPECTED_ABI = {
         '_PersonalMissionsProgressRequester._response': (
             'self', 'resID', 'value', 'callback'),
     },
+    'scripts/common/potapov_quests.pyc': {
+        'PQStorage.__init__': ('self', 'compDescr', 'storage'),
+        'PQStorage.makeCompDescr': ('self',),
+    },
+    'scripts/client/gui/shared/gui_items/badge.pyc': {
+        'Badge.__init__': ('self', 'data', 'proxy'),
+    },
     'scripts/common/items/tankmen.pyc': {
         'generateTankmen': (
             'nationID', 'vehicleTypeID', 'roles', 'isPremium',

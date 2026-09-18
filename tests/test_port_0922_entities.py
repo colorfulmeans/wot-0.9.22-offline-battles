@@ -423,6 +423,7 @@ class BigWorldBindingTests(unittest.TestCase):
         self.assertEqual([91, '17', 'Alpha', 1], vehicle_added[:4])
         self.assertTrue(vehicle_added[5])
         self.assertEqual(91, vehicle_added[7])
+        self.assertEqual([], vehicle_added[15])
         self.assertEqual(91, pickle.loads(avatar.updates[1][1]))
         self.assertEqual((5, 0, 0, []),
                          pickle.loads(zlib.decompress(avatar.updates[2][1])))
@@ -432,6 +433,50 @@ class BigWorldBindingTests(unittest.TestCase):
         self.assertEqual((91, 23, 0, 7),
                          pickle.loads(avatar.updates[5][1]))
         self.assertEqual([91], bigworld.destroyed)
+
+    def test_personal_mission_ids_use_the_existing_roster_field(self):
+        module = _binding_module()
+        avatar = _Avatar()
+        binding = module.BigWorldVehicleBinding(
+            _BigWorld(), avatar, _Constants, _VehicleDescr,
+            lambda yaw, pitch, limits: 321,
+            outfit_provider=lambda descriptor: 'verified')
+        properties = binding.properties_from_compact_descr(17, 1, 'Alpha')
+        binding.arena_vehicle_added(91, _snapshot(
+            properties=properties, personal_mission_ids=(270,), crew_group=13))
+        row = pickle.loads(zlib.decompress(avatar.updates[-1][1]))
+        self.assertEqual(18, len(row))
+        self.assertEqual([270], row[15])
+        self.assertEqual(13, row[16])
+        self.assertEqual({}, row[17])
+        # A remote/Bot roster never inherits the player's mission selection.
+        binding.arena_vehicle_added(92, _snapshot(properties=properties))
+        remote = pickle.loads(zlib.decompress(avatar.updates[-1][1]))
+        self.assertEqual([], remote[15])
+
+    def test_blind_enemy_kill_keeps_enemy_team_and_true_attacker_tuple(self):
+        """Visibility never changes the roster relation used by kill voice."""
+        module = _binding_module()
+        avatar = _Avatar()
+        binding = module.BigWorldVehicleBinding(
+            _BigWorld(), avatar, _Constants, _VehicleDescr,
+            lambda yaw, pitch, limits: 321,
+            outfit_provider=lambda descriptor: 'verified')
+        player = binding.properties_from_compact_descr(17, 1, 'Player')
+        hidden_enemy = binding.properties_from_compact_descr(
+            17, 2, 'HiddenEnemy')
+
+        binding.arena_vehicle_added(10, _snapshot(properties=player))
+        binding.arena_vehicle_added(
+            11, _snapshot(properties=hidden_enemy))
+        binding.arena_vehicle_killed(11, 10, 0)
+
+        player_row = pickle.loads(zlib.decompress(avatar.updates[0][1]))
+        enemy_row = pickle.loads(zlib.decompress(avatar.updates[1][1]))
+        kill_row = pickle.loads(avatar.updates[2][1])
+        self.assertEqual((10, 1), (player_row[0], player_row[3]))
+        self.assertEqual((11, 2), (enemy_row[0], enemy_row[3]))
+        self.assertEqual((11, 10, 0, 0), kill_row)
 
     def test_remote_pose_and_aim_use_authoritative_presentation(self):
         module = _binding_module()

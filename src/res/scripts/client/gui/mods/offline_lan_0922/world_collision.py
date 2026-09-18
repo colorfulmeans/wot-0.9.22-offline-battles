@@ -21,6 +21,28 @@ _WORLD_SOFT_RECAST_BUDGET = 4
 _UNPREPARED_COLLISION_FILTER = object()
 
 
+def _trace_collision_filter(collision_filter, trace):
+    """Observe bounded native callback candidates without another query.
+
+    Candidates are not asserted to be the nearest returned hit: the native
+    callback supplies identity but no position or ordering guarantee.
+    """
+    if collision_filter is None or trace is None:
+        return collision_filter
+    candidates = []
+    trace['native_surface_candidates'] = candidates
+    trace['native_surface_columns'] = 'material,flags,item,chunk,keep'
+
+    def observed_filter(*hit):
+        keep = collision_filter(*hit)
+        if len(hit) == 4:
+            candidate = tuple(hit) + (bool(keep),)
+            if len(candidates) < 16 and candidate not in candidates:
+                candidates.append(candidate)
+        return keep
+    return observed_filter
+
+
 def _record_hard_contact(trace, reason, start, end, collision,
         ground_ahead=None, heights=()):
     """Copy existing query evidence; diagnostics must never change the verdict."""
@@ -501,7 +523,8 @@ def check_horizontal_collision(bigworld, math_module, *args, **kwargs):
 def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		airborne=False, dt=0.04, return_status=False,
 		allow_kinetic=False, kinetic_speed=None, commit_enabled=True,
-		motion_yaw=None, pitch=0.0, roll=0.0, trace=None):
+		motion_yaw=None, pitch=0.0, roll=0.0, trace=None,
+		exact_footprint=False):
 	import math, BigWorld, Math
 	try:
 		hw = 1.5
@@ -524,7 +547,13 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		# the wall and trickled down instead of flying a ballistic arc.
 		# Grounded: just enough to not tunnel at speed. Airborne: only the
 		# distance actually travelled this tick - contact stops, proximity not.
-		if airborne:
+		if exact_footprint:
+			# A continuous-yaw caller already enlarged the descriptor to the
+			# complete occupied interval.  Keep both signed probes inside that
+			# exact envelope; the normal 0.4 m translation look-ahead would make
+			# a tank which stopped short of a wall unable to rotate away from it.
+			_ahead = 0.0
+		elif airborne:
 			_ahead = abs(vel) * dt + 0.2
 		else:
 			# Cover the complete copied-pose translation of this frame.  A fixed
@@ -615,6 +644,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		_sweep_filter = prepare_horizontal_collision_filter(
 			Math.Vector3(minimum_x, pos.y + 0.6, minimum_z),
 			Math.Vector3(maximum_x, pos.y + 1.6, maximum_z))
+		_sweep_filter = _trace_collision_filter(_sweep_filter, trace)
 		_crush_state = [False]
 		_kinetic_contact = False
 

@@ -82,6 +82,18 @@ MAX_EARNINGS_PERCENT = 10000
 PREMIUM_VEHICLE_CREDITS_PERCENT = 150
 PREMIUM_VEHICLE_TAG = 'premium'
 
+# Offline shop policy. Premium packet prices are server data and are absent
+# from the packaged client; these are the standard legacy WoT gold packages
+# exposed by the #1513 PremiumWindow contract.
+PREMIUM_COSTS = {
+    1: 250,
+    3: 650,
+    7: 1250,
+    30: 2500,
+    180: 10000,
+    360: 18000,
+}
+
 # What #1513's own ``ShopCommonStats`` falls back to when the shop stream does
 # not carry the key, in gold.  These are shipped client values, not policy, so
 # the offline shop publishes exactly them and the garage charges exactly them.
@@ -282,6 +294,52 @@ def award_record(value):
     return result
 
 
+def battle_income(base, reserves, premium=False, first_win=False,
+                  vehicle_xp_factor=0, xp_penalty=0, original=None):
+    """One 0.9.22 income calculation shared by banking and result replays.
+
+    The native results factors use tenths for account/first-win bonuses and
+    hundredths for vehicle XP. Reserve bonuses are additive to the first-win
+    bonus, and account premium scales both. Repair and ammunition costs and
+    bonds are outside these factors. Round at each native ValueReplay step.
+    """
+    account = 150 if premium else 100
+    daily = 200 if first_win else 100
+    original = base if original is None else original
+    basis = dict((key, min(base.get(key, 0), original.get(key, 0)))
+                 for key in ('credits', 'xp', 'free_xp'))
+    extras = dict((key, max(0, base.get(key, 0) - basis[key]))
+                  for key in basis)
+    boosters = {}
+    result = dict(base)
+    for key in ('credits', 'xp', 'free_xp'):
+        value = premium_xp_bonus(basis[key], account)
+        if key == 'xp':
+            value = (premium_xp_bonus(basis[key] + xp_penalty, account) -
+                     premium_xp_bonus(xp_penalty, account))
+        extra = extras[key]
+        if key != 'credits':
+            value = premium_xp_bonus(value, daily)
+            value = premium_xp_bonus(value, 100 + vehicle_xp_factor)
+            extra = premium_xp_bonus(extra, daily)
+            extra = premium_xp_bonus(extra, 100 + vehicle_xp_factor)
+        # Save-owned extra income shares the native boosters row. Keep the
+        # battle's original gross XP intact for penalties and both columns.
+        boosters[key] = extra + reserves.get(key, 0)
+        result[key] = value + premium_xp_bonus(boosters[key], account)
+    crew = (premium_xp_bonus(basis['xp'] + xp_penalty, account) -
+            premium_xp_bonus(xp_penalty, account))
+    crew = premium_xp_bonus(crew, daily)
+    crew += premium_xp_bonus(premium_xp_bonus(extras['xp'], daily) +
+                             reserves.get('xp', 0), account)
+    crew += premium_xp_bonus(reserves.get('crew_xp', 0), account)
+    record = dict(basis)
+    record.update({'premium': bool(premium), 'first_win': bool(first_win),
+                   'vehicle_xp_factor': int(vehicle_xp_factor),
+                   'boosters': boosters})
+    return result, crew, record
+
+
 def price_index(vehicles_module, nations_module):
     """Return ``{compactDescr: (credits, gold, not_in_shop[, crystal])}``.
 
@@ -352,6 +410,29 @@ def shop_prices(index):
         if price[price_catalogue.NOT_IN_SHOP]:
             not_in_shop.add(compact_descr)
     return prices, not_in_shop
+
+
+def retail_gold_vehicle_offers(vehicles_module, nations_module, index):
+    """Return gold vehicles the stock #1513 shop actually offered.
+
+    The native vehicle shop applies ``REQ_CRITERIA.UNLOCKED`` even to a
+    premium vehicle and renders ``SHOP_ERRORS_UNLOCKNEEDED`` otherwise.  A
+    retail account receives those offer descriptors in its server-side
+    unlock view; they are purchasable offers, not researched tech-tree
+    progress.  Keep ``notInShop`` reward vehicles out of this set so hidden
+    event/reward definitions do not leak into the ordinary armory.
+    """
+    offers = set()
+    make = vehicles_module.makeIntCompactDescrByID
+    for nation_id in range(len(nations_module.NAMES)):
+        for vehicle_type_id in vehicles_module.g_list.getList(nation_id):
+            compact_descr = make('vehicle', nation_id, vehicle_type_id)
+            price = index.get(compact_descr)
+            if (price is not None and
+                    price[price_catalogue.GOLD] > 0 and
+                    not price[price_catalogue.NOT_IN_SHOP]):
+                offers.add(int(compact_descr))
+    return offers
 
 
 def cost(index, compact_descr, count=1):

@@ -783,8 +783,13 @@ Damage does not imply removal of collision. The compiled BSMO destroyed-model
 reference identifies modules with a solid replacement BSP; map catalogs retain
 that per-box fact. Such contacts cannot skip the original whole-item OBB, and
 destroyed-model materials 87–100 remain eligible for native motion, support and
-shell queries even after an item-wide destruction receipt. After replacement,
-the native BSP, rather than the original bounding box, owns collision.
+shell queries even after an item-wide destruction receipt. The native BSP still
+owns the replacement's exact shape, but #1513 exposes no volume-overlap query for
+it. Copied vehicle motion therefore keeps the source module box as a conservative
+no-entry envelope only for catalog boxes proved to retain collision, supplements
+that envelope with native rays for protrusions, and permits a historical overlap
+only through bounded outward-progress intervals. Collision-free destroyed
+modules do not retain the source box and therefore do not become invisible walls.
 
 For physical fragile/module crushing, the exact stock manager starts effects
 before scheduling its collision replacement after 0.2 seconds. The adapter
@@ -3667,3 +3672,726 @@ archive, commit 487396ac2bec27127b8e03abca33bc961dc67021). This different region
 build is orientation, not #1513 ABI proof. Only a run of the resulting package
 on the supported China HD #1513 Windows client can establish native voice,
 Expert overlay, fourth-slot UI, timing and frame-pacing acceptance.
+
+## September 17 test-report follow-up
+
+The three supplied reports identify version 0.8.4 with build identity
+`colorfulmeans-35196027324-1`. Ruinberg reports include live but unidentified
+placements, a 52-name/84-slot disagreement, and catalog signature misses.
+These are distinct outcomes; the logs do not prove that every reported object
+has one cause. Moving actors no longer preempt the shared bounded name scan.
+Reviewed chunk-load/loss hooks retire that chunk's quarantine when its native
+lifetime ends. Ordinary cache invalidation still preserves quarantine, and
+ambiguous identities still cannot authorize destruction. Regression coverage
+includes a large name scan under competing actor requests and chunk reload.
+
+Expert now has one owner for the offline four-second focus state. Enabling the
+stock target monitor previously allowed its target-blur callback to clear the
+shared overlay despite continued offline silhouette focus. Its native monitor
+is disabled while the existing visibility/alive/perk guards remain. Pivot RPM
+uses the same descriptor-derived left/right track velocities as animation,
+instead of only center-of-hull speed. Audible turning and sustained Expert
+display still require Windows gameplay evidence.
+
+The bond vehicle shop did not exist in 0.9.22. WG's
+[October 28, 2019 announcement](https://worldoftanks.com/en/news/specials/tanks-for-bonds/)
+provides the first assortment, prices, included slot and trained crew. Eight
+definitions exist in the old client and are offered with those prices; the
+two later vehicles are omitted. The five explicitly requested retired
+definitions use offline tier brackets, not their residual tech-tree/placeholder
+prices. The tier VII/IX/X prices are 6000/12000/15000 bonds, respectively;
+these are not described as official 0.9.22 bond prices.
+
+The native store retains its card surface; purchases use the Account command,
+GarageState transaction, common vehicle purchase and durable garage ledger.
+Slot and crew entitlements are shared with native purchase consumers.
+Insufficient funds, duplicate purchases and failed save writes roll back.
+Premium purchases use the native six durations and stock price templates.
+
+No friendly-fire locale key is overridden. Public 0.9.22 result calculations
+use `details/calculations/friendlyFirePenalty` for credits and XP, and
+`details/calculations/friendlyFireCompensation` for credits only. Exact China
+0.9.22 text was not independently recovered in this workspace; the installed
+client owns those translations. No XP compensation field or row is added.
+
+Training mode travels from the selector through the host's explicit start to
+the authority, native arena types and durable receipt. Bot fill is optional;
+the mandatory hidden native worker remains the authority even without Bots.
+Training settlements preserve spent ammunition and consumables, repair for
+free, and cannot award XP, currency, medals, daily progress or lifetime stats.
+
+The reserve surface reuses the room's cursor, callback and root ownership,
+with explicit Close/Escape teardown. Reserve purchase and activation use
+durable transactions. Four legacy types remain separate, at most three can
+run, and bonuses use base earnings and battle-start eligibility. Expired
+activation intervals survive newer activations for late receipt replay.
+The [WG reserve guide](https://na.wargaming.net/support/en/products/wot/article/18943/)
+describes reserve types and acquisition via missions/events, but is updated
+after 0.9.22. The purchase prices and daily missions here are explicitly
+offline extensions, not a reconstruction of a particular historical event.
+Daily grants share the once-only receipt commit and cannot be re-awarded by
+retry or by replaying an older day after newer progress.
+
+The reports' Vivox failure reflects an unavailable online account service.
+The sound tab no longer requests reinitialization and reports offline voice
+unavailability. This does not implement a replacement voice server.
+Native store card rendering, reserve surface layering/closing, training arena
+transitions and sound-tab presentation require the exact Windows client.
+
+The subsequent `20260917-214608-a4c3f99dd823` report identified a startup
+regression in build `colorfulmeans-35227105547-1`: the server was listening,
+but the worker's initial Account sync rejected its vehicle catalogue before
+the launcher could open the visible client. Bond-offer publication had added
+unowned definitions to `vehicleTypeCompactDescrs`, which must exactly match
+complete garage records. Offers now only extend shop prices and purchase
+entitlements. The common purchase still establishes ownership when successful;
+the inventory validator is unchanged. The regression test follows the actual
+bootstrap -> full Account sync path with an available offer absent from the
+garage, for both account modes and with/without saved-state restoration.
+
+The same startup audit reproduced a second failure in the visible lobby
+adapter: the stock settings package re-exports `SettingsWindow` as a class,
+but the adapter treated that export as its module. Importing the class and
+its tab helpers explicitly from the module fixes installation. A focused
+test preserves that package/class distinction, exercises the sound tab and
+ordinary tab delegation, and verifies uninstall restores the original method.
+The older isolated bootstrap contract now includes the services adapter and
+asserts installation before Account connection and cleanup on shutdown. The
+combined bootstrap, Account RPC, services, economy and garage regression run
+passes 667 tests. Native Windows client startup remains a user retest boundary.
+
+The `20260917-223308-04b90c87b1e8` report reached the native hangar on build
+`colorfulmeans-35230599345-1`. Its screenshots show why the service overlays
+were insufficient: the retail mission empty-state text and controls remained
+underneath them, and native reserve slots still consumed an empty goodies
+cache. This follow-up removes the reserve overlay and restores the retail
+BoostersWindow/TabsContainer lifecycle. The shop now publishes four mod-owned
+GoodieData definitions (nine fields including nested target/resource tuples),
+and Account sync and paid-service updates publish their three-field
+GoodieVariable values. Native GoodiesCache, booster tooltips, filters and both
+BoostersPanelComponent instances therefore consume the same IDs, counts and
+expiration timestamps. Expiry retires the active interval while retaining its
+battle-start entitlement history. System messages follow durable purchase or
+activation acknowledgement; a failed save cannot emit a purchase success.
+
+The offers tab selects the existing ShopUI linkage and binds its component ID
+to a Shop subclass before Flash registration. Rows use the original vehicle
+wrapper and item.icon, crystal prices, separate offer filters, and ownership
+sorting with disabled owned rows at the bottom. Ownership is checked before
+opening the confirmation, again after confirmation, and inside the transaction.
+Factory settings and filter defaults are restored on teardown. Regular Shop
+and Inventory components retain their classes and filter values.
+
+The account popover retains AbstractPopOverView's hide/destroy lifecycle while
+populating local account/badge data without online clan/tutorial initialization.
+The native badge page now gates selection on the installed Badge.isAchieved
+dossier result; merely existing in badges.xml is insufficient. Selection uses
+the same persistent Account transaction and badges sync field, so a failed
+write cannot visually equip an unsaved badge. The daily page no longer builds
+retail mission tabs; its separate opaque panel owns its close/cursor lifecycle.
+Three daily templates are selected deterministically from a hashed day and
+template ID, with one battle-count, damage and victory goal. Rewards belong to
+the templates, not a second reward roll. Existing same-day fixed missions keep
+their progress/claims; the next day gets the new selection.
+
+The additional native UI producer/consumer contracts were reviewed in public
+0.9.22 reference Python (regional #788), alongside the #1513 screenshots/logs;
+the exact client's scripts.pkg is not available in this workspace. Regression
+coverage checks native row/slot wire shapes, controller lifecycle preservation,
+duplicate clicks, confirmation races, durable badge publication, notification
+ordering, daily rollover and legacy receipt replay. These checks do not prove
+Flash layout, component binding or input behavior on #1513; that remains the
+next Windows gameplay acceptance boundary.
+
+The `20260917-225717-1dc3e2c245c8` report and new screenshots show a 90-day
+premium account with identical standard/premium results columns. The public
+0.9.22 reference defines account factors 10 and 15 and replays both columns
+from the applied premium factor. The supplied historical screenshot agrees:
+39157/58736 credits and 918/1377 battle XP. New receipts now freeze premium
+eligibility at battle start and persist the same factor inputs used to bank
+income. Native ValueReplay chains consume those inputs for credits, XP and
+free XP, with the client's rounding at each step. Premium also reaches crew
+training; it does not multiply bonds, repair costs or ammunition costs.
+Reserve income remains additive to the daily first-win bonus. The default
+first victory is x2, not the historical video's temporary x5 event.
+
+First wins are tracked per vehicle and UTC day in the garage transaction.
+A failed write consumes neither the reward nor its entitlement. Receipt
+retries retain the original premium/first-win inputs, and older receipts
+cannot reset a newer day's marker. Account updates replace (rather than
+union) multipliedXPVehs with its stock tuple-key protocol, so the carousel
+can recover its x2 markers at midnight or upon returning to the lobby.
+The retail carousel maps an available dailyXPFactor to its existing bonus_x2
+asset and clears xpImgSource after consumption. The account's native daily-XP
+attribute also enables the matching tooltip. A focused Account test verifies
+initial entitlement, removal for only the winning tank and next-day set
+replacement, alongside the existing durable-settlement and lobby-timer tests.
+Existing archived results are not retroactively repriced or re-awarded.
+
+Daily completion IDs are stored with the settlement receipt. They produce
+native lower-left result rows and a single combined reward dialog through
+the existing once-only result-notification path. This is the offline daily
+goal system, separate from the original campaign personal missions. Campaign
+reward settlement and supported condition evaluation were added in the
+2026-09-18 follow-up documented below. Badge selection alone does not award
+campaign medals.
+
+The same report repeatedly blocks Ruinberg's old Mercedes (chunk 33151,
+item 3), motorcycle (33151/89), bench (32385/7) and other small objects while
+waiting for full-chunk name alignment. A focused registration path now
+checks a contacted catalog model independently under the existing query
+budget. It requires the exact wire ID, unique complete authored transform,
+supported catalog revision and compatible native category. Unresolved,
+isolated or remapped layouts continue through the existing conservative path.
+It never calls the unsafe native filename helper or weakens crush strength.
+The proof cache is discarded on chunk unload, layout invalidation and arena
+teardown. A regression uses the report's actual Ruinberg catalog records,
+including a stale-transform rejection after unload. Native #1513 contact and
+projectile behavior still requires a Windows gameplay retest.
+
+Regression coverage additionally checks premium/first-win replay totals against
+durable awards, rounding with XP penalties and reserve bonuses, per-vehicle
+and cross-day first wins, disk-failure rollback, late receipt replay and
+combined mission notifications. Public Python contracts and historical
+screenshots support these changes; an exact official China 0.9.22 web copy of
+the premium/help pages was not recovered. The package does not import modern
+WoT Premium Account features or claim native gameplay validation from mocks.
+
+Full CI exposed one additional regression in the friendly-fire settlement
+test: save-owned extra XP had moved into originalXP. Settlement now persists
+the battle basis separately from extra earnings and reserves; the latter
+share the existing booster row, with the same stepwise account-factor rounding
+in banking and native replays. The original 667 gross / 67 penalty / 600 extra
+fixture again displays 1200 total XP across save failure and restart. The
+premium/first-win replay matrix also covers 50/100/150/200 percent save income.
+
+## September 18 follow-up: completed battles, recovery and collision ownership
+
+Reports `20260918-002345-1049c84c783b` and
+`20260918-003256-afb94deeac69` identify the current launcher build, so this is
+not explained by a stale mod installation. Bootstrap forwards the durable
+receipt's `premature_leave` fact to daily policy, and settlement preserves the
+first-win entitlement for abandoned battles. The September 18 follow-up
+separates abandonment from returning to the garage after destruction: the
+server freezes voluntary, live, non-overturned abandonment at the leave
+boundary instead of treating every departed participant as a deserter.
+`watched_battle_to_end` separately owns result auto-opening and survival
+statistics; old receipts retain their historical presentation fallback. A
+destroyed participant can advance ordinary daily goals when the round settles.
+Connection loss and failed startup are not a confirmed abandonment warning. Hashed daily
+selection and reset remain at 00:00 UTC / 08:00 Beijing; receipt replay cannot
+grant the same reward again.
+
+Badge cards use native achievement ownership and show unearned badges in the
+locked collection. The Account command validates ownership independently of
+the page. A saved verification marker distinguishes newly validated selection
+from the earlier unrestricted cosmetics; it does not manufacture campaign or
+ranked achievements.
+
+Premium sales now save a recovery entitlement with the hull's credit selling
+value plus 10%, independent of ammunition, equipment and crew sold with it.
+The rule and vacant-slot requirement follow WG's
+[restoration policy](https://wargaming.net/support/en/products/wot/article/23829/).
+The mod uses its own published 0.9.22 selling values, not modern vehicle price
+tables. The native `restore_config.vehicles` and
+`recycleBin.vehicles.buffer` carry PREMIUM=0 with a 72-hour timestamp, or
+ACTION=1 with timestamp zero for a premium outside the shop assortment.
+Purchase and sale persist wallet, inventory and recovery state together;
+failure rolls back and successful restoration removes the native buffer row
+using an explicit None diff. All price consumers use the same saved credit
+quote. Ordinary, rental and unrecoverable vehicles receive no entitlement.
+No historical sale record can be invented for an older save.
+
+Shop vehicle extras now select the union of the checked categories, with
+normal available purchases when nothing is checked. Class, nation and tier
+criteria remain native. Bond offers stay in Special Offers, whose inventory
+and rental filters now work, and are excluded from the regular purchase tab.
+The native Python component identity must remain `shop`: Flash's
+`VehicleView.onFitsArrayRequest` compares that exact string to include the
+owned checkbox. Bond-only persistence now overrides the StoreComponent filter
+read/update boundaries rather than changing that identity. The native vehicle
+view hides purchase/restore/trade-in/unresearched controls after its own
+visibility pass. The accordion hides and disables non-vehicle buttons,
+including keyboard selection; its native controller retains disposal ownership.
+It does not mutate the shared `FITTING_TYPES.STORE_SLOTS` array.
+
+The September 18 reports still showed the ordinary shop in Special Offers.
+The reference `StoreView` enables `ViewStack.cache`, whose key is the linkage,
+not the tab ID. Sharing `ShopUI` therefore suppressed `NEED_UPDATE` on a cache
+hit and prevented registration of `BondShop`. The adapter now disables this
+parent view's cache before `as_initS` creates its first component. Native
+`clearCurrentVew` unregisters and disposes the old tab before creating the next
+one. Regression coverage checks shop/offers/shop and offers/shop/offers;
+original tank artwork and duplicate-purchase protection remain in use.
+
+The public Flash SDK at `CH4MPi/GUIFlash` commit
+`78d711d336cf55d73e62d0ab996fc18bbfbd893f` provides the reviewed
+`StoreComponent`, `ShopVehicleView`, `VehicleView`, `Accordion` and
+`ButtonBarEx` members. The historical SDK is orientation, not an exact #1513
+asset audit. `DataProvider` extends Array, and the published BigWorld
+`PyGFxValue` bridge converts arrays to Python lists; editing that list would
+not change the native provider. The implementation instead edits the referenced
+entry VOs and their public buttons, resynchronizing filter controls after native
+layout. Focused fakes preserve this array-copy distinction and exercise repeated
+refresh, independent saved filters, owned rows and disabled category buttons.
+Actual rendering and resize behavior remain a #1513 Windows acceptance item.
+
+Personal reserves now include all 44 distinct manual, non-expiring combinations
+in the [WG API response captured on April 26, 2016](https://github.com/victor-lyan/wotwrap/blob/931feede6d2f86e7f46973a25b6df6b233e261bd/tests/json/encyclopedia.boosters.json).
+The source has 61 IDs: expired 2015 events are omitted and equal resource,
+bonus and duration variants are deduplicated. Percentages and 1/2/4/6-hour
+durations are preserved; the installed client's `Booster.quality` and GUI
+settings classify them. The four old keys/IDs remain stable, so saved counts,
+active clocks and daily rewards survive the expansion. Gold prices remain an
+explicit offline extension, scaled from the existing four offers. Activation
+allows three resource types, and a stronger same-type reserve replaces the old
+one after the native confirmation. Replacement truncates the old historical
+interval, preserving late battle-start entitlement without future overlap.
+Catalogue shape, expiry, saved-state reload, replacement, rollback and
+cross-variant exclusion are covered. The three-slot policy is also installed
+into all three native imported `MAX_ACTIVE_BOOSTERS_COUNT` copies and the
+panel's prebuilt `_GUI_SLOTS_PROPS`; changing only the transaction limit would
+leave a regional one-slot UI at 1/1. Uninstall restores the original copies.
+The [2017 official guide](https://wargaming.net/support/en/products/wot/article/18943/)
+describes four resource types; the [three-type redesign](https://worldoftanks.com/en/news/updates/1-18-1-improved-personal-reserves/)
+arrived in 2022 and does not define this client's catalogue. Size depends on
+bonus strength, with duration independent; actual classification remains the
+installed client's `GUI_SETTINGS` rule, not a guessed universal threshold. This preserved international catalogue
+does not prove completeness for later China-only 0.9.22 event offers.
+
+The Ruinberg logs show a compacted-name rebuild failing with
+`status=isolated_item`, followed by independently position-proved cars and
+fences remaining blocked. That status no longer quarantines the entire chunk.
+Other terminal ABI/descriptor failures retain quarantine. Contact proof has
+its own four-query render-tick budget, cannot acquire or release the
+background scan's focus, and still requires exact unique placement, unchanged
+wire, native category and installed descriptor. Regression coverage uses the
+reported Mercedes and motorcycle while another chunk owns exhausted scan
+budget and an unrelated slot is isolated.
+
+The stock `__setFragileDestroyed` callback records native delivery for that
+space/chunk/item, but its return does not prove that every remaining collision
+face belongs to a replacement. September 18 report coordinates intersect
+Ruinberg `env406_Flowerbed` items 123/106/102 in chunk 32637 and Westfield
+`gaf019_StoneFenceTile` items in chunks 33153/33409. The previous item-wide
+exception made original normal materials solid again after destruction. Both
+ground and horizontal filters now keep accepted 71--86 original materials
+hidden, retaining native damaged-module materials 87--100 and ordinary
+replacement materials after delivery. Unrelated walls and intact neighbours
+still block; no car-shaped obstacle or fabricated support height is added.
+Chunk unload and battle reset clear the delivery marker. Bounded hard-contact
+diagnostics observe existing callbacks and record up to 16 material/flags/item/
+chunk/keep candidates, without adding native queries or asserting callback
+order. The supplied reports did not include material IDs, so exact Windows
+traversal and retained wreck support remain required gameplay checks.
+
+Copied local Siege pose now snapshots body/ground relative offsets once at
+attachment. The previous live products kept importing two unsynchronized
+providers from a client-only WGVehicleFilter without cell physics; the copied
+terrain/aim matrices now own subsequent movement. Gun, shot ray and rendered
+body still share one copied provider. This removes a plausible drift path,
+but neither attached report records Strv S1 sinking, so reproduction and
+native acceptance remain outstanding. Ruinberg destruction, residual car
+support and Swedish Siege motion require the exact #1513 Windows client.
+
+The initial Siege-mode hint uses a separate GUI-ready cache seed. The vehicle
+starts in DISABLED without a change event; skipping that physical no-op must
+not leave `vehicleState` without a `SIEGE_MODE` value. A single local seed
+after `setClientReady` lets the indicator consume `(DISABLED, 0.0)` immediately
+or when it populates later. It does not invoke a fake hydraulic or descriptor
+transition. A reversible offline indicator adapter also prevents the original
+ten-transition tutorial budget from suppressing the requested persistent key
+hint; the saved account counter is preserved, and switching, death and
+observer visibility stay with the native implementation. The reference
+Python is regional #788 and the available Flash SDK is a historical reference;
+no complete Chinese #1513 installation is available for native acceptance.
+
+## September 18 playtest: Siege timing and worker failure
+
+Reports `20260918-070333-f76f320bea1c` and
+`20260918-070836-29c3e83712cd` both identify the installed
+`colorfulmeans-35282925222-1` package. The premium screenshot proves the
+bundled 90-day texture loads, but its three-game ribbons do not match the
+other World of Tanks duration emblems. This is an artwork mismatch rather
+than evidence of a missing resource in that package.
+
+The premium-window resource rule is
+`gui/maps/icons/windows/prem/icon_prem{days}_98.png`. The user's subsequent
+extracted-resource screenshot confirms 1, 3, 7, 30, 180 and 360 days. The
+erroneously added 90-day offer, duration/image monkey patches and bundled
+artwork have been removed. The shared shop catalogue now offers exactly
+360, 180, 30, 7, 3 and 1 day; the Account command rejects 90 without charging
+or changing existing premium expiry. One day costs the retained 250 gold.
+
+Report `20260918-083042-e3e156565014` identifies build
+`colorfulmeans-35288390043-1`. Three car-support records have current wheel
+coordinates and retain every direct support sample (world-height spans
+approximately 0.17, 0.49 and 0.35 metres). These are wheel-height differences,
+not measurements of the wreck's height above terrain. Two later records
+incorrectly reuse old spring traces after switching to hydraulic suspension;
+these are invalid height evidence. Suspension reset/disable paths now clear
+that diagnostic trace. Collision geometry and support calculations remain
+unchanged, consistent with the user's improved visual acceptance.
+
+The Strv S1 report records a Python exception at 07:03:19, not an unexplained
+native process crash: `_present_authority_bot_poses` reaches
+`RemoteVehicle._write_pose`, where the native orientation setter raises
+`TypeError: () argument 1 element 0 must be a valid angle`. The exception
+escapes the frame, closes the mandatory simulation worker connection and
+ends the round with `worker_disconnected`. The rendering failure and the
+reported travel-mode motion need separate treatment; a display failure is
+not evidence that the authoritative round itself has become invalid.
+
+Both copied and native remote presentations now convert finite angles to an
+equivalent principal rotation at the native matrix boundary. Shortest-arc
+interpolation remains unwrapped internally so turn-speed differences stay
+continuous across the seam. The captured exception does not record its
+rejected value, so multiple-turn accumulation is a covered failure path,
+not a claim about the exact observed value. A per-actor presentation boundary
+logs a failed matrix/aim update, leaves its successful-write cache unset and
+allows other actors and combat events to continue; the next frame retries.
+Finite authoritative geometry still feeds projectiles independently of
+rendering. Non-finite samples are rejected before writes and preserve the
+last coherent collision pose. Tests use a matrix fake that rejects invalid
+angles rather than an always-successful setter.
+
+The Siege reticle's stable states carry zero remaining transition time. The
+reference Flash `SiegeModePanel.setEngineAndTime` renders this second time
+argument as `- -`, even though the native Python indicator separately holds
+the descriptor's next-switch duration. The battle-scoped adapter now uses
+`_switchTimeTable[state][engineState]` only while rendering a stable-mode
+indicator and restores `_switchTime` immediately afterwards. Switching
+states retain their authoritative remaining time; engine critical/destroyed
+handling, observers, postmortem and disposal remain native. This displays
+2.0/1.3 seconds for Strv S1/103/103B and 2.0/2.0 for UDES without changing
+their physical mode transitions or hard-coding a shared display duration.
+
+The native Shop's upper-right `actionsFilterView` sends its selection through
+`requestTableData`; it is not a separate hyperlink callback. In Special Offers
+the redundant selector is hidden and its mouse interaction disabled. In the
+regular Shop a selected request preserves the normal shop filters, saves the
+discount flag as false and schedules navigation to the native Offers tab with
+its independent filters reset. Navigation runs after the Flash callback has
+finished accessing `storeTable`, avoiding disposal of an in-use component.
+Repeated clicks coalesce; disposal, account changes or adapter removal retire
+the queued navigation without changing filters.
+
+Report `20260918-212147-84a3849a93a9` exercises matching launcher/client build
+`colorfulmeans-35348086780-1` on Chinese HD `0.9.22.0.1 #1513`. Switching from
+vehicle recovery to buying reaches native `Shop.requestTableData`, then
+`StoreComponent._setTableData` and `ShopVehicleTab._getRequestCriteria`, which
+raises `KeyError: 'extra'`. This is a recorded Python failure, not a network
+timeout. The regional 0.9.22 Python references show that recovery/trade-in
+defaults omit `extra`, whereas buying indexes it directly. Shop and Inventory
+both save the received filter before building their table and close their
+waiting overlay only on success. Thus a failed request can also persist the
+incomplete filter for the next opening. The available Flash reference shows
+the shared vehicle view switching its obtaining type; it does not establish
+the exact #1513 serialization step that omitted the key.
+
+The store adapter now completes each incoming filter from that category's
+saved values and the running client's `AccountSettings.getFilterDefault`.
+Explicit empty selections remain empty, and the requested category owns its
+obtaining type. It repairs incomplete saved category filters before native
+`StoreComponent._populate` reads them. Regular Shop and Inventory retain their
+native table builders, scroll targets and persistence; an exception releases
+that request's waiting entry and remains visible in the exception log. Offers'
+separate filter-option and request overrides use the same completion helper,
+with their existing independent settings and deferred navigation retained.
+
+Regression coverage reproduces the missing-key exception before installing
+the fix, then checks repeated recovery/buy/trade-in transitions, missing/null
+fields across all fourteen native Shop/Inventory categories, empty and saved
+selections, initialization after a failed save, Flash-object conversion,
+exception cleanup without double-hiding another wait, next-request recovery,
+and reversible hooks under Python 2 method binding. This identifies a shared
+failure class; it does not claim every category failed in the supplied report.
+The references and fakes are contract guidance, not a new exact #1513 bytecode
+audit. Actual menu rendering and transitions still require Windows playtest.
+
+The later Ruinberg report locates the crushed-car observation at
+`env418_OldGMercedes1.model`, chunk 33407 / item 36, around
+`(340.126, 13.579, 46.447)`. Its suspension-plane residuals of 0.129 and
+0.091 metres are not measurements of visual penetration. Existing support
+layers were logged only for a hard contact, while this traversal remained
+clear. `LOCAL PROP SUPPORT` now samples at a separate two-second cadence,
+including constant-speed travel, only over a locally identified,
+authoritatively destroyed road vehicle with native destruction delivered.
+It reuses the existing wheel samples and local catalogue; it adds no native
+queries or guessed geometry and preserves the original stall-report cadence.
+The supplied reports and local resource references do not contain the
+damaged visual/BSP or this car's wheel support layers, so a contour-matching
+collision change remains unproved and is not claimed by this patch. Restoring
+the original intact-car bounds would reintroduce an invisible obstacle.
+
+The Strv S1 travel complaint remains a native acceptance item. The report
+contains intermittent `world=pending`/`soft_hold` intervals while destructible
+structure models change; it does not prove one continuous half-second stall
+or a bad engine coefficient. Repeated stable Siege snapshots already skip
+descriptor/velocity resets, and a destroyed structure's hold deadline is
+written once rather than extended by each query. New Siege request, ack and
+state-edge diagnostics record input sequence, drive input, pending mode,
+actual speed and descriptor limits, capped at 128 records per round. Existing
+throttled movement diagnostics provide the contact context. This adds
+evidence for the next Windows run without changing physical coefficients,
+collision safety or the model-switch wait interval.
+
+
+## Launcher campaign, orders and badge editing (2026-09-18)
+
+The launcher garage retains its original labels and standard-resource filter.
+All five supported retired vehicles are included even when their original
+entry has a credit price instead of gold or a zero-price reward flag. The
+Bot exclusion and in-client bond shop remain independent of this catalogue.
+
+The completion editor uses regular mission IDs 1..300, four operations of
+five fifteen-mission chains in LT/HT/MT/TD/SPG order. The ledger stores these
+under `personalMissions.completed` as 1 (main complete) or 2 (honors), while
+`personalMissions.regular` remains the selection list. Omission is incomplete.
+The editor closes the required-unlock graph without granting honors:
+tasks 1..14 are unordered, finals require their fourteen tasks, and later
+operations require the previous operation's five finals. Resetting a main
+completion clears its chain's final and every class in every later operation,
+even when a sparse old save omits an intermediate final. Downgrading honors
+changes no other task and does not fill skipped prerequisites. A reset mission replaces an older
+selection of the same vehicle class so it can be replayed. The producer uses
+installed `PMStorage`/`PM_STATE`, retaining native reward-needed states for
+unclaimed female crew choices.
+
+`personal_campaign` reads reward definitions from installed resources and
+settles missing stages on garage startup and after authoritative battle
+receipts. `rewarded` records paid main/additional stages independently of
+`completed`; `tankwomen` records delayed crew claims. The launcher writes
+`requestedCompleted` and `requestedRegular`, not committed progress. The client
+withdraws the actual recorded stage and dependent operation payouts on a
+detached transaction before committing an edit. Markers are cleared only after
+successful withdrawal, allowing replay to grant the reward once again. A
+rejected withdrawal clears the pending request, preserves the old progress and
+property, and publishes `resetError` to the editor and a durable notification.
+All quantity withdrawals stop at the remaining balance or stock; notices
+record only the actual debit, including duplicate-vehicle compensation,
+consumables, camouflage, dossier increments and free orders. Mounted stock
+and occupied slots/bunks are excluded. Other missions' order pledges remain
+recorded and cannot create free orders after their earning source is reset.
+Unresolvable legacy provenance still rejects the withdrawal.
+Elapsed premium time is not reversible; only the remaining earned interval is
+removed without consuming separately purchased time.
+
+Crew provenance survives inventory-ID reconstruction across restarts. A
+permanent dismissal recorded at recycle-bin eviction/expiry, or the prior
+serializer's explicit missing-owner location with its reward descriptor,
+allows reset without another crew removal. Unverified or ambiguous provenance
+still rejects the edit; no similar-descriptor search selects unrelated crew.
+Reward vehicles also carry a persisted
+source marker. Withdrawal returns crew and fitted items to storage and keeps
+a reversible record of the hull. A later purchase of the same type is not
+silently removed in place of a sold mission vehicle. Old operation claims
+without a vehicle source marker cannot distinguish a granted tank from a
+previously owned vehicle that received compensation. Such resets are refused
+rather than parking a purchased tank while retaining an unknown cash payout.
+
+Before every tank grant, existing ownership is checked. Compensation uses the
+full original catalogue price in credits (gold at the existing account exchange
+rate), without `sellPriceFactor` or the bond-shop override in `shopItemPrices`.
+The exact compensation is journaled and withdrawn on reset, leaving the
+pre-existing vehicle untouched. This is the requested offline policy rather
+than a claimed historical regional rule. Tokens are rebuilt from current
+progress. Currency, inventory, premium time, vehicles/slots, badges, camouflage
+and native female-crew rewards share the persisted account transaction.
+Existing saves containing only completion flags receive their missing rewards.
+
+The battle evaluator uses the installed conditions and existing receipt facts.
+It supports the reported Object 260 MT-15 through per-target tank-destroyer
+damage; honors additionally evaluates distinct damaged targets and victory.
+Training, early unfinished exits, duplicate receipts, unmet prerequisites and
+wrong vehicle classes cannot complete it. Event-history conditions without
+the required telemetry remain explicitly unevaluated, rather than treating
+missing evidence as success. This does not claim full 300-mission combat
+coverage.
+
+Orders are `personalMissions.orders`, published as the stock
+`tokens['free_award_list'] = (4104777660, count)` tuple. The standalone launcher
+quantity editor was removed at the user's request. The available balance is
+derived from unique honored-final reward claims minus current pawns. Old
+manually supplied extras are removed; old excessive pawns retain their mission
+state but provide no free balance until covered or cancelled. Resource-defined
+order counts are used, yielding 20 earned orders for the four regular
+operations. Command 10019 records a one-order
+ordinary or four-order final pawn and publishes its native marker. Honors
+completion refunds that pawn; resetting it in the editor refunds it once.
+The regional reference's unused constant 21 is not treated as a token balance
+limit. Account badge ownership is `ledger.accountBadges`,
+a badge-ID/acquisition-time map, written into the native account dossier's
+`playerBadges` block. Native Badge objects consequently expose acquisition to
+both the gallery and selection validation. No battle medal counters or combat
+statistics are fabricated. The launcher parses `scripts/item_defs/badges.xml`
+from the installed `scripts.pkg` using a dedicated read-only accessor, not the
+vehicle-edit path whitelist, and reads `res/text/LC_MESSAGES/badge.mo`.
+Removing the selected badge also removes its saved selection.
+
+Report `20260918-112918-91f01e7610db` identifies a startup failure in build
+`colorfulmeans-35301539662-1`: `personal mission rewards could not be published:
+global name 'data' is not defined`. The account data import was local to other
+functions, so the startup validator rejected the staged edit before any flush;
+the same omission affected post-battle reward-vehicle research publication.
+Bootstrap now imports that dependency at module scope. Regression coverage
+executes save restoration, resource parsing, settlement, native-shaped garage
+validation, durable flush, publication and restart, including a refused flush.
+
+Report `20260918-114203-26519828ce40` confirms the same missing import during
+post-battle reward-vehicle research publication: the server ends the round at
+11:41:44 and the visible client rejects its receipt at 11:41:49.813. Pending
+launcher rewards were consequently retried during battle settlement. This is
+a plausible contributor to the reported end-of-battle stall, but the server's
+five-second round-reset delay is not itself proof of a five-second Python
+stall. Receipt diagnostics now record settlement elapsed time and rejection
+tracebacks. The client restores its lobby Account at 11:41:50.590 and enters
+`game.fini` at 11:42:00; the report has no native exception event or dump. The
+exit cause and final frame pacing still require Windows reproduction. No Bot
+cadence, physics coefficient or rendering setting is changed for this report.
+
+The [official 9.20.1 release notes](https://worldoftanks.eu/en/content/docs/release_notes/release-notes-9201/)
+document the five final-mission components, one order per honored final,
+one-/four-order skip costs and refunds after honors. They explicitly allow
+spending four orders on a final before its fourteen preceding tasks. The
+launcher's cascading reset is a user-requested offline editing rule; it is
+not a retail operation. Vehicle ownership does not replace completion flags
+when deciding whether later missions remain available.
+
+Before the first garage, corresponding initial values live in `save.json`;
+restoring an existing garage ledger takes priority. Writes reject a running
+game and use the existing atomic replacement helper. Completion writes preserve
+badges, wallet, vehicles, daily goals and unrelated save fields.
+
+Producer/consumer orientation for PMStorage, states, tokens and Badge comes
+from regional #788 Python; the existing #1513 contract pins `potapovQuests`
+and its requester keys. Command 10019 and crew reward command 125 are oriented
+from that regional producer/consumer pair; they are not claimed as new exact
+#1513 bytecode audit evidence. New native serialization, reward selection,
+badge rendering and the Tk dialog's final Windows layout still require
+#1513 Windows acceptance.
+Local tests cover storage round trips, checkbox dependencies, all 300 IDs,
+invalid/running writes, atomic failure, badge removal and publication fields.
+
+
+## Personal-mission display and reward withdrawal (2026-09-18)
+
+The battle roster's existing 18-field vehicle tuple now carries active personal
+mission IDs at index 15. Selection is captured before Account retirement,
+filtered through installed mission class, tier and prerequisite definitions,
+and retained through Avatar/arena creation. A main-complete mission remains
+eligible for honors; fully honored, wrong-class, locked and training missions
+do not populate that field. This uses the original TAB description, not the
+live progress widget introduced in Update 1.1.
+
+Each durable battle receipt captures mission state before/after evaluation,
+actual paid stages, localized quest identifiers and reward details. Native
+`questsProgress` is constructed from those recorded transitions for the result
+screen, including incomplete conditions. Result reopening and receipt replay
+use saved metadata rather than current campaign state. System notices use one
+native `SystemMessages.pushMessage` call per settlement. Personal-notice retry
+does not replay an already accepted battle or daily notice. Launcher settlement
+queues messages in the same garage save as the assets; successful delivery is
+acknowledged persistently.
+
+Launcher vehicle delivery now stages the vehicle and an `account_changes`
+notice together, preserves the inbox on a failed save, and consumes it only
+after commit. Badge and wallet editors append actual deltas through the same
+durable notification queue; initial-save metadata hands it off once to the
+garage ledger. Native badge and vehicle names are resolved for presentation.
+The existing Account-ready publisher and session acknowledgement suppress
+duplicate notices after unchanged edits, reconnects and failed ack writes.
+
+The dismissed-crew buffer already had a limit of 100. Expired entries now
+leave a terminal campaign crew receipt, and equal-time eviction always keeps
+the newly dismissed member. The confirmed offline policy retains an immediate
+100-gold charge and seven-day lifetime in both the shop and mutation owner.
+Region-specific `ShopRequester.tankmenRestoreConfig`,
+`getTankmenRestoreInfo` and `RecycleBinRequester.getTankmen` confirm the field
+roles as source orientation. The old Chinese server's numerical configuration
+is not audited: official guide pages could not be read in this investigation.
+Clock-controlled tests cover immediate/last-second/expired recovery and 101 dismissals;
+they do not prove native dialog rendering or real-time callback behavior.
+
+Badge eligibility is recomputed from the enabled token-quest dependency graph,
+not permanent historical token-reward markers. Missing main or honors
+requirements remove their mission badges and equipped selection; unrelated
+badges remain owned. Restoration of eligibility restores the badge without
+replaying unrelated economic rewards.
+
+The [9.16 release notes](https://worldoftanks.eu/en/content/docs/release_notes/release_note-9_16/)
+describe revised reward presentation and personal-mission information. The
+[1.1 release notes](https://worldoftanks.eu/en/content/docs/release_notes/release-notes-11/)
+identify the later in-battle progress changes and reworked TAB descriptions.
+The existing regional `QuestsProgressBlock` supplies lower-left result contract
+orientation; these references do not prove new #1513 native rendering. Daily
+missions here remain an offline extension, not the later retail Daily Missions
+feature. Reward withdrawal on launcher edits is likewise a custom policy.
+
+Report `20260918-124129-4822f788f955` contains successful campaign-bearing battle
+receipts and no recurrence of the earlier missing-`data` failure. Its shutdown
+cleanup traceback does not establish a native crash cause. The report and
+screenshots establish the missing mission presentation, while exact Windows
+TAB/result layout, notice timing and final-frame behavior still need gameplay
+acceptance on #1513.
+
+### Completed daily rows, battle commendations and commander voices
+
+The September 18 screenshots show daily reward text under an orange warning,
+missing small battle-result commendations, and female commanders using male
+voices. `offline_services_ui` incorrectly populated `alertMsg`, the stock
+post-battle quest warning field. Completed daily rows now leave that field
+empty, carry `MISSIONS_STATES.COMPLETED`, omit progress bars, and render their
+actual reserve through `GoodiesBonus.formattedList` and the stock simple-bonus
+block. No replacement icon is drawn over Scaleform.
+
+The entire `approachableAchieves` group was absent from the award allowlist.
+Its eleven records now flow through battle settlement, results and dossiers.
+The 0.9.22 reference `arena_achievements`, `achievements.xml` and dossier
+layouts supply the group, numeric conditions and record/block orientation.
+Descriptions were cross-checked against the client text resources mirrored at
+`izeberg/wot-src` commit `0ff1890d1a24d43cf186b86a295bbc7dec63de56`,
+`sources/res/text/lc_messages/achievements.po`; this later resource is not
+presented as #1513 evidence. In particular, Spotter is spotting assist on a
+win, not a shooting streak. Its flag belongs in `singleAchievements`, with
+`maxAimerSeries` in `achievements`. Battle Buddy has an account-wide 50-battle
+series and no vehicle record. Admitted module transitions include zero-HP
+hits and fire; module-only friendly damage interrupts Battle Buddy. Existing
+receipt deduplication and save rollback own these awards too. Prior battles
+without the missing combat facts are not retroactively re-awarded.
+
+The local arena producer previously hard-coded vehicle-list slot 16 to zero.
+The reviewed 18-field roster and regional 0.9.22 `ClientArena` reader identify
+that slot as `crewGroup`; `TankmanDescr.group` packs gender, premium and group
+identity. Freeze the mounted commander's actual group with the garage loadout
+before Account retirement and publish it before native vehicle presentation.
+The native `SoundModes.setCurrentNation` owner selects the language and writes
+the gender switch. The scoped offline adapter supplies attached-vehicle
+gender there so settings and postmortem callbacks cannot overwrite it; lobby
+previews use the selected crew. Special voices that call `setMode` directly
+remain native. Applying commander gender to Standard/localized mode as well
+as national mode is the requested offline extension.
+
+Report `20260918-204953-158db2d626ed` uses build
+`colorfulmeans-35342782450-1`; the player reports that changing Standard to
+Commander during battle leaves Standard active. The client-only Avatar's
+engine `vehicle` attribute is empty, as already handled by
+`BigWorldBinding.avatar_vehicle_entered`. Regional `AltVoicesSetting`
+changes its mapping in `setSystemValue`, but `clearPreviewSound` refreshes
+only the engine `player.vehicle` and skips a present-but-empty attachment.
+The offline adapter now refreshes the live, started `getVehicleAttached()`
+after successful mode application and native preview cleanup. It delegates
+to `Vehicle.refreshNationalVoice`, preserving nation mapping, special crew
+modes, native preview stopping, return values and teardown. The patch has no
+retained vehicle or deferred callback, and leaves ordinary engine attachments
+and online players alone. Focused tests reproduce the missing-attachment guard,
+both switch directions, male/female national and Chinese modes, preview
+cleanup, failed settings, startup/teardown and special native voices. This is
+source/lifecycle evidence; the report has no bank-selection trace proving the
+audible result of the new patch.
+
+Focused tests cover award boundaries, module/fire bookkeeping, result packing,
+career reload/deduplication, the roster field and voice resets. Regional source
+orientation and tests do not replace a new #1513 bytecode audit or Windows
+acceptance: the final Scaleform layout and audible Chinese/national female
+banks must still be checked in the actual supported client.

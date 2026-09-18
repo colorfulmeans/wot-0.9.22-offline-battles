@@ -93,8 +93,19 @@ class _LobbyHeader(object):
         self.disabled.append(disabled)
 
 
+class _TrainingItem(object):
+    def __init__(self, data='training'):
+        self._data = data
+        self.calls = 0
+
+    def select(self):
+        self.calls += 1
+        return 'stock'
+
+
 _LOBBY_HEADER_FIGHT_CLICK = _LobbyHeader.fightClick
 _LOBBY_HEADER_UPDATE_CONTROLS = _LobbyHeader._updatePrebattleControls
+_TRAINING_ITEM_SELECT = _TrainingItem.select
 
 
 class JoinButtonUITests(unittest.TestCase):
@@ -104,13 +115,15 @@ class JoinButtonUITests(unittest.TestCase):
         self.handled = True
         self.refresh = mock.Mock()
         self.adapter = self.queue_ui.JoinButtonUI(
-            self._join, runtime=_LobbyHeader, refresh=self.refresh)
+            self._join, runtime=_LobbyHeader, refresh=self.refresh,
+            training_runtime=_TrainingItem)
 
     def tearDown(self):
         self.adapter.uninstall()
         _LobbyHeader.fightClick = _LOBBY_HEADER_FIGHT_CLICK
         _LobbyHeader._updatePrebattleControls = (
             _LOBBY_HEADER_UPDATE_CONTROLS)
+        _TrainingItem.select = _TRAINING_ITEM_SELECT
 
     def _join(self, map_id, action_name):
         self.join_calls.append((map_id, action_name))
@@ -144,6 +157,15 @@ class JoinButtonUITests(unittest.TestCase):
         self.assertEqual([(9, 'ranked')], self.join_calls)
         self.assertEqual([], header.calls)
 
+    def test_training_selector_enters_the_lan_waiting_room_directly(self):
+        self.adapter.install()
+        item = _TrainingItem('trainingList')
+
+        self.assertIsNone(item.select())
+
+        self.assertEqual([(None, 'training')], self.join_calls)
+        self.assertEqual(0, item.calls)
+
     def test_uninstall_restores_raw_class_function(self):
         original = _LobbyHeader.__dict__['fightClick']
         original_update = _LobbyHeader.__dict__['_updatePrebattleControls']
@@ -159,6 +181,7 @@ class JoinButtonUITests(unittest.TestCase):
         self.assertIs(
             original_update,
             _LobbyHeader.__dict__['_updatePrebattleControls'])
+        self.assertIs(_TRAINING_ITEM_SELECT, _TrainingItem.__dict__['select'])
 
     def test_failed_refresh_rolls_back_both_wrappers(self):
         adapter = self.queue_ui.JoinButtonUI(
@@ -174,6 +197,8 @@ class JoinButtonUITests(unittest.TestCase):
         self.assertIs(
             _LOBBY_HEADER_UPDATE_CONTROLS,
             _LobbyHeader.__dict__['_updatePrebattleControls'])
+        self.assertIs(
+            _TRAINING_ITEM_SELECT, _TrainingItem.__dict__['select'])
 
     def test_uninstall_does_not_clobber_later_wrapper(self):
         self.adapter.install()
@@ -188,6 +213,17 @@ class JoinButtonUITests(unittest.TestCase):
         self.assertIs(
             _LOBBY_HEADER_UPDATE_CONTROLS,
             _LobbyHeader.__dict__['_updatePrebattleControls'])
+
+    def test_uninstall_does_not_clobber_later_training_wrapper(self):
+        self.adapter.install()
+
+        def later_wrapper(item):
+            return 'later'
+
+        _TrainingItem.select = later_wrapper
+        self.adapter.uninstall()
+
+        self.assertIs(later_wrapper, _TrainingItem.select)
 
 
 class QueueUITests(unittest.TestCase):

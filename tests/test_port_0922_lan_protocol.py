@@ -663,6 +663,8 @@ class LanProtocolTests(unittest.TestCase):
         state.track_immobilisers[('player', 2)] = ('player', 1)
         state.player_spotted[1] = frozenset([('player', 2)])
         state._record_damage(('player', 3), ('player', 2), 240, tracked)
+        state._record_critical_damage(('player', 3), ('player', 2), {}, tracked)
+        state._record_critical_damage(('player', 3), ('player', 1), {}, tracked)
         self.assertTrue(state._finish_battle(1, 'elimination'))
 
         self.assertEqual(
@@ -694,6 +696,7 @@ class LanProtocolTests(unittest.TestCase):
             'piercings_received', 'no_damage_direct_hits_received',
             'explosion_hits_received', 'explosion_hits', 'damaged',
             'team_hits', 'team_damage', 'team_kills', 'mileage', 'life_time',
+            'team_crits', 'critical_hits',
             'damaging_hits_received', 'deflected_hits_received',
             'crits_received_mask', 'hits_with_damage',
             'sniper_damage_dealt', 'deflection_streak',
@@ -711,6 +714,9 @@ class LanProtocolTests(unittest.TestCase):
         self.assertEqual(240, rows[1]['damage_assisted_radio'])
         self.assertEqual(240, rows[3]['damage_dealt'])
         self.assertEqual(240, rows[2]['damage_received'])
+        self.assertEqual(1, rows[3]['critical_hits'])
+        self.assertEqual(1, rows[3]['team_crits'])
+        self.assertEqual(list(rows.values()), json.loads(json.dumps(list(rows.values()))))
 
     def test_destructible_report_requires_exact_identity_fields(self):
         self.assertFalse(self.client.send_destructible({

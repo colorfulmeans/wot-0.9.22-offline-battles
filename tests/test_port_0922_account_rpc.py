@@ -160,6 +160,98 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual(0.0, delay)
         callback()
 
+    def _campaign_outbox(self, flush_results=(True,)):
+        settlement = {'missions': [{
+            'id': 1, 'phase': 'granted', 'before': 0, 'after': 1,
+            'paid_stages': [1], 'rewards': [{'kind': 'credits', 'count': 1234}]}]}
+        state = account_requests.garage.GarageState({
+            'wallet': {'credits': 7777},
+            'personalMissionNotifications': [{'id': 'notice-1',
+                                               'settlement': settlement}]})
+        saved = []
+        outcomes = iter(flush_results)
+
+        def flush(snapshot):
+            saved.append(copy.deepcopy(snapshot))
+            return next(outcomes)
+
+        store = types.SimpleNamespace(mark_dirty=mock.Mock(),
+                                      flush=mock.Mock(side_effect=flush))
+        context = {'garage': state, 'garage_store': store,
+                   'selected_vehicle': copy.deepcopy(state.snapshot())}
+        server = FakeServer(lambda: self.player, lambda delay, callback: None,
+                            context)
+        system = types.SimpleNamespace(pushMessage=mock.Mock(),
+            SM_TYPE=types.SimpleNamespace(Information='info'))
+        patch = mock.patch.object(sys.modules['gui'], 'SystemMessages', system,
+                                  create=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return server, state, store, system, saved, context
+
+    def test_campaign_outbox_pushes_once_and_acknowledges_shared_garage(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        delivered = set()
+        self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
+        self.assertEqual((0, False), server.publish_campaign_notifications(delivered))
+        system.pushMessage.assert_called_once()
+        self.assertIn('1234', system.pushMessage.call_args[0][0])
+        self.assertEqual({'notice-1'}, delivered)
+        self.assertEqual([], state.snapshot()['personalMissionNotifications'])
+        self.assertEqual([], saved[0]['personalMissionNotifications'])
+        self.assertIs(state.snapshot(), server._context['selected_vehicle'])
+        self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
+        store.flush.assert_called_once()
+
+    def test_campaign_outbox_native_failure_keeps_notice_for_lobby_retry(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        delivered = set()
+        system.pushMessage.side_effect = RuntimeError('lobby message service not ready')
+        with self.assertRaises(RuntimeError):
+            server.publish_campaign_notifications(delivered)
+        self.assertEqual(1, len(state.snapshot()['personalMissionNotifications']))
+        self.assertEqual(set(), delivered)
+        self.assertEqual([], saved)
+        store.flush.assert_not_called()
+        system.pushMessage.side_effect = None
+        self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
+        self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
+
+    def test_launcher_asset_notice_uses_native_publisher_without_reapplying_assets(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        state.snapshot()['personalMissionNotifications'][0]['settlement'] = {
+            'account_changes': [{'phase': 'granted', 'rewards': [
+                {'kind': 'credits', 'count': 4321}, {'kind': 'crew', 'count': 4}]}]}
+        delivered = set()
+        self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
+        self.assertEqual((0, False), server.publish_campaign_notifications(delivered))
+        system.pushMessage.assert_called_once()
+        self.assertIn('4321', system.pushMessage.call_args[0][0])
+        self.assertEqual('info', system.pushMessage.call_args[1]['type'])
+        self.assertEqual([], saved[0]['personalMissionNotifications'])
+        self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
+
+    def test_campaign_outbox_failed_ack_retries_after_account_replacement_without_push(self):
+        server, state, store, system, saved, context = self._campaign_outbox((False, True))
+        delivered = set()
+        self.assertEqual((1, True), server.publish_campaign_notifications(delivered))
+        self.assertEqual(1, len(state.snapshot()['personalMissionNotifications']))
+        replacement = FakeServer(lambda: self.player,
+                                 lambda delay, callback: None, context)
+        self.assertEqual((0, False), replacement.publish_campaign_notifications(delivered))
+        system.pushMessage.assert_called_once()
+        self.assertEqual([], state.snapshot()['personalMissionNotifications'])
+        self.assertEqual(2, len(saved))
+        self.assertEqual({'credits': 7777}, saved[-1]['wallet'])
+
+    def test_campaign_outbox_waits_for_account_without_pushing_or_acknowledging(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        self.player = None
+        self.assertEqual((0, True), server.publish_campaign_notifications())
+        system.pushMessage.assert_not_called()
+        store.flush.assert_not_called()
+        self.assertEqual(1, len(state.snapshot()['personalMissionNotifications']))
+
     def test_shop_item_prices_are_normalized_for_native_long_formatter(self):
         value = {
             'items': {'itemPrices': {
@@ -189,6 +281,76 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual([], self.player.responses)
         self._run()
         self.assertEqual([(31, commands.RES_SUCCESS, '')], self.player.responses)
+
+    def test_premium_purchase_debits_gold_and_publishes_active_account(self):
+        snapshot = _full_garage_snapshot()
+        snapshot['wallet'] = {
+            'credits': 100000, 'gold': 5000, 'freeXP': 0, 'crystal': 0}
+        context = {
+            'garage': account_requests.garage.GarageState(snapshot),
+        }
+        server = FakeServer(
+            lambda: self.player,
+            lambda delay, fn: self.pending.append((delay, fn)), context)
+        now = 1700000000
+
+        with mock.patch.object(
+                account_requests.garage.time, 'time', return_value=now):
+            server.doCmdInt3(61, commands.CMD_PREMIUM, 17, 7, 0)
+            while self.pending:
+                self._run()
+
+        expiry = now + 7 * 24 * 60 * 60
+        self.assertEqual(
+            (61, commands.RES_SUCCESS, ''), self.player.responses[-1])
+        selected = server._context['selected_vehicle']
+        self.assertEqual(3750, selected['wallet']['gold'])
+        self.assertEqual(
+            expiry, selected['premiumExpiryTime'])
+        update = pickle.loads(self.player.updates[-1])
+        self.assertEqual({'gold': 3750}, update['stats'])
+        self.assertEqual(expiry, update['account']['premiumExpiryTime'])
+        self.assertTrue(
+            update['account']['attrs'] & account_data.PREMIUM_ACCOUNT_ATTR)
+
+    def test_personal_mission_selection_publishes_five_vehicle_class_chains(self):
+        snapshot = _full_garage_snapshot()
+        context = {
+            'garage': account_requests.garage.GarageState(snapshot),
+        }
+        server = FakeServer(
+            lambda: self.player,
+            lambda delay, fn: self.pending.append((delay, fn)), context)
+
+        server.doCmdIntArr(
+            62, commands.CMD_SELECT_POTAPOV_QUESTS,
+            [0, 1, 16, 31, 46, 61])
+        while self.pending:
+            self._run()
+
+        self.assertEqual(
+            (62, commands.RES_SUCCESS, ''), self.player.responses[-1])
+        progress = pickle.loads(self.player.updates[-1])['potapovQuests']
+        self.assertEqual(5, progress['regular']['slots'])
+        self.assertEqual([1, 16, 31, 46, 61],
+                         progress['regular']['selected'])
+        self.assertEqual(
+            {'regular': [1, 16, 31, 46, 61]},
+            server._context['selected_vehicle']['personalMissionSelections'])
+
+        before = copy.deepcopy(server._context['selected_vehicle'])
+        update_count = len(self.player.updates)
+        server.doCmdIntArr(
+            63, commands.CMD_SELECT_POTAPOV_QUESTS,
+            [0, 2, 3, 31, 46, 61])
+        while self.pending:
+            self._run()
+
+        self.assertEqual(commands.RES_FAILURE, self.player.responses[-1][1])
+        self.assertEqual(
+            'TOO_MANY_QUESTS_IN_CHAIN', self.player.responses[-1][2])
+        self.assertEqual(update_count, len(self.player.updates))
+        self.assertEqual(before, server._context['selected_vehicle'])
 
     def test_postbattle_progress_pushes_the_banked_ledger_now(self):
         """The garage banked the battle; the push reads what it banked.
@@ -228,7 +390,8 @@ class AccountRpcTests(unittest.TestCase):
 
         update = pickle.loads(self.player.updates[-1])
         self.assertEqual(
-            {'credits', 'gold', 'freeXP', 'crystal', 'vehTypeXP', 'dossier'},
+            {'credits', 'gold', 'freeXP', 'crystal', 'vehTypeXP', 'dossier',
+             'slots', 'berths', 'vehicleSellsLeft', ('multipliedXPVehs', '_r')},
             set(update['stats']))
         self.assertNotIn('eliteVehicles', update['stats'])
         self.assertNotIn('unlocks', update['stats'])
@@ -237,6 +400,39 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual(30, update['stats']['freeXP'])
         self.assertEqual(600, update['stats']['vehTypeXP'][50001])
         self.assertEqual(1, self.player.dossier_resyncs)
+
+    def test_carousel_first_win_state_hides_one_vehicle_then_resets_all(self):
+        selected = _full_garage_snapshot()
+        server = FakeServer(
+            lambda: self.player,
+            lambda delay, fn: self.pending.append((delay, fn)), {
+                'selected_vehicle': selected,
+                'postbattle_store': types.SimpleNamespace(progress=lambda: {}),
+            })
+        vehicles_module = types.ModuleType('items.vehicles')
+        vehicles_module.getVehicleType = lambda cd: types.SimpleNamespace(unlocksDescrs=())
+        items_module = types.ModuleType('items')
+        items_module.vehicles = vehicles_module
+        with mock.patch.dict(sys.modules, {
+                'items': items_module, 'items.vehicles': vehicles_module}), \
+                mock.patch.object(account_data.time, 'time', return_value=172799) as clock:
+            initial = account_data.stats(selected)
+            self.assertFalse(initial['stats']['multipliedXPVehs'])
+            self.assertTrue(initial['account']['attrs'] & 2048)
+            self.assertEqual(2, account_data.shop(selected_vehicle=selected)['dailyXPFactor'])
+            # The native carousel maps an unconsumed factor to bonus_x2.
+            # Only the tank that won is included in the consumed set.
+            selected['firstWinDays'] = {'50001': 1}
+            self.assertTrue(server.publish_postbattle_progress())
+            self._run()
+            current = pickle.loads(self.player.updates[-1])['stats']
+            self.assertEqual({50001}, current[('multipliedXPVehs', '_r')])
+            clock.return_value = 172800
+            self.assertTrue(server.publish_postbattle_progress())
+            self._run()
+            next_day = pickle.loads(self.player.updates[-1])['stats']
+            # Replacement, not a growing-set union, restores both markers.
+            self.assertEqual(set(), next_day[('multipliedXPVehs', '_r')])
 
     def test_postbattle_progress_publishes_the_depot_rows_it_moved(self):
         """A battle spends rounds and consumables and may buy them back.
@@ -893,6 +1089,118 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual(set(range(1, 13)), set(data['inventory']))
         self.assertEqual({}, data['inventory'][1]['compDescr'])
 
+    def test_sync_data_logs_anonymous_barracks_producer_counts(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        snapshot['barracksTankmen'] = {909: b'private-descriptor'}
+        snapshot['accountBerths'] = 19
+        context = {'selected_vehicle': snapshot}
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            result = account_requests._sync_data(context, [0])
+
+        self.assertEqual(commands.RES_SUCCESS, result.result_id)
+        line = write.call_args[0][0]
+        self.assertEqual(
+            '[Offline LAN 0.9.22] BARRACKS_SYNC v=1 '
+            'snapshot_seated=2 snapshot_barracks=1 wire_compDescr=3 '
+            'wire_vehicle=3 wire_positive=2 wire_nonpositive=1 '
+            'missing_vehicle_ref=0 extra_vehicle_ref=0 berths=19\n',
+            line)
+        self.assertIn('BARRACKS_SYNC v=1', line)
+        self.assertIn('snapshot_seated=2', line)
+        self.assertIn('snapshot_barracks=1', line)
+        self.assertIn('wire_compDescr=3', line)
+        self.assertIn('wire_vehicle=3', line)
+        self.assertIn('wire_positive=2', line)
+        self.assertIn('wire_nonpositive=1', line)
+        self.assertIn('missing_vehicle_ref=0', line)
+        self.assertIn('extra_vehicle_ref=0', line)
+        self.assertIn('berths=19', line)
+        self.assertNotIn('909', line)
+        self.assertNotIn('private-descriptor', line)
+        for private_value in ('101', '102', 'commander', 'driver', 'compact'):
+            self.assertNotIn(private_value, line)
+
+    def test_sync_data_logs_seated_crew_when_the_barracks_is_empty(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            account_requests._sync_data(
+                {'selected_vehicle': snapshot}, [0])
+
+        line = write.call_args[0][0]
+        self.assertIn('snapshot_seated=2', line)
+        self.assertIn('snapshot_barracks=0', line)
+        self.assertIn('wire_positive=2', line)
+        self.assertIn('wire_nonpositive=0', line)
+
+    def test_repeated_sync_deduplicates_the_barracks_diagnostic(self):
+        context = {'selected_vehicle': copy.deepcopy(SELECTED_VEHICLE)}
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            first = account_requests._sync_data(context, [0])
+            second = account_requests._sync_data(context, [1])
+
+        self.assertEqual(commands.RES_SUCCESS, first.result_id)
+        self.assertEqual(commands.RES_SUCCESS, second.result_id)
+        self.assertEqual(1, write.call_count)
+        self.assertIn('BARRACKS_SYNC v=1', write.call_args[0][0])
+
+    def test_barracks_diagnostic_has_a_hard_detail_limit(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        context = {}
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            for index in range(
+                    account_requests.BARRACKS_SYNC_DIAGNOSTIC_LIMIT + 2):
+                payload = account_data.sync_data(selected_vehicle=snapshot)
+                payload['stats']['berths'] += index
+                account_requests._report_barracks_sync(
+                    snapshot, payload, context)
+
+        self.assertEqual(
+            account_requests.BARRACKS_SYNC_DIAGNOSTIC_LIMIT + 1,
+            write.call_count)
+        detail_lines = [call[0][0] for call in write.call_args_list
+                        if 'snapshot_seated=' in call[0][0]]
+        self.assertEqual(
+            account_requests.BARRACKS_SYNC_DIAGNOSTIC_LIMIT,
+            len(detail_lines))
+        self.assertIn(
+            'detail_limit=%d reached' %
+            account_requests.BARRACKS_SYNC_DIAGNOSTIC_LIMIT,
+            write.call_args_list[-1][0][0])
+
+    def test_barracks_diagnostic_observes_foreign_keys_without_mutation(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        payload = account_data.sync_data(selected_vehicle=snapshot)
+        tankmen = payload['inventory'][8]
+        tankmen['vehicle'].pop(101)
+        tankmen['vehicle'][999] = -1
+        before = copy.deepcopy(payload)
+
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write') as write:
+            self.assertTrue(account_requests._report_barracks_sync(
+                snapshot, payload))
+
+        line = write.call_args[0][0]
+        self.assertIn('missing_vehicle_ref=1', line)
+        self.assertIn('extra_vehicle_ref=1', line)
+        self.assertEqual(before, payload)
+
+    def test_barracks_diagnostic_failure_does_not_change_sync(self):
+        snapshot = copy.deepcopy(SELECTED_VEHICLE)
+        expected = account_data.sync_data(7, snapshot, {}, None)
+        with mock.patch.object(
+                account_requests.sys.stdout, 'write',
+                side_effect=OSError('log unavailable')):
+            result = account_requests._sync_data(
+                {'selected_vehicle': snapshot}, [7])
+
+        self.assertEqual(commands.RES_SUCCESS, result.result_id)
+        self.assertEqual(expected, result.ext)
+
     def test_repeated_sync_keeps_existing_elite_vehicles_out_of_notifications(self):
         snapshot = _full_garage_snapshot()
         self.server.update_context({'selected_vehicle': snapshot})
@@ -915,7 +1223,7 @@ class AccountRpcTests(unittest.TestCase):
         sync_contract = CONTRACT['syncData']
         self.assertTrue(set(sync_contract['directKeys']).issubset(value))
         self.assertEqual({}, value['quests'])
-        self.assertEqual({}, value['tokens'])
+        self.assertEqual({'free_award_list': (4104777660, 0)}, value['tokens'])
         self.assertEqual(
             set(sync_contract['groupLocksDirectKeys']),
             set(value['groupLocks']))
@@ -942,7 +1250,8 @@ class AccountRpcTests(unittest.TestCase):
             progress = personal_missions[quest_type]
             self.assertEqual(
                 set(pm_contract['progressDirectKeys']), set(progress))
-            self.assertEqual(0, progress['slots'])
+            self.assertEqual(
+                5 if quest_type == 'regular' else 0, progress['slots'])
             self.assertEqual([], progress['selected'])
             self.assertEqual({}, progress['lastIDs'])
 
@@ -1087,6 +1396,20 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual({50001, 50002}, stats['eliteVehicles'])
         self.assertTrue(
             garage['unlockItemCompactDescrs'].issubset(stats['unlocks']))
+
+    def test_gold_vehicle_offer_is_buyable_without_persisted_research(self):
+        garage = _full_garage_snapshot()
+        garage['shopVehicleOfferCompactDescrs'] = {60001}
+        garage['shopItemPrices'][60001] = {'gold': 12500}
+        garage['notInShopItems'] = {60001, 60002}
+
+        synced = account_data.sync_data(selected_vehicle=garage)
+        shop = account_data.shop(selected_vehicle=garage)
+
+        self.assertNotIn(60001, garage['unlockItemCompactDescrs'])
+        self.assertIn(60001, synced['stats']['unlocks'])
+        self.assertNotIn(60001, shop['items']['notInShopItems'])
+        self.assertIn(60002, shop['items']['notInShopItems'])
 
     def test_incomplete_selected_vehicle_is_rejected_before_hangar_build(self):
         with self.assertRaisesRegex(ValueError, 'one seat per role'):
@@ -1482,6 +1805,7 @@ class SaleDiffTests(unittest.TestCase):
         snapshot['wallet'] = {'credits': 1000, 'gold': 0, 'freeXP': 0}
         state = account_requests.garage.GarageState(
             snapshot, vehicles_module=types.SimpleNamespace(
+                getVehicleType=lambda compact_descr: types.SimpleNamespace(tags=()),
                 getTypeOfCompactDescr=lambda compact_descr: 10,
                 VehicleDescr=lambda compactDescr: types.SimpleNamespace(
                     getDevices=lambda: ([], [], []))))

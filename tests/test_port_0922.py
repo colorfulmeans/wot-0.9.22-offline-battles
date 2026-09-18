@@ -350,7 +350,7 @@ class PortSourceTests(unittest.TestCase):
         build_script = (PORT_ROOT / 'build_for_client.sh').read_text(
             encoding='utf-8')
 
-        self.assertEqual('0.8.4', packager.MOD_VERSION)
+        self.assertEqual('0.9.0', packager.MOD_VERSION)
         self.assertEqual(packager.MOD_VERSION, package.PORT_VERSION)
         self.assertEqual(packager.MOD_VERSION, meta_version)
         self.assertIn(
@@ -367,10 +367,10 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual([packager.MOD_VERSION], values, filename)
         for directory in ('launcher', 'server'):
             source = (PORT_ROOT / directory / 'version_info.txt').read_text()
-            self.assertIn("StringStruct('FileVersion', '0.8.4')", source)
-            self.assertIn("StringStruct('ProductVersion', '0.8.4')", source)
-            self.assertIn('filevers=(0, 8, 4, 0)', source)
-            self.assertIn('prodvers=(0, 8, 4, 0)', source)
+            self.assertIn("StringStruct('FileVersion', '0.9.0')", source)
+            self.assertIn("StringStruct('ProductVersion', '0.9.0')", source)
+            self.assertIn('filevers=(0, 9, 0, 0)', source)
+            self.assertIn('prodvers=(0, 9, 0, 0)', source)
 
     def test_port_sources_are_python_2_compatible_syntax(self):
         source_root = PORT_ROOT / 'src'
@@ -490,7 +490,7 @@ class PortSourceTests(unittest.TestCase):
                 config_path.parent / packager.BUILD_IDENTITY_FILENAME
             ).read_text(encoding='utf-8'))
             self.assertEqual(1, identity['schema'])
-            self.assertEqual('0.8.4', identity['semanticVersion'])
+            self.assertEqual('0.9.0', identity['semanticVersion'])
             self.assertRegex(
                 identity['buildIdentity'],
                 r'^local-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
@@ -3700,6 +3700,25 @@ class OfflineCompatibilityTests(unittest.TestCase):
         self.assertEqual(92, compatibility.clear_postmortem_vehicle())
         self.assertEqual(0, compatibility._postmortem_vehicle_id)
 
+    def test_hidden_killer_clear_uses_the_guarded_stock_camera_boundary(self):
+        compatibility_module = _load_port_source('compat')
+        runtime, unused_operations = self._runtime()
+        compatibility = compatibility_module.OfflineCompatibility(runtime)
+        setter = mock.Mock()
+        avatar = types.SimpleNamespace(inputHandler=types.SimpleNamespace(
+            setKillerVehicleID=setter))
+
+        with self.assertRaisesRegex(RuntimeError, 'active battle'):
+            compatibility.clear_postmortem_killer(avatar)
+
+        compatibility._battle_active = True
+        self.assertTrue(compatibility.clear_postmortem_killer(avatar))
+        setter.assert_called_once_with(None)
+
+        avatar.inputHandler = types.SimpleNamespace()
+        with self.assertRaisesRegex(RuntimeError, 'boundary is unavailable'):
+            compatibility.clear_postmortem_killer(avatar)
+
     def test_offline_vehicle_pose_overlay_preserves_native_entity_transform(self):
         compatibility_module = _load_port_source('compat')
         runtime, unused_operations = self._runtime()
@@ -6642,6 +6661,8 @@ class BootstrapContractTests(unittest.TestCase):
         account_rpc_package = types.ModuleType(
             'gui.mods.offline_lan_0922.account_rpc')
         account_rpc_package.economy = economy
+        account_rpc_package.data = types.ModuleType(
+            'gui.mods.offline_lan_0922.account_rpc.data')
         instance_guard = types.ModuleType(
             'gui.mods.offline_lan_0922.instance_guard')
         instance_guard.release_if_requested = mock.Mock(return_value=False)
@@ -6656,10 +6677,16 @@ class BootstrapContractTests(unittest.TestCase):
         lobby_entry = mock.Mock()
         lobby_entry.attach_mock(session.install, 'install')
         lobby_entry.attach_mock(compatibility.connect, 'connect')
+        services_ui_module = types.ModuleType(
+            'gui.mods.offline_lan_0922.offline_services_ui')
+        services_ui_module.install = mock.Mock()
+        services_ui_module.uninstall = mock.Mock()
+        lobby_entry.attach_mock(services_ui_module.install, 'install_services')
         compatibility_module = types.ModuleType(
             'gui.mods.offline_lan_0922.compat')
         compatibility_module.g_compatibility = compatibility
         account_state = types.SimpleNamespace()
+        garage_store = object()
         state_module = types.ModuleType(
             'gui.mods.offline_lan_0922.account_rpc.state')
         state_module.AccountState = mock.Mock(return_value=account_state)
@@ -6734,6 +6761,7 @@ class BootstrapContractTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.price_catalogue': price_catalogue,
             'gui.mods.offline_lan_0922.account_rpc': account_rpc_package,
             'gui.mods.offline_lan_0922.account_rpc.economy': economy,
+            'gui.mods.offline_lan_0922.account_rpc.data': account_rpc_package.data,
             'gui.mods.offline_lan_0922.compat': compatibility_module,
             'gui.mods.offline_lan_0922.config': config,
             'gui.mods.offline_lan_0922.instance_guard': instance_guard,
@@ -6745,6 +6773,7 @@ class BootstrapContractTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.account_rpc.postbattle_store':
                 postbattle_module,
             'gui.mods.offline_lan_0922.lan_session': lan_session,
+            'gui.mods.offline_lan_0922.offline_services_ui': services_ui_module,
             'gui.mods.offline_lan_0922.lobby_ui': lobby_ui_module,
             'gui.mods.offline_lan_0922.worker_presentation':
                 worker_presentation_module,
@@ -6759,6 +6788,9 @@ class BootstrapContractTests(unittest.TestCase):
                 'bootstrap0922', bootstrap_path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
+            # Store availability must not depend on which other tests have
+            # imported the real garage module during unittest discovery.
+            module._garage_store = mock.Mock(return_value=garage_store)
             module._selected_vehicle = lambda value: {
                 'id': 1, 'compDescr': 12345}
             module._signal_worker_ready = mock.Mock(return_value=True)
@@ -6803,11 +6835,12 @@ class BootstrapContractTests(unittest.TestCase):
                 session.install.assert_called_once_with()
                 compatibility.connect.assert_called_once()
                 self.assertEqual(
-                    [mock.call.install(), mock.call.connect(
+                    [mock.call.install(), mock.call.install_services(),
+                     mock.call.connect(
                         show_lobby=True,
                         account_context={'selected_vehicle': {
                             'id': 1, 'compDescr': 12345},
-                            'garage_store': None,
+                            'garage_store': garage_store,
                             'on_inventory_refreshed': module._on_inventory_refreshed,
                             'account_state': account_state})],
                     lobby_entry.mock_calls)
@@ -6828,6 +6861,7 @@ class BootstrapContractTests(unittest.TestCase):
             module.fini()
             self.assertFalse(module._started)
             module._signal_player_ready.assert_called_once_with()
+            services_ui_module.uninstall.assert_called_once_with()
 
             # A lobby-stage timeout must fully undo the connection adapter
             # and listener, then allow a clean init.  Keep the hangar not
@@ -6919,6 +6953,7 @@ class BootstrapContractTests(unittest.TestCase):
             [expected_session, expected_session],
             lan_session.LANSession.call_args_list)
         self.assertEqual(2, session.install.call_count)
+        self.assertEqual(2, services_ui_module.install.call_count)
         self.assertEqual(2, announcement_ui.install.call_count)
         self.assertEqual(2, announcement_ui.uninstall.call_count)
         self.assertEqual(5, intro_skip.install.call_count)
@@ -6933,7 +6968,7 @@ class BootstrapContractTests(unittest.TestCase):
             show_lobby=True,
             account_context={'selected_vehicle': {
                 'id': 1, 'compDescr': 12345},
-                'garage_store': None,
+                'garage_store': garage_store,
                 'on_inventory_refreshed': module._on_inventory_refreshed,
                 'account_state': account_state})
         self.assertEqual([expected_connect, expected_connect],

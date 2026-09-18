@@ -6,6 +6,7 @@ import base64
 import math
 import sys
 import time
+import traceback
 
 from gui.mods.offline_lan_0922.ui_i18n import as_text, tr
 
@@ -499,6 +500,8 @@ class LANSession(object):
             self._effective_params_provider = \
                 _selected_vehicle_effective_params
         self._postbattle_store = postbattle_store
+        self._training_mode = False
+        self._training_bots = False
         self._room_preferences = port_config.load_waiting_room_state()
         self._restored_team_generation = None
         self._restored_team_sizes_generation = None
@@ -508,6 +511,9 @@ class LANSession(object):
         self._requested_results = set()
         self._completed_results = set()
         self._notified_results = set()
+        self._battle_messages_sent = set()
+        self._campaign_notifications_sent = set()
+        self._campaign_notification_error_reported = False
         self._archived_result_replayed = False
         # UI intent is process-local and belongs to one live round. Durable
         # receipts describe rewards, not permission to open a window later.
@@ -820,6 +826,7 @@ class LANSession(object):
                 return
             self._publish_postbattle_progress()
             self._publish_postbattle_results()
+            self._publish_campaign_notifications()
 
         callback_id = self._callback(POSTBATTLE_RETRY_DELAY, retry)
         if self._postbattle_token is token:
@@ -830,30 +837,47 @@ class LANSession(object):
         """Inject one exact #1513 clickable service-channel result message."""
         if arena_unique_id in self._notified_results:
             return False
-        try:
-            from chat_shared import SYS_MESSAGE_IMPORTANCE, SYS_MESSAGE_TYPE
-            from messenger import MessengerEntry
-            timestamp = int(time.time())
-            chat_action = {
-                'sentTime': timestamp,
-                'data': {
-                    'messageID': int(arena_unique_id),
-                    'user_id': 0,
-                    'type': SYS_MESSAGE_TYPE.battleResults.index(),
-                    'importance': SYS_MESSAGE_IMPORTANCE.normal.index(),
-                    'active': True,
-                    'started_at': timestamp,
-                    'finished_at': None,
-                    'created_at': timestamp,
-                    'data': dict(result_data),
-                },
-            }
-            MessengerEntry.g_instance.protos.BW.serviceChannel.onReceiveSysMessage(
-                chat_action)
-        except Exception as error:
-            self._report_postbattle_notification_error(
-                arena_unique_id, error)
-            return False
+        if arena_unique_id not in self._battle_messages_sent:
+            try:
+                from chat_shared import SYS_MESSAGE_IMPORTANCE, SYS_MESSAGE_TYPE
+                from messenger import MessengerEntry
+                timestamp = int(time.time())
+                chat_action = {
+                    'sentTime': timestamp,
+                    'data': {
+                        'messageID': int(arena_unique_id),
+                        'user_id': 0,
+                        'type': SYS_MESSAGE_TYPE.battleResults.index(),
+                        'importance': SYS_MESSAGE_IMPORTANCE.normal.index(),
+                        'active': True,
+                        'started_at': timestamp,
+                        'finished_at': None,
+                        'created_at': timestamp,
+                        'data': dict(result_data),
+                    },
+                }
+                MessengerEntry.g_instance.protos.BW.serviceChannel.onReceiveSysMessage(
+                    chat_action)
+            except Exception as error:
+                self._report_postbattle_notification_error(
+                    arena_unique_id, error)
+                return False
+            self._battle_messages_sent.add(arena_unique_id)
+            if result_data.get('offlineDailyMissions'):
+                try:
+                    from gui.mods.offline_lan_0922.offline_services_ui import notify_missions
+                    notify_missions(result_data['offlineDailyMissions'])
+                except Exception as error:
+                    self._report_postbattle_notification_error(arena_unique_id, error)
+        # A mission-message failure may retry without replaying the battle
+        # result or daily reward notice already admitted to the native channel.
+        if result_data.get('offlinePersonalMissions'):
+            try:
+                from gui.mods.offline_lan_0922.personal_campaign_ui import notify
+                notify(result_data['offlinePersonalMissions'])
+            except Exception as error:
+                self._report_postbattle_notification_error(arena_unique_id, error)
+                return False
         self._notified_results.add(arena_unique_id)
         return True
 
@@ -880,6 +904,37 @@ class LANSession(object):
         self._published_progress_battles = battles
         return True
 
+    def _publish_campaign_notifications(self):
+        """Show persisted launcher rewards only when the lobby is ready."""
+        if self._stopped:
+            return False
+        try:
+            import BigWorld
+        except ImportError:
+            return False
+        try:
+            publisher = getattr(
+                getattr(BigWorld.player(), 'fakeServer', None),
+                'publish_campaign_notifications', None)
+            if not callable(publisher):
+                return False
+            if self._battle_started or not self._lobby_ready():
+                self._schedule_postbattle_publish()
+                return False
+            published, pending = publisher(self._campaign_notifications_sent)
+            self._campaign_notification_error_reported = False
+            if pending:
+                self._schedule_postbattle_publish()
+            return bool(published)
+        except Exception as error:
+            if not self._campaign_notification_error_reported:
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] personal mission notifications '
+                    'could not be published: %s\n' % error)
+                self._campaign_notification_error_reported = True
+            self._schedule_postbattle_publish()
+            return False
+
     def on_lobby_view_loaded(self):
         """Drain a completed battle as soon as the rebuilt lobby can do so.
 
@@ -892,7 +947,8 @@ class LANSession(object):
             return False
         progress_published = self._publish_postbattle_progress()
         results_published = self._publish_postbattle_results()
-        return bool(progress_published or results_published)
+        campaign_published = self._publish_campaign_notifications()
+        return bool(progress_published or results_published or campaign_published)
 
     def _publish_selected_vehicle(self):
         """Send the current garage tank so the next round uses it."""
@@ -980,6 +1036,7 @@ class LANSession(object):
         # stock result service became available. Drain it as soon as this
         # lobby finishes loading, without requiring another LAN join.
         self._publish_postbattle_results()
+        self._publish_campaign_notifications()
         return True
 
     def revive(self):
@@ -1098,6 +1155,7 @@ class LANSession(object):
         nor a message is what makes the button look dead after a round.
         """
         self._postbattle_return = None
+        self._training_mode = unused_action_name == 'training'
         if self._stopped or self.state in ('error', 'stopped'):
             sys.stdout.write(
                 '[Offline LAN 0.9.22] LAN session was %s; rebuilding it\n' %
@@ -1727,6 +1785,8 @@ class LANSession(object):
                     'on_map_selected': self._remember_map,
                     'open_map_picker': self._open_map_window,
                     'round_seconds': self._round_seconds_value,
+                    'training_status': lambda: (self._training_mode, self._training_bots),
+                    'toggle_training_bots': self._toggle_training_bots,
                 })
             room = self._room_factory(
                 self.request_start, self._map_pool_value, **options)
@@ -1893,9 +1953,11 @@ class LANSession(object):
             # The stock map window can only present the elected room host.
             return False
         # As in 0.8.2, the stock queue screen loads under the room.
-        screen = self._ensure_queue_screen()
+        screen = None if self._training_mode else self._ensure_queue_screen()
         if screen is not None:
             screen.open()
+        elif self._training_mode and self._queue_screen is not None:
+            self._leave_queue_screen()
         self._picker_open = bool(self._open_surface(surface))
         if self._picker_open:
             sys.stdout.write(
@@ -2078,6 +2140,11 @@ class LANSession(object):
             self._close_picker_after_event()
         return accepted
 
+    def _toggle_training_bots(self):
+        if self._is_local_host() and self._training_mode:
+            self._training_bots = not self._training_bots
+        return self._training_bots
+
     def _send_start_request(self, map_name):
         if _garage_inventory_refresh_pending():
             self._status_notifier(tr(
@@ -2088,6 +2155,10 @@ class LANSession(object):
         if not self._publish_selected_vehicle():
             self._status_notifier(tr(VEHICLE_SELECTION_WARNING))
             return False
+        if self._training_mode:
+            return bool(self.client.request_start(
+                map_name, self._round_seconds, battle_mode='training',
+                training_bots=self._training_bots))
         return bool(self.client.request_start(map_name, self._round_seconds))
 
     def _stop_active_round(self):
@@ -2377,7 +2448,7 @@ class LANSession(object):
         if bool(_message_value(message, 'lobby_restored', False)):
             leave = getattr(self.client, 'leave_battle', None)
             try:
-                if not callable(leave) or not leave():
+                if not callable(leave) or not leave(voluntary=False):
                     raise RuntimeError(
                         'LAN server did not accept failed battle leave')
             except Exception:
@@ -2658,13 +2729,23 @@ class LANSession(object):
             store = self._postbattle_store
             if store is None:
                 return
+            started = time.time()
             try:
                 accepted = store.accept(message)
             except Exception as error:
                 sys.stdout.write(
-                    '[Offline LAN 0.9.22] battle receipt was rejected: %s\n'
-                    % error)
+                    '[Offline LAN 0.9.22] battle receipt was rejected: %s '
+                    'receipt_id=%s elapsed_ms=%.3f\n' % (
+                        error, _message_value(message, 'receipt_id'),
+                        max(0.0, time.time() - started) * 1000.0))
+                traceback.print_exc(file=sys.stdout)
                 return
+            if accepted:
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] battle receipt accepted '
+                    'receipt_id=%s elapsed_ms=%.3f\n' % (
+                        _message_value(message, 'receipt_id'),
+                        max(0.0, time.time() - started) * 1000.0))
             # Store.accept() returns only after its atomic JSON replacement.
             # Ack duplicates too: they already exist in durable local state,
             # and the server may be retrying because an earlier ACK was lost.
@@ -2678,7 +2759,10 @@ class LANSession(object):
                         returning['generation'] == self._client_generation and
                         _message_value(message, 'round_id') ==
                         returning['round_id'] and
-                        not _message_value(message, 'premature_leave', False)):
+                        _message_value(
+                            message, 'watched_battle_to_end',
+                            not _message_value(
+                                message, 'premature_leave', False))):
                     returning['arena_unique_id'] = _message_value(
                         message, 'arena_unique_id')
                 self._publish_postbattle_progress()

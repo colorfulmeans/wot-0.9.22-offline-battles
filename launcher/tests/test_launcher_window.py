@@ -260,8 +260,18 @@ class WindowTest(unittest.TestCase):
         self.window.game_root.set(game_root)
         return game_root
 
+    def test_custom_save_restores_original_vehicle_labels_and_exposes_progress_editors(self):
+        self.assertEqual("Garage vehicles", self.window.shop_panel.cget("text"))
+        self.assertEqual("Gold and reward vehicle", self.window.gold_vehicle_label.cget("text"))
+        self.assertEqual("Personal missions", self.window.personal_missions_panel.cget("text"))
+        self.assertFalse(hasattr(self.window, "orders_entry"))
+        self.assertFalse(hasattr(self.window, "orders_label"))
+        self.assertEqual("Lowe - tier 8", self.window._gold_offer_label({
+            "label": "Lowe", "level": 8, "owned": False, "pending": False,
+            "offerKinds": ("gold", "reward")}))
+
     def test_layout_separates_play_vehicle_and_repair_controls(self):
-        self.assertEqual("0.8.4", wot_launcher.LAUNCHER_VERSION)
+        self.assertEqual("0.9.0", wot_launcher.LAUNCHER_VERSION)
         self.assertEqual(
             "Single player",
             self.window.battle_tabs.tab(self.window.single_panel).get("text"))
@@ -309,12 +319,12 @@ class WindowTest(unittest.TestCase):
 
     def test_launcher_session_identity_is_visible_and_persisted(self):
         self.assertIn(
-            "Launcher session: version=0.8.4 build=unknown role=launcher",
+            "Launcher session: version=0.9.0 build=unknown role=launcher",
             self._log_text())
         with open(core.launcher_log_path(), encoding="utf-8") as stream:
             persisted = stream.read()
         self.assertIn(
-            "Launcher session: version=0.8.4 build=unknown role=launcher",
+            "Launcher session: version=0.9.0 build=unknown role=launcher",
             persisted)
 
     def test_first_run_prompts_once_when_the_launcher_starts(self):

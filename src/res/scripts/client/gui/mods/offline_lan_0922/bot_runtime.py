@@ -1991,7 +1991,8 @@ class BotRuntime(object):
                  bot_equipment_resolver=None,
                  destructible_body_scan=None, control_seconds=None,
                  incoming_lane_probe=None, combat_diagnostics=None,
-                 turret_motion_probe=None, turret_hulls_provider=None):
+                 turret_motion_probe=None, turret_hulls_provider=None,
+                 rotation_resolver=None):
         self.local_player_id = local_player_id
         self._combat_diagnostics = combat_diagnostics
         self.descriptor_resolver = descriptor_resolver or (lambda unused: {})
@@ -2073,6 +2074,8 @@ class BotRuntime(object):
         self.native_motion = bool(native_motion)
         self.motion_resolver = motion_resolver
         self.motion_report = motion_report
+        self.rotation_resolver = (
+            rotation_resolver if callable(rotation_resolver) else None)
         self._turret_motion_probe = turret_motion_probe
         self._turret_hulls_provider = turret_hulls_provider
         self._turret_pending_landing_impacts = None
@@ -11853,7 +11856,14 @@ class BotRuntime(object):
                     BAKED_MOTION_LOOKAHEAD_SECONDS)
             else:
                 reactive_horizon = None
-            if (travel_sign > 0.0 and reactive_horizon is not None and
+            if command.get('recovery_mode') == 'contact_escape':
+                # BotAdapter admitted this separating direction with the same
+                # short hull sweep. A wall beyond that bounded exit must not
+                # turn the final selected-motion gate back into a long-range
+                # veto and leave contact_escape at zero throttle every frame.
+                maximum_probe_distance = ai_driver.recovery_probe_distance(
+                    state.get('half_length', 3.5))
+            elif (travel_sign > 0.0 and reactive_horizon is not None and
                     move_position is not None and
                     command.get('movement_intent', True) and
                     command.get('recovery_mode', 'drive') in
@@ -12103,26 +12113,40 @@ class BotRuntime(object):
                     remember(state['id'], travel_yaw)
                 report_blocked = getattr(
                     self.navigator, 'report_blocked_step', None)
+                report_corridor = getattr(
+                    self.navigator, 'report_blocked_corridor', None)
                 # A hull contact escalates from its realised status below.
                 if (callable(report_blocked) and not probe_deferred and
                         not (isinstance(motion_probe, dict) and
                              motion_probe.get('collision', False)) and
                         command.get('move_position') is not None):
-                    blocked_target = command.get('move_position')
-                    if navigation_grid is not None:
-                        # The generic probe just rejected travel_yaw before
-                        # this slice turns the hull.  Mark that local edge,
-                        # rather than the strategic waypoint it was pursuing.
-                        edge_length = _number(
-                            getattr(navigation_grid, 'cell_size', 0.0), 0.0)
-                        if edge_length > 0.0:
-                            blocked_target = (
-                                position[0] + math.sin(travel_yaw) *
-                                edge_length,
-                                position[1],
-                                position[2] + math.cos(travel_yaw) *
-                                edge_length)
-                    report_blocked(state['id'], position, blocked_target, now)
+                    if (callable(report_corridor) and
+                            isinstance(motion_probe, dict) and
+                            not motion_probe.get('water', False)):
+                        # A terrain/world veto follows the realised hull yaw,
+                        # but a stationary wedged hull can wag that yaw every
+                        # decision. Accumulate against the stable semantic
+                        # route edge while travel still closes on it.
+                        report_corridor(
+                            state['id'], position,
+                            command.get('move_position'), travel_yaw, now)
+                    else:
+                        blocked_target = command.get('move_position')
+                        if navigation_grid is not None:
+                            # Water and legacy navigators retain the precise
+                            # sampled edge rather than penalising a whole
+                            # semantic corridor they cannot classify.
+                            edge_length = _number(
+                                getattr(navigation_grid, 'cell_size', 0.0), 0.0)
+                            if edge_length > 0.0:
+                                blocked_target = (
+                                    position[0] + math.sin(travel_yaw) *
+                                    edge_length,
+                                    position[1],
+                                    position[2] + math.cos(travel_yaw) *
+                                    edge_length)
+                        report_blocked(
+                            state['id'], position, blocked_target, now)
             steer_dir = 0
             if abs(turn) > 0.01:
                 # LocalDriver already inverts reverse recovery steering for the
@@ -12178,17 +12202,42 @@ class BotRuntime(object):
                         # Preserve the motor command. The contact solver must
                         # spend this track torque even when actual yaw is held.
                         state['_rotation_contact_blocked'] = True
-                if (not self._baked_pose_progress_clear(
+                yaw_changed = abs(_angle_delta(
+                    candidate_hull_yaw, old_hull_yaw)) > 1.0e-8
+                rotation_blocked = (
+                    not self._baked_pose_progress_clear(
                         state, position, old_hull_yaw,
                         position, candidate_hull_yaw) or
-                        (abs(_angle_delta(candidate_hull_yaw,
-                                          old_hull_yaw)) > 1.0e-8 and
-                         not self._turret_pose_is_clear(
-                             state, position, old_hull_yaw,
-                             position, candidate_hull_yaw))):
+                    (yaw_changed and not self._turret_pose_is_clear(
+                        state, position, old_hull_yaw,
+                        position, candidate_hull_yaw)))
+                if (not rotation_blocked and yaw_changed and
+                        not state.get('airborne', False) and
+                        self.rotation_resolver is not None):
+                    if not self._probe_timing_enabled():
+                        rotation_clear = timed_call(
+                            self._combat_diagnostics, 'bot.physics',
+                            self.rotation_resolver,
+                            state['id'], position, old_hull_yaw,
+                            candidate_hull_yaw, descriptor, step, now,
+                            params['rotSpd'])
+                    else:
+                        probe_started = self._probe_started()
+                        try:
+                            rotation_clear = timed_call(
+                                self._combat_diagnostics, 'bot.physics',
+                                self.rotation_resolver,
+                                state['id'], position, old_hull_yaw,
+                                candidate_hull_yaw, descriptor, step, now,
+                                params['rotSpd'])
+                        finally:
+                            self._probe_finished(4, probe_started)
+                    rotation_blocked = not bool(rotation_clear)
+                if rotation_blocked:
                     # Turning is a pose change even without translation. Keep
                     # the prior legal OBB until the hull first moves far enough
-                    # inward to rotate without crossing a red line or turret.
+                    # inward to rotate without crossing a red line, turret or
+                    # a damaged structure replacement BSP.
                     turn_speed = 0.0
                     candidate_hull_yaw = old_hull_yaw
                     state['rotation_dir'] = 0

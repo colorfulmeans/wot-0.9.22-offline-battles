@@ -3169,6 +3169,54 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(math.pi, cached['yaw'])
         self.assertEqual(-1, cached['direction'])
 
+    def test_contact_escape_final_probe_uses_the_admitted_short_sweep(self):
+        """A blocker beyond the escape sweep cannot cancel hull separation."""
+        command = {
+            'target_yaw': 0.0, 'throttle': -0.72, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': False, 'target_id': None,
+            'fire_range': 0.0, 'combat_mode': 'artillery_hold',
+            'aim_position': (0.0, 0.0, 200.0),
+            'face_position': (0.0, 0.0, 200.0),
+            'move_position': (0.0, 0.0, -10.0),
+            'recovery_mode': 'contact_escape', 'movement_intent': True,
+        }
+        probe_distances = []
+
+        def far_blocker(
+                unused_position, unused_yaw, unused_speed,
+                unused_descriptor, maximum_distance, unused_half_width):
+            probe_distances.append(maximum_distance)
+            blocked = maximum_distance is None or maximum_distance >= 10.0
+            return {
+                'clear': not blocked, 'collision': blocked,
+                'water': False, 'slope': 0.0,
+            }
+
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+            direction_probe=far_blocker,
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        state = runtime.states[11]
+        state.update(yaw=0.0, speed=0.0, grounded_once=True)
+        before_z = state['z']
+
+        runtime.update(0.04, 1.0)
+
+        expected = self.module.ai_driver.recovery_probe_distance(
+            state['half_length'])
+        self.assertIsNone(probe_distances[0])
+        self.assertAlmostEqual(expected, probe_distances[-1])
+        self.assertLess(expected, 10.0)
+        self.assertAlmostEqual(
+            expected,
+            runtime._motion_probe_cache[11]['maximum_distance'])
+        self.assertEqual(-1, state['movement_dir'])
+        self.assertLess(state['z'], before_z)
+
     def test_deferred_final_world_receipt_uses_generic_and_retries(self):
         command = {
             'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
@@ -4037,6 +4085,48 @@ class BotRuntimeTests(unittest.TestCase):
         forward_edge = runtime.navigator.grid._edge_cells_for_segment(
             (0.0, 0.0, 0.0), target)
         self.assertIn(forward_edge, runtime.navigator.bot_failed_edges[11])
+        self.assertTrue(
+            nav_state['hard_contact_episode']['uses_navigation_target'])
+
+    def test_ensk_slope_veto_replans_despite_reported_hull_yaw_wag(self):
+        """The 180228 non-contact slope grind keeps one semantic edge."""
+        target = (200.0, 0.0, 0.0)
+        command = {
+            'target_yaw': math.pi * 0.5, 'throttle': 1.0, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': False, 'target_id': None,
+            'fire_range': 0.0, 'combat_mode': 'route',
+            'aim_position': target, 'face_position': target,
+            'move_position': target, 'recovery_mode': 'drive',
+            'movement_intent': True,
+        }
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+            direction_probe=lambda *unused: {
+                'clear': False, 'collision': False, 'water': False,
+                'slope': 0.90},
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        runtime.navigator.bot_states[11] = {}
+        state = runtime.states[11]
+
+        # Representative Object 430 II headings from the Ensk stall. The
+        # rejected sampled edge changes with every yaw, while all headings
+        # still close on the same route target.
+        for yaw, now in zip(
+                (1.606, 1.924, 1.958, 0.697),
+                (1.0, 1.34, 1.68, 2.02)):
+            state.update(x=0.0, y=0.0, z=0.0, yaw=yaw, speed=4.0,
+                         grounded_once=True)
+            runtime.update(0.04, now)
+
+        nav_state = runtime.navigator.bot_states[11]
+        self.assertEqual(1, nav_state['blocked_step_replans'])
+        route_edge = runtime.navigator.grid._edge_cells_for_segment(
+            (0.0, 0.0, 0.0), target)
+        self.assertIn(route_edge, runtime.navigator.bot_failed_edges[11])
         self.assertTrue(
             nav_state['hard_contact_episode']['uses_navigation_target'])
 
@@ -13656,6 +13746,61 @@ class BotRuntimeTests(unittest.TestCase):
         clear.return_value = True
         runtime.update(0.04, 1.04)
         self.assertGreater(state['yaw'], 0.0)
+
+    def test_damaged_bsp_blocks_stationary_bot_pivot_before_yaw_commit(self):
+        command = self._stationary_command()
+        command.update(turn=1.0, target_yaw=1.0)
+        rotation = mock.Mock(return_value=False)
+        motion = mock.Mock(return_value='clear')
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused: _FixedAdapter(command),
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph(),
+            motion_resolver=motion, rotation_resolver=rotation)
+        runtime.battle_start(self.start)
+        state = runtime.states[11]
+        state.update(x=2.0, y=3.0, z=4.0, yaw=0.0, speed=0.0,
+                     pitch=0.14, roll=-0.08, grounded_once=True)
+
+        runtime.update(0.04, 1.0)
+
+        self.assertEqual(0.0, state['yaw'])
+        self.assertEqual(0.0, runtime._turn_speeds[11])
+        self.assertEqual(0, state['rotation_dir'])
+        rotation.assert_called_once()
+        (bot_id, position, old_yaw, candidate_yaw, descriptor, dt, now,
+         rotation_speed_cap) = (
+            rotation.call_args.args)
+        self.assertEqual(11, bot_id)
+        self.assertEqual((2.0, 3.0, 4.0), position)
+        self.assertEqual(0.0, old_yaw)
+        self.assertGreater(candidate_yaw, old_yaw)
+        self.assertIs(runtime._descriptors[11], descriptor)
+        self.assertEqual(0.04, dt)
+        self.assertEqual(1.0, now)
+        self.assertGreater(rotation_speed_cap, 0.0)
+        motion.assert_not_called()
+
+        clear_rotation = mock.Mock(return_value=True)
+        clear_runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused: _FixedAdapter(command),
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph(),
+            motion_resolver=motion, rotation_resolver=clear_rotation)
+        clear_runtime.battle_start(self.start)
+        clear_state = clear_runtime.states[11]
+        clear_state.update(
+            x=2.0, y=3.0, z=4.0, yaw=0.0, speed=0.0,
+            pitch=0.14, roll=-0.08, grounded_once=True)
+        clear_runtime.update(0.04, 1.0)
+        self.assertGreater(clear_state['yaw'], 0.0)
+        clear_rotation.assert_called_once()
 
     def test_landed_turret_blocks_bot_residual_push_with_real_descriptor(self):
         clear = mock.Mock(return_value=False)

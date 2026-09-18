@@ -227,7 +227,9 @@ class FriendlyFireSettlementTests(unittest.TestCase):
         self.assertEqual(1200, vehicle['xp'])
         self.assertEqual(60, vehicle['freeXP'])
         self.assertEqual(667, vehicle['originalXP'])
-        self.assertIn(b'SUB:originalXPPenalty', vehicle['xpReplay'])
+        self.assertEqual(600, vehicle['boosterXP'])
+        self.assertIn(b'SUBCOEFF:originalXPPenalty:appliedPremiumXPFactor10',
+                      vehicle['xpReplay'])
         self.assertIn(b'SUB:originalCreditsContributionOut', vehicle['creditsReplay'])
         with mock.patch.object(self.results, '_vehicle_type_compact_descr',
                                return_value=50001), mock.patch.object(

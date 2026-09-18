@@ -23,7 +23,7 @@ class WindowsServerLauncherTests(unittest.TestCase):
             ('0.6.1', 'test-build-a'),
             windows_server._session_identity(environment))
         self.assertEqual(
-            ('0.8.4', 'unknown'),
+            ('0.9.0', 'unknown'),
             windows_server._session_identity({}))
 
     def test_double_click_entry_uses_fixed_zero_configuration_contract(self):
@@ -42,7 +42,8 @@ class WindowsServerLauncherTests(unittest.TestCase):
             team_size=15,
             team1_size=15, team2_size=15,
             bot_lineup=[],
-            bot_excluded_vehicles=[],
+            bot_excluded_vehicles=sorted(
+                windows_server.RETIRED_BOT_VEHICLES_0922),
             vehicle_overlay_root=None,
         )
 
@@ -89,7 +90,8 @@ class WindowsServerLauncherTests(unittest.TestCase):
             team_size=15,
             team1_size=15, team2_size=15,
             bot_lineup=[],
-            bot_excluded_vehicles=[],
+            bot_excluded_vehicles=sorted(
+                windows_server.RETIRED_BOT_VEHICLES_0922),
             vehicle_overlay_root=None,
         )
 
@@ -141,8 +143,10 @@ class WindowsServerLauncherTests(unittest.TestCase):
             self.assertEqual(0, windows_server.main())
 
         self.assertEqual(lineup, run_server.call_args.kwargs['bot_lineup'])
-        self.assertEqual(['germany:G12_Ltraktor'],
-                         run_server.call_args.kwargs['bot_excluded_vehicles'])
+        self.assertEqual(
+            sorted(set(('germany:G12_Ltraktor',)).union(
+                windows_server.RETIRED_BOT_VEHICLES_0922)),
+            run_server.call_args.kwargs['bot_excluded_vehicles'])
 
     def test_invalid_bot_exclusions_do_not_silently_use_an_empty_list(self):
         for value in ('{bad json', '{}', 'null'):

@@ -3528,6 +3528,27 @@ class OfflineCompatibility(object):
         self._postmortem_vehicle_id = 0
         return previous
 
+    def clear_postmortem_killer(self, avatar):
+        """Keep #1513's delayed death camera on the local wreck.
+
+        ``ClientArena.onVehicleKilled`` must still receive the real attacker:
+        it owns death info, the kill feed and statistics.  Its synchronous
+        PlayerAvatar listener also stores that id in AvatarInputHandler for
+        ``PostmortemDelay``.  Clearing only this camera-owned value after the
+        arena update preserves every authoritative consumer while making the
+        delayed callback follow retail's out-of-AOI result for a hidden
+        killer.
+        """
+        if not self._battle_active:
+            raise RuntimeError('postmortem killer requires an active battle')
+        handler = getattr(avatar, 'inputHandler', None)
+        setter = getattr(handler, 'setKillerVehicleID', None)
+        if not callable(setter):
+            raise RuntimeError(
+                '#1513 postmortem killer boundary is unavailable')
+        setter(None)
+        return True
+
     def bind_vehicle_pose_sources(self, avatar, vehicle):
         """Bind every stock #1513 pose provider to one live matrix.
 

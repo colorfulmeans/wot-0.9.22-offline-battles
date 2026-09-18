@@ -272,7 +272,10 @@ class BotLineupIntegrationTests(unittest.TestCase):
         self.assertEqual(assignments, server_lineup)
         exclusions = windows_server._bot_excluded_vehicles_from_environment(
             environment)
-        self.assertEqual([expected_name], exclusions)
+        self.assertEqual(
+            sorted(set((expected_name,)).union(
+                windows_server.RETIRED_BOT_VEHICLES_0922)),
+            exclusions)
 
         roster = ({"id": 21, "team": 2, "slot": 0},)
         entries = {
@@ -458,14 +461,17 @@ class BotLineupIntegrationTests(unittest.TestCase):
             frozenset(vehicle_overlays._NON_EDITABLE_VEHICLE_SUFFIXES),
             frozenset(bot_lineup_profiles.NON_BATTLE_ENTITY_BOT_SUFFIXES_0922))
 
+        retired_module = bot_lineup_profiles.retired_vehicles
+        retired_bot_names = retired_module.RETIRED_BOT_VEHICLES_0922
         for name, tags, expected in self._EXCLUSION_CASES:
             entry = types.SimpleNamespace(name=name, level=5, tags=tags)
             admitted = bool(
                 vehicle_configuration.is_standard_battle_vehicle(entry) and
                 not vehicle_blacklist.is_unusable(name))
+            bot_admitted = admitted and name not in retired_bot_names
             self.assertEqual(expected, admitted, name)
             self.assertEqual(
-                admitted, self._launcher_admits(name, tags), name)
+                bot_admitted, self._launcher_admits(name, tags), name)
             runtime = types.SimpleNamespace(
                 nations=types.SimpleNamespace(
                     AVAILABLE_NAMES=('all',), INDICES={'all': 0}),

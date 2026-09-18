@@ -76,6 +76,32 @@ def _attach_worker(state):
 
 
 class ServerTeamSizeTests(unittest.TestCase):
+    def test_training_starts_a_room_without_matchmaking_or_forced_bots(self):
+        state = BattleState(team_size=15)
+        _attach_worker(state)
+        player, error = state.add_player(_Connection(), ('127.0.0.1', 1001), _hello(1))
+        self.assertIsNone(error)
+        start, error = state.request_start(player.player_id, battle_mode='training')
+        self.assertIsNone(error)
+        self.assertEqual('training', start['battle_mode'])
+        self.assertEqual([], start['bots'])
+        self.assertEqual('loading', state.phase)
+        state.phase = 'battle'
+        self.assertEqual('training', state.current_battle_message()['battle_mode'])
+
+    def test_training_can_fill_bots_and_regular_next_round_restores_rewards_mode(self):
+        state = BattleState(team_size=2)
+        _attach_worker(state)
+        player, error = state.add_player(_Connection(), ('127.0.0.1', 1001), _hello(1))
+        start, error = state.request_start(player.player_id, battle_mode='training', training_bots=True)
+        self.assertIsNone(error)
+        self.assertEqual(3, len(start['bots']))
+        state._reset_round()
+        start, error = state.request_start(player.player_id)
+        self.assertIsNone(error)
+        self.assertEqual('regular', start['battle_mode'])
+        self.assertEqual(3, len(start['bots']))
+
     def test_profile_bot_exclusions_survive_every_battle_start_delivery(self):
         excluded = ['ussr:R11_MS-1', 'germany:G12_Ltraktor']
         state = BattleState(team_size=2, bot_excluded_vehicles=excluded)

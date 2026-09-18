@@ -75,6 +75,100 @@ class GroundContactTests(unittest.TestCase):
         peer.update(position=(2.99, 0., 0.), team=1)
         self.assertFalse(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
 
+    def test_korea_offset_side_contact_selects_checked_separating_end(self):
+        """The 181355 Object 212 pose must actively leave the WZ-132."""
+        from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+        from gui.mods.offline_lan_0922.ai.traffic import TrafficCoordinator
+        bot_position = (
+            284.7567787926926, -5.209865093231201, 159.24293786428566)
+        bot_yaw = 2.2587600359635918
+        bot_shape = (
+            1.6977280378341675, 4.012182235717773,
+            -0.00002700000004551839, 3.36995792388916)
+        player_shape = (
+            1.382557988166809, 2.789793014526367,
+            0.0020000000949949026, 1.520462989807129)
+        player = {
+            'id': 1000001, 'team': 1, 'alive': True,
+            'position': (
+                290.62511966620104, -5.150843763351441,
+                158.5806506767057),
+            'yaw': -0.933, 'shape': player_shape,
+            'half_width': player_shape[0],
+            'half_length': player_shape[1],
+        }
+        state = {
+            'id': 15, 'slot': 14, 'team': 2,
+            'position': bot_position, 'yaw': bot_yaw,
+            'speed': 0.0, 'dt': 0.1,
+            'collision_shape': bot_shape,
+            'half_width': bot_shape[0], 'half_length': bot_shape[1],
+            'neighbours': [player],
+        }
+        strategic = {
+            'target_id': player['id'],
+            'aim_position': player['position'],
+            'move_position': (290.0, 0.0, 146.0),
+            'face_position': player['position'],
+            'combat_mode': 'artillery_hold',
+            'fire_allowed': True, 'throttle_override': 0.0,
+        }
+        adapter = BotAdapter('73_asia_korea', 1)
+
+        initial = contact._obb_overlap(
+            bot_position[0], bot_position[2], bot_yaw, bot_shape,
+            player['position'][0], player['position'][2],
+            player['yaw'], player_shape)
+        self.assertGreater(initial[2], 0.0)
+        command = adapter.decide_with_order(
+            state, strategic, lambda *unused: True)
+
+        self.assertEqual('contact_escape', command['recovery_mode'])
+        self.assertEqual(-0.72, command['throttle'])
+        self.assertEqual(0.0, command['turn'])
+        self.assertEqual(player['id'], command['target_id'])
+        self.assertTrue(command['fire_allowed'])
+        forward = math.sin(bot_yaw), math.cos(bot_yaw)
+        displacement = (
+            command['move_position'][0] - bot_position[0],
+            command['move_position'][2] - bot_position[2])
+        self.assertLess(
+            displacement[0] * forward[0] + displacement[1] * forward[1],
+            0.0)
+        final_overlap = contact._obb_overlap(
+            command['move_position'][0], command['move_position'][2],
+            bot_yaw, bot_shape,
+            player['position'][0], player['position'][2],
+            player['yaw'], player_shape)
+        self.assertLess(final_overlap[2], 0.0)
+
+        body = {
+            'id': 15, 'team': 2, 'alive': True,
+            'position': bot_position, 'yaw': bot_yaw,
+            'velocity': (0.0, 0.0, 0.0), 'shape': bot_shape,
+            'half_width': bot_shape[0], 'half_length': bot_shape[1],
+        }
+        guarded = TrafficCoordinator().safe_controls(
+            body, command, [player], 1.0, lambda: 0.0)
+        self.assertEqual(command['throttle'], guarded['throttle'])
+        self.assertNotEqual('vehicle_brake', guarded.get('traffic_mode'))
+
+        # The selected reverse is not a blind escape. A second hull in that
+        # exact swept corridor withdraws the direct plan instead of allowing
+        # contact escape to trade one overlap for another.
+        rear = {
+            'id': 77, 'team': 2, 'alive': True, 'yaw': bot_yaw,
+            'half_width': 1.5, 'half_length': 3.5,
+            'position': (
+                bot_position[0] - forward[0] * 8.0,
+                bot_position[1],
+                bot_position[2] - forward[1] * 8.0),
+        }
+        state['neighbours'] = [player, rear]
+        geometry = adapter._enemy_contact(15, state, bot_position)
+        self.assertIsNone(adapter._contact_escape_plan(
+            state, bot_position, lambda *unused: True, geometry))
+
     def test_side_hug_cannot_be_bypassed_by_repeated_traverse(self):
         shape = (1.5, 3.5, -.8, 2.)
         for actor in (1, 1000001):

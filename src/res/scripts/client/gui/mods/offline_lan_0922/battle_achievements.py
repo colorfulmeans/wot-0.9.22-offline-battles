@@ -50,6 +50,7 @@ RECEIPT_STAT_NAMES = (
     "piercings_received", "no_damage_direct_hits_received",
     "explosion_hits_received", "explosion_hits", "sniper_damage",
     "team_hits", "team_damage", "team_kills", "mileage", "life_time",
+    "team_crits",
 )
 
 # The #1513 table holds 62 entries across every game mode this build ever
@@ -117,7 +118,23 @@ ACHIEVEMENT_CONDITIONS = {
     # awards are purely structural.
     "raider": {},
     "medalFadin": {},
+    "fighter": {"minKills": 4, "maxKills": 5},
+    "duelist": {"minKills": 2},
+    "bonecrusher": {"minCrits": 5},
+    "charmed": {"minVehs": 4},
 }
+
+# The complete approachableAchieves group in 0.9.22 achievements.xml.
+# The remaining predicates have no arena_achievements numeric entry.
+APPROACHABLE_ACHIEVEMENTS = (
+    "impenetrable", "reliableComrade", "aimer", "shootToKill", "fighter",
+    "duelist", "demolition", "arsonist", "bonecrusher", "charmed", "even")
+DOSSIER_COUNTER_NAMES = ("reliableComradeSeries", "maxAimerSeries")
+
+
+def achievement_record(name):
+    return ('singleAchievements' if name == 'aimer' else 'achievements', name)
+
 
 # Condition key -> dossier record name, where #1513 disagrees with itself.
 CONDITION_RECORD_NAMES = {"monolith": "medalMonolith"}
@@ -147,9 +164,9 @@ UNAWARDED_ACHIEVEMENTS = {
 # wire validators use it as an exact allowlist; the client packer still maps
 # each one through the pinned ``dossiers2.custom.records.RECORD_DB_IDS`` table
 # before it reaches #1513.
-AWARDABLE_ACHIEVEMENTS = tuple(sorted(
+AWARDABLE_ACHIEVEMENTS = tuple(sorted(set(
     CONDITION_RECORD_NAMES.get(name, name)
-    for name in ACHIEVEMENT_CONDITIONS))
+    for name in ACHIEVEMENT_CONDITIONS).union(APPROACHABLE_ACHIEVEMENTS)))
 
 # Battle-hero medals go to exactly one actor per battle; the medal's own
 # metric also orders that winner.
@@ -552,6 +569,52 @@ def _confederate_targets(actors):
     return result
 
 
+def _approachable_achievements(actor, actors):
+    """Battle commendations; these are not unique battle-hero awards.
+
+    Rules follow the client's achievement descriptions, including fire and
+    module damage. Reliable Comrade belongs to the durable account owner;
+    Spotter's per-vehicle best is persisted there from this battle's assist.
+    """
+    earned = []
+    kills = _kills(actor)
+    identity = _identity(actor)
+    maximum = _int(actor.get('max_health'))
+    if maximum > 0:
+        if actor.get('survived') and _stat(actor, 'damage_blocked') > maximum:
+            earned.append('impenetrable')
+        if actor.get('vehicle_class') != _SPG and _stat(actor, 'damage') > maximum:
+            earned.append('shootToKill')
+    fighter = ACHIEVEMENT_CONDITIONS['fighter']
+    if fighter['minKills'] <= _stat(actor, 'kills') <= fighter['maxKills']:
+        earned.append('fighter')
+    sources = set(tuple(source) for source in actor.get('duelist_sources', ()))
+    if sum((kill['victim_kind'], kill['victim_id']) in sources
+           for kill in kills) >= ACHIEVEMENT_CONDITIONS['duelist']['minKills']:
+        earned.append('duelist')
+    if any(kill.get('ammo_rack') for kill in kills):
+        earned.append('demolition')
+    if any(_int(kill.get('death_reason')) == 1 for kill in kills):
+        earned.append('arsonist')
+    if _int(actor.get('critical_hits')) >= ACHIEVEMENT_CONDITIONS['bonecrusher']['minCrits']:
+        earned.append('bonecrusher')
+    if (actor.get('won') and actor.get('survived') and
+            len(set(tuple(source) for source in actor.get('damage_sources', ()))) >=
+            ACHIEVEMENT_CONDITIONS['charmed']['minVehs']):
+        earned.append('charmed')
+    if actor.get('won') and _stat(actor, 'assist_radio') >= 1000:
+        earned.append('aimer')
+    for kill in kills:
+        victim = (kill['victim_kind'], kill['victim_id'])
+        other = next((row for row in actors if _identity(row) == victim), None)
+        if other is not None and any(
+                (back['victim_kind'], back['victim_id']) == identity
+                for back in _kills(other)):
+            earned.append('even')
+            break
+    return earned
+
+
 def award_battle_achievements(battle):
     """Return ``{(actor_kind, actor_id): [achievement names]}``.
 
@@ -592,4 +655,5 @@ def award_battle_achievements(battle):
 
     for actor in actors:
         awards[_identity(actor)].extend(_epic_achievements(actor, context))
+        awards[_identity(actor)].extend(_approachable_achievements(actor, actors))
     return awards

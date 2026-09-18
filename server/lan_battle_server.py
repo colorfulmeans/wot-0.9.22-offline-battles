@@ -1157,7 +1157,9 @@ def _persisted_result_receipt(value):
         if (isinstance(parsed, bool) or not isinstance(parsed, int) or
                 parsed < low or (high is not None and parsed > high)):
             raise ValueError("invalid persisted battle receipt number")
-    if not isinstance(value.get("premature_leave"), bool):
+    if (not isinstance(value.get("premature_leave"), bool) or
+            ("watched_battle_to_end" in value and not isinstance(
+                value["watched_battle_to_end"], bool))):
         raise ValueError("invalid persisted battle receipt leave state")
     stats = value.get("stats")
     rewards = value.get("rewards")
@@ -2332,6 +2334,8 @@ class BattleState:
         self._load_result_receipts()
         self.receipt_namespace = uuid.uuid4().hex
         self.receipt_arena_prefix = uuid.uuid4().int & 0xffffffff
+        self.battle_mode = "regular"
+        self.training_bots = False
         self.round_start_time = int(time.time())
         self.result_reset_tick = None
         self.roster_finalized = False
@@ -3604,7 +3608,8 @@ class BattleState:
             return None
 
     def request_start(self, player_id, requested_map=None,
-                      requested_round_seconds=None):
+                      requested_round_seconds=None, battle_mode="regular",
+                      training_bots=False):
         with self.lock:
             player = self.players.get(player_id)
             if player is None or not player.connected:
@@ -3613,6 +3618,8 @@ class BattleState:
                 return None, "already_started"
             if player_id != self.host_player_id:
                 return None, "host_only"
+            if battle_mode not in ("regular", "training") or not isinstance(training_bots, bool):
+                return None, "invalid_battle_mode"
             battle_duration_seconds = self._requested_battle_duration(
                 requested_round_seconds)
             if battle_duration_seconds is None:
@@ -3713,13 +3720,18 @@ class BattleState:
                 participant.participating = True
             self._freeze_round_participants(connected)
             occupied_slots = {(p.team, p.slot) for p in connected}
-            self.bot_roster = self._new_bot_roster(occupied_slots)
+            self.battle_mode = battle_mode
+            self.training_bots = training_bots
+            self.bot_roster = (self._new_bot_roster(occupied_slots)
+                               if battle_mode == "regular" or training_bots else [])
             self.roster_finalized = True
             self.phase = "loading"
             self._elect_bot_authority()
             self.state_revision += 1
             start_message = {
                 "type": "battle_start",
+                "battle_mode": self.battle_mode,
+                "training_bots": self.training_bots,
                 "protocol": PROTOCOL_VERSION,
                 "client_build": self.client_build,
                 "round_id": self.round_id,
@@ -4372,12 +4384,28 @@ class BattleState:
                 return False
             if not player.participating:
                 return True
+            voluntary = message.get("voluntary", True)
+            if not isinstance(voluntary, bool):
+                return False
             was_alive = bool(player.alive)
+            overturn = self.player_overturn_state.get(player_id) or {}
+            # Avatar.isVehicleOverturned covers both CAUTION and DANGER;
+            # the server promotes level only after the native ignore delay.
+            overturned = int(overturn.get("level", 0)) in (1, 2)
             participant = self.round_participants.get(player.account_key)
             if participant is not None:
                 # Preserve the final participant state for the result receipt
                 # before the unobserved remainder is adjudicated from bot state.
                 participant["alive"] = was_alive
+                # Match the regular battle exit warning: a destroyed or
+                # overturned vehicle may return to the garage without
+                # deserting. Transport loss and native startup failure are
+                # not a voluntary confirmation of that warning either.
+                participant["premature_leave"] = bool(
+                    voluntary and was_alive and
+                    self.phase == "battle" and self.battle_result is None and
+                    self.battle_mode != "training" and
+                    not overturned)
                 participant["health"] = int(player.health)
                 participant["death_reason"] = int(player.death_reason)
                 participant["death_attacker_kind"] = str(
@@ -4463,6 +4491,8 @@ class BattleState:
                 takeover_manifest.append(entry)
             message = {
                 "type": "battle_start",
+                "battle_mode": self.battle_mode,
+                "training_bots": self.training_bots,
                 "protocol": PROTOCOL_VERSION,
                 "round_id": self.round_id,
                 "state_revision": self.state_revision,
@@ -6809,6 +6839,7 @@ class BattleState:
                     "worker human ram armor results are invalid")
             pending_projectile_launches = {}
             fire_deaths = []
+            fire_damage_records = []
             fire_lineage_clears = set()
             capture_resets = set()
             stun_clears = []
@@ -7011,6 +7042,14 @@ class BattleState:
             for bot_id, current in next_states.items():
                 previous = self.bot_states.get(bot_id)
                 if previous is not None and previous.get("alive"):
+                    if ((previous.get("critical") or {}).get("fire") and
+                            current.get("fire_attacker_kind") in ("player", "bot") and
+                            int(current.get("fire_attacker_id", 0)) > 0):
+                        fire_damage_records.append((
+                            (current["fire_attacker_kind"], int(current["fire_attacker_id"])),
+                            ("bot", bot_id),
+                            max(0, int(previous["health"]) - int(current["health"])),
+                            previous.get("critical"), current.get("critical")))
                     if not current.get("alive"):
                         self._record_vehicle_end("bot", bot_id)
                     if (not source_clock_rebase and previous.get("world_pose")
@@ -7020,6 +7059,9 @@ class BattleState:
                             tuple(previous[name] for name in ("x", "y", "z")),
                             tuple(current[name] for name in ("x", "y", "z")))
             self.bot_states = next_states
+            for attacker, victim, damage, before, after in fire_damage_records:
+                self._record_damage(attacker, victim, damage, before)
+                self._record_critical_damage(attacker, victim, before, after)
             self._admit_detached_turrets(message)
             self.bot_unavailable_checkpoints = next_unavailable_checkpoints
             for bot_id in stun_clears:
@@ -9126,10 +9168,8 @@ class BattleState:
             self._increment_interaction(
                 shooter, victim, "explosion_hits")
             self._statistics_row(*victim)["explosion_hits_received"] += 1
-        if enemy_hit and crits_mask:
-            victim_state = self._statistics_row(*victim)
-            victim_state["crits_received_mask"] |= crits_mask
-            self._or_interaction(shooter, victim, "crits", crits_mask)
+        self._record_critical_damage(shooter, victim, critical_before,
+                                     admitted_critical)
         if not proposal["splash"] and not enemy_hit and shooter != victim:
             # Top Gun and Sniper both forbid hitting a friendly vehicle at
             # all, so a direct friendly hit needs an owner even though it
@@ -9932,6 +9972,7 @@ class BattleState:
             "team_hits": max(0, int(row.get("team_hits", 0))),
             "team_damage": max(0, int(row.get("team_damage", 0))),
             "team_kills": max(0, int(row.get("team_kills", 0))),
+            "team_crits": max(0, int(row.get("team_crits", 0))),
             "mileage": max(0, int(round(row.get("mileage", 0)))),
             "life_time": max(0, int(row.get("life_time", 0))),
         }
@@ -9994,6 +10035,7 @@ class BattleState:
                 "defended_base": record["defended_base"],
                 "actor_speed": record["actor_speed"],
                 "victim_speed": record["victim_speed"],
+                "ammo_rack": bool(record.get("ammo_rack")),
             })
 
         actors = []
@@ -10001,6 +10043,13 @@ class BattleState:
             identity = (row["actor_kind"], row["actor_id"])
             statistics = self._statistics_row(*identity)
             tier, vehicle_class = described(identity)
+            damage_sources = set(
+                (interaction['target_kind'], interaction['target_id'])
+                for interaction in self.vehicle_interactions.get(identity, {}).values()
+                if int(interaction.get("damage_received", 0)) > 0)
+            duelist_sources = damage_sources | set(
+                source for source, interactions in self.vehicle_interactions.items()
+                if int(interactions.get("%s:%d" % identity, {}).get("crits", 0)) > 0)
             actors.append({
                 "actor_kind": identity[0], "actor_id": identity[1],
                 "team": int(row["team"]),
@@ -10014,6 +10063,9 @@ class BattleState:
                 "xp": int(row["xp"]),
                 "stats": dict(row["stats"]),
                 "kills": kills_by_actor.get(identity, []),
+                "damage_sources": sorted(damage_sources),
+                "duelist_sources": sorted(duelist_sources),
+                "critical_hits": int(statistics.get("critical_hits", 0)),
                 "damaged_targets": sorted(
                     self.damaged_targets.get(identity, ())),
                 "exclusive_spot_assists": len(
@@ -10338,6 +10390,10 @@ class BattleState:
             for row in public_results:
                 row["achievements"] = sorted(awards.get(
                     (row["actor_kind"], row["actor_id"]), ()))
+            if self.battle_mode == "training":
+                for row in public_results:
+                    row["xp"] = 0
+                    row["achievements"] = []
             public_by_player = dict(
                 (row["actor_id"], row) for row in public_results
                 if row["actor_kind"] == "player")
@@ -10380,8 +10436,14 @@ class BattleState:
                 rewards["crystal"] = sum(crystal_rewards.values())
                 friendly = self._friendly_fire_receipt(
                     ("player", player_id), rewards.pop("xp_penalty", 0))
+                if self.battle_mode == "training":
+                    rewards = dict((key, 0) for key in rewards)
+                    crystal_rewards = {}
+                    friendly = {"victims": [], "received_damage": 0,
+                                "xp_penalty": 0}
                 receipt = {
                     "type": "battle_receipt",
+                    "battle_mode": self.battle_mode,
                     "protocol": PROTOCOL_VERSION,
                     "receipt_id": "%s:%d:%d" % (
                         self.receipt_namespace, self.round_id, player_id),
@@ -10399,8 +10461,10 @@ class BattleState:
                     "duration": max(0, int(round(
                         float(self.tick) / TICK_HZ))),
                     "premature_leave": bool(
-                        live_player is None or
-                        not live_player.participating),
+                        participant.get("premature_leave", False)),
+                    "watched_battle_to_end": bool(
+                        live_player is not None and live_player.connected and
+                        live_player.participating),
                     "stats": dict(public_row["stats"]),
                     "rewards": rewards,
                     "crystal_rewards": crystal_rewards,
@@ -11437,6 +11501,10 @@ class BattleState:
                             "y": round(float(sample["y"]), 4),
                             "z": round(float(sample["z"]), 4),
                             "yaw": round(float(sample["yaw"]), 5),
+                            "pitch": round(float(sample.get(
+                                "pitch", 0.0)), 5),
+                            "roll": round(float(sample.get(
+                                "roll", 0.0)), 5),
                             "forward": round(float(sample["forward"]), 4),
                         })
                         player.destructible_contacts[seq] = contact
@@ -12209,6 +12277,8 @@ class BattleState:
             self._record_damage(
                 attacker, ("player", player.player_id), damage,
                 critical_before)
+            self._record_critical_damage(
+                attacker, victim, critical_before, player.critical)
             event = {
                 "kind": ("hit" if attacker_kind == "player" else
                          "bot_human_hit"),
@@ -12613,10 +12683,15 @@ class BattleState:
         """Freeze one enemy kill with the facts #1513 medals ask about."""
         attacker = (str(attacker[0]), int(attacker[1]))
         victim = (str(victim[0]), int(victim[1]))
+        target = (self.players.get(victim[1]) if victim[0] == "player"
+                  else self.bot_states.get(victim[1]))
+        critical = (getattr(target, "critical", None) if victim[0] == "player"
+                    else (target or {}).get("critical")) or {}
         self.kill_records.append({
             "actor_kind": attacker[0], "actor_id": attacker[1],
             "victim_kind": victim[0], "victim_id": victim[1],
             "death_reason": int(death_reason),
+            "ammo_rack": bool(critical.get("ammo_rack_death")),
             "distance": (None if distance is None else
                          round(float(distance), 3)),
             # De Langlade's medal counts enemies destroyed while they were
@@ -12694,6 +12769,7 @@ class BattleState:
                 "piercings_received": 0, "no_damage_direct_hits_received": 0,
                 "explosion_hits_received": 0, "explosion_hits": 0,
                 "team_hits": 0, "team_damage": 0, "team_kills": 0,
+                "team_crits": 0, "critical_hits": 0,
                 "team_damage_penalized": 0, "team_killed_durability": 0,
                 "mileage": 0.0, "life_time": 0,
                 "damaging_hits_received": 0, "deflected_hits_received": 0,
@@ -12864,6 +12940,21 @@ class BattleState:
         return friendly_fire.facts({
             "victims": victims, "received_damage": received,
             "xp_penalty": int(xp_penalty)})
+
+    def _record_critical_damage(self, attacker, target, previous, current):
+        """Attribute admitted critical transitions, including fire and zero HP hits."""
+        if attacker is None or attacker == target:
+            return
+        mask = _crits_mask(previous, current)
+        if not mask:
+            return
+        row = self._statistics_row(*attacker)
+        if self._vehicle_team(*attacker) == self._vehicle_team(*target):
+            row["team_crits"] += _popcount(mask)
+            return
+        row["critical_hits"] += _popcount(mask)
+        self._statistics_row(*target)["crits_received_mask"] |= mask
+        self._or_interaction(attacker, target, "crits", mask)
 
     def _record_damage(self, attacker, target, damage, target_critical,
                        attacker_team=None):
@@ -14482,6 +14573,8 @@ class BattleState:
 
             if kind == "battle_start":
                 outgoing = dict(message)
+                outgoing["battle_mode"] = self.battle_mode
+                outgoing["training_bots"] = self.training_bots
                 connected = [
                     player for player in self.players.values()
                     if player.connected and player.participating]
@@ -15201,7 +15294,9 @@ class ClientHandler(socketserver.BaseRequestHandler):
                         elif message_type == "start_battle":
                             start_message, start_error = server.state.request_start(
                                 player.player_id, message.get("map"),
-                                message.get("round_seconds"))
+                                message.get("round_seconds"),
+                                message.get("battle_mode", "regular"),
+                                message.get("training_bots", False))
                             if start_message is None:
                                 player.send({
                                     "type": "start_denied",
