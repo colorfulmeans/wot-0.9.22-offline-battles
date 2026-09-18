@@ -531,6 +531,9 @@ def _settle_launcher_campaign(snapshot, vehicles, tankmen):
             snapshot.get('personalMissionOrders') or
             snapshot.get('personalMissionPawned') or
             snapshot.get('personalMissionRewardJournal') or
+            snapshot.get('personalMissionTokenRewards') or
+            snapshot.get('accountBadges') or
+            snapshot.get('selectedBadges') or
             'personalMissionRequestedCompleted' in snapshot):
         return
     from gui.mods.offline_lan_0922 import personal_campaign
@@ -543,6 +546,15 @@ def _settle_launcher_campaign(snapshot, vehicles, tankmen):
     for mission_id, error in result['pending']:
         sys.stdout.write('[Offline LAN 0.9.22] personal mission %s reward '
                          'remains pending: %s\n' % (mission_id, error))
+    # Keep the message and reward mutation in the same durable commit. The
+    # first lobby may not exist yet, so publishing here would lose both the
+    # native notification and its retry intent on an Account transition.
+    from gui.mods.offline_lan_0922.personal_campaign_ui import messages
+    if messages(result):
+        import uuid
+        state.snapshot().setdefault('personalMissionNotifications', []).append({
+            'id': uuid.uuid4().hex, 'settlement': copy.deepcopy(result)})
+        state.revision += 1
     if not state.revision:
         return
     staged = state.snapshot()

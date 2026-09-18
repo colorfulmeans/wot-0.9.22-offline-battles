@@ -511,6 +511,9 @@ class LANSession(object):
         self._requested_results = set()
         self._completed_results = set()
         self._notified_results = set()
+        self._battle_messages_sent = set()
+        self._campaign_notifications_sent = set()
+        self._campaign_notification_error_reported = False
         self._archived_result_replayed = False
         # UI intent is process-local and belongs to one live round. Durable
         # receipts describe rewards, not permission to open a window later.
@@ -823,6 +826,7 @@ class LANSession(object):
                 return
             self._publish_postbattle_progress()
             self._publish_postbattle_results()
+            self._publish_campaign_notifications()
 
         callback_id = self._callback(POSTBATTLE_RETRY_DELAY, retry)
         if self._postbattle_token is token:
@@ -833,37 +837,48 @@ class LANSession(object):
         """Inject one exact #1513 clickable service-channel result message."""
         if arena_unique_id in self._notified_results:
             return False
-        try:
-            from chat_shared import SYS_MESSAGE_IMPORTANCE, SYS_MESSAGE_TYPE
-            from messenger import MessengerEntry
-            timestamp = int(time.time())
-            chat_action = {
-                'sentTime': timestamp,
-                'data': {
-                    'messageID': int(arena_unique_id),
-                    'user_id': 0,
-                    'type': SYS_MESSAGE_TYPE.battleResults.index(),
-                    'importance': SYS_MESSAGE_IMPORTANCE.normal.index(),
-                    'active': True,
-                    'started_at': timestamp,
-                    'finished_at': None,
-                    'created_at': timestamp,
-                    'data': dict(result_data),
-                },
-            }
-            MessengerEntry.g_instance.protos.BW.serviceChannel.onReceiveSysMessage(
-                chat_action)
-        except Exception as error:
-            self._report_postbattle_notification_error(
-                arena_unique_id, error)
-            return False
-        self._notified_results.add(arena_unique_id)
-        if result_data.get('offlineDailyMissions'):
+        if arena_unique_id not in self._battle_messages_sent:
             try:
-                from gui.mods.offline_lan_0922.offline_services_ui import notify_missions
-                notify_missions(result_data['offlineDailyMissions'])
+                from chat_shared import SYS_MESSAGE_IMPORTANCE, SYS_MESSAGE_TYPE
+                from messenger import MessengerEntry
+                timestamp = int(time.time())
+                chat_action = {
+                    'sentTime': timestamp,
+                    'data': {
+                        'messageID': int(arena_unique_id),
+                        'user_id': 0,
+                        'type': SYS_MESSAGE_TYPE.battleResults.index(),
+                        'importance': SYS_MESSAGE_IMPORTANCE.normal.index(),
+                        'active': True,
+                        'started_at': timestamp,
+                        'finished_at': None,
+                        'created_at': timestamp,
+                        'data': dict(result_data),
+                    },
+                }
+                MessengerEntry.g_instance.protos.BW.serviceChannel.onReceiveSysMessage(
+                    chat_action)
+            except Exception as error:
+                self._report_postbattle_notification_error(
+                    arena_unique_id, error)
+                return False
+            self._battle_messages_sent.add(arena_unique_id)
+            if result_data.get('offlineDailyMissions'):
+                try:
+                    from gui.mods.offline_lan_0922.offline_services_ui import notify_missions
+                    notify_missions(result_data['offlineDailyMissions'])
+                except Exception as error:
+                    self._report_postbattle_notification_error(arena_unique_id, error)
+        # A mission-message failure may retry without replaying the battle
+        # result or daily reward notice already admitted to the native channel.
+        if result_data.get('offlinePersonalMissions'):
+            try:
+                from gui.mods.offline_lan_0922.personal_campaign_ui import notify
+                notify(result_data['offlinePersonalMissions'])
             except Exception as error:
                 self._report_postbattle_notification_error(arena_unique_id, error)
+                return False
+        self._notified_results.add(arena_unique_id)
         return True
 
     def _publish_postbattle_progress(self):
@@ -889,6 +904,37 @@ class LANSession(object):
         self._published_progress_battles = battles
         return True
 
+    def _publish_campaign_notifications(self):
+        """Show persisted launcher rewards only when the lobby is ready."""
+        if self._stopped:
+            return False
+        try:
+            import BigWorld
+        except ImportError:
+            return False
+        try:
+            publisher = getattr(
+                getattr(BigWorld.player(), 'fakeServer', None),
+                'publish_campaign_notifications', None)
+            if not callable(publisher):
+                return False
+            if self._battle_started or not self._lobby_ready():
+                self._schedule_postbattle_publish()
+                return False
+            published, pending = publisher(self._campaign_notifications_sent)
+            self._campaign_notification_error_reported = False
+            if pending:
+                self._schedule_postbattle_publish()
+            return bool(published)
+        except Exception as error:
+            if not self._campaign_notification_error_reported:
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] personal mission notifications '
+                    'could not be published: %s\n' % error)
+                self._campaign_notification_error_reported = True
+            self._schedule_postbattle_publish()
+            return False
+
     def on_lobby_view_loaded(self):
         """Drain a completed battle as soon as the rebuilt lobby can do so.
 
@@ -901,7 +947,8 @@ class LANSession(object):
             return False
         progress_published = self._publish_postbattle_progress()
         results_published = self._publish_postbattle_results()
-        return bool(progress_published or results_published)
+        campaign_published = self._publish_campaign_notifications()
+        return bool(progress_published or results_published or campaign_published)
 
     def _publish_selected_vehicle(self):
         """Send the current garage tank so the next round uses it."""
@@ -989,6 +1036,7 @@ class LANSession(object):
         # stock result service became available. Drain it as soon as this
         # lobby finishes loading, without requiring another LAN join.
         self._publish_postbattle_results()
+        self._publish_campaign_notifications()
         return True
 
     def revive(self):

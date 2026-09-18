@@ -671,6 +671,12 @@ class BootstrapLifecycleTests(unittest.TestCase):
         resources = {
             resource_root + 'list.xml': ET.fromstring(
                 '<root><regular_1_1_1/></root>'),
+            resource_root + 'tiles.xml': ET.fromstring(
+                '<root><quests><tokenQuest><id>test_badge</id><enabled>true</enabled>'
+                '<conditions><preBattle><account><token><id>component</id>'
+                '<greaterOrEqual>1</greaterOrEqual></token></account></preBattle></conditions>'
+                '<bonus><dossier><name>playerBadges:10</name><value>timestamp</value>'
+                '</dossier></bonus></tokenQuest></quests></root>'),
             resource_root + 'regular/tile_1/chain_1/regular_1_1_1.xml':
                 ET.fromstring('<root><quests>' + ''.join(
                     '<potapovQuest><id>regular_1_1_1_%s</id><bonus>%s'
@@ -689,7 +695,10 @@ class BootstrapLifecycleTests(unittest.TestCase):
         # These modules retain the config/data objects they import. Load them
         # inside this client's isolated package, not another test's globals.
         with mock.patch.dict(sys.modules, modules):
-            for relative in ('account_rpc/garage', 'personal_campaign',
+            for relative in ('account_rpc/garage', 'ui_i18n',
+                             'personal_campaign_rewards',
+                             'personal_campaign_vehicles',
+                             'personal_campaign_ui', 'personal_campaign',
                              'personal_campaign_ledger', 'friendly_fire',
                              'account_rpc/garage_store'):
                 name = 'gui.mods.offline_lan_0922.' + relative.replace('/', '.')
@@ -729,6 +738,11 @@ class BootstrapLifecycleTests(unittest.TestCase):
             self.assertEqual({'1': 1}, saved['personalMissions']['completed'])
             self.assertNotIn('requestedCompleted', saved['personalMissions'])
             self.assertEqual(credits + 1234, saved['wallet']['credits'])
+            notifications = settled['personalMissionNotifications']
+            self.assertEqual(1, len(notifications))
+            self.assertTrue(notifications[0]['id'])
+            self.assertEqual(1, notifications[0]['settlement']['missions'][0]['id'])
+            self.assertEqual(notifications, saved['personalMissions']['notifications'])
 
             # Recreating the Account from the committed file must not pay it
             # again or resurrect the launcher's consumed request.
@@ -736,6 +750,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             restarted = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
             self.assertEqual(credits + 1234, restarted['wallet']['credits'])
             self.assertNotIn('personalMissionRequestedCompleted', restarted)
+            self.assertEqual(notifications, restarted['personalMissionNotifications'])
 
     def test_campaign_edit_stays_pending_when_the_save_cannot_be_committed(self):
         bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
@@ -756,6 +771,34 @@ class BootstrapLifecycleTests(unittest.TestCase):
             self.assertEqual({'1': 1}, snapshot['personalMissionRequestedCompleted'])
             self.assertEqual(credits, snapshot['wallet']['credits'])
             self.assertFalse(snapshot.get('personalMissionProgress'))
+            self.assertFalse(snapshot.get('personalMissionNotifications'))
+
+    def test_rejected_launcher_reset_persists_a_readable_notification_without_rewards(self):
+        bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
+            unused_spaces, unused_events, modules = self._load()
+        store_module = self._campaign_modules(modules)
+        with mock.patch.dict(sys.modules, modules):
+            snapshot = bootstrap._selected_vehicle(
+                {'vehicle': 'ussr:R11_MS-1'}, restore_saved=False)
+            bootstrap._store = store_module.GarageStore()
+            snapshot['personalMissionRequestedCompleted'] = {'1': 1}
+            bootstrap._settle_launcher_campaign(
+                snapshot, modules['items'].vehicles, modules['items'].tankmen)
+            self.assertEqual({'1': 1}, snapshot['personalMissionProgress'])
+            snapshot['personalMissionNotifications'] = []
+            snapshot['wallet']['credits'] = 0
+            snapshot['personalMissionRequestedCompleted'] = {}
+            bootstrap._settle_launcher_campaign(
+                snapshot, modules['items'].vehicles, modules['items'].tankmen)
+            self.assertEqual({'1': 1}, snapshot['personalMissionProgress'])
+            self.assertEqual(0, snapshot['wallet']['credits'])
+            notices = snapshot['personalMissionNotifications']
+            self.assertEqual(1, len(notices))
+            self.assertIn('WALLET_UNAVAILABLE', notices[0]['settlement']['reset_error'])
+            self.assertEqual([], notices[0]['settlement']['missions'])
+            with open(bootstrap._store._path, encoding='utf-8') as stream:
+                saved = json.load(stream)['ledger']['personalMissions']
+            self.assertEqual(notices, saved['notifications'])
 
     def test_startup_reconciles_legacy_orders_even_without_any_mission_progress(self):
         bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
@@ -775,6 +818,30 @@ class BootstrapLifecycleTests(unittest.TestCase):
             with open(store._path, encoding='utf-8') as stream:
                 saved = json.load(stream)['ledger']['personalMissions']
             self.assertEqual(0, saved['orders'])
+
+    def test_startup_revokes_stale_campaign_badge_and_equipment_without_progress(self):
+        bootstrap, unused_callbacks, unused_compatibility, unused_loader, \
+            unused_spaces, unused_events, modules = self._load()
+        store_module = self._campaign_modules(modules)
+        with mock.patch.dict(sys.modules, modules):
+            snapshot = bootstrap._selected_vehicle(
+                {'vehicle': 'ussr:R11_MS-1'}, restore_saved=False)
+            snapshot.update(accountBadges={'10': 100, '77': 101},
+                            selectedBadges=[10], personalMissionTokenRewards=['test_badge'])
+            store = store_module.GarageStore()
+            store.mark_dirty()
+            self.assertTrue(store.flush(snapshot))
+
+            bootstrap._store = store_module.GarageStore()
+            restored = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
+            self.assertEqual({'77': 101}, restored['accountBadges'])
+            self.assertEqual([], restored['selectedBadges'])
+            from gui.mods.offline_lan_0922 import offline_services
+            self.assertEqual((), offline_services.service_diff(restored)['badges'])
+            with open(store._path, encoding='utf-8') as stream:
+                saved = json.load(stream)['ledger']
+            self.assertEqual({'77': 101}, saved['accountBadges'])
+            self.assertEqual([], saved['offlineServices']['selectedBadges'])
 
     def test_bond_offers_survive_full_account_sync_without_granting_ownership(self):
         # The launcher waits for the worker's full Account sync before opening

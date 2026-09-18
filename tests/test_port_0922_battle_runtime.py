@@ -7256,6 +7256,70 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self._bot_factors_patch.start()
         self.addCleanup(self._bot_factors_patch.stop)
 
+    def test_tab_mission_is_frozen_before_account_retirement_and_first_roster(self):
+        from gui.mods.offline_lan_0922 import personal_campaign
+        from test_port_0922_personal_campaign_battle import definition
+
+        runtime = _runtime()
+        snapshot = {
+            'personalMissionSelections': {'regular': [31]},
+            'personalMissionProgress': {'31': 1},
+        }
+        current_vehicle = sys.modules['CurrentVehicle'].g_currentVehicle
+        current_vehicle.item.descriptor.type.tags = frozenset(('mediumTank',))
+        current_vehicle.item.descriptor.type.level = 6
+        retired = [False]
+        reads = []
+
+        def garage_state():
+            if retired[0]:
+                raise AssertionError('mission capture used a retired Account')
+            reads.append('garage')
+            return types.SimpleNamespace(snapshot=lambda: snapshot)
+
+        original_retire = runtime.compatibility.retire_current_player
+
+        def retire():
+            retired[0] = True
+            # The Account's old selection is no longer available once the
+            # Avatar owns the GUI. Roster construction must use the freeze.
+            snapshot['personalMissionSelections']['regular'] = []
+            return original_retire()
+
+        runtime.compatibility.garage_state = garage_state
+        runtime.compatibility.retire_current_player = retire
+        battle = BattleRuntime(runtime)
+        with mock.patch.object(personal_campaign, 'mission_definition',
+                               return_value=definition('<win/>')):
+            self.assertTrue(battle.start({
+                'map': '01_karelia', 'vehicle': 'ussr:R11_MS-1',
+                'name': 'Player'}, _minimal_start(), _Client()))
+
+        roster = [pickle.loads(zlib.decompress(payload))
+                  for operation, payload in runtime.bigworld.avatar.arena_updates
+                  if operation == runtime.constants.ARENA_UPDATE.VEHICLE_ADDED]
+        self.assertEqual(['garage'], reads)
+        self.assertTrue(retired[0])
+        self.assertEqual([31], roster[0][15])
+        self.assertEqual((31,), battle._garage_loadout['personal_mission_ids'])
+        # Resolving the remaining battle loadout never reads the old Account.
+        self.assertEqual((31,), battle._garage_loadout_snapshot()[
+            'personal_mission_ids'])
+        battle.stop(show_login=False)
+        self.assertIsNone(battle._garage_loadout)
+
+    def test_training_and_hidden_worker_do_not_publish_personal_tasks(self):
+        for mode, worker in (('training', False), ('regular', True)):
+            runtime = _runtime()
+            runtime.compatibility.garage_state = mock.Mock(
+                side_effect=AssertionError('this role has no campaign mission'))
+            battle = BattleRuntime(runtime)
+            battle._worker_mode = worker
+            battle._start_message = {'battle_mode': mode}
+            self.assertEqual((), battle._garage_personal_mission_ids(
+                sys.modules['CurrentVehicle'].g_currentVehicle.item))
+            runtime.compatibility.garage_state.assert_not_called()
+
     def test_production_runtime_wires_stock_camera_visibility_module(self):
         cameras = types.SimpleNamespace(isPointOnScreen=mock.Mock())
         modules = {'AvatarInputHandler': mock.Mock(cameras=cameras)}

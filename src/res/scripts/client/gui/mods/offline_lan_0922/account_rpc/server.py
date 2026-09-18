@@ -6,6 +6,7 @@ except ImportError:
     import pickle as _pickle
 import zlib
 import traceback
+import copy
 
 from gui.mods.offline_lan_0922.account_rpc import commands, data, requests
 
@@ -105,6 +106,7 @@ class FakeServer(object):
         self._player_getter = player_getter
         self._context = dict(context or {})
         self._pending_inventory_updates = 0
+        self._campaign_notifications_sent = set()
         if self._context.get('account_state') is None:
             from gui.mods.offline_lan_0922.account_rpc.state import AccountState
             self._context['account_state'] = AccountState(path=None)
@@ -303,6 +305,52 @@ class FakeServer(object):
         if not accepted:
             restore_research()
         return accepted
+
+    def publish_campaign_notifications(self, delivered=None):
+        """Drain saved launcher settlements; return (published, pending).
+
+        ``delivered`` belongs to the session, surviving Account replacement.
+        A successful native push followed by a failed save retries only its
+        acknowledgement in this process. No reward settlement runs here.
+        """
+        if delivered is None:
+            delivered = self._campaign_notifications_sent
+        state = requests._garage(self._context)
+        snapshot = state.snapshot()
+        rows = list(snapshot.get('personalMissionNotifications') or ())
+        if not rows:
+            return 0, False
+        store = self._context.get('garage_store')
+        player = self._player()
+        if store is None or player is None:
+            return 0, True
+        from gui.mods.offline_lan_0922.personal_campaign_ui import notify
+        published = 0
+        for row in rows:
+            identifier = row['id']
+            if identifier not in delivered:
+                if notify(row.get('settlement')):
+                    published += 1
+                # An obsolete empty message can be acknowledged too. The
+                # enqueue path only writes messages with visible content.
+                delivered.add(identifier)
+            if self._player() is not player:
+                return published, True
+            # Stage just the acknowledgement. Mutating the live queue before
+            # a failed flush would lose retry state, while acknowledging only
+            # selected_vehicle would leave the shared GarageState unchanged.
+            remaining = [entry for entry in
+                         snapshot.get('personalMissionNotifications', ())
+                         if entry.get('id') != identifier]
+            staged = copy.deepcopy(snapshot)
+            staged['personalMissionNotifications'] = remaining
+            store.mark_dirty()
+            if not store.flush(staged):
+                return published, True
+            snapshot['personalMissionNotifications'] = remaining
+            state.revision += 1
+            self._context['selected_vehicle'] = snapshot
+        return published, bool(snapshot.get('personalMissionNotifications'))
 
     def _respond(self, request_id, command, args):
         result = requests.dispatch(command, self._context, args)

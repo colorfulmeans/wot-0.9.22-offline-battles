@@ -317,7 +317,8 @@ def _eligible(metadata, completed, facts):
                   all(completed.get(str(qid), 0) >= 1 for qid in required))
 
 
-def evaluate(snapshot, receipt, vehicles_module=None, definition_provider=None):
+def evaluate(snapshot, receipt, vehicles_module=None, definition_provider=None,
+             evaluations=None):
     """Return newly completed states and unmet evidence; never change the save.
 
     The settlement owner applies ``completed`` through the same reward path as
@@ -361,11 +362,15 @@ def evaluate(snapshot, receipt, vehicles_module=None, definition_provider=None):
                 result['unsupported'][key] = sorted(reasons)
             continue
         main, reasons = _postbattle(definition.get('main'), facts)
+        evaluated = {'definition': definition, 'main': main, 'add': False}
+        if evaluations is not None:
+            evaluations[key] = evaluated
         if main is not True:
             if reasons:
                 result['unsupported'][key] = sorted(reasons)
             continue
         additional, reasons = _postbattle(definition.get('add'), facts)
+        evaluated['add'] = additional
         level = 2 if additional is True else 1
         if level > completed.get(key, 0):
             result['completed'][key] = level

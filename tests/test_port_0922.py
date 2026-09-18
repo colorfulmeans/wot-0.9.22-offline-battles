@@ -6684,6 +6684,7 @@ class BootstrapContractTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.compat')
         compatibility_module.g_compatibility = compatibility
         account_state = types.SimpleNamespace()
+        garage_store = object()
         state_module = types.ModuleType(
             'gui.mods.offline_lan_0922.account_rpc.state')
         state_module.AccountState = mock.Mock(return_value=account_state)
@@ -6784,6 +6785,9 @@ class BootstrapContractTests(unittest.TestCase):
                 'bootstrap0922', bootstrap_path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
+            # Store availability must not depend on which other tests have
+            # imported the real garage module during unittest discovery.
+            module._garage_store = mock.Mock(return_value=garage_store)
             module._selected_vehicle = lambda value: {
                 'id': 1, 'compDescr': 12345}
             module._signal_worker_ready = mock.Mock(return_value=True)
@@ -6833,7 +6837,7 @@ class BootstrapContractTests(unittest.TestCase):
                         show_lobby=True,
                         account_context={'selected_vehicle': {
                             'id': 1, 'compDescr': 12345},
-                            'garage_store': None,
+                            'garage_store': garage_store,
                             'on_inventory_refreshed': module._on_inventory_refreshed,
                             'account_state': account_state})],
                     lobby_entry.mock_calls)
@@ -6961,7 +6965,7 @@ class BootstrapContractTests(unittest.TestCase):
             show_lobby=True,
             account_context={'selected_vehicle': {
                 'id': 1, 'compDescr': 12345},
-                'garage_store': None,
+                'garage_store': garage_store,
                 'on_inventory_refreshed': module._on_inventory_refreshed,
                 'account_state': account_state})
         self.assertEqual([expected_connect, expected_connect],

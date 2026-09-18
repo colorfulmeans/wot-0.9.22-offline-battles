@@ -611,10 +611,15 @@ class BigWorldVehicleBinding(object):
         # account identity namespace.  Every Vehicle is fully materialized
         # before this producer runs; publish it ready like the 0.8.2 roster.
         team_killer = bool((snapshot or {}).get('team_killer', False))
+        # ClientArena unpacks index 15 into personalMissionIDs. The stock
+        # personal arena description consumes it on its first player roster
+        # update, before TAB is populated; publishing it later is too late.
+        mission_ids = list((snapshot or {}).get('personal_mission_ids', ()))
         values = [entity_id, public_info['compDescr'], public_info['name'],
                   public_info['team'], is_alive, True, team_killer,
                   entity_id, '', 0,
-                  public_info['prebattleID'], False, False, {}, 0, [], 0, {}]
+                  public_info['prebattleID'], False, False, {}, 0,
+                  mission_ids, 0, {}]
         return zlib.compress(_pickle.dumps(values))
 
     def _snapshot_properties(self, snapshot):

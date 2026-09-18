@@ -1,7 +1,8 @@
-"""Reclaim only resettable campaign orders and their recorded crew rewards.
+"""Reclaim campaign orders and their source-identified crew rewards.
 
-Ordinary mission payouts are permanent. The caller owns the completion/reward
-markers and wraps a whole reset in GarageState._transaction(). These helpers
+The economic receipt owner reverses the remaining mission assets. The caller
+owns completion/reward markers and wraps a whole reset in
+GarageState._transaction(). These helpers
 validate all of one inverse operation before changing the live snapshot.
 """
 from gui.mods.offline_lan_0922.account_rpc.garage import GarageError
@@ -39,7 +40,8 @@ def revoke_tankwoman(state, effect):
     Save restoration validates a saved source locator and remaps this ID.
     Training and assignment may change the descriptor without changing its
     source. No descriptor-based search is allowed when the source is missing.
-    The accompanying berth is an ordinary permanent reward and is retained.
+    The economic receipt owner withdraws the accompanying berth after crew
+    movement has finished.
     """
     if not isinstance(effect, dict):
         raise GarageError('INVALID_PERSONAL_MISSION_REWARD_JOURNAL')

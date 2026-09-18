@@ -18,6 +18,11 @@ class PersonalCampaignReceiptTests(unittest.TestCase):
         condition_case.setUp()
         self.receipt = copy.deepcopy(condition_case.receipt)
         self.definition = copy.deepcopy(condition_case.definitions[270])
+        for stage in ('main', 'add'):
+            self.definition[stage]['children'].append(('id', {
+                'value': 'regular_4_3_15_' + stage, 'children': []}))
+        self.definition['main']['children'].append(('bonusDelayed',
+            battle_fixture.node('<bonusDelayed><tankwoman/></bonusDelayed>')))
         self.definition['main']['children'].append(('bonus', battle_fixture.node(
             '<bonus><token><id>token:pt:final:s1:t4</id><count>1</count>'
             '<limit>5</limit></token></bonus>')))
@@ -78,6 +83,15 @@ class PersonalCampaignReceiptTests(unittest.TestCase):
         self.assertEqual({'270': 2}, self.snapshot['personalMissionRewarded'])
         self.assertEqual(600100, self.snapshot['wallet']['credits'])
         self.assertEqual(1, self.snapshot['personalMissionOrders'])
+        mission = first['personal_missions']['missions'][0]
+        self.assertEqual((0, 2), (mission['before'], mission['after']))
+        self.assertEqual([1, 2], mission['paid_stages'])
+        self.assertTrue(mission['main_complete'])
+        self.assertTrue(mission['add_complete'])
+        self.assertTrue(mission['tankwoman_pending'])
+        self.assertEqual(1, mission['orders_earned'])
+        self.assertEqual('regular_4_3_15_main', mission['main_quest'])
+        self.assertEqual('regular_4_3_15_add', mission['add_quest'])
         before = copy.deepcopy(self.snapshot)
         duplicate = self.settle('campaign:1')
         self.assertFalse(duplicate['applied'])
@@ -99,6 +113,48 @@ class PersonalCampaignReceiptTests(unittest.TestCase):
         self.assertEqual(1, len(persisted['battleCrewReceipts']))
         self.assertEqual({'270': 2},
                          persisted['ledger']['personalMissions']['rewarded'])
+
+    def test_incomplete_battle_keeps_native_conditions_without_new_rewards(self):
+        self.receipt['interactions'][0]['damage'] = 0
+        result = self.settle('campaign:unfinished')['personal_missions']
+        self.assertEqual([], result['completed'])
+        mission = result['missions'][0]
+        self.assertEqual((0, 0), (mission['before'], mission['after']))
+        self.assertFalse(mission['main_complete'])
+        self.assertFalse(mission['add_complete'])
+        self.assertEqual([], mission['paid_stages'])
+        self.assertEqual([], mission['rewards'])
+        self.assertFalse(mission['tankwoman_pending'])
+
+    def test_unsupported_condition_never_becomes_a_completed_result_card(self):
+        conditions = self.definition['main']['children'][0][1]
+        conditions['children'][0][1]['children'].append(('unavailableEvent',
+            {'value': '', 'children': []}))
+        result = self.settle('campaign:unsupported')['personal_missions']
+        self.assertIn('270', result['unsupported'])
+        self.assertEqual([], result['completed'])
+        mission = result['missions'][0]
+        self.assertFalse(mission['main_complete'])
+        self.assertFalse(mission['add_complete'])
+
+    def test_failed_reward_reports_completion_without_claiming_delivery(self):
+        bonus = self.campaign.child(self.definition['add'], 'bonus')
+        bonus['children'].append(('unknownReward', {'value': '1', 'children': []}))
+        first = self.settle('campaign:pending')['personal_missions']
+        self.assertEqual([], first['completed'])
+        self.assertTrue(first['pending'])
+        mission = first['missions'][0]
+        self.assertEqual((0, 2), (mission['before'], mission['after']))
+        self.assertEqual([], mission['paid_stages'])
+        self.assertEqual([], mission['rewards'])
+        self.assertFalse(mission['tankwoman_pending'])
+        self.assertEqual(0, mission['orders_earned'])
+        restarted = self.fresh_snapshot()
+        restarted_store = self.fixture._store()
+        self.assertTrue(restarted_store.apply(restarted))
+        replay = self.settle('campaign:pending', restarted_store, restarted)
+        self.assertFalse(replay['applied'])
+        self.assertEqual(first, replay['personal_missions'])
 
     def test_operation_vehicle_touch_is_remapped_after_restart(self):
         self.snapshot['defaultVehicleSettings'] = 14

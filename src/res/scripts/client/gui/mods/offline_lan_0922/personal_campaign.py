@@ -5,6 +5,7 @@ Launcher edits and battle receipts enter the same idempotent settlement path.
 """
 from __future__ import print_function
 
+import copy
 import time
 
 from gui.mods.offline_lan_0922.account_rpc import data
@@ -88,33 +89,28 @@ def _tokens(snapshot):
 
 
 def _grant_vehicle(state, name):
-    snapshot = state.snapshot()
-    existing = next((record for record in state._records()
-                     if record.get('vehicleTypeName') == name), None)
-    if existing is not None:
-        # Explicit offline policy: a first operation claim for an owned tank
-        # pays its existing bare-vehicle credit refund. The operation receipt
-        # makes this compensation one-time, even after a mission reset.
-        refund = state._item_refund(int(existing['vehicleTypeCompactDescr']))
-        state._wallet()['credits'] += int(refund.get('credits', 0))
-        return
-    # Use the existing stock-record builder; the XML defines this as a free
-    # 100%-crew reward, so no wallet-dependent shop transaction is involved.
-    from items import ITEM_TYPE_INDICES
-    from gui.mods.offline_lan_0922 import bootstrap
-    compact_descr = bootstrap._build_purchased_vehicle(
-        snapshot, state._vehicles_module(), state._tankmen_module(),
-        ITEM_TYPE_INDICES, state._default_vehicle_settings(), name)
-    for record in state._records():
-        if int(record.get('vehicleTypeCompactDescr', 0)) == compact_descr:
-            state._touched.add(int(record['id']))
-            state._touched_tankmen.update(record.get('tankmen', {}))
-            for item_type, items in record.get('inventoryItems', {}).items():
-                state._touched_items.setdefault(int(item_type), set()).update(items)
+    from gui.mods.offline_lan_0922 import personal_campaign_vehicles
+
+    def create():
+        # The first claim carries the XML's stock hull and 100% crew. A
+        # withdrawn claim restores its held hull without creating this crew
+        # again; an already owned hull receives the full purchase-price value.
+        from items import ITEM_TYPE_INDICES
+        from gui.mods.offline_lan_0922 import bootstrap
+        compact_descr = bootstrap._build_purchased_vehicle(
+            state.snapshot(), state._vehicles_module(), state._tankmen_module(),
+            ITEM_TYPE_INDICES, state._default_vehicle_settings(), name)
+        for record in state._records():
+            if int(record.get('vehicleTypeCompactDescr', 0)) == compact_descr:
+                state._touched_tankmen.update(record.get('tankmen', {}))
+        return compact_descr
+
+    return personal_campaign_vehicles.grant(state, name, create)
 
 
 def _grant_bonus(state, bonus, now):
     snapshot = state.snapshot()
+    vehicle_effects = []
     for name, item in (bonus or {}).get('children', ()):
         amount = value(item)
         if name in ('credits', 'gold', 'freeXP', 'crystal'):
@@ -146,7 +142,9 @@ def _grant_bonus(state, bonus, now):
                 tokens[identifier] = [TOKEN_EXPIRY, min(limit, old + count)]
                 snapshot['personalMissionTokens'] = tokens
         elif name == 'vehicle':
-            _grant_vehicle(state, amount)
+            effect = _grant_vehicle(state, amount)
+            if isinstance(effect, dict):
+                vehicle_effects.append(effect)
         elif name == 'dossier':
             identifier = value(item, 'name')
             raw = value(item, 'value')
@@ -172,10 +170,109 @@ def _grant_bonus(state, bonus, now):
                 buckets[bound] = buckets.get(bound, 0) + int(value(row, 'value'))
         else:
             raise GarageError('UNSUPPORTED_PERSONAL_MISSION_REWARD: ' + name)
+    return {'vehicles': vehicle_effects}
+
+
+def _definition(mission_id, definitions=None, open_section=None):
+    return (definitions[int(mission_id)] if definitions is not None
+            else mission_definition(int(mission_id), open_section))
+
+
+def _reward_rows(receipt, economic_rows=None, vehicle_rows=None):
+    """Report actual delivered effects, without counting compensation twice."""
+    rows = copy.deepcopy(receipt.get('rewards', ()) if economic_rows is None
+                         else economic_rows)
+    vehicles = copy.deepcopy(receipt.get('vehicles', ()) if vehicle_rows is None
+                             else vehicle_rows)
+    compensation = sum(int(row.get('credits', 0)) for row in vehicles
+                       if row.get('kind') == 'compensation')
+    for row in rows:
+        if row.get('kind') == 'credits' and compensation:
+            deducted = min(compensation, int(row.get('count', 0)))
+            row['count'] = int(row.get('count', 0)) - deducted
+            compensation -= deducted
+    rows = [row for row in rows if row.get('count', 1)]
+    rows.extend(vehicles)
+    rows.extend(copy.deepcopy(receipt.get('token_rewards') or ()))
+    return rows
+
+
+def _record_reward(state, bonus, now):
+    from gui.mods.offline_lan_0922 import personal_campaign_rewards
+    previous = _tokens(state.snapshot())
+    receipt = personal_campaign_rewards.record_grant(
+        state, bonus, now, lambda: _grant_bonus(state, bonus, now))
+    current = _tokens(state.snapshot())
+    receipt['token_rewards'] = [
+        {'kind': 'token', 'id': name, 'count': row[1] - previous.get(name, [0, 0])[1]}
+        for name, row in current.items()
+        if (name.startswith('token:pt:final:') and len(name.split(':')) == 5 and
+            row[1] > previous.get(name, [0, 0])[1])]
+    return receipt
+
+
+def _legacy_reward(state, bonus, now):
+    from gui.mods.offline_lan_0922 import personal_campaign_rewards
+    receipt = personal_campaign_rewards.legacy_receipt(state, bonus, now)
+    if children(bonus, 'vehicle'):
+        from gui.mods.offline_lan_0922 import personal_campaign_vehicles
+        receipt['vehicles'] = [personal_campaign_vehicles.legacy_effect(
+            state, value(row)) for row in children(bonus, 'vehicle')]
+    return receipt
+
+
+def _revoke_reward(state, receipt, now):
+    from gui.mods.offline_lan_0922 import personal_campaign_rewards
+    vehicle_rows = []
+    if receipt.get('vehicles'):
+        from gui.mods.offline_lan_0922 import personal_campaign_vehicles
+        for effect in reversed(receipt['vehicles']):
+            withdrawn = personal_campaign_vehicles.revoke(state, effect)
+            if isinstance(withdrawn, dict):
+                vehicle_rows.append(withdrawn)
+    withdrawn = personal_campaign_rewards.revoke(state, receipt, now)
+    return _reward_rows(receipt, withdrawn, vehicle_rows)
+
+
+def _operation_entitlements(progress, definitions=None, open_section=None):
+    """Replay installed token dependencies using only current task progress."""
+    tokens = {}
+    for key, level in progress.items():
+        definition = _definition(key, definitions, open_section)
+        for stage in ('main', 'add')[:level]:
+            for row in children(child(definition[stage], 'bonus'), 'token'):
+                name = value(row, 'id')
+                if name != 'free_award_list':
+                    tokens[name] = tokens.get(name, 0) + int(value(row, 'count', '1'))
+    quests = children(child(_resource('tiles.xml', open_section), 'quests'), 'tokenQuest')
+    eligible = []
+    while True:
+        advanced = False
+        for quest in quests:
+            identifier = value(quest, 'id')
+            conditions = child(child(child(quest, 'conditions'), 'preBattle'), 'account')
+            requirements = children(conditions, 'token')
+            if (identifier in eligible or value(quest, 'enabled') != 'true' or
+                    not requirements or any(tag != 'token' for tag, unused in conditions['children']) or
+                    any(tokens.get(value(row, 'id'), 0) < int(value(row, 'greaterOrEqual', '1'))
+                        for row in requirements)):
+                continue
+            eligible.append(identifier)
+            for row in children(child(quest, 'bonus'), 'token'):
+                name = value(row, 'id')
+                if name != 'free_award_list':
+                    tokens[name] = min(int(value(row, 'limit', '2147483647')),
+                        tokens.get(name, 0) + int(value(row, 'count', '1')))
+            for row in requirements:
+                name = value(row, 'id')
+                tokens[name] = max(0, tokens.get(name, 0) - int(value(row, 'consume', '0')))
+            advanced = True
+        if not advanced:
+            return eligible, dict((value(row, 'id'), row) for row in quests)
 
 
 def _rebuild_progress_tokens(state, progress, definitions=None, open_section=None):
-    """Recompute counters after launcher resets; permanent claims stay claimed."""
+    """Recompute counters from tasks and the operation claims still earned."""
     totals = {}
     for key, level in progress.items():
         definition = (definitions[int(key)] if definitions is not None
@@ -185,6 +282,9 @@ def _rebuild_progress_tokens(state, progress, definitions=None, open_section=Non
                 name = value(row, 'id')
                 if name != 'free_award_list':
                     totals[name] = totals.get(name, 0) + int(value(row, 'count', '1'))
+    # Badge entitlement needs unspent task counters. Account publication also
+    # includes the bonuses and token consumption of still-earned operations.
+    progress_totals = dict(totals)
     claimed = set(state.snapshot().get('personalMissionTokenRewards') or ())
     if claimed:
         for quest in children(child(_resource('tiles.xml', open_section), 'quests'), 'tokenQuest'):
@@ -202,6 +302,69 @@ def _rebuild_progress_tokens(state, progress, definitions=None, open_section=Non
     if tokens != _tokens(state.snapshot()):
         state.snapshot()['personalMissionTokens'] = tokens
         state.revision += 1
+    return progress_totals
+
+
+def _reconcile_campaign_badges(state, progress_totals, now, open_section=None):
+    """Replay only token dependencies to derive current campaign cosmetics.
+
+    Dependent badge quests use the current entitlement of their source quests.
+    Legacy or manually edited badge ownership cannot replace that entitlement.
+    """
+    snapshot = state.snapshot()
+    if not (progress_totals or snapshot.get('accountBadges') or
+            snapshot.get('selectedBadges')):
+        return
+    quests = children(child(_resource('tiles.xml', open_section), 'quests'), 'tokenQuest')
+    managed, eligible = set(), set()
+    rows = []
+    for quest in quests:
+        badge_ids = set(value(row, 'name').split(':', 1)[1]
+                        for row in children(child(quest, 'bonus'), 'dossier')
+                        if value(row, 'name').startswith('playerBadges:'))
+        managed.update(badge_ids)
+        conditions = child(child(child(quest, 'conditions'), 'preBattle'), 'account')
+        requirements = children(conditions, 'token')
+        if (value(quest, 'enabled') == 'true' and requirements and
+                all(tag == 'token' for tag, unused in conditions['children'])):
+            rows.append((quest, requirements, badge_ids))
+    tokens = dict(progress_totals)
+    completed = set()
+    while True:
+        advanced = False
+        for index, (quest, requirements, badge_ids) in enumerate(rows):
+            if index in completed or any(
+                    tokens.get(value(row, 'id'), 0) < int(value(row, 'greaterOrEqual', '1'))
+                    for row in requirements):
+                continue
+            completed.add(index)
+            eligible.update(badge_ids)
+            for row in children(child(quest, 'bonus'), 'token'):
+                name = value(row, 'id')
+                if name != 'free_award_list':
+                    tokens[name] = min(int(value(row, 'limit', '2147483647')),
+                                       tokens.get(name, 0) + int(value(row, 'count', '1')))
+            for row in requirements:
+                name = value(row, 'id')
+                tokens[name] = max(0, tokens.get(name, 0) - int(value(row, 'consume', '0')))
+            advanced = True
+        if not advanced:
+            break
+    badges = data.account_badges(snapshot.get('accountBadges'))
+    revoked = managed - eligible
+    for badge in revoked:
+        badges.pop(badge, None)
+    for badge in eligible:
+        if badge not in badges:
+            badges[badge] = now
+    selected = [badge for badge in (snapshot.get('selectedBadges') or ())
+                if str(badge) not in revoked]
+    if badges != snapshot.get('accountBadges', {}):
+        snapshot['accountBadges'] = badges
+        state.revision += 1
+    if selected != list(snapshot.get('selectedBadges') or ()):
+        snapshot['selectedBadges'] = selected
+        state.revision += 1
 
 
 def saved_fields(snapshot):
@@ -209,8 +372,8 @@ def saved_fields(snapshot):
     progress = data.personal_mission_completed(snapshot.get('personalMissionProgress'))
     rewarded = data.personal_mission_completed(snapshot.get('personalMissionRewarded'))
     result = {
-        # Retain ordinary reward claims when completion is reset. Only
-        # explicitly journaled orders and female crew can be reclaimed.
+        # Claim markers and actual reward receipts move together during an
+        # atomic reset. Source records for parked hulls remain available.
         'rewarded': rewarded,
         'pawned': dict((str(key), int(count)) for key, count in
                        (snapshot.get('personalMissionPawned') or {}).items()
@@ -222,6 +385,7 @@ def saved_fields(snapshot):
         'tokenRewards': list(snapshot.get('personalMissionTokenRewards') or ()),
         'dossier': dict(snapshot.get('personalMissionDossier') or {}),
         'rewardJournal': dict(snapshot.get('personalMissionRewardJournal') or {}),
+        'notifications': copy.deepcopy(snapshot.get('personalMissionNotifications') or []),
         'resetError': snapshot.get('personalMissionResetError', ''),
     }
     for source, target in (('personalMissionRequestedCompleted', 'requestedCompleted'),
@@ -236,13 +400,14 @@ def restored_fields(personal_missions):
                'tankwomen': 'personalMissionTankwomen', 'tokens': 'personalMissionTokens',
                'tokenRewards': 'personalMissionTokenRewards', 'dossier': 'personalMissionDossier',
                'rewardJournal': 'personalMissionRewardJournal', 'resetError': 'personalMissionResetError',
+               'notifications': 'personalMissionNotifications',
                'requestedCompleted': 'personalMissionRequestedCompleted',
                'requestedRegular': 'personalMissionRequestedRegular'}
     return dict((target, personal_missions[source])
                 for source, target in mapping.items() if source in personal_missions)
 
 
-def _token_quests(state, now, open_section=None):
+def _token_quests(state, now, open_section=None, operations=None):
     snapshot = state.snapshot()
     if not snapshot.get('personalMissionTokens'):
         return []
@@ -261,7 +426,9 @@ def _token_quests(state, now, open_section=None):
                for row in requirements):
             continue
         with state._transaction():
-            _grant_bonus(state, child(quest, 'bonus'), now)
+            receipt = _record_reward(state, child(quest, 'bonus'), now)
+            snapshot.setdefault('personalMissionRewardJournal', {})[
+                'operation:' + identifier] = receipt
             tokens = _tokens(snapshot)
             for row in requirements:
                 token = value(row, 'id')
@@ -271,43 +438,120 @@ def _token_quests(state, now, open_section=None):
             snapshot['personalMissionTokenRewards'] = sorted(completed)
             state.revision += 1
         granted.append(identifier)
+        if operations is not None:
+            operations.append({'id': identifier, 'phase': 'granted',
+                               'rewards': _reward_rows(receipt)})
     return granted
 
 
-def _apply_requested_progress(state):
-    """Commit an editor request and its limited clawback together or reject it."""
+def _apply_requested_progress(state, now=None, definitions=None,
+                              open_section=None, notices=None):
+    """Reverse every cancelled reward atomically before replacing progress."""
     snapshot = state.snapshot()
     if 'personalMissionRequestedCompleted' not in snapshot:
         return ''
     from gui.mods.offline_lan_0922 import personal_campaign_ledger
+    now = int(time.time() if now is None else now)
     requested = data.personal_mission_completed(snapshot['personalMissionRequestedCompleted'])
     previous = data.personal_mission_completed(snapshot.get('personalMissionProgress'))
+    revoked_missions, revoked_operations = [], []
     try:
         with state._transaction():
             journal = snapshot.setdefault('personalMissionRewardJournal', {})
+            rewarded = data.personal_mission_completed(snapshot.get('personalMissionRewarded'))
+            returned_orders = {}
             # Return only orders from missions cancelled in this same edit
             # before reclaiming earnings, so dictionary order cannot reject
             # an otherwise balanced reset.
             for key in previous:
                 if requested.get(key, 0) == 0:
-                    refund = snapshot.setdefault('personalMissionPawned', {}).pop(key, 0)
-                    snapshot['personalMissionOrders'] = data.personal_mission_orders(
-                        snapshot.get('personalMissionOrders', 0) + int(refund))
-            for key, level in previous.items():
+                    before_orders = order_balance(snapshot)
+                    snapshot.setdefault('personalMissionPawned', {}).pop(key, 0)
+                    balance = _reconcile_order_balance(state)
+                    returned_orders[key] = max(0, balance - before_orders)
+            # Remove cancelled female crew before parking reward tanks. This
+            # releases their barracks seats for other crew returned by the
+            # same atomic reset; berth rewards are reversed only afterwards.
+            revoked_crew = {}
+            for key in list(snapshot.get('personalMissionTankwomen', {})):
+                if requested.get(key, 0):
+                    continue
+                crew_key = 'crew:' + key
+                if crew_key not in journal:
+                    raise GarageError('PERSONAL_MISSION_CREW_PROVENANCE_MISSING: ' + key)
+                personal_campaign_ledger.revoke_tankwoman(state, journal[crew_key])
+                del journal[crew_key]
+                snapshot['personalMissionTankwomen'].pop(key, None)
+                bonus_key = 'crewBonus:' + key
+                receipt = journal.get(bonus_key)
+                if not isinstance(receipt, dict):
+                    definition = _definition(key, definitions, open_section)
+                    delayed = child(definition['main'], 'bonusDelayed')
+                    bonus = {'children': [(name, row) for name, row in
+                        (delayed or {}).get('children', ())
+                        if name not in ('tankmen', 'dossier')]}
+                    receipt = _legacy_reward(state, bonus, now)
+                revoked_crew[key] = receipt
+            # Remove dependent operation rewards before their source task
+            # stages. Vehicle removal must precede withdrawing its garage slot.
+            claimed = list(snapshot.get('personalMissionTokenRewards') or ())
+            if claimed:
+                eligible, quests = _operation_entitlements(requested, definitions, open_section)
+                old_eligible, unused = _operation_entitlements(previous, definitions, open_section)
+                ordered = old_eligible + [key for key in claimed if key not in old_eligible]
+                for identifier in reversed(ordered):
+                    if identifier not in claimed or identifier in eligible:
+                        continue
+                    receipt_key = 'operation:' + identifier
+                    receipt = journal.get(receipt_key)
+                    if not isinstance(receipt, dict):
+                        if identifier not in quests:
+                            raise GarageError('PERSONAL_MISSION_REWARD_SOURCE_UNAVAILABLE: ' + identifier)
+                        receipt = _legacy_reward(state, child(quests[identifier], 'bonus'), now)
+                    rows = _revoke_reward(state, receipt, now)
+                    journal.pop(receipt_key, None)
+                    claimed.remove(identifier)
+                    revoked_operations.append({'id': identifier, 'phase': 'revoked', 'rewards': rows})
+                snapshot['personalMissionTokenRewards'] = claimed
+            for key in sorted(set(previous) | set(rewarded) | set(revoked_crew),
+                              key=int, reverse=True):
+                level = previous.get(key, 0)
                 target = requested.get(key, 0)
+                paid = rewarded.get(key, 0)
+                if target >= level and target >= paid and key not in revoked_crew:
+                    continue
+                rows, orders_revoked, tankwomen_revoked = [], 0, 0
                 if level == 2 and target < 2:
                     order_key = 'orders:' + key
                     if order_key in journal:
-                        personal_campaign_ledger.revoke_orders(state, journal[order_key]['count'])
+                        orders_revoked = personal_campaign_ledger.revoke_orders(
+                            state, journal[order_key]['count'])
                         del journal[order_key]
-                if target == 0:
-                    crew_key = 'crew:' + key
-                    if snapshot.get('personalMissionTankwomen', {}).get(key):
-                        if crew_key not in journal:
-                            raise GarageError('PERSONAL_MISSION_CREW_PROVENANCE_MISSING: ' + key)
-                        personal_campaign_ledger.revoke_tankwoman(state, journal[crew_key])
-                        del journal[crew_key]
-                        snapshot['personalMissionTankwomen'].pop(key, None)
+                if key in revoked_crew:
+                    tankwomen_revoked = 1
+                    rows.extend(_revoke_reward(state, revoked_crew[key], now))
+                    journal.pop('crewBonus:' + key, None)
+                for stage in range(paid, target, -1):
+                    stage_name = 'main' if stage == 1 else 'add'
+                    receipt_key = 'stage:%s:%s' % (key, stage_name)
+                    receipt = journal.get(receipt_key)
+                    if not isinstance(receipt, dict):
+                        definition = _definition(key, definitions, open_section)
+                        receipt = _legacy_reward(state, child(definition[stage_name], 'bonus'), now)
+                    rows.extend(_revoke_reward(state, receipt, now))
+                    journal.pop(receipt_key, None)
+                if paid > target:
+                    if target:
+                        rewarded[key] = target
+                    else:
+                        rewarded.pop(key, None)
+                revoked_missions.append({'id': int(key), 'phase': 'revoked',
+                    'before': level, 'after': target, 'paid_before': paid,
+                    'paid_after': min(paid, target), 'paid_stages': [],
+                    'rewards': rows, 'orders_revoked': orders_revoked,
+                    'orders_refunded': returned_orders.get(key, 0),
+                    'tankwomen_revoked': tankwomen_revoked})
+            snapshot['personalMissionRewarded'] = rewarded
             snapshot['personalMissionProgress'] = requested
             if 'personalMissionRequestedRegular' in snapshot:
                 snapshot['personalMissionSelections'] = {'regular':
@@ -325,6 +569,9 @@ def _apply_requested_progress(state):
         snapshot['personalMissionResetError'] = str(error)
         state.revision += 1
         return str(error)
+    if notices is not None:
+        notices['missions'].extend(revoked_missions)
+        notices['operations'].extend(revoked_operations)
     return ''
 
 
@@ -388,9 +635,12 @@ def _reconcile_order_sources(state, definitions=None, open_section=None):
 
 
 def settle(state, now=None, definitions=None, open_section=None):
-    """Pay permanent stages once; resettable orders and crew have provenance."""
+    """Pay or reverse installed reward stages with durable exact receipts."""
     now = int(time.time() if now is None else now)
     granted, pending = [], []
+    notices = {'missions': [], 'operations': []}
+    initial_progress = data.personal_mission_completed(state.snapshot().get('personalMissionProgress'))
+    initial_badges = set(data.account_badges(state.snapshot().get('accountBadges')))
     # Normalize before a reset checks its available refund budget. A save
     # without completed missions still needs to lose its old manual balance.
     _reconcile_order_balance(state)
@@ -398,7 +648,10 @@ def settle(state, now=None, definitions=None, open_section=None):
         _reconcile_order_sources(state, definitions, open_section)
     except Exception as error:
         pending.append(('orders', str(error)))
-    reset_error = _apply_requested_progress(state)
+    reset_error = _apply_requested_progress(state, now, definitions, open_section, notices)
+    if reset_error:
+        return {'completed': [], 'operation_rewards': [], 'missions': [],
+                'operations': [], 'pending': pending, 'reset_error': reset_error}
     snapshot = state.snapshot()
     progress = data.personal_mission_completed(snapshot.get('personalMissionProgress'))
     rewarded = data.personal_mission_completed(snapshot.get('personalMissionRewarded'))
@@ -413,14 +666,20 @@ def settle(state, now=None, definitions=None, open_section=None):
         if paid >= level and not order_may_be_due and not pawn_may_be_due:
             continue
         try:
-            definition = (definitions[int(key)] if definitions is not None
-                          else mission_definition(int(key), open_section))
+            definition = _definition(key, definitions, open_section)
+            paid_stages, rewards = [], []
+            earned_delta, refund = 0, 0
+            before_orders = order_balance(snapshot)
             with state._transaction():
                 for stage in range(paid + 1, level + 1):
                     stage_name = 'main' if stage == 1 else 'add'
+                    receipt_key = 'stage:%s:%s' % (key, stage_name)
                     if stage == 1 and key in snapshot.get('personalMissionPawned', {}):
                         stage_name = 'main_award_list'
-                    _grant_bonus(state, child(definition[stage_name], 'bonus'), now)
+                    receipt = _record_reward(state, child(definition[stage_name], 'bonus'), now)
+                    journal[receipt_key] = receipt
+                    paid_stages.append(stage)
+                    rewards.extend(_reward_rows(receipt))
                 earned_orders = (_earned_order_count(definition)
                                  if level == 2 and int(key) % 15 == 0 else 0)
                 if earned_orders and order_key not in journal:
@@ -430,29 +689,55 @@ def settle(state, now=None, definitions=None, open_section=None):
                         snapshot['personalMissionOrders'] = data.personal_mission_orders(
                             snapshot.get('personalMissionOrders', 0) + earned_orders)
                     journal[order_key] = {'count': earned_orders}
+                    earned_delta = earned_orders
                 if level == 2:
                     refund = snapshot.setdefault('personalMissionPawned', {}).pop(key, 0)
                     snapshot['personalMissionOrders'] = data.personal_mission_orders(
                         snapshot.get('personalMissionOrders', 0) + int(refund))
                 snapshot.setdefault('personalMissionRewarded', {})[key] = max(paid, level)
+                current_orders = _reconcile_order_balance(state)
+                refund = max(0, current_orders - before_orders - earned_delta)
                 state.revision += 1
             granted.append(int(key))
+            notices['missions'].append({'id': int(key), 'phase': 'granted',
+                'before': initial_progress.get(key, 0), 'after': level,
+                'paid_before': paid, 'paid_after': max(paid, level),
+                'paid_stages': paid_stages, 'rewards': rewards,
+                'orders_earned': earned_delta, 'orders_refunded': int(refund),
+                'tankwoman_pending': bool(level and not snapshot.get(
+                    'personalMissionTankwomen', {}).get(key) and
+                    child(definition['main'], 'bonusDelayed'))})
         except Exception as error:
             snapshot = state.snapshot()
             pending.append((int(key), str(error)))
+    progress_totals = None
     try:
-        _rebuild_progress_tokens(state, progress, definitions, open_section)
+        progress_totals = _rebuild_progress_tokens(state, progress, definitions, open_section)
         operation_rewards = []
         while True:
-            batch = _token_quests(state, now, open_section)
+            batch = _token_quests(state, now, open_section, notices['operations'])
             operation_rewards.extend(batch)
             if not batch:
                 break
     except Exception as error:
         pending.append(('operation', str(error)))
-        operation_rewards = []
+        operation_rewards = [row['id'] for row in notices['operations']
+                             if row.get('phase') == 'granted']
+    if progress_totals is not None:
+        try:
+            _reconcile_campaign_badges(state, progress_totals, now, open_section)
+        except Exception as error:
+            pending.append(('badges', str(error)))
     _reconcile_order_balance(state)
+    final_badges = set(data.account_badges(state.snapshot().get('accountBadges')))
+    for phase, changed in (('granted', final_badges - initial_badges),
+                           ('revoked', initial_badges - final_badges)):
+        if changed:
+            notices['operations'].append({'id': 'badges', 'phase': phase,
+                'rewards': [{'kind': 'badge', 'id': badge, 'count': 1}
+                            for badge in sorted(changed)]})
     return {'completed': granted, 'operation_rewards': operation_rewards,
+            'missions': notices['missions'], 'operations': notices['operations'],
             'pending': pending, 'reset_error': reset_error}
 
 
@@ -496,16 +781,14 @@ def claim_tankwoman(state, mission_id, nation, vehicle_id, role_id,
         import base64
         journal = snapshot.setdefault('personalMissionRewardJournal', {})
         bonus_key = 'crewBonus:' + key
-        first_claim = bonus_key not in journal
         bonus = {'children': [(name, row) for name, row in delayed['children']
-                 if name != 'tankmen' and (first_claim or name == 'dossier')]}
-        dossier_count = sum(int(value(row, 'value', '0')) for row in children(bonus, 'dossier')
-                            if value(row, 'name') == 'achievements:tankwomenProgress')
-        _grant_bonus(state, bonus, int(time.time() if now is None else now))
-        journal[bonus_key] = True
+                 if name != 'tankmen']}
+        journal[bonus_key] = _record_reward(state, bonus,
+            int(time.time() if now is None else now))
         journal['crew:' + key] = {'tankman': tankman_id,
             'descriptor': base64.b64encode(descriptor).decode('ascii'),
-            'dossier_count': dossier_count}
+            # The economic receipt owns the dossier inverse for new claims.
+            'dossier_count': 0}
         snapshot.setdefault('personalMissionTankwomen', {})[key] = True
         state.revision += 1
     return tankman_id

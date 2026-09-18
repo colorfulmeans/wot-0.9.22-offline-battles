@@ -148,20 +148,37 @@ without honors. Clearing a main completion also clears that chain's final and
 every mission in all five classes of every later operation. Clearing honors
 alone changes no other mission or operation, including order-skipped finals.
 Edits are settled when the game next opens the garage. Resetting main completion
-reclaims that mission's female crew; resetting honors reclaims its earned
-orders. An eligible reset mission replaces the previous selection of its class.
-Other rewards remain owned and recorded as claimed, so replay cannot duplicate
-credits, equipment, premium time or tanks. If the free order balance is too low
-to withdraw earned orders, the edit is rejected atomically and its reason is
-shown in the mission editor. An edit is also rejected when the exact reward
-crew can no longer be identified, including an old claim without provenance
-or a permanently removed crew member. Daily missions remain separate.
+withdraws the corresponding main and honors rewards, including dependent
+operation rewards; resetting honors withdraws only its additional rewards.
+An eligible reset mission replaces the previous selection of its class.
+The durable reward journal records the actual payout, so a successful withdrawal
+allows that reward to be earned again without duplicating property. A failed
+withdrawal preserves the original progress and property and shows its reason
+in the mission editor and system messages. Spent currency, missing items,
+unknown crew provenance or insufficient storage can prevent a complete reset.
+Elapsed premium time cannot be undone; only the remaining earned interval is
+withdrawn. Daily missions remain separate.
 
-On the first claim of an operation's reward tank, an already owned permanent
-vehicle instead gives a one-time credit compensation using its stock vehicle
-sale value. This is an explicit offline policy, not a verified historical
-KongZhong compensation rule. Resetting an operation retains its tank and claim
-record, and cannot grant compensation again.
+Before each operation tank grant, the garage is checked for the same vehicle.
+An already owned vehicle receives its **full original vehicle value in credits**,
+using the catalogue's credit price plus any gold price at the account exchange
+rate, without the selling discount or custom bond-shop price. This compensation
+is an explicit offline policy, not a verified historical KongZhong rule.
+Cancellation reverses the recorded compensation, leaving the pre-existing tank
+alone. A tank actually granted by the mission is withdrawn; its crew and fitted
+items return to the barracks/depot. A saved vehicle source marker prevents a
+later purchased replacement from being mistaken for the original reward.
+Old operation claims without vehicle provenance cannot establish whether a
+tank or compensation was originally paid; those resets are refused rather
+than taking a purchased vehicle or leaving an unknown cash payout behind.
+
+Personal-mission account badges follow the current completion and honors
+requirements. Cancelling those requirements also removes the corresponding
+badge and its equipped selection. The original battle TAB receives the active
+mission for the current tank class and tier. Battle results carry personal
+mission progress in the native lower-left quest area, while system messages
+list actual rewards, vehicle compensation and withdrawals. Launcher changes
+queue these messages for the next garage load and retain undelivered notices.
 
 The account panel also edits account badge ownership.
 Badge choices and translated names come from the installed client's

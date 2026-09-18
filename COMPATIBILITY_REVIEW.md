@@ -4128,23 +4128,36 @@ unclaimed female crew choices.
 `personal_campaign` reads reward definitions from installed resources and
 settles missing stages on garage startup and after authoritative battle
 receipts. `rewarded` records paid main/additional stages independently of
-`completed`; `tankwomen` records delayed crew claims. Paid economic markers
-are retained across resets. The launcher writes `requestedCompleted` and
-`requestedRegular`, not committed progress; the client reclaims only earned
-order entitlements and mission-origin female crew on a detached transaction
-before committing the edit. A rejected withdrawal clears the pending request,
-preserves the old progress/property and publishes `resetError` to the editor.
-Crew provenance must survive inventory-ID reconstruction across restarts;
-it must never identify an unrelated crew member by a reused numeric ID.
-An old claim without provenance, or a crew member no longer present in the
-garage, barracks or recycle bin, rejects the reset rather than guessing.
-Operation reward markers prevent duplicate permanent grants. The first claim
-of an already owned tank gives stock credit sale-value compensation once,
-an explicit offline policy rather than a claimed historical regional rule.
-Tokens are rebuilt from current progress. Currency, inventory,
-premium time, vehicle/slot, badge, camouflage and native female-crew rewards
-use the same persisted account transaction. Existing saves containing only
-completion flags receive their missing rewards during migration.
+`completed`; `tankwomen` records delayed crew claims. The launcher writes
+`requestedCompleted` and `requestedRegular`, not committed progress. The client
+withdraws the actual recorded stage and dependent operation payouts on a
+detached transaction before committing an edit. Markers are cleared only after
+successful withdrawal, allowing replay to grant the reward once again. A
+rejected withdrawal clears the pending request, preserves the old progress and
+property, and publishes `resetError` to the editor and a durable notification.
+Spent property or unresolvable legacy provenance rejects the whole withdrawal.
+Elapsed premium time is not reversible; only the remaining earned interval is
+removed without consuming separately purchased time.
+
+Crew provenance survives inventory-ID reconstruction across restarts. A missing
+or ambiguous reward crew member rejects the edit rather than identifying an
+unrelated crew member by a reused ID. Reward vehicles also carry a persisted
+source marker. Withdrawal returns crew and fitted items to storage and keeps
+a reversible record of the hull. A later purchase of the same type is not
+silently removed in place of a sold mission vehicle. Old operation claims
+without a vehicle source marker cannot distinguish a granted tank from a
+previously owned vehicle that received compensation. Such resets are refused
+rather than parking a purchased tank while retaining an unknown cash payout.
+
+Before every tank grant, existing ownership is checked. Compensation uses the
+full original catalogue price in credits (gold at the existing account exchange
+rate), without `sellPriceFactor` or the bond-shop override in `shopItemPrices`.
+The exact compensation is journaled and withdrawn on reset, leaving the
+pre-existing vehicle untouched. This is the requested offline policy rather
+than a claimed historical regional rule. Tokens are rebuilt from current
+progress. Currency, inventory, premium time, vehicles/slots, badges, camouflage
+and native female-crew rewards share the persisted account transaction.
+Existing saves containing only completion flags receive their missing rewards.
 
 The battle evaluator uses the installed conditions and existing receipt facts.
 It supports the reported Object 260 MT-15 through per-target tank-destroyer
@@ -4201,7 +4214,7 @@ document the five final-mission components, one order per honored final,
 one-/four-order skip costs and refunds after honors. They explicitly allow
 spending four orders on a final before its fourteen preceding tasks. The
 launcher's cascading reset is a user-requested offline editing rule; it is
-not a retail operation. Retained reward tanks do not replace completion flags
+not a retail operation. Vehicle ownership does not replace completion flags
 when deciding whether later missions remain available.
 
 Before the first garage, corresponding initial values live in `save.json`;
@@ -4218,3 +4231,46 @@ badge rendering and the Tk dialog's final Windows layout still require
 #1513 Windows acceptance.
 Local tests cover storage round trips, checkbox dependencies, all 300 IDs,
 invalid/running writes, atomic failure, badge removal and publication fields.
+
+
+## Personal-mission display and reward withdrawal (2026-09-18)
+
+The battle roster's existing 18-field vehicle tuple now carries active personal
+mission IDs at index 15. Selection is captured before Account retirement,
+filtered through installed mission class, tier and prerequisite definitions,
+and retained through Avatar/arena creation. A main-complete mission remains
+eligible for honors; fully honored, wrong-class, locked and training missions
+do not populate that field. This uses the original TAB description, not the
+live progress widget introduced in Update 1.1.
+
+Each durable battle receipt captures mission state before/after evaluation,
+actual paid stages, localized quest identifiers and reward details. Native
+`questsProgress` is constructed from those recorded transitions for the result
+screen, including incomplete conditions. Result reopening and receipt replay
+use saved metadata rather than current campaign state. System notices use one
+native `SystemMessages.pushMessage` call per settlement. Personal-notice retry
+does not replay an already accepted battle or daily notice. Launcher settlement
+queues messages in the same garage save as the assets; successful delivery is
+acknowledged persistently.
+
+Badge eligibility is recomputed from the enabled token-quest dependency graph,
+not permanent historical token-reward markers. Missing main or honors
+requirements remove their mission badges and equipped selection; unrelated
+badges remain owned. Restoration of eligibility restores the badge without
+replaying unrelated economic rewards.
+
+The [9.16 release notes](https://worldoftanks.eu/en/content/docs/release_notes/release_note-9_16/)
+describe revised reward presentation and personal-mission information. The
+[1.1 release notes](https://worldoftanks.eu/en/content/docs/release_notes/release-notes-11/)
+identify the later in-battle progress changes and reworked TAB descriptions.
+The existing regional `QuestsProgressBlock` supplies lower-left result contract
+orientation; these references do not prove new #1513 native rendering. Daily
+missions here remain an offline extension, not the later retail Daily Missions
+feature. Reward withdrawal on launcher edits is likewise a custom policy.
+
+Report `20260918-124129-4822f788f955` contains successful campaign-bearing battle
+receipts and no recurrence of the earlier missing-`data` failure. Its shutdown
+cleanup traceback does not establish a native crash cause. The report and
+screenshots establish the missing mission presentation, while exact Windows
+TAB/result layout, notice timing and final-frame behavior still need gameplay
+acceptance on #1513.

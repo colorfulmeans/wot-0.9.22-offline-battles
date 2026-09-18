@@ -21,6 +21,37 @@ def quest(bonus):
     return node(bonus=bonus)
 
 
+def badge_campaign():
+    """Model the resource token graph, including its out-of-order final badge."""
+    definitions, quests = {}, []
+
+    def badge_quest(identifier, source, required, consumed, badge, **bonus):
+        return node(id=node(identifier), enabled=node('true'),
+            conditions=node(preBattle=node(account=node(token=node(
+                id=node(source), greaterOrEqual=node(required), consume=node(consumed))))),
+            bonus=node(dossier=node(name=node('playerBadges:' + str(badge)),
+                value=node('timestamp'), type=node('set')), **bonus))
+
+    quests.append(('tokenQuest', badge_quest('all_honors', 'campaign_badges', 4, 4, 18)))
+    for operation in range(4):
+        prefix = 'operation_%d' % operation
+        for offset in range(75):
+            main_tokens = [('token', token(prefix + ':main'))]
+            extra_tokens = [('token', token(prefix + ':add'))]
+            if (offset + 1) % 15 == 0:
+                main_tokens.append(('token', token(prefix + ':parts')))
+                extra_tokens.append(('token', token('free_award_list')))
+            definitions[operation * 75 + offset + 1] = {
+                'main': quest({'children': main_tokens}),
+                'add': quest({'children': extra_tokens})}
+        quests.append(('tokenQuest', badge_quest(prefix, prefix + ':parts', 5, 5,
+            10 + operation * 2, token=token(prefix + ':complete'),
+            slots=node(1), vehicle=node('reward:' + prefix))))
+        quests.append(('tokenQuest', badge_quest(prefix + ':honors', prefix + ':add', 75,
+            100, 11 + operation * 2, token=token('campaign_badges'))))
+    return definitions, node(quests={'children': quests})
+
+
 class RewardsTests(unittest.TestCase):
     def test_main_honors_and_restart_pay_only_missing_stages(self):
         state = fixture._state()
@@ -38,7 +69,7 @@ class RewardsTests(unittest.TestCase):
         self.assertEqual(520, restarted.snapshot()['wallet']['freeXP'])
         self.assertEqual({'1': 2}, restarted.snapshot()['personalMissionRewarded'])
 
-    def test_reset_reclaims_only_earned_orders_and_replay_preserves_cash_receipt(self):
+    def test_reset_reclaims_all_paid_stages_and_recompletion_pays_once(self):
         state = fixture._state()
         definition = {15: {'main': quest(node(credits=node(100))),
             'add': quest(node(token=token('free_award_list'), credits=node(500)))}}
@@ -49,7 +80,8 @@ class RewardsTests(unittest.TestCase):
         state.snapshot()['personalMissionRequestedCompleted'] = {}
         campaign.settle(state, now=101, definitions=definition)
         self.assertEqual({}, state.snapshot()['personalMissionProgress'])
-        self.assertEqual({'15': 2}, state.snapshot()['personalMissionRewarded'])
+        self.assertEqual({}, state.snapshot()['personalMissionRewarded'])
+        self.assertEqual(100000, state.snapshot()['wallet']['credits'])
         self.assertEqual(0, state.snapshot()['personalMissionOrders'])
         state.snapshot()['personalMissionRequestedCompleted'] = {'15': 2}
         campaign.settle(state, now=102, definitions=definition)
@@ -81,7 +113,8 @@ class RewardsTests(unittest.TestCase):
             personalMissionPawned={'30': 4},
             personalMissionRewardJournal={'orders:15': {'count': 1}},
             personalMissionRequestedCompleted={})
-        definition = {15: {'main': quest(node()), 'add': quest(node(token=token('free_award_list')))}}
+        definition = {15: {'main': quest(node()), 'add': quest(node(token=token('free_award_list')))},
+                      30: {'main': quest(node()), 'add': quest(node())}}
         result = campaign.settle(state, now=100, definitions=definition)
         self.assertEqual('', result['reset_error'])
         self.assertEqual({}, state.snapshot()['personalMissionProgress'])
@@ -92,7 +125,7 @@ class RewardsTests(unittest.TestCase):
     def test_crew_provenance_survives_duplicate_descriptors_and_new_inventory_ids(self):
         from gui.mods.offline_lan_0922.account_rpc import garage_store
         snapshot = fixture._snapshot()
-        snapshot.update(personalMissionProgress={'15': 1}, personalMissionRewarded={'15': 1},
+        snapshot.update(accountBerths=31, personalMissionProgress={'15': 1}, personalMissionRewarded={'15': 1},
             barracksTankmen={701: b'female', 702: b'female'}, personalMissionTankwomen={'15': True},
             personalMissionDossier={'achievements:tankwomenProgress': 1},
             personalMissionRewardJournal={'crew:15': {'tankman': 702, 'descriptor': 'ZmVtYWxl',
@@ -105,12 +138,14 @@ class RewardsTests(unittest.TestCase):
         self.assertEqual(504, restored['personalMissionRewardJournal']['crew:15']['tankman'])
         state = fixture._state(restored)
         state.snapshot()['personalMissionRequestedCompleted'] = {}
-        result = campaign.settle(state, now=100, definitions={})
+        result = campaign.settle(state, now=100, definitions={15: {
+            'main': node(bonus=node(), bonusDelayed=node(berths=node(1))),
+            'add': quest(node())}})
         self.assertEqual('', result['reset_error'])
         self.assertEqual({503: b'female'}, state.snapshot()['barracksTankmen'])
         self.assertEqual(30, state.snapshot()['accountBerths'])
-        self.assertEqual({'15': 1}, state.snapshot()['personalMissionRewarded'])
-        self.assertTrue(state.snapshot()['personalMissionRewardJournal']['crewBonus:15'])
+        self.assertEqual({}, state.snapshot()['personalMissionRewarded'])
+        self.assertNotIn('crewBonus:15', state.snapshot()['personalMissionRewardJournal'])
 
     def test_crew_provenance_follows_trained_assigned_crew_across_restore(self):
         from gui.mods.offline_lan_0922.account_rpc import garage_store
@@ -127,7 +162,8 @@ class RewardsTests(unittest.TestCase):
         garage_store._apply_ledger(restored, {'ledger': serialized})
         state = fixture._state(restored)
         state.snapshot()['personalMissionRequestedCompleted'] = {}
-        result = campaign.settle(state, now=100, definitions={})
+        result = campaign.settle(state, now=100, definitions={15: {
+            'main': quest(node()), 'add': quest(node())}})
         self.assertEqual('', result['reset_error'])
         self.assertEqual([801, None], state.snapshot()['vehicles'][0]['crew'])
         self.assertEqual({801: b'one'}, state.snapshot()['vehicles'][0]['tankmen'])
@@ -231,7 +267,9 @@ class RewardsTests(unittest.TestCase):
         state.snapshot().update(personalMissionProgress={'15': 2},
             personalMissionRewarded={'15': 2}, personalMissionOrders=21,
             personalMissionPawned={'15': 4})
-        campaign.settle(state, now=100, definitions=definitions)
+        result = campaign.settle(state, now=100, definitions=definitions)
+        self.assertEqual(1, result['missions'][0]['orders_refunded'])
+        self.assertEqual(0, result['missions'][0]['orders_earned'])
         self.assertEqual({}, state.snapshot()['personalMissionPawned'])
         self.assertEqual(1, state.snapshot()['personalMissionOrders'])
         campaign.settle(state, now=101, definitions=definitions)
@@ -286,6 +324,137 @@ class RewardsTests(unittest.TestCase):
         self.assertEqual(31, state.snapshot()['accountSlots'])
         self.assertEqual({'10': 100}, state.snapshot()['accountBadges'])
 
+    def _earned_badge_campaign(self):
+        definitions, tiles = badge_campaign()
+        # Badge-only fixture: physical hull withdrawal has its own integration
+        # coverage and must not be represented by uncreated imaginary tanks.
+        for row in campaign.children(campaign.child(tiles, 'quests'), 'tokenQuest'):
+            bonus = campaign.child(row, 'bonus')
+            bonus['children'] = [(name, value) for name, value in bonus['children']
+                                 if name not in ('vehicle', 'slots')]
+        state = fixture._state()
+        progress = dict((str(qid), 2) for qid in definitions)
+        state.snapshot().update(personalMissionProgress=progress.copy(),
+            personalMissionRewarded=progress.copy(),
+            personalMissionTokenRewards=[campaign.value(row, 'id')
+                for row in campaign.children(campaign.child(tiles, 'quests'), 'tokenQuest')],
+            accountBadges=dict((str(badge), 90) for badge in range(10, 19)),
+            selectedBadges=[18], badgeSelectionVerified=True)
+        state.snapshot()['accountBadges']['99'] = 80
+        return state, definitions, tiles, progress
+
+    def test_honors_downgrade_revokes_operation_and_dependent_badges_only(self):
+        state, definitions, tiles, progress = self._earned_badge_campaign()
+        requested = progress.copy()
+        requested['2'] = 1
+        state.snapshot()['personalMissionRequestedCompleted'] = requested
+        with mock.patch.object(campaign, '_resource', return_value=tiles):
+            result = campaign.settle(state, now=100, definitions=definitions)
+        self.assertEqual([], result['pending'])
+        self.assertEqual('', result['reset_error'])
+        self.assertEqual(requested, state.snapshot()['personalMissionProgress'])
+        badges = state.snapshot()['accountBadges']
+        self.assertEqual({'10', '12', '13', '14', '15', '16', '17', '99'}, set(badges))
+        self.assertEqual(90, badges['10'])
+        self.assertEqual(80, badges['99'])
+        self.assertEqual([], state.snapshot()['selectedBadges'])
+        self.assertNotIn('all_honors', state.snapshot()['personalMissionTokenRewards'])
+        self.assertEqual(20, state.snapshot()['personalMissionOrders'])
+
+    def test_main_reset_cascade_revokes_all_higher_operation_badges(self):
+        state, definitions, tiles, progress = self._earned_badge_campaign()
+        state.snapshot()['personalMissionRequestedCompleted'] = dict(
+            (key, level) for key, level in progress.items()
+            if int(key) <= 75 and key not in ('1', '15'))
+        with mock.patch.object(campaign, '_resource', return_value=tiles):
+            result = campaign.settle(state, now=100, definitions=definitions)
+        self.assertEqual([], result['pending'])
+        self.assertEqual('', result['reset_error'])
+        self.assertEqual({'99': 80}, state.snapshot()['accountBadges'])
+        self.assertEqual([], state.snapshot()['selectedBadges'])
+        self.assertEqual(4, state.snapshot()['personalMissionOrders'])
+        self.assertEqual(1, len(state.snapshot()['vehicles']))
+
+    def test_recompletion_restores_reversed_badge_claims_once(self):
+        from gui.mods.offline_lan_0922.account_rpc import garage_store
+        state, definitions, tiles, progress = self._earned_badge_campaign()
+        state.snapshot()['wallet'].setdefault('crystal', 0)
+        wallet = copy.deepcopy(state.snapshot()['wallet'])
+        slots = state.snapshot()['accountSlots']
+        state.snapshot()['personalMissionRequestedCompleted'] = {}
+        with mock.patch.object(campaign, '_resource', return_value=tiles), \
+                mock.patch.object(campaign, '_grant_vehicle') as grant:
+            campaign.settle(state, now=100, definitions=definitions)
+            self.assertEqual({'99': 80}, state.snapshot()['accountBadges'])
+            serialized = json.loads(json.dumps(garage_store._ledger_payload(state.snapshot())))
+            restored = fixture._snapshot()
+            garage_store._apply_ledger(restored, {'ledger': serialized})
+            state = fixture._state(restored)
+            self.assertEqual({'99': 80}, state.snapshot()['accountBadges'])
+            self.assertEqual([], state.snapshot()['selectedBadges'])
+            state.snapshot()['personalMissionRequestedCompleted'] = progress
+            first = campaign.settle(state, now=101, definitions=definitions)
+            second = campaign.settle(state, now=102, definitions=definitions)
+        self.assertEqual([], first['pending'])
+        self.assertEqual(9, len(first['operation_rewards']))
+        self.assertEqual([], second['pending'])
+        self.assertEqual([], second['operation_rewards'])
+        grant.assert_not_called()
+        self.assertEqual(wallet, state.snapshot()['wallet'])
+        self.assertEqual(slots, state.snapshot()['accountSlots'])
+        self.assertEqual(dict([(str(badge), 101) for badge in range(10, 19)] + [('99', 80)]),
+                         state.snapshot()['accountBadges'])
+        # Regaining eligibility does not silently re-equip the old badge.
+        self.assertEqual([], state.snapshot()['selectedBadges'])
+
+    def test_manual_campaign_badges_follow_tasks_but_unrelated_badges_remain(self):
+        state = fixture._state()
+        unused, tiles = badge_campaign()
+        state.snapshot().update(accountBadges={'10': 90, '18': 91, '99': 80},
+                                selectedBadges=[99], badgeSelectionVerified=True)
+        with mock.patch.object(campaign, '_resource', return_value=tiles):
+            result = campaign.settle(state, now=100, definitions={})
+        self.assertEqual([], result['pending'])
+        self.assertEqual({'99': 80}, state.snapshot()['accountBadges'])
+        self.assertEqual([99], state.snapshot()['selectedBadges'])
+
+    def test_order_skipped_finals_still_qualify_for_basic_operation_badge(self):
+        state = fixture._state()
+        definitions, tiles = badge_campaign()
+        progress = dict((str(qid), 1) for qid in range(15, 76, 15))
+        state.snapshot().update(personalMissionProgress=progress,
+            personalMissionRewarded=progress.copy(),
+            personalMissionTokenRewards=['operation_0'])
+        with mock.patch.object(campaign, '_resource', return_value=tiles):
+            result = campaign.settle(state, now=100, definitions=definitions)
+        self.assertEqual([], result['pending'])
+        self.assertEqual({'10': 100}, state.snapshot()['accountBadges'])
+
+    def test_badge_entitlement_resource_failure_does_not_destroy_ownership(self):
+        state = fixture._state()
+        state.snapshot().update(accountBadges={'10': 90, '99': 80}, selectedBadges=[10])
+        with mock.patch.object(campaign, '_resource', side_effect=RuntimeError('unavailable')):
+            result = campaign.settle(state, now=100, definitions={})
+        self.assertEqual([('badges', 'unavailable')], result['pending'])
+        self.assertEqual({'10': 90, '99': 80}, state.snapshot()['accountBadges'])
+        self.assertEqual([10], state.snapshot()['selectedBadges'])
+
+    def test_pending_vehicle_reward_does_not_prevent_unrelated_badge_revocation(self):
+        state, definitions, tiles, progress = self._earned_badge_campaign()
+        progress['2'] = 1
+        state.snapshot()['personalMissionRequestedCompleted'] = progress
+        state.snapshot()['personalMissionTokenRewards'].remove('operation_3')
+        for row in campaign.children(campaign.child(tiles, 'quests'), 'tokenQuest'):
+            if campaign.value(row, 'id') == 'operation_3':
+                campaign.child(row, 'bonus')['children'].append(('vehicle', node('reward:operation_3')))
+        with mock.patch.object(campaign, '_resource', return_value=tiles), \
+                mock.patch.object(campaign, '_grant_vehicle', side_effect=RuntimeError('no vehicle')):
+            result = campaign.settle(state, now=100, definitions=definitions)
+        self.assertEqual([('operation', 'no vehicle')], result['pending'])
+        self.assertNotIn('11', state.snapshot()['accountBadges'])
+        self.assertNotIn('18', state.snapshot()['accountBadges'])
+        self.assertEqual([], state.snapshot()['selectedBadges'])
+
     def test_reward_state_and_bound_camouflage_survive_json_roundtrip(self):
         from gui.mods.offline_lan_0922.account_rpc import garage_store
         snapshot = fixture._snapshot()
@@ -305,14 +474,16 @@ class RewardsTests(unittest.TestCase):
             self.assertEqual(snapshot[name], restored[name], name)
 
 
-    def test_existing_reward_vehicle_pays_only_bare_credit_refund(self):
+    def test_existing_reward_vehicle_pays_full_credit_price(self):
+        from gui.mods.offline_lan_0922 import personal_campaign_vehicles
         state = fixture._state()
         record = state.snapshot()['vehicles'][0]
         record['vehicleTypeName'] = 'ussr:reward'
-        with mock.patch.object(state, '_item_refund', return_value={'credits': 200000}) as refund:
+        with mock.patch.object(personal_campaign_vehicles, 'full_price_credits',
+                               return_value=400000) as price:
             campaign._grant_vehicle(state, 'ussr:reward')
-        refund.assert_called_once_with(record['vehicleTypeCompactDescr'])
-        self.assertEqual(300000, state.snapshot()['wallet']['credits'])
+        price.assert_called_once_with(state, record['vehicleTypeCompactDescr'])
+        self.assertEqual(500000, state.snapshot()['wallet']['credits'])
         self.assertEqual(1, len(state.snapshot()['vehicles']))
 
 

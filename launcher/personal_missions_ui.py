@@ -60,8 +60,8 @@ class PersonalMissionsDialog(object):
         tk.Label(self.window, text=tr(
             "Completing a later mission fills required earlier tasks without honors. "
             "Clearing completion resets this chain's final and every later operation. "
-            "Clearing honors affects only this task. Earned orders and female crew are "
-            "reclaimed; tanks and other paid rewards remain. Changes apply on next game launch. "
+            "Clearing honors affects only this task. Corresponding rewards, including "
+            "tanks, are withdrawn. Changes apply on next game launch. "
             "Close the game before saving."),
             wraplength=520, justify="left").pack(
                 fill="x", padx=12, pady=4)

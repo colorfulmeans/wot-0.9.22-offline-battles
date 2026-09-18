@@ -34,6 +34,7 @@ except ImportError:
 
 from gui.mods.offline_lan_0922 import battle_bonds, battle_mastery
 from gui.mods.offline_lan_0922 import friendly_fire
+from gui.mods.offline_lan_0922 import personal_campaign_results
 from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922.battle_achievements import (
     AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES)
@@ -344,6 +345,7 @@ def _receipt(value):
         'income': copy.deepcopy(value.get('income')),
         'daily_reserves': list(value.get('daily_reserves') or ()),
         'daily_missions': list(value.get('daily_missions') or ()),
+        'personal_missions': copy.deepcopy(value.get('personal_missions') or {}),
         # By the shell's index in the gun's own shot order: only the client
         # can turn that into a shell, and only the client owns its price.
         'shells_fired': shells_fired,
@@ -852,10 +854,13 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'watchedBattleToTheEnd': receipt['watched_battle_to_end'],
         'isTeamKiller': False,
     }
-    avatar = {
-        'questsProgress': dict(('offline_daily_' + key,
+    quests_progress = dict(('offline_daily_' + key,
             (0, {'bonusCount': 0}, {'bonusCount': 1}))
-            for key in receipt.get('daily_missions', ())),
+            for key in receipt.get('daily_missions', ()))
+    quests_progress.update(personal_campaign_results.quests_progress(
+        receipt.get('personal_missions')))
+    avatar = {
+        'questsProgress': quests_progress,
         'accountDBID': account_dbid, 'team': receipt['team'],
         'credits': rewards['credits'], 'xp': rewards['xp'],
         'freeXP': rewards['free_xp'], 'crystal': rewards['crystal'],
@@ -1124,6 +1129,8 @@ class PostBattleStore(object):
         receipt['income'] = copy.deepcopy(policy.get('income'))
         receipt['daily_reserves'] = list(policy.get('daily_reserves') or ())
         receipt['daily_missions'] = list(policy.get('daily_missions') or ())
+        receipt['personal_missions'] = copy.deepcopy(
+            policy.get('personal_missions') or {})
         awarded = policy.get('awarded')
         if isinstance(awarded, dict):
             receipt['awarded'] = economy.award_record(awarded)
@@ -1205,6 +1212,8 @@ class PostBattleStore(object):
             'winnerIfDraw': 0, 'guiType': 1,
             'arenaUniqueID': receipt['arena_unique_id'],
             'offlineDailyMissions': list(receipt.get('daily_missions') or ()),
+            'offlinePersonalMissions': copy.deepcopy(
+                receipt.get('personal_missions') or {}),
         }
 
     def should_show_immediately(self, arena_unique_id):

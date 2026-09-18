@@ -24,6 +24,7 @@ from gui.mods.offline_lan_0922.authority_worker_probe import \
     AuthorityWorkerProbe, write_probe_record
 from gui.mods.offline_lan_0922.battle_feedback import (
     SixthSenseController, VehicleStatePresenter, is_gold_shell)
+from gui.mods.offline_lan_0922 import battle_missions
 from gui.mods.offline_lan_0922.bot_runtime import (
     BOT_WATER_AVOID_DEPTH, BotRuntime, PROBE_KINDS,
     WORKER_CONTROL_SECONDS)
@@ -3372,6 +3373,8 @@ class BattleRuntime(object):
                 'position': self._vector(position),
                 'rotation': _engine_rotation(yaw),
                 'period': 'battle',
+                'personal_mission_ids': self._garage_loadout_snapshot().get(
+                    'personal_mission_ids', ()),
             }
             vehicle_id = self._server.addVehicleToArena(snapshot)
             self._synchronise_player_identity(vehicle_id)
@@ -7661,8 +7664,32 @@ class BattleRuntime(object):
             'camouflage_id': self._garage_camouflage_id(item),
             'outfit': self._garage_outfit(item),
             'fitting': self._garage_fitting(item),
+            'personal_mission_ids': self._garage_personal_mission_ids(item),
         }
         return self._garage_loadout
+
+    def _garage_personal_mission_ids(self, item):
+        """Freeze TAB's mission before the Account-to-Avatar transition."""
+        if (self._worker_mode or item is None or
+                (self._start_message or {}).get(
+                    'battle_mode', 'regular') != 'regular'):
+            return ()
+        getter = getattr(self._runtime.compatibility, 'garage_state', None)
+        if not callable(getter):
+            return ()
+        try:
+            state = getter()
+            if state is None:
+                return ()
+            mission_ids = battle_missions.selected_mission_ids(
+                state.snapshot(), getattr(item, 'descriptor', None))
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] battle personal mission ids=%s\n' %
+                (list(mission_ids),))
+            return mission_ids
+        except Exception as error:
+            self._warn_optional_failure('battle personal mission', error)
+            return ()
 
     def _garage_outfit(self, item):
         """Return the selected vehicle's native outfit for this arena season.

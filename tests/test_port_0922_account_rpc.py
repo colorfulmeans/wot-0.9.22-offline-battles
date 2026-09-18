@@ -160,6 +160,84 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual(0.0, delay)
         callback()
 
+    def _campaign_outbox(self, flush_results=(True,)):
+        settlement = {'missions': [{
+            'id': 1, 'phase': 'granted', 'before': 0, 'after': 1,
+            'paid_stages': [1], 'rewards': [{'kind': 'credits', 'count': 1234}]}]}
+        state = account_requests.garage.GarageState({
+            'wallet': {'credits': 7777},
+            'personalMissionNotifications': [{'id': 'notice-1',
+                                               'settlement': settlement}]})
+        saved = []
+        outcomes = iter(flush_results)
+
+        def flush(snapshot):
+            saved.append(copy.deepcopy(snapshot))
+            return next(outcomes)
+
+        store = types.SimpleNamespace(mark_dirty=mock.Mock(),
+                                      flush=mock.Mock(side_effect=flush))
+        context = {'garage': state, 'garage_store': store,
+                   'selected_vehicle': copy.deepcopy(state.snapshot())}
+        server = FakeServer(lambda: self.player, lambda delay, callback: None,
+                            context)
+        system = types.SimpleNamespace(pushMessage=mock.Mock(),
+            SM_TYPE=types.SimpleNamespace(Information='info'))
+        patch = mock.patch.object(sys.modules['gui'], 'SystemMessages', system,
+                                  create=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return server, state, store, system, saved, context
+
+    def test_campaign_outbox_pushes_once_and_acknowledges_shared_garage(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        delivered = set()
+        self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
+        self.assertEqual((0, False), server.publish_campaign_notifications(delivered))
+        system.pushMessage.assert_called_once()
+        self.assertIn('1234', system.pushMessage.call_args[0][0])
+        self.assertEqual({'notice-1'}, delivered)
+        self.assertEqual([], state.snapshot()['personalMissionNotifications'])
+        self.assertEqual([], saved[0]['personalMissionNotifications'])
+        self.assertIs(state.snapshot(), server._context['selected_vehicle'])
+        self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
+        store.flush.assert_called_once()
+
+    def test_campaign_outbox_native_failure_keeps_notice_for_lobby_retry(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        delivered = set()
+        system.pushMessage.side_effect = RuntimeError('lobby message service not ready')
+        with self.assertRaises(RuntimeError):
+            server.publish_campaign_notifications(delivered)
+        self.assertEqual(1, len(state.snapshot()['personalMissionNotifications']))
+        self.assertEqual(set(), delivered)
+        self.assertEqual([], saved)
+        store.flush.assert_not_called()
+        system.pushMessage.side_effect = None
+        self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
+        self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
+
+    def test_campaign_outbox_failed_ack_retries_after_account_replacement_without_push(self):
+        server, state, store, system, saved, context = self._campaign_outbox((False, True))
+        delivered = set()
+        self.assertEqual((1, True), server.publish_campaign_notifications(delivered))
+        self.assertEqual(1, len(state.snapshot()['personalMissionNotifications']))
+        replacement = FakeServer(lambda: self.player,
+                                 lambda delay, callback: None, context)
+        self.assertEqual((0, False), replacement.publish_campaign_notifications(delivered))
+        system.pushMessage.assert_called_once()
+        self.assertEqual([], state.snapshot()['personalMissionNotifications'])
+        self.assertEqual(2, len(saved))
+        self.assertEqual({'credits': 7777}, saved[-1]['wallet'])
+
+    def test_campaign_outbox_waits_for_account_without_pushing_or_acknowledging(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        self.player = None
+        self.assertEqual((0, True), server.publish_campaign_notifications())
+        system.pushMessage.assert_not_called()
+        store.flush.assert_not_called()
+        self.assertEqual(1, len(state.snapshot()['personalMissionNotifications']))
+
     def test_shop_item_prices_are_normalized_for_native_long_formatter(self):
         value = {
             'items': {'itemPrices': {

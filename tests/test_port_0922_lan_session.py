@@ -1138,7 +1138,47 @@ class LANSessionTests(unittest.TestCase):
         session._publish_postbattle_progress.assert_called_once_with()
         session._publish_postbattle_results.assert_called_once_with()
 
-    def test_clickable_battle_result_uses_native_service_channel_wrapper(self):
+    def test_launcher_campaign_outbox_waits_for_lobby_then_drains_without_battle(self):
+        ready = [False]
+        callbacks = []
+        publisher = mock.Mock(return_value=(1, False))
+        player = types.SimpleNamespace(fakeServer=types.SimpleNamespace(
+            publish_campaign_notifications=publisher))
+        bigworld = types.SimpleNamespace(player=lambda: player)
+        session = self.module.LANSession(
+            {}, lobby_ready=lambda: ready[0],
+            callback=lambda delay, function: callbacks.append(function) or len(callbacks))
+        with mock.patch.dict(sys.modules, {'BigWorld': bigworld}):
+            self.assertFalse(session.on_lobby_view_loaded())
+            publisher.assert_not_called()
+            self.assertEqual(1, len(callbacks))
+            ready[0] = True
+            callbacks.pop(0)()
+        publisher.assert_called_once_with(session._campaign_notifications_sent)
+        self.assertIsNone(session._postbattle_callback_id)
+
+    def test_launcher_campaign_outbox_retries_failed_push_and_cancels_stale_callback(self):
+        callbacks = []
+        publisher = mock.Mock(side_effect=[RuntimeError('native UI loading'), (1, False)])
+        player = types.SimpleNamespace(fakeServer=types.SimpleNamespace(
+            publish_campaign_notifications=publisher))
+        session = self.module.LANSession(
+            {}, callback=lambda delay, function: callbacks.append(function) or len(callbacks))
+        with mock.patch.dict(sys.modules, {'BigWorld': types.SimpleNamespace(player=lambda: player)}):
+            self.assertFalse(session.on_lobby_view_loaded())
+            self.assertEqual(1, len(callbacks))
+            callbacks.pop(0)()
+            self.assertEqual(2, publisher.call_count)
+            self.assertIsNone(session._postbattle_callback_id)
+            publisher.return_value = (0, True)
+            publisher.side_effect = None
+            session._publish_campaign_notifications()
+            retry = callbacks.pop(0)
+            session._cancel_postbattle_callback()
+            retry()
+        self.assertEqual(3, publisher.call_count)
+
+    def test_native_battle_message_is_not_replayed_when_mission_notice_retries(self):
         received = []
 
         class Entry(object):
@@ -1159,19 +1199,28 @@ class LANSessionTests(unittest.TestCase):
         messenger.MessengerEntry = messenger_entry
         services_ui = types.ModuleType('gui.mods.offline_lan_0922.offline_services_ui')
         services_ui.notify_missions = mock.Mock()
+        campaign_ui = types.ModuleType('gui.mods.offline_lan_0922.personal_campaign_ui')
+        campaign_ui.notify = mock.Mock(side_effect=[RuntimeError('UI not ready'), True])
+        campaign = {'missions': [{'id': 1, 'before': 0, 'after': 1}]}
+        result = {'arenaUniqueID': 123, 'credits': 7,
+                  'offlineDailyMissions': ['damage', 'wins'],
+                  'offlinePersonalMissions': campaign}
         with mock.patch.dict(sys.modules, {
                 'chat_shared': chat_shared, 'messenger': messenger,
                 'messenger.MessengerEntry': messenger_entry,
-                'gui.mods.offline_lan_0922.offline_services_ui': services_ui}):
+                'gui.mods.offline_lan_0922.offline_services_ui': services_ui,
+                'gui.mods.offline_lan_0922.personal_campaign_ui': campaign_ui}):
+            self.assertFalse(self.session._publish_battle_service_message(123, result))
+            self.assertNotIn(123, self.session._notified_results)
             self.assertTrue(self.session._publish_battle_service_message(
-                123, {'arenaUniqueID': 123, 'credits': 7,
-                      'offlineDailyMissions': ['damage', 'wins']}))
+                123, result))
             self.assertFalse(self.session._publish_battle_service_message(
-                123, {'arenaUniqueID': 123, 'credits': 7,
-                      'offlineDailyMissions': ['damage', 'wins']}))
+                123, result))
 
         self.assertEqual(1, len(received))
         services_ui.notify_missions.assert_called_once_with(['damage', 'wins'])
+        self.assertEqual([mock.call(campaign), mock.call(campaign)],
+                         campaign_ui.notify.call_args_list)
         action = received[0]
         self.assertEqual(123, action['data']['messageID'])
         self.assertEqual(17, action['data']['type'])

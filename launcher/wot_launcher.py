@@ -214,14 +214,48 @@ _CHINESE = {
         "旧存档缺少该任务女乘员的来源记录，原进度和乘员已保留。任务编号",
     "INVALID_PERSONAL_MISSION_REWARD_JOURNAL":
         "任务奖励记录异常，原进度和奖励已保留。",
+    "PERSONAL_MISSION_RESET_WALLET_UNAVAILABLE":
+        "余额不足，无法撤回已发放的奖励；原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_ITEM_UNAVAILABLE":
+        "所需奖励物品已消耗或装在其他车辆上，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_SLOTS_UNAVAILABLE":
+        "车位已被占用，无法回收奖励车位；原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_BERTHS_UNAVAILABLE":
+        "床位已被占用，无法回收奖励床位；原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_PREMIUM_UNAVAILABLE":
+        "高级账号奖励记录与当前时长不一致，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_PREMIUM_PROVENANCE_MISSING":
+        "旧存档无法区分任务奖励与其他高级账号时长，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_DOSSIER_PROVENANCE_MISSING":
+        "旧存档缺少这项任务奖励的来源记录，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_DOSSIER_CHANGED":
+        "任务奖励记录已发生变化，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_CUSTOMIZATION_UNAVAILABLE":
+        "奖励涂装不足，无法完成回收；原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_VEHICLE_SOURCE_UNAVAILABLE":
+        "找不到对应的奖励坦克或历史补偿记录，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_VEHICLE_SOURCE_CHANGED":
+        "车库中的同型坦克不是原任务奖励车，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_LAST_VEHICLE":
+        "奖励坦克是车库最后一辆车，请先添加其他车辆再取消任务。",
+    "PERSONAL_MISSION_RESET_DUPLICATE_CREW_SOURCE":
+        "车组来源记录冲突，原进度和资产已保留。",
+    "PERSONAL_MISSION_RESET_VEHICLE_MODULES_UNAVAILABLE":
+        "奖励坦克的模块记录不完整，原进度和资产已保留。",
+    "PERSONAL_MISSION_REWARD_SOURCE_UNAVAILABLE":
+        "旧存档的奖励来源无法确认，原进度和资产已保留。",
+    "PERSONAL_MISSION_VEHICLE_PRICE_UNAVAILABLE":
+        "无法读取坦克原始价格，奖励补偿尚未发放。",
+    "PERSONAL_MISSION_RESTORE_NO_GARAGE_SLOT":
+        "没有空闲车位，任务奖励坦克暂未恢复。",
     "Account badges saved.": "账号勋章已保存。",
     "Completing a later mission fills required earlier tasks without honors. "
     "Clearing completion resets this chain's final and every later operation. "
-    "Clearing honors affects only this task. Earned orders and female crew are "
-    "reclaimed; tanks and other paid rewards remain. Changes apply on next game launch. "
+    "Clearing honors affects only this task. Corresponding rewards, including "
+    "tanks, are withdrawn. Changes apply on next game launch. "
     "Close the game before saving.":
         "勾选后自动完成必要前置任务，不自动完美完成。取消完成会取消本列第15项及后续所有奖励车的全部任务；"
-        "仅取消完美完成不影响其他任务。回收对应女乘员和奖励通行令，坦克及其他已领奖励保留且不重复发放。"
+        "仅取消完美完成不影响其他任务。对应的全部奖励（包括坦克）都会撤回，成功撤回后可重新完成领取。"
         "下次启动游戏时结算，保存前请关闭游戏。",
     "Close World of Tanks before editing personal missions.": "修改前请关闭坦克世界。",
     "Customize save...": "自定义存档…",

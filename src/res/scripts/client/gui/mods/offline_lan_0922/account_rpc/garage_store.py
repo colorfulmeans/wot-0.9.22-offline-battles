@@ -19,6 +19,7 @@ from __future__ import print_function
 
 import base64
 import copy
+import json
 import os
 import sys
 
@@ -687,6 +688,9 @@ class GarageStore(object):
             type_name = record.get('vehicleTypeName')
             if isinstance(type_name, string_types) and type_name:
                 stored['name'] = type_name
+            source = record.get('personalMissionVehicleSource')
+            if isinstance(source, string_types) and source:
+                stored['personalMissionVehicleSource'] = source
             outfits = {}
             if isinstance(record.get('outfits'), dict):
                 for raw_season, outfit_data in record['outfits'].items():
@@ -961,12 +965,23 @@ class GarageStore(object):
         if (campaign_receipt is not None and not training and
                 not campaign_receipt.get('premature_leave', False)):
             from gui.mods.offline_lan_0922 import personal_campaign_battle
+            from gui.mods.offline_lan_0922 import personal_campaign_results
+            campaign_before = personal_campaign_results.before(state.snapshot())
+            evaluations = {}
             campaign = personal_campaign_battle.evaluate(
-                state.snapshot(), campaign_receipt, vehicles_module)
+                state.snapshot(), campaign_receipt, vehicles_module,
+                evaluations=evaluations)
             state.snapshot().setdefault('personalMissionProgress', {}).update(
                 campaign['completed'])
             result['personal_missions'] = personal_campaign.settle(state)
             result['personal_missions']['unsupported'] = campaign['unsupported']
+            result['personal_missions']['missions'] = personal_campaign_results.collect(
+                campaign_before, state.snapshot(), evaluations,
+                result['personal_missions'])
+            # Pending diagnostics and installed XML children may use tuples.
+            # Return the same JSON shape before and after receipt replay.
+            result['personal_missions'] = json.loads(json.dumps(
+                result['personal_missions']))
         # Every other field of this result is plain JSON, and the store hands
         # it straight to a caller that may well write it down.
         result['touched_items'] = dict(
@@ -1240,6 +1255,12 @@ class GarageStore(object):
 
     def _apply_vehicle(self, record, saved):
         changed = False
+        source = saved.get('personalMissionVehicleSource')
+        if isinstance(source, string_types) and source:
+            record['personalMissionVehicleSource'] = source
+            changed = True
+        else:
+            record.pop('personalMissionVehicleSource', None)
         # Python 2 json.load returns unicode, so this must not test for str.
         decoded = _decode_bytes(saved.get('compDescr'))
         if decoded:
