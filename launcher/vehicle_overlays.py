@@ -787,7 +787,7 @@ def list_gold_vehicles(game_root):
     Include zero-credit ``notInShop`` rewards such as White Tiger without
     adding the free starter tech-tree vehicles. Keep hidden rewards, but apply
     the same standard-battle and resource exclusions as vehicle_records.
-    The launcher already mirrors those rules for Bot lineup choices.
+    Bot-only retired-vehicle exclusions do not apply to manual garage additions.
     """
     status, package_path = _require_target(game_root)
     try:
@@ -807,7 +807,7 @@ def list_gold_vehicles(game_root):
     for record in roster:
         is_reward = record["credits"] == 0 and record["notInShop"]
         if ((record["gold"] <= 0 and not is_reward) or
-                not bot_lineup_profiles.vehicle_choice_is_eligible(record)):
+                not bot_lineup_profiles.vehicle_choice_is_standard(record)):
             continue
         nation = record["nation"]
         if nation not in translators:

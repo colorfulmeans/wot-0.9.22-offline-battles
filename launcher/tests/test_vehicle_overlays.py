@@ -770,6 +770,8 @@ class VehicleOverlayTest(unittest.TestCase):
 
         records = [
             record("G04_PzVI_Tiger_IA", 0, 0, True, 7),
+            record("G98_Waffentrager_E100", 0, 0, True, 10),
+            record("G85_Auf_Panther", 1000, 0, True, 7),
             record("Starter", 0, 0, False, 1),
             record("CreditTank", 1000, 0, False, 3),
             record("HiddenCreditTank", 1000, 0, True, 3),
@@ -779,7 +781,8 @@ class VehicleOverlayTest(unittest.TestCase):
                 mock.patch.object(vehicle_overlays, "list_vehicle_choices",
                                   return_value=[]):
             rows = vehicle_overlays.list_gold_vehicles(self.game)
-        self.assertEqual(["germany:G04_PzVI_Tiger_IA"],
+        self.assertEqual(["germany:G98_Waffentrager_E100",
+                          "germany:G04_PzVI_Tiger_IA"],
                          [row["name"] for row in rows])
         self.assertEqual(0, rows[0]["gold"])
 

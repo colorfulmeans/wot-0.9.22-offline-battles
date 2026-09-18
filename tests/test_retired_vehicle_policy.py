@@ -30,11 +30,13 @@ class RetiredVehiclePolicyTests(unittest.TestCase):
         for type_name in RETIRED:
             nation, vehicle = type_name.split(":", 1)
             with self.subTest(type_name=type_name):
-                self.assertFalse(bot_lineup_profiles.vehicle_choice_is_eligible({
+                choice = {
                     "nation": nation,
                     "vehicle": vehicle,
                     "tags": ["mediumTank"],
-                }))
+                }
+                self.assertFalse(bot_lineup_profiles.vehicle_choice_is_eligible(choice))
+                self.assertTrue(bot_lineup_profiles.vehicle_choice_is_standard(choice))
 
     def test_non_retired_hidden_vehicle_is_not_excluded_by_name_policy(self):
         self.assertTrue(bot_lineup_profiles.vehicle_choice_is_eligible({

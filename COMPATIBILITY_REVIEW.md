@@ -4108,7 +4108,10 @@ collision safety or the model-switch wait interval.
 
 The launcher-only vehicle catalogue and labels are restored from tag v0.8.4:
 no special-offer categories, bond annotations or retired-vehicle augmentation.
-The in-client bond shop remains independent.
+The in-client bond shop remains independent. The garage uses the original
+standard-resource filter; the later Bot-only retired exclusions no longer
+remove original gold/reward rows such as Waffentrager E 100. Retired vehicles
+without an original gold/reward listing are not added artificially.
 
 The completion editor uses regular mission IDs 1..300, four operations of
 five fifteen-mission chains in LT/HT/MT/TD/SPG order. The ledger stores these
