@@ -241,11 +241,6 @@ time cannot be attributed to this stage or distinguished from paid premium.
             'effects': effects, 'rewards': notification_rows(effects)}
 
 
-def _unavailable(kind, required, available, identifier=''):
-    raise GarageError('PERSONAL_MISSION_RESET_%s_UNAVAILABLE: %s required=%d available=%d' %
-                      (kind.upper(), identifier, required, available))
-
-
 def _premium_effects(value):
     if isinstance(value, dict):
         if value.get('kind') == 'premium' and 'start' in value and 'end' in value:
@@ -300,8 +295,9 @@ def revoke(state, receipt, now):
     """Withdraw exact economic assets; return actual withdrawal message rows.
 
 The caller must remove reward vehicles and crew first, making their slots and
-berths free. Spent credits and free XP are withdrawn only up to the remaining
-balance. Other conflicts roll back the enclosing reset and its claim markers.
+berths free. Quantity rewards are withdrawn only up to the remaining stock.
+Mounted items and occupied capacity stay with their current owners. Invalid
+or ambiguous provenance still rolls back the enclosing reset and its claims.
 """
     if not isinstance(receipt, dict) or receipt.get('version') != 1:
         raise GarageError('INVALID_PERSONAL_MISSION_REWARD_JOURNAL')
@@ -319,11 +315,8 @@ balance. Other conflicts roll back the enclosing reset and its claim markers.
                 if name not in WALLET_NAMES:
                     raise GarageError('INVALID_PERSONAL_MISSION_REWARD_JOURNAL')
                 available = state._balances()[name]
-                if name in ('credits', 'freeXP'):
-                    count = min(count, max(0, available))
-                    effect['count'] = count
-                elif available < count:
-                    _unavailable('wallet', count, available, name)
+                count = min(count, max(0, available))
+                effect['count'] = count
                 state._wallet()[name] = available - count
                 if not count:
                     continue
@@ -332,24 +325,26 @@ balance. Other conflicts roll back the enclosing reset and its claim markers.
                 compact_descr = _count(effect['compact_descr'])
                 available = _at(snapshot.get('inventoryItems'), (item_type, compact_descr))
                 mounted = state._mounted(compact_descr, item_type, state._records())
-                if available - mounted < count:
-                    _unavailable('item', count, max(0, available - mounted), str(compact_descr))
+                count = min(count, max(0, available - mounted))
+                if not count:
+                    continue
+                effect['count'] = count
                 state._set_owned(compact_descr, item_type, available - count)
             elif kind in ('slots', 'berths'):
                 key = 'accountSlots' if kind == 'slots' else 'accountBerths'
                 total = _count(snapshot.get(key, 0))
                 used = len(state._records()) if kind == 'slots' else len(snapshot.get('barracksTankmen') or {})
-                if total - used < count:
-                    _unavailable(kind, count, max(0, total - used))
+                count = min(count, max(0, total - used))
+                if not count:
+                    continue
+                effect['count'] = count
                 snapshot[key] = total - count
             elif kind == 'premium':
                 start, end = _count(effect['start']), _count(effect['end'])
                 if end < start:
                     raise GarageError('INVALID_PERSONAL_MISSION_REWARD_JOURNAL')
-                seconds = max(0, end - max(now, start))
                 expiry = _count(snapshot.get('premiumExpiryTime', 0))
-                if seconds and expiry < end:
-                    _unavailable('premium', seconds, max(0, expiry - max(now, start)))
+                seconds = max(0, min(end, expiry) - max(now, start))
                 if seconds:
                     snapshot['premiumExpiryTime'] = expiry - seconds
                     # Subsequent grants move earlier with the shortened
@@ -366,8 +361,10 @@ balance. Other conflicts roll back the enclosing reset and its claim markers.
                 dossier = snapshot.setdefault('personalMissionDossier', {})
                 if effect.get('mode') == 'add':
                     available = _count(dossier.get(name, 0))
-                    if available < count:
-                        _unavailable('dossier', count, available, name)
+                    count = min(count, available)
+                    if not count:
+                        continue
+                    effect['count'] = count
                     dossier[name] = available - count
                 elif effect.get('mode') == 'set':
                     if dossier.get(name) != effect.get('after'):
@@ -382,10 +379,11 @@ balance. Other conflicts roll back the enclosing reset and its claim markers.
                 keys = tuple(_count(effect[key]) for key in
                              ('customization_type', 'item_id', 'vehicle_type'))
                 available = _at(snapshot.get('customizationItems'), keys)
-                if available < count:
-                    _unavailable('customization', count, available, str(keys[1]))
-                if count:
-                    _remove_reward_camouflage(state, keys[1], keys[2])
+                count = min(count, available)
+                if not count:
+                    continue
+                effect['count'] = count
+                _remove_reward_camouflage(state, keys[1], keys[2])
                 buckets = snapshot['customizationItems'][keys[0]][keys[1]]
                 if available > count:
                     buckets[keys[2]] = available - count

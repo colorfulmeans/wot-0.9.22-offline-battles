@@ -90,7 +90,7 @@ class RewardsTests(unittest.TestCase):
         campaign.settle(state, now=103, definitions=definition)
         self.assertEqual(1, state.snapshot()['personalMissionOrders'])
 
-    def test_spent_order_rejects_whole_reset_and_consumes_failed_request(self):
+    def test_spent_order_allows_reset_without_removing_other_mission_pledges(self):
         state = fixture._state()
         state.snapshot().update(personalMissionProgress={'15': 2, '1': 1},
             personalMissionRewarded={'15': 2}, personalMissionOrders=0,
@@ -101,9 +101,11 @@ class RewardsTests(unittest.TestCase):
                           'add': quest(node())},
                       15: {'main': quest(node()), 'add': quest(node(token=token('free_award_list')))}}
         result = campaign.settle(state, now=100, definitions=definition)
-        self.assertEqual({'15': 2, '1': 1}, state.snapshot()['personalMissionProgress'])
+        self.assertEqual({'1': 1}, state.snapshot()['personalMissionProgress'])
         self.assertEqual(0, state.snapshot()['personalMissionOrders'])
-        self.assertEqual('PERSONAL_MISSION_RESET_ORDERS_SPENT', result['reset_error'])
+        self.assertEqual({'1': 1}, state.snapshot()['personalMissionPawned'])
+        self.assertEqual('', result['reset_error'])
+        self.assertNotIn('orders:15', state.snapshot()['personalMissionRewardJournal'])
         self.assertNotIn('personalMissionRequestedCompleted', state.snapshot())
 
     def test_reset_returns_cancelled_pawns_before_reclaiming_earned_orders(self):

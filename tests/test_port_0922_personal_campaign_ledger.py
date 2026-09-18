@@ -25,10 +25,10 @@ class CampaignInverseTests(unittest.TestCase):
         self.assertEqual(1, ledger.revoke_orders(state, 1))
         self.assertEqual(4, state.snapshot()['personalMissionOrders'])
         self.assertEqual({'30': 4}, state.snapshot()['personalMissionPawned'])
-        before = copy.deepcopy(state.snapshot())
-        with self.assertRaises(ledger.GarageError):
-            ledger.revoke_orders(state, 5)
-        self.assertEqual(before, state.snapshot())
+        self.assertEqual(4, ledger.revoke_orders(state, 5))
+        self.assertEqual(0, state.snapshot()['personalMissionOrders'])
+        self.assertEqual(0, ledger.revoke_orders(state, 1))
+        self.assertEqual({'30': 4}, state.snapshot()['personalMissionPawned'])
 
     def test_revoke_woman_retains_berth_and_removes_only_her_dossier_increment(self):
         state = self.state(lastCrew=[500, 501])
@@ -68,20 +68,19 @@ class CampaignInverseTests(unittest.TestCase):
                 ledger.revoke_tankwoman(state, self.effect(tankman=identity))
             self.assertEqual(before, state.snapshot())
 
-    def test_dossier_conflict_fails_without_partial_removal(self):
+    def test_reward_woman_dossier_count_never_becomes_negative(self):
         state = self.state(personalMissionDossier={ledger.TANKWOMAN_DOSSIER_KEY: 0})
-        before = copy.deepcopy(state.snapshot())
-        with self.assertRaises(ledger.GarageError):
-            ledger.revoke_tankwoman(state, self.effect())
-        self.assertEqual(before, state.snapshot())
+        self.assertEqual(500, ledger.revoke_tankwoman(state, self.effect()))
+        self.assertNotIn(500, state.snapshot()['barracksTankmen'])
+        self.assertEqual(0, state.snapshot()['personalMissionDossier'][ledger.TANKWOMAN_DOSSIER_KEY])
 
-    def test_caller_transaction_restores_prior_inverse_when_later_orders_are_spent(self):
+    def test_caller_transaction_restores_prior_inverse_when_a_later_receipt_is_invalid(self):
         state = self.state(personalMissionOrders=0)
         before = copy.deepcopy(state.snapshot())
         with self.assertRaises(ledger.GarageError):
             with state._transaction():
                 ledger.revoke_tankwoman(state, self.effect())
-                ledger.revoke_orders(state, 1)
+                ledger.revoke_orders(state, -1)
         self.assertEqual(before, state.snapshot())
         self.assertEqual(set(), state._touched_tankmen)
         self.assertEqual(0, state.revision)

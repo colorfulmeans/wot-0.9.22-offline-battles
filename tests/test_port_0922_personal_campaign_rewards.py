@@ -67,16 +67,15 @@ class ReversibleRewardsTests(unittest.TestCase):
         self.assertEqual(2, state.snapshot()['inventoryItems'][2][2002])
         self.assertEqual(2, state.snapshot()['inventoryItems'][9][9001])
 
-    def test_insufficient_money_rolls_back_all_prior_asset_withdrawals(self):
+    def test_all_reward_currencies_stop_at_the_remaining_balance(self):
         state = fixture._state()
-        receipt = self.grant(state, node(credits=node(100), gold=node(2000)))
-        state._wallet()['gold'] = 1
-        before = copy.deepcopy(state.snapshot())
-        revision = state.revision
-        with self.assertRaisesRegex(rewards.GarageError, 'WALLET_UNAVAILABLE: gold required=2000 available=1'):
-            rewards.revoke(state, receipt, 100)
-        self.assertEqual(before, state.snapshot())
-        self.assertEqual(revision, state.revision)
+        receipt = self.grant(state, node(credits=node(100), gold=node(2000),
+                                        freeXP=node(300), crystal=node(50)))
+        state._wallet().update(credits=0, gold=1, freeXP=2, crystal=3)
+        rows = rewards.revoke(state, receipt, 100)
+        self.assertEqual(dict.fromkeys(rewards.WALLET_NAMES, 0), state._balances())
+        self.assertEqual({'gold': 1, 'freeXP': 2, 'crystal': 3},
+                         {row['kind']: row['count'] for row in rows})
 
     def test_duplicate_spent_currency_rows_share_the_remaining_balance(self):
         state = fixture._state()
@@ -93,29 +92,68 @@ class ReversibleRewardsTests(unittest.TestCase):
         self.assertEqual(0, state._wallet()['freeXP'])
         self.assertEqual([], rewards.revoke(state, receipt, 101))
 
-    def test_spent_and_installed_items_refuse_without_removing_other_assets(self):
-        for mounted in (False, True):
+    def test_spent_item_rewards_clear_remaining_depot_stock_and_keep_mounted_items(self):
+        for available, mounted in ((0, 0), (1, 0), (2, 1), (1, 1), (5, 1)):
             state = fixture._state()
             receipt = self.grant(state, node(credits=node(100), item=node(9001, count=node(2))))
-            state._set_owned(9001, 9, 1 if not mounted else 2)
+            state._set_owned(9001, 9, available)
             if mounted:
                 state.snapshot()['vehicles'][0]['inventoryItems'][9] = {9001: 1}
-            before = copy.deepcopy(state.snapshot())
-            with self.assertRaisesRegex(rewards.GarageError, 'ITEM_UNAVAILABLE'):
-                rewards.revoke(state, receipt, 100)
-            self.assertEqual(before, state.snapshot())
+            records = copy.deepcopy(state.snapshot()['vehicles'])
+            rows = rewards.revoke(state, receipt, 100)
+            count = min(2, available - mounted)
+            self.assertEqual(available - count, state.snapshot()['inventoryItems'][9].get(9001, 0))
+            self.assertEqual(count, sum(row['count'] for row in rows if row['kind'] == 'item'))
+            self.assertEqual(records, state.snapshot()['vehicles'])
+            self.assertEqual(100000, state._balances()['credits'])
 
-    def test_occupied_slot_and_berth_rewards_refuse_atomically(self):
+    def test_capacity_rewards_only_withdraw_free_slots_and_berths(self):
         for kind, key in (('slots', 'accountSlots'), ('berths', 'accountBerths')):
             state = fixture._state()
             state.snapshot()[key] = 0
             receipt = self.grant(state, node(**{kind: node(1)}))
             if kind == 'berths':
                 state.snapshot()['barracksTankmen'] = {999: b'other-crew'}
-            before = copy.deepcopy(state.snapshot())
-            with self.assertRaisesRegex(rewards.GarageError, kind.upper() + '_UNAVAILABLE'):
-                rewards.revoke(state, receipt, 100)
-            self.assertEqual(before, state.snapshot())
+            self.assertEqual([], rewards.revoke(state, receipt, 100))
+            self.assertEqual(1, state.snapshot()[key])
+            state.snapshot()[key] = 2
+            receipt['effects'][0]['count'] = 3
+            self.assertEqual([{'kind': kind, 'count': 1}], rewards.revoke(state, receipt, 100))
+            self.assertEqual(1, state.snapshot()[key])
+
+    def test_spent_consumable_reset_clears_claim_and_regrants_once(self):
+        state = fixture._state()
+        definitions = {1: {'main': node(bonus=node(item=node(9001, count=node(5)))),
+                           'add': node(bonus=node())}}
+        state.snapshot()['personalMissionRequestedCompleted'] = {'1': 1}
+        self.assertEqual('', campaign.settle(state, now=100, definitions=definitions)['reset_error'])
+        state.snapshot()['personalMissionRewardJournal'] = json.loads(json.dumps(
+            state.snapshot()['personalMissionRewardJournal']))
+        state._set_owned(9001, 9, 1)
+        state.snapshot()['personalMissionRequestedCompleted'] = {}
+        result = campaign.settle(state, now=101, definitions=definitions)
+        self.assertEqual('', result['reset_error'])
+        self.assertNotIn(9001, state.snapshot()['inventoryItems'][9])
+        self.assertEqual({}, state.snapshot()['personalMissionRewarded'])
+        self.assertIn({'kind': 'item', 'id': 9001, 'count': 1}, result['missions'][0]['rewards'])
+        state.snapshot()['personalMissionRequestedCompleted'] = {'1': 1}
+        campaign.settle(state, now=102, definitions=definitions)
+        self.assertEqual(5, state.snapshot()['inventoryItems'][9][9001])
+        campaign.settle(state, now=103, definitions=definitions)
+        self.assertEqual(5, state.snapshot()['inventoryItems'][9][9001])
+
+    def test_missing_or_partial_customization_and_counters_stop_at_zero(self):
+        for remaining in (0, 1):
+            state = fixture._state()
+            state.snapshot()['customizationItems'] = {2: {123: {50001: remaining, 50002: 4}}}
+            state.snapshot()['personalMissionDossier'] = {'counter': remaining}
+            receipt = self.customization_receipt()
+            receipt['effects'].append({'kind': 'dossier', 'mode': 'add', 'name': 'counter', 'count': 5})
+            rows = rewards.revoke(state, receipt, 100)
+            self.assertEqual(0, state.snapshot()['personalMissionDossier']['counter'])
+            self.assertEqual(0, state.snapshot()['customizationItems'][2][123].get(50001, 0))
+            self.assertEqual(4, state.snapshot()['customizationItems'][2][123][50002])
+            self.assertEqual([1, 1] if remaining else [], [row['count'] for row in rows])
 
     def test_additive_and_set_dossier_restore_without_erasing_unrelated_progress(self):
         state = fixture._state()
@@ -182,14 +220,14 @@ class ReversibleRewardsTests(unittest.TestCase):
         self.assertEqual([{'kind': 'premium', 'count': 1.0, 'seconds': rewards.DAY}], rows)
         self.assertEqual(100 + 2 * rewards.DAY, state.snapshot()['premiumExpiryTime'])
 
-    def test_shortened_premium_receipt_refuses_instead_of_charging_other_assets(self):
+    def test_shortened_premium_withdraws_only_the_remaining_earned_interval(self):
         state = fixture._state()
         receipt = self.grant(state, node(credits=node(100), premium=node(3)), now=100)
         state.snapshot()['premiumExpiryTime'] = 100 + rewards.DAY
-        before = copy.deepcopy(state.snapshot())
-        with self.assertRaisesRegex(rewards.GarageError, 'PREMIUM_UNAVAILABLE'):
-            rewards.revoke(state, receipt, 100)
-        self.assertEqual(before, state.snapshot())
+        rows = rewards.revoke(state, receipt, 100)
+        self.assertEqual(100, state.snapshot()['premiumExpiryTime'])
+        self.assertIn({'kind': 'premium', 'count': 1.0, 'seconds': rewards.DAY}, rows)
+        self.assertEqual(100000, state._balances()['credits'])
 
     def test_legacy_fixed_stage_reconstructs_only_recorded_resource_payouts(self):
         state = fixture._state()
@@ -221,7 +259,9 @@ class ReversibleRewardsTests(unittest.TestCase):
         receipt = self.grant(state, bonus)
         self.assertIn({'kind': 'credits', 'count': 300}, receipt['rewards'])
         self.assertIn({'kind': 'item', 'id': 9001, 'count': 3}, receipt['rewards'])
-        bad = {'version': 1, 'effects': [{'kind': 'wallet', 'name': 'gold', 'count': 700}] * 2}
+        bad = {'version': 1, 'effects': [
+            {'kind': 'wallet', 'name': 'gold', 'count': 700},
+            {'kind': 'wallet', 'name': 'gold', 'count': -1}]}
         before = copy.deepcopy(state.snapshot())
         with self.assertRaises(rewards.GarageError):
             rewards.revoke(state, bad, 100)

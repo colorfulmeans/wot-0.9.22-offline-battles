@@ -154,10 +154,12 @@ An eligible reset mission replaces the previous selection of its class.
 The durable reward journal records the actual payout, so a successful withdrawal
 allows that reward to be earned again without duplicating property. A failed
 withdrawal preserves the original progress and property and shows its reason
-in the mission editor and system messages. Credits and free XP are reclaimed
-only up to the remaining balance; spending them never blocks a reset or makes
-the balance negative. Other missing assets, unknown crew provenance or
-insufficient storage can still prevent a complete reset. A reward woman
+in the mission editor and system messages. Currency, consumables and other
+quantity rewards are reclaimed only up to the remaining balance or depot
+stock; spending them never blocks a reset or makes the count negative.
+Mounted items, occupied slots/bunks and orders pledged to other missions are
+retained. Unknown reward provenance or insufficient room for crew returned
+from a reward tank can still prevent a complete reset. A reward woman
 permanently removed from the recovery list no longer blocks her mission reset;
 the claim is cleared without removing another crew member.
 Elapsed premium time cannot be undone; only the remaining earned interval is
@@ -216,6 +218,9 @@ with the installed client's own icons and labels. Battle-result friendly-fire
 labels remain the installed client's own localization: credits have penalty and compensation rows; XP has only a
 penalty. Offline voice chat has no authenticated Vivox service and remains
 unavailable; opening sound settings no longer retries that service.
+Standard and Commander voice settings apply immediately in battle, including
+after preview cancellation. The attached vehicle's native refresh selects
+the language and special crew voices; commander gender remains preserved.
 
 ## Saves
 

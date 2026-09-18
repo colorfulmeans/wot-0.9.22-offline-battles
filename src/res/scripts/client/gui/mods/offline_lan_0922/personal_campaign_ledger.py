@@ -27,8 +27,9 @@ def revoke_orders(state, count):
         return 0
     snapshot = state.snapshot()
     available = _count(snapshot.get('personalMissionOrders', 0))
-    if available < count:
-        raise GarageError('PERSONAL_MISSION_RESET_ORDERS_SPENT')
+    count = min(count, available)
+    if not count:
+        return 0
     snapshot['personalMissionOrders'] = available - count
     state.revision += 1
     return count
@@ -66,8 +67,7 @@ def revoke_tankwoman(state, effect):
         raise GarageError('PERSONAL_MISSION_RESET_CREW_SOURCE_UNAVAILABLE')
     dossier = snapshot.get('personalMissionDossier') or {}
     dossier_count = _count(dossier.get(TANKWOMAN_DOSSIER_KEY, 0))
-    if dossier_count < dossier_delta:
-        raise GarageError('PERSONAL_MISSION_RESET_CREW_DOSSIER_CHANGED')
+    dossier_delta = min(dossier_delta, dossier_count)
 
     if found:
         kind, rows, record = found[0]

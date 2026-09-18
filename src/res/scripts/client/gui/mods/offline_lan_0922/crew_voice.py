@@ -14,6 +14,7 @@ def commander_group(crew):
 def install(patch):
     import BigWorld
     import SoundGroups
+    from account_helpers.settings_core.options import AltVoicesSetting
     original = SoundGroups.SoundModes.setCurrentNation
 
     def set_current_nation(modes, nation,
@@ -41,3 +42,37 @@ def install(patch):
         return original(modes, nation, genderSwitch)
 
     patch(SoundGroups.SoundModes, 'setCurrentNation', set_current_nation)
+
+    def refresh_attached_voice():
+        player = BigWorld.player()
+        # Client-only Avatars have no server-created Entity.vehicle link.
+        # AltVoicesSetting.clearPreviewSound therefore skips its native
+        # refresh even though getVehicleAttached resolves the current tank.
+        if (getattr(player, 'fakeServer', None) is None or
+                getattr(player, 'arena', None) is None or
+                getattr(player, 'vehicle', None) is not None):
+            return
+        attached = getattr(player, 'getVehicleAttached', None)
+        vehicle = attached() if callable(attached) else None
+        if (vehicle is not None and getattr(vehicle, 'inWorld', False) and
+                getattr(vehicle, 'isStarted', False)):
+            # This owns native nation mapping, commander gender and special
+            # crew modes. Refresh only after the setting commits its mapping.
+            vehicle.refreshNationalVoice()
+
+    original_set = AltVoicesSetting.setSystemValue
+    original_clear = AltVoicesSetting.clearPreviewSound
+
+    def set_system_value(setting, value):
+        result = original_set(setting, value)
+        if result:
+            refresh_attached_voice()
+        return result
+
+    def clear_preview_sound(setting):
+        result = original_clear(setting)
+        refresh_attached_voice()
+        return result
+
+    patch(AltVoicesSetting, 'setSystemValue', set_system_value)
+    patch(AltVoicesSetting, 'clearPreviewSound', clear_preview_sound)

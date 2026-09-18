@@ -4135,9 +4135,12 @@ detached transaction before committing an edit. Markers are cleared only after
 successful withdrawal, allowing replay to grant the reward once again. A
 rejected withdrawal clears the pending request, preserves the old progress and
 property, and publishes `resetError` to the editor and a durable notification.
-Credits and free XP withdrawals stop at zero; notices record only the actual
-debit, including the recovered portion of duplicate-vehicle compensation.
-Other spent property or unresolvable legacy provenance rejects the withdrawal.
+All quantity withdrawals stop at the remaining balance or stock; notices
+record only the actual debit, including duplicate-vehicle compensation,
+consumables, camouflage, dossier increments and free orders. Mounted stock
+and occupied slots/bunks are excluded. Other missions' order pledges remain
+recorded and cannot create free orders after their earning source is reset.
+Unresolvable legacy provenance still rejects the withdrawal.
 Elapsed premium time is not reversible; only the remaining earned interval is
 removed without consuming separately purchased time.
 
@@ -4335,6 +4338,24 @@ gender there so settings and postmortem callbacks cannot overwrite it; lobby
 previews use the selected crew. Special voices that call `setMode` directly
 remain native. Applying commander gender to Standard/localized mode as well
 as national mode is the requested offline extension.
+
+Report `20260918-204953-158db2d626ed` uses build
+`colorfulmeans-35342782450-1`; the player reports that changing Standard to
+Commander during battle leaves Standard active. The client-only Avatar's
+engine `vehicle` attribute is empty, as already handled by
+`BigWorldBinding.avatar_vehicle_entered`. Regional `AltVoicesSetting`
+changes its mapping in `setSystemValue`, but `clearPreviewSound` refreshes
+only the engine `player.vehicle` and skips a present-but-empty attachment.
+The offline adapter now refreshes the live, started `getVehicleAttached()`
+after successful mode application and native preview cleanup. It delegates
+to `Vehicle.refreshNationalVoice`, preserving nation mapping, special crew
+modes, native preview stopping, return values and teardown. The patch has no
+retained vehicle or deferred callback, and leaves ordinary engine attachments
+and online players alone. Focused tests reproduce the missing-attachment guard,
+both switch directions, male/female national and Chinese modes, preview
+cleanup, failed settings, startup/teardown and special native voices. This is
+source/lifecycle evidence; the report has no bank-selection trace proving the
+audible result of the new patch.
 
 Focused tests cover award boundaries, module/fire bookkeeping, result packing,
 career reload/deduplication, the roster field and voice resets. Regional source
