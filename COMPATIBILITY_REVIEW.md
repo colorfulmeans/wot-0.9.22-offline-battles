@@ -4274,3 +4274,46 @@ cleanup traceback does not establish a native crash cause. The report and
 screenshots establish the missing mission presentation, while exact Windows
 TAB/result layout, notice timing and final-frame behavior still need gameplay
 acceptance on #1513.
+
+### Completed daily rows, battle commendations and commander voices
+
+The September 18 screenshots show daily reward text under an orange warning,
+missing small battle-result commendations, and female commanders using male
+voices. `offline_services_ui` incorrectly populated `alertMsg`, the stock
+post-battle quest warning field. Completed daily rows now leave that field
+empty, carry `MISSIONS_STATES.COMPLETED`, omit progress bars, and render their
+actual reserve through `GoodiesBonus.formattedList` and the stock simple-bonus
+block. No replacement icon is drawn over Scaleform.
+
+The entire `approachableAchieves` group was absent from the award allowlist.
+Its eleven records now flow through battle settlement, results and dossiers.
+The 0.9.22 reference `arena_achievements`, `achievements.xml` and dossier
+layouts supply the group, numeric conditions and record/block orientation.
+Descriptions were cross-checked against the client text resources mirrored at
+`izeberg/wot-src` commit `0ff1890d1a24d43cf186b86a295bbc7dec63de56`,
+`sources/res/text/lc_messages/achievements.po`; this later resource is not
+presented as #1513 evidence. In particular, Spotter is spotting assist on a
+win, not a shooting streak. Its flag belongs in `singleAchievements`, with
+`maxAimerSeries` in `achievements`. Battle Buddy has an account-wide 50-battle
+series and no vehicle record. Admitted module transitions include zero-HP
+hits and fire; module-only friendly damage interrupts Battle Buddy. Existing
+receipt deduplication and save rollback own these awards too. Prior battles
+without the missing combat facts are not retroactively re-awarded.
+
+The local arena producer previously hard-coded vehicle-list slot 16 to zero.
+The reviewed 18-field roster and regional 0.9.22 `ClientArena` reader identify
+that slot as `crewGroup`; `TankmanDescr.group` packs gender, premium and group
+identity. Freeze the mounted commander's actual group with the garage loadout
+before Account retirement and publish it before native vehicle presentation.
+The native `SoundModes.setCurrentNation` owner selects the language and writes
+the gender switch. The scoped offline adapter supplies attached-vehicle
+gender there so settings and postmortem callbacks cannot overwrite it; lobby
+previews use the selected crew. Special voices that call `setMode` directly
+remain native. Applying commander gender to Standard/localized mode as well
+as national mode is the requested offline extension.
+
+Focused tests cover award boundaries, module/fire bookkeeping, result packing,
+career reload/deduplication, the roster field and voice resets. Regional source
+orientation and tests do not replace a new #1513 bytecode audit or Windows
+acceptance: the final Scaleform layout and audible Chinese/national female
+banks must still be checked in the actual supported client.

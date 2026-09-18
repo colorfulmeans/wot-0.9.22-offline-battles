@@ -6839,6 +6839,7 @@ class BattleState:
                     "worker human ram armor results are invalid")
             pending_projectile_launches = {}
             fire_deaths = []
+            fire_damage_records = []
             fire_lineage_clears = set()
             capture_resets = set()
             stun_clears = []
@@ -7041,6 +7042,14 @@ class BattleState:
             for bot_id, current in next_states.items():
                 previous = self.bot_states.get(bot_id)
                 if previous is not None and previous.get("alive"):
+                    if ((previous.get("critical") or {}).get("fire") and
+                            current.get("fire_attacker_kind") in ("player", "bot") and
+                            int(current.get("fire_attacker_id", 0)) > 0):
+                        fire_damage_records.append((
+                            (current["fire_attacker_kind"], int(current["fire_attacker_id"])),
+                            ("bot", bot_id),
+                            max(0, int(previous["health"]) - int(current["health"])),
+                            previous.get("critical"), current.get("critical")))
                     if not current.get("alive"):
                         self._record_vehicle_end("bot", bot_id)
                     if (not source_clock_rebase and previous.get("world_pose")
@@ -7050,6 +7059,9 @@ class BattleState:
                             tuple(previous[name] for name in ("x", "y", "z")),
                             tuple(current[name] for name in ("x", "y", "z")))
             self.bot_states = next_states
+            for attacker, victim, damage, before, after in fire_damage_records:
+                self._record_damage(attacker, victim, damage, before)
+                self._record_critical_damage(attacker, victim, before, after)
             self._admit_detached_turrets(message)
             self.bot_unavailable_checkpoints = next_unavailable_checkpoints
             for bot_id in stun_clears:
@@ -9156,10 +9168,8 @@ class BattleState:
             self._increment_interaction(
                 shooter, victim, "explosion_hits")
             self._statistics_row(*victim)["explosion_hits_received"] += 1
-        if enemy_hit and crits_mask:
-            victim_state = self._statistics_row(*victim)
-            victim_state["crits_received_mask"] |= crits_mask
-            self._or_interaction(shooter, victim, "crits", crits_mask)
+        self._record_critical_damage(shooter, victim, critical_before,
+                                     admitted_critical)
         if not proposal["splash"] and not enemy_hit and shooter != victim:
             # Top Gun and Sniper both forbid hitting a friendly vehicle at
             # all, so a direct friendly hit needs an owner even though it
@@ -9962,6 +9972,7 @@ class BattleState:
             "team_hits": max(0, int(row.get("team_hits", 0))),
             "team_damage": max(0, int(row.get("team_damage", 0))),
             "team_kills": max(0, int(row.get("team_kills", 0))),
+            "team_crits": max(0, int(row.get("team_crits", 0))),
             "mileage": max(0, int(round(row.get("mileage", 0)))),
             "life_time": max(0, int(row.get("life_time", 0))),
         }
@@ -10024,6 +10035,7 @@ class BattleState:
                 "defended_base": record["defended_base"],
                 "actor_speed": record["actor_speed"],
                 "victim_speed": record["victim_speed"],
+                "ammo_rack": bool(record.get("ammo_rack")),
             })
 
         actors = []
@@ -10031,6 +10043,13 @@ class BattleState:
             identity = (row["actor_kind"], row["actor_id"])
             statistics = self._statistics_row(*identity)
             tier, vehicle_class = described(identity)
+            damage_sources = set(
+                (interaction['target_kind'], interaction['target_id'])
+                for interaction in self.vehicle_interactions.get(identity, {}).values()
+                if int(interaction.get("damage_received", 0)) > 0)
+            duelist_sources = damage_sources | set(
+                source for source, interactions in self.vehicle_interactions.items()
+                if int(interactions.get("%s:%d" % identity, {}).get("crits", 0)) > 0)
             actors.append({
                 "actor_kind": identity[0], "actor_id": identity[1],
                 "team": int(row["team"]),
@@ -10044,6 +10063,9 @@ class BattleState:
                 "xp": int(row["xp"]),
                 "stats": dict(row["stats"]),
                 "kills": kills_by_actor.get(identity, []),
+                "damage_sources": sorted(damage_sources),
+                "duelist_sources": sorted(duelist_sources),
+                "critical_hits": int(statistics.get("critical_hits", 0)),
                 "damaged_targets": sorted(
                     self.damaged_targets.get(identity, ())),
                 "exclusive_spot_assists": len(
@@ -12255,6 +12277,8 @@ class BattleState:
             self._record_damage(
                 attacker, ("player", player.player_id), damage,
                 critical_before)
+            self._record_critical_damage(
+                attacker, victim, critical_before, player.critical)
             event = {
                 "kind": ("hit" if attacker_kind == "player" else
                          "bot_human_hit"),
@@ -12659,10 +12683,15 @@ class BattleState:
         """Freeze one enemy kill with the facts #1513 medals ask about."""
         attacker = (str(attacker[0]), int(attacker[1]))
         victim = (str(victim[0]), int(victim[1]))
+        target = (self.players.get(victim[1]) if victim[0] == "player"
+                  else self.bot_states.get(victim[1]))
+        critical = (getattr(target, "critical", None) if victim[0] == "player"
+                    else (target or {}).get("critical")) or {}
         self.kill_records.append({
             "actor_kind": attacker[0], "actor_id": attacker[1],
             "victim_kind": victim[0], "victim_id": victim[1],
             "death_reason": int(death_reason),
+            "ammo_rack": bool(critical.get("ammo_rack_death")),
             "distance": (None if distance is None else
                          round(float(distance), 3)),
             # De Langlade's medal counts enemies destroyed while they were
@@ -12740,6 +12769,7 @@ class BattleState:
                 "piercings_received": 0, "no_damage_direct_hits_received": 0,
                 "explosion_hits_received": 0, "explosion_hits": 0,
                 "team_hits": 0, "team_damage": 0, "team_kills": 0,
+                "team_crits": 0, "critical_hits": 0,
                 "team_damage_penalized": 0, "team_killed_durability": 0,
                 "mileage": 0.0, "life_time": 0,
                 "damaging_hits_received": 0, "deflected_hits_received": 0,
@@ -12910,6 +12940,21 @@ class BattleState:
         return friendly_fire.facts({
             "victims": victims, "received_damage": received,
             "xp_penalty": int(xp_penalty)})
+
+    def _record_critical_damage(self, attacker, target, previous, current):
+        """Attribute admitted critical transitions, including fire and zero HP hits."""
+        if attacker is None or attacker == target:
+            return
+        mask = _crits_mask(previous, current)
+        if not mask:
+            return
+        row = self._statistics_row(*attacker)
+        if self._vehicle_team(*attacker) == self._vehicle_team(*target):
+            row["team_crits"] += _popcount(mask)
+            return
+        row["critical_hits"] += _popcount(mask)
+        self._statistics_row(*target)["crits_received_mask"] |= mask
+        self._or_interaction(attacker, target, "crits", mask)
 
     def _record_damage(self, attacker, target, damage, target_critical,
                        attacker_team=None):

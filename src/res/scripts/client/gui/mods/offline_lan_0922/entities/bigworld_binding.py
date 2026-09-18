@@ -615,11 +615,12 @@ class BigWorldVehicleBinding(object):
         # personal arena description consumes it on its first player roster
         # update, before TAB is populated; publishing it later is too late.
         mission_ids = list((snapshot or {}).get('personal_mission_ids', ()))
+        crew_group = int((snapshot or {}).get('crew_group', 0))
         values = [entity_id, public_info['compDescr'], public_info['name'],
                   public_info['team'], is_alive, True, team_killer,
                   entity_id, '', 0,
                   public_info['prebattleID'], False, False, {}, 0,
-                  mission_ids, 0, {}]
+                  mission_ids, crew_group, {}]
         return zlib.compress(_pickle.dumps(values))
 
     def _snapshot_properties(self, snapshot):

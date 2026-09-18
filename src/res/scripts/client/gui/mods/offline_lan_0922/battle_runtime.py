@@ -3373,6 +3373,7 @@ class BattleRuntime(object):
                 'position': self._vector(position),
                 'rotation': _engine_rotation(yaw),
                 'period': 'battle',
+                'crew_group': self._garage_loadout_snapshot().get('crew_group', 0),
                 'personal_mission_ids': self._garage_loadout_snapshot().get(
                     'personal_mission_ids', ()),
             }
@@ -7653,6 +7654,8 @@ class BattleRuntime(object):
                     equipment_ids.append(int(compact_descr or 0))
                 except (TypeError, ValueError):
                     equipment_ids.append(0)
+        from gui.mods.offline_lan_0922.crew_voice import commander_group
+        crew = tuple(getattr(item, 'crew', None) or ())
         self._garage_loadout = {
             'shells': shells,
             'equipment_ids': equipment_ids,
@@ -7660,7 +7663,8 @@ class BattleRuntime(object):
                            tuple(consumables.getInstalledItems())),
             'battle_boosters': (() if booster_slots is None else
                                 tuple(booster_slots.getInstalledItems())),
-            'crew': tuple(getattr(item, 'crew', None) or ()),
+            'crew': crew,
+            'crew_group': commander_group(crew),
             'camouflage_id': self._garage_camouflage_id(item),
             'outfit': self._garage_outfit(item),
             'fitting': self._garage_fitting(item),

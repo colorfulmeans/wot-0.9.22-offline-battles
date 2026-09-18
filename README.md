@@ -388,6 +388,14 @@ whose profile changed after it started must be restarted first.
   itself retired, cancelled before release, or that need data this
   reconstruction does not own are listed with their reason in
   `battle_achievements.py` rather than guessed.
+- The small battle-result commendations also settle into their native records:
+  Shellproof, Fire for Effect, Fighter, Duelist, Demolition Expert, Arsonist,
+  Bruiser, Hand of God, Eye for an Eye, Spotter and Battle Buddy. Battle Buddy
+  counts 50 consecutive battles without friendly HP or module damage across
+  vehicles; Spotter keeps each vehicle's best qualifying assist result.
+- Completed offline daily missions use the native completed tick and reward
+  block. Both Standard (localized Chinese) and Commander national voices use
+  the mounted commander's gender, including after changing voice settings.
 - Battle payments follow the published structure: Credits are a base amount
   per vehicle tier that alone carries the 1.85 victory multiplier, a
   tier-independent amount per point of damage, double for detecting artillery,

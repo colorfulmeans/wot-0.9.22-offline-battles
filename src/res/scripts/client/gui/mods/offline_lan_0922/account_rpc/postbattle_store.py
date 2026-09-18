@@ -37,7 +37,8 @@ from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922 import personal_campaign_results
 from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922.battle_achievements import (
-    AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES)
+    AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES, DOSSIER_COUNTER_NAMES,
+    achievement_record)
 
 
 try:
@@ -648,7 +649,7 @@ def _achievement_counts(value):
     if not isinstance(value, dict):
         return {}
     counts = {}
-    for name in AWARDABLE_ACHIEVEMENTS:
+    for name in AWARDABLE_ACHIEVEMENTS + DOSSIER_COUNTER_NAMES:
         count = value.get(name)
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             continue
@@ -669,7 +670,7 @@ def _achievement_records(names, record_db_ids=None):
         record_db_ids = RECORD_DB_IDS
     result = []
     for name in sorted(names):
-        db_id = record_db_ids.get(('achievements', name))
+        db_id = record_db_ids.get(achievement_record(name))
         if db_id is not None:
             result.append((name, int(db_id)))
     return sorted(result, key=lambda row: row[1])
@@ -791,6 +792,9 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'sniperDamageDealt': stats['sniper_damage'],
         'directTeamHits': stats['team_hits'],
         'tdamageDealt': stats['team_damage'],
+        'tdestroyedModules': stats['team_crits'],
+        'aimerSeries': min(200, stats['assist_radio'] // 1000)
+                       if receipt['winner'] == receipt['team'] else 0,
         'tkills': stats['team_kills'],
         'mileage': stats['mileage'],
         'lifeTime': stats['life_time'],
@@ -943,7 +947,8 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
     vehicle['achievements'] = _achievement_db_ids(
         personal_public['achievements'], record_db_ids=record_db_ids)
     vehicle['dossierPopUps'] = [
-        (db_id, max(1, _int(counts.get(name, 1), 1)))
+        (db_id, max(1, _int(counts.get(
+            'maxAimerSeries' if name == 'aimer' else name, 1), 1)))
         for name, db_id in _achievement_records(
             personal_public['achievements'], record_db_ids=record_db_ids)]
     _add_badge_results(vehicle, awards, record_db_ids=record_db_ids)
@@ -1312,9 +1317,35 @@ class PostBattleStore(object):
         vehicle_medals = _achievement_counts(row.get('achievements'))
         progress['achievements'] = account_medals
         row['achievements'] = vehicle_medals
+        # Battle Buddy is account-wide and wraps at 50 clean battles. A
+        # module-only friendly hit breaks it too; harmless bounces do not.
+        series = (account_medals.get('reliableComradeSeries', 0) + 1
+                  if stats['team_damage'] == 0 and stats['team_crits'] == 0
+                  else 0)
+        if series >= 50:
+            if 'reliableComrade' not in receipt['achievements']:
+                receipt['achievements'].append('reliableComrade')
+                for public in receipt['public_results']:
+                    if (public['actor_kind'] == 'player' and
+                            public['actor_id'] == receipt['player_id']):
+                        public['achievements'].append('reliableComrade')
+            series %= 50
+        if series:
+            account_medals['reliableComradeSeries'] = series
+        else:
+            account_medals.pop('reliableComradeSeries', None)
         for name in receipt['achievements']:
+            if name == 'aimer':
+                best = min(200, stats['assist_radio'] // 1000)
+                for counters in (account_medals, vehicle_medals):
+                    counters['aimer'] = 1
+                    counters['maxAimerSeries'] = max(
+                        counters.get('maxAimerSeries', 0), best)
+                continue
             account_medals[name] = account_medals.get(name, 0) + 1
-            vehicle_medals[name] = vehicle_medals.get(name, 0) + 1
+            # The vehicle layout has no Battle Buddy record or series.
+            if name != 'reliableComrade':
+                vehicle_medals[name] = vehicle_medals.get(name, 0) + 1
         for target_name, source_name in (
                 ('shots', 'shots'), ('directHits', 'direct_hits'),
                 ('piercings', 'piercings'), ('spotted', 'spotted'),

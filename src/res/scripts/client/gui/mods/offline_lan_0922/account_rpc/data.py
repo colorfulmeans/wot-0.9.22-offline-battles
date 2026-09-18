@@ -1148,6 +1148,7 @@ def _write_achievements(dossier, counts):
     if not isinstance(counts, dict) or not counts:
         return
     block = dossier['achievements']
+    from gui.mods.offline_lan_0922.battle_achievements import achievement_record
     heroes = 0
     for name in sorted(counts):
         value = counts.get(name)
@@ -1159,7 +1160,7 @@ def _write_achievements(dossier, counts):
         if name in BATTLE_HERO_ACHIEVEMENTS:
             heroes += value
         try:
-            block[name] = value
+            dossier[achievement_record(name)[0]][name] = value
         except (KeyError, TypeError, ValueError):
             continue
     if heroes:

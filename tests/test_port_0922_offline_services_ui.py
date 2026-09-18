@@ -713,7 +713,12 @@ class MissionResultUITests(unittest.TestCase):
             'constants': {'EVENT_TYPE': types.SimpleNamespace(BATTLE_QUEST=2)},
             'gui.battle_results.components.progress': {'QuestsProgressBlock': Block},
             'gui.battle_results.components.base': {'DirectStatsItem': lambda unused, info: info},
-            'gui.server_events.formatters': {'PROGRESS_BAR_TYPE': types.SimpleNamespace(SIMPLE=1)},
+            'gui.server_events.formatters': {
+                'PROGRESS_BAR_TYPE': types.SimpleNamespace(SIMPLE=1, NONE=0),
+                'packSimpleBonusesBlock': lambda values: {'rewards': values},
+                'todict': lambda values: values},
+            'gui.server_events.bonuses': {'GoodiesBonus': lambda name, value:
+                types.SimpleNamespace(formattedList=lambda: [(name, value)])},
             'gui.Scaleform.genConsts.MISSIONS_STATES': {'MISSIONS_STATES': types.SimpleNamespace(COMPLETED='done')},
             'gui.Scaleform.genConsts.QUESTS_ALIASES': {'QUESTS_ALIASES': types.SimpleNamespace(RENDERER_TYPE_QUEST='quest')},
             'gui.Scaleform.daapi.view.battle_results_window': {'BattleResultsWindow': Window},
@@ -728,6 +733,11 @@ class MissionResultUITests(unittest.TestCase):
             self.assertEqual(['receipt'], stock)
             self.assertEqual(1, len(block.rows))
             self.assertEqual('done', block.rows[0]['questInfo']['status'])
+            self.assertEqual('', block.rows[0]['alertMsg'])
+            self.assertEqual([], block.rows[0]['progressList'])
+            self.assertEqual(0, block.rows[0]['questInfo']['progrBarType'])
+            self.assertEqual([{'rewards': [('goodies', {92002: {'count': 1}})]}],
+                             block.rows[0]['awards'])
             Window().showEventsWindow('offline_daily_wins', 2)
             self.assertEqual(['daily', 'closed'], opened)
 

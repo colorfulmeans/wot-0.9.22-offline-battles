@@ -75,6 +75,7 @@ def _install_mission_results():
     from gui.Scaleform.genConsts.MISSIONS_STATES import MISSIONS_STATES
     from gui.Scaleform.genConsts.QUESTS_ALIASES import QUESTS_ALIASES
     from gui.Scaleform.daapi.view.battle_results_window import BattleResultsWindow
+    from gui.server_events import bonuses, formatters
     original = progress.QuestsProgressBlock.setRecord
 
     def set_record(block, result, reusable):
@@ -86,22 +87,24 @@ def _install_mission_results():
             if mission_id not in policy.MISSION_BY_ID:
                 continue
             row = policy.MISSION_BY_ID[mission_id]
-            info = {'title': mission_label(row), 'awards': None,
-                'alertMsg': mission_reward_text(mission_id),
+            reward = bonuses.GoodiesBonus('goodies', {
+                policy.RESERVE_IDS[row[4]]: {'count': 1}})
+            awards = [formatters.packSimpleBonusesBlock(reward.formattedList())]
+            # Stock completed quests show their reward and COMPLETED tick.
+            # alertMsg is reserved for a reset/warning, not success text.
+            info = {'title': mission_label(row), 'awards': formatters.todict(awards),
+                'alertMsg': '',
                 'questInfo': {'questID': key, 'eventType': EVENT_TYPE.BATTLE_QUEST,
                     'IGR': False, 'taskType': '', 'tasksCount': 1,
-                    'progrBarType': PROGRESS_BAR_TYPE.SIMPLE, 'progrTooltip': None,
-                    'maxProgrVal': row[3], 'currentProgrVal': row[3],
+                    'progrBarType': PROGRESS_BAR_TYPE.NONE, 'progrTooltip': None,
+                    'maxProgrVal': 0, 'currentProgrVal': 0,
                     'rendererType': QUESTS_ALIASES.RENDERER_TYPE_QUEST,
                     'timerDescription': '', 'status': MISSIONS_STATES.COMPLETED,
                     'description': mission_label(row), 'tooltip': '',
                     'isSelectable': True, 'isNew': False, 'isAvailable': True},
                 'personalInfo': [],
                 'questType': EVENT_TYPE.BATTLE_QUEST,
-                'progressList': [{'progrTooltip': None,
-                    'progrBarType': PROGRESS_BAR_TYPE.SIMPLE,
-                    'maxProgrVal': row[3], 'currentProgrVal': row[3],
-                    'description': tr('Mission completed'), 'progressDiff': ''}]}
+                'progressList': []}
             block.addComponent(block.getNextComponentIndex(), base.DirectStatsItem('', info))
     _patch(progress.QuestsProgressBlock, 'setRecord', set_record)
     original_show = BattleResultsWindow.showEventsWindow
@@ -874,6 +877,8 @@ def install():
         _install_daily()
         _install_mission_results()
         _install_settings()
+        from gui.mods.offline_lan_0922 import crew_voice
+        crew_voice.install(_patch)
         _schedule_daily_rollover()
     except Exception:
         uninstall()

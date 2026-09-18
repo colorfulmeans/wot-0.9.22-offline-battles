@@ -443,10 +443,11 @@ class BigWorldBindingTests(unittest.TestCase):
             outfit_provider=lambda descriptor: 'verified')
         properties = binding.properties_from_compact_descr(17, 1, 'Alpha')
         binding.arena_vehicle_added(91, _snapshot(
-            properties=properties, personal_mission_ids=(270,)))
+            properties=properties, personal_mission_ids=(270,), crew_group=13))
         row = pickle.loads(zlib.decompress(avatar.updates[-1][1]))
         self.assertEqual(18, len(row))
         self.assertEqual([270], row[15])
+        self.assertEqual(13, row[16])
         self.assertEqual({}, row[17])
         # A remote/Bot roster never inherits the player's mission selection.
         binding.arena_vehicle_added(92, _snapshot(properties=properties))
