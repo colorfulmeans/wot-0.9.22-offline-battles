@@ -22,11 +22,17 @@ Current release: **v0.9.0** — [Release notes](docs/releases/v0.9.0.md).
      server and prints the address to give them.
    - **Join a LAN battle**: type the host's address, for example
      `192.168.1.20`.
-4. Click **Start game**. In the garage, fit a tank and click **Battle!**.
+4. Click **Start game**. In the garage, fit a tank and click **Battle!** or
+   **Create Platoon**.
    Everyone lands in the LAN waiting room over the stock queue screen. The
    host picks the map - **RANDOM MAP**, or **MAP** to browse the client's own
    map window and choose a battle time - and clicks **START BATTLE**.
    **LEAVE** returns you to the garage.
+
+Create Platoon opens that same LAN room; the launcher selects the server.
+It does not create a separate retail platoon or use online friend invitations.
+Have the host enter first, then join the same address and select the same team
+to play together. Starting Single player on each PC creates separate rooms.
 
 The mod's waiting room and LAN notifications follow the launcher's selected
 English or Simplified Chinese language when you start the game. **Automatic**
@@ -82,6 +88,11 @@ The five retired definitions have explicit offline prices: tier VII
 Aufkl. Panther 6000, tier IX SU-122-54 12000, and tier X Object 430B,
 Object 263B and Waffentrager E 100 15000 bonds each. These are the old
 definitions, not their later replacements or alternate variants.
+Special Offers uses its own bond quotes. The tech tree retains the native
+catalogue gold values, including 32000 for 121B and 9000 for Panzer 58 Mutz;
+catalogue availability flags still apply. A bond purchase includes the slot
+and trained crew; an ordinary catalogue purchase uses its displayed currency
+and normal slot/crew terms.
 The regular Shop excludes those bond offers. Vehicle checkboxes select
 unresearched, owned or rented vehicles; with none selected, the list contains
 available purchases. Multiple selected categories are combined.

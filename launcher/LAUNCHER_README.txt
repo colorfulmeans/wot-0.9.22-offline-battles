@@ -30,8 +30,12 @@ not install or start earlier client lines.
    and stages the complete package before replacing the old mod, and restores
    the previous mod if that replacement fails.
 
-In the game, fit a tank and click Battle!. Everyone lands in the LAN waiting
-room, drawn over the stock battle queue screen. The room host selects the map
+In the game, fit a tank and click Battle! or Create Platoon. Both open the
+LAN room configured in the launcher, without retail friend invitations.
+Have the host enter first; friends join the same address and choose the same
+team. Single player on separate PCs creates separate rooms. Everyone lands
+in the LAN waiting room over the stock battle queue screen. The room host
+selects the map
 and the total tanks for each team, including human players, from 1 through 15,
 then clicks START BATTLE. The room settings can be changed there without
 restarting the game or LAN server. LEAVE closes the room and returns you to

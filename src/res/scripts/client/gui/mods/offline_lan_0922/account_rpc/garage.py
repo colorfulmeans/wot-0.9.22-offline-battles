@@ -1777,7 +1777,7 @@ class GarageState(object):
 
     def buy_vehicle(self, vehicle_type_compact_descr, buy_shells=False,
                     recruit_crew=False, tman_cost_type_index=0,
-                    rent_period=-1):
+                    rent_period=-1, bond_offer=False):
         """Own one more vehicle, stock, and pay the catalogue price for it.
 
         A bought vehicle arrives exactly as retail sells it: the stock fitting,
@@ -1800,9 +1800,20 @@ class GarageState(object):
         from gui.mods.offline_lan_0922 import offline_services
         recovery = offline_services.vehicle_recovery_offer(
             self._snapshot, compact_descr)
+        offer = next((row for row in self._snapshot.get('offlineVehicleOffers', ())
+                      if _int(row.get('cd')) == compact_descr), None)
+        if bond_offer:
+            # Only the service's selected, published offer grants this route.
+            # A regular VehicleBuyer request still uses the native catalogue
+            # or restoration terms; membership alone must not change its bill.
+            if offer is None or _int(offer.get('price')) <= 0:
+                raise GarageError('This vehicle is not offered for bonds.')
+            purchase_cost = {'crystal': _int(offer['price'])}
+        else:
+            purchase_cost = ({'credits': recovery['credits']} if recovery is not None
+                             else self._item_cost(compact_descr))
         slots = _int(self._snapshot.get('accountSlots', 0))
-        bond_bundle = recovery is None and any(_int(row.get('cd')) == compact_descr for row in
-                          self._snapshot.get('offlineVehicleOffers', ()))
+        bond_bundle = offer is not None and purchase_cost.get('crystal', 0) > 0
         if not bond_bundle and slots and len(self._records()) >= slots:
             raise GarageError('every garage slot is occupied')
 
@@ -1824,8 +1835,7 @@ class GarageState(object):
                 recruit_crew=False)
             record = built['record']
 
-            cost = ({'credits': recovery['credits']} if recovery is not None
-                    else self._item_cost(compact_descr))
+            cost = dict(purchase_cost)
             shells = [_int(value) for value in (record.get('shells') or ())]
             if not buy_shells:
                 shells = [value if index % 2 == 0 else 0

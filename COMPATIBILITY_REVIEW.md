@@ -1753,6 +1753,26 @@ Only Windows play can say how the resulting pace feels.
 
 ## Stock map-selection lifecycle
 
+The September 18 Create Platoon report exposed another unadapted retail
+entry. Public 0.9.22 Python shows `LobbyHeader.showSquad()` and
+`SquadTypeSelectPopover.selectFight(actionName)` independently dispatching
+`doSelectAction`; the squad entry creates a `prebattle/create` waiting context
+and calls `unitMgr.createSquad()`. The offline server has no retail unit reply.
+The existing pre-lobby adapter now consumes both entries and calls
+`LANSession.join(None, 'random')`, before either native waiting request starts.
+Repeated clicks reuse the configured connection; host election, team choice,
+connection errors and explicit battle start retain their existing LAN owners.
+Training remains a separate selector action. No new native API or network
+protocol is introduced, and no shared Waiting state is forcibly dismissed.
+Uninstall restores only the adapter's own functions, including inherited
+members; partial installation and reinstall are covered.
+
+This callback investigation used the public regional 0.9.22 source as
+orientation, plus current adapter/session regression tests. The exact China
+1513 `scripts.pkg` was unavailable for a new bytecode audit here. The tests
+prove the routing and lifecycle logic, not live Flash binding or dropdown
+presentation; both Create Platoon entry points still require Windows play.
+
 Before the local Account creates the lobby, a chain-safe adapter intercepts the
 exact `LobbyHeader.fightClick(self, mapID, actionName)` boundary. Exact `#1513`
 Flash stores that Python callback when `LobbyHeaderMeta` first binds its script;
@@ -3729,9 +3749,30 @@ these are not described as official 0.9.22 bond prices.
 
 The native store retains its card surface; purchases use the Account command,
 GarageState transaction, common vehicle purchase and durable garage ledger.
-Slot and crew entitlements are shared with native purchase consumers.
+Slot and crew entitlements apply to purchases charged the bond offer.
 Insufficient funds, duplicate purchases and failed save writes roll back.
 Premium purchases use the native six durations and stock price templates.
+
+The September 18 zero-gold reports for 121B and Panzer 58 Mutz came from
+publishing all bond offers into the shared `shopItemPrices`. Native tech-tree
+consumers read gold there, so a crystal-only override became zero gold. Offer
+publication now restores the eight non-retired entries' baked native prices
+and `notInShop` flags, including 32000 gold for `Ch25_121_mod_1971B` and 9000
+for `G119_Pz58_Mutz`. This does not make every reward or unavailable vehicle
+an ordinary purchase. The five explicitly retired offline bond definitions
+keep their bond-only catalogue override.
+
+Special Offers supplies its own complete `ItemPrices(ItemPrice(Money(...)))`
+quote and bond affordability check to the native vehicle-row producer; it
+does not mutate the shared Vehicle object. Its Account service selects the
+published offer explicitly for the common GarageState purchase, which charges
+bonds and grants the included slot/100% crew. An ordinary gold purchase or
+credit recovery keeps its own price and normal slot/crew terms. Merely being
+listed in Special Offers no longer changes either transaction. Regressions
+cover every published offer, republishing stale bond overrides, native card
+prices/affordability, both currencies, recovery precedence and atomic failures.
+The row hooks were checked against public 0.9.22 Python; exact 1513 native
+card rendering and the tech-tree values still need Windows acceptance.
 
 No friendly-fire locale key is overridden. Public 0.9.22 result calculations
 use `details/calculations/friendlyFirePenalty` for credits and XP, and
