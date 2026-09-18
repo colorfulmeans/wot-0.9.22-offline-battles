@@ -4076,6 +4076,39 @@ finished accessing `storeTable`, avoiding disposal of an in-use component.
 Repeated clicks coalesce; disposal, account changes or adapter removal retire
 the queued navigation without changing filters.
 
+Report `20260918-212147-84a3849a93a9` exercises matching launcher/client build
+`colorfulmeans-35348086780-1` on Chinese HD `0.9.22.0.1 #1513`. Switching from
+vehicle recovery to buying reaches native `Shop.requestTableData`, then
+`StoreComponent._setTableData` and `ShopVehicleTab._getRequestCriteria`, which
+raises `KeyError: 'extra'`. This is a recorded Python failure, not a network
+timeout. The regional 0.9.22 Python references show that recovery/trade-in
+defaults omit `extra`, whereas buying indexes it directly. Shop and Inventory
+both save the received filter before building their table and close their
+waiting overlay only on success. Thus a failed request can also persist the
+incomplete filter for the next opening. The available Flash reference shows
+the shared vehicle view switching its obtaining type; it does not establish
+the exact #1513 serialization step that omitted the key.
+
+The store adapter now completes each incoming filter from that category's
+saved values and the running client's `AccountSettings.getFilterDefault`.
+Explicit empty selections remain empty, and the requested category owns its
+obtaining type. It repairs incomplete saved category filters before native
+`StoreComponent._populate` reads them. Regular Shop and Inventory retain their
+native table builders, scroll targets and persistence; an exception releases
+that request's waiting entry and remains visible in the exception log. Offers'
+separate filter-option and request overrides use the same completion helper,
+with their existing independent settings and deferred navigation retained.
+
+Regression coverage reproduces the missing-key exception before installing
+the fix, then checks repeated recovery/buy/trade-in transitions, missing/null
+fields across all fourteen native Shop/Inventory categories, empty and saved
+selections, initialization after a failed save, Flash-object conversion,
+exception cleanup without double-hiding another wait, next-request recovery,
+and reversible hooks under Python 2 method binding. This identifies a shared
+failure class; it does not claim every category failed in the supplied report.
+The references and fakes are contract guidance, not a new exact #1513 bytecode
+audit. Actual menu rendering and transitions still require Windows playtest.
+
 The later Ruinberg report locates the crushed-car observation at
 `env418_OldGMercedes1.model`, chunk 33407 / item 36, around
 `(340.126, 13.579, 46.447)`. Its suspension-plane residuals of 0.129 and

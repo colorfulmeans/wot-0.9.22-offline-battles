@@ -233,6 +233,62 @@ def _buy_vehicle(view, compact_descr):
     return True
 
 
+def _store_filter_data(key, incoming=None):
+    """Complete this category's payload before native readers persist/use it."""
+    from account_helpers.AccountSettings import AccountSettings
+    from gui.shared.utils import flashObject2Dict
+    defaults = AccountSettings.getFilterDefault(key)
+    result = copy.deepcopy(defaults)
+    for values in (AccountSettings.getFilter(key), flashObject2Dict(incoming)):
+        if isinstance(values, dict):
+            for name, value in values.items():
+                # Empty selections are intentional; absent/null fields are not.
+                if value is not None or name not in defaults:
+                    result[name] = copy.deepcopy(value)
+    if 'obtainingType' in defaults:
+        result['obtainingType'] = defaults['obtainingType']
+    return result
+
+
+def _install_store_filters():
+    from account_helpers.AccountSettings import AccountSettings, DEFAULT_VALUES, KEY_FILTERS
+    from gui.Scaleform.daapi.view.lobby.store.StoreComponent import StoreComponent
+    from gui.Scaleform.daapi.view.lobby.store.Shop import Shop
+    from gui.Scaleform.daapi.view.lobby.store.Inventory import Inventory
+    from gui.Scaleform.Waiting import Waiting
+
+    def wrap_request(original, prefix, waiting):
+        def request_table(view, nation, actions, item_type, filters):
+            filters = _store_filter_data(prefix + '_' + item_type, filters)
+            try:
+                return original(view, nation, actions, item_type, filters)
+            except Exception:
+                # Stock show/build/hide has no finally. Balance only its failed
+                # request; a second hide on success could remove another wait.
+                Waiting.hide(waiting)
+                raise
+        return request_table
+
+    _patch(Shop, 'requestTableData', wrap_request(
+        Shop.requestTableData, 'shop', 'updateShop'))
+    _patch(Inventory, 'requestTableData', wrap_request(
+        Inventory.requestTableData, 'inventory', 'updateInventory'))
+    original_populate = StoreComponent._populate
+
+    def populate(view):
+        # A previous failed request may already have saved an incomplete VO.
+        # Repair it before __populateFilters reads vehicleCD/selectedTypes.
+        prefix = view.getName() + '_'
+        for key, defaults in DEFAULT_VALUES[KEY_FILTERS].items():
+            if key.startswith(prefix) and isinstance(defaults, dict):
+                filters = _store_filter_data(key)
+                if filters != AccountSettings.getFilter(key):
+                    AccountSettings.setFilter(key, filters)
+        return original_populate(view)
+
+    _patch(StoreComponent, '_populate', populate)
+
+
 def _install_shop():
     from account_helpers.AccountSettings import AccountSettings, DEFAULT_VALUES, KEY_FILTERS
     from gui.Scaleform.daapi.settings.views import VIEW_ALIAS
@@ -241,7 +297,6 @@ def _install_shop():
     from gui.Scaleform.daapi.view.lobby.store.tabs.shop import ShopVehicleTab
     from gui.Scaleform.genConsts.STORE_CONSTANTS import STORE_CONSTANTS
     from gui.shared.gui_items.Vehicle import VEHICLE_TYPES_ORDER
-    from gui.shared.utils import flashObject2Dict
     from gui.Scaleform.Waiting import Waiting
     prefix = 'offline_bond'
     defaults = DEFAULT_VALUES[KEY_FILTERS]
@@ -305,8 +360,7 @@ def _install_shop():
             from gui.Scaleform import getVehicleTypeAssetPath, getLevelsAssetPath
             from gui.prb_control.settings import VEHICLE_LEVELS
             from gui.shared.utils.functions import makeTooltip
-            filters = copy.deepcopy(AccountSettings.getFilter(
-                prefix + '_' + STORE_CONSTANTS.VEHICLE))
+            filters = _store_filter_data(prefix + '_' + STORE_CONSTANTS.VEHICLE)
             filters['obtainingType'] = STORE_CONSTANTS.VEHICLE
             filters['extra'] = [value for value in filters.get('extra', ())
                                 if value in ('inHangar', 'rentals')]
@@ -366,7 +420,7 @@ def _install_shop():
             # saved native vehicle filters, not a module-filter VO as a tank VO.
             if unused_type != STORE_CONSTANTS.VEHICLE:
                 filters = AccountSettings.getFilter(prefix + '_' + STORE_CONSTANTS.VEHICLE)
-            filters = flashObject2Dict(filters)
+            filters = _store_filter_data(prefix + '_' + STORE_CONSTANTS.VEHICLE, filters)
             filters['obtainingType'] = STORE_CONSTANTS.VEHICLE
             filters['extra'] = [value for value in filters.get('extra', ())
                                 if value in ('inHangar', 'rentals')]
@@ -870,6 +924,7 @@ def install():
     if _patches:
         return
     try:
+        _install_store_filters()
         _install_shop()
         _install_vehicle_filters_and_recovery()
         _install_reserves()

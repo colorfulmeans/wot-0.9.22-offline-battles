@@ -166,12 +166,17 @@ class NativeServiceUITests(unittest.TestCase):
                 LOBBY_STORE_ACTIONS='storeActions', LOBBY_STORE='store')},
             'gui.Scaleform.daapi.view.lobby.store.StoreView': {'StoreView': StoreView},
             'gui.Scaleform.daapi.view.lobby.store.Shop': {'Shop': Shop},
+            'gui.Scaleform.daapi.view.lobby.store.Inventory': {'Inventory': type(
+                'Inventory', (), {'requestTableData': lambda *args: None})},
+            'gui.Scaleform.daapi.view.lobby.store.StoreComponent': {'StoreComponent': type(
+                'StoreComponent', (), {'_populate': lambda self: None})},
             'gui.Scaleform.daapi.view.lobby.store.tabs.shop': {'ShopVehicleTab': VehicleTab},
             'gui.Scaleform.genConsts.STORE_CONSTANTS': {'STORE_CONSTANTS': types.SimpleNamespace(
                 STORE_ACTIONS='storeActions', SHOP_LINKAGE='ShopUI', VEHICLE='vehicle')},
             'gui.shared.gui_items.Vehicle': {'VEHICLE_TYPES_ORDER': ['lightTank', 'heavyTank']},
             'gui.Scaleform.framework': {'g_entitiesFactories': factory},
-            'gui.shared.utils': {'flashObject2Dict': dict},
+            'gui.shared.utils': {'flashObject2Dict': lambda value:
+                                 dict(value) if value is not None else None},
             'gui.Scaleform.Waiting': {'Waiting': mock.Mock()},
             'gui': {'GUI_NATIONS': ['ussr', 'germany']},
             'gui.Scaleform': {'getVehicleTypeAssetPath': lambda name: name,
@@ -185,6 +190,7 @@ class NativeServiceUITests(unittest.TestCase):
                 'EVENT_BUS_SCOPE': types.SimpleNamespace(LOBBY='lobby')},
         }
         with native_modules(exports):
+            self.ui._install_store_filters()
             self.ui._install_shop()
             self.assertIsNot(Shop.requestTableData,
                              Shop.__dict__['requestTableData'])
@@ -232,7 +238,8 @@ class NativeServiceUITests(unittest.TestCase):
                     'obtainingType': 'restoreVehicle',
                     'extra': ['locked', 'inHangar']},
                 'shop_current': (0, 'shell', True)}
-            account_settings.getFilter.side_effect = saved_filters.__getitem__
+            account_settings.getFilter.side_effect = lambda key: saved_filters.get(
+                key, defaults['filters'].get(key, default_vehicle_filter))
             account_settings.setFilter.side_effect = saved_filters.__setitem__
             self.assertEqual((1, 'vehicle', False),
                              shop._StoreComponent__getCurrentFilter())
@@ -269,6 +276,16 @@ class NativeServiceUITests(unittest.TestCase):
                 self.assertEqual(20, controls.rentalsChckBx.y - controls.inHangarChkBx.y)
                 self.assertFalse(actions.visible)
             self.assertEqual(controls.obtainingTypeBuyBtn.y, controls.vehTypeHeader.y)
+            # Offers has its own request/filter-option overrides. Repair those
+            # saved filters too, without importing a module category's VO.
+            saved_filters['offline_bond_vehicle'].pop('selectedLevels')
+            shop._StoreComponent__updateFilterOptions('vehicle')
+            self.assertEqual([False] * 10,
+                shop.filter_options['voData']['selectedLevels'])
+            shop.requestTableData(1, False, 'module', {'fitsType': 'myVehicle'})
+            self.assertEqual('vehicle', shop.table_request[2])
+            self.assertEqual([False] * 10, shop.table_request[0]['selectedLevels'])
+            self.assertNotIn('fitsType', shop.table_request[0])
             tab = shop._getTabClass('vehicle')()
             tab._nation = None
             tab._filterData = {'selectedTypes': [False, False],

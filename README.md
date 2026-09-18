@@ -89,6 +89,10 @@ Special Offers shows only the tank section, class/tier filters and owned/rental
 checkboxes. Its filters are saved independently from the regular Shop. The
 regular Shop's special-offers selector opens the complete bond catalogue with
 those filters cleared; the redundant selector is hidden inside Special Offers.
+Shop and Inventory complete missing category filters from the client's saved
+selection and native defaults, including when returning from vehicle recovery.
+Reopening repairs incomplete saved filters; a failed table update releases its
+loading overlay so the page can be used again.
 
 Premium vehicles sold from this build onward enter the native Shop recovery
 list. Recovery costs the hull's sale value plus 10% in credits and requires a
