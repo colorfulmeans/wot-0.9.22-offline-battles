@@ -3862,6 +3862,21 @@ def _structure_module_may_retain_native_collision_1513(
 		for index in record.get('retained_collision_boxes') or ())
 
 
+def structure_collision_swap_required(token):
+	"""Hold only modules whose replacement can introduce a solid collider.
+
+	The pinned map catalog distinguishes collision-free destroyed modules from
+	retained walls. A model hiding delay is not itself a physical obstacle.
+	Missing instance/resource evidence continues to require the safe hand-off.
+	"""
+	ready = getattr(_get_destr_authority(), 'contact_collision_ready', None)
+	return any(mat_kind is not None and
+		_structure_module_may_retain_native_collision_1513(
+			chunk_id, item_index, mat_kind) and
+		not (callable(ready) and ready(chunk_id, item_index, mat_kind))
+		for chunk_id, item_index, mat_kind in token or ())
+
+
 def note_destroyed(kind, chunkID, itemIndex, matKind=None, now=None):
 	"""Track native hide or falling-matrix collision after destruction."""
 	if kind == 'tree':
@@ -4567,13 +4582,12 @@ def _catalog_pending_at_hull(pos, yaw, vel, td, now, dt=0.04,
 		deadline = pending.get((candidate[0], candidate[1], candidate[2]))
 		is_pending = (
 			deadline is not None and float(now) < float(deadline) and
-				(candidate[4] == 'structure' or
-				 not (callable(ready) and ready(*candidate[:3]))))
+			(candidate[4] != 'structure' or
+			 _catalog_retains_collision_1513(candidate)) and
+			not (callable(ready) and ready(*candidate[:3])))
 		if is_pending:
-			# A structure replacement can enter the native collision world one
-			# frame after its Python hide callback completes.  Keep its complete
-			# bounded swap window; fragiles may still release as soon as the
-			# callback proves their collision transition complete.
+			# Only a solid replacement needs the bounded structure swap window.
+			# Collision-free modules cannot create a blocker after the callback.
 			saw_pending = True
 			continue
 		# The native hard result cannot be attributed only to a swapping
@@ -4763,21 +4777,18 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 					'g_offh_destr_pending', {}).get(key, 0.0)
 				swap_pending = (
 					float(now) < pending_deadline and
-					(kind == 'structure' or (
-						_catalog_retains_collision_1513(candidate) and
-						not (callable(getattr(
+					_catalog_retains_collision_1513(candidate) and
+					not (callable(getattr(
 							auth, 'contact_collision_ready', None)) and
-								auth.contact_collision_ready(*key)))))
+								auth.contact_collision_ready(*key)))
 				if swap_pending:
-					# A structure can materialise a destroyed-model BSP after its
-					# logical module receipt, even when the stock callback already
-					# reports complete. Keep the hull outside for the complete native
-					# hiding interval; the replacement's actual BSP owns motion after
-					# that bounded hand-off. Fragiles retain their narrower proved
-					# replacement rule.
+					# Preserve an unfinished solid replacement's native hand-off.
+					# A completed physical-contact callback releases immediately;
+					# it must not pay the original animation timer a second time.
 					blocked = True
 					swap_blocked = True
-				elif _catalog_retains_collision_1513(candidate):
+				elif (kind == 'structure' and
+						_catalog_retains_collision_1513(candidate)):
 					# #1513 exposes only segment queries for the replacement BSP.
 					# Only a box whose compiled destroyed-model reference proves a
 					# solid replacement keeps its source module envelope.  Applying
@@ -4796,6 +4807,11 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 							_candidate_world_boxes_1513(candidate)):
 						blocked = True
 						other_blocked = True
+				# A fragile prop's source box describes its intact body, not its
+				# crushed wreck. Once the native swap has completed, motion and
+				# suspension use the replacement BSP, including vehicle-only faces.
+				# Keeping the old tractor/car box here creates an invisible wall
+				# above and around the wreck even when the native rays are clear.
 				crushed = True
 				if contact_candidate:
 					exact_token.add(key)
@@ -4904,10 +4920,11 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		exact_token.add((chunk_id, item_index, mat_kind))
 		note_destroyed(
 			event_kind, chunk_id, item_index, mat_kind, now)
-		if event_kind == 'module':
-			# Do not advance into a structure in the same tick that starts its
-			# native model swap. Subsequent sweeps take the destroyed branch
-			# above until the bounded hiding interval has elapsed.
+		if (event_kind == 'module' and
+				structure_collision_swap_required((
+					(chunk_id, item_index, mat_kind),))):
+			# Only an unfinished solid replacement needs the stock hand-off;
+			# never impose its animation timer on collision-free modules.
 			blocked = True
 			swap_blocked = True
 		_publish_catalog_once_1513(
@@ -7326,6 +7343,42 @@ def _stock_crushable_1513(mat_info, vel, td, item_scale=None):
 			_isolate_destructible_1513(
 				'material_descriptor', chunkID, itemIndex, detail=error)
 		return False
+
+
+def static_contact_evidence(spaceID, segment_start, hit_pt, surf_normal):
+	"""Name a reported native blocker without attempting destruction.
+
+	Called only by the two-second stalled-motion diagnostic, never by every
+	hull lane. Material probes may hit neighbours, so preserve the returned
+	point and separation rather than treating the filename as exact proof.
+	"""
+	import BigWorld
+	normal = type(surf_normal)(surf_normal.x, surf_normal.y, surf_normal.z)
+	if normal.length <= 0.001:
+		return []
+	normal.normalise()
+	probes = [(hit_pt - normal.scale(3.0), hit_pt + normal.scale(2.0))]
+	incoming = hit_pt - segment_start
+	if incoming.length > 0.001:
+		incoming.normalise()
+		probes.append((hit_pt + incoming.scale(3.0),
+			hit_pt - incoming.scale(2.0)))
+	result = []
+	for start, end in probes:
+		payload = BigWorld.wg_getMatInfoNearPoint(
+			spaceID, start, end, hit_pt, lambda *args: False)
+		decoded = _decode_mat_info_1513(payload)
+		if decoded is None:
+			result.append({'hit': False})
+			continue
+		point, unused_normal, chunk, item, material, filename = decoded
+		result.append({
+			'hit': True, 'chunk': chunk, 'item': item, 'material': material,
+			'filename': _normalized_filename(filename),
+			'point': (point.x, point.y, point.z),
+			'contact_distance': (point - hit_pt).length,
+		})
+	return result
 
 
 def _try_destroy_solid_hit(spaceID, segment_start, hit_pt, surf_normal,

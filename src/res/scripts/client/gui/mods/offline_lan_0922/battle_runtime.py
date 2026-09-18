@@ -17713,6 +17713,17 @@ class BattleRuntime(object):
                     json.dumps(self._local_ground_plane)))
         if trace and trace.get('reason'):
             trace = dict(trace)
+            evidence = getattr(self._destructibles, 'static_contact_evidence', None)
+            if callable(evidence) and all(key in trace for key in (
+                    'ray_start', 'hit', 'normal')):
+                try:
+                    trace['material_probes'] = evidence(
+                        self._avatar.spaceID, self._vector(trace['ray_start']),
+                        self._vector(trace['hit']), self._vector(trace['normal']))
+                except Exception as error:
+                    # A diagnostic failure never changes motion or the native
+                    # collision verdict that has already been applied.
+                    trace['material_probe_error'] = str(error)
             trace['motion_skip_flags'] = VEHICLE_SKIP_FLAGS
             trace['spring_columns'] = (
                 'x,z,minimum,maximum,direct,support,flat_maximum,layers')
@@ -18840,16 +18851,23 @@ class BattleRuntime(object):
                     entity.typeDescriptor)):
             return False
         if (status == 'crushed' and 'structure' in catalog_kinds and
-                committed_catalog is not None and
-                any(row[2] is not None for row in committed_catalog)):
-            # The native module replacement is not atomic with its logical
-            # destroy receipt.  Hold this pre-contact pose for the first swap
-            # frame; the sensor keeps subsequent frames outside for the
-            # complete bounded hiding interval.
+                self._structure_contact_needs_swap_hold(committed_catalog)):
+            # A solid replacement still has an unfinished native callback.
+            # Keep the last outside pose until that hand-off completes.
             self._local_motion_soft_block = True
             self._local_motion_status = 'pending'
             return False
         return status in ('clear', 'crushed', 'approach')
+
+    def _structure_contact_needs_swap_hold(self, token):
+        """Use exact replacement evidence, not the generic structure kind."""
+        if token is None or not any(row[2] is not None for row in token):
+            return False
+        reader = getattr(
+            self._destructibles, 'structure_collision_swap_required', None)
+        # An unavailable catalog contract must not authorize entry into a
+        # potentially solid replacement. Production supplies this reader.
+        return not callable(reader) or bool(reader(token))
 
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
@@ -19050,8 +19068,8 @@ class BattleRuntime(object):
                 structure_swap_hold = (
                     proposal.get('status') == 'crushed' and
                     'structure' in catalog_kinds and
-                    committed_catalog is not None and
-                    any(row[2] is not None for row in committed_catalog))
+                    self._structure_contact_needs_swap_hold(
+                        committed_catalog))
                 world_status = world_collision.check_horizontal_collision(
                     self._runtime.bigworld, self._runtime.math,
                     self._avatar.spaceID, self._vector(position),
@@ -19204,11 +19222,10 @@ class BattleRuntime(object):
         kinds = set(value for value in str(
             detail.get('kinds', '-')).split(',') if value and value != '-')
         if (bool(detail.get('accepted_now', False)) and
-                'structure' in kinds and token is not None and
-                any(row[2] is not None for row in token)):
-            # The accepted native module starts an asynchronous model swap.
-            # Commit its exact event, but keep this Bot outside for the first
-            # frame; later frames remain blocked by the catalog deadline.
+                'structure' in kinds and
+                self._structure_contact_needs_swap_hold(token)):
+            # Only an unfinished solid replacement needs a pose hold. A
+            # completed callback or collision-free module may move this tick.
             return False
         clear = self._native_world_rotation_is_clear(
             position, start_yaw, end_yaw, descriptor,

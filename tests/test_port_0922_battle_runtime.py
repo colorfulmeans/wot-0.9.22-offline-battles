@@ -20576,6 +20576,83 @@ class BattleRuntimeContractTests(unittest.TestCase):
         contact = battle.local_destructible_contacts()[0]
         self.assertEqual([[22, 37, 73]], contact['token'])
 
+    def test_collision_free_building_motion_keeps_native_wall_checks(self):
+        for speed in (-5.0, 5.0):
+            for world_status in ('clear', 'hard'):
+                with self.subTest(speed=speed, world=world_status):
+                    runtime = _runtime()
+                    battle = BattleRuntime(runtime)
+                    battle._avatar = runtime.bigworld.avatar
+                    battle._sender = types.SimpleNamespace(
+                        send_current=mock.Mock(return_value=True))
+                    token = ((22, 37, 73), (22, 37, 74))
+                    battle._destructibles = types.SimpleNamespace(
+                        _catalog_motion_proposal=mock.Mock(return_value={
+                            'status': 'crushed', 'token': token,
+                            'accepted_now': False, 'used_kinetic_speed': False,
+                            'kinds': 'structure', 'requires_commit': True,
+                        }),
+                        structure_collision_swap_required=mock.Mock(
+                            return_value=False),
+                        commit_local_prediction=mock.Mock(return_value=True))
+                    entity = _Vehicle(10, _Descriptor(), _Vector(),
+                                      (0, 0, 0), {'health': 500})
+                    with mock.patch(
+                            'gui.mods.offline_lan_0922.battle_runtime.'
+                            'world_collision.check_horizontal_collision',
+                            return_value=world_status) as world:
+                        self.assertEqual(world_status == 'clear',
+                            battle._motion_is_clear(
+                                entity, (1.0, 2.0, 3.0), 0.0, speed, 0.1))
+                    self.assertFalse(battle._local_motion_soft_block)
+                    world.assert_called_once()
+                    battle._destructibles.commit_local_prediction.assert_called_once()
+                    battle._sender.send_current.assert_called_once_with()
+                    self.assertEqual([list(row) for row in token],
+                        battle.local_destructible_contacts()[0]['token'])
+
+    def test_collision_free_building_allows_player_and_bot_rotation(self):
+        for actor in ('player', 'bot'):
+            for native_clear in (False, True):
+                with self.subTest(actor=actor, native_clear=native_clear):
+                    runtime = _runtime()
+                    battle = BattleRuntime(runtime)
+                    battle._avatar = runtime.bigworld.avatar
+                    battle._bots = types.SimpleNamespace(states={101: {}})
+                    battle._local_physics = _effective_params_snapshot()['physics']
+                    battle._sender = types.SimpleNamespace(
+                        send_current=mock.Mock(return_value=True))
+                    token = ((22, 37, 73),)
+                    proposal = {
+                        'status': 'crushed', 'token': token,
+                        'accepted_now': False, 'used_kinetic_speed': False,
+                        'kinds': 'structure', 'requires_commit': True,
+                        '_catalog_token': token,
+                    }
+                    committed = dict(proposal, accepted_now=True,
+                                     requires_commit=False)
+                    battle._destructible_pose_sweep = mock.Mock(
+                        side_effect=(proposal, committed))
+                    battle._destructibles = types.SimpleNamespace(
+                        structure_collision_swap_required=mock.Mock(
+                            return_value=False),
+                        commit_local_prediction=mock.Mock(return_value=True))
+                    battle._native_world_rotation_is_clear = mock.Mock(
+                        return_value=native_clear)
+                    if actor == 'bot':
+                        result = battle._resolve_bot_rotation(
+                            101, (2.0, 3.0, 4.0), 0.0, 0.08,
+                            _Descriptor(), 0.1, 12.5, 0.75)
+                    else:
+                        entity = _Vehicle(10, _Descriptor(), _Vector(),
+                                          (0, 0, 0), {'health': 500})
+                        result = battle._pose_sweep_is_clear(
+                            entity, (2.0, 3.0, 4.0), 0.0,
+                            (2.0, 3.0, 4.0), 0.08, 0.0, 0.1)
+                    self.assertEqual(native_clear, result)
+                    self.assertFalse(battle._local_motion_soft_block)
+                    battle._native_world_rotation_is_clear.assert_called_once()
+
     def test_player_unavailable_tree_registry_does_not_block_translation(self):
         for status in ('pending', 'hard'):
             with self.subTest(status=status):

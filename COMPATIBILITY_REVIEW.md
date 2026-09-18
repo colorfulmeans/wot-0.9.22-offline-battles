@@ -785,11 +785,26 @@ that per-box fact. Such contacts cannot skip the original whole-item OBB, and
 destroyed-model materials 87–100 remain eligible for native motion, support and
 shell queries even after an item-wide destruction receipt. The native BSP still
 owns the replacement's exact shape, but #1513 exposes no volume-overlap query for
-it. Copied vehicle motion therefore keeps the source module box as a conservative
-no-entry envelope only for catalog boxes proved to retain collision, supplements
-that envelope with native rays for protrusions, and permits a historical overlap
-only through bounded outward-progress intervals. Collision-free destroyed
-modules do not retain the source box and therefore do not become invisible walls.
+it. Copied vehicle motion therefore keeps a solid structure module's source box
+as a conservative no-entry envelope, supplements it with native rays for
+protrusions, and permits historical overlap through bounded outward progress.
+Crushed fragile props instead use their replacement's native motion and support
+surfaces: retaining an intact car or tractor box after replacement creates an
+invisible wall above or beside the lower wreck. Native replacement hits cannot
+be skipped through the old OBB. Collision-free destroyed modules retain neither
+the source box nor a forced hiding-delay hold. Solid replacement swaps release
+as soon as the matching physical-contact callback completes; only unfinished
+callbacks retain the bounded stock hand-off. Translation and rotation share
+this distinction for players and Bots.
+
+The September 18 v0.9.0 Ruinberg Winter report records soft holds at the catalog's
+`bld000_base` and `bld707_shed` instances, whose destroyed modules have no solid
+replacement. The tractor next to the shed retains collision, but its intact
+box is not the replacement shape. Other native hard contacts in that report
+cannot be identified from unordered collision-filter candidates alone. The
+existing rate-limited stall report now includes two read-only material probes,
+their returned points and distance from the actual hard hit, to distinguish
+a remaining map collider from a nearby destructible without changing motion.
 
 For physical fragile/module crushing, the exact stock manager starts effects
 before scheduling its collision replacement after 0.2 seconds. The adapter
