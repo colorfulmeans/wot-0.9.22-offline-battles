@@ -501,6 +501,14 @@ class GarageState(object):
         # replace a live crew member in the barracks with a dismissed one.
         used.update(_int(value) for value in self._barracks())
         used.update(_int(value) for value in self._recycle_bin())
+        # A dismissed campaign reward may outlive its recycle-bin entry.
+        # Its provenance ID must never be reassigned to an unrelated recruit.
+        for key, effect in (self._snapshot.get(
+                'personalMissionRewardJournal') or {}).items():
+            if key.startswith('crew:') and isinstance(effect, dict):
+                identity = _int(effect.get('tankman', 0))
+                if identity > 0:
+                    used.add(identity)
         return (max(used) + 1) if used else 100001
 
     # ---- barracks -------------------------------------------------------
@@ -2855,6 +2863,88 @@ class GarageState(object):
         progress['regular'] = selected
         self.revision += 1
         return selected
+
+    def pawn_personal_mission(self, event_type, mission_id):
+        """Complete a main objective by committing refundable native orders."""
+        from gui.mods.offline_lan_0922.account_rpc import data
+        from gui.mods.offline_lan_0922 import personal_campaign
+        import personal_missions
+
+        mission_id = _int(mission_id)
+        if (_int(event_type) != 8 or
+                data.personal_mission_regular_chain_id(mission_id) is None):
+            raise GarageError('INVALID_PERSONAL_MISSION_REQUEST')
+        cache = personal_missions.g_cache
+        mission = cache.questByPersonalMissionID(mission_id)
+        if mission.branch != 0:
+            raise GarageError('INVALID_PERSONAL_MISSION_BRANCH')
+        completed = data.personal_mission_completed(
+            self._snapshot.get('personalMissionProgress'))
+        if str(mission_id) in completed:
+            raise GarageError('CANNOT_BE_PAWNED')
+        completed_ids = set(int(key) for key in completed)
+        # The native controller permits orders anywhere in an unlocked
+        # operation; a later individually selectable quest is insufficient.
+        initial_ids = [cache.initialMissionQuestIDByOperationIDChainID(
+            mission.tileID, chain) for chain in range(1, 6)]
+        if not any(cache.questByPersonalMissionID(initial).maySelectQuest(
+                completed_ids) for initial in initial_ids):
+            raise GarageError('NOT_UNLOCKED_QUEST')
+        cost = 4 if mission.isFinal else 1
+        balance = data.personal_mission_orders(
+            self._snapshot.get('personalMissionOrders', 0))
+        if balance < cost:
+            raise GarageError('NOT_ENOUGH_FREE_TOKENS')
+        with self._transaction():
+            self._snapshot['personalMissionOrders'] = balance - cost
+            pawned = self._snapshot.setdefault('personalMissionPawned', {})
+            pawned[str(mission_id)] = cost
+            completed[str(mission_id)] = 1
+            self._snapshot['personalMissionProgress'] = completed
+            settlement = personal_campaign.settle(self)
+            for key, error in settlement.get('pending', ()):
+                if key == mission_id or key == 'operation':
+                    raise GarageError('PERSONAL_MISSION_REWARD_PENDING: ' + str(error))
+            self.revision += 1
+        return {'missionID': mission_id, 'orders': cost}
+
+    def claim_personal_mission_reward(self, branch, mission_id, need_tankman,
+                                     nation_id, vehicle_id, role_id):
+        """Retry unpaid rewards and resolve the native female-crew chooser."""
+        from gui.mods.offline_lan_0922 import personal_campaign
+        from gui.mods.offline_lan_0922.account_rpc import data
+        if _int(branch) != 0:
+            raise GarageError('INVALID_PERSONAL_MISSION_BRANCH')
+        mission_id, need_tankman = _int(mission_id), _int(need_tankman)
+        if (data.personal_mission_regular_chain_id(mission_id) is None or
+                need_tankman not in (0, 1)):
+            raise GarageError('INVALID_PERSONAL_MISSION_REQUEST')
+        key = str(mission_id)
+        completed = data.personal_mission_completed(
+            self._snapshot.get('personalMissionProgress'))
+        target = completed.get(key, 0)
+        if not target:
+            raise GarageError('PERSONAL_MISSION_NOT_COMPLETE')
+        paid = data.personal_mission_completed(
+            self._snapshot.get('personalMissionRewarded')).get(key, 0)
+        if not need_tankman and paid >= target:
+            raise GarageError('NO_REWARD')
+        with self._transaction():
+            settlement = personal_campaign.settle(self)
+            for pending_key, error in settlement.get('pending', ()):
+                if pending_key == mission_id or pending_key == 'operation':
+                    raise GarageError('PERSONAL_MISSION_REWARD_PENDING: ' + str(error))
+            paid = data.personal_mission_completed(
+                self._snapshot.get('personalMissionRewarded')).get(key, 0)
+            if paid < target:
+                raise GarageError('PERSONAL_MISSION_REWARD_PENDING')
+            result = None
+            if need_tankman:
+                result = personal_campaign.claim_tankwoman(
+                    self, mission_id, _int(nation_id), _int(vehicle_id),
+                    _int(role_id))
+            self.revision += 1
+        return result
 
     def _default_vehicle_settings(self):
         """Return the settings mask a vehicle built at startup would carry.

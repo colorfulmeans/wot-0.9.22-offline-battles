@@ -1,13 +1,14 @@
-"""Edit regular personal-mission completion without issuing rewards.
+"""Edit regular personal missions and reconcile their reward eligibility.
 
 The four #1513 operations each have five chains of fifteen missions. Values
 are 1 (main conditions) or 2 (main and additional conditions); omission means
-incomplete. Selection, daily goals and the rest of the garage are preserved.
+incomplete. The client grants missing rewards on the next garage load.
 """
 
 import os
 import gettext
 import time
+import zipfile
 
 try:
     from . import core, save_ledger, save_slots, vehicle_overlays
@@ -21,6 +22,7 @@ except ImportError:
 INITIAL_KEY = "initial_personal_missions"
 OPERATIONS = ("StuG IV", "T28 Concept", "T 55A", "Object 260")
 CHAINS = ("LT", "HT", "MT", "TD", "SPG")
+MAX_ORDERS = 2 ** 31 - 1
 
 
 def mission_ids(operation, chain):
@@ -44,6 +46,56 @@ def normalize(progress):
     return result
 
 
+def prerequisites(mission):
+    """The regular list.xml unlock graph: unordered tasks, then a final."""
+    if type(mission) is not int or not 1 <= mission <= 300:
+        raise ValueError("Invalid personal-mission ID.")
+    operation, offset = divmod(mission - 1, 75)
+    if offset % 15 == 14:
+        return tuple(range(mission - 14, mission))
+    if operation:
+        return tuple((operation - 1) * 75 + 15 * chain for chain in range(1, 6))
+    return ()
+
+
+def complete_prerequisites(progress):
+    """Add required main completions without upgrading any task to honors."""
+    result = normalize(progress)
+    pending = [int(key) for key in result]
+    while pending:
+        for required in prerequisites(pending.pop()):
+            key = str(required)
+            if key not in result:
+                result[key] = 1
+                pending.append(required)
+    return result
+
+
+def edit_progress(progress, mission_ids, value):
+    """Apply one UI action, including dependent resets and unlock closure."""
+    result = normalize(progress)
+    if type(value) is not int or value not in (0, 1, 2):
+        raise ValueError("Invalid personal-mission state.")
+    ids = set(mission_ids)
+    for mission in ids:
+        prerequisites(mission)
+        if value:
+            result[str(mission)] = value
+        else:
+            result.pop(str(mission), None)
+    if value:
+        return complete_prerequisites(result)
+    removed = set(ids)
+    while True:
+        dependents = {int(key) for key in result
+                      if removed.intersection(prerequisites(int(key)))}
+        if not dependents:
+            return result
+        for mission in dependents:
+            result.pop(str(mission), None)
+        removed.update(dependents)
+
+
 def _target(slot_id, game_root=None, environment=None, root=None):
     path = save_ledger.ledger_path(slot_id, game_root, environment, root)
     state = save_ledger._read_state(path)
@@ -54,7 +106,8 @@ def _target(slot_id, game_root=None, environment=None, root=None):
         missions = ledger.get("personalMissions", {})
         if not isinstance(missions, dict):
             raise save_ledger.SaveLedgerError("The save is not in the expected format.")
-        return path, state, missions.get("completed", {}), True
+        progress = missions.get("requestedCompleted", missions.get("completed", {}))
+        return path, state, progress, True
     path = save_slots.metadata_path(slot_id, game_root, environment, root)
     state = save_ledger._read_state(path) or {}
     return path, state, state.get(INITIAL_KEY, {}), False
@@ -62,6 +115,14 @@ def _target(slot_id, game_root=None, environment=None, root=None):
 
 def read_progress(slot_id, game_root=None, environment=None, root=None):
     return normalize(_target(slot_id, game_root, environment, root)[2])
+
+
+def read_edit_status(slot_id, game_root=None, environment=None, root=None):
+    unused, state, unused_progress, has_garage = _target(
+        slot_id, game_root, environment, root)
+    missions = state.get("ledger", {}).get("personalMissions", {}) if has_garage else {}
+    return {"pending": "requestedCompleted" in missions,
+            "error": str(missions.get("resetError") or "")}
 
 
 def write_progress(slot_id, progress, game_root=None, environment=None,
@@ -72,14 +133,35 @@ def write_progress(slot_id, progress, game_root=None, environment=None,
     normalized = normalize(progress)
     if normalized != progress:
         raise save_ledger.SaveLedgerError("Invalid personal-mission progress.")
-    path, state, unused, has_garage = _target(
+    normalized = complete_prerequisites(normalized)
+    path, state, previous, has_garage = _target(
         slot_id, game_root, environment, root)
     if has_garage:
         missions = state.setdefault("ledger", {}).setdefault("personalMissions", {})
-        missions["completed"] = normalized
-        # A fully completed mission cannot remain active in the native UI.
-        missions["regular"] = [qid for qid in missions.get("regular", ())
-                               if normalized.get(str(qid)) != 2]
+        # The native client can identify granted crew and settle orders. Keep
+        # actual progress and paid markers together until that transaction is
+        # durably committed; a failed withdrawal must not reopen rewards.
+        missions["requestedCompleted"] = normalized
+        missions.pop("resetError", None)
+        def selectable(qid):
+            return (type(qid) is int and 1 <= qid <= 300 and
+                    normalized.get(str(qid)) != 2 and
+                    all(str(required) in normalized for required in prerequisites(qid)))
+        selected = [qid for qid in missions.get("requestedRegular", missions.get("regular", ()))
+                    if selectable(qid)]
+        # A reset final must be available for the player's next battle even if
+        # its previous honors state removed it from the native selection.
+        reset = sorted(int(key) for key, value in normalize(previous).items()
+                       if normalized.get(key, 0) < value)
+        reset_chains = set()
+        for qid in reset:
+            chain = ((qid - 1) % 75) // 15
+            if chain not in reset_chains and selectable(qid):
+                selected = [other for other in selected
+                            if ((other - 1) % 75) // 15 != chain]
+                selected.append(qid)
+                reset_chains.add(chain)
+        missions["requestedRegular"] = selected
     else:
         state[INITIAL_KEY] = normalized
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -96,27 +178,20 @@ def read_account_fields(slot_id, game_root=None, environment=None, root=None):
     else:
         orders = state.get("initial_personal_orders", 0)
         badges = state.get("initial_account_badges", {})
-    return {"orders": max(0, min(21, int(orders))),
+    return {"orders": max(0, min(MAX_ORDERS, int(orders))),
             "badges": dict(badges) if isinstance(badges, dict) else {}}
 
 
-def write_account_fields(slot_id, game_root=None, orders=None, badges=None,
+def write_account_fields(slot_id, game_root=None, badges=None,
                          environment=None, root=None, is_running=None):
     if (is_running or core.game_is_running)():
         raise save_ledger.SaveLedgerError("Close World of Tanks before editing personal missions.")
-    if orders is not None and (type(orders) is not int or not 0 <= orders <= 21):
-        raise save_ledger.SaveLedgerError("Orders must be a whole number from 0 to 21.")
     if badges is not None:
         available = {row["id"] for row in badge_catalogue(game_root)}
         if any(type(value) is not int or value not in available for value in badges):
             raise save_ledger.SaveLedgerError("Unknown account badge.")
     path, state, unused, has_garage = _target(slot_id, game_root, environment, root)
     container = state.setdefault("ledger", {}) if has_garage else state
-    if orders is not None:
-        if has_garage:
-            container.setdefault("personalMissions", {})["orders"] = orders
-        else:
-            container["initial_personal_orders"] = orders
     if badges is not None:
         key = "accountBadges" if has_garage else "initial_account_badges"
         previous = container.get(key, {})
@@ -132,10 +207,27 @@ def write_account_fields(slot_id, game_root=None, orders=None, badges=None,
     save_ledger._write_state(path, state)
 
 
+def _read_badge_catalogue(package):
+    """Read the fixed badge resource without invoking vehicle edit rules."""
+    member = "scripts/item_defs/badges.xml"
+    try:
+        with zipfile.ZipFile(package, "r") as archive:
+            matches = [info for info in archive.infolist()
+                       if info.filename == member]
+            if len(matches) != 1:
+                raise save_ledger.SaveLedgerError(
+                    "The original package must contain exactly one badge catalogue.")
+            data = archive.read(matches[0])
+        return vehicle_overlays.packed_xml.read_packed_xml(data)
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile) as error:
+        raise save_ledger.SaveLedgerError(
+            "The original badge catalogue is unreadable: %s" % error)
+
+
 def badge_catalogue(game_root):
     """Read actual badge IDs/names from the installed client's packed data."""
     status, package = vehicle_overlays._require_target(game_root)
-    unused, tree = vehicle_overlays._read_source_member(package, "scripts/item_defs/badges.xml")
+    tree = _read_badge_catalogue(package)
 
     def child(node, name):
         values = [value for key, value in node.children if key == name.encode("ascii")]
@@ -148,19 +240,29 @@ def badge_catalogue(game_root):
     if os.path.isfile(path):
         with open(path, "rb") as stream:
             translator = gettext.GNUTranslations(stream)
-    rows = []
-    for name, value in child(tree, "badges").children:
-        if name != b"badge":
-            continue
-        badge = value.value
-        fields = {}
-        for unused, item in child(badge, "value").children:
-            field = item.value
-            fields[child(field, "name").decode("utf-8").strip()] = field.value.value
-        badge_id = int(fields["id"])
-        key = "badge_%d" % badge_id
-        label = translator.gettext(key) if translator else key
-        if label == key:
-            label = child(badge, "name").decode("utf-8").strip()
-        rows.append({"id": badge_id, "label": label, "weight": float(fields.get("weight", 0))})
+    rows, seen = [], set()
+    try:
+        for name, value in child(tree, "badges").children:
+            if name != b"badge":
+                continue
+            badge = value.value
+            fields = {}
+            for unused, item in child(badge, "value").children:
+                field = item.value
+                fields[child(field, "name").decode("utf-8").strip()] = field.value.value
+            badge_id = int(fields["id"])
+            if badge_id in seen:
+                raise ValueError("Duplicate badge ID")
+            seen.add(badge_id)
+            key = "badge_%d" % badge_id
+            label = translator.gettext(key) if translator else key
+            if label == key:
+                label = child(badge, "name").decode("utf-8").strip()
+            rows.append({"id": badge_id, "label": label,
+                         "weight": float(fields.get("weight", -1))})
+        if not rows:
+            raise ValueError("No badges in catalogue")
+    except (AttributeError, KeyError, TypeError, ValueError):
+        raise save_ledger.SaveLedgerError(
+            "The badge catalogue is not in the expected format.")
     return sorted(rows, key=lambda row: (row["weight"], row["id"]))

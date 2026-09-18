@@ -136,18 +136,40 @@ lists the four resource types. The [2022 redesign](https://worldoftanks.com/en/n
 merged crew/free XP into the modern three-type system, which is not used here.
 
 The launcher's **Customize save** window keeps the v0.8.4 **Garage vehicles**
-list and simple vehicle/tier labels. Its **Personal missions** editor covers
+list and simple vehicle/tier labels, including the five supported retired
+vehicles (Aufkl. Panther, Waffentrager E 100, SU-122-54, Object 263B and
+Object 430B). Its **Personal missions** editor covers
 all 300 regular campaign missions (StuG IV, T28 Concept, T 55A and Object 260).
 Each mission can be incomplete, completed, or completed with honors. Honors
 also checks completion; clearing completion also clears honors. Changes stay
 in the editor when switching operations and vehicle classes; **Save** applies
-them to the selected save. This changes completion without issuing or removing
-rewards. Daily missions are separate and unchanged.
+them to the selected save. Required earlier missions are completed automatically
+without honors. Resetting a prerequisite also resets dependent later missions.
+Edits are settled when the game next opens the garage. Resetting main completion
+reclaims that mission's female crew; resetting honors reclaims its earned
+orders. An eligible reset mission replaces the previous selection of its class.
+Other rewards remain owned and recorded as claimed, so replay cannot duplicate
+credits, equipment, premium time or tanks. If the free order balance is too low
+to withdraw earned orders, the edit is rejected atomically and its reason is
+shown in the mission editor. An edit is also rejected when the exact reward
+crew can no longer be identified, including an old claim without provenance
+or a permanently removed crew member. Daily missions remain separate.
 
-The account panel also edits personal-mission orders (0–21) and account badge
-ownership. Badge choices and translated names come from the installed client's
+On the first claim of an operation's reward tank, an already owned permanent
+vehicle instead gives a one-time credit compensation using its stock vehicle
+sale value. This is an explicit offline policy, not a verified historical
+KongZhong compensation rule. Resetting an operation retains its tank and claim
+record, and cannot grant compensation again.
+
+The account panel also edits account badge ownership.
+Badge choices and translated names come from the installed client's
 catalogue. Removing an equipped badge clears its selection. Close the game
 before saving these edits; new saves use the edited values on first startup.
+There is no separate order-quantity editor. Orders come from the corresponding
+mission honors rewards, whether earned in battle or checked in the mission
+editor. Existing saved balances are retained. Spending orders records the amount assigned to each mission;
+honors completion returns those orders. Resetting that mission also returns
+its assigned orders once, independently of withdrawing earned honor orders.
 
 Premium purchases use the original six durations: 360, 180, 30, 7, 3 and 1 day,
 with the installed client's own icons and labels. Battle-result friendly-fire

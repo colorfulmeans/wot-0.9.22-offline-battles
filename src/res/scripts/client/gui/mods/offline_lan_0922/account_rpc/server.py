@@ -170,7 +170,10 @@ class FakeServer(object):
             return True
 
         def finish():
-            if not release() or self._player() is not player:
+            if self._player() is not player:
+                fail('account changed during inventory refresh')
+                return
+            if not release():
                 return
             try:
                 if callable(after_publish):
@@ -189,20 +192,23 @@ class FakeServer(object):
                               'not be published to the room: %s' % error)
 
         def fail(error):
-            if not release() or self._player() is not player:
+            if not release():
                 return
+            # Failure callbacks release transaction-owned pending state even
+            # after the Account retires. Their command-response continuation
+            # separately guards the captured player identity.
             print('[Offline LAN 0.9.22] account update failed: %s' % error)
             if callable(after_failure):
                 after_failure(error)
 
         def publish():
             if self._player() is not player:
-                release()
+                fail('account changed before update')
                 return
             try:
                 player.update(payload)
                 if self._player() is not player:
-                    release()
+                    fail('account changed during update')
                     return
                 if inventory:
                     _refresh_garage_views(
@@ -236,12 +242,26 @@ class FakeServer(object):
         # PlayerAccount._update treats every descriptor carried by an
         # incremental ``eliteVehicles`` field as a newly elite vehicle and
         # emits one modal notification for each.  A post-battle update changes
-        # only these accumulated values; the static unlocked/elite snapshot
-        # belongs exclusively to the initial full sync.
+        # accumulated values plus exact new research from reward vehicles;
+        # the full historical unlock/elite sets belong to initial sync.
         stats = snapshot['stats']
         diff = {'stats': dict((name, stats[name]) for name in (
-            'credits', 'gold', 'crystal', 'freeXP', 'vehTypeXP', 'dossier'))}
+            'credits', 'gold', 'crystal', 'freeXP', 'vehTypeXP', 'dossier',
+            'slots', 'berths', 'vehicleSellsLeft'))}
+        diff['account'] = snapshot['account']
+        diff['tokens'] = data.personal_mission_tokens(
+            self._context.get('selected_vehicle'))
         diff['stats'][('multipliedXPVehs', '_r')] = stats['multipliedXPVehs']
+        research_delta = {}
+        for name in ('unlocks', 'eliteVehicles'):
+            pending = self._context.get('postbattle_added_' + name)
+            added = set(pending or ()) & set(stats[name])
+            if added:
+                diff['stats'][name] = added
+                research_delta[name] = added
+                # Claim this one-shot notification before admission, so two
+                # queued post-battle pushes cannot announce it twice.
+                pending.difference_update(added)
         from gui.mods.offline_lan_0922 import offline_services
         diff.update(offline_services.service_diff(
             self._context.get('selected_vehicle') or {}))
@@ -274,7 +294,15 @@ class FakeServer(object):
             if callable(resync):
                 resync()
 
-        return self._push_update(diff, after_publish=resync_dossiers)
+        def restore_research(unused_error=None):
+            for name, added in research_delta.items():
+                self._context.setdefault('postbattle_added_' + name, set()).update(added)
+
+        accepted = self._push_update(diff, after_publish=resync_dossiers,
+                                     after_failure=restore_research)
+        if not accepted:
+            restore_research()
+        return accepted
 
     def _respond(self, request_id, command, args):
         result = requests.dispatch(command, self._context, args)

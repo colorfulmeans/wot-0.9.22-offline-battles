@@ -264,7 +264,8 @@ class WindowTest(unittest.TestCase):
         self.assertEqual("Garage vehicles", self.window.shop_panel.cget("text"))
         self.assertEqual("Gold and reward vehicle", self.window.gold_vehicle_label.cget("text"))
         self.assertEqual("Personal missions", self.window.personal_missions_panel.cget("text"))
-        self.assertEqual("Orders (0-21)", self.window.orders_label.cget("text"))
+        self.assertFalse(hasattr(self.window, "orders_entry"))
+        self.assertFalse(hasattr(self.window, "orders_label"))
         self.assertEqual("Lowe - tier 8", self.window._gold_offer_label({
             "label": "Lowe", "level": 8, "owned": False, "pending": False,
             "offerKinds": ("gold", "reward")}))

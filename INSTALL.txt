@@ -89,14 +89,24 @@ Reopening or restarting cannot reroll that day's selection or claim it twice.
 An existing fixed set keeps its progress until the next reset. Reserve prices
 and these daily goals are custom offline rules. Completed daily goals appear
 in the lower-left battle-result area, with one combined reward popup per
-battle and a system message. Original campaign personal missions (such as the
-T-55A missions) still only support selection, not completion or reward grants.
+battle and a system message. Regular campaign missions now settle supported
+battle conditions and mission rewards separately. The launcher can edit all
+300 completion states, automatically completing required earlier tasks without
+honors. Missing rewards arrive on the next garage load. Female crew rewards
+use the game's own nationality, vehicle and role chooser. Resetting main
+completion reclaims its female crew; resetting honors withdraws earned orders.
+Other rewards remain claimed and cannot be earned twice. A failed order
+withdrawal leaves the original progress and property unchanged and reports the
+reason in the launcher mission editor. Owned reward tanks are retained; first
+operation completion compensates an already owned tank once at its stock
+credit sale value, an explicit offline rule.
+Orders come from mission honors rewards; the launcher has no order-count input.
 
-The badge slot in the account popover opens the native badge page. Built-in
-client badges can be selected as offline cosmetics, and the selection is saved
-with the account. This does not award historical ranked or campaign medals.
+The badge slot in the account popover opens the native badge page. Acquired
+badges can be selected, and ownership and selection are saved with the account.
+The launcher can edit ownership using the installed client's badge catalogue.
 
-The 90-day premium option displays its duration and keeps its 6500-gold price.
+Premium uses the original 360, 180, 30, 7, 3 and 1-day options.
 An active premium account now applies the legacy 50% credit and experience
 bonus to actual battle income, including crew training. Native results show
 the separate standard and premium columns. Each tank's first standard-battle

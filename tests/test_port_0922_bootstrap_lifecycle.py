@@ -1026,6 +1026,26 @@ class BootstrapLifecycleTests(unittest.TestCase):
         del snapshot['barracksTankmen']
         self.assertEqual(100003, bootstrap._next_tankman_id(snapshot))
 
+    def test_delivered_crew_cannot_take_a_dismissed_mission_reward_identity(self):
+        (bootstrap, unused_callbacks, unused_compatibility,
+         unused_app_loader, unused_spaces, unused_events,
+         unused_modules) = self._load()
+        snapshot = {
+            'vehicles': [{'id': 1, 'tankmen': {100001: b'ordinary'}}],
+            'barracksTankmen': {},
+            'recycleBinTankmen': {100002: (b'reward-woman', 100)},
+            'personalMissionRewardJournal': {
+                'crew:15': {'tankman': 100002, 'dossier_count': 1}},
+        }
+        self.assertEqual(100003, bootstrap._next_tankman_id(snapshot))
+        # The recycle-bin limit may evict her. The outstanding receipt must
+        # still not identify a replacement crew member when the task resets.
+        snapshot['recycleBinTankmen'].clear()
+        self.assertEqual(100003, bootstrap._next_tankman_id(snapshot))
+        snapshot['personalMissionRewardJournal'].clear()
+        snapshot['recycleBinTankmen'][100004] = (b'other-dismissed', 101)
+        self.assertEqual(100005, bootstrap._next_tankman_id(snapshot))
+
     def test_a_delivery_the_client_cannot_publish_is_never_written(self):
         """An unpublishable save is discarded whole on the next start.
 
@@ -1483,7 +1503,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
                                      shells_fired=None, equipment_used=None,
                                      auto_settings=None, friendly_fire_facts=None,
                                      vehicle_type_name=None, battle_start=0,
-                                     daily_facts=None, training=False):
+                                     daily_facts=None, training=False,
+                                     campaign_receipt=None):
                 applied.append(snapshot)
                 self.assert_not_used = tankmen_module
                 # The vehicle's own repair/reload/restock switches are settled

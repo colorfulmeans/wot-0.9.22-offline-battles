@@ -21,6 +21,8 @@ class PersonalProgressTests(unittest.TestCase):
         native = types.SimpleNamespace(PMStorage=storage,
             PM_STATE=types.SimpleNamespace(MAIN_REWARD_GOTTEN=3, ALL_REWARDS_GOTTEN=6))
         snapshot = {'personalMissionProgress': {'1': 1, '300': 2, '301': 2},
+                    'personalMissionRewarded': {'1': 1, '300': 2},
+                    'personalMissionTankwomen': {'300': True},
                     'personalMissionSelections': {'regular': [1, 300]}}
         with mock.patch.dict(sys.modules, {'personal_missions': native}):
             published = data.personal_missions(snapshot)

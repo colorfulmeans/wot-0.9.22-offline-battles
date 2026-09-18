@@ -821,7 +821,8 @@ def stats(selected_vehicle=None, postbattle_progress=None):
             # starts the stock lobby tutorial/hints lifecycle even though this
             # account cannot persist its tutorial actions on a retail server.
             'denunciationsLeft': 0, 'tutorialsCompleted': 33553532,
-            'dossier': account_dossier(progress, badges=vehicle.get('accountBadges')),
+            'dossier': account_dossier(progress, badges=vehicle.get('accountBadges'),
+                mission_dossier=vehicle.get('personalMissionDossier')),
             'battlesTillCaptcha': 0, 'dailyPlayHours': [0],
             # Full daily/weekly periods disable parental-control blocking in
             # the native #1513 GameSessionController.  Zero means no allowed
@@ -863,9 +864,55 @@ def personal_mission_completed(value):
 
 def personal_mission_orders(value):
     try:
-        return max(0, min(21, int(value)))
+        # The native token requester does not apply the reference's 21-order
+        # constant to balances. A manually supplied balance must still accept
+        # later mission earnings without silently discarding them.
+        return max(0, min(2147483647, int(value)))
     except (TypeError, ValueError, OverflowError):
         return 0
+
+
+def personal_mission_pawned(value):
+    """Persist the refundable orders committed to each regular mission."""
+    result = {}
+    for key, count in (value.items() if isinstance(value, dict) else ()):
+        try:
+            mission, count = int(key), int(count)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        cost = 4 if mission % 15 == 0 else 1
+        if 1 <= mission <= PERSONAL_MISSION_REGULAR_MAX_ID and count == cost:
+            result[str(mission)] = cost
+    return result
+
+
+def personal_mission_tokens(snapshot):
+    """Publish account tokens, including the native per-mission pawn marker."""
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    tokens = {}
+    saved = snapshot.get('personalMissionTokens') or {}
+    for name, value in (saved.items() if isinstance(saved, dict) else ()):
+        if isinstance(value, (tuple, list)) and len(value) == 2:
+            try:
+                expiry = max(0, min(2 ** 32 - 1, int(value[0])))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            tokens[name] = (expiry, personal_mission_orders(value[1]))
+    tokens['free_award_list'] = (4104777660, personal_mission_orders(
+        snapshot.get('personalMissionOrders', 0)))
+    completed = personal_mission_completed(snapshot.get('personalMissionProgress'))
+    pawned = personal_mission_pawned(snapshot.get('personalMissionPawned'))
+    if completed or pawned:
+        import personal_missions
+        cache = getattr(personal_missions, 'g_cache', None)
+        if cache is not None:
+            for key in set(completed) | set(pawned):
+                mission = cache.questByPersonalMissionID(int(key))
+                # Keep zero entries after an honors completion: incremental
+                # token caches must clear the previous pawn marker as well.
+                tokens[mission.mainAwardListQuestID] = (
+                    4104777660, 1 if key in pawned else 0)
+    return tokens
 
 
 def account_badges(value):
@@ -892,9 +939,23 @@ def personal_missions(selected_vehicle=None):
     descriptor = ''
     if completed:
         from personal_missions import PMStorage, PM_STATE
-        storage = dict((int(qid), (0, PM_STATE.ALL_REWARDS_GOTTEN
-                        if state == 2 else PM_STATE.MAIN_REWARD_GOTTEN))
-                       for qid, state in completed.items())
+        storage = {}
+        rewarded = personal_mission_completed(vehicle.get('personalMissionRewarded'))
+        tankwomen = vehicle.get('personalMissionTankwomen') or {}
+        for qid, state in completed.items():
+            paid = rewarded.get(qid, 0)
+            crew_delivered = int(qid) % 15 != 0 or bool(tankwomen.get(qid))
+            if state == 1:
+                native_state = (PM_STATE.MAIN_REWARD_GOTTEN
+                                if paid >= 1 and crew_delivered
+                                else PM_STATE.NEED_GET_MAIN_REWARD)
+            elif paid >= 2 and crew_delivered:
+                native_state = PM_STATE.ALL_REWARDS_GOTTEN
+            elif paid >= 1 and crew_delivered:
+                native_state = PM_STATE.NEED_GET_ADD_REWARD
+            else:
+                native_state = PM_STATE.NEED_GET_ALL_REWARDS
+            storage[int(qid)] = (0, native_state)
         descriptor = PMStorage(storage=storage).makeCompDescr()
     return {
         'compDescr': descriptor,
@@ -921,8 +982,7 @@ def sync_data(revision=0, selected_vehicle=None, int_user_settings=None,
     result = {
         'rev': int(revision) + 1,
         'quests': {},
-        'tokens': {'free_award_list': (4104777660, personal_mission_orders(
-            (selected_vehicle or {}).get('personalMissionOrders', 0)))},
+        'tokens': personal_mission_tokens(selected_vehicle),
         'potapovQuests': personal_missions(selected_vehicle),
         'intUserSettings': dict(int_user_settings or {}),
         'goodies': {},
@@ -1191,7 +1251,7 @@ def _write_battle_statistics(dossier, stats):
 
 
 def account_dossier(postbattle_progress=None, dossier_factory=None,
-                    vehicle_type_resolver=None, badges=None):
+                    vehicle_type_resolver=None, badges=None, mission_dossier=None):
     """Return the account dossier compact descriptor #1513 reads.
 
     ``StatsRequester.accountDossier`` of the pinned client reads the ``stats``
@@ -1203,7 +1263,7 @@ def account_dossier(postbattle_progress=None, dossier_factory=None,
     counts = progress.get('achievements')
     vehicle_rows = progress.get('vehicles', {})
     badges = account_badges(badges)
-    if not vehicle_rows and not counts and not badges:
+    if not vehicle_rows and not counts and not badges and not mission_dossier:
         return ''
     if dossier_factory is None:
         from dossiers2.custom.builders import getAccountDossierDescr
@@ -1242,6 +1302,9 @@ def account_dossier(postbattle_progress=None, dossier_factory=None,
     _write_achievements(dossier, counts)
     for badge, timestamp in badges.items():
         dossier['playerBadges'][int(badge)] = timestamp
+    for identifier, amount in (mission_dossier or {}).items():
+        block, name = str(identifier).split(':', 1)
+        dossier[block][name] = max(0, int(amount))
     return dossier.makeCompDescr()
 
 

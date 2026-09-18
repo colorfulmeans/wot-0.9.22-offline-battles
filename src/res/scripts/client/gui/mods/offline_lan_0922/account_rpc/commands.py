@@ -25,6 +25,10 @@ CMD_SELL_C11N_ITEMS = 117
 CMD_BUY_C11N_ITEMS = 118
 CMD_VEH_APPLY_OUTFIT = 119
 CMD_SELECT_POTAPOV_QUESTS = 124
+# 0.9.22 Account.getPersonalMissionReward / pawnFreeAwardList. The pawn
+# payload uses EVENT_TYPE.PERSONAL_MISSION (8), unlike selection's branch 0.
+CMD_GET_POTAPOV_QUEST_REWARD = 125
+CMD_PAWN_FREE_AWARD_LIST = 10019
 # Ledger surface, verified against this build's AccountCommands.pyc.
 CMD_UNLOCK = 201
 CMD_EXCHANGE = 202

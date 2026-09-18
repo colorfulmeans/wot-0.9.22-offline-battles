@@ -90,6 +90,19 @@ def _battle_results_store():
     return _postbattle_store
 
 
+def _research_snapshot(snapshot):
+    """Copy only the fields that determine native unlock and elite sets."""
+    types = set(snapshot.get('vehicleTypeCompactDescrs') or ())
+    if not types:
+        records = snapshot.get('vehicles') or (snapshot,)
+        types.update(record['vehicleTypeCompactDescr'] for record in records
+                     if record.get('vehicleTypeCompactDescr') is not None)
+    return {'vehicleTypeCompactDescrs': types,
+            'unlockItemCompactDescrs': set(snapshot.get('unlockItemCompactDescrs') or ()),
+            'shopVehicleOfferCompactDescrs': set(snapshot.get('shopVehicleOfferCompactDescrs') or ()),
+            'vehicleXP': dict((key, 0) for key in (snapshot.get('vehicleXP') or {}))}
+
+
 def _bind_battle_progress(context):
     """Bind durable result receipts to the equally durable garage crew."""
     garage_store = context.get('garage_store')
@@ -133,6 +146,7 @@ def _bind_battle_progress(context):
         used = list(receipt.get('equipment_used') or ())
         if receipt.get('battle_booster'):
             used.append(int(receipt['battle_booster']))
+        research_before = _research_snapshot(snapshot)
         result = garage_store.apply_battle_crew_xp(
             snapshot, receipt['receipt_id'], vehicle_type_cd,
             receipt['rewards']['xp'], VEHICLE_SETTINGS_FLAG.XP_TO_TMAN,
@@ -150,12 +164,24 @@ def _bind_battle_progress(context):
                          if receipt.get('battle_mode', 'regular') == 'regular'
                          else None),
             training=receipt.get('battle_mode') == 'training',
+            campaign_receipt=receipt,
             auto_settings=(VEHICLE_SETTINGS_FLAG.AUTO_REPAIR,
                            VEHICLE_SETTINGS_FLAG.AUTO_LOAD,
                            VEHICLE_SETTINGS_FLAG.AUTO_EQUIP,
                            VEHICLE_SETTINGS_FLAG.AUTO_EQUIP_BOOSTER))
         context['selected_vehicle'] = snapshot
+        research_after = _research_snapshot(snapshot)
+        if result.get('applied', True) and research_after != research_before:
+            # Mission reward tanks can grant genuinely new research. Derive
+            # only those additions; replaying the account's whole elite set
+            # makes the native client reopen every historical elite dialog.
+            before_stats = data.stats(research_before)['stats']
+            after_stats = data.stats(research_after)['stats']
+            for name in ('unlocks', 'eliteVehicles'):
+                context.setdefault('postbattle_added_' + name, set()).update(
+                    set(after_stats[name]) - set(before_stats[name]))
         touched.add(int(result['vehicle_id']))
+        touched.update(int(vehicle_id) for vehicle_id in result.get('touched_vehicles', ()))
         # The depot changed too: a battle spends rounds and consumables, and
         # the vehicle's own switches may have bought them back.  The client
         # only drops what the diff names.
@@ -500,6 +526,41 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
     return len(delivered)
 
 
+def _settle_launcher_campaign(snapshot, vehicles, tankmen):
+    """Deliver edited completion and its reward markers in one durable save."""
+    if not (snapshot.get('personalMissionProgress') or
+            snapshot.get('personalMissionTokens') or
+            'personalMissionRequestedCompleted' in snapshot):
+        return
+    from gui.mods.offline_lan_0922 import personal_campaign
+    from gui.mods.offline_lan_0922.account_rpc.garage import GarageState
+    state = GarageState(snapshot, vehicles_module=vehicles, tankmen_module=tankmen)
+    result = personal_campaign.settle(state)
+    if result.get('reset_error'):
+        sys.stdout.write('[Offline LAN 0.9.22] personal mission edit rejected: %s\n'
+                         % result['reset_error'])
+    for mission_id, error in result['pending']:
+        sys.stdout.write('[Offline LAN 0.9.22] personal mission %s reward '
+                         'remains pending: %s\n' % (mission_id, error))
+    if not state.revision:
+        return
+    staged = state.snapshot()
+    try:
+        _validate_restored_garage(staged)
+        data._validate_selected_vehicle(staged)
+    except Exception as error:
+        sys.stdout.write('[Offline LAN 0.9.22] personal mission rewards '
+                         'could not be published: %s\n' % error)
+        return
+    store = _garage_store()
+    if store is None:
+        return
+    store.mark_dirty()
+    if store.flush(staged):
+        snapshot.clear()
+        snapshot.update(staged)
+
+
 def _stocked_total(item_type, published, count):
     """Return the account count one more vehicle's stock leaves behind.
 
@@ -564,9 +625,20 @@ def _next_tankman_id(snapshot):
     # A crew member in the barracks still holds their inventory id. Handing it
     # out twice does not break one vehicle, it makes the whole garage
     # unrestorable on the next start.
-    for tankman_id in (snapshot.get('barracksTankmen') or ()):
+    for field in ('barracksTankmen', 'recycleBinTankmen'):
+        for tankman_id in (snapshot.get(field) or ()):
+            try:
+                used.append(int(tankman_id))
+            except (TypeError, ValueError):
+                continue
+    # A dismissed campaign reward may have left the recycle bin while its
+    # reset receipt still identifies it. Do not let a delivered tank's crew
+    # take that identity and become the target of a later reward clawback.
+    for key, effect in (snapshot.get('personalMissionRewardJournal') or {}).items():
+        if not key.startswith('crew:') or not isinstance(effect, dict):
+            continue
         try:
-            used.append(int(tankman_id))
+            used.append(int(effect.get('tankman', 0)))
         except (TypeError, ValueError):
             continue
     return max(used) + 1
@@ -813,6 +885,7 @@ def _selected_vehicle(config, restore_saved=True):
             _restore_garage(result)
             _deliver_launcher_purchases(
                 result, vehicles, tankmen, default_settings)
+            _settle_launcher_campaign(result, vehicles, tankmen)
         return result
     except Exception:
         # _run_once owns startup error reporting.  Returning an empty snapshot

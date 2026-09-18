@@ -9,6 +9,7 @@ import zipfile
 from unittest import mock
 
 import core
+import gold_shop
 import vehicle_overlays
 
 packed = vehicle_overlays.packed_xml
@@ -782,9 +783,65 @@ class VehicleOverlayTest(unittest.TestCase):
                                   return_value=[]):
             rows = vehicle_overlays.list_gold_vehicles(self.game)
         self.assertEqual(["germany:G98_Waffentrager_E100",
-                          "germany:G04_PzVI_Tiger_IA"],
+                          "germany:G04_PzVI_Tiger_IA",
+                          "germany:G85_Auf_Panther"],
                          [row["name"] for row in rows])
         self.assertEqual(0, rows[0]["gold"])
+
+    def test_manual_garage_includes_only_supported_retired_credit_vehicles(self):
+        retired = {
+            "germany:G85_Auf_Panther": (7, "lightTank"),
+            "germany:G98_Waffentrager_E100": (10, "AT-SPG"),
+            "ussr:R75_SU122_54": (9, "AT-SPG"),
+            "ussr:R93_Object263B": (10, "AT-SPG"),
+            "ussr:R96_Object_430B": (10, "mediumTank"),
+        }
+        rosters = {"germany": packed.PackedElement(children=[]),
+                   "ussr": packed.read_packed_xml(self.members[self.LIST])}
+        for name, (level, vehicle_class) in retired.items():
+            nation, vehicle = name.split(":")
+            rosters[nation].children.append((vehicle.encode("ascii"), element([
+                (b"tags", scalar(packed.TYPE_STRING,
+                                 ("secret " + vehicle_class).encode("ascii"))),
+                (b"level", scalar(packed.TYPE_INTEGER, level)),
+                (b"price", scalar(packed.TYPE_INTEGER, 1000000)),
+                (b"notInShop", scalar(packed.TYPE_STRING, b"true")),
+            ])))
+            self.members["scripts/item_defs/vehicles/%s/%s.xml" % (
+                nation, vehicle)] = self.members[self.VEHICLE]
+        for nation, roster in rosters.items():
+            self.members["scripts/item_defs/vehicles/%s/list.xml" % nation] = (
+                packed.write_packed_xml(roster))
+        self._write_package()
+
+        rows = vehicle_overlays.list_gold_vehicles(self.game)
+        self.assertEqual(set(retired) | {"ussr:R12_Test"},
+                         {row["name"] for row in rows})
+        for row in rows:
+            if row["name"] in retired:
+                self.assertEqual(0, row["gold"])
+                self.assertEqual(retired[row["name"]],
+                                 (row["level"], row["vehicleClass"]))
+                self.assertNotIn("offerKinds", row)
+
+        # Follow the editor's real add path, including rereading the package.
+        saves = os.path.join(self.game, "test-saves")
+        for name in sorted(retired):
+            gold_shop.add_vehicle("career", name, self.game, root=saves,
+                                  is_running=lambda: False)
+        self.assertEqual(sorted(retired), gold_shop.pending_vehicles(
+            "career", self.game, root=saves))
+        offers = gold_shop.list_offers("career", self.game, root=saves)
+        self.assertTrue(all(row["pending"] and not row["available"]
+                            for row in offers if row["name"] in retired))
+
+        # An allowlisted name does not manufacture a missing stock definition.
+        del self.members[
+            "scripts/item_defs/vehicles/ussr/R93_Object263B.xml"]
+        self._write_package()
+        with self.assertRaisesRegex(vehicle_overlays.VehicleOverlayError,
+                                    "definition is missing"):
+            vehicle_overlays.list_gold_vehicles(self.game)
 
     def test_the_gold_shop_excludes_unavailable_save_vehicles(self):
         unavailable = [

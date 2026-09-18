@@ -185,7 +185,6 @@ _CHINESE = {
     "Edit mission progress...": "调整完成进度…",
     "Account badges": "账号勋章",
     "Edit account badges...": "编辑勋章获取情况…",
-    "Orders (0-21)": "通行令（0–21）",
     "Acquired": "已获取",
     "Operation": "章节",
     "Mission": "任务",
@@ -203,11 +202,26 @@ _CHINESE = {
     "Honor this chain": "本组全部完美完成",
     "Reset this chain": "清空本组",
     "Personal-mission progress saved.": "个人任务进度已保存。",
+    "Mission edits will be applied on the next game launch.": "任务修改已保存，将在下次启动游戏时结算。",
+    "Mission edit was not applied: %s": "任务修改未生效：%s",
+    "PERSONAL_MISSION_RESET_ORDERS_SPENT":
+        "可用通行令不足以回收任务奖励。请先取消使用了通行令的任务，再保存。",
+    "PERSONAL_MISSION_RESET_CREW_SOURCE_UNAVAILABLE":
+        "无法确认该任务女乘员的来源，原进度和乘员已保留。",
+    "PERSONAL_MISSION_RESET_CREW_DOSSIER_CHANGED":
+        "女乘员领取记录不一致，原进度和乘员已保留。",
+    "PERSONAL_MISSION_CREW_PROVENANCE_MISSING":
+        "旧存档缺少该任务女乘员的来源记录，原进度和乘员已保留。任务编号",
+    "INVALID_PERSONAL_MISSION_REWARD_JOURNAL":
+        "任务奖励记录异常，原进度和奖励已保留。",
     "Account badges saved.": "账号勋章已保存。",
-    "Edits completion only; does not grant or remove mission rewards. "
-    "Close the game before saving.": "修改完成状态，不补发或回收任务奖励；保存前请关闭游戏。",
+    "Required earlier missions are completed automatically, without honors. "
+    "Edits and rewards are applied on the next game launch. Resets reclaim mission "
+    "orders and female crew; other rewards remain claimed and cannot be issued twice. "
+    "Close the game before saving.":
+        "勾选后自动完成必要前置任务（不自动完美完成）；取消前置也会取消依赖它的后续任务。"
+        "下次启动游戏时结算：回收取消任务对应的女乘员和奖励通行令，其他已领奖励保留且不重复发放。保存前请关闭游戏。",
     "Close World of Tanks before editing personal missions.": "修改前请关闭坦克世界。",
-    "Orders must be a whole number from 0 to 21.": "通行令数量必须是 0 到 21 的整数。",
     "Customize save...": "自定义存档…",
     "Customize save: %s": "自定义存档：%s",
     "Close": "关闭",
@@ -822,10 +836,6 @@ class LauncherWindow(object):
             padx=(6, 0), pady=(0, 4))
         self.earnings_entry = tk.Entry(earnings_row, width=8)
         self.earnings_entry.pack(side="left")
-        self.orders_label = tk.Label(earnings_row, text="")
-        self.orders_label.pack(side="left", padx=(18, 6))
-        self.orders_entry = tk.Entry(earnings_row, width=8)
-        self.orders_entry.pack(side="left")
         account_actions = tk.Frame(self.account_panel)
         account_actions.grid(
             row=len(save_ledger.CURRENCIES) + 1, column=0, columnspan=2,
@@ -1053,7 +1063,6 @@ class LauncherWindow(object):
         self.account_help_label.config(text=self._t(
             "Edit this save's balances and battle earnings. Before the first "
             "game, these are its starting funds. Close the game before editing."))
-        self.orders_label.config(text=self._t("Orders (0-21)"))
         self.edit_badges_button.config(text=self._t("Edit account badges..."))
         self.personal_missions_panel.config(text=self._t("Personal missions"))
         self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
@@ -1382,6 +1391,7 @@ class LauncherWindow(object):
         except (save_ledger.SaveLedgerError, save_slots.SaveSlotError,
                 vehicle_overlays.VehicleOverlayError, OSError, ValueError) as error:
             self._log(str(error))
+            self.save_dialog_feedback.config(text=self._t(str(error)))
             return False
         return True
 
@@ -1409,13 +1419,6 @@ class LauncherWindow(object):
             if hasattr(self, "log_view"):
                 self._log("The balances could not be read: %s" % error)
             balances = None
-        try:
-            fields = save_personal_missions.read_account_fields(self._save_slot_id, game_root or None)
-            self.orders_entry.delete(0, "end")
-            self.orders_entry.insert(0, str(fields["orders"]))
-        except (save_ledger.SaveLedgerError, save_slots.SaveSlotError, ValueError, TypeError):
-            self.orders_entry.delete(0, "end")
-            self.orders_entry.insert(0, "0")
         editable = balances is not None
         for name, entry in self.balance_entries.items():
             entry.config(state="normal")
@@ -1470,13 +1473,6 @@ class LauncherWindow(object):
                          self._earnings_text(save_slots.MAX_EARNINGS_PERCENT)))
             self._refresh_earnings()
             return False
-        try:
-            orders = int(self.orders_entry.get().strip())
-            if not 0 <= orders <= 21:
-                raise ValueError()
-        except ValueError:
-            self._log("Orders must be a whole number from 0 to 21.")
-            return False
         wanted = {}
         for name, entry in self.balance_entries.items():
             raw = entry.get().strip()
@@ -1496,11 +1492,6 @@ class LauncherWindow(object):
         except save_ledger.SaveLedgerError as error:
             self._log("The balances could not be saved: %s" % error)
             self._refresh_balances()
-            return False
-        try:
-            save_personal_missions.write_account_fields(self._save_slot_id, game_root or None, orders=orders)
-        except (save_ledger.SaveLedgerError, save_slots.SaveSlotError) as error:
-            self._log(str(error))
             return False
         try:
             save_slots.set_earnings_percent(

@@ -58,8 +58,11 @@ class PersonalMissionsDialog(object):
             tk.Button(actions, text=tr(text), command=lambda v=value: self.set_chain(v)).pack(
                 side="left", fill="x", expand=True)
         tk.Label(self.window, text=tr(
-            "Edits completion only; does not grant or remove mission rewards. "
-            "Close the game before saving."), wraplength=520, justify="left").pack(
+            "Required earlier missions are completed automatically, without honors. "
+            "Edits and rewards are applied on the next game launch. Resets reclaim mission "
+            "orders and female crew; other rewards remain claimed and cannot be issued twice. "
+            "Close the game before saving."),
+            wraplength=520, justify="left").pack(
                 fill="x", padx=12, pady=4)
         self.feedback = tk.Label(self.window, text="", wraplength=520, justify="left")
         self.feedback.pack(fill="x", padx=12)
@@ -68,6 +71,13 @@ class PersonalMissionsDialog(object):
         tk.Button(buttons, text=tr("Save"), command=self.save).pack(side="left", expand=True, fill="x")
         tk.Button(buttons, text=tr("Close"), command=self.close).pack(side="right", expand=True, fill="x")
         self.refresh()
+        status = progress_store.read_edit_status(self.slot_id, self.game_root)
+        if status["error"]:
+            error_key, separator, detail = status["error"].partition(":")
+            error_text = tr(error_key) + (": " + detail.strip() if separator else "")
+            self.feedback.config(text=tr("Mission edit was not applied: %s") % error_text)
+        elif status["pending"]:
+            self.feedback.config(text=tr("Mission edits will be applied on the next game launch."))
         self.window.grab_set()
 
     def ids(self):
@@ -88,18 +98,12 @@ class PersonalMissionsDialog(object):
         if field == "completed" and not completed.get():
             honors.set(False)
         value = 2 if honors.get() else (1 if completed.get() else 0)
-        key = str(self.ids()[index])
-        if value:
-            self.progress[key] = value
-        else:
-            self.progress.pop(key, None)
+        self.progress = progress_store.edit_progress(
+            self.progress, [self.ids()[index]], value)
+        self.refresh()
 
     def set_chain(self, value):
-        for qid in self.ids():
-            if value:
-                self.progress[str(qid)] = value
-            else:
-                self.progress.pop(str(qid), None)
+        self.progress = progress_store.edit_progress(self.progress, self.ids(), value)
         self.refresh()
 
     def save(self):
@@ -107,11 +111,13 @@ class PersonalMissionsDialog(object):
             self.feedback.config(text=self.owner._t("Wait for the current launcher operation to finish."))
             return False
         try:
-            progress_store.write_progress(self.slot_id, self.progress, self.game_root)
+            self.progress = progress_store.write_progress(
+                self.slot_id, self.progress, self.game_root)
         except (save_ledger.SaveLedgerError, save_slots.SaveSlotError) as error:
             self.feedback.config(text=self.owner._t(str(error)))
             return False
-        self.feedback.config(text=self.owner._t("Personal-mission progress saved."))
+        self.refresh()
+        self.feedback.config(text=self.owner._t("Mission edits will be applied on the next game launch."))
         return True
 
     def close(self):

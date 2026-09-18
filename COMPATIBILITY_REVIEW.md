@@ -3831,10 +3831,10 @@ Existing archived results are not retroactively repriced or re-awarded.
 Daily completion IDs are stored with the settlement receipt. They produce
 native lower-left result rows and a single combined reward dialog through
 the existing once-only result-notification path. This is the offline daily
-goal system, not completion support for the original campaign personal
-missions. The existing campaign code only selects missions; the full mission
-conditions and authoritative battle telemetry needed for those rewards have
-not been implemented. Badge selection does not award campaign medals.
+goal system, separate from the original campaign personal missions. Campaign
+reward settlement and supported condition evaluation were added in the
+2026-09-18 follow-up documented below. Badge selection alone does not award
+campaign medals.
 
 The same report repeatedly blocks Ruinberg's old Mercedes (chunk 33151,
 item 3), motorcycle (33151/89), bench (32385/7) and other small objects while
@@ -4106,43 +4106,80 @@ collision safety or the model-switch wait interval.
 
 ## Launcher campaign, orders and badge editing (2026-09-18)
 
-The launcher-only vehicle catalogue and labels are restored from tag v0.8.4:
-no special-offer categories, bond annotations or retired-vehicle augmentation.
-The in-client bond shop remains independent. The garage uses the original
-standard-resource filter; the later Bot-only retired exclusions no longer
-remove original gold/reward rows such as Waffentrager E 100. Retired vehicles
-without an original gold/reward listing are not added artificially.
+The launcher garage retains its original labels and standard-resource filter.
+All five supported retired vehicles are included even when their original
+entry has a credit price instead of gold or a zero-price reward flag. The
+Bot exclusion and in-client bond shop remain independent of this catalogue.
 
 The completion editor uses regular mission IDs 1..300, four operations of
 five fifteen-mission chains in LT/HT/MT/TD/SPG order. The ledger stores these
 under `personalMissions.completed` as 1 (main complete) or 2 (honors), while
 `personalMissions.regular` remains the selection list. Omission is incomplete.
-The producer calls the installed `personal_missions.PMStorage(storage=...)`
-and its `makeCompDescr`, using native `PM_STATE.MAIN_REWARD_GOTTEN` and
-`ALL_REWARDS_GOTTEN`. This explicitly sets completion without queuing rewards;
-it does not implement campaign reward settlement or order spending. Honored
-missions are removed from active selections. The client owns availability
-and prerequisite presentation; editing a later mission does not silently
-complete its prerequisites.
+The editor closes the required-unlock graph without granting honors:
+tasks 1..14 are unordered, finals require their fourteen tasks, and later
+operations require the previous operation's five finals. Resetting a
+prerequisite resets dependent completions. A reset mission replaces an older
+selection of the same vehicle class so it can be replayed. The producer uses
+installed `PMStorage`/`PM_STATE`, retaining native reward-needed states for
+unclaimed female crew choices.
+
+`personal_campaign` reads reward definitions from installed resources and
+settles missing stages on garage startup and after authoritative battle
+receipts. `rewarded` records paid main/additional stages independently of
+`completed`; `tankwomen` records delayed crew claims. Paid economic markers
+are retained across resets. The launcher writes `requestedCompleted` and
+`requestedRegular`, not committed progress; the client reclaims only earned
+order entitlements and mission-origin female crew on a detached transaction
+before committing the edit. A rejected withdrawal clears the pending request,
+preserves the old progress/property and publishes `resetError` to the editor.
+Crew provenance must survive inventory-ID reconstruction across restarts;
+it must never identify an unrelated crew member by a reused numeric ID.
+An old claim without provenance, or a crew member no longer present in the
+garage, barracks or recycle bin, rejects the reset rather than guessing.
+Operation reward markers prevent duplicate permanent grants. The first claim
+of an already owned tank gives stock credit sale-value compensation once,
+an explicit offline policy rather than a claimed historical regional rule.
+Tokens are rebuilt from current progress. Currency, inventory,
+premium time, vehicle/slot, badge, camouflage and native female-crew rewards
+use the same persisted account transaction. Existing saves containing only
+completion flags receive their missing rewards during migration.
+
+The battle evaluator uses the installed conditions and existing receipt facts.
+It supports the reported Object 260 MT-15 through per-target tank-destroyer
+damage; honors additionally evaluates distinct damaged targets and victory.
+Training, early unfinished exits, duplicate receipts, unmet prerequisites and
+wrong vehicle classes cannot complete it. Event-history conditions without
+the required telemetry remain explicitly unevaluated, rather than treating
+missing evidence as success. This does not claim full 300-mission combat
+coverage.
 
 Orders are `personalMissions.orders`, published as the stock
-`tokens['free_award_list'] = (4104777660, count)` tuple. The editor observes the
-reference's 21-order limit. Account badge ownership is `ledger.accountBadges`,
+`tokens['free_award_list'] = (4104777660, count)` tuple. The standalone launcher
+quantity editor was removed at the user's request. Existing balances remain;
+new orders are issued by mission honors. Command 10019 records a one-order
+ordinary or four-order final pawn and publishes its native marker. Honors
+completion refunds that pawn; resetting it in the editor refunds it once.
+The regional reference's unused constant 21 is not treated as a token balance
+limit. Account badge ownership is `ledger.accountBadges`,
 a badge-ID/acquisition-time map, written into the native account dossier's
 `playerBadges` block. Native Badge objects consequently expose acquisition to
 both the gallery and selection validation. No battle medal counters or combat
 statistics are fabricated. The launcher parses `scripts/item_defs/badges.xml`
-from the installed `scripts.pkg` and reads `res/text/LC_MESSAGES/badge.mo`.
+from the installed `scripts.pkg` using a dedicated read-only accessor, not the
+vehicle-edit path whitelist, and reads `res/text/LC_MESSAGES/badge.mo`.
 Removing the selected badge also removes its saved selection.
 
 Before the first garage, corresponding initial values live in `save.json`;
 restoring an existing garage ledger takes priority. Writes reject a running
 game and use the existing atomic replacement helper. Completion writes preserve
-orders, badges, wallet, vehicles, daily goals and unrelated save fields.
+badges, wallet, vehicles, daily goals and unrelated save fields.
 
 Producer/consumer orientation for PMStorage, states, tokens and Badge comes
 from regional #788 Python; the existing #1513 contract pins `potapovQuests`
-and its requester keys. New native serialization, badge rendering and the
-Tk dialog's final Windows layout still require #1513 Windows acceptance.
+and its requester keys. Command 10019 and crew reward command 125 are oriented
+from that regional producer/consumer pair; they are not claimed as new exact
+#1513 bytecode audit evidence. New native serialization, reward selection,
+badge rendering and the Tk dialog's final Windows layout still require
+#1513 Windows acceptance.
 Local tests cover storage round trips, checkbox dependencies, all 300 IDs,
 invalid/running writes, atomic failure, badge removal and publication fields.

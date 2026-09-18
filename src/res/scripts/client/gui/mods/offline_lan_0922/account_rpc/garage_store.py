@@ -25,6 +25,7 @@ import sys
 from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922 import offline_services
+from gui.mods.offline_lan_0922 import personal_campaign
 from gui.mods.offline_lan_0922.account_rpc import data, economy
 from gui.mods.offline_lan_0922.account_rpc.garage import (
     STOCKED_ITEM_TYPES, mirror_shells_layout)
@@ -100,6 +101,98 @@ def _int_list(value):
     return result
 
 
+def _customization_inventory(value):
+    """Normalize the three integer-key levels used by native ownership."""
+    result = {}
+    for kind, items in (value.items() if isinstance(value, dict) else ()):
+        try:
+            kind = int(kind)
+        except (TypeError, ValueError):
+            continue
+        for item, bindings in (items.items() if isinstance(items, dict) else ()):
+            try:
+                item = int(item)
+            except (TypeError, ValueError):
+                continue
+            for vehicle, count in (bindings.items() if isinstance(bindings, dict) else ()):
+                try:
+                    vehicle, count = int(vehicle), int(count)
+                except (TypeError, ValueError):
+                    continue
+                if kind > 0 and item > 0 and vehicle >= 0 and count > 0:
+                    result.setdefault(kind, {}).setdefault(item, {})[vehicle] = count
+    return result
+
+
+def _campaign_crew_locations(snapshot):
+    """Tie campaign crew provenance to the same serialized owner records."""
+    result = {}
+    for record in _records(snapshot):
+        for seat, tankman_id in enumerate(record.get('crew') or ()):
+            descriptor = (record.get('tankmen') or {}).get(tankman_id)
+            if tankman_id is not None and _encode_bytes(descriptor) is not None:
+                result[int(tankman_id)] = ({'kind': 'vehicle',
+                    'vehicle': int(record['vehicleTypeCompactDescr']), 'seat': seat}, descriptor)
+    barracks = sorted((_encode_bytes(descriptor), int(tankman_id))
+        for tankman_id, descriptor in (snapshot.get('barracksTankmen') or {}).items()
+        if _encode_bytes(descriptor) is not None)
+    for index, (encoded, tankman_id) in enumerate(barracks):
+        result[tankman_id] = ({'kind': 'barracks', 'index': index}, _decode_bytes(encoded))
+    recycled = sorted((_encode_bytes(row[0]), int(row[1]), int(tankman_id))
+        for tankman_id, row in (snapshot.get('recycleBinTankmen') or {}).items()
+        if _encode_bytes(row[0]) is not None)
+    for index, (encoded, unused_stamp, tankman_id) in enumerate(recycled):
+        result[tankman_id] = ({'kind': 'recycle', 'index': index}, _decode_bytes(encoded))
+    return result
+
+
+def _saved_campaign_journal(snapshot):
+    journal = copy.deepcopy(snapshot.get('personalMissionRewardJournal') or {})
+    locations = _campaign_crew_locations(snapshot)
+    for key, effect in journal.items():
+        if not key.startswith('crew:') or not isinstance(effect, dict):
+            continue
+        owner = locations.get(_int_value(effect.get('tankman')))
+        effect.pop('tankman', None)
+        if owner is None:
+            effect['location'] = {'kind': 'missing'}
+        else:
+            effect['location'], descriptor = owner
+            effect['descriptor'] = _encode_bytes(descriptor)
+    return journal
+
+
+def _restore_campaign_crew_ids(snapshot):
+    for key, effect in (snapshot.get('personalMissionRewardJournal') or {}).items():
+        if not key.startswith('crew:') or not isinstance(effect, dict):
+            continue
+        owner = effect.get('location') or {}
+        tankman_id, descriptor = 0, None
+        if owner.get('kind') == 'vehicle':
+            for record in _records(snapshot):
+                if int(record.get('vehicleTypeCompactDescr', 0)) != _int_value(owner.get('vehicle')):
+                    continue
+                seat = _int_value(owner.get('seat'), -1)
+                crew = record.get('crew') or ()
+                if 0 <= seat < len(crew) and crew[seat] is not None:
+                    tankman_id = int(crew[seat])
+                    descriptor = (record.get('tankmen') or {}).get(tankman_id)
+        elif owner.get('kind') in ('barracks', 'recycle'):
+            field = 'barracksTankmen' if owner['kind'] == 'barracks' else 'recycleBinTankmen'
+            rows = snapshot.get(field) or {}
+            ids = sorted(rows)
+            index = _int_value(owner.get('index'), -1)
+            if 0 <= index < len(ids):
+                tankman_id = ids[index]
+                descriptor = rows[tankman_id]
+                if owner['kind'] == 'recycle':
+                    descriptor = descriptor[0]
+        # This comparison verifies the owner restored in this transaction;
+        # it is never a search for another similar crew member.
+        effect['tankman'] = (tankman_id if descriptor is not None and
+                             _encode_bytes(descriptor) == effect.get('descriptor') else 0)
+
+
 def _ledger_payload(snapshot):
     """Return the account balances and research a save must keep.
 
@@ -142,6 +235,11 @@ def _ledger_payload(snapshot):
     selections = selections if isinstance(selections, dict) else {}
     regular = data.personal_mission_regular_selection(
         selections.get('regular', ()))
+    personal_fields = personal_campaign.saved_fields(snapshot)
+    personal_fields['rewardJournal'] = _saved_campaign_journal(snapshot)
+    personal_fields.update({'regular': regular,
+        'completed': data.personal_mission_completed(snapshot.get('personalMissionProgress')),
+        'orders': data.personal_mission_orders(snapshot.get('personalMissionOrders', 0))})
     return {
         'wallet': dict(
             (name, max(0, int(wallet.get(name, 0) or 0)))
@@ -154,10 +252,9 @@ def _ledger_payload(snapshot):
         'recycleBin': sorted(recycled),
         'premiumExpiryTime': max(
             0, _int_value(snapshot.get('premiumExpiryTime'))),
-        'personalMissions': {'regular': regular,
-            'completed': data.personal_mission_completed(snapshot.get('personalMissionProgress')),
-            'orders': data.personal_mission_orders(snapshot.get('personalMissionOrders', 0))},
+        'personalMissions': personal_fields,
         'accountBadges': data.account_badges(snapshot.get('accountBadges')),
+        'customizations': _customization_inventory(snapshot.get('customizationItems')),
         'offlineServices': offline_services.saved_fields(snapshot),
     }
 
@@ -303,6 +400,7 @@ def _apply_ledger(staged, stored):
     if isinstance(services, dict):
         staged.update(offline_services.saved_fields(services))
     if isinstance(personal_missions, dict):
+        staged.update(personal_campaign.restored_fields(personal_missions))
         regular = data.personal_mission_regular_selection(
             personal_missions.get('regular', ()))
         staged['personalMissionSelections'] = {'regular': regular}
@@ -310,6 +408,9 @@ def _apply_ledger(staged, stored):
             personal_missions.get('completed'))
         staged['personalMissionOrders'] = data.personal_mission_orders(
             personal_missions.get('orders', 0))
+        _restore_campaign_crew_ids(staged)
+    if 'customizations' in ledger:
+        staged['customizationItems'] = _customization_inventory(ledger['customizations'])
     if 'accountBadges' in ledger:
         staged['accountBadges'] = data.account_badges(ledger['accountBadges'])
     return True
@@ -703,7 +804,8 @@ class GarageStore(object):
                              shells_fired=None, equipment_used=None,
                              auto_settings=None, friendly_fire_facts=None,
                              vehicle_type_name=None, battle_start=0,
-                             daily_facts=None, training=False):
+                             daily_facts=None, training=False,
+                             campaign_receipt=None):
         """Apply and persist one battle's whole settlement exactly once.
 
         The compact crew descriptors, the earnings, the damage the battle did
@@ -723,6 +825,9 @@ class GarageStore(object):
                     _int_value(record.get('id')) for record in _records(snapshot)
                     if _int_value(record.get('vehicleTypeCompactDescr')) ==
                     _int_value(vehicle_type_compact_descr)), 0)
+                touched_types = set(row.get('touched_vehicle_types') or ())
+                result['touched_vehicles'] = [int(record['id']) for record in _records(snapshot)
+                    if int(record.get('vehicleTypeCompactDescr', 0)) in touched_types]
                 result['xp_by_tankman'] = dict(
                     self._session_crew_xp.get(receipt_id, {}))
                 result.setdefault('refused', [])
@@ -853,11 +958,21 @@ class GarageStore(object):
             result['daily_missions'] = [key for key in
                 state.snapshot()['dailyMissions']['claimed']
                 if result['daily_reserves'] and key not in before_claimed]
+        if (campaign_receipt is not None and not training and
+                not campaign_receipt.get('premature_leave', False)):
+            from gui.mods.offline_lan_0922 import personal_campaign_battle
+            campaign = personal_campaign_battle.evaluate(
+                state.snapshot(), campaign_receipt, vehicles_module)
+            state.snapshot().setdefault('personalMissionProgress', {}).update(
+                campaign['completed'])
+            result['personal_missions'] = personal_campaign.settle(state)
+            result['personal_missions']['unsupported'] = campaign['unsupported']
         # Every other field of this result is plain JSON, and the store hands
         # it straight to a caller that may well write it down.
         result['touched_items'] = dict(
             (int(item_type), sorted(int(value) for value in items))
             for item_type, items in state.touched_items().items())
+        result['touched_vehicles'] = sorted(state.touched_vehicles())
         staged = state.snapshot()
         marker = {
             'receipt_id': receipt_id,
@@ -867,6 +982,10 @@ class GarageStore(object):
         if 'awarded' in result:
             marker['awarded'] = dict(result['awarded'])
         marker['touched_items'] = copy.deepcopy(result['touched_items'])
+        marker['touched_vehicle_types'] = sorted(int(record['vehicleTypeCompactDescr'])
+            for record in _records(staged) if int(record['id']) in result['touched_vehicles'])
+        if 'personal_missions' in result:
+            marker['personal_missions'] = copy.deepcopy(result['personal_missions'])
         marker['service_costs'] = dict(result['service_costs'])
         marker['income'] = copy.deepcopy(result['income'])
         marker['daily_reserves'] = list(result.get('daily_reserves') or ())
@@ -1106,6 +1225,9 @@ class GarageStore(object):
                 row['income'] = copy.deepcopy(raw['income'])
             row['daily_reserves'] = list(raw.get('daily_reserves') or ())
             row['daily_missions'] = list(raw.get('daily_missions') or ())
+            row['touched_vehicle_types'] = _int_list(raw.get('touched_vehicle_types')) or []
+            if isinstance(raw.get('personal_missions'), dict):
+                row['personal_missions'] = copy.deepcopy(raw['personal_missions'])
             touched = raw.get('touched_items')
             if isinstance(touched, dict):
                 row['touched_items'] = dict(

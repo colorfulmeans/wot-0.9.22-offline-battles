@@ -69,7 +69,9 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
     state = _garage(context)
     from gui.mods.offline_lan_0922 import offline_services
     previous_recovery = offline_services.vehicle_recovery_buffer(state.snapshot())
-    previous_stats = data.stats(state.snapshot())['stats']
+    postbattle = context.get('postbattle_store')
+    progress = postbattle.progress() if postbattle is not None else None
+    previous_stats = data.stats(state.snapshot(), progress)['stats']
     state.touched_vehicles()
     state.touched_items()
     try:
@@ -83,7 +85,7 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
     # Capture this command's result before deferred publication. Another
     # command may mutate the garage before publish runs; its new unlocks and
     # elite vehicles must belong only to its own notification delta.
-    current_stats = data.stats(state.snapshot())['stats']
+    current_stats = data.stats(state.snapshot(), progress)['stats']
     current_recovery = offline_services.vehicle_recovery_buffer(state.snapshot())
     recovery_diff = dict((cd, current_recovery.get(cd)) for cd in
                          set(previous_recovery) | set(current_recovery)
@@ -117,7 +119,7 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
         # Publish the ledger with the inventory for every paid garage action.
         changed_stats = dict((name, current_stats[name]) for name in (
             'credits', 'gold', 'crystal', 'freeXP', 'slots', 'berths', 'vehicleSellsLeft',
-            'vehTypeXP', 'unlocks', 'eliteVehicles')
+            'vehTypeXP', 'unlocks', 'eliteVehicles', 'dossier')
             if current_stats[name] != previous_stats[name])
         # #1513 merges these growing sets and treats each incremental entry
         # as a new unlock/elite notification. Repeating the full set floods
@@ -527,6 +529,43 @@ def _select_personal_missions(context, args):
         })
 
 
+def _personal_mission_diff(snapshot, unused_outcome):
+    return {'potapovQuests': data.personal_missions(snapshot),
+            'tokens': data.personal_mission_tokens(snapshot),
+            'account': data.stats(snapshot)['account']}
+
+
+def _personal_mission_transaction(context, mutate):
+    state = _garage(context)
+    try:
+        with state._transaction():
+            return _fitting(context, mutate,
+                            extra_diff=_personal_mission_diff,
+                            require_persistence=True)
+    except garage.GarageError as error:
+        return Result(commands.RES_FAILURE, str(error))
+
+
+def _pawn_personal_mission(context, args):
+    # Account.pawnFreeAwardList -> intArr [EVENT_TYPE, questID].
+    if (len(args) != 1 or not isinstance(args[0], (list, tuple)) or
+            len(args[0]) != 2):
+        return Result(commands.RES_FAILURE, 'INVALID_PERSONAL_MISSION_REQUEST')
+    values = args[0]
+    return _personal_mission_transaction(context, lambda state:
+        state.pawn_personal_mission(values[0], values[1]))
+
+
+def _get_personal_mission_reward(context, args):
+    # Account.getPersonalMissionReward -> branch, questID, needTankman,
+    # chosen nation, chosen vehicle's in-nation ID, chosen role ID.
+    if (len(args) != 1 or not isinstance(args[0], (list, tuple)) or
+            len(args[0]) != 6):
+        return Result(commands.RES_FAILURE, 'INVALID_PERSONAL_MISSION_REQUEST')
+    return _personal_mission_transaction(context, lambda state:
+        state.claim_personal_mission_reward(*args[0]))
+
+
 def _vehicle_settings(context, args):
     # _doCmdInt3: (vehInvID, setting, isOn)
     if len(args) < 3:
@@ -870,6 +909,8 @@ HANDLERS = {
     commands.CMD_DEQUEUE_RANDOM: _dequeue_random,
     commands.CMD_SET_LANGUAGE: _set_language,
     commands.CMD_SELECT_POTAPOV_QUESTS: _select_personal_missions,
+    commands.CMD_GET_POTAPOV_QUEST_REWARD: _get_personal_mission_reward,
+    commands.CMD_PAWN_FREE_AWARD_LIST: _pawn_personal_mission,
     commands.CMD_COMPLETE_TUTORIAL: lambda context, args: Result(commands.RES_SUCCESS),
     commands.CMD_REQ_BATTLE_RESULTS: _request_battle_results,
     commands.CMD_BATTLE_RESULTS_RECEIVED: _battle_results_received,
