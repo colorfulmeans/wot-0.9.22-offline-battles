@@ -4474,3 +4474,40 @@ career reload/deduplication, the roster field and voice resets. Regional source
 orientation and tests do not replace a new #1513 bytecode audit or Windows
 acceptance: the final Scaleform layout and audible Chinese/national female
 banks must still be checked in the actual supported client.
+
+## September 19 Strv S1 downhill ground-exit report
+
+Report `20260919-002743-39ef021b304a` identifies released v0.9.0 build
+`colorfulmeans-35356845247-1`. On `18_cliff`, Strv S1 remains at approximately
+`(-185.979, -1.128, -124.409)` from 00:24:45 through 00:24:52 while receiving
+forward and reverse input. Both stable Siege states (0 and 2) occur;
+`siege_drive_locked` is false and `siege_pending` is null. Five hard-contact
+records identify `ground_profile`, not a destructible or a transition lock.
+
+The captured lower hull ray crosses outward through a drivable terrain top.
+Its seven forward samples descend monotonically, but a later, steeper segment
+exceeds the existing descending gradient limit. The Python collision owner
+incorrectly uses that later drop to block departure from the earlier surface.
+The reported body pitch also remains nearly level and its five-point support
+plane is absent; the report does not contain the individual support samples
+needed to independently diagnose that pose. Hydraulic vehicles intentionally
+use the legacy support path rather than the ten-spring trial.
+
+The shared horizontal collision owner now admits this bounded departure only
+when the sampled lane is descending, the actual native normal is drivable,
+the ray crosses outward, a vertical query confirms the exact hit is the top,
+and a recast of the remaining same-height segment is clear. Occupied upper
+hull lanes require the same proof for their terrain contacts. A backing wall,
+low obstacle, beam, inward hit, unconfirmed top, or mixed rise/drop stays solid.
+Extra queries retain the original vehicle mask and destruction filter. No
+Siege speed, hydraulic provider, support/gravity law or terrain gradient limit
+changes; player and worker adapters use the same corrected owner.
+
+The regression scene reconstructs the recorded airborne and grounded lanes
+from their positions, normals and seven samples. The previous implementation
+reproduces `ground_profile` stops in forward and reverse departure; the fix
+clears those scenes while native backing walls and upper/lower obstructions
+still block. Adapter tests cover both stable Siege states and retain hydraulic
+trial exclusion. This is local Python/geometric evidence, not an exact Cliff
+mesh or Windows playtest. Actual #1513 Strv S1/UDES 03/Strv 103 downhill motion,
+body pose and feel remain native acceptance work.

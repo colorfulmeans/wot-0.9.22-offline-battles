@@ -184,6 +184,40 @@ def _hit_matches_exact_ground_top(spaceID, Math, pos, collision, look,
 		return False
 
 
+def _ground_exit_is_clear(spaceID, Math, pos, start, end, collision,
+		look, ground_plane, collision_filter):
+	"""Prove an outward terrain contact and query the rest of the same ray.
+
+	A steeper drop beyond a supported slope is not a horizontal wall. Only an
+	actual drivable top, crossed outward, earns this exception; a second native
+	hit remains solid. In particular, a low wall behind the slope must not be
+	hidden by the first terrain triangle or by the raised hull rays.
+	"""
+	if not _drivable_surface(collision, _MAX_DESCENDING_GRADIENT):
+		return False
+	delta = end - start
+	length = delta.length
+	if length <= _GROUND_HIT_EPSILON:
+		return False
+	normal = collision[1]
+	outward = (delta.x * normal.x + delta.y * normal.y +
+		delta.z * normal.z) / length
+	if outward <= _GROUND_HIT_EPSILON:
+		return False
+	if not _hit_matches_exact_ground_top(
+			spaceID, Math, pos, collision, look, ground_plane,
+			collision_filter):
+		return False
+	remaining = end - collision[0]
+	remaining_length = remaining.length
+	if remaining_length <= _GROUND_HIT_EPSILON:
+		return False
+	recast_start = collision[0] + remaining.scale(
+		_GROUND_HIT_EPSILON / remaining_length)
+	return _collide_horizontal(
+		spaceID, recast_start, end, collision_filter) is None
+
+
 def _vehicle_motion_extents(descriptor):
 	"""Cover the chassis and mounted hull instead of only the narrow armour."""
 	hull_box = _vehicle_hull_bbox(descriptor)
@@ -382,7 +416,7 @@ def _raised_ray_has_wall(spaceID, Math, pos, x1, z1, x2, z2,
 		local_start, local_end, pose_y, target_length,
 		maximum_gradient=_MAX_DRIVABLE_GRADIENT, ground_profile=None,
 		collision_filter=_UNPREPARED_COLLISION_FILTER,
-		ground_ahead=None, trace=None):
+		ground_ahead=None, trace=None, require_clear_exit=False):
 	"""A drivable lower slope must not hide an independent wall above it."""
 	for height in (1.1, 1.6):
 		start, end = _posed_ray(
@@ -395,8 +429,11 @@ def _raised_ray_has_wall(spaceID, Math, pos, x1, z1, x2, z2,
 		if (collision[0] - start).length >= target_length:
 			continue
 		if _drivable_surface(collision, maximum_gradient):
-			continue
-		if (ground_profile is not None and
+			if (not require_clear_exit or _ground_exit_is_clear(
+					spaceID, Math, pos, start, end, collision,
+					ground_profile[7], ground_profile[8], collision_filter)):
+				continue
+		if (not require_clear_exit and ground_profile is not None and
 				_hit_matches_ground_profile(
 					collision, ground_profile[0], ground_profile[1],
 					ground_profile[2], ground_profile[3],
@@ -739,9 +776,29 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 								_MIN_DRIVABLE_HEIGHT_CHANGE and
 								not _drivable_ground_profile(
 									_heights, _segment)):
-							# This is a proved continuous-direction terrain profile, not
-							# a small prop. An ascent/descent outside its directional
-							# bound remains solid instead of falling into prop handling.
+							# A descending lane can leave the actual surface before a
+							# steeper drop farther ahead. Do not turn that lower ground
+							# into a wall: prove the outward native top and a clear
+							# remainder at every occupied hull height. Ascents, mixed
+							# profiles and contacts entering terrain retain the limit.
+							departing = (
+								all(_heights[index] <= _heights[index - 1]
+									for index in range(1, len(_heights))) and
+								_ground_exit_is_clear(
+									spaceID, Math, pos, start_bot, end_bot, col_bot,
+									profile_look, _profile_plane, _sweep_filter))
+							if departing:
+								if _raised_ray_has_wall(
+										spaceID, Math, pos, x1, z1, x2, z2,
+										local_start, local_end, pose_y, target_len,
+										_gradient_limit,
+										(_heights, _segment, profile_x, profile_z,
+										 profile_sin, profile_cos, profile_direction,
+										 profile_look, _profile_plane),
+										_sweep_filter, _ground_ahead, trace=trace,
+										require_clear_exit=True):
+									return 'hard' if return_status else True
+								continue
 							_record_hard_contact(trace, 'ground_profile', start_bot,
 								end_bot, col_bot, _ground_ahead, _heights)
 							return 'hard' if return_status else True
