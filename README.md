@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.8.4** — [更新说明](docs/releases/v0.8.4.md).
+Current release: **v0.9.0** — [Release notes](docs/releases/v0.9.0.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.8.4-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.9.0-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -60,9 +60,9 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
-The [v0.8.4 release notes](docs/releases/v0.8.4.md) describe the latest combat
-feedback, artillery stun, spotting and radio, Bot navigation, destructible
-scenery, garage-economy and stability updates.
+The [v0.9.0 release notes](docs/releases/v0.9.0.md) cover all changes since
+v0.8.4: campaigns, garage services, combat feedback, Bot navigation,
+destructible scenery, battle income and stability updates.
 
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
@@ -100,7 +100,8 @@ free garage slot. Premiums offered in the regular shop can be recovered for
 72 hours; premiums outside its assortment have no deadline. Earlier sales
 cannot be reconstructed from saves that never recorded them. Badge selection
 now requires the native earned achievement; old unrestricted cosmetic
-selections are cleared. Original campaign completion remains unimplemented.
+selections are cleared. Personal campaigns settle supported battle conditions
+and their corresponding rewards as described below.
 
 Personal Reserves has purchase, activation, Close and Escape actions. It offers
 44 distinct historical bonus/duration combinations across combat XP, crew XP,

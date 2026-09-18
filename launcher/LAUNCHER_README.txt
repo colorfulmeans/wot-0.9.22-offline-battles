@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v0.8.4
+wot-0.9.22-offline-battles v0.9.0
 ================================
 
 The launcher prepares one battle before the game starts. It installs the mod,
@@ -37,11 +37,12 @@ then clicks START BATTLE. The room settings can be changed there without
 restarting the game or LAN server. LEAVE closes the room and returns you to
 the garage.
 
-On the 0.9.22 client the garage works offline. Every vehicle is owned and every
-module in its own tech tree is unlocked, each vehicle arrives with its top
-modules and three consumables, and every item costs nothing. Change modules,
-optional devices, consumables, shells, camouflage and crew skills; the garage
-is saved after each change and the battle uses what you fitted.
+On the 0.9.22 client the garage works offline. A fully unlocked save starts
+with the supported vehicle catalogue and researched modules; a new-account
+save starts with starter vehicles. Purchases use the displayed currency and
+price. Change modules, optional devices, consumables, shells, camouflage and
+crew skills; the garage is saved after each change and the battle uses what
+you fitted. UPDATE_NOTES.md lists the complete changes since v0.8.4.
 
 The Tools tab also edits vehicle data directly. A vehicle data profile is a
 named set of Packed XML field changes (health, damage, penetration, armour,

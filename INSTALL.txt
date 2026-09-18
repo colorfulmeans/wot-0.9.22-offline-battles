@@ -80,8 +80,9 @@ with bond prices. Owned vehicles follow the available ones and cannot be
 purchased again. The offer filters are separate from the regular Shop filters.
 
 Personal Reserves uses the native inventory, missions and purchase tabs with
-four one-hour bonuses. Active reserves appear in the three slots in both the
-window and account popover. Purchases and activation produce system messages.
+44 historical bonus/duration combinations across four resource types. Active
+reserves appear in the three slots in both the window and account popover.
+Purchases and activation produce system messages.
 Close or Escape returns to the garage. Up to three different types may be
 active together. The Missions tab opens three daily offline goals, randomly
 selected from fixed-reward templates at 00:00 UTC (08:00 Beijing time).
