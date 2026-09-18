@@ -781,21 +781,20 @@ present in that exact admitted instance.
 
 Damage does not imply removal of collision. The compiled BSMO destroyed-model
 reference identifies modules with a solid replacement BSP; map catalogs retain
-that per-box fact. Such contacts cannot skip the original whole-item OBB, and
-destroyed-model materials 87–100 remain eligible for native motion, support and
-shell queries even after an item-wide destruction receipt. The native BSP still
-owns the replacement's exact shape, but #1513 exposes no volume-overlap query for
-it. Copied vehicle motion therefore keeps a solid structure module's source box
-as a conservative no-entry envelope, supplements it with native rays for
-protrusions, and permits historical overlap through bounded outward progress.
-Crushed fragile props instead use their replacement's native motion and support
-surfaces: retaining an intact car or tractor box after replacement creates an
-invisible wall above or beside the lower wreck. Native replacement hits cannot
-be skipped through the old OBB. Collision-free destroyed modules retain neither
-the source box nor a forced hiding-delay hold. Solid replacement swaps release
-as soon as the matching physical-contact callback completes; only unfinished
-callbacks retain the bounded stock hand-off. Translation and rotation share
-this distinction for players and Bots.
+that per-box fact, not the replacement's shape. Such contacts cannot use an
+original whole-item OBB exit to skip a native hit, and destroyed-model materials
+87–100 remain eligible for native motion, support and shell queries even after
+an item-wide destruction receipt. Once replaced, both structures and fragile
+props relinquish their intact motion envelopes: keeping a source box creates
+an invisible wall around a lower or narrower wreck. Translation and rotation
+query the actual native BSP, including vehicle-only surfaces, for players and
+Bots. Intact sibling modules and unrelated walls retain their own guards.
+Collision-free destroyed modules also avoid the forced hiding-delay hold.
+Solid replacement swaps release as soon as the matching physical-contact
+callback completes; only unfinished callbacks retain the bounded stock hand-off.
+The native segment sweeps are not a volume-overlap proof for every narrow
+replacement feature. Exact Windows driving and pivot acceptance remains the
+boundary for those shapes; an intact source box is not replacement geometry.
 
 The September 18 v0.9.0 Ruinberg Winter report records soft holds at the catalog's
 `bld000_base` and `bld707_shed` instances, whose destroyed modules have no solid
@@ -805,6 +804,17 @@ cannot be identified from unordered collision-filter candidates alone. The
 existing rate-limited stall report now includes two read-only material probes,
 their returned points and distance from the actual hard hit, to distinguish
 a remaining map collider from a nearby destructible without changing motion.
+
+The same-day Malinovka report supplies a second counterexample to retaining
+source envelopes: `mil203_MilitaryDefences01.model` is a two-module structure,
+with both boxes marked as retaining collision. Chunk 32636 items 23–26 receive
+accepted destruction for materials 73 and 74, but repeated catalog hard results
+continue without a native hard-hit reason. The regression uses the reported
+positions and exact baked placements of those barriers. Native-scene tests
+exercise both adapters, forward/reverse travel and both turn signs, allowing a
+lower replacement while preserving damaged faces, vehicle-only obstacles,
+unbroken sibling materials and unrelated walls. These tests establish adapter
+behavior, not the exact client's destroyed mesh or gameplay feel.
 
 For physical fragile/module crushing, the exact stock manager starts effects
 before scheduling its collision replacement after 0.2 seconds. The adapter

@@ -8048,7 +8048,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         self.assertNotIn('swap_pending', after_swap_deadline)
         authority.contact_collision_ready.assert_not_called()
 
-    def test_retained_structure_forbids_entry_but_allows_translation_escape(
+    def test_destroyed_structure_does_not_reuse_intact_translation_envelope(
             self):
         (bigworld, math_module, area, cache, authority,
          descriptor) = self._direction_catalog_fixture(
@@ -8074,10 +8074,10 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 1, _Vector(), 0.0, -20.0,
                 descriptor, 10.3, dt=0.04, kinetic_speed=20.0)
 
-        self.assertEqual('hard', entering['status'])
+        self.assertEqual('crushed', entering['status'])
         self.assertEqual('crushed', escaping['status'])
 
-    def test_solid_structure_swap_releases_on_callback_but_keeps_geometry(self):
+    def test_solid_structure_swap_releases_source_box_on_callback(self):
         (bigworld, math_module, area, cache, authority,
          descriptor) = self._direction_catalog_fixture(
              kind='structure', destroyed=True)
@@ -8096,7 +8096,8 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                     detail = destructibles_sensor._catalog_motion_proposal(
                         1, _Vector(), 0.0, 20.0, descriptor, 10.0,
                         dt=0.04, kinetic_speed=20.0)
-                    self.assertEqual('hard', detail['status'])
+                    self.assertEqual('crushed' if ready else 'hard',
+                                     detail['status'])
                     self.assertEqual(not ready, detail.get('swap_pending', False))
                     self.assertEqual(not ready,
                         destructibles_sensor.structure_collision_swap_required(
@@ -8151,112 +8152,176 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                         destructibles_sensor.structure_collision_swap_required(
                             tuple((chunk, item, box[2]) for box in boxes)))
 
-    def test_retained_structure_narrow_post_blocks_rotation_entry_but_escape(
-            self):
-        (bigworld, math_module, area, cache, authority,
-         unused_descriptor) = self._direction_catalog_fixture(
-             kind='structure', destroyed=True)
-        record = next(iter(
-            destructibles_sensor._destructible_catalog[
-                'resources'].values()))
-        record['retained_collision_boxes'] = frozenset((0,))
-        posed_bbox = (
-            (-1.7, -1.0, -3.5), (1.7, 1.0, 3.2), None)
-        interval_bbox = \
-            destructibles_sensor._tree_rotation_interval_bbox_1513(
-                posed_bbox, 0.04)
-        descriptor = _Strict1513Component(
-            physics={'weight': 10000.0},
-            hull=_Strict1513Component(
-                hitTester=types.SimpleNamespace(bbox=interval_bbox)))
-        instance = destructibles_sensor.g_offh_destr_instances[(22, 37)]
-        # A 3 cm post lies between the three native longitudinal lanes.  The
-        # continuous catalog volume, rather than a chosen ray grid, owns it.
-        instance['boxes'] = (((-0.8, 0.8, 3.31), (
-            (0.015, 0.0, 0.0), (0.0, 1.0, 0.0),
-            (0.0, 0.0, 0.015)), 73),)
-        destructibles_sensor.g_offh_destr_contact_bins = {}
-        destructibles_sensor._index_catalog_instance_1513(
-            destructibles_sensor.g_offh_destr_contact_bins,
-            (22, 37), instance)
-        destructibles_sensor.g_offh_destr_pending = {
-            (22, 37, 73): 10.2,
-        }
-        origin = (0.0, 0.0, 0.0)
+    def test_malinovka_report_broken_railings_release_the_intact_boxes(self):
+        data = json.loads((ROOT / 'destructibles' /
+                           '02_malinovka.json').read_text())
+        cases = (
+            (23, (13.593, 8.336, -277.556), 0.314, 0.736),
+            (24, (24.374, 8.118, -270.528), 0.781, 1.0),
+            (25, (27.540, 8.096, -268.595), 0.914, 1.0),
+        )
+        for item, position, yaw, speed in cases:
+            with self.subTest(item=item):
+                (bigworld, math_module, area, cache, authority,
+                 descriptor) = self._direction_catalog_fixture(destroyed=True)
+                row = next(row for row in data['instances']
+                           if row[14:16] == [32636, item])
+                record = data['resources'][row[12]]
+                self.assertEqual('structure', record['kind'])
+                self.assertEqual([0, 1], record['retained_collision_boxes'])
+                self.assertTrue(row[12].endswith(
+                    '/mil203_MilitaryDefences01.model'))
+                destructibles_sensor.set_catalog(data)
+                boxes = destructibles_sensor._baked_world_boxes_1513(
+                    record, row[:12], row[13], data['locator_quantization'])
+                identity = (32636, item)
+                instance = {
+                    'filename': row[12].lower(), 'kind': record['kind'],
+                    'boxes': boxes, 'item_scale': row[16], 'box_index': row[13],
+                }
+                destructibles_sensor.g_offh_destr_instances = {identity: instance}
+                destructibles_sensor.g_offh_destr_contact_bins = bins = {}
+                destructibles_sensor._index_catalog_instance_1513(
+                    bins, identity, instance)
+                destructibles_sensor.g_offh_destr_pending = {}
+                authority.contact_collision_ready = mock.Mock(return_value=True)
+                with mock.patch.dict(sys.modules, {
+                        'BigWorld': bigworld, 'Math': math_module,
+                        'AreaDestructibles': area, 'DestructiblesCache': cache}), \
+                        mock.patch.object(destructibles_sensor,
+                            '_stream_baked_motion_instances_1513', return_value=()), \
+                        mock.patch.object(destructibles_sensor,
+                            '_get_destr_authority', return_value=authority):
+                    for elapsed in (0.0, 0.3):
+                        detail = destructibles_sensor._catalog_motion_proposal(
+                            1, _Vector(position), yaw, speed, descriptor,
+                            10.0 + elapsed, dt=0.04, kinetic_speed=20.0)
+                        self.assertEqual('crushed', detail['status'])
+                        self.assertEqual('structure', detail['kinds'])
+                        self.assertFalse(detail['requires_commit'])
+                        self.assertNotIn('swap_pending', detail)
+                authority.destroy_module.assert_not_called()
 
+    def test_broken_structure_module_does_not_release_its_live_sibling(self):
+        (bigworld, math_module, area, cache, authority,
+         descriptor) = self._direction_catalog_fixture(kind='structure')
+        instance = destructibles_sensor.g_offh_destr_instances[(22, 37)]
+        module = instance['boxes'][0]
+        instance['boxes'] = module, (module[0], module[1], 74)
+        authority.is_destroyed.side_effect = lambda chunk, item, mat: mat == 73
+        authority.contact_collision_ready = mock.Mock(return_value=True)
         with mock.patch.dict(sys.modules, {
                 'BigWorld': bigworld, 'Math': math_module,
                 'AreaDestructibles': area, 'DestructiblesCache': cache}), \
-                mock.patch.object(
-                    destructibles_sensor, '_get_destr_authority',
-                    return_value=authority):
-            entering = destructibles_sensor._catalog_motion_proposal(
-                1, _Vector(), 0.04, 1.0, descriptor, 10.3,
-                dt=0.0, kinetic_speed=1.0, travel_reach=0.0,
-                replacement_motion=(
-                    origin, 0.0, origin, 0.08, posed_bbox))
-            escaping = destructibles_sensor._catalog_motion_proposal(
-                1, _Vector(), 0.04, 1.0, descriptor, 10.3,
-                dt=0.0, kinetic_speed=1.0, travel_reach=0.0,
-                replacement_motion=(
-                    origin, 0.08, origin, 0.0, posed_bbox))
+                mock.patch.object(destructibles_sensor, '_get_destr_authority',
+                                  return_value=authority), \
+                mock.patch.object(destructibles_sensor, '_stock_crushable_1513',
+                                  return_value=False):
+            detail = destructibles_sensor._catalog_motion_proposal(
+                1, _Vector(), 0.0, 1.0, descriptor, 10.0,
+                dt=0.04, kinetic_speed=1.0)
+        self.assertEqual('hard', detail['status'])
+        self.assertFalse(detail['requires_commit'])
+        authority.destroy_module.assert_not_called()
 
-        self.assertEqual('hard', entering['status'])
-        self.assertEqual('crushed', escaping['status'])
+    def test_replacement_native_geometry_controls_player_and_bot_motion(self):
+        import test_port_0922_battle_runtime as local
 
-    def test_retained_replacement_escape_cannot_cross_to_opposite_side(self):
-        math_module = types.ModuleType('Math')
-        math_module.Vector3 = _Vector
-        bbox = ((-0.4, -0.4, -0.4), (0.4, 0.4, 0.4), None)
-        world_box = ((0.0, 0.0, 0.0), (
-            (0.5, 0.0, 0.0), (0.0, 0.5, 0.0),
-            (0.0, 0.0, 0.5)), None)
+        # These are explicit native ray scenes, not guessed #1513 wreck shapes.
+        # The old envelope intersects in every scene; only the actual returned
+        # surface may distinguish a cleared opening from a remaining obstacle.
+        for direction in (-1.0, 1.0):
+            for blocker in ('low_wreck', 'damaged', 'vehicle_only',
+                            'backing_wall', 'live_sibling'):
+                with self.subTest(direction=direction, blocker=blocker):
+                    (bigworld, math_module, area, cache, authority,
+                     descriptor) = self._direction_catalog_fixture(
+                         kind='structure', destroyed=True)
+                    record = next(iter(destructibles_sensor.
+                        _destructible_catalog['resources'].values()))
+                    record['retained_collision_boxes'] = frozenset((0,))
+                    instance = destructibles_sensor.g_offh_destr_instances[(22, 37)]
+                    box = instance['boxes'][0]
+                    instance['boxes'] = ((
+                        (box[0][0], box[0][1], direction * box[0][2]),
+                        box[1], box[2]),)
+                    destructibles_sensor.g_offh_destr_contact_bins = bins = {}
+                    destructibles_sensor._index_catalog_instance_1513(
+                        bins, (22, 37), instance)
+                    destructibles_sensor.g_offh_destr_pending = {}
+                    authority.contact_collision_ready = mock.Mock(return_value=True)
+                    authority.destroyed_keys = lambda chunk: (
+                        {(37, 73)} if chunk == 22 else ())
+                    surface = {
+                        'low_wreck': (87, 0, 37, 22),
+                        'damaged': (87, 0, 37, 22),
+                        'vehicle_only': (87, 0x80, 37, 22),
+                        'backing_wall': (2, 0, 99, 22),
+                        'live_sibling': (74, 0, 37, 22),
+                    }[blocker]
+                    top = 0.2 if blocker == 'low_wreck' else 2.0
 
-        with mock.patch.dict(sys.modules, {'Math': math_module}):
-            motion = destructibles_sensor._replacement_motion_geometry_1513(
-                _Vector(-0.85, 0.0, 0.0), math.pi * 0.5, 20.0,
-                bbox, 0.1, motion_yaw=math.pi * 0.5)
+                    def collide(space, start, end, mask, callback=None):
+                        if abs(end.z - start.z) < 1.0e-8:
+                            return None
+                        hits = []
+                        for z, height, material in (
+                                (direction * 3.5, 2.0, (73, 0x80, 37, 22)),
+                                (direction * 3.0, top, surface)):
+                            t = (z - start.z) / (end.z - start.z)
+                            y = start.y + (end.y - start.y) * t
+                            x = start.x + (end.x - start.x) * t
+                            if not (0.0 <= t <= 1.0 and
+                                    0.0 <= y <= height and abs(x) <= 5.0):
+                                continue
+                            if material[1] & mask:
+                                continue
+                            if callback is not None and not callback(*material):
+                                continue
+                            hits.append((t, _Vector(x, y, z), material[0]))
+                        if not hits:
+                            return None
+                        unused_t, point, mat = min(hits, key=lambda hit: hit[0])
+                        return point, _Vector(0.0, 0.0, -direction), mat
 
-        self.assertLess(
-            destructibles_sensor._boxes_signed_clearance(
-                motion[0][0], world_box), 0.0)
-        self.assertGreater(
-            destructibles_sensor._boxes_signed_clearance(
-                motion[0][1], world_box), 0.0)
-        self.assertTrue(
-            destructibles_sensor._replacement_motion_blocked_1513(
-                motion, (world_box,)))
-
-    def test_retained_replacement_escape_cannot_cut_corner_from_legal_pose(
-            self):
-        math_module = types.ModuleType('Math')
-        math_module.Vector3 = _Vector
-        bbox = ((-0.4, -0.4, -0.4), (0.4, 0.4, 0.4), None)
-        world_box = ((0.0, 0.0, 0.0), (
-            (0.5, 0.0, 0.0), (0.0, 0.5, 0.0),
-            (0.0, 0.0, 0.5)), None)
-        start = _Vector(1.0, 0.0, 0.8)
-        end = _Vector(0.8, 0.0, 1.1)
-
-        with mock.patch.dict(sys.modules, {'Math': math_module}):
-            motion = destructibles_sensor._replacement_motion_geometry_1513(
-                start, 0.0, 0.0, bbox, 0.0,
-                replacement_motion=(
-                    (start.x, start.y, start.z), 0.0,
-                    (end.x, end.y, end.z), 0.0, bbox))
-
-        self.assertFalse(
-            destructibles_sensor._boxes_intersect(
-                motion[0][0], world_box))
-        self.assertFalse(
-            destructibles_sensor._boxes_intersect(
-                motion[0][1], world_box))
-        self.assertTrue(any(
-            destructibles_sensor._boxes_intersect(sweep, world_box)
-            for sweep in motion[0][2]))
-        self.assertTrue(
-            destructibles_sensor._replacement_motion_blocked_1513(
-                motion, (world_box,)))
+                    descriptor = local._Descriptor()
+                    runtime = local._runtime()
+                    runtime.bigworld.wg_collideSegment = mock.Mock(side_effect=collide)
+                    runtime.bigworld.wg_getMatInfoNearPoint = mock.Mock(
+                        return_value=_mat_info_1513())
+                    battle = local.BattleRuntime(runtime)
+                    battle._avatar = runtime.bigworld.avatar
+                    battle._destructibles = destructibles_sensor
+                    battle._local_physics = local._effective_params_snapshot()['physics']
+                    battle._bots = types.SimpleNamespace(states={11: {
+                        'movement_dir': 0, 'airborne': False,
+                    }})
+                    entity = types.SimpleNamespace(typeDescriptor=descriptor)
+                    clear = blocker == 'low_wreck'
+                    with mock.patch.dict(sys.modules, {
+                            'BigWorld': runtime.bigworld, 'Math': math_module,
+                            'AreaDestructibles': area, 'DestructiblesCache': cache}), \
+                            mock.patch.object(destructibles_sensor,
+                                '_get_destr_authority', return_value=authority), \
+                            mock.patch.object(battle, '_tree_motion_proposal',
+                                return_value={'status': 'clear', 'token': None,
+                                              'requires_commit': False}):
+                        self.assertEqual(clear, battle._motion_is_clear(
+                            entity, (0.0, 0.0, 0.0), 0.0,
+                            direction * 20.0, 0.04))
+                        self.assertEqual('crushed' if clear else 'hard',
+                            battle._resolve_bot_motion(
+                                11, (0.0, 0.0, 0.0), 0.0,
+                                direction * 20.0, descriptor, 0.04, 10.0))
+                        self.assertEqual(clear, battle._pose_sweep_is_clear(
+                            entity, (0.0, 0.0, 0.0), 0.0,
+                            (0.0, 0.0, 0.0), direction * 0.08, 0.0, 0.04))
+                        self.assertEqual(clear, battle._resolve_bot_rotation(
+                            11, (0.0, 0.0, 0.0), 0.0, direction * 0.08,
+                            descriptor, 0.04, 10.0, 0.75))
+                    self.assertTrue(runtime.bigworld.wg_collideSegment.called)
+                    authority.destroy_module.assert_not_called()
+                    authority.destroy_fragile.assert_not_called()
 
     def test_structure_swap_pending_requires_every_catalog_contact_pending(self):
         (unused_bigworld, unused_math, unused_area, unused_cache, authority,

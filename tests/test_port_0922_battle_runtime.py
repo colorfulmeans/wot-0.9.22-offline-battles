@@ -19729,19 +19729,15 @@ class BattleRuntimeContractTests(unittest.TestCase):
             [0.5, 0.5],
             [round(call.kwargs['travel_reach'], 6)
              for call in resolver.call_args_list])
-        motions = [call.kwargs['replacement_motion']
-                   for call in resolver.call_args_list]
-        self.assertEqual([
-            ((2.0, 3.0, 4.0), (2.5, 3.0, 4.0)),
-            ((2.5, 3.0, 4.0), (3.0, 3.0, 4.0)),
-        ], [(motion[0], motion[2]) for motion in motions])
-        self.assertAlmostEqual(0.0, motions[0][1])
-        self.assertAlmostEqual(0.05, motions[0][3])
-        self.assertAlmostEqual(0.05, motions[1][1])
-        self.assertAlmostEqual(0.1, motions[1][3])
         self.assertEqual(
-            [((-1.7, -0.2, -3.5), (1.7, 1.4, 3.5))] * 2,
-            [motion[4] for motion in motions])
+            [(2.0, 3.0, 4.0), (2.5, 3.0, 4.0)],
+            [(call.args[1].x, call.args[1].y, call.args[1].z)
+             for call in resolver.call_args_list])
+        self.assertEqual([0.025, 0.075], [
+            round(call.args[2], 6) for call in resolver.call_args_list])
+        self.assertTrue(all(
+            abs(call.args[3] * call.kwargs['dt'] - 0.5) < 1.0e-9
+            for call in resolver.call_args_list))
 
     def test_first_turn_pose_uses_actual_geometry_and_reachable_crush_cap(self):
         runtime = _runtime()

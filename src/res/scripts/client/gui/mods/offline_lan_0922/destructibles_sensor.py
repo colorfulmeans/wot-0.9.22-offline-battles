@@ -21,8 +21,6 @@ _SOLID_CONTACT_NORMAL_DOT_1513 = 0.5
 _TREE_SWEEP_ANGLE_STEP_1513 = 3.141592653589793 / 36.0
 _TREE_SWEEP_TRANSLATION_STEP_1513 = 8.0
 _TREE_SWEEP_MAX_SEGMENTS_1513 = 128
-_REPLACEMENT_PROGRESS_ANGLE_STEP_1513 = 3.141592653589793 / 180.0
-_REPLACEMENT_PROGRESS_TRANSLATION_STEP_1513 = 0.5
 _TREE_CONTACT_TOKEN_LIMIT_1513 = 64
 _CATALOG_POINT_EPSILON = 0.075
 _SHOT_RAY_EPSILON = 1.0e-4
@@ -2500,81 +2498,6 @@ def _boxes_intersect(left, right):
 	return True
 
 
-def _boxes_signed_clearance(left, right):
-	"""Return the greatest normalized SAT gap; larger means farther apart.
-
-	A positive value proves separation.  Intersecting zonotopes return a
-	non-positive maximum separating-axis gap.  The caller combines it with
-	fixed-face and centre-plane progress; this scalar alone is not a continuous
-	path proof.
-	"""
-	left_center = left[0]
-	right_center = right[0]
-	left_half_axes = tuple(left[1])
-	right_half_axes = tuple(right[1])
-	delta = tuple(right_center[index] - left_center[index]
-		for index in range(3))
-	generators = left_half_axes + right_half_axes
-	best = None
-	for left_index in range(len(generators)):
-		for right_index in range(left_index + 1, len(generators)):
-			axis = _vector_cross(
-				generators[left_index], generators[right_index])
-			length_squared = _vector_dot(axis, axis)
-			if length_squared <= 1.0e-16:
-				continue
-			left_radius = sum(abs(_vector_dot(axis, half_axis))
-				for half_axis in left_half_axes)
-			right_radius = sum(abs(_vector_dot(axis, half_axis))
-				for half_axis in right_half_axes)
-			clearance = (
-				abs(_vector_dot(delta, axis)) - left_radius - right_radius
-				) / length_squared ** 0.5
-			if best is None or clearance > best:
-				best = clearance
-	if best is None:
-		raise RuntimeError('catalog SAT clearance axes are unavailable')
-	return best
-
-
-def _box_face_clearances(left, right):
-	"""Return signed gaps on the fixed box's three face normals."""
-	left_center = left[0]
-	right_center = right[0]
-	left_half_axes = tuple(left[1])
-	right_half_axes = tuple(right[1])
-	delta = tuple(right_center[index] - left_center[index]
-		for index in range(3))
-	result = []
-	for axis in _box_face_axes(right_half_axes):
-		length_squared = _vector_dot(axis, axis)
-		if length_squared <= 1.0e-16:
-			raise RuntimeError('catalog box face axis is unavailable')
-		length = length_squared ** 0.5
-		left_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in left_half_axes)
-		right_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in right_half_axes)
-		result.append((abs(_vector_dot(delta, axis)) -
-			left_radius - right_radius) / length)
-	return tuple(result)
-
-
-def _box_face_center_offsets(left, right):
-	"""Project the moving centre onto the fixed box's oriented axes."""
-	left_center = left[0]
-	right_center = right[0]
-	delta = tuple(left_center[index] - right_center[index]
-		for index in range(3))
-	result = []
-	for axis in _box_face_axes(tuple(right[1])):
-		length_squared = _vector_dot(axis, axis)
-		if length_squared <= 1.0e-16:
-			raise RuntimeError('catalog box face axis is unavailable')
-		result.append(_vector_dot(delta, axis) / length_squared ** 0.5)
-	return tuple(result)
-
-
 def _point_in_world_box(point, world_box):
 	center, half_axes = world_box[:2]
 	delta = (point.x - center[0], point.y - center[1],
@@ -3614,189 +3537,6 @@ def _vehicle_contact_box(pos, yaw, bbox, epsilon=0.075, travel=0.0,
 	return center, half_axes
 
 
-def _replacement_motion_geometry_1513(pos, yaw, vel, bbox, dt,
-		motion_yaw=None, pitch=0.0, roll=0.0,
-		replacement_motion=None):
-	"""Build bounded exact-pose intervals for retained replacement escape."""
-	import math
-	import Math
-	if replacement_motion is not None:
-		try:
-			start_raw, start_yaw, end_raw, end_yaw, posed_bbox = (
-				replacement_motion)
-			values = tuple(_finite_tree_motion_value_1513(value) for value in (
-				start_raw[0], start_raw[1], start_raw[2], start_yaw,
-				end_raw[0], end_raw[1], end_raw[2], end_yaw))
-			if any(value is None for value in values):
-				return None
-			(sx, sy, sz, start_yaw,
-				ex, ey, ez, end_yaw) = values
-			start = Math.Vector3(
-				sx, sy, sz)
-			end = Math.Vector3(
-				ex, ey, ez)
-			minimum, maximum = posed_bbox[:2]
-			bounds = tuple(_finite_tree_motion_value_1513(value)
-				for value in tuple(minimum[:3]) + tuple(maximum[:3]))
-			if (any(value is None for value in bounds) or
-					any(bounds[index] > bounds[index + 3]
-						for index in range(3))):
-				return None
-			minimum = bounds[:3]
-			maximum = bounds[3:]
-			margin = _CATALOG_POINT_EPSILON
-			expanded_bbox = (
-				tuple(value - margin for value in minimum),
-				tuple(value + margin for value in maximum), None)
-			posed_bbox = (minimum, maximum)
-		except (IndexError, TypeError, ValueError, OverflowError):
-			return None
-		dx = float(end.x) - float(start.x)
-		dy = float(end.y) - float(start.y)
-		dz = float(end.z) - float(start.z)
-		distance = (dx * dx + dy * dy + dz * dz) ** 0.5
-		yaw_delta = ((end_yaw - start_yaw + math.pi) %
-			(2.0 * math.pi)) - math.pi
-		steps = max(1,
-			int(math.ceil(
-				distance / _REPLACEMENT_PROGRESS_TRANSLATION_STEP_1513)),
-			int(math.ceil(
-				abs(yaw_delta) / _REPLACEMENT_PROGRESS_ANGLE_STEP_1513)))
-		if steps > _TREE_SWEEP_MAX_SEGMENTS_1513:
-			return None
-		intervals = []
-		for index in range(steps):
-			lower = float(index) / float(steps)
-			upper = float(index + 1) / float(steps)
-			interval_start = Math.Vector3(
-				float(start.x) + dx * lower,
-				float(start.y) + dy * lower,
-				float(start.z) + dz * lower)
-			interval_end = Math.Vector3(
-				float(start.x) + dx * upper,
-				float(start.y) + dy * upper,
-				float(start.z) + dz * upper)
-			interval_start_yaw = start_yaw + yaw_delta * lower
-			interval_end_yaw = start_yaw + yaw_delta * upper
-			sweeps = _tree_pose_sweep_boxes_1513(
-				interval_start, interval_start_yaw,
-				interval_end, interval_end_yaw, expanded_bbox)
-			if not sweeps:
-				return None
-			intervals.append((
-				_vehicle_contact_box(
-					interval_start, interval_start_yaw, posed_bbox,
-					epsilon=_CATALOG_POINT_EPSILON),
-				_vehicle_contact_box(
-					interval_end, interval_end_yaw, posed_bbox,
-					epsilon=_CATALOG_POINT_EPSILON),
-				tuple(sweeps)))
-		return tuple(intervals)
-
-	try:
-		duration = max(0.0, float(dt))
-		travel = float(vel) * duration
-		travel_yaw = (float(motion_yaw) if motion_yaw is not None else
-			float(yaw) if travel >= 0.0 else float(yaw) + math.pi)
-		distance = abs(travel)
-		end = Math.Vector3(
-			float(pos.x) + math.sin(travel_yaw) * distance,
-			float(pos.y),
-			float(pos.z) + math.cos(travel_yaw) * distance)
-	except (AttributeError, TypeError, ValueError, OverflowError):
-		return None
-	start_box = _vehicle_contact_box(
-		pos, yaw, bbox, epsilon=_CATALOG_POINT_EPSILON,
-		pitch=pitch, roll=roll)
-	end_box = _vehicle_contact_box(
-		end, yaw, bbox, epsilon=_CATALOG_POINT_EPSILON,
-		pitch=pitch, roll=roll)
-	sweep_box = _vehicle_contact_box(
-		pos, yaw, bbox, epsilon=_CATALOG_POINT_EPSILON,
-		travel=travel, motion_yaw=motion_yaw,
-		pitch=pitch, roll=roll)
-	return ((start_box, end_box, (sweep_box,)),)
-
-
-def _candidate_world_boxes_1513(candidate):
-	instance = globals().get('g_offh_destr_instances', {}).get(candidate[:2])
-	if not isinstance(instance, dict):
-		return ()
-	if candidate[4] != 'structure':
-		return tuple(instance.get('boxes') or ())
-	return tuple(world_box for world_box in instance.get('boxes') or ()
-		if world_box[2] == candidate[2])
-
-
-def _replacement_escape_progress_1513(start_box, end_box, world_box):
-	"""Prove one overlapping interval moves outward without changing sides."""
-	tolerance = 1.0e-7
-	start_clearance = _boxes_signed_clearance(start_box, world_box)
-	end_clearance = _boxes_signed_clearance(end_box, world_box)
-	if end_clearance < start_clearance - tolerance:
-		return False
-	start_offsets = _box_face_center_offsets(start_box, world_box)
-	end_offsets = _box_face_center_offsets(end_box, world_box)
-	# Crossing a retained box's centre plane can turn one large frame into a
-	# tunnel from one side to the other even when the endpoint is farther away.
-	if any(start_value * end_value < -tolerance * tolerance
-			for start_value, end_value in zip(start_offsets, end_offsets)):
-		return False
-	start_center = start_box[0]
-	end_center = end_box[0]
-	world_center = world_box[0]
-	start_delta = tuple(start_center[index] - world_center[index]
-		for index in range(3))
-	movement = tuple(end_center[index] - start_center[index]
-		for index in range(3))
-	start_distance_squared = _vector_dot(start_delta, start_delta)
-	end_delta = tuple(end_center[index] - world_center[index]
-		for index in range(3))
-	end_distance_squared = _vector_dot(end_delta, end_delta)
-	center_outward = (
-		_vector_dot(start_delta, movement) >= -tolerance and
-		end_distance_squared > start_distance_squared + tolerance)
-	# A centred/asymmetric hull can also rotate out without translating its
-	# entity origin. Admit that only when every fixed obstacle-face gap is
-	# non-worsening and at least one improves; rotating farther in fails here.
-	start_faces = _box_face_clearances(start_box, world_box)
-	end_faces = _box_face_clearances(end_box, world_box)
-	face_outward = (
-		all(end_value >= start_value - tolerance
-			for start_value, end_value in zip(start_faces, end_faces)) and
-		any(end_value > start_value + tolerance
-			for start_value, end_value in zip(start_faces, end_faces)))
-	return center_outward or face_outward
-
-
-def _replacement_motion_blocked_1513(motion_geometry, world_boxes):
-	"""Fail closed on entry while permitting bounded outward escape."""
-	if motion_geometry is None or not world_boxes:
-		return True
-	for world_box in world_boxes:
-		escaped_on_previous_interval = False
-		for start_box, end_box, sweep_boxes in motion_geometry:
-			start_overlaps = _boxes_intersect(start_box, world_box)
-			end_overlaps = _boxes_intersect(end_box, world_box)
-			if not any(_boxes_intersect(sweep_box, world_box)
-					for sweep_box in sweep_boxes):
-				escaped_on_previous_interval = (
-					start_overlaps and not end_overlaps)
-				continue
-			# A previously legal pose may not enter or sweep through the retained
-			# replacement.  A clear interval is admitted only as the conservative
-			# sweep tail immediately after the preceding interval crossed outward;
-			# once fully clear, a later corner-cut in the same frame is blocked too.
-			if not start_overlaps and not escaped_on_previous_interval:
-				return True
-			if not _replacement_escape_progress_1513(
-					start_box, end_box, world_box):
-				return True
-			escaped_on_previous_interval = (
-				start_overlaps and not end_overlaps)
-	return False
-
-
 @observed('destructible.intersections')
 def _catalog_intersections(world_boxes, vehicle_box):
 	result = []
@@ -4672,7 +4412,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		return_status=False, dt=0.04, kinetic_speed=None,
 		return_detail=False, kinetic_commit=False, commit_enabled=True,
 		proposal_only=False, motion_yaw=None, pitch=0.0, roll=0.0,
-		travel_reach=None, replacement_motion=None):
+		travel_reach=None):
 	"""Resolve exact streamed OBB contact before committing local movement."""
 	if proposal_only and (not return_detail or not kinetic_commit):
 		raise ValueError(
@@ -4709,8 +4449,6 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 	vehicle_box = _vehicle_swept_box(
 		pos, yaw, vel, bbox, sweep_reach,
 		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
-	replacement_geometry = None
-	replacement_geometry_ready = False
 	# The visible player does not run the authority Bot scan that normally
 	# populates the live item registry.  Admit only checksum-pinned wires in the
 	# current hull bins through the same read-only native validation as shells.
@@ -4787,31 +4525,11 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 					# it must not pay the original animation timer a second time.
 					blocked = True
 					swap_blocked = True
-				elif (kind == 'structure' and
-						_catalog_retains_collision_1513(candidate)):
-					# #1513 exposes only segment queries for the replacement BSP.
-					# Only a box whose compiled destroyed-model reference proves a
-					# solid replacement keeps its source module envelope.  Applying
-					# this to every destroyed structure would create invisible walls
-					# where the compiled replacement is collision-free.
-					if not replacement_geometry_ready:
-						replacement_geometry = \
-							_replacement_motion_geometry_1513(
-								pos, yaw, vel, bbox, dt,
-								motion_yaw=motion_yaw,
-								pitch=pitch, roll=roll,
-								replacement_motion=replacement_motion)
-						replacement_geometry_ready = True
-					if _replacement_motion_blocked_1513(
-							replacement_geometry,
-							_candidate_world_boxes_1513(candidate)):
-						blocked = True
-						other_blocked = True
-				# A fragile prop's source box describes its intact body, not its
-				# crushed wreck. Once the native swap has completed, motion and
-				# suspension use the replacement BSP, including vehicle-only faces.
-				# Keeping the old tractor/car box here creates an invisible wall
-				# above and around the wreck even when the native rays are clear.
+				# Retained collision proves that a replacement BSP exists, not
+				# that it fills the intact module's box. Buildings, railings and
+				# fragile props all yield their source envelope after the swap.
+				# Translation and rotation still query the actual native BSP;
+				# damaged and vehicle-only faces cannot be skipped by this receipt.
 				crushed = True
 				if contact_candidate:
 					exact_token.add(key)
@@ -4951,16 +4669,14 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 
 def _catalog_motion_proposal(spaceID, pos, yaw, vel, td, now,
 		dt=0.04, kinetic_speed=None, motion_yaw=None,
-		pitch=0.0, roll=0.0, travel_reach=None,
-		replacement_motion=None):
+		pitch=0.0, roll=0.0, travel_reach=None):
 	"""Return a mutation-free exact hull-sweep proposal for worker review."""
 	return _catalog_motion_blocked(
 		spaceID, pos, yaw, vel, td, now, dt=dt,
 		kinetic_speed=kinetic_speed, return_detail=True,
 		kinetic_commit=True, commit_enabled=True, proposal_only=True,
 		motion_yaw=motion_yaw, pitch=pitch, roll=roll,
-		travel_reach=travel_reach,
-		replacement_motion=replacement_motion)
+		travel_reach=travel_reach)
 
 
 def _catalog_instance_boxes(chunkID, itemIndex, filename, kind,

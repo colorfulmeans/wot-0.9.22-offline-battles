@@ -18607,8 +18607,6 @@ class BattleRuntime(object):
             slice_end = tuple(
                 start[axis] + (end[axis] - start[axis]) * upper
                 for axis in range(3))
-            slice_start_yaw = float(start_yaw) + yaw_delta * lower
-            slice_end_yaw = float(start_yaw) + yaw_delta * upper
             slice_yaw = float(start_yaw) + yaw_delta * middle
             interval_bbox = _destructible_rotation_interval_bbox(
                 posed_bbox, abs(yaw_delta) * 0.5 / float(steps))
@@ -18625,9 +18623,6 @@ class BattleRuntime(object):
             # preserves that path; the sensor's normal contact skin remains.
             slice_dt = (move_distance / impact_magnitude
                         if move_distance > 1.0e-8 else 0.0)
-            replacement_motion = (
-                slice_start, slice_start_yaw,
-                slice_end, slice_end_yaw, posed_bbox)
             if commit_enabled:
                 detail = resolver(
                     self._avatar.spaceID, self._vector(slice_start),
@@ -18636,16 +18631,14 @@ class BattleRuntime(object):
                     return_detail=True,
                     kinetic_commit=True, commit_enabled=True,
                     motion_yaw=motion_yaw,
-                    travel_reach=move_distance,
-                    replacement_motion=replacement_motion)
+                    travel_reach=move_distance)
             else:
                 detail = resolver(
                     self._avatar.spaceID, self._vector(slice_start),
                     slice_yaw, impact_speed, sweep_descriptor, now,
                     dt=slice_dt, kinetic_speed=rotation_kinetic_speed,
                     motion_yaw=motion_yaw,
-                    travel_reach=move_distance,
-                    replacement_motion=replacement_motion)
+                    travel_reach=move_distance)
             if isinstance(detail, bool):
                 detail = {'status': 'hard' if detail else 'clear'}
             elif isinstance(detail, str):
