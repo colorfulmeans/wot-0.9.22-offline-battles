@@ -25,7 +25,6 @@ _TREE_CONTACT_TOKEN_LIMIT_1513 = 64
 _CATALOG_POINT_EPSILON = 0.075
 _SHOT_RAY_EPSILON = 1.0e-4
 _SOFT_STATIC_MAX_SKIPS = 4
-_NATIVE_HIDE_MIN_SECONDS = 0.2
 _FALLING_REFRESH_SECONDS = 1.0 / 60.0
 _DIAGNOSTICS_ENABLED = False
 _DIAGNOSTIC_EMIT_SECONDS = 0.25
@@ -3547,17 +3546,6 @@ def _catalog_intersections(world_boxes, vehicle_box):
 	return result
 
 
-def _native_hide_delay():
-	import AreaDestructibles
-	try:
-		delay = float(getattr(
-			AreaDestructibles, 'DESTRUCTIBLE_HIDING_DELAY',
-			_NATIVE_HIDE_MIN_SECONDS))
-	except (TypeError, ValueError):
-		delay = _NATIVE_HIDE_MIN_SECONDS
-	return max(_NATIVE_HIDE_MIN_SECONDS, delay)
-
-
 def _fragile_may_retain_native_collision_1513(chunkID, itemIndex):
 	"""Fail safe unless this exact fragile is proved to leave no solid BSP."""
 	instance = globals().get('g_offh_destr_instances', {}).get(
@@ -3603,22 +3591,12 @@ def _structure_module_may_retain_native_collision_1513(
 
 
 def structure_collision_swap_required(token):
-	"""Hold only modules whose replacement can introduce a solid collider.
-
-	The pinned map catalog distinguishes collision-free destroyed modules from
-	retained walls. A model hiding delay is not itself a physical obstacle.
-	Missing instance/resource evidence continues to require the safe hand-off.
-	"""
-	ready = getattr(_get_destr_authority(), 'contact_collision_ready', None)
-	return any(mat_kind is not None and
-		_structure_module_may_retain_native_collision_1513(
-			chunk_id, item_index, mat_kind) and
-		not (callable(ready) and ready(chunk_id, item_index, mat_kind))
-		for chunk_id, item_index, mat_kind in token or ())
+	"""Compatibility seam: native geometry, never a timer, decides movement."""
+	return False
 
 
 def note_destroyed(kind, chunkID, itemIndex, matKind=None, now=None):
-	"""Track native hide or falling-matrix collision after destruction."""
+	"""Track native replacement geometry or falling matrices after destruction."""
 	if kind == 'tree':
 		space_id = globals().get('g_offh_destr_runtime_space')
 		state = globals().setdefault('g_offh_tree_state', {
@@ -3663,11 +3641,6 @@ def note_destroyed(kind, chunkID, itemIndex, matKind=None, now=None):
 		# deliberately fail-safe because its exact catalog box may stream later.
 		# Once enabled, rotation retains the native-world recast until reset.
 		globals()['g_offh_destr_native_replacement_bsp_active'] = True
-	key = (int(chunkID), int(itemIndex),
-		int(matKind) if matKind is not None else None)
-	pending = globals().setdefault('g_offh_destr_pending', {})
-	if key not in pending:
-		pending[key] = float(now) + _native_hide_delay()
 	return True
 
 
@@ -3875,7 +3848,8 @@ def _synthetic_mat_info(candidate, math_module):
 
 
 def _catalog_candidate_on_ray_1513(
-		contact_pt, segment_start, segment_end, prefer_destroyed=False):
+		contact_pt, segment_start, segment_end, prefer_destroyed=False,
+		excluded_keys=()):
 	"""Resolve one exact registered OBB on the current native ray.
 
 	Point containment deliberately has a 7.5 cm tolerance for compiled BSP
@@ -3916,6 +3890,8 @@ def _catalog_candidate_on_ray_1513(
 			candidate = (int(chunk_id), int(item_index), mat_kind,
 				_instance_descriptor_filename_1513(instance),
 				instance['kind'], instance['item_scale'])
+			if candidate[:3] in excluded_keys:
+				continue
 			entry = (candidate, entry_distance, exit_distance)
 			if not any(value[0] == candidate for value in candidates):
 				candidates.append(entry)
@@ -3973,8 +3949,8 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	proved crushable as a soft obstacle so the bot can reach real hull contact,
 	but it must never destroy from that distance or skip unrelated geometry
 	behind the item.  Every skipped hit therefore needs one unique registered
-	OBB, the retail kinetic gate, an exact OBB exit and a clear/native-next-hit
-	recast.  Unknown and ambiguous chains remain solid.  Exhausting the shared
+	OBB, the retail kinetic gate and an exact original-material filter. The
+	filtered query covers the whole ray, including the prop's interior.  Unknown and ambiguous chains remain solid.  Exhausting the shared
 	native recast budget instead returns ``'deferred'`` so the caller can avoid
 	caching a false hard wall.
 	"""
@@ -3996,6 +3972,7 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	authority = _get_destr_authority()
 	kinetic_contact = False
 	pending_contact = False
+	excluded_keys = set()
 	for candidate_index in range(_SOFT_STATIC_MAX_SKIPS):
 		try:
 			hit_point = current_hit[0]
@@ -4003,12 +3980,9 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			return 'pending_hard' if pending_contact else False
 		candidate = _catalog_candidate_on_ray_1513(
 			hit_point, current_start, segment_end,
-			prefer_destroyed=(require_pending_first and candidate_index == 0))
+			prefer_destroyed=(require_pending_first and candidate_index == 0),
+			excluded_keys=excluded_keys)
 		if candidate is None:
-			return 'pending_hard' if pending_contact else False
-		# Damage can replace a railway vehicle with a still-solid wreck.  Its
-		# native hit must never be skipped through the old whole-item OBB.
-		if _catalog_retains_collision_1513(candidate):
 			return 'pending_hard' if pending_contact else False
 		# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True as soon as the
 		# chunk controller reports the item broken, whatever the vehicle speed and
@@ -4045,34 +4019,29 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			current_crushable = True
 		if not current_crushable:
 			return 'pending_hard' if pending_contact else False
-		exit_distance = _registered_shot_exit_1513(
-			candidate[0], candidate[1], candidate[2], candidate[3],
-			current_start, segment_end, hit_point)
-		if exit_distance is None:
-			return 'pending_hard' if pending_contact else False
-		# The interval is clipped to this segment.  Decide whether any ray
-		# remains before adding the epsilon to a native float32 position:
-		# rounding can overshoot the endpoint by more than epsilon and turn
-		# a length-based check into a backwards recast through the same skin.
-		if float(exit_distance) >= (segment_end - current_start).length:
-			return 'kinetic' if kinetic_contact else True
-		next_start = current_start + direction.scale(
-			float(exit_distance) + _SHOT_RAY_EPSILON)
-		if _vector_dot(
-				(segment_end.x - next_start.x, segment_end.y - next_start.y,
-				 segment_end.z - next_start.z),
-				(direction.x, direction.y, direction.z)) <= _SHOT_RAY_EPSILON:
-			return 'kinetic' if kinetic_contact else True
+		# A box is identity evidence, not proof that its interior is empty.
+		# Exact native keys are unique across the space, so one filtered query
+		# can inspect BOTH the interior and the rest of the original segment.
+		# Never jump to a box exit: a real wall can be inside that same box.
+		excluded_keys.add(candidate[:3])
 		if recast_budget is not None:
 			if not recast_budget or int(recast_budget[0]) <= 0:
 				return 'pending_hard' if pending_contact else 'deferred'
 			recast_budget[0] = int(recast_budget[0]) - 1
+		def keep_interior(*surface):
+			if (len(surface) != 4 or
+					not all(type(value) in _INTEGER_TYPES for value in surface) or
+					not 71 <= surface[0] <= 86):
+				return True
+			identity = (surface[3], surface[2])
+			return (identity + (surface[0],) not in excluded_keys and
+				identity + (None,) not in excluded_keys)
 		current_hit = observed_ray(
 			'native.destructible.ray', BigWorld.wg_collideSegment,
-			spaceID, next_start, segment_end, VEHICLE_SKIP_FLAGS)
+			spaceID, current_start, segment_end, VEHICLE_SKIP_FLAGS,
+			keep_interior)
 		if current_hit is None:
 			return 'kinetic' if kinetic_contact else True
-		current_start = next_start
 	return 'pending_hard' if pending_contact else False
 
 
@@ -4254,15 +4223,130 @@ def horizontal_collision_filter(start, end):
 	return prepare_horizontal_collision_filter(start, end)
 
 
+def _instance_motion_envelope_1513(instance):
+	"""Bound compiled original materials in their model's oriented basis.
+
+	The native merged BSP does not use the per-module damage box as its
+	geometry boundary. Keep the union in the authored basis, including shear,
+	and use it only to bound filtered native queries, never as a solid shape.
+	"""
+	boxes = instance.get('boxes', ())
+	if not boxes:
+		return None
+	cached = instance.get('_motion_envelope')
+	if cached is not None and cached[0] is boxes:
+		return cached[1]
+	center, axes = boxes[0][:2]
+	normals = _box_face_axes(axes)
+	limits = []
+	for index, normal in enumerate(normals):
+		denominator = _vector_dot(normal, axes[index])
+		if abs(denominator) <= 1.0e-12:
+			return None
+		low, high = float('inf'), -float('inf')
+		for other_center, other_axes, unused_material in boxes:
+			delta = tuple(other_center[i] - center[i] for i in range(3))
+			mid = _vector_dot(normal, delta) / denominator
+			radius = sum(abs(_vector_dot(normal, axis) / denominator)
+				for axis in other_axes)
+			low, high = min(low, mid - radius), max(high, mid + radius)
+		limits.append((low, high))
+	new_center = tuple(center[i] + sum(axes[j][i] *
+		(limits[j][0] + limits[j][1]) * 0.5 for j in range(3))
+		for i in range(3))
+	new_axes = tuple(tuple(value * (high - low) * 0.5 for value in axis)
+		for axis, (low, high) in zip(axes, limits))
+	envelope = (new_center, new_axes, None)
+	instance['_motion_envelope'] = (boxes, envelope)
+	return envelope
+
+
+def _compiled_motion_skin_1513(point, start, end, surfaces):
+	"""Resolve anonymous original keys without conflating adjacent live owners."""
+	instances = globals().get('g_offh_destr_instances', {})
+	aliases = set(surface for surface in surfaces
+		if all(type(value) in _INTEGER_TYPES for value in surface) and
+		71 <= surface[0] <= 86 and surface[1] & 0x80 and
+		(surface[3], surface[2]) not in instances)
+	if not aliases:
+		return None
+	members = globals().get('g_offh_destr_contact_bins', {}).get(
+		_destructible_bin_key(point.x, point.z), ())
+	owners = []
+	for identity in members:
+		instance = instances.get(identity)
+		if (instance is None or instance['kind'] not in
+				('structure', 'fragile', 'falling') or
+				_destructible_isolated_1513(*identity)):
+			continue
+		envelope = _instance_motion_envelope_1513(instance)
+		if envelope is None or not _point_in_world_box(point, envelope):
+			continue
+		interval = _segment_world_box_interval(start, end, envelope)
+		if interval is not None:
+			owners.append((identity, instance, interval))
+	if len(owners) != 1:
+		return None
+	identity, instance, interval = owners[0]
+	authority = _get_destr_authority()
+	predicted = globals().get('g_offh_destr_speculative', set())
+	materials = set(box[2] for box in instance['boxes'])
+	excluded = set()
+	for surface in aliases:
+		material = surface[0] if instance['kind'] == 'structure' else None
+		key = identity + (material,)
+		if material in materials and (
+				authority.is_destroyed(*key) or key in predicted):
+			excluded.add(surface)
+	if not excluded:
+		return None
+	# Anonymous keys can be shared by several placements. A later live owner
+	# may begin inside this model envelope even though it did not contain the
+	# first hit. End the filtered query before that owner, then query it normally.
+	limit = interval[1]
+	bound = start + (end - start).scale(limit)
+	neighbours = set()
+	bins = globals().get('g_offh_destr_contact_bins', {})
+	for bin_key in _bin_keys_for_bounds(
+			min(start.x, bound.x), max(start.x, bound.x),
+			min(start.z, bound.z), max(start.z, bound.z)):
+		neighbours.update(bins.get(bin_key, ()))
+	for other_identity in neighbours:
+		if other_identity == identity:
+			continue
+		other = instances.get(other_identity)
+		if other is None:
+			continue
+		live = any(not (authority.is_destroyed(*(other_identity + (material,))) or
+			other_identity + (material,) in predicted)
+			for material in (set(surface[0] for surface in excluded)
+				if other['kind'] == 'structure' else (None,)))
+		if not live:
+			continue
+		other_box = _instance_motion_envelope_1513(other)
+		other_interval = (_segment_world_box_interval(start, end, other_box)
+			if other_box is not None else None)
+		if (other_interval is not None and
+				other_interval[1] * (end - start).length >=
+				(point - start).length):
+			limit = min(limit, max(0.0, other_interval[0] -
+				2.0 * _SHOT_RAY_EPSILON / (end - start).length))
+	distance = limit * (end - start).length
+	if distance + 1.0e-7 < (point - start).length:
+		return None
+	return distance, excluded
+
+
 def collide_motion_segment(space_id, start, end, collision_filter,
 		native_collide, ray_label='native.motion.ray'):
 	"""Recast compiled original skins inside their accepted object/module.
 
 	#1513 can return a merged, PROJECTILENOCOLLIDE BSP with anonymous item
 	IDs alongside the live chunk model. Callback order does not identify the
-	nearest hit. Resolve that hit against one registered object/module, then remove
-	only its original-material callback keys in a ray bounded by its exact OBB
-	exit. The recast still sees replacement materials, terrain and backing
+	nearest hit. Resolve that hit against one registered model, then remove
+	only accepted original-material keys in a ray bounded by its envelope.
+	Per-module damage boxes are not the compiled model's geometry bounds.
+	The recast still sees replacement materials, terrain and backing
 	walls, including geometry inside the original module's box.
 	"""
 	if collision_filter is None or _destructible_catalog is None:
@@ -4287,33 +4371,11 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 	hit, surfaces = query(current, end)
 	if hit is None or collision_filter is None or _destructible_catalog is None:
 		return hit
-	authority = _get_destr_authority()
 	for unused in range(_SOFT_STATIC_MAX_SKIPS):
-		candidate = _catalog_candidate_on_ray_1513(hit[0], current, end)
-		if candidate is None or candidate[4] not in ('structure', 'fragile', 'falling'):
+		skin = _compiled_motion_skin_1513(hit[0], current, end, surfaces)
+		if skin is None:
 			return hit
-		key = candidate[:3]
-		if not (authority.is_destroyed(*key) or key in
-				globals().get('g_offh_destr_speculative', set())):
-			return hit
-		instances = globals().get('g_offh_destr_instances', {})
-		# Fragile fences (including Paris bridge railings) and falling posts
-		# have one item-wide destruction key. Structures destroy each material
-		# separately. Both can leave anonymous compiled original skins, so
-		# resolve by the registered kind rather than a map or model whitelist.
-		excluded = set(surface for surface in surfaces
-			if all(type(value) in _INTEGER_TYPES for value in surface) and
-			71 <= surface[0] <= 86 and
-			(candidate[4] != 'structure' or surface[0] == candidate[2]) and
-			surface[1] & 0x80 and
-			(surface[3], surface[2]) not in instances)
-		if not excluded:
-			return hit
-		exit_distance = _registered_shot_exit_1513(
-			candidate[0], candidate[1], candidate[2], candidate[3],
-			current, end, hit[0])
-		if exit_distance is None:
-			return hit
+		exit_distance, excluded = skin
 		direction = end - current
 		length = direction.length
 		if length <= _SHOT_RAY_EPSILON:
@@ -4383,39 +4445,8 @@ def take_ground_skip_count():
 
 def _catalog_pending_at_hull(pos, yaw, vel, td, now, dt=0.04,
 		motion_yaw=None, pitch=0.0, roll=0.0):
-	"""Return whether a fragile/module hide window still covers the hull.
-
-	This is classification only.  Callers keep the pose blocked while the native
-	skin of a broken item is still drawn, but preserve impact momentum instead
-	of applying the hard wall exponential brake.  The window is the pinned
-	``DESTRUCTIBLE_HIDING_DELAY``, so a wall that outlives it is a real wall.
-	"""
-	bbox = _vehicle_body_bbox(td)
-	if _destructible_catalog is None or bbox is None:
-		return False
-	vehicle_box = _vehicle_swept_box(
-		pos, yaw, vel, bbox, _motion_travel_reach(vel, dt),
-		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
-	pending = globals().get('g_offh_destr_pending', {})
-	ready = getattr(_get_destr_authority(), 'contact_collision_ready', None)
-	saw_pending = False
-	for candidate in _catalog_contact_candidates(vehicle_box):
-		deadline = pending.get((candidate[0], candidate[1], candidate[2]))
-		is_pending = (
-			deadline is not None and float(now) < float(deadline) and
-			(candidate[4] != 'structure' or
-			 _catalog_retains_collision_1513(candidate)) and
-			not (callable(ready) and ready(*candidate[:3])))
-		if is_pending:
-			# Only a solid replacement needs the bounded structure swap window.
-			# Collision-free modules cannot create a blocker after the callback.
-			saw_pending = True
-			continue
-		# The native hard result cannot be attributed only to a swapping
-		# module when another catalog body or module occupies the same hull.
-		# Preserve hard braking/replanning for that mixed contact.
-		return False
-	return saw_pending
+	"""Compatibility seam: a visual hiding window never holds the hull."""
+	return False
 
 
 def _unidentified_hull_contact_1513(unresolved, vehicle_box, authority):
@@ -4464,7 +4495,7 @@ def _catalog_hull_contact(pos, yaw, vel, td, dt=0.04,
 
 def _catalog_motion_result(status, token=None, accepted_now=False,
 		used_kinetic_speed=False, return_status=False, return_detail=False,
-		kinds=None, requires_commit=None, swap_pending=False):
+		kinds=None, requires_commit=None):
 	"""Keep the legacy status seam while exposing an exact commit receipt."""
 	if return_detail:
 		result = {
@@ -4476,11 +4507,6 @@ def _catalog_motion_result(status, token=None, accepted_now=False,
 		}
 		if requires_commit is not None:
 			result['requires_commit'] = bool(requires_commit)
-		if swap_pending:
-			# A hard result with this bit has no independent solid blocker.  The
-			# caller must keep the pose outside, but may preserve momentum while
-			# the native structure model completes its bounded replacement.
-			result['swap_pending'] = True
 		return result
 	# ``approach`` is meaningful only to the combined world+catalog resolver.
 	# Older callers must continue to fail closed on a non-contact lookahead.
@@ -4555,8 +4581,6 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
 		if kinetic_speed is not None else None)
 	blocked = bool(unidentified)
-	other_blocked = bool(unidentified)
-	swap_blocked = False
 	crushed = False
 	kinetic = False
 	approach = False
@@ -4592,23 +4616,9 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 					note_destroyed(
 						'module' if mat_kind is not None else 'fragile',
 						chunk_id, item_index, mat_kind, now)
-				pending_deadline = globals().get(
-					'g_offh_destr_pending', {}).get(key, 0.0)
-				swap_pending = (
-					float(now) < pending_deadline and
-					_catalog_retains_collision_1513(candidate) and
-					not (callable(getattr(
-							auth, 'contact_collision_ready', None)) and
-								auth.contact_collision_ready(*key)))
-				if swap_pending:
-					# Preserve an unfinished solid replacement's native hand-off.
-					# A completed physical-contact callback releases immediately;
-					# it must not pay the original animation timer a second time.
-					blocked = True
-					swap_blocked = True
 				# Retained collision proves that a replacement BSP exists, not
 				# that it fills the intact module's box. Buildings, railings and
-				# fragile props all yield their source envelope after the swap.
+				# fragile props all yield their source envelope on acceptance.
 				# Translation and rotation still query the actual native BSP;
 				# damaged and vehicle-only faces cannot be skipped by this receipt.
 				crushed = True
@@ -4626,11 +4636,6 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			chunk_id, item_index, mat_kind, unused_filename, kind = (
 				candidate[:5])
 			key = (chunk_id, item_index, mat_kind)
-			if _catalog_retains_collision_1513(candidate):
-				# A legal cosmetic break does not admit translation through the
-				# replacement body during the native hiding callback window.
-				blocked = True
-				other_blocked = True
 			mat_info = _synthetic_mat_info(candidate, Math)
 			physical_crushable = _stock_crushable_1513(
 				mat_info, vel, td, candidate[5])
@@ -4647,14 +4652,12 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 					approach = True
 				else:
 					blocked = True
-					other_blocked = True
 				continue
 			if physical_crushable and commit_enabled:
 				commit_candidates.append((candidate, vel, False))
 			elif physical_crushable:
 				exact_token.add(key)
 				blocked = True
-				other_blocked = True
 			elif cap_crushable:
 				# Cap-only admission reaches here only for exact current-hull
 				# contact; planning look-ahead returned ``approach`` above.
@@ -4665,7 +4668,6 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 					kinetic = True
 			else:
 				blocked = True
-				other_blocked = True
 			_diagnostic_contact_1513(
 				('swept_kinetic_hold' if cap_crushable else
 				'swept_kinetic_reject'), chunk_id, item_index,
@@ -4707,7 +4709,6 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			event_kind = 'column'
 		else:
 			blocked = True
-			other_blocked = True
 			continue
 		if not accepted:
 			raise RuntimeError(
@@ -4719,13 +4720,6 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		exact_token.add((chunk_id, item_index, mat_kind))
 		note_destroyed(
 			event_kind, chunk_id, item_index, mat_kind, now)
-		if (event_kind == 'module' and
-				structure_collision_swap_required((
-					(chunk_id, item_index, mat_kind),))):
-			# Only an unfinished solid replacement needs the stock hand-off;
-			# never impose its animation timer on collision-free modules.
-			blocked = True
-			swap_blocked = True
 		_publish_catalog_once_1513(
 				event_kind, chunk_id, item_index, point, yaw, vel,
 				mat_kind if event_kind == 'module' else None)
@@ -4744,8 +4738,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 	return _catalog_motion_result(
 		status, exact_token, accepted_now,
 		used_kinetic_speed, return_status, return_detail, contact_kinds,
-		requires_commit if proposal_only else None,
-		swap_pending=(blocked and swap_blocked and not other_blocked))
+		requires_commit if proposal_only else None)
 
 
 def _catalog_motion_proposal(spaceID, pos, yaw, vel, td, now,

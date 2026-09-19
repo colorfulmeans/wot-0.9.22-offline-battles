@@ -79,6 +79,27 @@ class CompiledCollisionTests(unittest.TestCase):
                 self.assertIs(hit, self.query(start, end, [(hit, alias)])[0])
                 self.broken.add(candidate[:3])
 
+    def test_latest_report_model_edges_and_overlapping_module_boxes(self):
+        contacts = json.loads((ROOT / 'tests/fixtures/malinovka_095351_contacts.json').read_text())
+        for contact in contacts:
+            start, end, hit = (V(contact[name]) for name in ('ray_start', 'ray_end', 'hit'))
+            aliases = [tuple(row[:4]) for row in contact['native_surface_candidates']
+                       if 71 <= row[0] <= 86 and row[1] & 128]
+            for alias in aliases:
+                with self.subTest(hit=contact['hit'], material=alias[0]):
+                    self.assertIsNone(self.query(start, end, [(hit, alias)]))
+                    direction = end - start
+                    direction.normalise()
+                    wall = hit + direction.scale(.001)
+                    for material in (88, 111):
+                        key = (material, 0, 50000, 32636)
+                        self.assertIs(wall, self.query(start, end,
+                            [(hit, alias), (wall, key)])[0])
+                    removed = {key for key in self.broken if key[2] == alias[0]}
+                    self.broken.difference_update(removed)
+                    self.assertIs(hit, self.query(start, end, [(hit, alias)])[0])
+                    self.broken.update(removed)
+
     def test_replacement_and_backing_wall_inside_box_remain_solid(self):
         for material in (88, 111):
             for contact in self.contacts:
@@ -95,13 +116,32 @@ class CompiledCollisionTests(unittest.TestCase):
 
     def test_merged_key_is_not_filtered_beyond_the_destroyed_box(self):
         start, end, hit, candidate, alias = self.evidence(self.contacts[1])
+        # The same aggregate key on the next intact tile is independent.
+        self.broken.intersection_update({candidate[:3]})
         direction = end - start
         direction.normalise()
         end = end + direction.scale(20.0)
-        distance = sensor._registered_shot_exit_1513(*candidate[:4],
-                                                    start, end, hit)
+        envelope = sensor._instance_motion_envelope_1513(
+            sensor.g_offh_destr_instances[candidate[:2]])
+        distance = sensor._segment_world_box_interval(
+            start, end, envelope)[1] * (end - start).length
         outside = start + direction.scale(distance + 1.0)
         self.assertIs(outside, self.query(start, end, [(hit, alias), (outside, alias)])[0])
+
+    def test_later_live_owner_inside_model_envelope_keeps_shared_native_key(self):
+        start, end, hit, candidate, alias = self.evidence(self.contacts[1])
+        direction = end - start
+        direction.normalise()
+        end = end + direction.scale(2.0)
+        wall = hit + direction.scale(.2)
+        identity = (32636, 900)
+        neighbour = dict(sensor.g_offh_destr_instances[candidate[:2]])
+        neighbour['boxes'] = [((wall.x, wall.y, wall.z),
+            ((.02, 0, 0), (0, .02, 0), (0, 0, .02)), candidate[2])]
+        sensor.g_offh_destr_instances[identity] = neighbour
+        sensor._index_catalog_instance_1513(sensor.g_offh_destr_contact_bins,
+                                           identity, neighbour)
+        self.assertIs(wall, self.query(start, end, [(hit, alias), (wall, alias)])[0])
 
     def test_ambiguous_overlapping_live_module_stays_solid(self):
         start, end, hit, candidate, alias = self.evidence(self.contacts[1])

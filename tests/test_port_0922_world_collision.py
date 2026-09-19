@@ -149,6 +149,9 @@ class WorldCollisionTests(unittest.TestCase):
             for call in native.call_args_list:
                 calls.append(tuple(
                     (value.x, value.y, value.z) if isinstance(value, _Vector)
+                    else tuple(value(*key) for key in
+                               [(75, 0, 37 + i, 22) for i in range(5)] +
+                               [(111, 0, 50000, 22)]) if callable(value)
                     else value for value in call.args))
             return verdict, calls
 
@@ -216,18 +219,20 @@ class WorldCollisionTests(unittest.TestCase):
 
         normal = _Vector(0.0, 0.0, -1.0)
 
-        def collide(unused_space, start, end, mask):
+        def collide(unused_space, start, end, mask, keep=None):
             if end.z <= start.z:
                 return None
             hits = []
-            for center_z in centers:
+            for index, center_z in enumerate(centers):
                 entry = float(center_z) - 0.5
                 exit_point = float(center_z) + 0.5
-                if start.z <= exit_point and end.z >= entry:
+                if (start.z <= exit_point and end.z >= entry and
+                        (keep is None or keep(75, 0, 37 + index, 22))):
                     hits.append(max(start.z, entry))
             if (hard_wall is not None and
                     not hard_wall_flags & mask and
-                    start.z <= float(hard_wall) <= end.z):
+                    start.z <= float(hard_wall) <= end.z and
+                    (keep is None or keep(111, hard_wall_flags, 50000, 22))):
                 hits.append(float(hard_wall))
             if not hits:
                 return None
@@ -342,21 +347,21 @@ class WorldCollisionTests(unittest.TestCase):
         return (cleared, bigworld.wg_collideSegment, authority, destroy,
                 note, publish)
 
-    def test_destroyed_hide_skin_exact_obb_exit_can_clear_world_ray(self):
+    def test_destroyed_skin_filter_queries_the_complete_world_ray(self):
         cleared, collide = self._run_soft_recast((4.0,))
 
         self.assertTrue(cleared)
         self.assertEqual(2, collide.call_count)
         helper_start = collide.call_args_list[1][0][1]
-        self.assertGreater(helper_start.z, 4.5)
+        self.assertEqual(0.0, helper_start.z)
 
     def test_destroyed_hide_skin_then_second_soft_prop_can_clear_world_ray(self):
         cleared, collide = self._run_soft_recast((4.0, 5.1))
 
         self.assertTrue(cleared)
         self.assertEqual(3, collide.call_count)
-        self.assertGreater(collide.call_args_list[1][0][1].z, 4.5)
-        self.assertGreater(collide.call_args_list[2][0][1].z, 5.6)
+        self.assertEqual(0.0, collide.call_args_list[1][0][1].z)
+        self.assertEqual(0.0, collide.call_args_list[2][0][1].z)
 
     def test_soft_chain_keeps_wall_one_centimetre_behind_second_prop_solid(self):
         cleared, collide = self._run_soft_recast(
@@ -365,7 +370,7 @@ class WorldCollisionTests(unittest.TestCase):
         self.assertFalse(cleared)
         self.assertEqual(3, collide.call_count)
         final_recast_start = collide.call_args_list[-1][0][1].z
-        self.assertGreater(final_recast_start, 5.6)
+        self.assertEqual(0.0, final_recast_start)
         self.assertLess(final_recast_start, 5.61)
 
     def test_soft_chain_recast_keeps_vehicle_only_backing_wall(self):
@@ -428,7 +433,7 @@ class WorldCollisionTests(unittest.TestCase):
         note.assert_not_called()
         publish.assert_not_called()
         self.assertEqual(1, collide.call_count)
-        self.assertGreater(collide.call_args[0][1].z, 4.5)
+        self.assertEqual(0.0, collide.call_args[0][1].z)
 
     def test_native_horizontal_filter_skips_only_the_broken_identity(self):
         (bigworld, math_module, area, cache, authority,
@@ -542,7 +547,7 @@ class WorldCollisionTests(unittest.TestCase):
         authority.destroy_fragile.assert_not_called()
         self.assertEqual(1, collide.call_count)
         recast_start = collide.call_args[0][1].z
-        self.assertGreater(recast_start, 4.5)
+        self.assertEqual(0.0, recast_start)
         self.assertLess(recast_start, 4.51)
 
     def test_broken_skin_stays_transparent_after_the_hide_window(self):
@@ -592,10 +597,11 @@ class WorldCollisionTests(unittest.TestCase):
                 (-1.6, -1.0, -3.6), (1.6, 1.0, 3.6), None)))
         bigworld.time = mock.Mock(return_value=10.0)
         bigworld.wg_collideSegment = mock.Mock(side_effect=lambda unused_space,
-            start, end, unused_mask: (
+            start, end, unused_mask, keep=None: (
                 (_Vector(start.x, start.y, 3.8), normal, 75)
                 if (end.z > start.z and start.z <= 4.8 and
-                    abs(start.x) < 0.5) else None))
+                    abs(start.x) < 0.5 and
+                    (keep is None or keep(75, 0, 37, 22))) else None))
         bigworld.wg_getMatInfoNearPoint = mock.Mock(
             return_value=_miss_mat_info_1513())
 
@@ -651,7 +657,7 @@ class WorldCollisionTests(unittest.TestCase):
         authority.destroy_fragile.assert_not_called()
         collide.assert_not_called()
 
-    def test_two_continuous_pending_skins_clear_through_exact_exits(self):
+    def test_two_continuous_broken_skins_clear_with_exact_native_keys(self):
         (cleared, collide, authority, unused_destroy,
          unused_note, unused_publish) = self._run_pending_recast(
              (4.0, 5.0), pending_indices=(0, 1),
@@ -660,8 +666,8 @@ class WorldCollisionTests(unittest.TestCase):
         self.assertTrue(cleared)
         authority.destroy_fragile.assert_not_called()
         self.assertEqual(2, collide.call_count)
-        self.assertGreater(collide.call_args_list[0][0][1].z, 4.5)
-        self.assertGreater(collide.call_args_list[1][0][1].z, 5.5)
+        self.assertEqual(0.0, collide.call_args_list[0][0][1].z)
+        self.assertEqual(0.0, collide.call_args_list[1][0][1].z)
 
     def test_native_1513_hull_uses_attributes_without_mapping_protocol(self):
         horizontal_calls = []

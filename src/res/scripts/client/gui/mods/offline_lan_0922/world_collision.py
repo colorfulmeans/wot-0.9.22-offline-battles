@@ -445,8 +445,8 @@ def _solid_contact_cleared(spaceID, segment_start, segment_end, vel, td,
 	"""Admit only a clear ray or a bounded chain of proved light props.
 
 	#1513 keeps a destroyed fragile/module skin solid until its hide callback.
-	After native authority has accepted the first contact, skip that residual
-	skin only through its unique registered OBB exit.  The same read-only helper
+	After native authority has accepted the first contact, filter that exact
+	original native key and query the complete ray, including its box interior.  The same read-only helper
 	may classify following light props so the swept catalog commit can destroy
 	them later in this tick.  Unknown geometry, a backing wall, an ambiguous OBB
 	or an over-budget chain remains solid.
@@ -477,7 +477,7 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 		return cleared is True
 	# Revisit an already accepted hide skin before probing material again. This
 	# keeps the 0.2 s native callback window out of the hot path and still
-	# requires the exact pending identity, OBB exit and a real backing-ray recast.
+	# requires the exact accepted identity and a filtered query of the whole ray.
 	cleared = _catalog_soft_static_path(
 		spaceID, segment_start, segment_end, collision, vel, td,
 		[_WORLD_SOFT_RECAST_BUDGET], require_pending_first=True,
@@ -506,7 +506,7 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 			spaceID, segment_start, collision[0], collision[1], yaw, vel, td):
 		# A previously accepted fragile/module may remain in the native static
 		# skin until #1513's hide callback.  Only that exact pending identity may
-		# be skipped here, through its registered OBB exit and another real ray.
+		# be filtered here; the complete ray still checks every other surface.
 		# Active kinetic rejects, expired skins, falling bodies and unknown solids
 		# remain authoritative.
 		cleared = _catalog_soft_static_path(

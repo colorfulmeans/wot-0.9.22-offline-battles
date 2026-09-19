@@ -18842,33 +18842,12 @@ class BattleRuntime(object):
         # bound to the translated rotation start.
         self._send_pending_local_destructible_contacts_at_pose(
             start_position, start_yaw)
-        committed_catalog = self._destructible_contact_token(
-            detail.get('_catalog_token') or detail.get('token'))
-        catalog_kinds = set(value for value in str(
-            detail.get('kinds', '-')).split(',') if value and value != '-')
         if (status in ('clear', 'crushed', 'approach') and
                 not self._native_world_rotation_is_clear(
                     start_position, start_yaw, end_yaw,
                     entity.typeDescriptor)):
             return False
-        if (status == 'crushed' and 'structure' in catalog_kinds and
-                self._structure_contact_needs_swap_hold(committed_catalog)):
-            # A solid replacement still has an unfinished native callback.
-            # Keep the last outside pose until that hand-off completes.
-            self._local_motion_soft_block = True
-            self._local_motion_status = 'pending'
-            return False
         return status in ('clear', 'crushed', 'approach')
-
-    def _structure_contact_needs_swap_hold(self, token):
-        """Use exact replacement evidence, not the generic structure kind."""
-        if token is None or not any(row[2] is not None for row in token):
-            return False
-        reader = getattr(
-            self._destructibles, 'structure_collision_swap_required', None)
-        # An unavailable catalog contract must not authorize entry into a
-        # potentially solid replacement. Production supplies this reader.
-        return not callable(reader) or bool(reader(token))
 
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
@@ -19061,16 +19040,6 @@ class BattleRuntime(object):
                         self._send_pending_local_destructible_contacts()
                     return False
                 self._send_pending_local_destructible_contacts()
-                committed_catalog = self._destructible_contact_token(
-                    proposal.get('_catalog_token') or proposal.get('token'))
-                catalog_kinds = set(value for value in str(
-                    proposal.get('kinds', '-')).split(',')
-                    if value and value != '-')
-                structure_swap_hold = (
-                    proposal.get('status') == 'crushed' and
-                    'structure' in catalog_kinds and
-                    self._structure_contact_needs_swap_hold(
-                        committed_catalog))
                 world_status = world_collision.check_horizontal_collision(
                     self._runtime.bigworld, self._runtime.math,
                     self._avatar.spaceID, self._vector(position),
@@ -19084,14 +19053,6 @@ class BattleRuntime(object):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status not in ('clear', 'kinetic'):
                     self._local_motion_status = 'hard'
-                    return False
-                if structure_swap_hold:
-                    # Preserve the last outside pose while #1513 exchanges
-                    # the live module for its destroyed model.  The native
-                    # recast above still gets first say about an unrelated
-                    # backing wall in this same frame.
-                    self._local_motion_soft_block = True
-                    self._local_motion_status = 'pending'
                     return False
                 return proposal.get('status') in (
                     'clear', 'crushed', 'approach')
@@ -19111,13 +19072,7 @@ class BattleRuntime(object):
             world_status = 'hard' if world_status else 'clear'
         if world_status == 'hard':
             if self._destructibles is not None:
-                if self._destructibles._catalog_pending_at_hull(
-                        self._vector(position), world_hull_yaw, speed,
-                        entity.typeDescriptor, self._clock(), dt,
-                        **destructible_motion):
-                    self._local_motion_soft_block = True
-                    self._local_motion_kinds = 'broken'
-                elif self._destructibles._catalog_hull_contact(
+                if self._destructibles._catalog_hull_contact(
                         self._vector(position), world_hull_yaw, speed,
                         entity.typeDescriptor, dt, **destructible_motion):
                     self._local_motion_kinds = 'world'
@@ -19148,10 +19103,6 @@ class BattleRuntime(object):
         self._local_motion_kinds = str(detail.get('kinds', '-'))
         self._local_motion_status = status
         if status == 'hard':
-            if detail.get('swap_pending') is True:
-                self._local_motion_soft_block = True
-                self._local_motion_kinds = 'broken'
-                self._local_motion_status = 'pending'
             return False
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
@@ -19165,9 +19116,21 @@ class BattleRuntime(object):
                 'local contact receipt is inconsistent')
         if status == 'approach':
             status = 'clear'
-        if accepted_now and used_kinetic_speed:
-            self._local_motion_cap_crushed = True
-            return False
+        if accepted_now:
+            # Acceptance changes native geometry in this frame. Recast it
+            # immediately; the kinetic eligibility speed never becomes motion.
+            after = world_collision.check_horizontal_collision(
+                self._runtime.bigworld, self._runtime.math,
+                self._avatar.spaceID, self._vector(position),
+                world_hull_yaw, speed, entity.typeDescriptor,
+                self._local_airborne, dt, True,
+                bool(kinetic_speed is not None), kinetic_speed,
+                commit_enabled=False, pitch=self._local_pitch,
+                roll=self._local_roll, motion_yaw=world_motion_yaw,
+                trace=self._local_world_collision_trace)
+            if after is True or after not in (False, 'clear', 'kinetic'):
+                self._local_motion_status = 'hard'
+                return False
         if status == 'soft':
             self._local_motion_soft_block = True
         return status in ('clear', 'crushed')
@@ -19218,15 +19181,6 @@ class BattleRuntime(object):
             self._bot_motion_kinds[int(bot_id)] = str(
                 detail.get('kinds', '-'))
         if status not in ('clear', 'crushed', 'approach'):
-            return False
-        token = self._destructible_contact_token(detail.get('token'))
-        kinds = set(value for value in str(
-            detail.get('kinds', '-')).split(',') if value and value != '-')
-        if (bool(detail.get('accepted_now', False)) and
-                'structure' in kinds and
-                self._structure_contact_needs_swap_hold(token)):
-            # Only an unfinished solid replacement needs a pose hold. A
-            # completed callback or collision-free module may move this tick.
             return False
         clear = self._native_world_rotation_is_clear(
             position, start_yaw, end_yaw, descriptor,
@@ -19322,12 +19276,6 @@ class BattleRuntime(object):
             world_status = 'hard' if world_status else 'clear'
         self._bot_motion_kinds[int(bot_id)] = '-'
         if world_status == 'hard':
-            if (self._destructibles is not None and
-                    self._destructibles._catalog_pending_at_hull(
-                    pos, yaw, speed, descriptor, now, dt,
-                    **destructible_motion)):
-                self._bot_motion_kinds[int(bot_id)] = 'broken'
-                return 'soft'
             bot_state['_world_contact_trace'] = contact_trace
             return 'hard'
         if self._destructibles is None:
@@ -19354,9 +19302,6 @@ class BattleRuntime(object):
                 'bot motion resolver returned an invalid status')
         self._bot_motion_kinds[int(bot_id)] = str(detail.get('kinds', '-'))
         if status == 'hard':
-            if detail.get('swap_pending') is True:
-                self._bot_motion_kinds[int(bot_id)] = 'broken'
-                return 'soft'
             return 'hard'
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
@@ -19368,8 +19313,20 @@ class BattleRuntime(object):
             raise RuntimeError('bot contact receipt is inconsistent')
         if status == 'approach':
             return 'clear'
-        if accepted_now and used_kinetic_speed:
-            return 'cap_crushed'
+        if accepted_now:
+            # The catalog has committed this exact contact. Check the new BSP
+            # now so a real replacement wall blocks on the very same frame.
+            after = world_collision.check_horizontal_collision(
+                self._runtime.bigworld, self._runtime.math,
+                self._avatar.spaceID, pos, yaw, speed,
+                descriptor, airborne, dt, True,
+                allow_crush_drive, kinetic_speed, commit_enabled=False,
+                pitch=pose_pitch, roll=pose_roll,
+                motion_yaw=motion_yaw, trace=contact_trace)
+            if after is True or after not in (False, 'clear', 'kinetic'):
+                bot_state['_world_contact_trace'] = contact_trace
+                self._bot_motion_kinds[int(bot_id)] = 'world'
+                return 'hard'
         return status
 
     @staticmethod
