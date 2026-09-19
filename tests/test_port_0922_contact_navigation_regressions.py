@@ -18,7 +18,7 @@ CONTACTS = json.loads((ROOT / 'tests/fixtures/collision_144629_contacts.json').r
 
 
 class OverlappingBrokenSkins(unittest.TestCase):
-    def test_reported_shared_face_clears_only_when_every_owner_is_broken(self):
+    def test_reported_face_uses_component_ownership_not_whole_model_overlap(self):
         setup = compiled_tests.CompiledCollisionTests()
         setup.setUp()
         self.addCleanup(setup.doCleanups)
@@ -32,7 +32,11 @@ class OverlappingBrokenSkins(unittest.TestCase):
         self.assertIsNone(query())
         for owner in (25, 26):
             setup.broken.remove((32636, owner, 74))
-            self.assertIs(hit, query()[0])
+            if owner == 26:
+                self.assertIs(hit, query()[0])
+            else:
+                # Owner 25's opposite half does not contain this contact.
+                self.assertIsNone(query())
             setup.broken.add((32636, owner, 74))
         for material in (88, 111):
             backing = hit + (end - start).scale(0.001)
@@ -54,7 +58,10 @@ class RotationDepartureTests(unittest.TestCase):
         point, normal = V(*row['hit']), V(*row['normal'])
         def collide(space, start, end, flags, keep=None):
             if abs(start.x - end.x) < 1e-8 and abs(start.z - end.z) < 1e-8:
-                return V(start.x, row['position'][1], start.z), V(0, 1, 0)
+                height = row['position'][1]
+                if min(start.y, end.y) <= height <= max(start.y, end.y):
+                    return V(start.x, height, start.z), V(0, 1, 0)
+                return None
             delta = end - start
             denominator = delta.x * normal.x + delta.z * normal.z
             if abs(denominator) < 1e-9:
@@ -80,7 +87,8 @@ class RotationDepartureTests(unittest.TestCase):
             for delta, expected in ((0.02, True), (-0.02, False)):
                 with self.subTest(index=index, delta=delta):
                     predicate = battle_runtime._rotation_departing_contact(row['position'], bbox,
-                        row['yaw'], row['yaw'] + delta, row['pitch'], row['roll'])
+                        row['yaw'], row['yaw'] + delta, row['pitch'], row['roll'],
+                        previous_contacts=lambda: [contact])
                     self.assertEqual(expected, predicate(contact))
 
     def test_wall_outside_start_hull_does_not_become_an_escape(self):
@@ -95,6 +103,37 @@ class RotationDepartureTests(unittest.TestCase):
         predicate = battle_runtime._rotation_departing_contact((0, 0, 0),
             ((-1.5, 0, -3), (1.5, 2, 3)), 0.0, 0.02)
         self.assertFalse(predicate((V(1.53, 1, 0), V(0, 0, -1))))
+
+    def test_departure_recast_progresses_in_native_float32_at_map_coordinates(self):
+        import struct
+        def f32(value):
+            return struct.unpack('f', struct.pack('f', value))[0]
+        first, second = V(100., 1., 100.), V(100., 1., 100.0001)
+        starts = []
+        def native(space, start, end, flags):
+            starts.append(f32(start.z))
+            for point in (first, second):
+                if f32(start.z) <= point.z <= f32(end.z):
+                    return point, V(0., 0., -1.)
+        with mock.patch.dict('sys.modules', {'BigWorld': types.SimpleNamespace(
+                wg_collideSegment=native)}):
+            result = world_collision._collide_horizontal(1, V(100., 1., 99.),
+                V(100., 1., 101.), None, lambda hit: hit[0] is first)
+        self.assertIs(second, result[0])
+        self.assertGreater(starts[1], first.z)
+        self.assertLess(starts[1], second.z)
+
+    def test_departing_surface_at_zero_advances_without_distance_cancellation(self):
+        first, second = V(0., 1., 0.), V(0., 1., .0000001)
+        def native(space, start, end, flags):
+            for point in (first, second):
+                if start.z <= point.z <= end.z:
+                    return point, V(0., 0., -1.)
+        with mock.patch.dict('sys.modules', {'BigWorld': types.SimpleNamespace(
+                wg_collideSegment=native)}):
+            result = world_collision._collide_horizontal(1, V(0., 1., 0.),
+                V(0., 1., 3.), None, lambda hit: hit[0] is first)
+        self.assertIs(second, result[0])
 
     def test_departing_first_face_does_not_hide_a_second_wall(self):
         first, second = V(0, 1, 1), V(0, 1, 2)

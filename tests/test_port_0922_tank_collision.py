@@ -146,7 +146,7 @@ class TankCollisionTests(unittest.TestCase):
     def test_shape_uses_chassis_bbox_and_mounted_hull_height(self):
         shape = tank_collision.chassis_shape(_Descriptor())
 
-        self.assertEqual((1.7, 3.2, -0.6, 2.2), shape)
+        self.assertEqual((1.7, 3.2, -0.6, 2.2, 0.0, 0.0), shape)
 
     def test_shape_reads_native_1513_components_as_attributes(self):
         descriptor = _Strict1513Component(
@@ -162,7 +162,7 @@ class TankCollisionTests(unittest.TestCase):
 
         shape = tank_collision.chassis_shape(descriptor)
 
-        self.assertEqual((1.7, 3.2, -0.6, 2.2), shape)
+        self.assertEqual((1.7, 3.2, -0.6, 2.2, 0.0, 0.0), shape)
 
     def test_shape_requires_owner_to_load_bbox_before_geometry_read(self):
         tester = _UnloadedHitTester()

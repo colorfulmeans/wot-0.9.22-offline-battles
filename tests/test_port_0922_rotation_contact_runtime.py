@@ -8,6 +8,65 @@ import test_port_0922_bot_runtime as bots
 
 
 class PlayerRotationContactTests(unittest.TestCase):
+    def test_native_interval_box_requires_a_witness_on_the_real_arc(self):
+        import math
+        from gui.mods.offline_lan_0922 import collision_geometry as geometry, world_collision
+        runtime = local._runtime()
+        battle = local.BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        bbox = ((-1.,-.5,-3.),(1.,1.5,3.))
+        battle._destructibles = types.SimpleNamespace(
+            native_replacement_bsp_active=lambda: True,
+            _vehicle_body_bbox=lambda descriptor:bbox)
+        motion = {'start':(0.,0.,0.),'end':(0.,0.,0.),'yaw':0.,
+                  'yaw_delta':.08,'bbox':bbox}
+        envelope = geometry.motion_envelope(motion)
+        x = envelope[0][0]+envelope[1][0][0]-.00001
+        z = envelope[0][2]+envelope[1][2][2]-.00001
+        empty_corner = local._Vector(x,.5,z)
+        touched_corner = local._Vector(math.cos(.04)+3*math.sin(.04),.5,
+                                      -math.sin(.04)+3*math.cos(.04))
+        for point, expected in ((empty_corner,True),(touched_corner,False)):
+            def probe(*args,**kwargs):
+                query_motion = dict(motion, yaw=args[4], yaw_delta=0.,
+                    bbox=args[6]['hull']['hitTester'].bbox,
+                    pitch=kwargs.get('pitch', 0.), roll=kwargs.get('roll', 0.))
+                if not geometry.rotation_contains_point(query_motion, (point.x, point.y, point.z)):
+                    return 'clear'
+                predicate=kwargs.get('departing_contact')
+                return 'clear' if predicate and predicate((point,local._Vector(-1,0,0))) else 'hard'
+            with self.subTest(expected=expected), mock.patch.object(
+                    world_collision,'check_horizontal_collision',side_effect=probe):
+                self.assertEqual(expected,battle._native_world_rotation_is_clear(
+                    (0.,0.,0.),0.,.08,local._Descriptor(),pitch=0.,roll=0.))
+
+    def test_false_first_point_does_not_hide_the_wall_further_inside_the_arc(self):
+        import math
+        from gui.mods.offline_lan_0922 import world_collision
+        from test_port_0922_world_collision import _miss_mat_info_1513
+        runtime = local._runtime()
+        battle = local.BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        bbox = ((-1.5, 0., -3.), (1.5, 2., 3.))
+        battle._destructibles = types.SimpleNamespace(
+            native_replacement_bsp_active=lambda: False,
+            _vehicle_body_bbox=lambda descriptor: bbox)
+        # A short wall starts outside the midpoint hull near its centre but
+        # extends forward into the corner's real yaw arc.
+        def native(space, start, end, mask, keep=None):
+            delta = end - start
+            if abs(delta.z) < 1e-12:
+                return None
+            t = (2.98 - start.z) / delta.z
+            point = start + delta.scale(t)
+            if 0. <= t <= 1. and 1.53 <= point.x <= 2. and 0. <= point.y <= 2.:
+                return point, local._Vector(0., 0., -1.)
+            return None
+        runtime.bigworld.wg_collideSegment = native
+        runtime.bigworld.wg_getMatInfoNearPoint = _miss_mat_info_1513
+        self.assertFalse(battle._native_world_rotation_is_clear(
+            (0., 0., 0.), 0., .02, local._Descriptor(), pitch=0., roll=0.))
+
     def test_motor_contact_uses_full_descriptor_and_publishes_the_bot_response(self):
         runtime = local._runtime()
         battle = local.BattleRuntime(runtime)

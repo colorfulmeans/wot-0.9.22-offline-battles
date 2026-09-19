@@ -16,6 +16,7 @@ import stat
 import struct
 import subprocess
 import threading
+import tempfile
 import uuid
 import zipfile
 
@@ -919,6 +920,65 @@ def _write_slice(archive, archive_name, stream, length, observer=None):
             remaining -= len(payload)
 
 
+class PhysicsLogScanner:
+    """Extract every structured physics row in this session, across chunks."""
+
+    PREFIX = b"[Offline LAN 0.9.22] PHYSICS "
+
+    def __init__(self):
+        self.pending = b""
+        self.stream = tempfile.SpooledTemporaryFile(max_size=1024 * 1024)
+        self.events = {}
+        self.reasons = {}
+        self.invalid = 0
+        self.rows = 0
+
+    def feed(self, payload):
+        lines = (self.pending + payload).split(b"\n")
+        self.pending = lines.pop()
+        for line in lines:
+            self._line(line)
+
+    def _line(self, line):
+        marker = line.find(self.PREFIX)
+        if marker < 0:
+            return
+        payload = line[marker + len(self.PREFIX):].rstrip(b"\r")
+        try:
+            row = json.loads(payload)
+            if not isinstance(row, dict) or row.get("schema") != 1:
+                raise ValueError("invalid physics schema")
+            event = str(row["event"])
+            self.events[event] = self.events.get(event, 0) + 1
+            data = row.get("data", {})
+            for contact in data.get("contacts", ()) if isinstance(data, dict) else ():
+                if isinstance(contact, dict):
+                    reason = str(contact.get("reason", "missing_reason"))
+                    self.reasons[reason] = self.reasons.get(reason, 0) + 1
+        except (ValueError, KeyError, TypeError):
+            self.invalid += 1
+            return
+        self.stream.write(payload + b"\n")
+        self.rows += 1
+
+    def write(self, archive, role):
+        if self.pending:
+            self._line(self.pending)
+            self.pending = b""
+        length = self.stream.tell()
+        self.stream.seek(0)
+        name = "physics-%s.jsonl" % role
+        _write_slice(archive, name, self.stream, length)
+        return name, {"rows": self.rows, "events": self.events,
+                      "contact_reasons": self.reasons,
+                      "invalid_rows": self.invalid,
+                      "raw_log": _ARCHIVE_FILENAMES[role],
+                      "coverage": "entire session; no contact or byte cap"}
+
+    def close(self):
+        self.stream.close()
+
+
 def _write_text(archive, archive_name, text):
     """Add one generated text member. Diagnostics never fail a report."""
     try:
@@ -1036,6 +1096,7 @@ def create_report(now=None):
     included_roles = []
     included_files = []
     collected = []
+    physics_summary = {}
     try:
         with zipfile.ZipFile(
                 temporary, "w", compression=zipfile.ZIP_DEFLATED,
@@ -1048,11 +1109,18 @@ def create_report(now=None):
                 if opened is None:
                     continue
                 stream, length = opened
+                scanner = PhysicsLogScanner() if role in DUMP_ROLES else None
                 try:
                     archive_name = _ARCHIVE_FILENAMES[role]
-                    _write_slice(archive, archive_name, stream, length)
+                    _write_slice(archive, archive_name, stream, length,
+                                 observer=scanner)
+                    if scanner is not None:
+                        physics_name, physics_summary[role] = scanner.write(archive, role)
+                        included_files.append(physics_name)
                 finally:
                     stream.close()
+                    if scanner is not None:
+                        scanner.close()
                 included_roles.append(role)
                 included_files.append(archive_name)
             for role in DUMP_ROLES:
@@ -1093,6 +1161,12 @@ def create_report(now=None):
             # Generated last so that a failure inside them cannot cost the
             # logs and dumps that are already in the archive.
             if collected:
+                included_files.append(_write_text(
+                    archive, "physics-summary.json", json.dumps({
+                        "schema": 1, "session": session["id"],
+                        "roles": physics_summary,
+                        "identity_note": "Native callback candidates are not asserted to be the nearest hit. Use recorded witness, ownership and rejection reasons.",
+                    }, ensure_ascii=False, indent=2) + "\n"))
                 for archive_name, text in _describe_environment(
                         session, session.get("gameRoot")):
                     written = _write_text(archive, archive_name, text)

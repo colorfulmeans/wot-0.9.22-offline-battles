@@ -4594,7 +4594,7 @@ class BattleState:
             if (participant is None or player_id in seen or
                     vehicle != expected_vehicle or
                     not math.isfinite(mass) or not 100.0 <= mass <= 500000.0 or
-                    not isinstance(shape, (list, tuple)) or len(shape) != 4):
+                    not isinstance(shape, (list, tuple)) or len(shape) not in (4, 6)):
                 return None
             seen.add(player_id)
             try:
@@ -4602,9 +4602,10 @@ class BattleState:
             except (TypeError, ValueError, OverflowError):
                 return None
             if (not all(math.isfinite(value) for value in shape) or
-                    not 0.5 <= shape[0] <= 20.0 or
-                    not 0.75 <= shape[1] <= 30.0 or
-                    not -20.0 <= shape[2] < shape[3] <= 30.0):
+                    not 0.0 < shape[0] <= 20.0 or
+                    not 0.0 < shape[1] <= 30.0 or
+                    not -20.0 <= shape[2] < shape[3] <= 30.0 or
+                    any(abs(value) > 30.0 for value in shape[4:])):
                 return None
             if not isinstance(ram_profile, dict):
                 return None

@@ -13,6 +13,82 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 19: twelve-item physics correction and complete contact evidence
+
+This change supersedes earlier descriptions below of artificial wall damping,
+neutral braking, overspeed caps and fixed recast budgets. It changes shared
+player/worker/Bot physics, without map-coordinate exceptions or an added
+collision skin or collision waiting interval.
+
+| Audit item | Resulting behavior |
+| --- | --- |
+| 1. Pitch/roll shear | Body probes use an orthonormal yaw/pitch/roll transform. |
+| 2. Rotation envelope as a solid | Envelopes select candidates; catalog contacts follow the actual continuous rigid arc. Native candidates are refined in midpoint rigid-body axes until a real arc witness is established or geometry clears; an empty envelope point alone cannot discard an extended wall. Intact walls are queried even before the first destruction. |
+| 3. Fixed probe heights | Native probes use the actual combined chassis/mounted-hull vertical bounds and boundary segments. |
+| 4. Maximum-speed crushing | Destruction qualification uses actual contact-normal velocity, including angular velocity at a rotating contact. Vehicle maximum speed cannot qualify destruction. |
+| 5. Arbitrary wall-avoidance angles | Wall response follows the actual contact tangent. |
+| 6. Repeated wall damping | Remove inward normal velocity from the complete planar velocity; preserve tangential momentum without entry factors, exponential braking or grinding ticks. |
+| 7. Extra uphill drag | Uphill motion uses gravity, available traction and ordinary friction; the extra slip-drag coefficient is removed. |
+| 8. 105-percent downhill cap | The speed governor limits drive contribution; gravity and existing momentum have no percentage cap or artificial overspeed decay. |
+| 9. Neutral automatic braking | Neutral uses rolling resistance. Braking is explicit; a Bot's stop command requests braking. |
+| 10. Pseudo-contact skin and freezing | Ground contact/allowed penetration targets are zero; small heave/angular velocities are no longer forcibly frozen. |
+| 11. Mirrored/minimum collision sizes | Vehicle-pair bodies retain actual asymmetric chassis half sizes and centre offsets through client/server manifests, broad-phase radii, navigation probe widths and arena corners. |
+| 12. Four-skin budget | Accepted-skin recasts continue while identity or geometry advances. An unrelated live component or replacement remains solid. |
+
+Anonymous compiled BSP ownership is evaluated per material/component, rather
+than letting a nearby intact half veto an already accepted fence half through
+their shared whole-model envelope. Recasts retain backing walls, damaged BSPs
+and vehicle-only material 111. Destruction still requires the existing native
+health/kinetic gate and the native authority's acceptance. Removing a wait
+means using an accepted result immediately, not granting unaccepted destruction.
+
+Bot zero-throttle commands now request an explicit brake, while player neutral
+uses rolling resistance. Proved nearby parked traffic remains a navigation
+obstacle until it moves or leaves the nearby set; the old expiration timer
+could forget one half of a blockage while the hull was still braking/turning.
+Cooperative travelling Bots retain the existing short steering lease, rather
+than turning an entire temporarily braking convoy into static geometry.
+This affects planning only and introduces no physical stop delay or skin.
+
+The always-on `PHYSICS` records include real body bounds and poses, timestep,
+linear/angular motion, contact fraction/point/normal, chunk/item/material,
+model path and module boxes when resolved, intact/broken state, descriptor
+health, item scale, energy/kinetic inputs, native callback candidates and the
+explicit rejection reason. Parameter snapshots include gravity, mass, drive,
+friction, slope grip, limits, spring layout/stiffness/damping and the selected
+contact laws. Player/Bot contact frames keep motion and suspension evidence;
+Bot rotation blocks, braking decisions and final pose rollbacks are captured
+from the first affected frame, independently of the old three-second text log. Records do not depend on the optional legacy
+text-debug switch or its per-session/contact caps. Records include a wall-clock timestamp for correlation across the client and
+worker. Only unchanged identical payloads may coalesce for one second, with repeat counts.
+
+The launcher extracts all structured rows within its existing exact session
+byte boundaries into `physics-visible-client.jsonl` and
+`physics-hidden-worker.jsonl`, and adds `physics-summary.json`. The original
+full-session logs remain in the ZIP. The extraction spools to disk rather than
+truncating by bytes or contact count; partial chunks and a final unterminated
+line are supported, and malformed rows are counted. Previous/later sessions
+are not copied into the report.
+
+These are corrections to this port's physical model, not a claim to reproduce
+retail C++ simulation exactly. Catalog narrow-phase uses authored oriented
+boxes; native scene geometry is queried through the existing #1513 segment
+API. Vehicle-pair contact remains a planar OBB model with vertical overlap.
+Numerical convergence tolerances are not physical inflation or waiting time.
+Previously recovered game-unit gravity/power scaling and other unlisted
+native parameters are unchanged. The native callback can expose anonymous
+aggregate keys without the identity of the nearest surface: reports retain
+all candidates, the actual witness, matching provenance and explicitly labelled
+read-only identity replays instead of presenting a guessed owner as certain.
+Only the exact Windows #1513 client can confirm gameplay and performance.
+
+Regression coverage includes empty rotation-envelope corners, thin objects
+crossed only mid-arc, grazing native point contacts, asymmetric chassis bounds,
+normal-only momentum response, real angular-speed crush thresholds, adjacent
+intact modules, more than four accepted skins, uncapped diagnostics and
+full-session report extraction. Package/CI evidence is recorded with the build
+in the pull request; no native playthrough is asserted by those checks.
+
 The post-0.8.3 gameplay follow-up addresses nine reported paths. A hidden remote
 vehicle retires its engine-audition component and detailed-engine callbacks.
 Report `83fea4595275` from the owner's #1513 client records an abort on Lakeville

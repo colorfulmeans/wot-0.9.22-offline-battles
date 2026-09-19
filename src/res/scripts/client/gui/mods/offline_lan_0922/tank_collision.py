@@ -11,7 +11,7 @@ mapping with these fields::
         'x': 10.0, 'y': 2.0, 'z': -4.0, 'yaw': 0.0,
         'mass': 25000.0,
         'vx': 0.0, 'vz': 8.0,
-        'shape': (half_width, half_length, lower_y, upper_y),
+        'shape': (half_width, half_length, lower_y, upper_y, center_x, center_z),
     }
 
 The retail body is sized from the native chassis ``hitTester.bbox`` and extended
@@ -127,7 +127,7 @@ def _bbox(component):
 
 
 def chassis_shape(type_descriptor):
-    """Return ``(half_width, half_length, lower_y, upper_y)``.
+    """Return actual half sizes, vertical interval and local X/Z centre offsets.
 
     The x/z body comes from the chassis hit tester. Retail ``physics_shared``
     extends its upper edge to contain the mounted hull, which is required for
@@ -148,10 +148,8 @@ def chassis_shape(type_descriptor):
         # index it exactly as both retail physics_shared and current 0.8.2 do.
         minimum = chassis_box[0]
         maximum = chassis_box[1]
-        half_width = max(
-            abs(_coord(minimum, 0)), abs(_coord(maximum, 0)), 0.8)
-        half_length = max(
-            abs(_coord(minimum, 2)), abs(_coord(maximum, 2)), 1.0)
+        half_width = (_coord(maximum, 0)-_coord(minimum, 0))*0.5
+        half_length = (_coord(maximum, 2)-_coord(minimum, 2))*0.5
         lower_y = _coord(minimum, 1, DEFAULT_SHAPE[2])
         upper_y = _coord(maximum, 1, DEFAULT_SHAPE[3])
 
@@ -165,7 +163,11 @@ def chassis_shape(type_descriptor):
         upper_y = max(
             upper_y,
             _coord(hull_position, 1) + _coord(hull_box[1], 1))
-        shape = (half_width, half_length, lower_y, upper_y)
+        center_x = (_coord(minimum, 0)+_coord(maximum, 0))*0.5
+        center_z = (_coord(minimum, 2)+_coord(maximum, 2))*0.5
+        if half_width <= 0.0 or half_length <= 0.0 or upper_y <= lower_y:
+            raise RuntimeError('vehicle collision dimensions are invalid')
+        shape = (half_width, half_length, lower_y, upper_y, center_x, center_z)
         # Retain the descriptor so CPython cannot reuse its id for another
         # vehicle descriptor while this long-running client is alive.
         _SHAPE_CACHE[cache_key] = (type_descriptor, shape)
@@ -173,6 +175,21 @@ def chassis_shape(type_descriptor):
     except (AttributeError, IndexError, TypeError, ValueError) as error:
         raise RuntimeError('#1513 vehicle collision descriptor is invalid: %s' %
                            error)
+
+
+def shape_offset(shape):
+    return (float(shape[4]), float(shape[5])) if len(shape) >= 6 else (0.0, 0.0)
+
+
+def shape_center(x, z, yaw, shape):
+    cx, cz = shape_offset(shape)
+    return (float(x)+math.cos(yaw)*cx+math.sin(yaw)*cz,
+            float(z)-math.sin(yaw)*cx+math.cos(yaw)*cz)
+
+
+def shape_radius(shape):
+    cx, cz = shape_offset(shape)
+    return math.hypot(abs(cx)+shape[0], abs(cz)+shape[1])
 
 
 def pose_axes(yaw, pitch=0.0, roll=0.0):
@@ -206,10 +223,10 @@ def body_contains_point(body, point, slop=POSITION_SLOP):
             for axis in axes)
         margin = max(0.0, float(slop))
         return bool(
-            abs(local[0]) <= float(shape[0]) + margin and
+            abs(local[0]-shape_offset(shape)[0]) <= float(shape[0]) + margin and
             float(shape[2]) - margin <= local[1] <=
             float(shape[3]) + margin and
-            abs(local[2]) <= float(shape[1]) + margin)
+            abs(local[2]-shape_offset(shape)[1]) <= float(shape[1]) + margin)
     except (KeyError, TypeError, ValueError, IndexError, OverflowError):
         return False
 
@@ -229,7 +246,8 @@ def vertical_interval(y, shape, pitch=0.0, roll=0.0):
     cp, sp = math.cos(float(pitch)), math.sin(float(pitch))
     cr, sr = math.cos(float(roll)), math.sin(float(roll))
     up = cp * cr
-    center = float(y) + (shape[2] + shape[3]) * 0.5 * up
+    cx, cz = shape_offset(shape)
+    center = float(y) + (shape[2] + shape[3]) * 0.5 * up+cx*cp*sr-cz*sp
     extent = (abs(cp * sr) * shape[0] + abs(sp) * shape[1] +
               abs(up) * (shape[3] - shape[2]) * 0.5)
     return center - extent, center + extent
@@ -437,6 +455,8 @@ def _obb_overlap(x_a, z_a, yaw_a, shape_a,
     """Signed SAT depth, including separation for conservative arc pruning."""
     axes_a = _axes(yaw_a)
     axes_b = _axes(yaw_b)
+    x_a, z_a = shape_center(x_a, z_a, yaw_a, shape_a)
+    x_b, z_b = shape_center(x_b, z_b, yaw_b, shape_b)
     delta_x = x_a - x_b
     delta_z = z_a - z_b
     best_overlap = None
@@ -479,7 +499,7 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others):
     miss a hull swept through during a late callback.
     """
     delta = (candidate_yaw-yaw+math.pi) % (2.0*math.pi)-math.pi
-    radius = math.hypot(shape[0], shape[1])
+    radius = shape_radius(shape)
     travel = abs(delta)*radius
     if travel <= 1e-9:
         return 1.0
@@ -490,7 +510,7 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others):
         if where is None:
             where = (other['x'], other.get('y', 0.0), other['z'])
         other_shape = _tank_shape(other)
-        reach = radius+math.hypot(other_shape[0], other_shape[1])
+        reach = radius+shape_radius(other_shape)
         if ((position[0]-where[0])**2+(position[2]-where[2])**2 > reach*reach or
                 not vertical_overlap(position[1], shape, where[1], other_shape)):
             continue
@@ -562,7 +582,7 @@ def traverse_impulses(tanks, dt, anchor=None):
                     (anchor is not None and anchor not in (a['id'], b['id']))):
                 continue
             other_shape = _tank_shape(b)
-            reach = math.hypot(*shape[:2])+math.hypot(*other_shape[:2])+POSITION_SLOP
+            reach = shape_radius(shape)+shape_radius(other_shape)+POSITION_SLOP
             if ((a['x']-b['x'])**2+(a['z']-b['z'])**2 > reach*reach or
                     not vertical_overlap(
                         a.get('y'), shape, b.get('y'), other_shape,
@@ -575,8 +595,8 @@ def traverse_impulses(tanks, dt, anchor=None):
                 continue
             corners = [(axes[0][0]*x+axes[1][0]*z,
                         axes[0][1]*x+axes[1][1]*z)
-                       for x in (-shape[0], shape[0])
-                       for z in (-shape[1], shape[1])]
+                       for x in (shape_offset(shape)[0]-shape[0], shape_offset(shape)[0]+shape[0])
+                       for z in (shape_offset(shape)[1]-shape[1], shape_offset(shape)[1]+shape[1])]
             # A face has two extreme corners. Only the one moving into the
             # peer loads the drive, and a corner moving away releases it.
             support = min(x*nx+z*nz for x, z in corners)
@@ -626,6 +646,8 @@ def obb_impact_contact(x_a, z_a, yaw_a, shape_a, velocity_a,
     """
     axes_a = _axes(yaw_a)
     axes_b = _axes(yaw_b)
+    x_a, z_a = shape_center(x_a, z_a, yaw_a, shape_a)
+    x_b, z_b = shape_center(x_b, z_b, yaw_b, shape_b)
     delta_x = float(x_a) - float(x_b)
     delta_z = float(z_a) - float(z_b)
     relative_x = float(velocity_a[0]) - float(velocity_b[0])
@@ -933,15 +955,14 @@ def _tank_shape(tank):
     shape = _tank_value(tank, 'shape')
     if shape is not None:
         try:
-            return (float(shape[0]), float(shape[1]),
-                    float(shape[2]), float(shape[3]))
+            return tuple(float(value) for value in shape)
         except (IndexError, TypeError, ValueError):
             pass
     descriptor = _tank_value(tank, 'descriptor')
     if descriptor is not None:
         return chassis_shape(descriptor)
     # Compatibility for snapshots/tests produced before the OBB port. New
-    # adapters always supply the descriptor-derived four-component shape.
+    # adapters always supply the descriptor-derived six-component shape (legacy four-component shapes remain centred).
     dims = _tank_value(tank, 'dims')
     if dims is not None:
         try:
@@ -1009,8 +1030,7 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
     velocity_y = float(_tank_value(tank, 'vy', 0.0) or 0.0)
     velocity_z = float(_tank_value(tank, 'vz', 0.0) or 0.0)
     own_shape = _tank_shape(tank)
-    own_radius = math.sqrt(
-        own_shape[0] * own_shape[0] + own_shape[1] * own_shape[1])
+    own_radius = shape_radius(own_shape)
 
     correction_x = 0.0
     correction_z = 0.0
@@ -1048,9 +1068,7 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
             continue
         center_dx = x - other_x
         center_dz = z - other_z
-        other_radius = math.sqrt(
-            other_shape[0] * other_shape[0] +
-            other_shape[1] * other_shape[1])
+        other_radius = shape_radius(other_shape)
         maximum_distance = own_radius + other_radius + CONTACT_BROADPHASE_PADDING
         if (center_dx * center_dx + center_dz * center_dz >
                 maximum_distance * maximum_distance):

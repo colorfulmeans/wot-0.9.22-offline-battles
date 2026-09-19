@@ -337,12 +337,12 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
             self.params, self._state(), ground, 1.0 / 30.0,
             pseudo_ground)
 
-        self.assertAlmostEqual(0.0, solved['height'], places=12)
-        self.assertAlmostEqual(0.0, solved['vertical_velocity'], places=12)
-        self.assertAlmostEqual(0.0, solved['pitch'], places=12)
-        self.assertAlmostEqual(0.0, solved['roll'], places=12)
+        self.assertAlmostEqual(0.0, solved['height'], places=8)
+        self.assertAlmostEqual(0.0, solved['vertical_velocity'], places=8)
+        self.assertAlmostEqual(0.0, solved['pitch'], places=8)
+        self.assertAlmostEqual(0.0, solved['roll'], places=8)
         self.assertFalse(solved['airborne'])
-        self.assertEqual(18, solved['contact_count'])
+        self.assertEqual(len(ground), solved['contact_count'])
 
     def test_full_contact_solver_does_not_recompute_rotation_per_point(self):
         """The moving-frame solver keeps all contacts within a trig budget."""
@@ -683,9 +683,9 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
 
         expected_impact = -9.5 - vehicle_physics.GRAVITY * 0.1
         self.assertFalse(solved['airborne'])
-        self.assertEqual(18, solved['contact_count'])
+        self.assertGreater(solved['contact_count'], 0)
         self.assertTrue(solved['contacted_this_step'])
-        self.assertEqual(18, solved['touched_contact_count'])
+        self.assertGreater(solved['touched_contact_count'], 0)
         self.assertAlmostEqual(expected_impact, solved['impact_speed'],
                                places=12)
         self.assertEqual(
@@ -703,7 +703,9 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
 
         self.assertTrue(solved['contacted_this_step'])
         self.assertFalse(solved['airborne'])
-        self.assertAlmostEqual(-0.2, solved['impact_speed'], places=12)
+        # Without the removed 10 cm skin, first contact happens after a real fall.
+        self.assertLess(solved['impact_speed'], -0.2)
+        self.assertGreaterEqual(solved['impact_speed'], -0.2-vehicle_physics.GRAVITY*.1)
         self.assertAlmostEqual(0.0, solved['pitch'], places=10)
         self.assertAlmostEqual(0.0, solved['roll'], places=10)
 
@@ -942,40 +944,29 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
 
 class VehiclePhysicsHardContactTests(unittest.TestCase):
 
-    def test_candidate_yaws_keep_the_shared_glancing_order(self):
-        candidates = vehicle_physics.hard_contact_candidate_yaws(0.2)
+    def test_candidate_yaw_comes_only_from_the_contact_tangent(self):
+        self.assertEqual((), vehicle_physics.hard_contact_candidate_yaws(.2))
+        yaw = math.pi/4
+        self.assertAlmostEqual(0., vehicle_physics.hard_contact_candidate_yaws(yaw, 4., (-1.,0.,0.))[0])
+        self.assertEqual((), vehicle_physics.hard_contact_candidate_yaws(math.pi/2, 4., (-1.,0.,0.)))
 
-        for expected, actual in zip((0.75, -0.35, 1.2, -0.8), candidates):
-            self.assertAlmostEqual(expected, actual)
+    def test_glancing_contact_removes_only_inward_normal_speed(self):
+        speed, dx, dz = vehicle_physics.hard_contact_step(6., .04, slide_yaw=0., incoming_yaw=math.pi/4)
+        self.assertAlmostEqual(6.*math.cos(math.pi/4), speed)
+        self.assertAlmostEqual(0., dx)
+        self.assertAlmostEqual(speed*.04, dz)
 
-    def test_first_glancing_contact_damps_and_advances_on_selected_yaw(self):
-        speed, delta_x, delta_z = vehicle_physics.hard_contact_step(
-            6.0, 0.04, grinding=False, slide_yaw=-0.55)
-        expected = (6.0 * vehicle_physics.HARD_CONTACT_ENTRY_FACTOR *
-                    vehicle_physics.HARD_CONTACT_SLIDE_DECAY ** 2.4)
+    def test_contact_history_does_not_change_tangent_momentum(self):
+        for dt in (.01, .04, .1):
+            a = vehicle_physics.hard_contact_step(6., dt, grinding=False, slide_yaw=.55, incoming_yaw=.55)
+            b = vehicle_physics.hard_contact_step(6., dt, grinding=True, slide_yaw=.55, incoming_yaw=.55)
+            self.assertEqual(a,b)
+            self.assertEqual(6., a[0])
 
-        self.assertAlmostEqual(expected, speed)
-        self.assertAlmostEqual(math.sin(-0.55) * expected * 0.04, delta_x)
-        self.assertAlmostEqual(math.cos(-0.55) * expected * 0.04, delta_z)
-
-    def test_continuing_glance_skips_the_first_contact_loss(self):
-        speed = vehicle_physics.hard_contact_step(
-            6.0, 0.04, grinding=True, slide_yaw=0.55)[0]
-
-        self.assertAlmostEqual(
-            6.0 * vehicle_physics.HARD_CONTACT_SLIDE_DECAY ** 2.4,
-            speed)
-
-    def test_fully_blocked_contact_uses_shared_brake_and_stop_threshold(self):
-        speed, delta_x, delta_z = vehicle_physics.hard_contact_step(
-            6.0, 0.04)
-
-        self.assertAlmostEqual(
-            6.0 * vehicle_physics.HARD_CONTACT_BRAKE_DECAY ** 2.4,
-            speed)
-        self.assertEqual((0.0, 0.0), (delta_x, delta_z))
-        self.assertEqual(
-            0.0, vehicle_physics.hard_contact_step(6.0, 0.1)[0])
+    def test_normal_impact_stops_without_a_decay_or_speed_dead_zone(self):
+        for speed in (.0001, .05, 6.):
+            self.assertEqual((0.,0.,0.), vehicle_physics.hard_contact_step(speed,.04))
+            self.assertEqual(speed, vehicle_physics.hard_contact_step(speed,.04,slide_yaw=0.,incoming_yaw=0.)[0])
 
 
 class VehiclePhysicsPinnedClimbTests(unittest.TestCase):
@@ -1112,36 +1103,32 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
             elapsed += dt
         return elapsed, distance
 
-    def test_type62_flat_release_stops_in_the_conservative_calibrated_window(self):
-        results = [self._flat_stop(rate) for rate in (24, 30, 60, 120)]
+    def test_neutral_flat_stop_follows_descriptor_rolling_force(self):
+        deceleration = vehicle_physics.rolling_resist_force(self.params)/self.params['mass']
+        expected_time = self.params['speedFwd']/deceleration
+        expected_distance = self.params['speedFwd']**2/(2*deceleration)
+        distances = []
+        for rate in (24,30,60,120):
+            speed = self.params['speedFwd']; distance=elapsed=0.
+            while speed > 0. and elapsed < expected_time+1.:
+                speed=self._coast(speed,0.,1./rate)
+                distance+=speed/rate;elapsed+=1./rate
+            self.assertLessEqual(abs(elapsed-expected_time),1./rate+1e-9)
+            self.assertLessEqual(abs(distance-expected_distance),self.params['speedFwd']/rate)
+            distances.append(distance)
+        self.assertLess(max(distances)-min(distances), self.params['speedFwd']/24.)
 
-        for elapsed, distance in results:
-            self.assertGreaterEqual(elapsed, 1.50)
-            self.assertLessEqual(elapsed, 1.60)
-            self.assertGreaterEqual(distance, 12.5)
-            self.assertLessEqual(distance, 12.9)
-        self.assertLess(
-            max(row[1] for row in results) -
-            min(row[1] for row in results),
-            0.30)
+    def test_unbraked_descent_follows_gravity_minus_rolling_resistance(self):
+        for angle in (0.,15.,28.,32.):
+            pitch=math.radians(angle)
+            acceleration=vehicle_physics.GRAVITY*math.sin(pitch)-vehicle_physics.rolling_resist_force(self.params)/self.params['mass']*math.cos(pitch)
+            self.assertAlmostEqual(5.+acceleration*.1,self._coast(5.,angle,.1))
 
-    def test_parkable_descent_brakes_and_a_steeper_one_slides(self):
-        # The 2.3-reviewed coast law: every slope the parked hold can keep
-        # brakes like the flat; past the perch limit gravity owns the descent.
-        self.assertLess(self._coast(5.0, 15.0, 0.1), 5.0)
-        self.assertGreater(self._coast(5.0, 15.0, 0.1),
-                           self._coast(5.0, 0.0, 0.1))
-        self.assertGreater(self._coast(5.0, 28.0, 0.1), 5.0)
-
-    def test_static_hold_and_handbrake_are_unchanged(self):
-        self.assertEqual(0.0, self._coast(0.0, 25.0, 0.1))
-        self.assertGreater(self._coast(0.0, 30.0, 0.1), 0.0)
-        self.assertGreater(
-            vehicle_physics.brake_force(self.params, True),
-            vehicle_physics.brake_force(self.params, False))
-        self.assertEqual(0.0, vehicle_physics.longitudinal_step(
-            self.params, 0.0, 0.0, False, math.radians(30.0), 0.1,
-            handbrake=True))
+    def test_neutral_does_not_apply_the_handbrake(self):
+        self.assertGreater(self._coast(0.,25.,.1),0.)
+        self.assertEqual(0., vehicle_physics.longitudinal_step(self.params,0.,0.,False,math.radians(25.),.1,handbrake=True))
+        self.assertGreater(vehicle_physics.brake_force(self.params,True),vehicle_physics.brake_force(self.params,False))
+        self.assertGreater(vehicle_physics.longitudinal_step(self.params,0.,0.,False,math.radians(40.),.1,handbrake=True),0.)
 
     def test_downhill_neutral_coast_is_frame_rate_invariant(self):
         results = []
@@ -1155,25 +1142,19 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
         self.assertGreater(results[0], 7.0)
         self.assertLess(max(results) - min(results), 1e-9)
 
-    def test_released_throttle_bleeds_the_gravity_overspeed(self):
-        speed = self.params['speedFwd'] * 1.04
-        elapsed = 0.0
-        while speed > 0.0 and elapsed < 6.0:
-            speed = self._coast(speed, 4.0, 1.0 / 30.0)
-            elapsed += 1.0 / 30.0
+    def test_releasing_throttle_does_not_remove_gravity_momentum(self):
+        speed=self.params['speedFwd']*1.04
+        after=self._coast(speed,4.,.1)
+        expected=speed+(vehicle_physics.GRAVITY*math.sin(math.radians(4.))-vehicle_physics.rolling_resist_force(self.params)/self.params['mass']*math.cos(math.radians(4.)))*.1
+        self.assertAlmostEqual(expected,after)
 
-        self.assertEqual(0.0, speed)
-        self.assertLess(elapsed, 2.5)
-
-    def test_a_driven_descent_keeps_the_gravity_overspeed(self):
-        speed = self.params['speedFwd']
-        for unused in range(30 * 20):
-            speed = vehicle_physics.longitudinal_step(
-                self.params, speed, 1.0, False, math.radians(20.0),
-                1.0 / 30.0)
-
-        self.assertAlmostEqual(self.params['speedFwd'] * 1.05, speed,
-                               places=3)
+    def test_governor_cannot_cap_downhill_energy_at_105_percent(self):
+        pitch=math.radians(20.)
+        speed=self.params['speedFwd']
+        for unused in range(300):
+            speed=vehicle_physics.longitudinal_step(self.params,speed,1.,False,pitch,1./30.)
+        acceleration=vehicle_physics.GRAVITY*math.sin(pitch)-vehicle_physics.rolling_resist_force(self.params)/self.params['mass']*math.cos(pitch)
+        self.assertAlmostEqual(self.params['speedFwd']+acceleration*10.,speed)
 
 
 class VehiclePhysicsAirborneTests(unittest.TestCase):

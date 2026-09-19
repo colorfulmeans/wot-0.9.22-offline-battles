@@ -1188,7 +1188,10 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
     The caller recasts after this individual hit to retain every other wall.
     """
     low, high = bbox[:2]
-    pose_y = world_collision._hull_pose_y(pitch, roll)
+    from gui.mods.offline_lan_0922 import collision_geometry
+    axes = collision_geometry.pose_axes(start_yaw, pitch, roll)
+    pose_axes = collision_geometry.pose_axes(0.0, pitch, roll)
+    pose_y = tuple(axis[1] for axis in pose_axes)
     end_yaw = float(start_yaw) + _angle_delta(start_yaw, end_yaw)
     sine, cosine = math.sin(start_yaw), math.cos(start_yaw)
 
@@ -1198,8 +1201,7 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
             return False
         dx, dy, dz = (point.x - position[0], point.y - position[1],
                       point.z - position[2])
-        x, z = dx * cosine - dz * sine, dx * sine + dz * cosine
-        y = (dy - x * pose_y[0] - z * pose_y[2]) / pose_y[1]
+        x, y, z = tuple(collision_geometry.dot(axis, (dx, dy, dz)) for axis in axes)
         inside = all(low[i] - 0.001 <= value <= high[i] + 0.001
                      for i, value in enumerate((x, y, z)))
         plane = dx * normal.x + dy * normal.y + dz * normal.z
@@ -1211,10 +1213,10 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
         for cx in (low[0], high[0]):
             for cy in (low[1], high[1]):
                 for cz in (low[2], high[2]):
-                    a = normal.x * cx + normal.z * cz
-                    b = normal.x * cz - normal.z * cx
-                    height = normal.y * (cx * pose_y[0] +
-                                        cy * pose_y[1] + cz * pose_y[2])
+                    px, py, pz = tuple(pose_axes[0][i]*cx+pose_axes[1][i]*cy+pose_axes[2][i]*cz for i in range(3))
+                    a = normal.x * px + normal.z * pz
+                    b = normal.x * pz - normal.z * px
+                    height = normal.y * py
                     before.append(a * cosine + b * sine + height)
                     after.append(a * math.cos(end_yaw) +
                                  b * math.sin(end_yaw) + height)
@@ -1242,35 +1244,13 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
 
 
 def _destructible_posed_bbox(bbox, pitch=0.0, roll=0.0):
-    """Enclose one height-posed body in its zero-yaw collision frame.
-
-    #1513's horizontal lanes retain the complete yaw-only X/Z footprint and
-    apply pitch/roll only to their height.  Pose that native collision shear
-    once before the analytical yaw interval, so a rotating sweep keeps the
-    raised nose/side without shrinking its horizontal coverage or applying
-    pitch and roll twice in the catalog resolver.
-    """
-    minimum, maximum = bbox[:2]
-    cos_pitch = math.cos(float(pitch))
-    sin_pitch = math.sin(float(pitch))
-    cos_roll = math.cos(float(roll))
-    sin_roll = math.sin(float(roll))
-    right_y = cos_pitch * sin_roll
-    up_y = cos_pitch * cos_roll
-    forward_y = -sin_pitch
-    points = []
-    for x in (float(minimum[0]), float(maximum[0])):
-        for y in (float(minimum[1]), float(maximum[1])):
-            for z in (float(minimum[2]), float(maximum[2])):
-                points.append((
-                    x,
-                    right_y * x + up_y * y + forward_y * z,
-                    z,
-                ))
-    return (
-        tuple(min(point[axis] for point in points) for axis in range(3)),
-        tuple(max(point[axis] for point in points) for axis in range(3)),
-    )
+    """Broad-phase bounds of a rigid body; never a physical overlap verdict."""
+    from gui.mods.offline_lan_0922 import collision_geometry
+    box = collision_geometry.body_box((0.0, 0.0, 0.0), 0.0, bbox, pitch, roll)
+    center, axes = box
+    extent = tuple(sum(abs(a[i]) for a in axes) for i in range(3))
+    return (tuple(center[i]-extent[i] for i in range(3)),
+            tuple(center[i]+extent[i] for i in range(3)))
 
 
 def _destructible_sweep_descriptor(descriptor, bbox):
@@ -2143,7 +2123,7 @@ class BattleRuntime(object):
             destructibles_compat.install(
                 area_destructibles, destructibles_cache)
             from gui.mods.offline_lan_0922 import destructibles_sensor
-            destructibles_sensor.set_diagnostics(debug_logging)
+            destructibles_sensor.set_diagnostics(True)
             self._destructibles = destructibles_sensor
         else:
             # Pure-logic tests inject no engine modules.  Production runtime
@@ -5431,8 +5411,8 @@ class BattleRuntime(object):
         bounds = self._arena_bounds
         if bounds is None:
             return (0.0, 0.0, 0.0, 0.0)
-        half_width, half_length = self._collision_shape(
-            entity.typeDescriptor)[:2]
+        shape = self._collision_shape(entity.typeDescriptor)
+        half_width, half_length = shape[:2]
         sine = abs(math.sin(float(yaw)))
         cosine = abs(math.cos(float(yaw)))
         # These are the axis projections of all four chassis OBB corners.
@@ -5443,6 +5423,7 @@ class BattleRuntime(object):
         maximum_x = float(bounds[2]) - extent_x
         maximum_z = float(bounds[3]) - extent_z
         x, unused_y, z = _xyz(position)
+        x, z = tank_collision.shape_center(x, z, yaw, shape)
         return (
             max(0.0, minimum_x - x),
             max(0.0, x - maximum_x),
@@ -5492,14 +5473,18 @@ class BattleRuntime(object):
                          descriptor=None, maximum_distance=None,
                          corridor_half_width=None):
         """Probe the admitted chassis corridor at two heights and distances."""
+        corridor_center = 0.0
         if corridor_half_width is None:
             # Passive contact callers have no active-drive descriptor. They
             # supply the chassis projection across their displacement; ordinary
             # drive probes use the same admitted body as tank contact physics.
             try:
-                corridor_half_width = (
-                    self._collision_shape(descriptor)[0]
-                    if descriptor is not None else 2.2)
+                if descriptor is not None:
+                    shape = self._collision_shape(descriptor)
+                    corridor_half_width = shape[0]
+                    corridor_center = tank_collision.shape_offset(shape)[0]
+                else:
+                    corridor_half_width = 2.2
             except (AttributeError, IndexError, TypeError, ValueError,
                     RuntimeError):
                 return {'clear': False, 'collision': True,
@@ -5593,7 +5578,8 @@ class BattleRuntime(object):
                 if delta > run * 0.48 or delta < -run * 0.38:
                     return {'clear': False, 'collision': False,
                             'water': False, 'slope': slope}
-            for offset in (-corridor_half_width, 0.0, corridor_half_width):
+            for offset in (corridor_center - corridor_half_width,
+                           corridor_center, corridor_center + corridor_half_width):
                 ray_start = self._vector((
                     x + lateral_x * offset, y + height,
                     z + lateral_z * offset))
@@ -17747,6 +17733,21 @@ class BattleRuntime(object):
                                    before=None, drive=None, pitch=None,
                                    contact=None, entity=None):
         """Record bounded pose evidence when powered travel cannot advance."""
+        if self._local_motion_status != 'clear' or path not in (None, 'still', 'advance'):
+            from gui.mods.offline_lan_0922 import physics_diagnostics
+            physics_diagnostics.emit('player_contact_frame', {
+                'start': start, 'end': end, 'dt': dt, 'path': path,
+                'yaw': self._local_yaw, 'pitch': self._local_pitch, 'roll': self._local_roll,
+                'throttle': throttle, 'turn_intent': self._local_drive_turn,
+                'turn_speed': self._local_turn_speed, 'speed_before': before,
+                'drive_speed': drive, 'speed_after': self._local_speed,
+                'vertical_speed': self._local_vertical_speed,
+                'status': self._local_motion_status, 'kinds': self._local_motion_kinds,
+                'contact': contact or getattr(self, '_local_world_collision_trace', None),
+                'physics': self._local_physics,
+                'spring_probes': getattr(self, '_local_suspension_probe_trace', ()),
+                'airborne': self._local_airborne,
+            }, key='player', now=self._clock())
         blocked_turn = (abs(self._local_drive_turn) > 0.01 and
                         abs(self._local_turn_speed) <= 1.0e-8 and
                         self._local_motion_status == 'hard')
@@ -17824,6 +17825,7 @@ class BattleRuntime(object):
             if callable(native_evidence) and all(key in trace for key in (
                     'ray_start', 'ray_end', 'hit')):
                 try:
+                    trace['native_evidence_source'] = 'supplemental_replay_after_decision'
                     trace['native_contact_evidence'] = native_evidence(
                         self._avatar.spaceID, self._vector(trace['ray_start']),
                         self._vector(trace['ray_end']), self._vector(trace['hit']))
@@ -18610,195 +18612,43 @@ class BattleRuntime(object):
             self, start_position, start_yaw, end_position, end_yaw,
             speed, descriptor, now, dt, commit_enabled=False,
             rotation_speed_cap=None, pitch=0.0, roll=0.0):
-        """Resolve the complete translating and rotating catalog hull sweep.
-
-        Each slice is a fixed-orientation zonotope understood by the pinned
-        sensor.  Its midpoint-frame bbox analytically encloses every rotated
-        hull pose in the slice, so the union covers the continuous old-to-new
-        pose instead of sampling a few rays or isolated endpoint rectangles.
-        """
-        clear = {
-            'status': 'clear', 'token': None, 'accepted_now': False,
-            'used_kinetic_speed': False, 'kinds': '-',
-            'requires_commit': False, 'impact_speed': abs(float(speed)),
-        }
+        """Resolve actual rigid poses and actual per-contact angular velocity."""
+        clear = {'status': 'clear', 'token': None, 'accepted_now': False,
+                 'used_kinetic_speed': False, 'kinds': '-',
+                 'requires_commit': False, 'impact_speed': abs(float(speed))}
         if self._destructibles is None:
             return clear
-        bbox_reader = getattr(
-            self._destructibles, '_vehicle_body_bbox', None)
-        if not callable(bbox_reader):
-            bbox_reader = getattr(
-                self._destructibles, '_vehicle_hull_bbox', None)
-        if not callable(bbox_reader):
-            # Production always has the pinned typed sensor.  Preserve the old
-            # no-rotation behavior for narrow injected adapters which predate
-            # this seam rather than inventing a hull shape for them.
+        reader = getattr(self._destructibles, '_vehicle_body_bbox', None)
+        if not callable(reader):
+            reader = getattr(self._destructibles, '_vehicle_hull_bbox', None)
+        if not callable(reader):
             return clear
-        bbox = bbox_reader(descriptor)
-        if bbox is None:
-            return clear
+        bbox = reader(descriptor)
         if not isinstance(bbox, (list, tuple)) or len(bbox) < 2:
-            # Narrow test/extension adapters may expose a dynamic attribute in
-            # place of the pinned sensor function.  It is not hull evidence.
             return clear
-        posed_bbox = _destructible_posed_bbox(bbox, pitch, roll)
-        resolver_name = ('_catalog_motion_blocked' if commit_enabled else
-                         '_catalog_motion_proposal')
-        resolver = getattr(self._destructibles, resolver_name, None)
+        delta = _angle_delta(float(start_yaw), float(end_yaw))
+        if abs(delta) <= 1.0e-12:
+            return clear
+        motion = {'start': tuple(start_position[:3]),
+                  'end': tuple(end_position[:3]), 'yaw': float(start_yaw),
+                  'yaw_delta': delta, 'pitch': float(pitch), 'roll': float(roll),
+                  'bbox': bbox, 'dt': max(0.0, float(dt))}
+        name = '_catalog_motion_blocked' if commit_enabled else '_catalog_motion_proposal'
+        resolver = getattr(self._destructibles, name, None)
         if not callable(resolver):
-            raise RuntimeError(
-                'destructible pose-sweep resolver is unavailable')
-
-        start = tuple(float(value) for value in start_position[:3])
-        end = tuple(float(value) for value in end_position[:3])
-        yaw_delta = _angle_delta(float(start_yaw), float(end_yaw))
-        if abs(yaw_delta) <= 1.0e-8:
-            return clear
-        steps = int(math.ceil(
-            abs(yaw_delta) / DESTRUCTIBLE_POSE_MAX_ANGLE_STEP))
-        if not 1 <= steps <= DESTRUCTIBLE_POSE_MAX_SWEEP_STEPS:
-            raise RuntimeError('destructible pose sweep exceeds its bound')
-        duration = max(1.0e-6, float(dt))
-        center_dx = end[0] - start[0]
-        center_dy = end[1] - start[1]
-        center_dz = end[2] - start[2]
-        center_distance = math.sqrt(
-            center_dx * center_dx + center_dz * center_dz)
-        corner_radius = max(math.sqrt(
-            float(local_x) * float(local_x) +
-            float(local_z) * float(local_z))
-            for local_x in (posed_bbox[0][0], posed_bbox[1][0])
-            for local_z in (posed_bbox[0][2], posed_bbox[1][2]))
-        if rotation_speed_cap is None:
-            rotation_kinetic_speed = None
-        else:
-            try:
-                rotation_speed_cap = abs(float(rotation_speed_cap))
-            except (TypeError, ValueError, OverflowError):
-                raise RuntimeError(
-                    'destructible rotation speed cap is invalid')
-            if (math.isnan(rotation_speed_cap) or
-                    math.isinf(rotation_speed_cap)):
-                raise RuntimeError(
-                    'destructible rotation speed cap is invalid')
-            rotation_kinetic_speed = rotation_speed_cap * corner_radius
-        angular_edge_speed = abs(yaw_delta) * corner_radius / duration
-        impact_magnitude = min(200.0, math.sqrt(
-            max(abs(float(speed)), center_distance / duration) ** 2 +
-            angular_edge_speed ** 2))
-        impact_speed = (-impact_magnitude
-                        if float(speed) < 0.0 else impact_magnitude)
-        if impact_magnitude <= 1.0e-8:
-            return clear
-
-        token = set()
-        kinds = set()
-        accepted_now = False
-        used_kinetic_speed = False
-        requires_commit = False
-        saw_crushed = False
-        saw_soft = False
-        saw_approach = False
-        saw_kinetic = False
-        saw_pending = False
-        saw_hard = False
-        for index in range(steps):
-            lower = float(index) / float(steps)
-            upper = float(index + 1) / float(steps)
-            middle = (lower + upper) * 0.5
-            slice_start = tuple(
-                start[axis] + (end[axis] - start[axis]) * lower
-                for axis in range(3))
-            slice_end = tuple(
-                start[axis] + (end[axis] - start[axis]) * upper
-                for axis in range(3))
-            slice_yaw = float(start_yaw) + yaw_delta * middle
-            interval_bbox = _destructible_rotation_interval_bbox(
-                posed_bbox, abs(yaw_delta) * 0.5 / float(steps))
-            sweep_descriptor = _destructible_sweep_descriptor(
-                descriptor, interval_bbox)
-            move_x = slice_end[0] - slice_start[0]
-            move_z = slice_end[2] - slice_start[2]
-            move_distance = math.sqrt(move_x * move_x + move_z * move_z)
-            motion_yaw = (math.atan2(move_x, move_z)
-                          if move_distance > 1.0e-8 else None)
-            # Geometry needs the realised centre travel, while kinetic
-            # classification needs the faster rotating hull edge.  Choosing a
-            # duration whose product with impact speed equals centre travel
-            # preserves that path without adding a proximity skin.
-            slice_dt = (move_distance / impact_magnitude
-                        if move_distance > 1.0e-8 else 0.0)
-            if commit_enabled:
-                detail = resolver(
-                    self._avatar.spaceID, self._vector(slice_start),
-                    slice_yaw, impact_speed, sweep_descriptor, now,
-                    dt=slice_dt, kinetic_speed=rotation_kinetic_speed,
-                    return_detail=True,
-                    kinetic_commit=True, commit_enabled=True,
-                    motion_yaw=motion_yaw,
-                    travel_reach=move_distance)
-            else:
-                detail = resolver(
-                    self._avatar.spaceID, self._vector(slice_start),
-                    slice_yaw, impact_speed, sweep_descriptor, now,
-                    dt=slice_dt, kinetic_speed=rotation_kinetic_speed,
-                    motion_yaw=motion_yaw,
-                    travel_reach=move_distance)
-            if isinstance(detail, bool):
-                detail = {'status': 'hard' if detail else 'clear'}
-            elif isinstance(detail, str):
-                detail = {'status': detail}
-            if not isinstance(detail, dict):
-                raise RuntimeError(
-                    'destructible pose-sweep detail is unavailable')
-            status = detail.get('status')
-            if status not in (
-                    'clear', 'crushed', 'soft', 'hard', 'approach',
-                    'kinetic', 'pending'):
-                raise RuntimeError(
-                    'destructible pose sweep returned an invalid status')
-            parsed_token = self._destructible_contact_token(
-                detail.get('token'))
-            if parsed_token is not None:
-                token.update(parsed_token)
-            raw_kinds = str(detail.get('kinds', '-'))
-            kinds.update(value for value in raw_kinds.split(',')
-                         if value and value != '-')
-            accepted_now = accepted_now or bool(
-                detail.get('accepted_now', False))
-            used_kinetic_speed = used_kinetic_speed or bool(
-                detail.get('used_kinetic_speed', False))
-            requires_commit = requires_commit or bool(
-                detail.get('requires_commit', False))
-            saw_crushed = saw_crushed or status == 'crushed'
-            saw_soft = saw_soft or status == 'soft'
-            saw_approach = saw_approach or status == 'approach'
-            saw_kinetic = saw_kinetic or status == 'kinetic'
-            saw_pending = saw_pending or status == 'pending'
-            saw_hard = saw_hard or status == 'hard'
-            if saw_hard:
-                # A hard backing body still blocks the pose, but an exact
-                # fragile token from this or an earlier slice must be
-                # committed and propagated before the tank stops.
-                break
-
-        status = ('hard' if saw_hard else
-                  'pending' if saw_pending else
-                  'kinetic' if saw_kinetic else
-                  'crushed' if saw_crushed else
-                  'soft' if saw_soft else
-                  'approach' if saw_approach else 'clear')
-        return {
-            'status': status,
-            'token': tuple(sorted(token, key=lambda row: (
-                row[0], row[1], -1 if row[2] is None else row[2]))) or None,
-            'accepted_now': accepted_now,
-            'used_kinetic_speed': used_kinetic_speed,
-            'kinds': ','.join(sorted(kinds)) or '-',
-            'requires_commit': requires_commit,
-            'impact_speed': impact_speed,
-            '_pending': saw_pending,
-        }
+            raise RuntimeError('destructible rigid motion resolver is unavailable')
+        options = {'dt': dt, 'contact_motion': motion, 'pitch': pitch, 'roll': roll}
+        if commit_enabled:
+            options.update(return_detail=True, kinetic_commit=True, commit_enabled=True)
+        detail = resolver(self._avatar.spaceID, self._vector(start_position),
+                          start_yaw, speed, descriptor, now, **options)
+        if isinstance(detail, bool):
+            detail = {'status': 'hard' if detail else 'clear'}
+        elif isinstance(detail, str):
+            detail = {'status': detail}
+        if not isinstance(detail, dict):
+            raise RuntimeError('destructible rigid motion detail is unavailable')
+        return detail
 
     def _turret_motion_is_clear(self, start_pose, end_pose, descriptor):
         """Use the room's published turret geometry for every moving hull."""
@@ -18898,6 +18748,9 @@ class BattleRuntime(object):
         detail = self._merge_destructible_motion_proposals(
             catalog_detail, tree_detail)
         status = detail.get('status')
+        catalog_evidence = catalog_detail.get('evidence')
+        if catalog_evidence and status == 'hard':
+            self._local_world_collision_trace = dict(catalog_evidence, reason='catalog_rigid_contact')
         self._local_motion_kinds = str(detail.get('kinds', '-'))
         self._local_motion_status = status
         if status == 'pending':
@@ -18948,10 +18801,11 @@ class BattleRuntime(object):
 
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
-            pitch=None, roll=None, record_local=True):
+            pitch=None, roll=None, record_local=True, evidence=None):
         """Recast every rotating body slice against the live native BSP.
 
-        The catalog owns each destructible's original shape.  Once a structure
+        Intact native walls and accepted replacement BSPs both own collision.
+        The catalog owns each destructible's original shape. Once a structure
         module or a retained-collision fragile is destroyed, however, #1513
         may replace it with a different compiled BSP which can extend outside
         the old catalog OBB.  Therefore even a catalog ``clear`` must ask the
@@ -18964,13 +18818,6 @@ class BattleRuntime(object):
         read-only recast through the ordinary broken-skin filter, preserving
         both backing walls and damaged-model materials.
         """
-        active_reader = getattr(
-            self._destructibles, 'native_replacement_bsp_active', None)
-        if callable(active_reader) and not active_reader():
-            # Before the first accepted retained replacement there is no
-            # damaged BSP to find.  The ordinary catalog/baked guards own live
-            # objects without paying for two native sweeps per slice.
-            return True
         if pitch is None:
             pitch = self._local_pitch
         if roll is None:
@@ -19016,19 +18863,46 @@ class BattleRuntime(object):
                                                   self._vector(previous_trace['normal'])))
             return previous_contacts
 
-        for index in range(steps):
-            lower = float(index) / float(steps)
-            upper = float(index + 1) / float(steps)
+        from gui.mods.offline_lan_0922 import collision_geometry
+        from gui.mods.offline_lan_0922 import physics_diagnostics
+        intervals = [(float(i) / steps, float(i + 1) / steps)
+                     for i in range(steps - 1, -1, -1)]
+        while intervals:
+            lower, upper = intervals.pop()
             middle = (lower + upper) * 0.5
             slice_yaw = float(start_yaw) + yaw_delta * middle
-            interval_bbox = _destructible_rotation_interval_bbox(
-                bbox, abs(yaw_delta) * 0.5 / float(steps))
-            sweep_descriptor = _destructible_world_sweep_descriptor(
-                descriptor, interval_bbox)
-            departing = _rotation_departing_contact(
-                position, bbox, float(start_yaw) + yaw_delta * lower,
-                float(start_yaw) + yaw_delta * upper, pitch, roll,
-                read_previous_contacts)
+            actual_motion = {'start': tuple(position), 'end': tuple(position),
+                'yaw': float(start_yaw) + yaw_delta * lower,
+                'yaw_delta': yaw_delta * (upper-lower), 'bbox': bbox,
+                'pitch': pitch, 'roll': roll, 'query_only': True}
+            # Bound in the MIDPOINT BODY axes. Bounding an already posed AABB
+            # would preserve fictitious empty corners even at zero yaw width.
+            local_motion = dict(actual_motion, start=(0., 0., 0.), end=(0., 0., 0.))
+            ranges = [collision_geometry.projection_range(local_motion, axis)
+                      for axis in collision_geometry.pose_axes(slice_yaw, pitch, roll)]
+            interval_bbox = (tuple(r[0] for r in ranges), tuple(r[1] for r in ranges))
+            sweep_descriptor = _destructible_world_sweep_descriptor(descriptor, interval_bbox)
+            departure_test = _rotation_departing_contact(
+                position, bbox, actual_motion['yaw'],
+                actual_motion['yaw'] + actual_motion['yaw_delta'],
+                pitch, roll, read_previous_contacts)
+            ambiguous = []
+
+            def departing(hit):
+                normal = (hit[1].x, hit[1].y, hit[1].z)
+                point = (hit[0].x, hit[0].y, hit[0].z)
+                plane = collision_geometry.dot(point, normal)
+                minimum = collision_geometry.projection_range(actual_motion, normal)[0]
+                if minimum > plane or departure_test(hit):
+                    return True
+                if not collision_geometry.rotation_contains_point(actual_motion, point):
+                    # This point alone cannot decide the wall: its farther
+                    # volume may enter the real arc. Recast later faces, then
+                    # subdivide the envelope instead of discarding the wall.
+                    ambiguous.append((point, normal))
+                    return True
+                return False
+
             for probe_speed in (1.0e-6, -1.0e-6):
                 trace = {}
                 world_status = world_collision.check_horizontal_collision(
@@ -19036,17 +18910,29 @@ class BattleRuntime(object):
                     self._avatar.spaceID, self._vector(position),
                     slice_yaw, probe_speed, sweep_descriptor, False, 0.0,
                     True, False, None, commit_enabled=False,
-                    pitch=pitch, roll=roll,
-                    trace=trace, exact_footprint=True,
+                    pitch=pitch, roll=roll, trace=trace, exact_footprint=True,
                     departing_contact=departing)
                 if isinstance(world_status, bool):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status != 'clear':
+                    if evidence is not None:
+                        evidence.update(trace)
                     if record_local:
                         self._local_world_collision_trace = trace
                         self._local_motion_kinds = 'world'
                         self._local_motion_status = 'hard'
                     return False
+            if ambiguous:
+                physics_diagnostics.emit('rotation_envelope_refine', {
+                    'motion': actual_motion, 'candidates': ambiguous})
+                # Stop only when native float32 yaw can no longer distinguish
+                # the endpoints, not after a fixed number of collision waits.
+                import struct
+                first_yaw = actual_motion['yaw']
+                last_yaw = first_yaw + actual_motion['yaw_delta']
+                if (middle != lower and middle != upper and
+                        struct.pack('f', first_yaw) != struct.pack('f', last_yaw)):
+                    intervals.extend(((middle, upper), (lower, middle)))
         return True
 
     def _motion_is_clear(self, entity, position, yaw, speed, dt,
@@ -19225,6 +19111,8 @@ class BattleRuntime(object):
                 'local motion resolver returned an invalid status')
         self._local_motion_kinds = str(detail.get('kinds', '-'))
         self._local_motion_status = status
+        if status == 'hard' and detail.get('evidence'):
+            self._local_world_collision_trace = dict(detail['evidence'], reason='catalog_rigid_contact')
         if status == 'hard':
             return False
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
@@ -19303,12 +19191,15 @@ class BattleRuntime(object):
                     'bot rotation commit returned an invalid status')
             self._bot_motion_kinds[int(bot_id)] = str(
                 detail.get('kinds', '-'))
+        bot_state['_rotation_contact_trace'] = detail.get('evidence')
         if status not in ('clear', 'crushed', 'approach'):
             return False
+        rotation_trace = {}
         clear = self._native_world_rotation_is_clear(
             position, start_yaw, end_yaw, descriptor,
-            pitch=pitch, roll=roll, record_local=False)
+            pitch=pitch, roll=roll, record_local=False, evidence=rotation_trace)
         if not clear:
+            bot_state['_rotation_contact_trace'] = rotation_trace
             self._bot_motion_kinds[int(bot_id)] = 'world'
         return clear
 
@@ -19426,6 +19317,8 @@ class BattleRuntime(object):
         self._bot_motion_kinds[int(bot_id)] = str(detail.get('kinds', '-'))
         if status == 'hard':
             return 'hard'
+        if status == 'hard' and detail.get('evidence'):
+            bot_state['_world_contact_trace'] = dict(detail['evidence'], reason='catalog_rigid_contact')
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
         if used_kinetic_speed and not (
@@ -19537,7 +19430,7 @@ class BattleRuntime(object):
         center = _xyz(getattr(
             matrix, 'translation', getattr(vehicle, 'position', None)))
         shape = self._collision_shape(descriptor)
-        reach = math.sqrt(shape[0] * shape[0] + shape[1] * shape[1]) + 1.0
+        reach = tank_collision.shape_radius(shape) + 1.0
         center_depth = ((center[0] - hit[0]) * inward_normal[0] +
                         (center[2] - hit[2]) * inward_normal[1])
         if math.isnan(center_depth) or math.isinf(center_depth):
@@ -19664,7 +19557,7 @@ class BattleRuntime(object):
                 not isinstance(vehicle, _STRING_TYPES) or
                 not vehicle or len(vehicle) > 80 or
                 not isinstance(raw.get('shape'), (list, tuple)) or
-                len(raw['shape']) != 4):
+                len(raw['shape']) not in (4, 6)):
             raise RuntimeError('worker human ram probe body is invalid')
         try:
             values = dict((name, float(raw[name])) for name in (
@@ -19675,9 +19568,10 @@ class BattleRuntime(object):
         if (any(math.isnan(value) or math.isinf(value)
                 for value in list(values.values()) + list(shape)) or
                 any(abs(values[name]) > 5000.0 for name in ('x', 'y', 'z')) or
-                not 0.5 <= shape[0] <= 20.0 or
-                not 0.75 <= shape[1] <= 30.0 or
-                not -20.0 <= shape[2] < shape[3] <= 30.0):
+                not 0.0 < shape[0] <= 20.0 or
+                not 0.0 < shape[1] <= 30.0 or
+                not -20.0 <= shape[2] < shape[3] <= 30.0 or
+                any(abs(value) > 30.0 for value in shape[4:])):
             raise RuntimeError('worker human ram probe body is invalid')
         return {
             'id': player_id, 'kind': 'player', 'network_id': player_id,
@@ -19978,7 +19872,7 @@ class BattleRuntime(object):
         cosine = math.cos(yaw)
         right_x, right_z = cosine, -sine
         forward_x, forward_z = sine, cosine
-        center_x, center_z = float(body['x']), float(body['z'])
+        center_x, center_z = tank_collision.shape_center(body['x'], body['z'], yaw, shape)
         half_width, half_length = float(shape[0]), float(shape[1])
         return [
             (center_x + sx * half_width * right_x +
@@ -20163,8 +20057,7 @@ class BattleRuntime(object):
         otherwise a returning hull could earn the same ram damage twice.
         """
         result = []
-        own_radius = math.sqrt(
-            own_shape[0] * own_shape[0] + own_shape[1] * own_shape[1])
+        own_radius = tank_collision.shape_radius(own_shape)
         bot_states = getattr(self._bots, 'states', {}) if self._bots else {}
         for record in self._records.values():
             if (record.get('local') or record.get('tombstone') or
@@ -20193,7 +20086,7 @@ class BattleRuntime(object):
                         pitch_b=_number(pose.get('pitch', state.get('pitch'))),
                         roll_b=_number(pose.get('roll', state.get('roll')))):
                     continue
-                radius = math.sqrt(shape[0] * shape[0] + shape[1] * shape[1])
+                radius = tank_collision.shape_radius(shape)
                 reach = (own_radius + radius +
                          tank_collision.CONTACT_BROADPHASE_PADDING)
                 dx, dz = position[0] - x, position[2] - z
@@ -20387,14 +20280,18 @@ class BattleRuntime(object):
                   applied_forward * math.sin(yaw))
         push_z = (self._local_push_z + delta_z -
                   applied_forward * math.cos(yaw))
+        undamped_push = (push_x, push_z)
         if self._local_physics is not None:
             push_x, push_z = vehicle_physics.contact_push_step(
                 self._local_physics, push_x, push_z, yaw, dt,
                 rolling=bool(self._local_speed or getattr(self._sender, 'forward', 0)),
                 normal_y=math.cos(self._local_pitch)*math.cos(self._local_roll))
         correction_x, correction_z = contact['correction']
-        move_x = correction_x + push_x * dt
-        move_z = correction_z + push_z * dt
+        integrated = getattr(self, '_local_wall_integrated_push', (0.0, 0.0))
+        self._local_wall_integrated_push = (0.0, 0.0)
+        travel_push = undamped_push if integrated != (0.0, 0.0) else (push_x, push_z)
+        move_x = correction_x + (travel_push[0]-integrated[0]) * dt
+        move_z = correction_z + (travel_push[1]-integrated[1]) * dt
         distance = math.sqrt(move_x * move_x + move_z * move_z)
         if distance > 0.0001:
             contact_yaw = math.atan2(move_x, move_z)
@@ -20450,7 +20347,7 @@ class BattleRuntime(object):
             try:
                 body = rigid_turret.Body(turret_obstacles.turret_components(source.typeDescriptor), frame)
                 shape = self._collision_shape(entity.typeDescriptor)
-                if _distance_2d(position, body.com) > body.radius + math.hypot(*shape[:2]):
+                if _distance_2d(position, body.com) > body.radius + tank_collision.shape_radius(shape):
                     continue
                 pending = turret_contact_ledger.pending(self._local_turret_pushes, key, body.acks, player_key)
                 body.momentum(pending[:3], pending[3:])
@@ -21986,6 +21883,7 @@ class BattleRuntime(object):
         dt = max(0.0, min(float(dt), 0.1))
         position = self._local_position
         tick_pose = position
+        self._local_wall_integrated_push = (0.0, 0.0)
         yaw = self._canonicalize_local_attitude(self._local_yaw)
         self._local_yaw = yaw
         turret_tick_pose = None
@@ -22073,57 +21971,35 @@ class BattleRuntime(object):
                 # probe must not erase the reason this drive slice slowed.
                 primary_contact = dict(getattr(
                     self, '_local_world_collision_trace', None) or {})
-                if self._local_motion_cap_crushed:
-                    # The speed cap only proves that this vehicle may crush the
-                    # exact item.  It is never copied vehicle momentum.  Keep
-                    # this tick outside the accepted native skin and restore
-                    # the real speed from before the longitudinal integration.
-                    self._local_speed = previous_speed
-                    self._local_grind = 1
-                    contact_path = 'cap_hold'
-                elif self._local_motion_soft_block:
-                    # #1513 hides fragile/module geometry asynchronously.  Keep
-                    # the pose outside its still-native skin, but retain impact
-                    # momentum; the next clear tick advances normally and a
-                    # newly exposed backing wall still uses the hard response.
-                    self._local_grind = 1
-                    contact_path = 'soft_hold'
-                    self._report_destructible_verdict(
-                        'visible_soft_hold', 0, False,
-                        world_status=self._local_motion_status)
-                else:
-                    self._apply_world_contact_impact(
-                        entity, primary_contact, self._local_speed, yaw)
-                    deflected = False
-                    for slide_yaw in \
-                            vehicle_physics.hard_contact_candidate_yaws(
-                                yaw, self._local_speed,
-                                primary_contact.get('normal')):
-                        if self._motion_is_clear(
-                                entity, position, slide_yaw,
-                                self._local_speed, dt, hull_yaw=yaw):
-                            slide_speed, slide_x, slide_z = \
-                                vehicle_physics.hard_contact_step(
-                                    self._local_speed, dt,
-                                    grinding=self._local_grind > 0,
-                                    slide_yaw=slide_yaw)
-                            position = (
-                                position[0] + slide_x,
-                                position[1],
-                                position[2] + slide_z)
-                            self._local_speed = slide_speed
-                            self._local_grind = (
-                                vehicle_physics.HARD_CONTACT_GRIND_TICKS)
-                            deflected = True
-                            contact_path = 'deflect'
-                            break
-                    if not deflected:
-                        self._local_speed = \
-                            vehicle_physics.hard_contact_step(
-                                self._local_speed, dt)[0]
-                        self._local_grind = (
-                            vehicle_physics.HARD_CONTACT_GRIND_TICKS)
-                        contact_path = 'brake'
+                self._apply_world_contact_impact(
+                    entity, primary_contact, self._local_speed, yaw)
+                deflected = False
+                velocity = (math.sin(yaw)*self._local_speed+self._local_push_x,
+                            0.0, math.cos(yaw)*self._local_speed+self._local_push_z)
+                normal = primary_contact.get('normal')
+                outgoing = vehicle_physics.world_contact_velocity(velocity, normal) if normal else (0.0, 0.0, 0.0)
+                tangent_speed = math.hypot(outgoing[0], outgoing[2])
+                if tangent_speed > 1.0e-10:
+                    slide_yaw = math.atan2(outgoing[0], outgoing[2])
+                    if self._motion_is_clear(entity, position, slide_yaw,
+                            tangent_speed, dt, hull_yaw=yaw):
+                        self._local_speed = outgoing[0]*math.sin(yaw)+outgoing[2]*math.cos(yaw)
+                        lateral = (outgoing[0]-math.sin(yaw)*self._local_speed,
+                                   outgoing[2]-math.cos(yaw)*self._local_speed)
+                        self._local_push_x, self._local_push_z = lateral
+                        self._local_wall_integrated_push = lateral
+                        position = (position[0]+outgoing[0]*dt, position[1],
+                                    position[2]+outgoing[2]*dt)
+                        self._local_grind = 0
+                        deflected = True
+                        contact_path = 'deflect'
+                if not deflected:
+                    self._local_speed = \
+                        vehicle_physics.hard_contact_step(
+                            self._local_speed, dt)[0]
+                    self._local_grind = (
+                        vehicle_physics.HARD_CONTACT_GRIND_TICKS)
+                    contact_path = 'brake'
             else:
                 # The old airborne branch withheld X/Z travel but retained
                 # full speed forever, pinning the falling hull to a cliff.
@@ -23137,7 +23013,7 @@ class BattleRuntime(object):
         try:
             shape = tank_collision.chassis_shape(
                 vehicle.typeDescriptor)
-            blocker_radius = math.hypot(shape[0], shape[1])
+            blocker_radius = tank_collision.shape_radius(shape)
         except Exception:
             fallback = tank_collision.DEFAULT_SHAPE
             blocker_radius = math.hypot(fallback[0], fallback[1])
