@@ -4731,3 +4731,80 @@ cadence, has bounded surface/owner counts, never destroys an object, and is
 never consulted for a movement verdict. Its errors are contained to logging.
 Further #1513 Windows evidence is needed to distinguish the remaining native
 original-skin, damaged-geometry and catalog-placement cases.
+
+### September 19 19:10 actual-contact follow-up
+
+The user explicitly rejects all added vehicle collision clearance and collision
+waiting. The `190613` upload contains launcher information only. The `191002`
+report runs the previous `9baedc10` build (`colorfulmeans-35438296692-1`) and
+contains five Paris hard-contact rays. Malinovka's improvement and remaining
+contacts are user-observed evidence; this report contains no Malinovka round.
+
+All five Paris replay rays hit original material 74 with flags 131 beside an
+already accepted module. The replay agrees with the reported point, but its
+anonymous item/chunk callback slots differ from the original query. Matching
+the complete old callback tuple therefore fails to exclude the same original
+surface. Four contacts belong to registered `(32384, 24)`, the fifth to
+`(32640, 64)`. Their native vertical side faces lie inside the authored XZ
+footprint but above its baked module bounds. The fixture retains all five
+reported poses, hit points, ray endpoints and nearby owner states.
+
+The common traversal now recognizes a transient original surface by its
+material/flags only inside a proved accepted owner's interval. Registered and
+baked wire identities never enter that alias class. When a vertical side face
+has no 3-D owner, its exact authored XZ footprint can establish ownership;
+every possible stacked owner must be registered and accepted for that material.
+Unregistered baked owners, live neighbours, ground-facing normals and vertical
+ground rays cannot use this fallback. It changes no collider or destruction
+bound and invokes no new native API. Unknown, damaged and backing-wall hits
+remain solid. This is a mechanism fix, without map names or coordinate gates.
+
+The hull/contact paths now use the authored asymmetric body bounds and actual
+frame travel. Removed physical padding includes the 0.5 m side guard, 0.075 m
+contact skin, `max(0.4, abs(speed)*dt + 0.2)` native/catalog lead, airborne
+0.2 m lead and the background scanner's 0.8--2.0 m proximity reach. The contact
+helper no longer accepts an optional padding parameter. The native lateral
+lanes preserve distinct left/right limits instead of mirroring the larger
+side. No collision wait is added. The prior immediate accepted-collider swap
+remains in place. Rotation uses the same unpadded contact helper; its true
+edge speed still feeds the existing destruction eligibility law.
+
+On the preceding implementation the new captured-face, transient-slot and
+rotation-gap repros fail eight cases. The updated related suites pass 1,413
+tests locally. Old tests requiring padding now assert actual body/frame bounds,
+clear gaps and retained physical contacts. Additional controls cover walls
+behind accepted skins, stacked/live owners, both turn directions, asynchronous
+proposal/commit ownership, rolled body corners and asymmetric lateral travel.
+Blocked turns at zero throttle now use the existing bounded stall diagnostic;
+the two-second log cadence is not a movement timer. Windows package/CI results
+are recorded on PR #12. Gameplay clearance in Paris/Malinovka and across all
+maps still needs the new build on #1513; fixtures do not prove that acceptance.
+
+### User-requested physics-parameter review (no additional tuning applied)
+
+The `v0.8.4` tag already contains the old explicit clearance and the following
+physics approximations. `vehicle_physics.py` differs from that tag only in the
+later contact-normal filtering of deflection headings; `tank_collision.py` is
+unchanged. This does not negate the user's later runtime regression, but it
+does rule out calling all these constants newly introduced after 0.8.4.
+The old building swap-hold was added in `624ead6a` and removed in `18110f50`;
+the uploaded `9baedc10` build already includes that removal.
+
+| Item | Current code behaviour | Review concern |
+| --- | --- | --- |
+| Hard-contact response | First slide speed is multiplied by 0.60, then by `0.85 ** (dt*60)`; a blocked speed uses `0.35 ** (dt*60)` | Tangential momentum and contact friction are replaced by fixed decay factors. Four grind ticks control repeated entry damping, not a four-tick movement wait. |
+| Deflection directions | Try yaw offsets +/-0.55 and +/-1.0 radians in a fixed order | The wall tangent can lie between all four probes; grazing contact can become a stop. The newer normal filter prevents inward escape probes but does not derive the actual tangent. |
+| Steep uphill drag | Above 27.5 degrees and 0.5 m/s, add `10*(tan(grade)-tan(27.5deg))*12.2625` m/s2 of braking | This is about 7 m/s2 at 30 degrees and 22 m/s2 at 35 degrees, additional to slope gravity/rolling resistance. It is an offline calibration, not a recovered native force law. |
+| Downhill overspeed | Limit to 105% of descriptor speed; grow surplus by only `0.20*sin(grade)` m/s each second, conditional on throttle | Explicit cap and throttle-dependent surplus replace part of the gravity-integrated result. |
+| Neutral braking | Apply 65% of grip braking in addition to rolling resistance, fading near the parked slope limit | The release curve is an offline approximation. It needs original-client comparison rather than being labelled a collision fix. |
+| Suspension contact/freeze | Pseudo contacts count with up to 0.10 m separation; small vertical/angular speeds are zeroed under acceleration thresholds | Can affect hovering/settling feel. These are ground-support rules, not the removed horizontal fence padding; changing them requires suspension evidence. |
+| Rotation interval box | At most 5 degrees per slice; use enclosing axis bounds of all rotated corners | An enclosing rectangle includes empty corners outside the exact rotational swept set. It is not an explicit clearance constant, but can produce a conservative false contact; a precise narrow-phase review is warranted. |
+| Tank-to-tank shape/receipt | Symmetric chassis half-extents have minima 0.8 m/1.0 m; ram receipt matching allows 0.75 m | Asymmetric bodies can be enlarged; receipt tolerance is not the physical collision shape. These paths are separate from map-object contact and remain unchanged for the user's decision. |
+| Soft-skin traversal budget | Four newly excluded original-surface classes per traversal | Exhaustion retains the unresolved native hit as hard. This is a bounded-query policy, not elapsed-time waiting, but dense accepted skins merit an adversarial traversal review. |
+
+Numerical SAT tolerance (1e-7 m), spatial-index broadphase padding and callback
+identity matching tolerances are not automatically physical clearance. Their
+consumers must be checked before changing them. The recovered 1.25 g arcade
+gravity and client-authored grip curves likewise must not be called accidental
+physics bugs merely because they differ from real-world SI behaviour. The user
+will choose any further physics changes after reviewing these findings.

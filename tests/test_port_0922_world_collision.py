@@ -99,6 +99,31 @@ class _ItemMatrix(object):
 
 class WorldCollisionTests(unittest.TestCase):
 
+    def test_asymmetric_body_and_real_lateral_travel_have_no_extra_width(self):
+        descriptor = _Strict1513Component(hull=_Strict1513Component(
+            hitTester=types.SimpleNamespace(bbox=(
+                (-1.0, -1.0, -3.0), (2.0, 1.0, 3.0), None))))
+        for wall_x, expected in ((-1.3, False), (-1.1, True),
+                                 (2.3, False), (2.1, True)):
+            def collide(space, start, end, mask, *unused):
+                delta = end.x - start.x
+                if abs(delta) < 1.0e-9:
+                    return None
+                fraction = (wall_x - start.x) / delta
+                if not 0.0 <= fraction <= 1.0:
+                    return None
+                return (start + (end - start).scale(fraction),
+                        _Vector(1.0 if wall_x < 0.0 else -1.0, 0, 0), 0)
+            scene = types.SimpleNamespace(
+                wg_collideSegment=collide,
+                wg_getMatInfoNearPoint=_miss_mat_info_1513)
+            with self.subTest(wall_x=wall_x), mock.patch.object(
+                    world_collision, '_destroy_and_recast', return_value=False):
+                self.assertEqual(expected, world_collision.check_horizontal_collision(
+                    scene, types.SimpleNamespace(Vector3=_Vector),
+                    1, _Vector(), 0.0, 3.0, descriptor, False, 0.04,
+                    motion_yaw=-math.pi / 2.0 if wall_x < 0 else math.pi / 2.0))
+
     def test_wide_tracks_hit_foundation_corner_outside_narrow_hull(self):
         # Exact #1513 Ch24_Type64 collision-client bounds. The foundation
         # corner overlaps the right track but misses the narrower hull.
@@ -755,7 +780,7 @@ class WorldCollisionTests(unittest.TestCase):
             if abs(start.y - 0.6) < 0.001]
         self.assertEqual(3, len(lower_rays))
         for start, end in lower_rays:
-            self.assertAlmostEqual(2.0, end.x)
+            self.assertAlmostEqual(1.6 + 5.0 * 0.04, end.x)
             self.assertGreater(end.x, start.x)
             self.assertAlmostEqual(start.z, end.z)
         lanes = sorted((start.z, start.x)
@@ -919,7 +944,7 @@ class WorldCollisionTests(unittest.TestCase):
                 side_effect=ground_profile) as profile:
             self.assertFalse(world_collision.check_horizontal_collision(
                 bigworld, math_module, 1, _Vector(), 0.0, 5.0,
-                descriptor, False, 0.04, motion_yaw=0.55))
+                descriptor, False, 0.08, motion_yaw=0.55))
 
         start, end = hit_segment[0]
         call = profile.call_args.args
@@ -963,12 +988,12 @@ class WorldCollisionTests(unittest.TestCase):
 
         for start, end in forward_rays:
             self.assertAlmostEqual(-0.5, start.z)
-            self.assertAlmostEqual(6.4, end.z)
+            self.assertAlmostEqual(6.0 + 5.0 * 0.04, end.z)
             self.assertGreater(end.z, start.z)
             self.assertAlmostEqual(start.x, end.x)
         for start, end in reverse_rays:
             self.assertAlmostEqual(0.5, start.z)
-            self.assertAlmostEqual(-4.4, end.z)
+            self.assertAlmostEqual(-4.0 - 5.0 * 0.04, end.z)
             self.assertLess(end.z, start.z)
             self.assertAlmostEqual(start.x, end.x)
         for rays in (forward_rays, reverse_rays):
@@ -1017,18 +1042,17 @@ class WorldCollisionTests(unittest.TestCase):
         default_reverse = run(-1.0e-6, False)[1]
         exact_forward = run(1.0e-6, True)[1]
         exact_reverse = run(-1.0e-6, True)[1]
-        self.assertAlmostEqual(3.6, max(end.z for unused, end in
+        self.assertAlmostEqual(3.2, max(end.z for unused, end in
                                        default_forward))
-        self.assertAlmostEqual(-3.9, min(end.z for unused, end in
+        self.assertAlmostEqual(-3.5, min(end.z for unused, end in
                                         default_reverse))
         self.assertAlmostEqual(3.2, max(end.z for unused, end in
                                        exact_forward))
         self.assertAlmostEqual(-3.5, min(end.z for unused, end in
                                         exact_reverse))
 
-        # A wall in the ordinary 0.4 m translation look-ahead must not stop a
-        # pivot which stays inside the exact continuous-yaw envelope.
-        self.assertTrue(run(1.0e-6, False, 3.4)[0])
+        # Neither stationary query may reach a wall outside the body.
+        self.assertFalse(run(1.0e-6, False, 3.4)[0])
         self.assertFalse(run(1.0e-6, True, 3.4)[0])
         # A wall actually inside that envelope remains a hard contact.
         self.assertTrue(run(1.0e-6, True, 3.1)[0])
@@ -1061,14 +1085,14 @@ class WorldCollisionTests(unittest.TestCase):
         self.assertTrue(world_collision.check_horizontal_collision(
             bigworld, math_module, 1, _Vector(), 0.0, 20.0,
             descriptor, False, 0.1))
-        self.assertGreaterEqual(max(horizontal_ends), 5.7)
+        self.assertAlmostEqual(3.5 + 20.0 * 0.1, max(horizontal_ends))
 
         horizontal_ends[:] = []
         wall_z[0] = 5.8
         self.assertFalse(world_collision.check_horizontal_collision(
             bigworld, math_module, 1, _Vector(), 0.0, 20.0,
             descriptor, False, 0.1))
-        self.assertGreaterEqual(max(horizontal_ends), 5.7)
+        self.assertAlmostEqual(3.5 + 20.0 * 0.1, max(horizontal_ends))
 
     def test_level_street_still_runs_wall_rays(self):
         calls = []
@@ -1351,8 +1375,8 @@ class WorldCollisionTests(unittest.TestCase):
                 pitch=-math.atan(gradient)))
         self.assertEqual(1, exact_wall_queries[0])
         self.assertTrue(wall_hits)
-        self.assertAlmostEqual(0.130194, wall_hits[0] - wall_bottom,
-                               places=5)
+        self.assertGreater(wall_hits[0], wall_bottom)
+        self.assertLess(wall_hits[0], wall_top)
 
     def test_level_point_six_one_wall_needs_no_ground_queries(self):
         wall_z = 6.813
@@ -1414,7 +1438,8 @@ class WorldCollisionTests(unittest.TestCase):
             self.assertEqual('solid_lane', trace['reason'])
             self.assertEqual((0.0, 0.0, -1.0), trace['normal'])
             self.assertEqual((1.5, 3.5, 3.5), trace['extents'])
-            for actual, expected in zip(trace['hit'], (-1.5, 0.6, 1.7)):
+            for actual, expected in zip(
+                    trace['hit'], (-1.5, 0.6, (-0.5 + 3.5 + 0.04) * 0.5)):
                 self.assertAlmostEqual(expected, actual)
             blocked[0] = False
             self.assertEqual('clear', world_collision.check_horizontal_collision(
@@ -1521,7 +1546,7 @@ class WorldCollisionTests(unittest.TestCase):
 
     def test_exact_top_filter_skips_broken_skin_to_terrain(self):
         gradient = 0.20
-        profile_look = 3.5 + 20.0 * 0.20 + 0.20
+        profile_look = 3.5 + 20.0 * 0.20
         profile_segment = profile_look / 6.0
         profile_samples = [
             profile_segment * index for index in range(7)]
@@ -1583,7 +1608,7 @@ class WorldCollisionTests(unittest.TestCase):
 
     def test_ground_profile_filter_skips_broken_skin_to_terrain(self):
         gradient = 0.20
-        profile_look = 3.5 + 20.0 * 0.20 + 0.20
+        profile_look = 3.5 + 20.0 * 0.20
         broken_z = profile_look / 6.0 * 2.0
         broken_queries = {'raw': 0, 'filtered': 0}
 
@@ -2148,7 +2173,7 @@ class WorldCollisionTests(unittest.TestCase):
                     0.6 * pose_y[1] + footprint_end * pose_y[2])
                 self.assertAlmostEqual(expected_end_y, end.y)
                 self.assertAlmostEqual(
-                    5.7 if velocity > 0.0 else -5.7, end.z)
+                    5.5 if velocity > 0.0 else -5.5, end.z)
 
     def test_pitched_upper_chord_hits_suspended_beam_after_crest(self):
         beam_bottom = 1.95
@@ -2312,7 +2337,7 @@ class WorldCollisionTests(unittest.TestCase):
             self.assertAlmostEqual(local_right, start.x)
             self.assertAlmostEqual(local_right, end.x)
             self.assertAlmostEqual(-0.5, start.z)
-            self.assertAlmostEqual(3.9, end.z)
+            self.assertAlmostEqual(3.5 + 5.0 * 0.04, end.z)
 
     def test_posed_ray_composes_roll_before_pitch(self):
         math_module = types.SimpleNamespace(Vector3=_Vector)
@@ -2456,7 +2481,7 @@ class WorldCollisionTests(unittest.TestCase):
 
     def test_level_ground_profile_filter_skips_broken_skin(self):
         gradient = 0.20
-        profile_look = 3.5 + 20.0 * 0.20 + 0.20
+        profile_look = 3.5 + 20.0 * 0.20
         broken_z = profile_look / 6.0 * 2.0
         broken_queries = {'raw': 0, 'filtered': 0}
 

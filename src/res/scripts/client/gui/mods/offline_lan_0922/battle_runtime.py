@@ -17747,7 +17747,10 @@ class BattleRuntime(object):
                                    before=None, drive=None, pitch=None,
                                    contact=None, entity=None):
         """Record bounded pose evidence when powered travel cannot advance."""
-        if dt <= 0.0 or abs(throttle) <= 0.01:
+        blocked_turn = (abs(self._local_drive_turn) > 0.01 and
+                        abs(self._local_turn_speed) <= 1.0e-8 and
+                        self._local_motion_status == 'hard')
+        if dt <= 0.0 or (abs(throttle) <= 0.01 and not blocked_turn):
             return False
         dx, dz = end[0] - start[0], end[2] - start[2]
         stalled = dx * dx + dz * dz <= (0.2 * dt) ** 2
@@ -17788,6 +17791,12 @@ class BattleRuntime(object):
                     if self._local_motion_status == 'pending' else None),
                 'world_soft_block': self._local_motion_soft_block,
                 'pending_contacts': len(self._local_destructible_contacts),
+                'rotation': {
+                    'intent': self._local_drive_turn,
+                    'speed': self._local_turn_speed,
+                    'limit': physics.get('rotSpd'),
+                    'blocked': blocked_turn,
+                },
             }
             sys.stdout.write(
                 '[Offline LAN 0.9.22] LOCAL DRIVE '
@@ -18716,7 +18725,7 @@ class BattleRuntime(object):
             # Geometry needs the realised centre travel, while kinetic
             # classification needs the faster rotating hull edge.  Choosing a
             # duration whose product with impact speed equals centre travel
-            # preserves that path; the sensor's normal contact skin remains.
+            # preserves that path without adding a proximity skin.
             slice_dt = (move_distance / impact_magnitude
                         if move_distance > 1.0e-8 else 0.0)
             if commit_enabled:

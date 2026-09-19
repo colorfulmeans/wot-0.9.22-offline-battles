@@ -376,7 +376,7 @@ class CrossMapRailingCollisionTests(unittest.TestCase):
         direction = end - start
         direction.normalise()
         surfaces = [(hit + direction.scale(i * 0.01),
-                     (73, 131, 60000 + i, 1700000)) for i in range(6)]
+                     (73 + i, 131, 60000 + i, 1700000)) for i in range(6)]
         evidence = {}
         result = sensor.collide_motion_segment(1, start, end,
             sensor.horizontal_collision_filter(start, end),
@@ -408,3 +408,116 @@ class CrossMapRailingCollisionTests(unittest.TestCase):
                      if row['identity'] == identity)
         self.assertTrue(owner['boxes'][0]['broken'])
         self.assertEqual(accepted_before, self.broken)
+
+
+class NativeFenceFollowupTests(unittest.TestCase):
+    """Replay the reported native face, bounds and accepted module state."""
+
+    setUp = CrossMapRailingCollisionTests.setUp
+    install = CrossMapRailingCollisionTests.install
+    paris = CrossMapRailingCollisionTests.paris
+    ray = staticmethod(CrossMapRailingCollisionTests.ray)
+
+    def install_report(self, contact):
+        sensor.set_catalog(json.loads(
+            (ROOT / 'destructibles/112_eiffel_tower_ctf.json').read_text()))
+        sensor.g_offh_destr_instances = {}
+        sensor.g_offh_destr_contact_bins = {}
+        sensor.g_offh_destr_speculative = set()
+        sensor.g_offh_destr_broken_cache = {}
+        self.broken.clear()
+        for owner in contact['native_contact_evidence']['nearby_owners']:
+            identity = tuple(owner['identity'])
+            instance = dict(filename=owner['filename'], kind=owner['kind'],
+                boxes=[(b['center'], b['axes'], b['material']) for b in owner['boxes']])
+            sensor.g_offh_destr_instances[identity] = instance
+            sensor._index_catalog_instance_1513(
+                sensor.g_offh_destr_contact_bins, identity, instance)
+            self.broken.update(identity + (b['material'],)
+                               for b in owner['boxes'] if b['broken'])
+
+    @staticmethod
+    def transient_native(surfaces):
+        calls = [0]
+        def collide(space, start, end, flags, keep=None):
+            calls[0] += 1
+            current = [(point, (key[0], key[1], key[2] + calls[0],
+                key[3] + calls[0]) if key[3] > 100000 else key)
+                for point, key in surfaces]
+            result = CompiledCollisionTests.native(current)(
+                space, start, end, flags, keep)
+            return None if result is None else (result[0], V(0, 0, 1))
+        return collide
+
+    def test_reported_paris_vertical_original_faces_above_baked_boxes(self):
+        rows = json.loads((ROOT / 'tests/fixtures/paris_191002_contacts.json').read_text())
+        for row in rows:
+            with self.subTest(time=row['log_time']):
+                self.install_report(row)
+                a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+                alias = tuple(row['native_contact_evidence']['queries'][0]['candidates'][0])
+                keep = sensor.horizontal_collision_filter(a, b)
+                cast = self.transient_native([(point, alias)])
+                self.assertIsNone(sensor.collide_motion_segment(1, a, b, keep, cast))
+                direction = b - a
+                direction.normalise()
+                wall = point + direction.scale(.001)
+                for material in (88, 111):
+                    result = sensor.collide_motion_segment(1, a, b, keep,
+                        self.transient_native([(point, alias),
+                            (wall, (material, 0, 999, 32384))]))
+                    self.assertIs(wall, result[0])
+                self.broken.clear()
+                self.assertIs(point, sensor.collide_motion_segment(
+                    1, a, b, keep, cast)[0])
+
+    def test_transient_aliases_inside_bounds_and_diagnostic_witness(self):
+        identity, instance, (a, b, point) = self.paris()
+        self.broken.add(identity + (None,))
+        cast = self.transient_native([(point, (73, 131, 60000, 1700000))])
+        self.assertIsNone(sensor.collide_motion_segment(1, a, b,
+            sensor.horizontal_collision_filter(a, b), cast))
+        self.broken.clear()
+        with mock.patch.dict('sys.modules', {
+                'BigWorld': types.SimpleNamespace(wg_collideSegment=cast),
+                'Math': types.SimpleNamespace(Vector3=V)}):
+            evidence = sensor.native_contact_evidence(1, a, b, point)
+        self.assertFalse(evidence['replay_clear'])
+        self.assertEqual(0, evidence['surface_witnesses'][0]['contact_distance'])
+
+    def test_projected_owner_does_not_hide_stacked_live_or_unregistered_items(self):
+        row = json.loads((ROOT / 'tests/fixtures/paris_191002_contacts.json').read_text())[0]
+        for registered in (True, False):
+            with self.subTest(registered=registered):
+                self.install_report(row)
+                a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+                identity = (32384, 999)
+                extra = dict(next(iter(sensor.g_offh_destr_instances.values())))
+                extra['boxes'] = [(tuple(c[i] + (30 if i == 1 else 0)
+                    for i in range(3)), axes, mat) for c, axes, mat in extra['boxes']]
+                if registered:
+                    sensor.g_offh_destr_instances[identity] = extra
+                    sensor._index_catalog_instance_1513(
+                        sensor.g_offh_destr_contact_bins, identity, extra)
+                else:
+                    sensor._destructible_catalog['baked_instances'][identity] = extra
+                    for key in sensor._baked_bin_keys_for_bounds_1513(
+                            point.x, point.x, point.z, point.z):
+                        sensor._destructible_catalog['baked_shot_bins'].setdefault(key,set()).add(identity)
+                cast = self.transient_native([(point, (74, 131, 60000, 1700000))])
+                self.assertIs(point, sensor.collide_motion_segment(1, a, b,
+                    sensor.horizontal_collision_filter(a, b), cast)[0])
+
+    def test_above_bounds_projection_preserves_ground_and_real_wire_identity(self):
+        row = json.loads((ROOT / 'tests/fixtures/paris_191002_contacts.json').read_text())[0]
+        self.install_report(row)
+        a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+        aliases = {(74, 131, 60000, 1700000)}
+        self.assertIsNone(sensor._compiled_motion_skin_1513(
+            point, a, b, aliases, V(0, 1, 0)))
+        self.assertIsNone(sensor._compiled_motion_skin_1513(
+            point, point + V(0, 1, 0), point - V(0, 1, 0), aliases, V(1, 0, 0)))
+        live = next(key for key in sensor._destructible_catalog['baked_instances']
+                    if key not in sensor.g_offh_destr_instances)
+        self.assertIsNone(sensor._anonymous_original_surface_1513(
+            (74, 131, live[1], live[0])))

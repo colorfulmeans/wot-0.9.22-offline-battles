@@ -223,7 +223,7 @@ def _ground_exit_is_clear(spaceID, Math, pos, start, end, collision,
 		spaceID, recast_start, end, collision_filter) is None
 
 
-def _vehicle_motion_extents(descriptor):
+def _vehicle_motion_bounds(descriptor):
 	"""Cover the chassis and mounted hull instead of only the narrow armour."""
 	hull_box = _vehicle_hull_bbox(descriptor)
 	if hull_box is None:
@@ -238,7 +238,15 @@ def _vehicle_motion_extents(descriptor):
 		float(hull_box[0][i]) + float(hull_position[i])) for i in (0, 2))
 	upper = tuple(max(float(chassis_box[1][i]),
 		float(hull_box[1][i]) + float(hull_position[i])) for i in (0, 2))
-	return max(abs(lower[0]), abs(upper[0])), -lower[1], upper[1]
+	return lower[0], upper[0], -lower[1], upper[1]
+
+
+def _vehicle_motion_extents(descriptor):
+	bounds = _vehicle_motion_bounds(descriptor)
+	if bounds is None:
+		return None
+	left, right, back, front = bounds
+	return max(abs(left), abs(right)), back, front
 
 
 def _hull_pose_y(pitch, roll):
@@ -256,15 +264,16 @@ def _hull_pose_y(pitch, roll):
 
 
 def _hull_pose_endpoint(local_start, local_end, half_width,
-		half_length_back, half_length_front):
+		half_length_back, half_length_front, lateral_bounds=None):
 	"""Stop pose extrapolation where a lane leaves the hull footprint."""
 	start_right = float(local_start[0])
 	start_forward = float(local_start[1])
 	delta_right = float(local_end[0]) - start_right
 	delta_forward = float(local_end[1]) - start_forward
 	fraction = 1.0
+	left, right = lateral_bounds or (-float(half_width), float(half_width))
 	for start, delta, lower, upper in (
-			(start_right, delta_right, -float(half_width), float(half_width)),
+			(start_right, delta_right, left, right),
 			(start_forward, delta_forward, -float(half_length_back),
 				float(half_length_front))):
 		if delta > 0.0:
@@ -622,32 +631,21 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		extents = _vehicle_motion_extents(td)
 		if extents is not None:
 			hw, hl_back, hl_front = extents
+		bounds = _vehicle_motion_bounds(td)
+		left, right = bounds[:2] if bounds is not None else (-hw, hw)
 
 		if trace is not None:
 			trace.clear()
 			trace.update(position=(pos.x, pos.y, pos.z), yaw=yaw, speed=vel,
 				dt=dt, motion_yaw=motion_yaw, pitch=pitch, roll=roll,
-				airborne=airborne, extents=(hw, hl_back, hl_front))
+				airborne=airborne, extents=(hw, hl_back, hl_front),
+				lateral_bounds=(left, right))
 
-		# Look-ahead beyond the hull. The old flat +2.0 m made an invisible
-		# wall 2 m before every obstacle, and DURING A FALL it saw the cliff
-		# face below-ahead and zeroed the speed mid-air - the tank then hugged
-		# the wall and trickled down instead of flying a ballistic arc.
-		# Grounded: just enough to not tunnel at speed. Airborne: only the
-		# distance actually travelled this tick - contact stops, proximity not.
-		if exact_footprint:
-			# A continuous-yaw caller already enlarged the descriptor to the
-			# complete occupied interval.  Keep both signed probes inside that
-			# exact envelope; the normal 0.4 m translation look-ahead would make
-			# a tank which stopped short of a wall unable to rotate away from it.
-			_ahead = 0.0
-		elif airborne:
-			_ahead = abs(vel) * dt + 0.2
-		else:
-			# Cover the complete copied-pose translation of this frame.  A fixed
-			# 1.2 m cap was shorter than a 20 m/s tank's 2 m slow-frame step and
-			# could miss a hard wall immediately behind a crushed light prop.
-			_ahead = max(0.4, abs(vel) * dt + 0.2)
+		# The occupied hull and this frame's actual travel are the entire
+		# collision sweep. A stationary turn already supplies its swept body.
+		# Neither contact path has a proximity margin or a waiting interval.
+		_ahead = (0.0 if exact_footprint else
+			abs(float(vel)) * max(0.0, float(dt)))
 		cos_y = math.cos(yaw)
 		sin_y = math.sin(yaw)
 		pose_y = _hull_pose_y(pitch, roll)
@@ -657,16 +655,14 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			-sin_y * pose_y[0] + cos_y * pose_y[2])
 		lane_segments = []
 		if motion_yaw is None:
-			# Keep the shipped longitudinal probe byte-for-byte in geometry and
-			# lane order.  The explicit path below is only for cross-heading
-			# translation introduced by ram, slip and wall deflection.
+			# Preserve the lane order, using both actual body edges separately.
 			back_margin = -0.5 if vel > 0.0 else 0.5
 			front_margin = ((hl_front + _ahead) if vel > 0.0 else
 				-(hl_back + _ahead))
 			direction = 1.0 if vel >= 0.0 else -1.0
 			look = (hl_front if vel > 0.0 else hl_back) + _ahead
 			target_len = abs(back_margin) + look
-			for offset_x in (-hw, 0.0, hw):
+			for offset_x in (left, 0.0, right):
 				sx = pos.x + cos_y * offset_x
 				sz = pos.z - sin_y * offset_x
 				x1 = sx + sin_y * back_margin
@@ -691,16 +687,16 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			forward_v = perp_x * sin_y + perp_z * cos_y
 			projected = []
 			for hull_right, hull_forward in (
-					(-hw, -hl_back), (hw, -hl_back),
-					(hw, hl_front), (-hw, hl_front)):
+					(left, -hl_back), (right, -hl_back),
+					(right, hl_front), (left, hl_front)):
 				corner_u = right_u * hull_right + forward_u * hull_forward
 				corner_v = right_v * hull_right + forward_v * hull_forward
 				projected.append((corner_v, corner_u, corner_u + _ahead))
 			limits = []
 			if right_u > 1.0e-9:
-				limits.append(hw / right_u)
+				limits.append(right / right_u)
 			elif right_u < -1.0e-9:
-				limits.append(-hw / right_u)
+				limits.append(left / right_u)
 			if forward_u > 1.0e-9:
 				limits.append(hl_front / forward_u)
 			elif forward_u < -1.0e-9:
@@ -751,7 +747,8 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			# This chord is a conservative witness inside the swept hull volume;
 			# extrapolating pitch/roll through look-ahead can pass over a real wall.
 			local_end = _hull_pose_endpoint(
-				local_start, ray_local_end, hw, hl_back, hl_front)
+				local_start, ray_local_end, hw, hl_back, hl_front,
+				lateral_bounds=(left, right))
 			pose_clamped = (
 				pose_y != (0.0, 1.0, 0.0) and
 				(abs(local_end[0] - ray_local_end[0]) > 1.0e-9 or

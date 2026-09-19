@@ -5963,14 +5963,14 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(
                     RuntimeError, 'native proximity destroy'):
                 destructibles_sensor._fell_trees_near(
-                    1, _Vector(102, 8, 200), 0.0, 6.0,
+                    1, _Vector(102, 8, 200.5), 0.0, 6.0,
                     type_descriptor)
             self.assertNotIn(
                 (22, 0),
                 destructibles_sensor.g_offh_tree_state['felled'])
 
             destructibles_sensor._fell_trees_near(
-                1, _Vector(102, 8, 200), 0.0, 6.0,
+                1, _Vector(102, 8, 200.5), 0.0, 6.0,
                 type_descriptor)
 
         object_position = calls[-1][-1]
@@ -7901,6 +7901,46 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                     (-1.6, -1.0, -3.6), (1.6, 1.0, 3.6), None))))
         return (bigworld, math_module, area, cache, authority, descriptor)
 
+    def test_rotation_sweep_uses_contact_volume_for_each_lateral_side(self):
+        import test_port_0922_battle_runtime as local
+
+        for side in (-1.0, 1.0):
+            (bigworld, math_module, area, cache, authority,
+             descriptor) = self._direction_catalog_fixture(kind='structure')
+            instance = destructibles_sensor.g_offh_destr_instances[(22, 37)]
+            runtime = local._runtime()
+            battle = local.BattleRuntime(runtime)
+            battle._avatar = runtime.bigworld.avatar
+            battle._destructibles = destructibles_sensor
+            with mock.patch.dict(sys.modules, {
+                    'BigWorld': bigworld, 'Math': math_module,
+                    'AreaDestructibles': area, 'DestructiblesCache': cache}), \
+                    mock.patch.object(destructibles_sensor,
+                        '_stream_baked_motion_instances_1513', return_value=()), \
+                    mock.patch.object(destructibles_sensor,
+                        '_get_destr_authority', return_value=authority):
+                for x, cap, expected in ((2.0, .1, 'clear'),
+                                         (1.65, .1, 'hard'),
+                                         (1.65, 1.0, 'crushed')):
+                    with self.subTest(side=side, x=x, cap=cap):
+                        instance['boxes'] = (((side * x, 0, 0),
+                            ((.1, 0, 0), (0, .5, 0), (0, 0, .1)), 73),)
+                        destructibles_sensor.g_offh_destr_contact_bins = bins = {}
+                        destructibles_sensor._index_catalog_instance_1513(
+                            bins, (22, 37), instance)
+                        detail = battle._destructible_pose_sweep(
+                            (0, 0, 0), 0, (0, 0, 0), side * .01,
+                            0.0, descriptor, 10.0, .1, rotation_speed_cap=cap)
+                        self.assertEqual(expected, detail['status'])
+                        self.assertEqual(expected == 'crushed', detail['requires_commit'])
+                authority.destroy_module.assert_not_called()
+                committed = battle._destructible_pose_sweep(
+                    (0, 0, 0), 0, (0, 0, 0), side * .01,
+                    0.0, descriptor, 10.0, .1,
+                    rotation_speed_cap=1.0, commit_enabled=True)
+                self.assertEqual('crushed', committed['status'])
+                authority.destroy_module.assert_called_once()
+
     def test_direction_soft_path_is_read_only_and_recasts_backing_wall(self):
         (bigworld, math_module, area, cache, authority,
          descriptor) = self._direction_catalog_fixture()
@@ -8621,27 +8661,27 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         authority.destroy_fragile.assert_not_called()
         authority.destroy_column.assert_not_called()
 
-    def test_motion_sweep_reach_matches_grounded_margin_in_both_directions(self):
+    def test_motion_sweep_reach_is_actual_frame_travel_in_both_directions(self):
         bbox = ((-1.0, -1.0, -3.0), (1.0, 1.0, 4.0), None)
 
         self.assertAlmostEqual(
-            0.4, destructibles_sensor._motion_travel_reach(1.0, 0.04))
+            0.04, destructibles_sensor._motion_travel_reach(1.0, 0.04))
         self.assertAlmostEqual(
-            1.2, destructibles_sensor._motion_travel_reach(10.0, 0.1))
+            1.0, destructibles_sensor._motion_travel_reach(10.0, 0.1))
         self.assertAlmostEqual(
-            1.2, destructibles_sensor._motion_travel_reach(-10.0, 0.1))
+            1.0, destructibles_sensor._motion_travel_reach(-10.0, 0.1))
 
         forward = destructibles_sensor._vehicle_swept_box(
-            _Vector(), 0.0, 10.0, bbox, 1.2)
+            _Vector(), 0.0, 10.0, bbox, 1.0)
         reverse = destructibles_sensor._vehicle_swept_box(
-            _Vector(), 0.0, -10.0, bbox, 1.2)
-        forward_min = forward[0][2] - abs(forward[1][2][2])
-        forward_max = forward[0][2] + abs(forward[1][2][2])
-        reverse_min = reverse[0][2] - abs(reverse[1][2][2])
-        reverse_max = reverse[0][2] + abs(reverse[1][2][2])
+            _Vector(), 0.0, -10.0, bbox, 1.0)
+        forward_min, forward_max = destructibles_sensor._box_xz_bounds(
+            forward)[2:]
+        reverse_min, reverse_max = destructibles_sensor._box_xz_bounds(
+            reverse)[2:]
         self.assertAlmostEqual(-3.0, forward_min)
-        self.assertAlmostEqual(5.2, forward_max)
-        self.assertAlmostEqual(-4.2, reverse_min)
+        self.assertAlmostEqual(5.0, forward_max)
+        self.assertAlmostEqual(-4.0, reverse_min)
         self.assertAlmostEqual(4.0, reverse_max)
 
     def test_explicit_zero_catalog_reach_excludes_drive_lookahead(self):
@@ -8659,7 +8699,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             exact_gap = destructibles_sensor._catalog_motion_proposal(
                 1, just_outside_hull, 0.0, 0.0, descriptor, 10.0,
                 dt=0.04, travel_reach=0.0)
-            legacy_lookahead = destructibles_sensor._catalog_motion_proposal(
+            default_gap = destructibles_sensor._catalog_motion_proposal(
                 1, just_outside_hull, 0.0, 0.0, descriptor, 10.0,
                 dt=0.04)
             exact_contact = destructibles_sensor._catalog_motion_blocked(
@@ -8667,7 +8707,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 dt=0.04, travel_reach=0.0)
 
         self.assertEqual('clear', exact_gap['status'])
-        self.assertEqual('hard', legacy_lookahead['status'])
+        self.assertEqual('clear', default_gap['status'])
         self.assertTrue(exact_contact)
         authority.destroy_fragile.assert_not_called()
 
@@ -8745,85 +8785,47 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 y_bounds(rotation_contact), y_bounds(direct_contact)):
             self.assertAlmostEqual(expected, actual, places=12)
 
-    def test_rolled_vehicle_zonotopes_keep_physical_and_guard_corners(self):
+    def test_rolled_vehicle_volumes_keep_physical_corners_without_padding(self):
         bbox = ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0), None)
         position = _Vector(4.0, 5.0, -6.0)
-        yaw = 0.37
-        roll = 0.61
-        epsilon = 0.075
-        right, up, forward_axis = destructibles_sensor._vehicle_pose_axes(
-            yaw, 0.0, roll)
+        yaw, roll = 0.37, 0.61
+        axes = destructibles_sensor._vehicle_pose_axes(yaw, 0.0, roll)
         swept = destructibles_sensor._vehicle_swept_box(
-            position, yaw, 0.0, bbox, 0.0, pitch=0.0, roll=roll)
+            position, yaw, 0.0, bbox, 0.0, roll=roll)
         contact = destructibles_sensor._vehicle_contact_box(
-            position, yaw, bbox, epsilon=epsilon,
-            pitch=0.0, roll=roll)
-
-        def physical_corner(right_sign, up_sign, forward_sign):
-            return tuple(
-                (position.x, position.y, position.z)[axis] +
-                right_sign * right[axis] + up_sign * up[axis] +
-                forward_sign * forward_axis[axis]
-                for axis in range(3))
+            position, yaw, bbox, roll=roll)
 
         def small_cube(center):
             return (center, ((0.002, 0.0, 0.0),
                              (0.0, 0.002, 0.0),
                              (0.0, 0.0, 0.002)), None)
 
-        signs = tuple(
-            (right_sign, up_sign, forward_sign)
-            for right_sign in (-1.0, 1.0)
-            for up_sign in (-1.0, 1.0)
-            for forward_sign in (-1.0, 1.0))
-        for right_sign, up_sign, forward_sign in signs:
-            corner = physical_corner(
-                right_sign, up_sign, forward_sign)
-            with self.subTest(
-                    volume='physical', right=right_sign,
-                    up=up_sign, forward=forward_sign):
+        for signs in ((r, u, f) for r in (-1.0, 1.0)
+                      for u in (-1.0, 1.0) for f in (-1.0, 1.0)):
+            corner = tuple(
+                (position.x, position.y, position.z)[i] +
+                sum(sign * axis[i] for sign, axis in zip(signs, axes))
+                for i in range(3))
+            with self.subTest(corner=signs):
                 self.assertTrue(destructibles_sensor._boxes_intersect(
                     swept, small_cube(corner)))
                 self.assertTrue(destructibles_sensor._boxes_intersect(
                     contact, small_cube(corner)))
-
-            # The 0.5 m collision-lane guard must vary independently of the
-            # rolled body axis.  Coupling both to one generator drops the
-            # opposite-sign corner/guard combinations.
-            for guard_sign in (-1.0, 1.0):
-                guarded_corner = (
-                    corner[0] + guard_sign * 0.5 * right[0],
-                    corner[1],
-                    corner[2] + guard_sign * 0.5 * right[2])
-                with self.subTest(
-                        volume='sweep_guard', right=right_sign,
-                        up=up_sign, forward=forward_sign,
-                        guard=guard_sign):
-                    self.assertTrue(destructibles_sensor._boxes_intersect(
-                        swept, small_cube(guarded_corner)))
-
-            # Contact skin is the Minkowski sum of the real posed body and
-            # independent yaw-right, yaw-forward and world-up guards.
-            for guard_right in (-1.0, 1.0):
-                for guard_up in (-1.0, 1.0):
-                    for guard_forward in (-1.0, 1.0):
-                        guarded_corner = (
-                            corner[0] + epsilon * (
-                                guard_right * right[0] +
-                                guard_forward * forward_axis[0]),
-                            corner[1] + epsilon * guard_up,
-                            corner[2] + epsilon * (
-                                guard_right * right[2] +
-                                guard_forward * forward_axis[2]))
-                        with self.subTest(
-                                volume='contact_guard', right=right_sign,
-                                up=up_sign, forward=forward_sign,
-                                guard_right=guard_right,
-                                guard_up=guard_up,
-                                guard_forward=guard_forward):
-                            self.assertTrue(
-                                destructibles_sensor._boxes_intersect(
-                                    contact, small_cube(guarded_corner)))
+            # Leave each actual face by 1 cm, including the opposite-sign
+            # corners of the sheared pose. No collision skin may fill the gap.
+            for face, sign in enumerate(signs):
+                a, b = axes[(face + 1) % 3], axes[(face + 2) % 3]
+                normal = (a[1] * b[2] - a[2] * b[1],
+                          a[2] * b[0] - a[0] * b[2],
+                          a[0] * b[1] - a[1] * b[0])
+                length = math.sqrt(sum(value * value for value in normal))
+                outside = tuple(corner[i] + sign * 0.01 * normal[i] / length
+                                for i in range(3))
+                with self.subTest(corner=signs, outside_face=face):
+                    self.assertFalse(destructibles_sensor._boxes_intersect(
+                        swept, small_cube(outside)))
+                    self.assertFalse(destructibles_sensor._boxes_intersect(
+                        contact, small_cube(outside)))
 
     def test_direction_soft_path_drives_through_a_felled_column(self):
         (bigworld, math_module, area, cache, authority,
@@ -9147,7 +9149,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 [{'x': 2.35, 'z': 0.0, 'boxes': box}],
                 return_detail=True, kinetic_commit=True,
                 motion_yaw=math.pi / 2.0))
-        self.assertEqual('approach', far['status'])
+        self.assertEqual('clear', far['status'])
         self.assertIsNone(far['token'])
         authority.destroy_fragile.assert_not_called()
 
@@ -9221,13 +9223,13 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         authority.destroy_fragile.assert_not_called()
         authority.destroy_module.assert_not_called()
 
-    def test_stationary_twenty_centimetre_gap_is_approach_only(self):
+    def test_gap_beyond_actual_frame_travel_is_clear(self):
         detail, authority, descriptor = self._stationary_contact_status(
             [{'z': 4.3}], return_detail=True, kinetic_commit=True)
 
-        self.assertTrue(destructibles_sensor._catalog_hull_contact(
+        self.assertFalse(destructibles_sensor._catalog_hull_contact(
             _Vector(), 0.0, 1.0, descriptor, 0.1))
-        self.assertEqual('approach', detail['status'])
+        self.assertEqual('clear', detail['status'])
         self.assertIsNone(detail['token'])
         self.assertFalse(detail['accepted_now'])
         self.assertFalse(detail['used_kinetic_speed'])
@@ -10892,12 +10894,17 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 mock.patch.object(
                     destructibles_sensor, '_get_destr_authority',
                     return_value=authority):
-            proposal = destructibles_sensor._catalog_motion_proposal(
+            distant = destructibles_sensor._catalog_motion_proposal(
                 1, _Vector(), 0.0, 20.0, descriptor, 10.0,
                 dt=0.001, kinetic_speed=20.0)
+            self.assertEqual('clear', distant['status'])
+            self.assertFalse(destroyed)
+            proposal = destructibles_sensor._catalog_motion_proposal(
+                1, _Vector(), 0.0, 20.0, descriptor, 10.0,
+                dt=0.02, kinetic_speed=20.0)
             committed = destructibles_sensor._catalog_motion_blocked(
                 1, _Vector(), 0.0, 20.0, descriptor, 10.0,
-                dt=0.001, kinetic_speed=20.0, return_detail=True,
+                dt=0.02, kinetic_speed=20.0, return_detail=True,
                 kinetic_commit=True, commit_enabled=True)
 
         self.assertEqual('crushed', proposal['status'])
@@ -12008,7 +12015,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             _Vector(), 0.0, 5.0, bbox, 1.0, motion_yaw=0.55)
         bounds = destructibles_sensor._box_xz_bounds(swept)
         outside = (
-            (-2.0, 0.0, 6.7),
+            (-1.5, 0.0, 6.7),
             ((0.05, 0.0, 0.0), (0.0, 0.5, 0.0),
              (0.0, 0.0, 0.05)), None)
 

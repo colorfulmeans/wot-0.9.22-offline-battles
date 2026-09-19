@@ -2468,7 +2468,7 @@ def _boxes_intersect(left, right):
 	left_center = left[0]
 	right_center = right[0]
 	# Keep every generator.  Vehicle sweeps are general zonotopes (posed body,
-	# independent contact guards and translation), not only three-axis OBBs.
+	# actual frame translation), not only three-axis OBBs.
 	# Materialising the iterables also lets the Python 2.7 sums below traverse
 	# them once per separating axis without consuming a caller's generator.
 	left_half_axes = tuple(left[1])
@@ -2477,7 +2477,7 @@ def _boxes_intersect(left, right):
 		for index in range(3))
 	# The separating axes for two 3-D zonotopes are the cross products of every
 	# pair in their combined generator set.  Ordinary three-axis OBBs retain the
-	# same 15 SAT axes, while extra sweep/guard generators remain exact instead
+	# same 15 SAT axes, while extra sweep generators remain exact instead
 	# of being collapsed into a lossy box.
 	generators = tuple(left_half_axes) + tuple(right_half_axes)
 	axes = (_vector_cross(generators[left_index], generators[right_index])
@@ -3164,81 +3164,11 @@ def _vehicle_pose_axes(yaw, pitch=0.0, roll=0.0):
 
 def _vehicle_swept_box(pos, yaw, vel, bbox, travel_reach=None,
 		motion_yaw=None, pitch=0.0, roll=0.0):
-	import math
-	minimum, maximum = bbox[:2]
-	body_half_width = max(abs(minimum[0]), abs(maximum[0]))
-	horizontal_guard = 0.5
-	back = abs(minimum[2])
-	front = abs(maximum[2])
-	if travel_reach is None:
-		# Registration/streaming look-ahead keeps the historical generous reach.
-		# Commit-side callers pass the exact frame travel separately below.
-		reach = 0.8 + min(abs(vel) * 0.25, 1.2)
-	else:
-		reach = max(0.0, float(travel_reach))
-	right, up, forward_axis = _vehicle_pose_axes(yaw, pitch, roll)
-	if (motion_yaw is None and
-			(float(pitch) != 0.0 or float(roll) != 0.0)):
-		# The body is pitched, but its integration step still translates over
-		# the horizontal X/Z plane.  Keep that travel as an independent
-		# generator instead of extending the raised local-forward axis.  The
-		# zero-pose branch below intentionally retains its historical three-axis
-		# representation for exact compatibility with existing callers.
-		motion_yaw = float(yaw) if vel >= 0.0 else float(yaw) + math.pi
-	if motion_yaw is not None:
-		# Ram separation, slope slip and wall deflection translate the chassis
-		# independently of its orientation.  Preserve the real hull OBB and add
-		# half of the translation as a fourth zonotope generator.  This is the
-		# exact swept volume for a fixed-orientation OBB; rotating the hull to the
-		# travel direction would lose the long front/rear corners.
-		center_forward = (front - back) * 0.5
-		half_forward = (front + back) * 0.5
-		motion_sin = math.sin(float(motion_yaw))
-		motion_cos = math.cos(float(motion_yaw))
-		travel_x = motion_sin * reach
-		travel_z = motion_cos * reach
-		center_up = (minimum[1] + maximum[1]) * 0.5
-		half_y = (maximum[1] - minimum[1]) * 0.5
-		center = (
-			pos.x + up[0] * center_up +
-			forward_axis[0] * center_forward + travel_x * 0.5,
-			pos.y + up[1] * center_up +
-			forward_axis[1] * center_forward,
-			pos.z + up[2] * center_up +
-			forward_axis[2] * center_forward + travel_z * 0.5)
-		half_axes = (
-			# Preserve the three physical pose generators.  Sharing a single
-			# coefficient between a rolled right axis and its horizontal guard
-			# cuts real opposite-sign body corners out of the zonotope.
-			tuple(value * body_half_width for value in right),
-			tuple(value * half_y for value in up),
-			tuple(value * half_forward for value in forward_axis),
-			(right[0] * horizontal_guard, 0.0,
-				right[2] * horizontal_guard),
-			(travel_x * 0.5, 0.0, travel_z * 0.5))
-		return center, half_axes
-	if vel < 0.0:
-		minimum_forward = -(back + reach)
-		maximum_forward = front
-	else:
-		minimum_forward = -back
-		maximum_forward = front + reach
-	center_forward = (minimum_forward + maximum_forward) * 0.5
-	half_forward = (maximum_forward - minimum_forward) * 0.5
-	center_up = (minimum[1] + maximum[1]) * 0.5
-	half_y = (maximum[1] - minimum[1]) * 0.5
-	center = (
-		pos.x + up[0] * center_up + forward_axis[0] * center_forward,
-		pos.y + up[1] * center_up + forward_axis[1] * center_forward,
-		pos.z + up[2] * center_up + forward_axis[2] * center_forward)
-	half_axes = (
-		tuple(value * body_half_width for value in right),
-		tuple(value * half_y for value in up),
-		tuple(value * half_forward for value in forward_axis),
-		# Preserve the complete horizontal lane guard without lifting it.
-		(right[0] * horizontal_guard, 0.0,
-			right[2] * horizontal_guard))
-	return center, half_axes
+	"""Use the real body and supplied frame displacement without padding."""
+	reach = 0.0 if travel_reach is None else max(0.0, float(travel_reach))
+	return _vehicle_contact_box(
+		pos, yaw, bbox, travel=(-reach if vel < 0.0 else reach),
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
 
 
 def _tree_trig_interval_1513(cosine_factor, sine_factor, start, end):
@@ -3487,17 +3417,16 @@ def _tree_candidates_for_sweeps_1513(
 	return candidates, isolated_hits
 
 
-def _vehicle_contact_box(pos, yaw, bbox, epsilon=0.075, travel=0.0,
+def _vehicle_contact_box(pos, yaw, bbox, travel=0.0,
 		motion_yaw=None, pitch=0.0, roll=0.0):
 	"""Return the complete current hull plus only this frame's real travel."""
 	import math
 	minimum, maximum = bbox[:2]
-	margin = max(0.0, float(epsilon))
 	travel = float(travel)
-	minimum_x = float(minimum[0]) - margin
-	maximum_x = float(maximum[0]) + margin
-	minimum_forward = float(minimum[2]) - margin
-	maximum_forward = float(maximum[2]) + margin
+	minimum_x = float(minimum[0])
+	maximum_x = float(maximum[0])
+	minimum_forward = float(minimum[2])
+	maximum_forward = float(maximum[2])
 	center_x = (minimum_x + maximum_x) * 0.5
 	body_half_width = (
 		float(maximum[0]) - float(minimum[0])) * 0.5
@@ -3522,17 +3451,12 @@ def _vehicle_contact_box(pos, yaw, bbox, epsilon=0.075, travel=0.0,
 		pos.z + right[2] * center_x + up[2] * center_up +
 		forward_axis[2] * center_forward + travel_z * 0.5)
 	half_axes = (
-		# The physical pose and each world-space skin direction need
-		# independent coefficients.  Otherwise roll/pitch couples the skin to
-		# one body-corner sign and opens holes at the opposite-sign corners.
+		# Keep the three physical body axes and frame translation independent.
 		tuple(value * body_half_width for value in right),
 		tuple(value * body_half_y for value in up),
-		tuple(value * body_half_forward for value in forward_axis),
-		(right[0] * margin, 0.0, right[2] * margin),
-		(forward_axis[0] * margin, 0.0,
-			forward_axis[2] * margin),
-		(0.0, margin, 0.0),
-		(travel_x * 0.5, 0.0, travel_z * 0.5))
+		tuple(value * body_half_forward for value in forward_axis))
+	if travel_distance:
+		half_axes += ((travel_x * 0.5, 0.0, travel_z * 0.5),)
 	return center, half_axes
 
 
@@ -4049,7 +3973,7 @@ def _motion_travel_reach(vel, dt):
 	# Match the grounded native sweep in world_collision.  A shorter catalog
 	# reach can accept the static hit, then miss the pending native skin during
 	# the copied pose commit and incorrectly feed it through hard-wall braking.
-	return max(0.4, abs(float(vel)) * max(0.0, float(dt)) + 0.2)
+	return abs(float(vel)) * max(0.0, float(dt))
 
 
 def _accepted_tree_collision_keys_1513():
@@ -4261,13 +4185,50 @@ def _instance_motion_envelope_1513(instance):
 	return envelope
 
 
-def _compiled_motion_skin_1513(point, start, end, surfaces):
+def _anonymous_original_surface_1513(surface):
+	# Compiled #1513 callbacks expose transient slots, not registered wires.
+	# Only material/flags survive a recast; never alias a real registered item.
+	if (len(surface) == 4 and
+			all(type(value) in _INTEGER_TYPES for value in surface) and
+			71 <= surface[0] <= 86 and surface[1] & 0x80 and
+			(surface[3], surface[2]) not in
+			globals().get('g_offh_destr_instances', {}) and
+			(surface[3], surface[2]) not in
+			(_destructible_catalog or {}).get('baked_instances', {}) and
+			(surface[3], surface[2]) not in
+			(_destructible_catalog or {}).get('tree_instances', {})):
+		return tuple(surface[:2])
+	return None
+
+
+def _projected_box_interval_1513(start, end, box):
+	"""Clip a ray to the exact XZ projection of a possibly sheared box."""
+	center, axes = box[:2]
+	entry, leave = 0.0, 1.0
+	for generator in axes:
+		nx, nz = -generator[2], generator[0]
+		length = (nx * nx + nz * nz) ** 0.5
+		if length <= 1.0e-12:
+			continue
+		radius = sum(abs(nx * axis[0] + nz * axis[2]) for axis in axes)
+		value = nx * (start.x - center[0]) + nz * (start.z - center[2])
+		delta = nx * (end.x - start.x) + nz * (end.z - start.z)
+		if abs(delta) <= 1.0e-12:
+			if abs(value) > radius:
+				return None
+			continue
+		near, far = (-radius - value) / delta, (radius - value) / delta
+		entry, leave = max(entry, min(near, far)), min(leave, max(near, far))
+		if entry > leave:
+			return None
+	return entry, leave
+
+
+def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 	"""Resolve anonymous original keys without conflating adjacent live owners."""
 	instances = globals().get('g_offh_destr_instances', {})
 	aliases = set(surface for surface in surfaces
-		if all(type(value) in _INTEGER_TYPES for value in surface) and
-		71 <= surface[0] <= 86 and surface[1] & 0x80 and
-		(surface[3], surface[2]) not in instances)
+		if _anonymous_original_surface_1513(surface) is not None)
 	if not aliases:
 		return None
 	members = globals().get('g_offh_destr_contact_bins', {}).get(
@@ -4285,6 +4246,36 @@ def _compiled_motion_skin_1513(point, start, end, surfaces):
 		interval = _segment_world_box_interval(start, end, envelope)
 		if interval is not None:
 			owners.append((identity, instance, interval))
+	projected = False
+	if (not owners and normal is not None and
+			abs(normal.y) <= 1.0e-6 and
+			normal.x * normal.x + normal.z * normal.z > 1.0e-12 and
+			(end.x - start.x) ** 2 + (end.z - start.z) ** 2 > 1.0e-12):
+		# Native vertical original faces can extend above a module's baked
+		# bounds. Use their authored footprint only for ownership of this
+		# material, never to invent a solid or enlarge the destruction volume.
+		# Every possible stacked owner must agree, including unstreamed baked
+		# items: a missing live registration cannot authorize an exclusion.
+		projected = True
+		catalog = _destructible_catalog or {}
+		baked = catalog.get('baked_instances', {})
+		possible = set(members)
+		for bin_key in _baked_bin_keys_for_bounds_1513(
+				point.x, point.x, point.z, point.z):
+			possible.update(catalog.get('baked_shot_bins', {}).get(bin_key, ()))
+		for identity in possible:
+			instance = instances.get(identity) or baked.get(identity)
+			if instance is None:
+				continue
+			envelope = _instance_motion_envelope_1513(instance)
+			if (envelope is None or
+					_projected_box_interval_1513(point, point, envelope) is None):
+				continue
+			if identity not in instances or _destructible_isolated_1513(*identity):
+				return None
+			interval = _projected_box_interval_1513(start, end, envelope)
+			if interval is not None:
+				owners.append((identity, instance, interval))
 	if not owners:
 		return None
 	authority = _get_destr_authority()
@@ -4320,10 +4311,17 @@ def _compiled_motion_skin_1513(point, start, end, surfaces):
 			min(start.x, bound.x), max(start.x, bound.x),
 			min(start.z, bound.z), max(start.z, bound.z)):
 		neighbours.update(bins.get(bin_key, ()))
+	if projected:
+		for bin_key in _baked_bin_keys_for_bounds_1513(
+				min(start.x, bound.x), max(start.x, bound.x),
+				min(start.z, bound.z), max(start.z, bound.z)):
+			neighbours.update(catalog.get('baked_shot_bins', {}).get(bin_key, ()))
 	for other_identity in neighbours:
 		if other_identity in owner_ids:
 			continue
 		other = instances.get(other_identity)
+		if other is None and projected:
+			other = baked.get(other_identity)
 		if other is None:
 			continue
 		live = any(not (authority.is_destroyed(*(other_identity + (material,))) or
@@ -4333,7 +4331,9 @@ def _compiled_motion_skin_1513(point, start, end, surfaces):
 		if not live:
 			continue
 		other_box = _instance_motion_envelope_1513(other)
-		other_interval = (_segment_world_box_interval(start, end, other_box)
+		clip = (_projected_box_interval_1513 if projected else
+			_segment_world_box_interval)
+		other_interval = (clip(start, end, other_box)
 			if other_box is not None else None)
 		if (other_interval is not None and
 				other_interval[1] * (end - start).length >=
@@ -4367,12 +4367,15 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 		return observed_ray(ray_label, native_collide, *args)
 	def query(a, b, excluded=()):
 		candidates = set()
+		excluded_aliases = frozenset(surface[:2] for surface in excluded)
 		if collision_filter is None:
 			return (observed_ray(ray_label, native_collide,
 				space_id, a, b, VEHICLE_SKIP_FLAGS), candidates)
 		def keep(*hit):
 			accepted = collision_filter(*hit)
-			accepted = accepted and tuple(hit) not in excluded
+			alias = _anonymous_original_surface_1513(hit)
+			accepted = accepted and tuple(hit) not in excluded and not (
+				alias is not None and alias in excluded_aliases)
 			if accepted and len(hit) == 4 and len(candidates) < 16:
 				candidates.add(tuple(hit))
 			return accepted
@@ -4400,7 +4403,7 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 		if hit is None:
 			continue
 		skin = _compiled_motion_skin_1513(
-			hit[0], current, segment_end, surfaces)
+			hit[0], current, segment_end, surfaces, hit[1])
 		if skin is None or remaining_budget <= 0:
 			if evidence is not None:
 				evidence['budget_exhausted'] = bool(skin is not None)
@@ -6724,11 +6727,6 @@ def _fell_trees_near(
 				continue
 			if _tree_vehicle_box is None:
 				_tree_vehicle_box = vehicle_box
-				if vel < 0.0:
-					# Preserve the legacy scanner's fixed 0.8 m reverse reach.
-					# Prepare this query's geometry once across all chunks.
-					_tree_vehicle_box = _vehicle_swept_box(
-						pos, yaw, vel, bbox, travel_reach=0.8)
 			_tree_candidates, unused_tree_isolated_hits = (
 				_tree_candidates_for_sweeps_1513(
 					cid, registry, (_tree_vehicle_box,),
@@ -6766,12 +6764,10 @@ def _fell_trees_near(
 						continue
 					fwd = dx * sin_y + dz * cos_y
 					lat = dx * cos_y - dz * sin_y
-					reach_f = hl_f + 0.8 + min(abs(vel) * 0.25, 1.2)
-					if vel < 0:
-						in_reach = -(hl_b + 0.8) <= fwd <= hl_f
-					else:
-						in_reach = -hl_b <= fwd <= reach_f
-					if abs(lat) > hw + 0.5 or not in_reach:
+					# This scan has no integration interval; only the occupied
+					# body can prove contact, in either travel direction.
+					if not (bbox[0][0] <= lat <= bbox[1][0] and
+							bbox[0][2] <= fwd <= bbox[1][2]):
 						continue
 				_key = ((cid, _ti, _mat_kind) if _mat_kind is not None
 					else (cid, _ti))
@@ -7223,7 +7219,9 @@ def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 		a, b = Math.Vector3(*last['start']), Math.Vector3(*last['end'])
 		for key in last['candidates']:
 			def only_surface(*surface):
-				return tuple(surface) == key
+				alias = _anonymous_original_surface_1513(key)
+				return (tuple(surface) == key if alias is None else
+					_anonymous_original_surface_1513(surface) == alias)
 			hit = observed_ray('native.motion.diagnostic',
 				BigWorld.wg_collideSegment, spaceID, a, b,
 				VEHICLE_SKIP_FLAGS, only_surface)

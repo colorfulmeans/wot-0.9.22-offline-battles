@@ -25328,6 +25328,27 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'advance', 4.0, 4.0, 0.0))
         output.write.assert_not_called()
 
+    def test_stationary_blocked_turn_is_reported_without_drive_throttle(self):
+        battle = BattleRuntime(_runtime())
+        battle._local_drive_turn = 1.0
+        battle._local_turn_speed = 0.0
+        battle._local_motion_status = 'hard'
+        battle._local_support_rise_blocked = False
+        args = ((0, 0, 0), (0, 0, 0), .02, 0.0, 'turn_contact', 0.0, 0.0, 0.0)
+        with mock.patch('sys.stdout') as output:
+            self.assertTrue(battle._report_local_motion_stall(*args))
+            self.assertFalse(battle._report_local_motion_stall(*args))
+        text = ''.join(call.args[0] for call in output.write.call_args_list)
+        self.assertIn('"blocked": true', text)
+        battle._next_local_stall_report = 0.0
+        for turn, speed, status in ((0.0, 0.0, 'hard'), (1.0, .2, 'clear')):
+            battle._local_drive_turn = turn
+            battle._local_turn_speed = speed
+            battle._local_motion_status = status
+            with mock.patch('sys.stdout') as output:
+                self.assertFalse(battle._report_local_motion_stall(*args))
+            output.write.assert_not_called()
+
     def test_destroyed_car_support_report_reuses_probes_and_existing_cadence(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
