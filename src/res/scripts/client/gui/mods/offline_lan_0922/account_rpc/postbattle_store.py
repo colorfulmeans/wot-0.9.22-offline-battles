@@ -34,6 +34,7 @@ except ImportError:
 
 from gui.mods.offline_lan_0922 import battle_bonds, battle_mastery
 from gui.mods.offline_lan_0922 import friendly_fire
+from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import personal_campaign_results
 from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922.battle_achievements import (
@@ -286,14 +287,16 @@ def _receipt(value):
             len(raw_interactions) > len(public_results)):
         raise ValueError('battle receipt interaction details are invalid')
     interaction_keys = set(field[0] for field in INTERACTION_FIELDS) | {
-        'target_kind', 'target_id'}
+        'target_kind', 'target_id'} | mission_events.FIELDS
     required_interactions = set(field[0] for field in INTERACTION_FIELDS
                                 if field[1] is not None) | {
         'target_kind', 'target_id'}
     interaction_targets = set()
+    mission_event_count = 0
     for raw in raw_interactions:
         if (not isinstance(raw, dict) or set(raw) - interaction_keys or
-                not required_interactions.issubset(raw)):
+                not required_interactions.issubset(raw) or
+                not mission_events.valid(raw)):
             raise ValueError('battle receipt interaction row is invalid')
         target = (
             _bounded_text(raw.get('target_kind'), 8),
@@ -319,6 +322,12 @@ def _receipt(value):
                 raise ValueError(
                     'battle receipt interaction value is invalid')
             interaction[field_name] = number(raw_value)
+        mission_event_count += len(raw.get('mission_events', ()))
+        if mission_event_count > mission_events.MAX_EVENTS:
+            raise ValueError('battle receipt mission history is too large')
+        for field_name in mission_events.FIELDS:
+            if field_name in raw:
+                interaction[field_name] = copy.deepcopy(raw[field_name])
         interactions.append(interaction)
         interaction_targets.add(target)
     return {

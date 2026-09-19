@@ -58,6 +58,7 @@ from gui.mods.offline_lan_0922 import effective_params as effective_params_wire
 from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import device_damage
 from gui.mods.offline_lan_0922 import friendly_fire
+from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import player_critical_mechanics
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
@@ -1267,11 +1268,15 @@ def _persisted_result_receipt(value):
             len(interactions) > len(public_rows)):
         raise ValueError("invalid persisted interaction details")
     interaction_fields = set(RESULT_INTERACTION_LIMITS)
-    interaction_keys = interaction_fields | {"target_kind", "target_id"}
+    interaction_keys = interaction_fields | {"target_kind", "target_id"} | mission_events.FIELDS
+    optional = {"damage_events", "kills_assisted_stun", "kills_assisted_track"} | mission_events.FIELDS
     interaction_targets = set()
+    mission_event_count = 0
     for interaction in interactions:
         if (not isinstance(interaction, dict) or
-                set(interaction) != interaction_keys):
+                set(interaction) - interaction_keys or
+                not (interaction_keys - optional).issubset(interaction) or
+                not mission_events.valid(interaction)):
             raise ValueError("invalid persisted interaction row")
         target = (interaction.get("target_kind"),
                   interaction.get("target_id"))
@@ -1280,10 +1285,16 @@ def _persisted_result_receipt(value):
                 row_teams[target] == value["team"]):
             raise ValueError("invalid persisted interaction target")
         for name, (minimum, maximum) in RESULT_INTERACTION_LIMITS.items():
+            if name in optional and name not in interaction:
+                continue
             field = interaction.get(name)
-            if (isinstance(field, bool) or not isinstance(field, int) or
-                    field < minimum or field > maximum):
+            types = (int, float) if name == "stun_duration" else (int,)
+            if (isinstance(field, bool) or not isinstance(field, types) or
+                    not minimum <= field <= maximum):
                 raise ValueError("invalid persisted interaction value")
+        mission_event_count += len(interaction.get("mission_events", ()))
+        if mission_event_count > mission_events.MAX_EVENTS:
+            raise ValueError("persisted mission history exceeds wire budget")
         interaction_targets.add(target)
     value["interactions"] = interactions
     encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
@@ -12745,6 +12756,17 @@ class BattleState:
                   else self.bot_states.get(victim[1]))
         critical = (getattr(target, "critical", None) if victim[0] == "player"
                     else (target or {}).get("critical")) or {}
+        interaction = self._statistics_interaction(attacker, victim)
+        immobilized = interaction.pop("_terminal_immobilized", bool(_destroyed_tracks(critical)))
+        mission_distance = distance
+        if mission_distance is None:
+            positions = [self._vehicle_position(identity, alive_only=False)
+                         for identity in (attacker, victim)]
+            if all(position is not None for position in positions):
+                mission_distance = math.sqrt(sum((a - b) ** 2
+                    for a, b in zip(*positions)))
+        self._record_mission_event(attacker, victim, "kill",
+                                   int(death_reason), immobilized, mission_distance)
         self.kill_records.append({
             "actor_kind": attacker[0], "actor_id": attacker[1],
             "victim_kind": victim[0], "victim_id": victim[1],
@@ -12895,12 +12917,23 @@ class BattleState:
         if interaction is None:
             interaction = {
                 "target_kind": target[0], "target_id": target[1],
+                "mission_events": [], "mission_events_complete": True,
             }
             for name, (minimum, unused_maximum) in (
                     RESULT_INTERACTION_LIMITS.items()):
                 interaction[name] = minimum if name == "death_reason" else 0
             interactions[key] = interaction
         return interaction
+
+    def _record_mission_event(self, actor, target, kind, *values):
+        interaction = self._statistics_interaction(actor, target)
+        histories = self.vehicle_interactions[(str(actor[0]), int(actor[1]))]
+        count = sum(len(row.get("mission_events", ())) for row in histories.values())
+        if count >= mission_events.MAX_EVENTS:
+            interaction["mission_events_complete"] = False
+            return
+        elapsed = max(0, int(round((self.tick / TICK_HZ - PREBATTLE_SECONDS) * 1000)))
+        interaction["mission_events"].append([kind, elapsed] + list(values))
 
     def _increment_interaction(self, actor, target, name, amount=1):
         minimum, maximum = RESULT_INTERACTION_LIMITS[name]
@@ -12927,7 +12960,8 @@ class BattleState:
         interactions = self.vehicle_interactions.get(actor, {})
         if not isinstance(interactions, dict):
             return []
-        return [dict(value) for value in sorted(
+        return [copy.deepcopy(dict((name, field) for name, field in value.items()
+                                   if not name.startswith("_"))) for value in sorted(
             interactions.values(), key=lambda value: (
                 0 if value.get("target_kind") == "player" else 1,
                 int(value.get("target_id", 0))))]
@@ -13020,6 +13054,11 @@ class BattleState:
         row["critical_hits"] += _popcount(mask)
         self._statistics_row(*target)["crits_received_mask"] |= mask
         self._or_interaction(attacker, target, "crits", mask)
+        self._record_mission_event(attacker, target, "critical", mask)
+        state = self._vehicle_stun_state(target)
+        if state is not None and not state['alive']:
+            self._statistics_interaction(attacker, target)["_terminal_immobilized"] = bool(
+                _destroyed_tracks(previous))
 
     def _impairment_assisters(self, attacker, target, target_critical):
         target_team = self._vehicle_team(*target)
@@ -13106,6 +13145,11 @@ class BattleState:
         self._increment_interaction(
             attacker, target, "damage", damage)
         self._increment_interaction(attacker, target, "damage_events")
+        immobilized = bool(_destroyed_tracks(target_critical))
+        self._record_mission_event(attacker, target, "damage", damage, immobilized)
+        state = self._vehicle_stun_state(target)
+        if state is not None and not state['alive']:
+            self._statistics_interaction(attacker, target)["_terminal_immobilized"] = immobilized
         self._increment_interaction(
             target, attacker, "damage_received", damage)
         # #1513's Patrol Duty (``evileye``) counts enemies damaged while the

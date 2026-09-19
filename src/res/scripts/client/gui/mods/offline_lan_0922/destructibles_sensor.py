@@ -4254,6 +4254,87 @@ def horizontal_collision_filter(start, end):
 	return prepare_horizontal_collision_filter(start, end)
 
 
+def collide_motion_segment(space_id, start, end, collision_filter,
+		native_collide, ray_label='native.motion.ray'):
+	"""Recast compiled original skins inside their accepted object/module.
+
+	#1513 can return a merged, PROJECTILENOCOLLIDE BSP with anonymous item
+	IDs alongside the live chunk model. Callback order does not identify the
+	nearest hit. Resolve that hit against one registered object/module, then remove
+	only its original-material callback keys in a ray bounded by its exact OBB
+	exit. The recast still sees replacement materials, terrain and backing
+	walls, including geometry inside the original module's box.
+	"""
+	if collision_filter is None or _destructible_catalog is None:
+		args = (space_id, start, end, VEHICLE_SKIP_FLAGS)
+		if collision_filter is not None:
+			args += (collision_filter,)
+		return observed_ray(ray_label, native_collide, *args)
+	def query(a, b, excluded=()):
+		candidates = set()
+		if collision_filter is None:
+			return (observed_ray(ray_label, native_collide,
+				space_id, a, b, VEHICLE_SKIP_FLAGS), candidates)
+		def keep(*hit):
+			accepted = collision_filter(*hit)
+			if accepted and len(hit) == 4 and len(candidates) < 16:
+				candidates.add(tuple(hit))
+			return accepted and tuple(hit) not in excluded
+		return (observed_ray(ray_label, native_collide,
+			space_id, a, b, VEHICLE_SKIP_FLAGS, keep), candidates)
+
+	current = start
+	hit, surfaces = query(current, end)
+	if hit is None or collision_filter is None or _destructible_catalog is None:
+		return hit
+	authority = _get_destr_authority()
+	for unused in range(_SOFT_STATIC_MAX_SKIPS):
+		candidate = _catalog_candidate_on_ray_1513(hit[0], current, end)
+		if candidate is None or candidate[4] not in ('structure', 'fragile', 'falling'):
+			return hit
+		key = candidate[:3]
+		if not (authority.is_destroyed(*key) or key in
+				globals().get('g_offh_destr_speculative', set())):
+			return hit
+		instances = globals().get('g_offh_destr_instances', {})
+		# Fragile fences (including Paris bridge railings) and falling posts
+		# have one item-wide destruction key. Structures destroy each material
+		# separately. Both can leave anonymous compiled original skins, so
+		# resolve by the registered kind rather than a map or model whitelist.
+		excluded = set(surface for surface in surfaces
+			if all(type(value) in _INTEGER_TYPES for value in surface) and
+			71 <= surface[0] <= 86 and
+			(candidate[4] != 'structure' or surface[0] == candidate[2]) and
+			surface[1] & 0x80 and
+			(surface[3], surface[2]) not in instances)
+		if not excluded:
+			return hit
+		exit_distance = _registered_shot_exit_1513(
+			candidate[0], candidate[1], candidate[2], candidate[3],
+			current, end, hit[0])
+		if exit_distance is None:
+			return hit
+		direction = end - current
+		length = direction.length
+		if length <= _SHOT_RAY_EPSILON:
+			return hit
+		direction.normalise()
+		bounded_end = (end if exit_distance >= length else
+			current + direction.scale(exit_distance))
+		remaining, unused_surfaces = query(current, bounded_end, excluded)
+		if remaining is not None:
+			return remaining
+		globals()['g_offh_destr_ground_skips'] = globals().get(
+			'g_offh_destr_ground_skips', 0) + 1
+		if exit_distance + _SHOT_RAY_EPSILON >= length:
+			return None
+		current = bounded_end + direction.scale(_SHOT_RAY_EPSILON)
+		hit, surfaces = query(current, end)
+		if hit is None:
+			return None
+	return hit
+
+
 def sight_collision_filter():
 	"""Prepare one broken-skin filter for rays of unbounded length.
 

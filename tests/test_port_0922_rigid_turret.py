@@ -29,6 +29,20 @@ def floor(start, end):
 
 
 class RigidTurretTests(unittest.TestCase):
+    def test_barrel_side_contact_survives_same_ground_height_as_tracks(self):
+        value = body((0, 1, 0))
+        value.grounded = True
+        # Only the gun at z=4..5 overlaps. The turret box is far behind;
+        # chassis and detached turret both have their underside exactly at 0.
+        boxes = (((.4, .4, 4.5), ((1.5, 0, 0), (0, .4, 0), (0, 0, 2))),
+                 ((.4, 1., 4.5), ((1.5, 0, 0), (0, .2, 0), (0, 0, 2))))
+        for horizontal in (False, True):
+            result = physics.vehicle_contact(value, boxes, 50000, (-5, 0, 0),
+                                             horizontal=horizontal)
+            self.assertIsNotNone(result)
+            self.assertAlmostEqual(0, result['normal'][1])
+            self.assertLess(result['momentum'][0], 0)
+
     def test_quantized_resting_corner_cannot_be_shoved_under_a_slope(self):
         f32 = lambda v: struct.unpack('f', struct.pack('f', v))[0]
         def ground(start, end):

@@ -534,8 +534,27 @@ def vehicle_contact(body, boxes, mass, velocity, horizontal=False):
     # shallow roof axis must not turn geometric recovery into an elevator.
     side = (body.grounded and min(p[1] for p in body.points()) <
             min(b[0][1]-sum(abs(v[1]) for v in b[1]) for b in boxes))
-    contacts = [contact for a in body.boxes() for b in boxes
-                for contact in [box_contact(a, b, horizontal=side)] if contact is not None]
+    contacts = []
+    side_contacts = []
+    for a in body.boxes():
+        for b in boxes:
+            # A thin barrel can meet the hull while the chassis and debris
+            # share the same ground height. The old whole-body bottom test
+            # then selected the barrel's shallow vertical axis and discarded
+            # the human's horizontal contact. Classify each component pair:
+            # a grounded component centred below this vehicle box's roof is
+            # a side contact; a component above it retains vertical support.
+            component_side = side or (body.grounded and
+                a[0][1] < b[0][1] + sum(abs(axis[1]) for axis in b[1]) - EPSILON)
+            contact = box_contact(a, b, horizontal=component_side)
+            if contact is not None:
+                contacts.append(contact)
+                if component_side and contact[1] > EPSILON:
+                    side_contacts.append(contact)
+    # A tangent contact on the track roof must not mask an intersecting
+    # barrel/hull side. Resolve that side before considering roof support.
+    if side_contacts:
+        contacts = side_contacts
     if horizontal and not side:
         contacts = [c for c in contacts if abs(c[0][1]) < max(abs(c[0][0]), abs(c[0][2]))]
     if not contacts:

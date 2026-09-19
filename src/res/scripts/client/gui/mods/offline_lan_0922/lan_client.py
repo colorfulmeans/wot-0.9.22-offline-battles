@@ -16,6 +16,7 @@ from gui.mods.offline_lan_0922 import bot_gunnery
 from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import friendly_fire
+from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
@@ -1439,15 +1440,20 @@ def _valid_battle_receipt(message):
             len(interactions) > len(public_rows)):
         return False
     interaction_keys = set(RESULT_INTERACTION_LIMITS) | {
-        'target_kind', 'target_id'}
+        'target_kind', 'target_id'} | mission_events.FIELDS
     optional_interactions = {'damage_events', 'kills_assisted_stun',
-                             'kills_assisted_track'}
+                             'kills_assisted_track'} | mission_events.FIELDS
     required_interactions = interaction_keys - optional_interactions
     interaction_targets = set()
+    mission_event_count = 0
     for interaction in interactions:
         if (not isinstance(interaction, dict) or
                 set(interaction) - interaction_keys or
-                not required_interactions.issubset(interaction)):
+                not required_interactions.issubset(interaction) or
+                not mission_events.valid(interaction)):
+            return False
+        mission_event_count += len(interaction.get('mission_events', ()))
+        if mission_event_count > mission_events.MAX_EVENTS:
             return False
         target = (
             interaction.get('target_kind'),

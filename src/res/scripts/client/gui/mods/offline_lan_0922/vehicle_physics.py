@@ -247,9 +247,29 @@ def apply_tuning(overrides):
 	return applied
 
 
-def hard_contact_candidate_yaws(yaw):
-	'''Return the shared ordered glancing paths for one blocked hull heading.'''
-	return tuple(float(yaw) + delta for delta in HARD_CONTACT_YAW_DELTAS)
+def hard_contact_candidate_yaws(yaw, speed=1.0, normal=None):
+	'''Keep deflection rays on the outside of the primary blocking plane.
+
+	A clear sparse ray in a different heading does not undo an existing hull
+	contact. In particular it can miss a wall between the new corner lanes.
+	Preserve the first normal before those probes replace their trace.
+	'''
+	candidates = tuple(float(yaw) + delta for delta in HARD_CONTACT_YAW_DELTAS)
+	if normal is None:
+		return candidates
+	try:
+		nx, nz = float(normal[0]), float(normal[2])
+		length = math.hypot(nx, nz)
+		if math.isnan(length) or math.isinf(length) or length <= 1.0e-9:
+			return ()
+	except (IndexError, TypeError, ValueError):
+		return ()
+	nx, nz = nx / length, nz / length
+	direction = -1.0 if speed < 0.0 else 1.0
+	if direction * (math.sin(yaw) * nx + math.cos(yaw) * nz) > 0.0:
+		nx, nz = -nx, -nz
+	return tuple(candidate for candidate in candidates if direction * (
+		math.sin(candidate) * nx + math.cos(candidate) * nz) >= -1.0e-9)
 
 
 def hard_contact_step(speed, dt, grinding=False, slide_yaw=None):

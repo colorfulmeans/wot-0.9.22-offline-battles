@@ -10,7 +10,7 @@ from gui.mods.offline_lan_0922.destructibles_sensor import (
 	_catalog_soft_static_path, _diagnostic_static_recast_1513,
 	_try_destroy_solid_hit, _vehicle_hull_bbox, _descriptor_value,
 	ground_collision_filter, horizontal_collision_filter,
-	prepare_horizontal_collision_filter)
+	prepare_horizontal_collision_filter, collide_motion_segment)
 
 
 _MAX_DRIVABLE_GRADIENT = 1.28
@@ -65,13 +65,8 @@ def _collide_horizontal(spaceID, start, end,
 	broken_filter = collision_filter
 	if broken_filter is _UNPREPARED_COLLISION_FILTER:
 		broken_filter = horizontal_collision_filter(start, end)
-	if broken_filter is None:
-		return observed_ray(
-			'native.motion.ray', BigWorld.wg_collideSegment,
-			spaceID, start, end, VEHICLE_SKIP_FLAGS)
-	return observed_ray(
-		'native.motion.ray', BigWorld.wg_collideSegment,
-		spaceID, start, end, VEHICLE_SKIP_FLAGS, broken_filter)
+	return collide_motion_segment(spaceID, start, end, broken_filter,
+		BigWorld.wg_collideSegment)
 
 
 def _profile_gradient_limit(heights):
@@ -306,13 +301,8 @@ def _ground_top(spaceID, Math, pos, x, z, look, ground_plane=None,
 		broken_filter = collision_filter
 		if broken_filter is _UNPREPARED_COLLISION_FILTER:
 			broken_filter = ground_collision_filter(x, z)
-		ground = (observed_ray(
-			'native.motion.ground', BigWorld.wg_collideSegment,
-			spaceID, start, end, VEHICLE_SKIP_FLAGS)
-			if broken_filter is None else
-			observed_ray(
-				'native.motion.ground', BigWorld.wg_collideSegment,
-				spaceID, start, end, VEHICLE_SKIP_FLAGS, broken_filter))
+		ground = collide_motion_segment(spaceID, start, end, broken_filter,
+			BigWorld.wg_collideSegment, 'native.motion.ground')
 		return None if ground is None else float(ground[0].y)
 	except (AttributeError, IndexError, TypeError, ValueError):
 		return None

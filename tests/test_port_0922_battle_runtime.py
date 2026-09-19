@@ -19354,7 +19354,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_position = (2.0, 3.0, 4.0)
         battle._local_descriptor = entity.typeDescriptor
         battle._attach_local_presentation()
-        battle._destructibles = mock.Mock()
+        # This legacy sensor double has no compiled-skin ray adapter.
+        battle._destructibles = mock.Mock(collide_motion_segment=None)
 
         def motion_is_clear(*unused_args, **unused_kwargs):
             battle._destructibles._fell_trees_near.assert_not_called()
@@ -19381,7 +19382,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_position = (2.0, 3.0, 4.0)
         battle._local_descriptor = entity.typeDescriptor
         battle._attach_local_presentation()
-        battle._destructibles = mock.Mock()
+        battle._destructibles = mock.Mock(collide_motion_segment=None)
         battle._destructibles._catalog_motion_blocked.return_value = True
 
         with mock.patch(
@@ -20826,7 +20827,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         skin_filter = lambda *unused: True
-        battle._destructibles = mock.Mock()
+        battle._destructibles = mock.Mock(collide_motion_segment=None)
         battle._destructibles.ground_collision_filter.side_effect = (
             lambda x, z: skin_filter if x > 0.0 else None)
         calls = []

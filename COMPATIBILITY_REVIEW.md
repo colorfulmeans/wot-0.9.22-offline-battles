@@ -4583,3 +4583,112 @@ and MT-2 rewards across duplicate delivery and restart. 875 related local
 tests pass. Exact Windows #1513 SPG-1/MT-2 completion, result-card appearance,
 and further native gameplay acceptance remain to be checked with the new
 package. Existing completed receipts are not replayed as new battles.
+
+## September 19 follow-up: Malinovka, hard walls, detached guns and mission events
+
+Reports `073337`, `073639` and `080804` use build
+`colorfulmeans-35375700188-1`. They supersede the earlier assumption that
+releasing the catalog envelope alone resolved the reported railing contacts.
+All five captured Malinovka native hit points resolve to unique registered
+modules of chunk 32636, items 23/24/26, `mil203_MilitaryDefences01.model`.
+Both modules of each encountered item were already accepted as destroyed.
+The native callback also exposes original materials 73/74 under anonymous
+compiled IDs with flags 131. The exact live `(chunk,item,material)` filter
+cannot remove those original surfaces. Nearby material probes sometimes hit
+another fence module and cannot identify the nearest ray result.
+
+Motion/support queries now retain the native callback's candidates and
+resolve the returned point against one exact registered destroyed module.
+A bounded recast removes only matching anonymous original-material keys up
+to that module's OBB exit. It still tests replacement material 88 and any
+wall inside the box; beyond the exit it restores the ordinary callback.
+Ambiguous or unaccepted modules and unknown materials remain solid. This
+does not change the global vehicle mask or add a destruction wait. Horizontal
+player/Bot queries and suspension/downward queries share the same operation.
+The fixture preserves all five captured rays and tests reversed callback
+order, an inside-box backing wall, a retained replacement, overlapping live
+modules and a merged key reused beyond the destroyed module.
+
+The Mannerheim report's material-111 contacts were followed by `deflect`
+motion. A sparse ray in another heading can miss the first wall between its
+new lanes. Both player and Bot hard-contact response now retain the primary
+normal and reject deflections that move farther into that blocking plane.
+The captured normals are regression inputs; reverse and outward glancing
+motion remain covered. No destructible whitelist is used to clear real walls.
+
+Detached bodies already contained separate descriptor turret/gun boxes.
+A reproduced thin-barrel contact was nevertheless discarded: the debris and
+chassis had the same ground height, the whole-body side test failed, and a
+shallow vertical/track-roof contact masked the barrel/hull side. Contact
+selection now classifies the individual component pairs and resolves an
+intersecting grounded side before a tangent roof contact. The shared rigid
+body law serves visible-player impulses and worker-owned responses. Existing
+landing-on-vehicle, gravity release, momentum and wall regressions remain
+required. First body creation also records its real component bounds so the
+next exact-client report can verify the exploded visual's alignment.
+
+MT-3, MT-4 and HT-2 failed because `limittedTime`, `enemyImmobilized`, destroyed
+track events and kill distance were unsupported. The server now records
+compact admitted damage, critical-transition and kill events with the combat
+clock, pre-hit immobilization, changed critical mask and available distance.
+Repeated track breaks after repair remain distinct; unchanged states, friendly
+damage and replayed projectile terminals create no additional enemy evidence.
+Final death-state module destruction does not fabricate pre-hit immobilization.
+The evaluator reads thresholds and honours from installed mission resources.
+The fixture covers main/add expressions for these three tasks in all four
+operations, including time and distance boundary failures.
+
+The optional history survives all three receipt readers: server restart,
+client wire validation and durable post-battle storage. It is excluded from
+the native result serializer. Its per-actor cap is explicit; overflow leaves
+an incomplete history rather than inventing success or exceeding the wire
+budget. Old receipts retain absent evidence. Server restart validation also
+now accepts the already shipped fractional stun seconds and optional older
+interaction counters. Settlement remains under the existing exactly-once
+owner; the regression delivers the same receipt twice across server recovery.
+Other unimplemented mission predicates remain explicitly unsupported.
+
+UDES 03 (Bot 26) in `080804` remains a diagnostic boundary. During the long
+reported stationary interval its worker ground position/pitch is stable;
+the report lacks Siege transitions and hydraulic-angle evidence. No native
+mode oscillation or hardware fault is established. State-edge and existing
+stall records now include mode, remaining switch time, intent, terrain pitch,
+hydraulic pitch and gun pitch. Hydraulic laws are unchanged in this follow-up.
+Shell/impact delay likewise remains diagnosis-only as requested.
+
+The new focused collision, turret and mission regressions pass locally.
+Full subsystem/CI and package results are recorded in PR #12. This remains a
+0.9.0 test build, not a release. Actual #1513 Windows traversal, barrel visual
+alignment and UDES mode/pose behaviour still require the new build in game;
+pure geometry fixtures cannot establish those native runtime outcomes.
+
+### All-map railing mechanism follow-up
+
+The user clarified that railings also fail in Paris and across other maps.
+The original compiled-skin recast was shared code, but its structure-only
+guard still excluded item-wide fragile fences. Paris's bridge end, slope and
+tile railings are fragile resources, not structure modules. The same bounded
+recast now accepts registered fragile and falling objects as well as structure
+modules. Item-wide acceptance removes only anonymous original destructible
+materials 71--86 inside the exact object bounds; structures still require the
+specific accepted module material. No map names or model families control the
+production collision rule. Damaged materials, independent walls, overlapping
+live objects, unrecognized materials and merged keys outside the accepted
+object remain solid. Revoking a local prediction restores its collision.
+
+The Paris fixture failed all four original-material variants before this
+extension and passes afterwards. Catalog-driven tests now cover 750 placed
+collider variants across all 40 shipped maps containing fence/gate/barrier
+resources, including Paris bridge railings. Each uses a simulated native
+callback with the shipped transform and bounds; these are mechanism tests,
+not captured gameplay in all 40 maps. All five original Malinovka report rays
+and their backing-wall/replacement regressions remain covered. A player
+ground-query integration test also proves that the recast finds real support
+below an accepted original skin and retains intact support.
+
+The three interrupted actor-suite failures were unconfigured generic mocks
+inventing the newly added optional ray adapter. Their legacy fixtures now
+explicitly omit that adapter; no assertions were removed, and the real-adapter
+ground integration is covered separately. The related collision, physics,
+destructible, turret, rotation and mission suites pass 560 tests locally.
+The complete client/launcher suites and Windows packaging run on PR #12.

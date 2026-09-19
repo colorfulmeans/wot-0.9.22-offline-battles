@@ -5204,6 +5204,11 @@ class BattleRuntime(object):
 
     def _collide_down(self, start, end, ground_filter):
         """Vertical probe that skips the skin of an already broken item."""
+        collide = getattr(self._destructibles, 'collide_motion_segment', None)
+        if callable(collide):
+            return collide(self._avatar.spaceID, start, end, ground_filter,
+                           self._runtime.bigworld.wg_collideSegment,
+                           'native.motion.ground')
         if ground_filter is None:
             return self._runtime.bigworld.wg_collideSegment(
                 self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS)
@@ -22011,7 +22016,9 @@ class BattleRuntime(object):
                         entity, primary_contact, self._local_speed, yaw)
                     deflected = False
                     for slide_yaw in \
-                            vehicle_physics.hard_contact_candidate_yaws(yaw):
+                            vehicle_physics.hard_contact_candidate_yaws(
+                                yaw, self._local_speed,
+                                primary_contact.get('normal')):
                         if self._motion_is_clear(
                                 entity, position, slide_yaw,
                                 self._local_speed, dt, hull_yaw=yaw):
@@ -25954,6 +25961,10 @@ class BattleRuntime(object):
                     components = turret_obstacles.turret_components(entity.typeDescriptor)
                     body = rigid_turret.Body(components, rigid_turret.frame_at(row, 0.0))
                     self._turret_bodies[key] = body
+                    sys.stdout.write(
+                        '[Offline LAN 0.9.22] TURRET GEOMETRY source=%s components=%s\n' % (
+                            key, tuple((name, offset, bounds)
+                                       for name, unused_component, offset, bounds in components)))
                 rollback = (body.frame(), list(body.support_points),
                             getattr(body, '_last_published_frame', None))
                 acknowledgements = dict((r[0], r) for r in body.acks)
