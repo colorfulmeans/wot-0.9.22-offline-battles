@@ -4692,3 +4692,42 @@ explicitly omit that adapter; no assertions were removed, and the real-adapter
 ground integration is covered separately. The related collision, physics,
 destructible, turret, rotation and mission suites pass 560 tests locally.
 The complete client/launcher suites and Windows packaging run on PR #12.
+
+### September 19 18:21 wooden-fence follow-up
+
+Report `20260919-182128-7408d7bbfcb2` used build
+`colorfulmeans-35429387931-1`. The user confirmed that the pavement seam now
+works, but wooden barriers remain blocked in both tested maps. The report
+contains six Paris and nine Malinovka hard-contact samples. Malinovka's
+worker accepted destruction of the contacted fence modules, yet subsequent
+rays still blocked. Paris's upper contacts do not fit a registered original
+module box in the shipped catalog. Callback candidate lists contain ordinary,
+original-destructible and damaged materials, but do not identify which one
+produced the nearest hit. They are insufficient evidence for deleting a
+replacement collider, enlarging an object bound, or relaxing a map's walls.
+
+The shared compiled-skin traversal had a separate reproducible early-return
+defect: after excluding one accepted original key, it returned the next hit
+as solid without classifying it. A native traversal is allowed to prune
+farther callbacks until the nearer surface is excluded, so the next key need
+not have appeared in the first query. The traversal now processes bounded
+intervals in near-to-far order, reclassifies newly revealed keys, and restores
+the previous filter outside each owner's interval. All intervals share the
+existing recast budget. Unknown or intact geometry and actual damaged/backing
+walls still stop the ray. No map parameters or collision timers change.
+
+A regression with pruned callbacks fails on the preceding implementation and
+passes with this traversal. It also retains a real wall or damaged collider
+behind two accepted skins and verifies the shared budget. This proves the
+local early-return correction; it does not prove that all reported wooden
+fence contacts have the same cause.
+
+The existing stalled-motion diagnostic now replays the exact filtered ray
+and tests surviving callback keys individually. It records their hit points,
+distance from the reported contact, actual nearby instance boxes, and each
+module's accepted/predicted state. Query stages and per-owner exclusions are
+included. The diagnostic runs only at the existing two-second reporting
+cadence, has bounded surface/owner counts, never destroys an object, and is
+never consulted for a movement verdict. Its errors are contained to logging.
+Further #1513 Windows evidence is needed to distinguish the remaining native
+original-skin, damaged-geometry and catalog-placement cases.

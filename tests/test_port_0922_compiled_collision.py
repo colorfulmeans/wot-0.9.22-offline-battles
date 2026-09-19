@@ -333,3 +333,78 @@ class CrossMapRailingCollisionTests(unittest.TestCase):
         self.assertIsNone(self.query(start, end, surfaces))
         sensor.g_offh_destr_speculative.remove(key)
         self.assertIs(hit, self.query(start, end, surfaces)[0])
+
+    @staticmethod
+    def pruned_native(surfaces):
+        # A native BSP traversal can prune farther callbacks once it finds a
+        # near hit. The second key then appears ONLY after filtering the first.
+        def collide(space, a, b, flags, keep=None):
+            delta = b - a
+            length = delta.length
+            delta.normalise()
+            for point, key in surfaces:
+                distance = sum(getattr(point - a, axis) * getattr(delta, axis)
+                               for axis in ('x', 'y', 'z'))
+                if -1e-7 <= distance <= length + 1e-7:
+                    if keep is None or keep(*key):
+                        return point, V(1, 0, 0)
+        return collide
+
+    def test_pruned_native_callbacks_reveal_more_than_one_broken_skin(self):
+        identity, instance, (start, end, hit) = self.paris()
+        self.broken.add(identity + (None,))
+        direction = end - start
+        direction.normalise()
+        next_skin = hit + direction.scale(0.01)
+        wall = hit + direction.scale(0.02)
+        originals = [(hit, (73, 131, 60000, 1700000)),
+                     (next_skin, (74, 131, 60001, 1700000))]
+
+        keep = sensor.horizontal_collision_filter(start, end)
+        self.assertIsNone(sensor.collide_motion_segment(
+            1, start, end, keep, self.pruned_native(originals)))
+        for material in (88, 111):
+            with self.subTest(material=material):
+                result = sensor.collide_motion_segment(1, start, end, keep,
+                    self.pruned_native(originals + [
+                        (wall, (material, 0, 50000, identity[0]))]))
+                self.assertIs(wall, result[0])
+
+    def test_nested_recasts_share_one_budget_and_keep_unexamined_surface_solid(self):
+        identity, instance, (start, end, hit) = self.paris()
+        self.broken.add(identity + (None,))
+        direction = end - start
+        direction.normalise()
+        surfaces = [(hit + direction.scale(i * 0.01),
+                     (73, 131, 60000 + i, 1700000)) for i in range(6)]
+        evidence = {}
+        result = sensor.collide_motion_segment(1, start, end,
+            sensor.horizontal_collision_filter(start, end),
+            self.pruned_native(surfaces), evidence=evidence)
+        self.assertIs(surfaces[4][0], result[0])
+        self.assertTrue(evidence['budget_exhausted'])
+        self.assertEqual(5, len(evidence['queries']))
+
+    def test_contact_diagnostic_distinguishes_actual_wall_from_callback_candidates(self):
+        identity, instance, (start, end, hit) = self.paris()
+        self.broken.add(identity + (None,))
+        direction = end - start
+        direction.normalise()
+        wall = hit + direction.scale(0.01)
+        wall_key = (111, 0, 50000, identity[0])
+        native = CompiledCollisionTests.native([
+            (hit, (73, 131, 60000, 1700000)), (wall, wall_key)])
+        accepted_before = set(self.broken)
+        with mock.patch.dict('sys.modules', {
+                'BigWorld': types.SimpleNamespace(wg_collideSegment=native),
+                'Math': types.SimpleNamespace(Vector3=V)}):
+            evidence = sensor.native_contact_evidence(1, start, end, wall)
+        self.assertFalse(evidence['replay_clear'])
+        self.assertAlmostEqual(0, evidence['replay_contact_distance'])
+        self.assertEqual([wall_key], [row['key']
+            for row in evidence['surface_witnesses']])
+        self.assertAlmostEqual(0, evidence['surface_witnesses'][0]['contact_distance'])
+        owner = next(row for row in evidence['nearby_owners']
+                     if row['identity'] == identity)
+        self.assertTrue(owner['boxes'][0]['broken'])
+        self.assertEqual(accepted_before, self.broken)

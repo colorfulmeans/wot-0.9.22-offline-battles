@@ -17810,6 +17810,16 @@ class BattleRuntime(object):
                     # A diagnostic failure never changes motion or the native
                     # collision verdict that has already been applied.
                     trace['material_probe_error'] = str(error)
+            native_evidence = getattr(
+                self._destructibles, 'native_contact_evidence', None)
+            if callable(native_evidence) and all(key in trace for key in (
+                    'ray_start', 'ray_end', 'hit')):
+                try:
+                    trace['native_contact_evidence'] = native_evidence(
+                        self._avatar.spaceID, self._vector(trace['ray_start']),
+                        self._vector(trace['ray_end']), self._vector(trace['hit']))
+                except Exception as error:
+                    trace['native_contact_evidence_error'] = str(error)
             trace['motion_skip_flags'] = VEHICLE_SKIP_FLAGS
             trace['spring_columns'] = (
                 'x,z,minimum,maximum,direct,support,flat_maximum,layers')

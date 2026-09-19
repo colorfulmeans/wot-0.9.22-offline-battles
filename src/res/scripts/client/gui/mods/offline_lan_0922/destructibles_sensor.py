@@ -4347,7 +4347,7 @@ def _compiled_motion_skin_1513(point, start, end, surfaces):
 
 
 def collide_motion_segment(space_id, start, end, collision_filter,
-		native_collide, ray_label='native.motion.ray'):
+		native_collide, ray_label='native.motion.ray', evidence=None):
 	"""Recast compiled original skins inside their accepted object/module.
 
 	#1513 can return a merged, PROJECTILENOCOLLIDE BSP with anonymous item
@@ -4355,8 +4355,10 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 	nearest hit. Resolve that hit against one registered model, then remove
 	only accepted original-material keys in a ray bounded by its envelope.
 	Per-module damage boxes are not the compiled model's geometry bounds.
-	The recast still sees replacement materials, terrain and backing
-	walls, including geometry inside the original module's box.
+	A native traversal may reveal another original key only after the first
+	one is excluded. Classify that hit too, within the same bounded interval.
+	Replacement materials, terrain and backing walls remain visible, including
+	geometry inside the original module's box. All intervals share one budget.
 	"""
 	if collision_filter is None or _destructible_catalog is None:
 		args = (space_id, start, end, VEHICLE_SKIP_FLAGS)
@@ -4370,40 +4372,55 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 				space_id, a, b, VEHICLE_SKIP_FLAGS), candidates)
 		def keep(*hit):
 			accepted = collision_filter(*hit)
+			accepted = accepted and tuple(hit) not in excluded
 			if accepted and len(hit) == 4 and len(candidates) < 16:
 				candidates.add(tuple(hit))
-			return accepted and tuple(hit) not in excluded
-		return (observed_ray(ray_label, native_collide,
-			space_id, a, b, VEHICLE_SKIP_FLAGS, keep), candidates)
+			return accepted
+		hit = observed_ray(ray_label, native_collide,
+			space_id, a, b, VEHICLE_SKIP_FLAGS, keep)
+		if evidence is not None:
+			evidence.setdefault('queries', []).append({
+				'start': (a.x, a.y, a.z), 'end': (b.x, b.y, b.z),
+				'excluded': sorted(excluded), 'candidates': sorted(candidates),
+				'hit': None if hit is None else tuple(
+					getattr(hit[0], axis) for axis in ('x', 'y', 'z')),
+				'normal': None if hit is None else tuple(
+					getattr(hit[1], axis) for axis in ('x', 'y', 'z')),
+			})
+		return hit, candidates
 
-	current = start
-	hit, surfaces = query(current, end)
-	if hit is None or collision_filter is None or _destructible_catalog is None:
-		return hit
-	for unused in range(_SOFT_STATIC_MAX_SKIPS):
-		skin = _compiled_motion_skin_1513(hit[0], current, end, surfaces)
-		if skin is None:
+	# Each exclusion belongs only to the owner interval which proved it.
+	# Resume its tail with the previous filter: the same compiled key may
+	# belong to an intact neighbour immediately outside that interval.
+	segments = [(start, end, frozenset())]
+	remaining_budget = _SOFT_STATIC_MAX_SKIPS
+	while segments:
+		current, segment_end, excluded = segments.pop()
+		hit, surfaces = query(current, segment_end, excluded)
+		if hit is None:
+			continue
+		skin = _compiled_motion_skin_1513(
+			hit[0], current, segment_end, surfaces)
+		if skin is None or remaining_budget <= 0:
+			if evidence is not None:
+				evidence['budget_exhausted'] = bool(skin is not None)
 			return hit
-		exit_distance, excluded = skin
-		direction = end - current
+		exit_distance, newly_excluded = skin
+		direction = segment_end - current
 		length = direction.length
 		if length <= _SHOT_RAY_EPSILON:
 			return hit
 		direction.normalise()
-		bounded_end = (end if exit_distance >= length else
+		bounded_end = (segment_end if exit_distance >= length else
 			current + direction.scale(exit_distance))
-		remaining, unused_surfaces = query(current, bounded_end, excluded)
-		if remaining is not None:
-			return remaining
+		remaining_budget -= 1
+		if exit_distance + _SHOT_RAY_EPSILON < length:
+			segments.append((bounded_end + direction.scale(_SHOT_RAY_EPSILON),
+				segment_end, excluded))
+		segments.append((current, bounded_end, excluded.union(newly_excluded)))
 		globals()['g_offh_destr_ground_skips'] = globals().get(
 			'g_offh_destr_ground_skips', 0) + 1
-		if exit_distance + _SHOT_RAY_EPSILON >= length:
-			return None
-		current = bounded_end + direction.scale(_SHOT_RAY_EPSILON)
-		hit, surfaces = query(current, end)
-		if hit is None:
-			return None
-	return hit
+	return None
 
 
 def sight_collision_filter():
@@ -7178,6 +7195,77 @@ def static_contact_evidence(spaceID, segment_start, hit_pt, surf_normal):
 			'contact_distance': (point - hit_pt).length,
 		})
 	return result
+
+
+def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
+	"""Resolve a stalled ray's actual surfaces without changing destruction.
+
+	The ordinary callback log is a set of traversal candidates, NOT a nearest
+	hit identity. Replay the filtered ray, then isolate each surviving key on
+	the exact final interval. Called only by the existing two-second diagnostic;
+	its result is never used to accept or reject vehicle movement.
+	"""
+	import BigWorld
+	import Math
+	evidence = {'surface_columns': 'material,flags,item,chunk'}
+	keep = horizontal_collision_filter(segment_start, segment_end)
+	if keep is None:
+		keep = lambda *unused: True
+	result = collide_motion_segment(spaceID, segment_start, segment_end, keep,
+		BigWorld.wg_collideSegment, 'native.motion.diagnostic', evidence=evidence)
+	evidence['replay_clear'] = result is None
+	if result is not None:
+		evidence['replay_contact_distance'] = (result[0] - hit_pt).length
+	queries = evidence.get('queries', ())
+	witnesses = []
+	if result is not None and queries:
+		last = queries[-1]
+		a, b = Math.Vector3(*last['start']), Math.Vector3(*last['end'])
+		for key in last['candidates']:
+			def only_surface(*surface):
+				return tuple(surface) == key
+			hit = observed_ray('native.motion.diagnostic',
+				BigWorld.wg_collideSegment, spaceID, a, b,
+				VEHICLE_SKIP_FLAGS, only_surface)
+			witness = {'key': key, 'hit': None}
+			if hit is not None:
+				witness.update(hit=(hit[0].x, hit[0].y, hit[0].z),
+					normal=(hit[1].x, hit[1].y, hit[1].z),
+					contact_distance=(hit[0] - hit_pt).length)
+			witnesses.append(witness)
+	evidence['surface_witnesses'] = witnesses
+	instances = globals().get('g_offh_destr_instances', {})
+	members = globals().get('g_offh_destr_contact_bins', {}).get(
+		_destructible_bin_key(hit_pt.x, hit_pt.z), ())
+	authority = _get_destr_authority()
+	predicted = globals().get('g_offh_destr_speculative', ())
+	owners = []
+	def owner_distance(identity):
+		boxes = instances.get(identity, {}).get('boxes', ())
+		distances = [sum((box[0][index] - value) ** 2 for index, value in
+			enumerate((hit_pt.x, hit_pt.y, hit_pt.z))) for box in boxes]
+		return min(distances) if distances else float('inf')
+	# Dense prop clusters must not produce unbounded diagnostic records.
+	nearby = sorted(members, key=owner_distance)
+	evidence['owners_omitted'] = max(0, len(nearby) - 16)
+	for identity in nearby[:16]:
+		instance = instances.get(identity)
+		if instance is None:
+			continue
+		boxes = instance.get('boxes', ())
+		states = []
+		for box in boxes:
+			material = box[2] if instance['kind'] == 'structure' else None
+			key = identity + (material,)
+			states.append({'material': material, 'center': box[0],
+				'axes': box[1], 'contains_hit': _point_in_world_box(hit_pt, box),
+				'broken': bool(authority.is_destroyed(*key)),
+				'predicted': key in predicted})
+		owners.append({'identity': identity, 'filename': instance['filename'],
+			'kind': instance['kind'], 'boxes': states,
+			'isolated': _destructible_isolated_1513(*identity)})
+	evidence['nearby_owners'] = owners
+	return evidence
 
 
 def _try_destroy_solid_hit(spaceID, segment_start, hit_pt, surf_normal,
