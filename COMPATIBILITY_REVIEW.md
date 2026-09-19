@@ -4782,8 +4782,8 @@ maps still needs the new build on #1513; fixtures do not prove that acceptance.
 
 ### User-requested physics-parameter review (no additional tuning applied)
 
-The `v0.8.4` tag already contains the old explicit clearance and the following
-physics approximations. `vehicle_physics.py` differs from that tag only in the
+The `v0.8.4` tag already contains the old explicit clearance and many of the
+physics approximations below. `vehicle_physics.py` differs from that tag only in the
 later contact-normal filtering of deflection headings; `tank_collision.py` is
 unchanged. This does not negate the user's later runtime regression, but it
 does rule out calling all these constants newly introduced after 0.8.4.
@@ -4792,6 +4792,9 @@ the uploaded `9baedc10` build already includes that removal.
 
 | Item | Current code behaviour | Review concern |
 | --- | --- | --- |
+| Pitched/rolled body projection | `_vehicle_pose_axes` changes Y with pitch/roll but retains yaw-only XZ; added in `c1dc3888` after v0.8.4 | This shear is not a rigid rotation and can overstate projected occupancy. The catalog and native lane paths must be reviewed together. |
+| Native lane heights | All vehicles use 0.6/1.1/1.6 m probe heights | Sparse common-height probes are not each descriptor's full physical surface. This may miss a real surface or sample outside a smaller body. |
+| Destruction eligibility speed | Powered contact can use descriptor top speed; a turn can use maximum traverse speed times the farthest-corner radius | These are eligibility shortcuts, not actual point-contact velocity. They do not overwrite vehicle speed, but can create drive/turn differences. The native damage formula itself is unchanged. |
 | Hard-contact response | First slide speed is multiplied by 0.60, then by `0.85 ** (dt*60)`; a blocked speed uses `0.35 ** (dt*60)` | Tangential momentum and contact friction are replaced by fixed decay factors. Four grind ticks control repeated entry damping, not a four-tick movement wait. |
 | Deflection directions | Try yaw offsets +/-0.55 and +/-1.0 radians in a fixed order | The wall tangent can lie between all four probes; grazing contact can become a stop. The newer normal filter prevents inward escape probes but does not derive the actual tangent. |
 | Steep uphill drag | Above 27.5 degrees and 0.5 m/s, add `10*(tan(grade)-tan(27.5deg))*12.2625` m/s2 of braking | This is about 7 m/s2 at 30 degrees and 22 m/s2 at 35 degrees, additional to slope gravity/rolling resistance. It is an offline calibration, not a recovered native force law. |
@@ -4808,3 +4811,12 @@ consumers must be checked before changing them. The recovered 1.25 g arcade
 gravity and client-authored grip curves likewise must not be called accidental
 physics bugs merely because they differ from real-world SI behaviour. The user
 will choose any further physics changes after reviewing these findings.
+
+The first full CI run on `0054dc70` ran 5,998 tests and found ten assertion
+failures, all in seven downhill-departure tests whose synthetic rays retained
+the previous lead. No production padding was restored. Those controls now
+exercise both the original short physical frame (clear without a spurious
+ground graze) and a longer actual step reconstructing the captured lane; all
+original ground-top, backing-wall and upper/low-wall assertions remain. The
+1,413 related cases and these seven departure cases pass locally. The follow-up
+commit changes tests/documentation only; full CI/package evidence is pending.

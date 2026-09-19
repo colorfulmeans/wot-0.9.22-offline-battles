@@ -116,12 +116,23 @@ class DownhillDepartureTests(unittest.TestCase):
     def tearDown(self):
         destructibles_sensor.set_catalog(None)
 
-    def check_scene(self, captured, wall=None, wall_band=None, reverse=False):
+    def check_scene(self, captured, wall=None, wall_band=None, reverse=False,
+                    replay_captured_lane=False):
         terrain = ReportedTerrain(captured, wall, wall_band)
         descriptor = _Strict1513Component(hull=_Strict1513Component(
             hitTester=types.SimpleNamespace(bbox=(
                 (-WIDTH, -1.0, -BACK), (WIDTH, 1.0, FRONT)))))
         yaw, speed, pitch, roll = captured['yaw'], captured['speed'], PITCH, ROLL
+        dt = captured['dt']
+        if replay_captured_lane:
+            # The historical ray included an artificial lead. Reproduce that
+            # same ray with a longer *actual* integration step so these ground
+            # exit/backing-wall controls still exercise their original contact.
+            # The ordinary recorded-pose test below keeps the real short dt.
+            reach = abs(speed) * dt + 0.2
+            if not captured['airborne']:
+                reach = max(0.4, reach)
+            dt = reach / abs(speed)
         if reverse:
             # Rotate the same occupied hull 180 degrees and back down the lane.
             yaw += math.pi
@@ -140,7 +151,7 @@ class DownhillDepartureTests(unittest.TestCase):
             status = world_collision.check_horizontal_collision(
                 native, types.SimpleNamespace(Vector3=_Vector), 1,
                 _Vector(*captured['position']), yaw, speed, descriptor,
-                captured['airborne'], captured['dt'], True,
+                captured['airborne'], dt, True,
                 pitch=pitch, roll=roll, trace=trace, commit_enabled=False)
         destroy.assert_not_called()
         # All extra native proofs retain the same accepted-destruction filter
@@ -159,13 +170,20 @@ class DownhillDepartureTests(unittest.TestCase):
                 with self.subTest(airborne=captured['airborne'], reverse=reverse):
                     status, trace, terrain = self.check_scene(captured, reverse=reverse)
                     self.assertEqual('clear', status, trace)
+                    # Removing the old lead changes the posed chord enough
+                    # that this short frame no longer grazes the ground.
+                    self.assertEqual(0, terrain.exit_recasts)
+                    status, trace, terrain = self.check_scene(
+                        captured, reverse=reverse, replay_captured_lane=True)
+                    self.assertEqual('clear', status, trace)
                     self.assertGreater(terrain.exit_recasts, 0)
 
     def test_native_wall_behind_departure_contact_still_blocks(self):
         for captured in CAPTURED:
             for reverse in (False, True):
                 with self.subTest(airborne=captured['airborne'], reverse=reverse):
-                    status, trace, terrain = self.check_scene(captured, wall=1.3, reverse=reverse)
+                    status, trace, terrain = self.check_scene(
+                        captured, wall=1.3, reverse=reverse, replay_captured_lane=True)
                     self.assertEqual('hard', status, trace)
                     self.assertGreater(terrain.wall_hits, 0)
 
@@ -175,7 +193,8 @@ class DownhillDepartureTests(unittest.TestCase):
             # the middle hull ray. The low ray's clear recast cannot hide it.
             base = captured['hit'][1]
             status, trace, terrain = self.check_scene(
-                captured, wall=1.3, wall_band=(base + 0.45, base + 0.55))
+                captured, wall=1.3, wall_band=(base + 0.45, base + 0.55),
+                replay_captured_lane=True)
             self.assertEqual('hard', status, trace)
             self.assertEqual('raised_wall', trace['reason'])
             self.assertGreater(terrain.wall_hits, 0)
@@ -184,7 +203,8 @@ class DownhillDepartureTests(unittest.TestCase):
         for captured in CAPTURED:
             base = captured['hit'][1]
             status, trace, terrain = self.check_scene(
-                captured, wall=1.3, wall_band=(base - 0.02, base + 0.02))
+                captured, wall=1.3, wall_band=(base - 0.02, base + 0.02),
+                replay_captured_lane=True)
             self.assertEqual('hard', status, trace)
             self.assertGreater(terrain.wall_hits, 0)
 
@@ -194,7 +214,8 @@ class DownhillDepartureTests(unittest.TestCase):
             heights = list(captured['profile'])
             heights[-2] = heights[-3] + 0.03
             changed['profile'] = heights
-            status, trace, unused_terrain = self.check_scene(changed)
+            status, trace, unused_terrain = self.check_scene(
+                changed, replay_captured_lane=True)
             self.assertEqual('hard', status, trace)
             self.assertEqual('ground_profile', trace['reason'])
 
@@ -204,7 +225,8 @@ class DownhillDepartureTests(unittest.TestCase):
         for captured in CAPTURED:
             with mock.patch.object(world_collision, '_hit_matches_exact_ground_top',
                                    return_value=False):
-                status, trace, unused_terrain = self.check_scene(captured)
+                status, trace, unused_terrain = self.check_scene(
+                    captured, replay_captured_lane=True)
             self.assertEqual('hard', status, trace)
 
     def test_player_and_worker_adapters_share_the_departure_decision(self):
