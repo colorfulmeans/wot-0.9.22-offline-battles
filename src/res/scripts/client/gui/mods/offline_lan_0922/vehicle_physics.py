@@ -52,17 +52,7 @@ SLOPE_GRIP_SDW_FULL_Y = math.cos(math.radians(24.5))
 SLOPE_GRIP_SDW_FULL = 1.0
 SLOPE_GRIP_SDW_MIN_Y = math.cos(math.radians(29.0))
 SLOPE_GRIP_SDW_MIN = 0.1
-# Track-slip drag when rolling UP a grade past SLIP_THRESHOLD_TAN: extra
-# deceleration = SLIP_DRAG * (tan(grade) - SLIP_THRESHOLD_TAN) * g. Bleeds the
-# 'coast up a mountain on momentum' - real tracks slip and stop dead.
-#
-# The #1513 longitudinal grip starts falling at 27.5 degrees. Momentum bleed
-# starts at the same point: starting it at the former 25.6-degree threshold
-# made a still-full-grip native slope lose several m/s2 for no retail reason.
-# SLIP_DRAG shapes the ramp above the threshold. 10.0 stays progressive:
-# about 1.4 m/s2 at 28 degrees, 7.0 at 30 degrees and 22 at 35 degrees.
-SLIP_THRESHOLD_TAN = math.tan(math.radians(27.5))
-SLIP_DRAG = 10.0
+# Uphill momentum changes through gravity, available drive and friction.
 FORWARD_FRICTION = 0.07        # WG: physics.forwardFriction (rolling)
 # WG scales enginePower by GRAVITY_FACTOR_SCALED (0.00125) against masses in
 # tons (WEIGHT_SCALE 0.001): net effect, drive power acts 1.25x its SI value.
@@ -79,16 +69,7 @@ COH_DECAY_POW = 3.0
 COH_DECAY_BOUND = 0.5
 SLOPE_COH_DECAY = 0.25
 SLOPE_COH_DECAY_Y = 0.72
-# ---- offline-model constants (no exact native transition curve recoverable) ----
-# Exact #1513 exposes per-vehicle mass, speed and terrain resistance plus the
-# common WGVehiclePhysics brake/damping configuration, but the W-release curve
-# itself lives in native code.  Use a conservative share of the recovered track
-# grip: 0.65 shortens a Type 62 flat-road 60 km/h stop by about 15% versus the
-# former 0.55 calibration without pretending that neutral coast is a full track
-# lock.  A real downhill grade progressively unloads this drag.  Above the
-# static perch tangent only rolling resistance remains, so gravity can carry a
-# tank down a steep continuous slope without making flat roads frictionless.
-COAST_BRAKE_SHARE = 0.65
+# ---- Offline contact integration ----
 # Steering adds track-differential drag to the rolling resistance.
 STEER_RESIST_MULT = 1.6
 # Engine force F = P / max(|v|, ENGINE_MIN_V), capped by track cohesion.
@@ -152,23 +133,12 @@ SERVER_PHYSICS_DAMPING_RATIO_SCALE = 0.25
 SERVER_PHYSICS_MAX_SPRING_FORCE_FACTOR = 6.0
 AIRBORNE_ANGULAR_DAMPING = 4.0
 AIRBORNE_ANGULAR_SPEED_LIMIT = 0.6
-FREEZE_ANG_ACCEL_EPSILON = 0.35
-FREEZE_ACCEL_EPSILON = 0.4
-FREEZE_VEL_EPSILON = 0.15
-FREEZE_ANG_VEL_EPSILON = 0.06
-ALLOWED_PENETRATION = 0.01
-CONTACT_PENETRATION = 0.1
-TRACKS_PENETRATION = 0.01
+ALLOWED_PENETRATION = 0.0
+CONTACT_PENETRATION = 0.0
+TRACKS_PENETRATION = 0.0
 SUSPENSION_GEOMETRY_EPSILON = 0.01
-# Grounded hulls use the same four glancing directions after an exact hard
-# contact. These angles and decay constants used to live only in the visible
-# player's integrator while copied Bots stopped with a separate fixed factor.
-HARD_CONTACT_YAW_DELTAS = (0.55, -0.55, 1.0, -1.0)
-HARD_CONTACT_ENTRY_FACTOR = 0.60
-HARD_CONTACT_SLIDE_DECAY = 0.85
-HARD_CONTACT_BRAKE_DECAY = 0.35
-HARD_CONTACT_STOP_SPEED = 0.05
-HARD_CONTACT_GRIND_TICKS = 4
+# Grounded players and Bots use the same actual contact-normal projection.
+HARD_CONTACT_GRIND_TICKS = 0  # No contact history alters the physical response.
 # Downhill slide on a slope the tracks cannot hold. The slide accelerates by the
 # grip-excess g*(sin-coh*cos) but a track drag SLIDE_DRAG*v pulls it to a natural,
 # terrain-dependent TERMINAL speed instead of ramping to a flat cap. SLIDE_MAX is
@@ -184,16 +154,7 @@ SLIDE_HOLD_TAN = 0.50   # 26.6 deg static perch; a powered hull can briefly clim
 # not climb - lower than the static hold so it does not hang mid-slope; it bleeds
 # down to the foot at a controlled speed. Lower = slides faster/further.
 SLIDE_KINETIC = 0.45
-# Gravity overspeed: a steep descent / fall may carry the hull up to this
-# multiple of its spec top speed, temporarily; OVERSPEED_DAMP (m/s^2) bleeds
-# the surplus back to spec once the ground flattens.
-OVERSPEED_MAX_FACTOR = 1.05   # gravity overspeed on a descent caps at 105% of spec
-OVERSPEED_DAMP = 2.0
-# Descent overspeed BUILDS UP gradually (m/s of surplus per sec, scaled by sin(grade))
-# instead of snapping to the cap - the longer/steeper the descent, the more speed.
-# ISOLATED to the overspeed clamp (>spec, descending only): does NOT touch the climb
-# limit, slide-back, momentum-kill or flat driving. Higher = builds faster.
-OVERSPEED_BUILD = 0.20
+# Gravity-driven speed is integrated without a percentage cap.
 
 
 # ---- Live tuning: config.json "physics_tuning" can override these WITHOUT a
@@ -203,21 +164,15 @@ _TUNABLE = {
 	'gravity_factor':      'GRAVITY_FACTOR',
 	'cohesion':            'COHESION',
 	'drive_traction':      'DRIVE_TRACTION',
-	'slip_drag':           'SLIP_DRAG',
-	'slip_threshold_tan':  'SLIP_THRESHOLD_TAN',
 	'power_factor':        'POWER_FACTOR',
 	'bkwd_power_fraction': 'BKWD_POWER_FRACTION',
 	'traverse_accel_time': 'ANG_ACCELERATION_TIME',
 	'traverse_speed_cost': 'SPEED_AFFECT_ROT_DECREASE',
-	'coast_brake_share':   'COAST_BRAKE_SHARE',
 	'steer_resist_mult':   'STEER_RESIST_MULT',
 	'slide_max':           'SLIDE_MAX',
 	'slide_drag':          'SLIDE_DRAG',
 	'slide_hold_tan':      'SLIDE_HOLD_TAN',
 	'slide_kinetic':       'SLIDE_KINETIC',
-	'overspeed_max_factor': 'OVERSPEED_MAX_FACTOR',
-	'overspeed_damp':      'OVERSPEED_DAMP',
-	'overspeed_build':     'OVERSPEED_BUILD',
 	'slope_coh_decay':     'SLOPE_COH_DECAY',
 	'slope_coh_decay_y':   'SLOPE_COH_DECAY_Y',
 	'coh_decay_bound':     'COH_DECAY_BOUND',
@@ -247,33 +202,42 @@ def apply_tuning(overrides):
 	return applied
 
 
-def hard_contact_candidate_yaws(yaw):
-	'''Return the shared ordered glancing paths for one blocked hull heading.'''
-	return tuple(float(yaw) + delta for delta in HARD_CONTACT_YAW_DELTAS)
+def hard_contact_candidate_yaws(yaw, speed=1.0, normal=None):
+	"""Return the actual contact tangent carrying the incoming momentum."""
+	if normal is None:
+		return ()
+	try:
+		nx, nz = float(normal[0]), float(normal[2])
+		length = math.hypot(nx, nz)
+		if math.isnan(length) or math.isinf(length) or length <= 1.0e-12:
+			return ()
+	except (IndexError, TypeError, ValueError):
+		return ()
+	nx, nz = nx/length, nz/length
+	vx, vz = math.sin(yaw)*speed, math.cos(yaw)*speed
+	projection = vx*nx+vz*nz
+	tx, tz = vx-projection*nx, vz-projection*nz
+	if math.hypot(tx, tz) <= 1.0e-12:
+		return ()
+	direction = -1.0 if speed < 0.0 else 1.0
+	return (math.atan2(tx*direction, tz*direction),)
 
+def hard_contact_step(speed, dt, grinding=False, slide_yaw=None,
+                      incoming_yaw=None):
+	"""Remove normal velocity at contact without a timer or empirical damping.
 
-def hard_contact_step(speed, dt, grinding=False, slide_yaw=None):
-	'''Resolve one grounded hard-contact response without probing the world.
-
-	Callers own their native/static collision queries and pass the first clear
-	glancing yaw, if any. The returned tuple is ``(speed, dx, dz)`` so visible
-	players and copied Bots cannot apply different damping or displacement after
-	the same probe result.
-	'''
-	speed = float(speed)
-	dt = max(0.0, float(dt))
+	The retained speed is the projection onto the proved clear tangent. No
+	frame-rate-dependent loss is applied to that component. Ground friction
+	continues to be integrated by the regular force law.
+	"""
 	if slide_yaw is None:
-		speed *= HARD_CONTACT_BRAKE_DECAY ** (dt * 60.0)
-		if abs(speed) < HARD_CONTACT_STOP_SPEED:
-			speed = 0.0
-		return speed, 0.0, 0.0
-	if not grinding:
-		speed *= HARD_CONTACT_ENTRY_FACTOR
-	speed *= HARD_CONTACT_SLIDE_DECAY ** (dt * 60.0)
-	yaw = float(slide_yaw)
-	return (speed, math.sin(yaw) * speed * dt,
-			math.cos(yaw) * speed * dt)
-
+		return 0.0, 0.0, 0.0
+	speed = float(speed)
+	if incoming_yaw is not None:
+		speed *= max(0.0, math.cos(float(slide_yaw)-float(incoming_yaw)))
+	dt = max(0.0, float(dt))
+	return (speed, math.sin(slide_yaw)*speed*dt,
+	        math.cos(slide_yaw)*speed*dt)
 
 def snapshot(p, v, omega, throttle, slope_pitch, airborne, slide_speed, tank='',
              ground_kmh=None, pitch_deg=None, roll_deg=None, vert_ms=None,
@@ -505,6 +469,23 @@ def derive_params(td, factors=None):
 	if factors:
 		p['rotSpd'] *= _factor(factors, 'vehicle/rotationSpeed')
 		p['powerW'] *= _factor(factors, 'engine/power')
+	from gui.mods.offline_lan_0922 import physics_diagnostics
+	physics_diagnostics.emit('parameters', {
+		'physics': p, 'gravity': GRAVITY, 'contact_penetration': CONTACT_PENETRATION,
+		'allowed_penetration': ALLOWED_PENETRATION, 'tracks_penetration': TRACKS_PENETRATION,
+		'collision_margin': 0.0, 'collision_wait': 0.0,
+		'coast_law': 'rolling_resistance', 'downhill_cap': None,
+		'crush_speed': 'actual_contact_normal_velocity',
+		'wall_response': 'remove_inward_normal_velocity',
+		'laws': dict((name, globals()[name]) for name in (
+			'GRAVITY_FACTOR', 'POWER_FACTOR', 'COHESION', 'DRIVE_TRACTION',
+			'FORWARD_FRICTION', 'STEER_RESIST_MULT', 'ENGINE_MIN_V',
+			'ANG_ACCELERATION_TIME', 'ROTATION_POWER_FRACTION',
+			'SLOPE_GRIP_LNG_FULL_Y', 'SLOPE_GRIP_LNG_FULL',
+			'SLOPE_GRIP_LNG_MIN_Y', 'SLOPE_GRIP_LNG_MIN',
+			'SLOPE_GRIP_SDW_FULL_Y', 'SLOPE_GRIP_SDW_FULL',
+			'SLOPE_GRIP_SDW_MIN_Y', 'SLOPE_GRIP_SDW_MIN',
+			'SLIDE_HOLD_TAN', 'SLIDE_KINETIC', 'SLIDE_DRAG', 'SLIDE_MAX'))})
 	return p
 
 
@@ -896,7 +877,7 @@ def derive_suspension_params(descriptor):
 	roll_inertia = max(
 		1.0, mass * (body_height ** 2 + width ** 2) /
 		12.0 * inertia_factors[2])
-	return {
+	result = {
 		'mass': mass, 'width': width, 'length': chassis_length,
 		'clearance': clearance, 'rest_length': rest_length,
 		'static_compression': static_compression,
@@ -915,6 +896,9 @@ def derive_suspension_params(descriptor):
 		'fixed_step': SERVER_PHYSICS_STEP,
 		'constraint_iterations': SERVER_PHYSICS_CONSTRAINT_ITERATIONS,
 	}
+	from gui.mods.offline_lan_0922 import physics_diagnostics
+	physics_diagnostics.emit('suspension_parameters', result)
+	return result
 
 
 def canonical_body_rotation(yaw, pitch, roll):
@@ -1741,7 +1725,7 @@ def _project_suspension_limits(params, state, ground_heights,
 			remaining_excess = max(remaining_excess, excess)
 			touched.add(key)
 	if remaining_excess > 0.0:
-		state['height'] += remaining_excess + 1.0e-9
+		state['height'] += remaining_excess
 	return touched
 
 
@@ -1903,17 +1887,6 @@ def damper_suspension_step(params, state, ground_heights, dt,
 			impact_speed = result['vertical_velocity']
 		contact_transition_seen = True
 	touched_keys.update(contact_keys)
-	if contact_count:
-		if (abs(vertical_acceleration) < FREEZE_ACCEL_EPSILON and
-				abs(result['vertical_velocity'] -
-					support_vertical_velocity) < FREEZE_VEL_EPSILON):
-			result['vertical_velocity'] = support_vertical_velocity
-		if (abs(pitch_acceleration) < FREEZE_ANG_ACCEL_EPSILON and
-				abs(result['pitch_velocity']) < FREEZE_ANG_VEL_EPSILON):
-			result['pitch_velocity'] = 0.0
-		if (abs(roll_acceleration) < FREEZE_ANG_ACCEL_EPSILON and
-				abs(result['roll_velocity']) < FREEZE_ANG_VEL_EPSILON):
-			result['roll_velocity'] = 0.0
 	result['contact_count'] = contact_count
 	result['rigid_contact_count'] = sum(1 for key in contact_keys
 		if key[0] == 'pseudo' and
@@ -2042,22 +2015,12 @@ def rolling_resist_force(p, terrainIdx=0, steering=False):
 
 
 def brake_force(p, active, terrainIdx=0, slope_pitch=0.0):
-	'''Braking is GRIP-limited, like drive traction: the locked tracks can
-	only hold cohesion x normal force, and the normal force shrinks with slope
-	(cos theta) while cohesion decays on steep ground. So a hull braking on a
-	slope past the grip limit CANNOT hold and slides - the same ~50 deg limit
-	as the lateral fall-line slip, kept consistent on purpose.
-	active=True: opposite-throttle / hold lock-up. active=False: the established
-	flat-ground drivetrain coast drag; longitudinal_step relieves that drag only
-	near the static perch tangent, where gravity owns the descent.'''
-	ny = math.cos(slope_pitch)
-	grip_decel = slope_cohesion(ny) * GRAVITY * (ny if ny > 0.1 else 0.1)
-	brake = p['brakeDecel'] if p['brakeDecel'] < grip_decel else grip_decel
-	if active:
-		return p['mass'] * brake
-	return (rolling_resist_force(p, terrainIdx, False) +
-		p['mass'] * COAST_BRAKE_SHARE * brake)
-
+	"""Return commanded track braking, or ordinary rolling resistance."""
+	ny = max(0.0, math.cos(slope_pitch))
+	if not active:
+		return rolling_resist_force(p, terrainIdx, False)*ny
+	grip = longitudinal_slope_grip(slope_pitch)*GRAVITY*ny
+	return p['mass']*min(p['brakeDecel'], grip)
 
 def contact_push_decel(p, rolling, terrainIdx=0, normal_y=1.0):
 	'''Return the (longitudinal, lateral) m/s^2 the tracks oppose an EXTERNAL
@@ -2143,153 +2106,33 @@ def _grip_decel(p, slope_pitch):
 @observed('physics.longitudinal')
 def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
                       airborne=False, terrainIdx=0, handbrake=False):
-	'''One integration step of forward (along-hull) speed. Returns the new v.
-	slope_pitch: fore/aft ground pitch (BigWorld: nose-up negative).
+	"""Integrate engine force, gravity and contact friction in their SI units.
 
-	Gravity along the slope ALWAYS acts when grounded (even parked at v=0), so
-	a hull pointed up/down a slope too steep for its tracks slides off from a
-	standstill - the fix for "stuck where it should slide". The tracks resist
-	up to the grip limit (_grip_decel): below it they hold, past it the excess
-	drives the slide. The climb limit is emergent (grip-capped engine force vs
-	slope gravity), so there is no dead can-neither-climb-nor-slide band.'''
-	if airborne:
-		return v  # no track grip in the air; horizontal momentum kept as-is
-
-	grav_a = GRAVITY * math.sin(slope_pitch)      # signed accel along hull (+fwd downhill)
-	if handbrake and not airborne:
-		# Locked tracks: full grip opposes any motion, and at a standstill the hull
-		# holds unless the slope beats the tracks outright. Grip-limited like every
-		# other brake here, so a cliff still wins - it is a parking brake, not glue.
-		_hb_grip = _grip_decel(p, slope_pitch)
-		if abs(v) < 0.05:
-			return 0.0 if abs(grav_a) <= _hb_grip else v + (grav_a - (_hb_grip if grav_a > 0.0 else -_hb_grip)) * dt
-		_hb_a = grav_a - (_hb_grip if v > 0.0 else -_hb_grip)
-		_hb_nv = v + _hb_a * dt
-		if (v > 0.0) != (_hb_nv > 0.0):
-			return 0.0            # braked through zero: stop, do not crawl backwards
-		return _hb_nv
-	grip = _grip_decel(p, slope_pitch)            # max track hold, m/s^2
-	rr = rolling_resist_force(p, terrainIdx, steering) / p['mass']
-
-	if throttle != 0:
-		# Drive: engine force (power/traction limited) + slope gravity.
-		_ef = engine_force(p, v, throttle, slope_pitch) / p['mass']
-		# TRUE rolling-drag-aware climb limit: powering INTO a grade the pulling tracks
-		# cannot overcome (peak drive accel < gravity-along + rolling drag). There the
-		# drive is CUT and the hold dropped to the slide limit, so the hull slides BACK
-		# instead of the engine pinning it just under a fixed gate (the 'stuck at the
-		# foot of a descent' bug). Replaces the hard minPlaneNormalY gate the hull used
-		# to oscillate across.
-		_ny_c = math.cos(slope_pitch)
-		_max_climb = (longitudinal_slope_grip(slope_pitch) * GRAVITY *
-			(_ny_c if _ny_c > 0.1 else 0.1))
-		_cant_climb = throttle * grav_a < 0.0 and _max_climb < abs(grav_a) + rr
-		if _cant_climb:
-			_ef = 0.0                                  # can't power up -> cut drive; momentum does not drive the hull up a too-steep grade
-		accel = _ef + grav_a
-		# Rolling drag ramped smoothly through v=0 - a hard abs(v)>0.01 threshold made
-		# the hull judder / stick in a limit cycle wherever engine and gravity nearly
-		# balanced (e.g. at the foot of a climb).
-		_rrf = v / 0.08
-		if _rrf > 1.0:
-			_rrf = 1.0
-		elif _rrf < -1.0:
-			_rrf = -1.0
-		accel -= rr * _rrf
-		# (track-slip drag now runs for BOTH throttle states - see below)
-		if _cant_climb:
-			# Can't climb -> tracks slip; a LOW kinetic drag opposes the involuntary
-			# slide-back so the hull bleeds down the grade at a controlled speed and does
-			# NOT hang mid-slope. It is NOT held (no auto-brake) - it slides to the foot
-			# where the grade becomes climbable again, carrying momentum onto the flat.
-			if abs(v) > 0.05:
-				_kin = SLIDE_KINETIC * GRAVITY * (_ny_c if _ny_c > 0.1 else 0.1)
-				accel += _kin if v < 0.0 else -_kin
-		else:
-			# Auto-brake: intentional reverse, CLAMPED so grip never overshoots v past 0
-			# in one tick (the raw +/-grip impulse limit-cycled ~1 km/h around v=0).
-			if (throttle > 0 and v < -0.1) or (throttle < 0 and v > 0.1):
-				_need = -v / dt - accel
-				accel += _need if abs(_need) < grip else (grip if _need > 0.0 else -grip)
-	else:
-		# Parked / coasting: static grip tries to hold against slope gravity.
-		if abs(v) < 0.02:
-			_ny_h = math.cos(slope_pitch)
-			_hold = SLIDE_HOLD_TAN * GRAVITY * (_ny_h if _ny_h > 0.1 else 0.1)   # static perch limit ~27 deg
-			if abs(grav_a) <= _hold:
-				return 0.0                        # tracks hold - no creep on ordinary hills
-			accel = grav_a - (_hold if grav_a > 0.0 else -_hold)   # slides off a too-steep parked slope
-		else:
-			# The 2.3-reviewed coast law: rolling + partial grip brake oppose
-			# the motion; gravity still acts. The old relief started unloading
-			# at zero slope and glided ~27 m on a 7-degree field descent; the
-			# share now fades only near the static perch limit, so a slope the
-			# parked hold cannot keep slides while every parkable slope brakes
-			# like the flat.
-			motion_sign = 1.0 if v > 0.0 else -1.0
-			downhill_tangent = max(0.0, math.tan(slope_pitch) * motion_sign)
-			fade_start = 0.8 * SLIDE_HOLD_TAN
-			fade = min(1.0, max(0.0, (downhill_tangent - fade_start) /
-			                    (SLIDE_HOLD_TAN - fade_start)))
-			resist = rr + COAST_BRAKE_SHARE * (1.0 - fade) * grip
-			accel = grav_a - (resist if v > 0.0 else -resist)
-
-	# TRACK-SLIP DRAG: rolling UP a grade steeper than the tracks can pull, they
-	# slip and momentum bleeds far faster than gravity alone would take it.
-	# This used to sit inside the throttle != 0 branch only, so releasing the
-	# throttle removed it entirely: build speed on the flat, let go, and coast
-	# straight up a slope the engine flatly refuses. It must apply whenever the
-	# hull is moving INTO the grade, powered or not.
-	_grade = -slope_pitch if v > 0.0 else slope_pitch   # >0 = moving uphill
-	if not airborne and abs(v) > 0.5 and _grade > 0.0:
-		_tan = math.tan(_grade)
-		if _tan > SLIP_THRESHOLD_TAN:
-			_slip = SLIP_DRAG * (_tan - SLIP_THRESHOLD_TAN) * GRAVITY
-			accel -= _slip if v > 0.0 else -_slip
-	
-	nv = v + accel * dt
-
-	# Coast/brake must not yank the hull backwards through zero into a reverse
-	# crawl (it should settle at rest) - but only when gravity itself can't hold
-	# a slide going (gentle ground); on a steep slope let it cross into reverse.
-	if throttle == 0 and abs(grav_a) <= grip and v != 0.0 and (v > 0.0) != (nv > 0.0):
-		nv = 0.0
-
-	# Speed limit with GRAVITY OVERSPEED: the engine can never push past the
-	# spec limit, but gravity (steep descent / a fall's downhill momentum) may
-	# carry the hull FASTER, temporarily, up to OVERSPEED_MAX_FACTOR x the limit.
-	# Above the limit the engine stops contributing and an overspeed drag bleeds
-	# the excess back to spec on flatter ground - the WoT 'downhill overspeed'
-	# feel. Airborne already returned early, so a fall keeps its momentum and
-	# this bleed only re-engages once the hull is back on the ground.
-	_dir = 1.0 if nv >= 0.0 else -1.0
-	_lim = p['speedFwd'] if nv >= 0.0 else p['speedBwd']
-	if abs(nv) > _lim:
-		# The overspeed drag ALWAYS bleeds the surplus back toward spec (rolling +
-		# OVERSPEED_DAMP), so leaving a descent onto flat/uphill ground eases down
-		# instead of a 1-tick snap to the limit. Gravity down THIS way is what lets
-		# the surplus PERSIST up to the cap; without it the accel step adds no new
-		# surplus, so the bleed just decays what is there, smoothly.
-		_cap = _lim * (OVERSPEED_MAX_FACTOR - 1.0)
-		# Build the surplus from the PREVIOUS speed at a slope-scaled rate so a descent
-		# gains speed gradually toward the cap (not a 1-tick jump); bleed it off once the
-		# ground stops helping.
-		_prev_ex = abs(v) - _lim
-		if _prev_ex < 0.0:
-			_prev_ex = 0.0
-		# Gravity holds the surplus only while the throttle still drives the
-		# motion. A released throttle brakes, so the surplus bleeds; the field
-		# run stayed pinned at the limit down the whole descent without this.
-		if throttle * _dir > 0.0 and (grav_a * _dir) > 0.05:
-			_excess = _prev_ex + OVERSPEED_BUILD * math.sin(abs(slope_pitch)) * dt
-		else:
-			_excess = _prev_ex - (rr + OVERSPEED_DAMP) * dt
-		if _excess < 0.0:
-			_excess = 0.0
-		if _excess > _cap:
-			_excess = _cap
-		nv = _dir * (_lim + _excess)
-	return nv
+	The governor limits engine work only. It cannot remove downhill or impact
+	momentum. Neutral has rolling resistance, with no invented brake share;
+	park/track locks use the explicit handbrake path. Static friction is the
+	zero-crossing impulse bound, not a velocity dead zone.
+	"""
+	dt = max(0.0, float(dt))
+	if airborne or dt == 0.0:
+		return v
+	gravity = GRAVITY*math.sin(slope_pitch)
+	normal = max(0.0, math.cos(slope_pitch))
+	if handbrake:
+		resistance = brake_force(p, True, terrainIdx, slope_pitch)/p['mass']
+		return _bleed(v+gravity*dt, resistance*dt)
+	drive_delta = engine_force(p, v, throttle, slope_pitch)/p['mass']*dt
+	if throttle:
+		direction = 1.0 if throttle > 0.0 else -1.0
+		limit = p['speedFwd'] if direction > 0.0 else p['speedBwd']
+		drive_delta = direction*min(abs(drive_delta), max(0.0, limit-direction*v))
+	resistance = rolling_resist_force(p, terrainIdx, steering)/p['mass']*normal
+	if throttle*v < 0.0:
+		# Braking and engine work share the same track contact budget.
+		drive_delta = 0.0
+		resistance = max(resistance, abs(throttle)*brake_force(
+			p, True, terrainIdx, slope_pitch)/p['mass'])
+	return _bleed(v+drive_delta+gravity*dt, resistance*dt)
 
 
 @observed('physics.traverse')

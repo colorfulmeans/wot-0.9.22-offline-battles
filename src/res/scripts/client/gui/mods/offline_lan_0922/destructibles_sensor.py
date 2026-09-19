@@ -21,13 +21,10 @@ _SOLID_CONTACT_NORMAL_DOT_1513 = 0.5
 _TREE_SWEEP_ANGLE_STEP_1513 = 3.141592653589793 / 36.0
 _TREE_SWEEP_TRANSLATION_STEP_1513 = 8.0
 _TREE_SWEEP_MAX_SEGMENTS_1513 = 128
-_REPLACEMENT_PROGRESS_ANGLE_STEP_1513 = 3.141592653589793 / 180.0
-_REPLACEMENT_PROGRESS_TRANSLATION_STEP_1513 = 0.5
 _TREE_CONTACT_TOKEN_LIMIT_1513 = 64
 _CATALOG_POINT_EPSILON = 0.075
 _SHOT_RAY_EPSILON = 1.0e-4
 _SOFT_STATIC_MAX_SKIPS = 4
-_NATIVE_HIDE_MIN_SECONDS = 0.2
 _FALLING_REFRESH_SECONDS = 1.0 / 60.0
 _DIAGNOSTICS_ENABLED = False
 _DIAGNOSTIC_EMIT_SECONDS = 0.25
@@ -1445,7 +1442,10 @@ def _diagnostic_flush_1513(now=None):
 
 
 def _diagnostic_enqueue_1513(category, key, fields, now=None):
-	"""Queue one bounded line; never query the engine or log per frame/slot."""
+	"""Write uncapped structured evidence, plus the optional legacy text view."""
+	from gui.mods.offline_lan_0922 import physics_diagnostics
+	physics_diagnostics.emit(
+		'destructible_'+category, dict(fields), key=key, now=now)
 	if not _DIAGNOSTICS_ENABLED:
 		return
 	state = globals().setdefault('g_offh_destr_diagnostics', {
@@ -2471,7 +2471,7 @@ def _boxes_intersect(left, right):
 	left_center = left[0]
 	right_center = right[0]
 	# Keep every generator.  Vehicle sweeps are general zonotopes (posed body,
-	# independent contact guards and translation), not only three-axis OBBs.
+	# actual frame translation), not only three-axis OBBs.
 	# Materialising the iterables also lets the Python 2.7 sums below traverse
 	# them once per separating axis without consuming a caller's generator.
 	left_half_axes = tuple(left[1])
@@ -2480,7 +2480,7 @@ def _boxes_intersect(left, right):
 		for index in range(3))
 	# The separating axes for two 3-D zonotopes are the cross products of every
 	# pair in their combined generator set.  Ordinary three-axis OBBs retain the
-	# same 15 SAT axes, while extra sweep/guard generators remain exact instead
+	# same 15 SAT axes, while extra sweep generators remain exact instead
 	# of being collapsed into a lossy box.
 	generators = tuple(left_half_axes) + tuple(right_half_axes)
 	axes = (_vector_cross(generators[left_index], generators[right_index])
@@ -2498,81 +2498,6 @@ def _boxes_intersect(left, right):
 				1.0e-7 * length_squared ** 0.5):
 			return False
 	return True
-
-
-def _boxes_signed_clearance(left, right):
-	"""Return the greatest normalized SAT gap; larger means farther apart.
-
-	A positive value proves separation.  Intersecting zonotopes return a
-	non-positive maximum separating-axis gap.  The caller combines it with
-	fixed-face and centre-plane progress; this scalar alone is not a continuous
-	path proof.
-	"""
-	left_center = left[0]
-	right_center = right[0]
-	left_half_axes = tuple(left[1])
-	right_half_axes = tuple(right[1])
-	delta = tuple(right_center[index] - left_center[index]
-		for index in range(3))
-	generators = left_half_axes + right_half_axes
-	best = None
-	for left_index in range(len(generators)):
-		for right_index in range(left_index + 1, len(generators)):
-			axis = _vector_cross(
-				generators[left_index], generators[right_index])
-			length_squared = _vector_dot(axis, axis)
-			if length_squared <= 1.0e-16:
-				continue
-			left_radius = sum(abs(_vector_dot(axis, half_axis))
-				for half_axis in left_half_axes)
-			right_radius = sum(abs(_vector_dot(axis, half_axis))
-				for half_axis in right_half_axes)
-			clearance = (
-				abs(_vector_dot(delta, axis)) - left_radius - right_radius
-				) / length_squared ** 0.5
-			if best is None or clearance > best:
-				best = clearance
-	if best is None:
-		raise RuntimeError('catalog SAT clearance axes are unavailable')
-	return best
-
-
-def _box_face_clearances(left, right):
-	"""Return signed gaps on the fixed box's three face normals."""
-	left_center = left[0]
-	right_center = right[0]
-	left_half_axes = tuple(left[1])
-	right_half_axes = tuple(right[1])
-	delta = tuple(right_center[index] - left_center[index]
-		for index in range(3))
-	result = []
-	for axis in _box_face_axes(right_half_axes):
-		length_squared = _vector_dot(axis, axis)
-		if length_squared <= 1.0e-16:
-			raise RuntimeError('catalog box face axis is unavailable')
-		length = length_squared ** 0.5
-		left_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in left_half_axes)
-		right_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in right_half_axes)
-		result.append((abs(_vector_dot(delta, axis)) -
-			left_radius - right_radius) / length)
-	return tuple(result)
-
-
-def _box_face_center_offsets(left, right):
-	"""Project the moving centre onto the fixed box's oriented axes."""
-	left_center = left[0]
-	right_center = right[0]
-	delta = tuple(left_center[index] - right_center[index]
-		for index in range(3))
-	result = []
-	for axis in _box_face_axes(tuple(right[1])):
-		length_squared = _vector_dot(axis, axis)
-		if length_squared <= 1.0e-16:
-			raise RuntimeError('catalog box face axis is unavailable')
-		result.append(_vector_dot(delta, axis) / length_squared ** 0.5)
-	return tuple(result)
 
 
 def _point_in_world_box(point, world_box):
@@ -3218,105 +3143,18 @@ def _stream_baked_motion_instances_1513(spaceID, vehicle_box):
 
 
 def _vehicle_pose_axes(yaw, pitch=0.0, roll=0.0):
-	"""Return #1513's collision-lane right/up/forward generators.
-
-	The native horizontal collision lanes keep their full yaw-only X/Z hull
-	footprint and apply pitch/roll only to occupied height.  Mirror that shear
-	here: a full 3-D rotation would shorten the catalog footprint by roughly
-	half a metre at the allowed pitch limit and could let a native hard contact
-	escape catalog revalidation.  Keeping the body level, on the other hand,
-	misses a raised nose/side and lets a tank enter below a live upper module.
-	"""
-	import math
-	cos_yaw = math.cos(float(yaw))
-	sin_yaw = math.sin(float(yaw))
-	cos_pitch = math.cos(float(pitch))
-	sin_pitch = math.sin(float(pitch))
-	cos_roll = math.cos(float(roll))
-	sin_roll = math.sin(float(roll))
-	return (
-		(cos_yaw, sin_roll * cos_pitch, -sin_yaw),
-		(0.0, cos_roll * cos_pitch, 0.0),
-		(sin_yaw, -sin_pitch, cos_yaw))
+	"""Rigid BigWorld YPR axes; collision dimensions never shear with tilt."""
+	from gui.mods.offline_lan_0922.collision_geometry import pose_axes
+	return pose_axes(float(yaw), float(pitch), float(roll))
 
 
 def _vehicle_swept_box(pos, yaw, vel, bbox, travel_reach=None,
 		motion_yaw=None, pitch=0.0, roll=0.0):
-	import math
-	minimum, maximum = bbox[:2]
-	body_half_width = max(abs(minimum[0]), abs(maximum[0]))
-	horizontal_guard = 0.5
-	back = abs(minimum[2])
-	front = abs(maximum[2])
-	if travel_reach is None:
-		# Registration/streaming look-ahead keeps the historical generous reach.
-		# Commit-side callers pass the exact frame travel separately below.
-		reach = 0.8 + min(abs(vel) * 0.25, 1.2)
-	else:
-		reach = max(0.0, float(travel_reach))
-	right, up, forward_axis = _vehicle_pose_axes(yaw, pitch, roll)
-	if (motion_yaw is None and
-			(float(pitch) != 0.0 or float(roll) != 0.0)):
-		# The body is pitched, but its integration step still translates over
-		# the horizontal X/Z plane.  Keep that travel as an independent
-		# generator instead of extending the raised local-forward axis.  The
-		# zero-pose branch below intentionally retains its historical three-axis
-		# representation for exact compatibility with existing callers.
-		motion_yaw = float(yaw) if vel >= 0.0 else float(yaw) + math.pi
-	if motion_yaw is not None:
-		# Ram separation, slope slip and wall deflection translate the chassis
-		# independently of its orientation.  Preserve the real hull OBB and add
-		# half of the translation as a fourth zonotope generator.  This is the
-		# exact swept volume for a fixed-orientation OBB; rotating the hull to the
-		# travel direction would lose the long front/rear corners.
-		center_forward = (front - back) * 0.5
-		half_forward = (front + back) * 0.5
-		motion_sin = math.sin(float(motion_yaw))
-		motion_cos = math.cos(float(motion_yaw))
-		travel_x = motion_sin * reach
-		travel_z = motion_cos * reach
-		center_up = (minimum[1] + maximum[1]) * 0.5
-		half_y = (maximum[1] - minimum[1]) * 0.5
-		center = (
-			pos.x + up[0] * center_up +
-			forward_axis[0] * center_forward + travel_x * 0.5,
-			pos.y + up[1] * center_up +
-			forward_axis[1] * center_forward,
-			pos.z + up[2] * center_up +
-			forward_axis[2] * center_forward + travel_z * 0.5)
-		half_axes = (
-			# Preserve the three physical pose generators.  Sharing a single
-			# coefficient between a rolled right axis and its horizontal guard
-			# cuts real opposite-sign body corners out of the zonotope.
-			tuple(value * body_half_width for value in right),
-			tuple(value * half_y for value in up),
-			tuple(value * half_forward for value in forward_axis),
-			(right[0] * horizontal_guard, 0.0,
-				right[2] * horizontal_guard),
-			(travel_x * 0.5, 0.0, travel_z * 0.5))
-		return center, half_axes
-	if vel < 0.0:
-		minimum_forward = -(back + reach)
-		maximum_forward = front
-	else:
-		minimum_forward = -back
-		maximum_forward = front + reach
-	center_forward = (minimum_forward + maximum_forward) * 0.5
-	half_forward = (maximum_forward - minimum_forward) * 0.5
-	center_up = (minimum[1] + maximum[1]) * 0.5
-	half_y = (maximum[1] - minimum[1]) * 0.5
-	center = (
-		pos.x + up[0] * center_up + forward_axis[0] * center_forward,
-		pos.y + up[1] * center_up + forward_axis[1] * center_forward,
-		pos.z + up[2] * center_up + forward_axis[2] * center_forward)
-	half_axes = (
-		tuple(value * body_half_width for value in right),
-		tuple(value * half_y for value in up),
-		tuple(value * half_forward for value in forward_axis),
-		# Preserve the complete horizontal lane guard without lifting it.
-		(right[0] * horizontal_guard, 0.0,
-			right[2] * horizontal_guard))
-	return center, half_axes
+	"""Use the real body and supplied frame displacement without padding."""
+	reach = 0.0 if travel_reach is None else max(0.0, float(travel_reach))
+	return _vehicle_contact_box(
+		pos, yaw, bbox, travel=(-reach if vel < 0.0 else reach),
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
 
 
 def _tree_trig_interval_1513(cosine_factor, sine_factor, start, end):
@@ -3565,17 +3403,16 @@ def _tree_candidates_for_sweeps_1513(
 	return candidates, isolated_hits
 
 
-def _vehicle_contact_box(pos, yaw, bbox, epsilon=0.075, travel=0.0,
+def _vehicle_contact_box(pos, yaw, bbox, travel=0.0,
 		motion_yaw=None, pitch=0.0, roll=0.0):
 	"""Return the complete current hull plus only this frame's real travel."""
 	import math
 	minimum, maximum = bbox[:2]
-	margin = max(0.0, float(epsilon))
 	travel = float(travel)
-	minimum_x = float(minimum[0]) - margin
-	maximum_x = float(maximum[0]) + margin
-	minimum_forward = float(minimum[2]) - margin
-	maximum_forward = float(maximum[2]) + margin
+	minimum_x = float(minimum[0])
+	maximum_x = float(maximum[0])
+	minimum_forward = float(minimum[2])
+	maximum_forward = float(maximum[2])
 	center_x = (minimum_x + maximum_x) * 0.5
 	body_half_width = (
 		float(maximum[0]) - float(minimum[0])) * 0.5
@@ -3600,201 +3437,13 @@ def _vehicle_contact_box(pos, yaw, bbox, epsilon=0.075, travel=0.0,
 		pos.z + right[2] * center_x + up[2] * center_up +
 		forward_axis[2] * center_forward + travel_z * 0.5)
 	half_axes = (
-		# The physical pose and each world-space skin direction need
-		# independent coefficients.  Otherwise roll/pitch couples the skin to
-		# one body-corner sign and opens holes at the opposite-sign corners.
+		# Keep the three physical body axes and frame translation independent.
 		tuple(value * body_half_width for value in right),
 		tuple(value * body_half_y for value in up),
-		tuple(value * body_half_forward for value in forward_axis),
-		(right[0] * margin, 0.0, right[2] * margin),
-		(forward_axis[0] * margin, 0.0,
-			forward_axis[2] * margin),
-		(0.0, margin, 0.0),
-		(travel_x * 0.5, 0.0, travel_z * 0.5))
+		tuple(value * body_half_forward for value in forward_axis))
+	if travel_distance:
+		half_axes += ((travel_x * 0.5, 0.0, travel_z * 0.5),)
 	return center, half_axes
-
-
-def _replacement_motion_geometry_1513(pos, yaw, vel, bbox, dt,
-		motion_yaw=None, pitch=0.0, roll=0.0,
-		replacement_motion=None):
-	"""Build bounded exact-pose intervals for retained replacement escape."""
-	import math
-	import Math
-	if replacement_motion is not None:
-		try:
-			start_raw, start_yaw, end_raw, end_yaw, posed_bbox = (
-				replacement_motion)
-			values = tuple(_finite_tree_motion_value_1513(value) for value in (
-				start_raw[0], start_raw[1], start_raw[2], start_yaw,
-				end_raw[0], end_raw[1], end_raw[2], end_yaw))
-			if any(value is None for value in values):
-				return None
-			(sx, sy, sz, start_yaw,
-				ex, ey, ez, end_yaw) = values
-			start = Math.Vector3(
-				sx, sy, sz)
-			end = Math.Vector3(
-				ex, ey, ez)
-			minimum, maximum = posed_bbox[:2]
-			bounds = tuple(_finite_tree_motion_value_1513(value)
-				for value in tuple(minimum[:3]) + tuple(maximum[:3]))
-			if (any(value is None for value in bounds) or
-					any(bounds[index] > bounds[index + 3]
-						for index in range(3))):
-				return None
-			minimum = bounds[:3]
-			maximum = bounds[3:]
-			margin = _CATALOG_POINT_EPSILON
-			expanded_bbox = (
-				tuple(value - margin for value in minimum),
-				tuple(value + margin for value in maximum), None)
-			posed_bbox = (minimum, maximum)
-		except (IndexError, TypeError, ValueError, OverflowError):
-			return None
-		dx = float(end.x) - float(start.x)
-		dy = float(end.y) - float(start.y)
-		dz = float(end.z) - float(start.z)
-		distance = (dx * dx + dy * dy + dz * dz) ** 0.5
-		yaw_delta = ((end_yaw - start_yaw + math.pi) %
-			(2.0 * math.pi)) - math.pi
-		steps = max(1,
-			int(math.ceil(
-				distance / _REPLACEMENT_PROGRESS_TRANSLATION_STEP_1513)),
-			int(math.ceil(
-				abs(yaw_delta) / _REPLACEMENT_PROGRESS_ANGLE_STEP_1513)))
-		if steps > _TREE_SWEEP_MAX_SEGMENTS_1513:
-			return None
-		intervals = []
-		for index in range(steps):
-			lower = float(index) / float(steps)
-			upper = float(index + 1) / float(steps)
-			interval_start = Math.Vector3(
-				float(start.x) + dx * lower,
-				float(start.y) + dy * lower,
-				float(start.z) + dz * lower)
-			interval_end = Math.Vector3(
-				float(start.x) + dx * upper,
-				float(start.y) + dy * upper,
-				float(start.z) + dz * upper)
-			interval_start_yaw = start_yaw + yaw_delta * lower
-			interval_end_yaw = start_yaw + yaw_delta * upper
-			sweeps = _tree_pose_sweep_boxes_1513(
-				interval_start, interval_start_yaw,
-				interval_end, interval_end_yaw, expanded_bbox)
-			if not sweeps:
-				return None
-			intervals.append((
-				_vehicle_contact_box(
-					interval_start, interval_start_yaw, posed_bbox,
-					epsilon=_CATALOG_POINT_EPSILON),
-				_vehicle_contact_box(
-					interval_end, interval_end_yaw, posed_bbox,
-					epsilon=_CATALOG_POINT_EPSILON),
-				tuple(sweeps)))
-		return tuple(intervals)
-
-	try:
-		duration = max(0.0, float(dt))
-		travel = float(vel) * duration
-		travel_yaw = (float(motion_yaw) if motion_yaw is not None else
-			float(yaw) if travel >= 0.0 else float(yaw) + math.pi)
-		distance = abs(travel)
-		end = Math.Vector3(
-			float(pos.x) + math.sin(travel_yaw) * distance,
-			float(pos.y),
-			float(pos.z) + math.cos(travel_yaw) * distance)
-	except (AttributeError, TypeError, ValueError, OverflowError):
-		return None
-	start_box = _vehicle_contact_box(
-		pos, yaw, bbox, epsilon=_CATALOG_POINT_EPSILON,
-		pitch=pitch, roll=roll)
-	end_box = _vehicle_contact_box(
-		end, yaw, bbox, epsilon=_CATALOG_POINT_EPSILON,
-		pitch=pitch, roll=roll)
-	sweep_box = _vehicle_contact_box(
-		pos, yaw, bbox, epsilon=_CATALOG_POINT_EPSILON,
-		travel=travel, motion_yaw=motion_yaw,
-		pitch=pitch, roll=roll)
-	return ((start_box, end_box, (sweep_box,)),)
-
-
-def _candidate_world_boxes_1513(candidate):
-	instance = globals().get('g_offh_destr_instances', {}).get(candidate[:2])
-	if not isinstance(instance, dict):
-		return ()
-	if candidate[4] != 'structure':
-		return tuple(instance.get('boxes') or ())
-	return tuple(world_box for world_box in instance.get('boxes') or ()
-		if world_box[2] == candidate[2])
-
-
-def _replacement_escape_progress_1513(start_box, end_box, world_box):
-	"""Prove one overlapping interval moves outward without changing sides."""
-	tolerance = 1.0e-7
-	start_clearance = _boxes_signed_clearance(start_box, world_box)
-	end_clearance = _boxes_signed_clearance(end_box, world_box)
-	if end_clearance < start_clearance - tolerance:
-		return False
-	start_offsets = _box_face_center_offsets(start_box, world_box)
-	end_offsets = _box_face_center_offsets(end_box, world_box)
-	# Crossing a retained box's centre plane can turn one large frame into a
-	# tunnel from one side to the other even when the endpoint is farther away.
-	if any(start_value * end_value < -tolerance * tolerance
-			for start_value, end_value in zip(start_offsets, end_offsets)):
-		return False
-	start_center = start_box[0]
-	end_center = end_box[0]
-	world_center = world_box[0]
-	start_delta = tuple(start_center[index] - world_center[index]
-		for index in range(3))
-	movement = tuple(end_center[index] - start_center[index]
-		for index in range(3))
-	start_distance_squared = _vector_dot(start_delta, start_delta)
-	end_delta = tuple(end_center[index] - world_center[index]
-		for index in range(3))
-	end_distance_squared = _vector_dot(end_delta, end_delta)
-	center_outward = (
-		_vector_dot(start_delta, movement) >= -tolerance and
-		end_distance_squared > start_distance_squared + tolerance)
-	# A centred/asymmetric hull can also rotate out without translating its
-	# entity origin. Admit that only when every fixed obstacle-face gap is
-	# non-worsening and at least one improves; rotating farther in fails here.
-	start_faces = _box_face_clearances(start_box, world_box)
-	end_faces = _box_face_clearances(end_box, world_box)
-	face_outward = (
-		all(end_value >= start_value - tolerance
-			for start_value, end_value in zip(start_faces, end_faces)) and
-		any(end_value > start_value + tolerance
-			for start_value, end_value in zip(start_faces, end_faces)))
-	return center_outward or face_outward
-
-
-def _replacement_motion_blocked_1513(motion_geometry, world_boxes):
-	"""Fail closed on entry while permitting bounded outward escape."""
-	if motion_geometry is None or not world_boxes:
-		return True
-	for world_box in world_boxes:
-		escaped_on_previous_interval = False
-		for start_box, end_box, sweep_boxes in motion_geometry:
-			start_overlaps = _boxes_intersect(start_box, world_box)
-			end_overlaps = _boxes_intersect(end_box, world_box)
-			if not any(_boxes_intersect(sweep_box, world_box)
-					for sweep_box in sweep_boxes):
-				escaped_on_previous_interval = (
-					start_overlaps and not end_overlaps)
-				continue
-			# A previously legal pose may not enter or sweep through the retained
-			# replacement.  A clear interval is admitted only as the conservative
-			# sweep tail immediately after the preceding interval crossed outward;
-			# once fully clear, a later corner-cut in the same frame is blocked too.
-			if not start_overlaps and not escaped_on_previous_interval:
-				return True
-			if not _replacement_escape_progress_1513(
-					start_box, end_box, world_box):
-				return True
-			escaped_on_previous_interval = (
-				start_overlaps and not end_overlaps)
-	return False
 
 
 @observed('destructible.intersections')
@@ -3805,17 +3454,6 @@ def _catalog_intersections(world_boxes, vehicle_box):
 			continue
 		result.append(world_box)
 	return result
-
-
-def _native_hide_delay():
-	import AreaDestructibles
-	try:
-		delay = float(getattr(
-			AreaDestructibles, 'DESTRUCTIBLE_HIDING_DELAY',
-			_NATIVE_HIDE_MIN_SECONDS))
-	except (TypeError, ValueError):
-		delay = _NATIVE_HIDE_MIN_SECONDS
-	return max(_NATIVE_HIDE_MIN_SECONDS, delay)
 
 
 def _fragile_may_retain_native_collision_1513(chunkID, itemIndex):
@@ -3862,8 +3500,13 @@ def _structure_module_may_retain_native_collision_1513(
 		for index in record.get('retained_collision_boxes') or ())
 
 
+def structure_collision_swap_required(token):
+	"""Compatibility seam: native geometry, never a timer, decides movement."""
+	return False
+
+
 def note_destroyed(kind, chunkID, itemIndex, matKind=None, now=None):
-	"""Track native hide or falling-matrix collision after destruction."""
+	"""Track native replacement geometry or falling matrices after destruction."""
 	if kind == 'tree':
 		space_id = globals().get('g_offh_destr_runtime_space')
 		state = globals().setdefault('g_offh_tree_state', {
@@ -3908,11 +3551,6 @@ def note_destroyed(kind, chunkID, itemIndex, matKind=None, now=None):
 		# deliberately fail-safe because its exact catalog box may stream later.
 		# Once enabled, rotation retains the native-world recast until reset.
 		globals()['g_offh_destr_native_replacement_bsp_active'] = True
-	key = (int(chunkID), int(itemIndex),
-		int(matKind) if matKind is not None else None)
-	pending = globals().setdefault('g_offh_destr_pending', {})
-	if key not in pending:
-		pending[key] = float(now) + _native_hide_delay()
 	return True
 
 
@@ -4120,7 +3758,8 @@ def _synthetic_mat_info(candidate, math_module):
 
 
 def _catalog_candidate_on_ray_1513(
-		contact_pt, segment_start, segment_end, prefer_destroyed=False):
+		contact_pt, segment_start, segment_end, prefer_destroyed=False,
+		excluded_keys=()):
 	"""Resolve one exact registered OBB on the current native ray.
 
 	Point containment deliberately has a 7.5 cm tolerance for compiled BSP
@@ -4161,6 +3800,8 @@ def _catalog_candidate_on_ray_1513(
 			candidate = (int(chunk_id), int(item_index), mat_kind,
 				_instance_descriptor_filename_1513(instance),
 				instance['kind'], instance['item_scale'])
+			if candidate[:3] in excluded_keys:
+				continue
 			entry = (candidate, entry_distance, exit_distance)
 			if not any(value[0] == candidate for value in candidates):
 				candidates.append(entry)
@@ -4218,10 +3859,9 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	proved crushable as a soft obstacle so the bot can reach real hull contact,
 	but it must never destroy from that distance or skip unrelated geometry
 	behind the item.  Every skipped hit therefore needs one unique registered
-	OBB, the retail kinetic gate, an exact OBB exit and a clear/native-next-hit
-	recast.  Unknown and ambiguous chains remain solid.  Exhausting the shared
-	native recast budget instead returns ``'deferred'`` so the caller can avoid
-	caching a false hard wall.
+	OBB, the retail kinetic gate and an exact original-material filter. The
+	filtered query covers the whole ray, including the prop's interior.  Unknown and ambiguous chains remain solid. Each recast must add a new
+	exact identity; chain length has no arbitrary collision budget.
 	"""
 	if (_destructible_catalog is None or collision is None or td is None):
 		return False
@@ -4241,19 +3881,18 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	authority = _get_destr_authority()
 	kinetic_contact = False
 	pending_contact = False
-	for candidate_index in range(_SOFT_STATIC_MAX_SKIPS):
+	excluded_keys = set()
+	candidate_index = 0
+	while True:
 		try:
 			hit_point = current_hit[0]
 		except (TypeError, IndexError):
 			return 'pending_hard' if pending_contact else False
 		candidate = _catalog_candidate_on_ray_1513(
 			hit_point, current_start, segment_end,
-			prefer_destroyed=(require_pending_first and candidate_index == 0))
+			prefer_destroyed=(require_pending_first and candidate_index == 0),
+			excluded_keys=excluded_keys)
 		if candidate is None:
-			return 'pending_hard' if pending_contact else False
-		# Damage can replace a railway vehicle with a still-solid wreck.  Its
-		# native hit must never be skipped through the old whole-item OBB.
-		if _catalog_retains_collision_1513(candidate):
 			return 'pending_hard' if pending_contact else False
 		# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True as soon as the
 		# chunk controller reports the item broken, whatever the vehicle speed and
@@ -4272,52 +3911,34 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 				# The visible player asks this read-only path to prove the
 				# complete native ray before submitting an exact catalog
 				# proposal.  A prop already crushable at the current physical
-				# speed is just as valid as one admitted by the directional cap;
-				# both still require an OBB-exit recast for a backing wall.
+				# speed still requires a whole-segment recast for a backing wall.
 				kinetic_contact = True
-			elif (allow_kinetic_first and kinetic_speed is not None and
-					not current_crushable and _stock_crushable_1513(
-						mat_info, kinetic_speed, td, candidate[5])):
-				kinetic_contact = True
-				current_crushable = True
 			else:
 				return False
-		elif (allow_kinetic_first and
-				kinetic_speed is not None and not current_crushable and
-				_stock_crushable_1513(
-					mat_info, kinetic_speed, td, candidate[5])):
-			kinetic_contact = True
-			current_crushable = True
 		if not current_crushable:
 			return 'pending_hard' if pending_contact else False
-		exit_distance = _registered_shot_exit_1513(
-			candidate[0], candidate[1], candidate[2], candidate[3],
-			current_start, segment_end, hit_point)
-		if exit_distance is None:
+		# A box is identity evidence, not proof that its interior is empty.
+		# Exact native keys are unique across the space, so one filtered query
+		# can inspect BOTH the interior and the rest of the original segment.
+		# Never jump to a box exit: a real wall can be inside that same box.
+		if candidate[:3] in excluded_keys:
 			return 'pending_hard' if pending_contact else False
-		# The interval is clipped to this segment.  Decide whether any ray
-		# remains before adding the epsilon to a native float32 position:
-		# rounding can overshoot the endpoint by more than epsilon and turn
-		# a length-based check into a backwards recast through the same skin.
-		if float(exit_distance) >= (segment_end - current_start).length:
-			return 'kinetic' if kinetic_contact else True
-		next_start = current_start + direction.scale(
-			float(exit_distance) + _SHOT_RAY_EPSILON)
-		if _vector_dot(
-				(segment_end.x - next_start.x, segment_end.y - next_start.y,
-				 segment_end.z - next_start.z),
-				(direction.x, direction.y, direction.z)) <= _SHOT_RAY_EPSILON:
-			return 'kinetic' if kinetic_contact else True
-		if recast_budget is not None:
-			if not recast_budget or int(recast_budget[0]) <= 0:
-				return 'pending_hard' if pending_contact else 'deferred'
-			recast_budget[0] = int(recast_budget[0]) - 1
+		excluded_keys.add(candidate[:3])
+		candidate_index += 1
+		def keep_interior(*surface):
+			if (len(surface) != 4 or
+					not all(type(value) in _INTEGER_TYPES for value in surface) or
+					not 71 <= surface[0] <= 86):
+				return True
+			identity = (surface[3], surface[2])
+			return (identity + (surface[0],) not in excluded_keys and
+				identity + (None,) not in excluded_keys)
 		current_hit = observed_ray(
 			'native.destructible.ray', BigWorld.wg_collideSegment,
-			spaceID, next_start, segment_end, VEHICLE_SKIP_FLAGS)
+			spaceID, current_start, segment_end, VEHICLE_SKIP_FLAGS,
+			keep_interior)
 		if current_hit is None:
 			return 'kinetic' if kinetic_contact else True
-		current_start = next_start
 	return 'pending_hard' if pending_contact else False
 
 
@@ -4325,7 +3946,7 @@ def _motion_travel_reach(vel, dt):
 	# Match the grounded native sweep in world_collision.  A shorter catalog
 	# reach can accept the static hit, then miss the pending native skin during
 	# the copied pose commit and incorrectly feed it through hard-wall braking.
-	return max(0.4, abs(float(vel)) * max(0.0, float(dt)) + 0.2)
+	return abs(float(vel)) * max(0.0, float(dt))
 
 
 def _accepted_tree_collision_keys_1513():
@@ -4499,6 +4120,308 @@ def horizontal_collision_filter(start, end):
 	return prepare_horizontal_collision_filter(start, end)
 
 
+def _instance_motion_envelope_1513(instance):
+	"""Bound compiled original materials in their model's oriented basis.
+
+	The native merged BSP does not use the per-module damage box as its
+	geometry boundary. Keep the union in the authored basis, including shear,
+	and use it only to bound filtered native queries, never as a solid shape.
+	"""
+	boxes = instance.get('boxes', ())
+	if not boxes:
+		return None
+	cached = instance.get('_motion_envelope')
+	if cached is not None and cached[0] is boxes:
+		return cached[1]
+	center, axes = boxes[0][:2]
+	normals = _box_face_axes(axes)
+	limits = []
+	for index, normal in enumerate(normals):
+		denominator = _vector_dot(normal, axes[index])
+		if abs(denominator) <= 1.0e-12:
+			return None
+		low, high = float('inf'), -float('inf')
+		for other_center, other_axes, unused_material in boxes:
+			delta = tuple(other_center[i] - center[i] for i in range(3))
+			mid = _vector_dot(normal, delta) / denominator
+			radius = sum(abs(_vector_dot(normal, axis) / denominator)
+				for axis in other_axes)
+			low, high = min(low, mid - radius), max(high, mid + radius)
+		limits.append((low, high))
+	new_center = tuple(center[i] + sum(axes[j][i] *
+		(limits[j][0] + limits[j][1]) * 0.5 for j in range(3))
+		for i in range(3))
+	new_axes = tuple(tuple(value * (high - low) * 0.5 for value in axis)
+		for axis, (low, high) in zip(axes, limits))
+	envelope = (new_center, new_axes, None)
+	instance['_motion_envelope'] = (boxes, envelope)
+	return envelope
+
+
+def _anonymous_original_surface_1513(surface):
+	# Compiled #1513 callbacks expose transient slots, not registered wires.
+	# Only material/flags survive a recast; never alias a real registered item.
+	if (len(surface) == 4 and
+			all(type(value) in _INTEGER_TYPES for value in surface) and
+			71 <= surface[0] <= 86 and surface[1] & 0x80 and
+			(surface[3], surface[2]) not in
+			globals().get('g_offh_destr_instances', {}) and
+			(surface[3], surface[2]) not in
+			(_destructible_catalog or {}).get('baked_instances', {}) and
+			(surface[3], surface[2]) not in
+			(_destructible_catalog or {}).get('tree_instances', {})):
+		return tuple(surface[:2])
+	return None
+
+
+def _projected_box_interval_1513(start, end, box):
+	"""Clip a ray to the exact XZ projection of a possibly sheared box."""
+	center, axes = box[:2]
+	entry, leave = 0.0, 1.0
+	for generator in axes:
+		nx, nz = -generator[2], generator[0]
+		length = (nx * nx + nz * nz) ** 0.5
+		if length <= 1.0e-12:
+			continue
+		radius = sum(abs(nx * axis[0] + nz * axis[2]) for axis in axes)
+		value = nx * (start.x - center[0]) + nz * (start.z - center[2])
+		delta = nx * (end.x - start.x) + nz * (end.z - start.z)
+		if abs(delta) <= 1.0e-12:
+			if abs(value) > radius:
+				return None
+			continue
+		near, far = (-radius - value) / delta, (radius - value) / delta
+		entry, leave = max(entry, min(near, far)), min(leave, max(near, far))
+		if entry > leave:
+			return None
+	return entry, leave
+
+
+def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
+	"""Resolve anonymous original keys without conflating adjacent live owners."""
+	instances = globals().get('g_offh_destr_instances', {})
+	aliases = set(surface for surface in surfaces
+		if _anonymous_original_surface_1513(surface) is not None)
+	if not aliases:
+		return None
+	members = globals().get('g_offh_destr_contact_bins', {}).get(
+		_destructible_bin_key(point.x, point.z), ())
+	owners = []
+	for identity in members:
+		instance = instances.get(identity)
+		if (instance is None or instance['kind'] not in
+				('structure', 'fragile', 'falling') or
+				_destructible_isolated_1513(*identity)):
+			continue
+		envelope = _instance_motion_envelope_1513(instance)
+		if envelope is None or not _point_in_world_box(point, envelope):
+			continue
+		interval = _segment_world_box_interval(start, end, envelope)
+		if interval is not None:
+			owners.append((identity, instance, interval))
+	projected = False
+	if (not owners and normal is not None and
+			abs(normal.y) <= 1.0e-6 and
+			normal.x * normal.x + normal.z * normal.z > 1.0e-12 and
+			(end.x - start.x) ** 2 + (end.z - start.z) ** 2 > 1.0e-12):
+		# Native vertical original faces can extend above a module's baked
+		# bounds. Use their authored footprint only for ownership of this
+		# material, never to invent a solid or enlarge the destruction volume.
+		# Every possible stacked owner must agree, including unstreamed baked
+		# items: a missing live registration cannot authorize an exclusion.
+		projected = True
+		catalog = _destructible_catalog or {}
+		baked = catalog.get('baked_instances', {})
+		possible = set(members)
+		for bin_key in _baked_bin_keys_for_bounds_1513(
+				point.x, point.x, point.z, point.z):
+			possible.update(catalog.get('baked_shot_bins', {}).get(bin_key, ()))
+		for identity in possible:
+			instance = instances.get(identity) or baked.get(identity)
+			if instance is None:
+				continue
+			envelope = _instance_motion_envelope_1513(instance)
+			if (envelope is None or
+					_projected_box_interval_1513(point, point, envelope) is None):
+				continue
+			if identity not in instances or _destructible_isolated_1513(*identity):
+				return None
+			interval = _projected_box_interval_1513(start, end, envelope)
+			if interval is not None:
+				owners.append((identity, instance, interval))
+	if not owners:
+		return None
+	authority = _get_destr_authority()
+	predicted = globals().get('g_offh_destr_speculative', set())
+	excluded = set()
+	for surface in aliases:
+		# Only a component containing this witness can own this material.
+		# A neighbouring placement's intact opposite half must not veto an
+		# already broken fence segment merely because their model envelopes meet.
+		accepted = True
+		matched = False
+		for identity, instance, unused_interval in owners:
+			material = surface[0] if instance['kind'] == 'structure' else None
+			component_boxes = [box for box in instance['boxes']
+				if material is None or box[2] == material]
+			contains = any(_point_in_world_box(point, box) or
+				(normal is not None and abs(normal.y) <= 1.0e-6 and
+				 _projected_box_interval_1513(point, point, box) is not None)
+				for box in component_boxes)
+			if not contains:
+				continue
+			matched = True
+			key = identity + (material,)
+			if not (authority.is_destroyed(*key) or key in predicted):
+				accepted = False
+				break
+		if not matched:
+			# Some original BSP faces extend outside damage-module boxes.
+			# Retain the whole-model proof only when EVERY possible owner
+			# has already accepted this material; never infer a live part gone.
+			accepted = all((surface[0] if instance['kind'] == 'structure' else None)
+				in set(box[2] for box in instance['boxes']) and
+				(authority.is_destroyed(*(identity+((surface[0] if instance['kind'] == 'structure' else None),))) or
+				 identity+((surface[0] if instance['kind'] == 'structure' else None),) in predicted)
+				for identity, instance, unused_interval in owners)
+			matched = accepted
+		if accepted and matched:
+			excluded.add(surface)
+	if not excluded:
+		return None
+	# Anonymous keys can be shared by several placements. A later live owner
+	# may begin inside this model envelope even though it did not contain the
+	# first hit. End the filtered query before that owner, then query it normally.
+	owner_ids = set(value[0] for value in owners)
+	# Re-resolve ownership at the first exit; do not extend an ambiguous
+	# shared key across the union of all intersecting placements.
+	limit = min(value[2][1] for value in owners)
+	bound = start + (end - start).scale(limit)
+	neighbours = set()
+	bins = globals().get('g_offh_destr_contact_bins', {})
+	for bin_key in _bin_keys_for_bounds(
+			min(start.x, bound.x), max(start.x, bound.x),
+			min(start.z, bound.z), max(start.z, bound.z)):
+		neighbours.update(bins.get(bin_key, ()))
+	if projected:
+		for bin_key in _baked_bin_keys_for_bounds_1513(
+				min(start.x, bound.x), max(start.x, bound.x),
+				min(start.z, bound.z), max(start.z, bound.z)):
+			neighbours.update(catalog.get('baked_shot_bins', {}).get(bin_key, ()))
+	for other_identity in neighbours:
+		other = instances.get(other_identity)
+		if other is None and projected:
+			other = baked.get(other_identity)
+		if other is None:
+			continue
+		materials = (set(surface[0] for surface in excluded)
+			if other['kind'] == 'structure' else (None,))
+		clip = (_projected_box_interval_1513 if projected else _segment_world_box_interval)
+		for material in materials:
+			key = other_identity + (material,)
+			if authority.is_destroyed(*key) or key in predicted:
+				continue
+			for other_box in other['boxes']:
+				if material is not None and other_box[2] != material:
+					continue
+				other_interval = clip(start, end, other_box)
+				if (other_interval is not None and
+						other_interval[1] * (end-start).length >= (point-start).length):
+					limit = min(limit, max(0.0, other_interval[0]))
+	distance = limit * (end - start).length
+	if distance + 1.0e-7 < (point - start).length:
+		return None
+	return distance, excluded
+
+
+def collide_motion_segment(space_id, start, end, collision_filter,
+		native_collide, ray_label='native.motion.ray', evidence=None):
+	"""Recast compiled original skins inside their accepted object/module.
+
+	#1513 can return a merged, PROJECTILENOCOLLIDE BSP with anonymous item
+	IDs alongside the live chunk model. Callback order does not identify the
+	nearest hit. Resolve that hit against one registered model, then remove
+	only accepted original-material keys in a ray bounded by its envelope.
+	Per-module damage boxes are not the compiled model's geometry bounds.
+	A native traversal may reveal another original key only after the first
+	one is excluded. Classify that hit too, within the same bounded interval.
+	Replacement materials, terrain and backing walls remain visible, including
+	geometry inside the original module's box. All intervals share one budget.
+	"""
+	if collision_filter is None or _destructible_catalog is None:
+		args = (space_id, start, end, VEHICLE_SKIP_FLAGS)
+		if collision_filter is not None:
+			args += (collision_filter,)
+		return observed_ray(ray_label, native_collide, *args)
+	def query(a, b, excluded=()):
+		candidates = set()
+		excluded_aliases = frozenset(surface[:2] for surface in excluded)
+		if collision_filter is None:
+			return (observed_ray(ray_label, native_collide,
+				space_id, a, b, VEHICLE_SKIP_FLAGS), candidates)
+		def keep(*hit):
+			accepted = collision_filter(*hit)
+			alias = _anonymous_original_surface_1513(hit)
+			accepted = accepted and tuple(hit) not in excluded and not (
+				alias is not None and alias in excluded_aliases)
+			if accepted and len(hit) == 4:
+				candidates.add(tuple(hit))
+			return accepted
+		hit = observed_ray(ray_label, native_collide,
+			space_id, a, b, VEHICLE_SKIP_FLAGS, keep)
+		if evidence is not None:
+			evidence.setdefault('queries', []).append({
+				'start': (a.x, a.y, a.z), 'end': (b.x, b.y, b.z),
+				'excluded': sorted(excluded), 'candidates': sorted(candidates),
+				'hit': None if hit is None else tuple(
+					getattr(hit[0], axis) for axis in ('x', 'y', 'z')),
+				'normal': None if hit is None else tuple(
+					getattr(hit[1], axis) for axis in ('x', 'y', 'z')),
+			})
+		return hit, candidates
+
+	# Each exclusion belongs only to the owner interval which proved it.
+	# Resume its tail with the previous filter: the same compiled key may
+	# belong to an intact neighbour immediately outside that interval.
+	segments = [(start, end, frozenset())]
+	seen_segments = set()
+	while segments:
+		current, segment_end, excluded = segments.pop()
+		state_key = ((current.x, current.y, current.z),
+			(segment_end.x, segment_end.y, segment_end.z), excluded)
+		if state_key in seen_segments:
+			raise RuntimeError('compiled original recast made no geometric progress')
+		seen_segments.add(state_key)
+		hit, surfaces = query(current, segment_end, excluded)
+		if hit is None:
+			continue
+		skin = _compiled_motion_skin_1513(
+			hit[0], current, segment_end, surfaces, hit[1])
+		if skin is None:
+			if evidence is not None:
+				evidence['budget_exhausted'] = False
+			return hit
+		exit_distance, newly_excluded = skin
+		direction = segment_end - current
+		length = direction.length
+		if length <= _SHOT_RAY_EPSILON:
+			return hit
+		direction.normalise()
+		bounded_end = (segment_end if exit_distance >= length else
+			current + direction.scale(exit_distance))
+		if not newly_excluded.difference(excluded):
+			if evidence is not None:
+				evidence['rejection_reason'] = 'native_filter_no_progress'
+			return hit
+		if exit_distance + _SHOT_RAY_EPSILON < length:
+			segments.append((bounded_end + direction.scale(_SHOT_RAY_EPSILON),
+				segment_end, excluded))
+		segments.append((current, bounded_end, excluded.union(newly_excluded)))
+		globals()['g_offh_destr_ground_skips'] = globals().get(
+			'g_offh_destr_ground_skips', 0) + 1
+	return None
+
+
 def sight_collision_filter():
 	"""Prepare one broken-skin filter for rays of unbounded length.
 
@@ -4547,40 +4470,8 @@ def take_ground_skip_count():
 
 def _catalog_pending_at_hull(pos, yaw, vel, td, now, dt=0.04,
 		motion_yaw=None, pitch=0.0, roll=0.0):
-	"""Return whether a fragile/module hide window still covers the hull.
-
-	This is classification only.  Callers keep the pose blocked while the native
-	skin of a broken item is still drawn, but preserve impact momentum instead
-	of applying the hard wall exponential brake.  The window is the pinned
-	``DESTRUCTIBLE_HIDING_DELAY``, so a wall that outlives it is a real wall.
-	"""
-	bbox = _vehicle_body_bbox(td)
-	if _destructible_catalog is None or bbox is None:
-		return False
-	vehicle_box = _vehicle_swept_box(
-		pos, yaw, vel, bbox, _motion_travel_reach(vel, dt),
-		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
-	pending = globals().get('g_offh_destr_pending', {})
-	ready = getattr(_get_destr_authority(), 'contact_collision_ready', None)
-	saw_pending = False
-	for candidate in _catalog_contact_candidates(vehicle_box):
-		deadline = pending.get((candidate[0], candidate[1], candidate[2]))
-		is_pending = (
-			deadline is not None and float(now) < float(deadline) and
-				(candidate[4] == 'structure' or
-				 not (callable(ready) and ready(*candidate[:3]))))
-		if is_pending:
-			# A structure replacement can enter the native collision world one
-			# frame after its Python hide callback completes.  Keep its complete
-			# bounded swap window; fragiles may still release as soon as the
-			# callback proves their collision transition complete.
-			saw_pending = True
-			continue
-		# The native hard result cannot be attributed only to a swapping
-		# module when another catalog body or module occupies the same hull.
-		# Preserve hard braking/replanning for that mixed contact.
-		return False
-	return saw_pending
+	"""Compatibility seam: a visual hiding window never holds the hull."""
+	return False
 
 
 def _unidentified_hull_contact_1513(unresolved, vehicle_box, authority):
@@ -4629,7 +4520,7 @@ def _catalog_hull_contact(pos, yaw, vel, td, dt=0.04,
 
 def _catalog_motion_result(status, token=None, accepted_now=False,
 		used_kinetic_speed=False, return_status=False, return_detail=False,
-		kinds=None, requires_commit=None, swap_pending=False):
+		kinds=None, requires_commit=None):
 	"""Keep the legacy status seam while exposing an exact commit receipt."""
 	if return_detail:
 		result = {
@@ -4641,11 +4532,6 @@ def _catalog_motion_result(status, token=None, accepted_now=False,
 		}
 		if requires_commit is not None:
 			result['requires_commit'] = bool(requires_commit)
-		if swap_pending:
-			# A hard result with this bit has no independent solid blocker.  The
-			# caller must keep the pose outside, but may preserve momentum while
-			# the native structure model completes its bounded replacement.
-			result['swap_pending'] = True
 		return result
 	# ``approach`` is meaningful only to the combined world+catalog resolver.
 	# Older callers must continue to fail closed on a non-contact lookahead.
@@ -4655,295 +4541,175 @@ def _catalog_motion_result(status, token=None, accepted_now=False,
 
 @observed('destructible.motion')
 def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
-		return_status=False, dt=0.04, kinetic_speed=None,
-		return_detail=False, kinetic_commit=False, commit_enabled=True,
-		proposal_only=False, motion_yaw=None, pitch=0.0, roll=0.0,
-		travel_reach=None, replacement_motion=None):
-	"""Resolve exact streamed OBB contact before committing local movement."""
-	if proposal_only and (not return_detail or not kinetic_commit):
-		raise ValueError(
-			'catalog motion proposals require detail and kinetic classification')
-	_diagnostic_flush_1513(now)
-	# Native acceptance already decided collision. Keep transport retries in
-	# their frozen ledger; a delayed event must not hold this or another hull.
-	_retry_catalog_publications_1513(spaceID)
-	if _destructible_catalog is None:
-		return _catalog_motion_result(
-			'clear',
-			return_status=return_status, return_detail=return_detail,
-			requires_commit=False if proposal_only else None)
-	bbox = _vehicle_body_bbox(td)
-	if bbox is None:
-		return _catalog_motion_result(
-			'clear',
-			return_status=return_status, return_detail=return_detail,
-			requires_commit=False if proposal_only else None)
-	import Math
-	auth = _get_destr_authority()
-	_refresh_destroyed_falling_instances_1513(spaceID, auth, now)
-	if travel_reach is None:
-		sweep_reach = _motion_travel_reach(vel, dt)
-	else:
-		import math
-		try:
-			sweep_reach = float(travel_reach)
-		except (TypeError, ValueError, OverflowError):
-			raise ValueError('catalog travel reach is invalid')
-		if (sweep_reach < 0.0 or math.isnan(sweep_reach) or
-				math.isinf(sweep_reach)):
-			raise ValueError('catalog travel reach is invalid')
-	vehicle_box = _vehicle_swept_box(
-		pos, yaw, vel, bbox, sweep_reach,
-		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
-	replacement_geometry = None
-	replacement_geometry_ready = False
-	# The visible player does not run the authority Bot scan that normally
-	# populates the live item registry.  Admit only checksum-pinned wires in the
-	# current hull bins through the same read-only native validation as shells.
-	unresolved = _stream_baked_motion_instances_1513(spaceID, vehicle_box)
-	candidates = _catalog_contact_candidates(vehicle_box)
-	# An unidentified model is real geometry this sweep cannot name, destroy or
-	# publish.  #1513 keeps it solid, so the hull stops on it until a later tick
-	# resolves its identity and the ordinary crush law can decide.
-	unidentified = bool(unresolved) and _unidentified_hull_contact_1513(
-		unresolved, vehicle_box, auth)
-	if not candidates and not unidentified:
-		return _catalog_motion_result(
-			'clear',
-			return_status=return_status, return_detail=return_detail,
-			requires_commit=False if proposal_only else None)
+        return_status=False, dt=0.04, kinetic_speed=None,
+        return_detail=False, kinetic_commit=False, commit_enabled=True,
+        proposal_only=False, motion_yaw=None, pitch=0.0, roll=0.0,
+        travel_reach=None, contact_motion=None):
+    """Classify actual rigid-body contact; enclosing boxes only find candidates.
 
-	grouped = {}
-	for candidate in candidates:
-		grouped.setdefault((candidate[0], candidate[1]), []).append(candidate)
-	instances = globals().get('g_offh_destr_instances', {})
-	contact_box = (_vehicle_contact_box(
-		pos, yaw, bbox, travel=float(vel) * max(0.0, float(dt)),
-		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
-		if kinetic_speed is not None else None)
-	blocked = bool(unidentified)
-	other_blocked = bool(unidentified)
-	swap_blocked = False
-	crushed = False
-	kinetic = False
-	approach = False
-	exact_token = set()
-	contact_kinds = set()
-	if unidentified:
-		contact_kinds.add('unidentified')
-	commit_candidates = []
-
-	for identity in sorted(grouped):
-		by_material = {}
-		for candidate in grouped[identity]:
-			by_material.setdefault(candidate[2], candidate)
-		active = []
-		for mat_kind in sorted(
-				by_material, key=lambda value: -1 if value is None else value):
-			candidate = by_material[mat_kind]
-			chunk_id, item_index, unused_mat, unused_filename, kind = (
-				candidate[:5])
-			key = (chunk_id, item_index, mat_kind)
-			contact_candidate = (contact_box is not None and
-				kind in ('fragile', 'structure', 'falling') and
-				any(_boxes_intersect(contact_box, world_box)
-					for world_box in instances.get(
-						(chunk_id, item_index), {}).get('boxes', ())
-					if (kind != 'structure' or world_box[2] == mat_kind)))
-			contact_kinds.add(kind)
-			# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True for any
-			# item the chunk controller already reports broken, so a hiding skin
-			# and a felled column are both transparent from that moment.
-			if auth.is_destroyed(chunk_id, item_index, mat_kind):
-				if kind != 'falling':
-					note_destroyed(
-						'module' if mat_kind is not None else 'fragile',
-						chunk_id, item_index, mat_kind, now)
-				pending_deadline = globals().get(
-					'g_offh_destr_pending', {}).get(key, 0.0)
-				swap_pending = (
-					float(now) < pending_deadline and
-					(kind == 'structure' or (
-						_catalog_retains_collision_1513(candidate) and
-						not (callable(getattr(
-							auth, 'contact_collision_ready', None)) and
-								auth.contact_collision_ready(*key)))))
-				if swap_pending:
-					# A structure can materialise a destroyed-model BSP after its
-					# logical module receipt, even when the stock callback already
-					# reports complete. Keep the hull outside for the complete native
-					# hiding interval; the replacement's actual BSP owns motion after
-					# that bounded hand-off. Fragiles retain their narrower proved
-					# replacement rule.
-					blocked = True
-					swap_blocked = True
-				elif _catalog_retains_collision_1513(candidate):
-					# #1513 exposes only segment queries for the replacement BSP.
-					# Only a box whose compiled destroyed-model reference proves a
-					# solid replacement keeps its source module envelope.  Applying
-					# this to every destroyed structure would create invisible walls
-					# where the compiled replacement is collision-free.
-					if not replacement_geometry_ready:
-						replacement_geometry = \
-							_replacement_motion_geometry_1513(
-								pos, yaw, vel, bbox, dt,
-								motion_yaw=motion_yaw,
-								pitch=pitch, roll=roll,
-								replacement_motion=replacement_motion)
-						replacement_geometry_ready = True
-					if _replacement_motion_blocked_1513(
-							replacement_geometry,
-							_candidate_world_boxes_1513(candidate)):
-						blocked = True
-						other_blocked = True
-				crushed = True
-				if contact_candidate:
-					exact_token.add(key)
-				_diagnostic_contact_1513(
-					'swept_destroyed', chunk_id, item_index,
-					fields=(('kind', kind), ('mat', mat_kind)), now=now)
-				continue
-			active.append((candidate, contact_candidate))
-
-		if not active:
-			continue
-		for candidate, contact_candidate in active:
-			chunk_id, item_index, mat_kind, unused_filename, kind = (
-				candidate[:5])
-			key = (chunk_id, item_index, mat_kind)
-			if _catalog_retains_collision_1513(candidate):
-				# A legal cosmetic break does not admit translation through the
-				# replacement body during the native hiding callback window.
-				blocked = True
-				other_blocked = True
-			mat_info = _synthetic_mat_info(candidate, Math)
-			physical_crushable = _stock_crushable_1513(
-				mat_info, vel, td, candidate[5])
-			cap_crushable = (kinetic_speed is not None and
-				kind in ('fragile', 'structure') and
-				_stock_crushable_1513(
-					mat_info, kinetic_speed, td, candidate[5]))
-			if (kinetic_speed is not None and not contact_candidate and
-					not physical_crushable):
-				# A real frame sweep at sufficient physical speed keeps the old
-				# crush-through behaviour.  Only the directional-cap shortcut is
-				# restricted to exact hull contact; otherwise it is planning-only.
-				if kind in ('fragile', 'structure') and cap_crushable:
-					approach = True
-				else:
-					blocked = True
-					other_blocked = True
-				continue
-			if physical_crushable and commit_enabled:
-				commit_candidates.append((candidate, vel, False))
-			elif physical_crushable:
-				exact_token.add(key)
-				blocked = True
-				other_blocked = True
-			elif cap_crushable:
-				# Cap-only admission reaches here only for exact current-hull
-				# contact; planning look-ahead returned ``approach`` above.
-				exact_token.add(key)
-				if kinetic_commit:
-					commit_candidates.append((candidate, kinetic_speed, True))
-				else:
-					kinetic = True
-			else:
-				blocked = True
-				other_blocked = True
-			_diagnostic_contact_1513(
-				('swept_kinetic_hold' if cap_crushable else
-				'swept_kinetic_reject'), chunk_id, item_index,
-				fields=(('kind', kind), ('mat', mat_kind),
-					('speed', '%.3f' % float(vel)),
-					('scale', '%.5f' % float(candidate[5]))), now=now)
-
-	accepted_now = False
-	used_kinetic_speed = False
-	requires_commit = False
-	# A hard or still-kinetic sibling may stop the chassis, but it must not hide
-	# an independently proved crushable identity in the same sweep.  Preserve
-	# and, when requested, commit that exact subset before returning the overall
-	# blocking status.
-	for candidate, gate_speed, used_cap in commit_candidates:
-		chunk_id, item_index, mat_kind, unused_filename, kind = (
-			candidate[:5])
-		if _destructible_isolated_1513(chunk_id, item_index):
-			continue
-		if proposal_only:
-			exact_token.add((chunk_id, item_index, mat_kind))
-			requires_commit = True
-			used_kinetic_speed = used_kinetic_speed or used_cap
-			crushed = True
-			continue
-		mat_info = _synthetic_mat_info(candidate, Math)
-		point = mat_info[1]
-		if kind == 'fragile':
-			accepted = auth.destroy_fragile(
-				spaceID, chunk_id, item_index, point, False)
-			event_kind = 'fragile'
-		elif kind == 'structure':
-			accepted = auth.destroy_module(
-				spaceID, chunk_id, item_index, mat_kind, point, False)
-			event_kind = 'module'
-		elif kind == 'falling' and not used_cap:
-			accepted = auth.destroy_column(
-				spaceID, chunk_id, item_index, yaw, vel, point)
-			event_kind = 'column'
-		else:
-			blocked = True
-			other_blocked = True
-			continue
-		if not accepted:
-			raise RuntimeError(
-				'native catalog contact destroy was not accepted: '
-				'chunk=%s item=%s' % (chunk_id, item_index))
-		# Return every identity that authority was asked to mutate.  This
-		# includes physical-speed look-ahead and exact cap-qualified contact;
-		# the native mutation itself is the authoritative commit receipt.
-		exact_token.add((chunk_id, item_index, mat_kind))
-		note_destroyed(
-			event_kind, chunk_id, item_index, mat_kind, now)
-		if event_kind == 'module':
-			# Do not advance into a structure in the same tick that starts its
-			# native model swap. Subsequent sweeps take the destroyed branch
-			# above until the bounded hiding interval has elapsed.
-			blocked = True
-			swap_blocked = True
-		_publish_catalog_once_1513(
-				event_kind, chunk_id, item_index, point, yaw, vel,
-				mat_kind if event_kind == 'module' else None)
-		accepted_now = True
-		used_kinetic_speed = used_kinetic_speed or used_cap
-		_diagnostic_contact_1513(
-			'swept_native_accept', chunk_id, item_index,
-			fields=(('kind', kind), ('mat', mat_kind),
-				('speed', '%.3f' % float(gate_speed))), now=now)
-		crushed = True
-
-	status = ('hard' if blocked else
-		'kinetic' if kinetic else
-		'crushed' if crushed else
-		'approach' if approach else 'clear')
-	return _catalog_motion_result(
-		status, exact_token, accepted_now,
-		used_kinetic_speed, return_status, return_detail, contact_kinds,
-		requires_commit if proposal_only else None,
-		swap_pending=(blocked and swap_blocked and not other_blocked))
+    The old kinetic_speed argument remains an adapter ABI, but cannot qualify
+    destruction. Each component uses its own actual closing contact velocity.
+    """
+    import math
+    from gui.mods.offline_lan_0922 import collision_geometry as geometry
+    from gui.mods.offline_lan_0922 import physics_diagnostics
+    if proposal_only and not return_detail:
+        raise ValueError('catalog motion proposals require detail')
+    _diagnostic_flush_1513(now)
+    _retry_catalog_publications_1513(spaceID)
+    if _destructible_catalog is None:
+        return _catalog_motion_result('clear', return_status=return_status,
+            return_detail=return_detail, requires_commit=False if proposal_only else None)
+    bbox = _vehicle_body_bbox(td)
+    if bbox is None:
+        raise RuntimeError('physics contact body descriptor is unavailable')
+    import Math
+    auth = _get_destr_authority()
+    _refresh_destroyed_falling_instances_1513(spaceID, auth, now)
+    if contact_motion is None:
+        direction = float(yaw) if motion_yaw is None else float(motion_yaw)
+        distance = float(vel)*max(0.0, float(dt))
+        if motion_yaw is not None:
+            distance = abs(distance)
+        start = (float(pos.x), float(pos.y), float(pos.z))
+        contact_motion = {'start': start,
+            'end': (start[0]+math.sin(direction)*distance, start[1],
+                    start[2]+math.cos(direction)*distance),
+            'yaw': float(yaw), 'yaw_delta': 0.0,
+            'pitch': float(pitch), 'roll': float(roll), 'bbox': bbox,
+            'dt': max(0.0, float(dt))}
+    vehicle_box = geometry.motion_envelope(contact_motion)
+    unresolved = _stream_baked_motion_instances_1513(spaceID, vehicle_box)
+    candidates = _catalog_contact_candidates(vehicle_box)
+    instances = globals().get('g_offh_destr_instances', {})
+    decisions = []
+    token, kinds = set(), set()
+    blocked = crushed = accepted_now = requires_commit = False
+    blocker = None
+    for identity, boxes in unresolved or ():
+        for box in boxes:
+            if auth.is_destroyed(identity[0], identity[1], box[2]):
+                continue
+            witness = geometry.sweep_contact(contact_motion, box)
+            if witness is None:
+                continue
+            blocked = True
+            kinds.add('unidentified')
+            blocker = blocker or witness
+            decisions.append({'identity': identity+(box[2],), 'box': box,
+                'reason': 'streamed_identity_unresolved', 'witness': witness})
+    grouped = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate[:3], candidate)
+    for key in sorted(grouped, key=lambda k: (k[0], k[1], -1 if k[2] is None else k[2])):
+        candidate = grouped[key]
+        chunk_id, item_index, material, filename, kind = candidate[:5]
+        instance = instances.get((chunk_id, item_index), {})
+        boxes = tuple(box for box in instance.get('boxes', ())
+                      if kind != 'structure' or box[2] == material)
+        contacts = [(geometry.sweep_contact(contact_motion, box), box) for box in boxes]
+        contacts = [(w, box) for w, box in contacts if w is not None]
+        row = {'identity': key, 'filename': filename, 'kind': kind,
+               'scale': candidate[5], 'boxes': boxes,
+               'identity_source': 'registered_catalog_component',
+               'slot': _diagnostic_slot_1513(chunk_id, item_index)}
+        if not contacts:
+            row['reason'] = 'envelope_only_no_rigid_contact'
+            decisions.append(row)
+            continue
+        witness, box = min(contacts, key=lambda pair: pair[0]['fraction'])
+        closing_speed = geometry.contact_speed(contact_motion, witness)
+        row.update(witness=witness, contact_speed=closing_speed,
+                   broken=bool(auth.is_destroyed(*key)))
+        kinds.add(kind)
+        if row['broken']:
+            if kind != 'falling':
+                note_destroyed('module' if material is not None else 'fragile',
+                               chunk_id, item_index, material, now)
+            crushed = True
+            token.add(key)
+            row['reason'] = 'accepted_original_yields_native_replacement_checked_separately'
+            decisions.append(row)
+            continue
+        # A contact already inside the body may release along its outward
+        # normal. This never authorizes destroying it or ignoring a new impact.
+        if closing_speed <= 1.0e-10 and witness['fraction'] == 0.0:
+            end_box = geometry.body_box(contact_motion['end'],
+                contact_motion['yaw']+contact_motion.get('yaw_delta', 0.0),
+                contact_motion['bbox'], contact_motion.get('pitch', 0.0),
+                contact_motion.get('roll', 0.0))
+            ending = geometry.contact(end_box, box)
+            normal = witness['normal']
+            initial_projection = geometry.projection_range(contact_motion, normal, 0.0, 0.0)[0]
+            whole_projection = geometry.projection_range(contact_motion, normal)[0]
+            final_projection = geometry.projection_range(contact_motion, normal, 1.0, 1.0)[0]
+            if final_projection > initial_projection and whole_projection >= initial_projection-1.0e-9:
+                row['reason'] = 'departing_existing_contact'
+                decisions.append(row)
+                continue
+        material_info = _synthetic_mat_info(candidate, Math)
+        law = {}
+        crushable = _stock_crushable_1513(material_info, closing_speed, td,
+                                         candidate[5], evidence=law)
+        row['kinetic'] = law
+        if not crushable or not commit_enabled:
+            blocked = True
+            blocker = blocker or witness
+            row['reason'] = 'insufficient_contact_energy' if not crushable else 'commit_disabled'
+        elif proposal_only:
+            token.add(key)
+            requires_commit = crushed = True
+            row['reason'] = 'actual_contact_proposed'
+        elif _destructible_isolated_1513(chunk_id, item_index):
+            blocked = True
+            blocker = blocker or witness
+            row['reason'] = 'isolated_native_identity'
+        else:
+            point = Math.Vector3(*witness['point'])
+            if kind == 'fragile':
+                accepted = auth.destroy_fragile(spaceID, chunk_id, item_index, point, False)
+                event_kind = 'fragile'
+            elif kind == 'structure':
+                accepted = auth.destroy_module(spaceID, chunk_id, item_index, material, point, False)
+                event_kind = 'module'
+            elif kind == 'falling':
+                accepted = auth.destroy_column(spaceID, chunk_id, item_index, yaw, closing_speed, point)
+                event_kind = 'column'
+            else:
+                raise RuntimeError('unsupported physical destructible kind: %s' % kind)
+            if not accepted:
+                raise RuntimeError('native contact destroy rejected: chunk=%s item=%s material=%s' % key)
+            token.add(key)
+            note_destroyed(event_kind, chunk_id, item_index, material, now)
+            _publish_catalog_once_1513(event_kind, chunk_id, item_index, point,
+                yaw, closing_speed, material if event_kind == 'module' else None)
+            accepted_now = crushed = True
+            row['reason'] = 'native_destroy_accepted'
+        decisions.append(row)
+    status = 'hard' if blocked else 'crushed' if crushed else 'clear'
+    evidence = {'space': spaceID, 'motion': contact_motion, 'status': status,
+                'proposal_only': proposal_only, 'commit_enabled': commit_enabled,
+                'contacts': decisions, 'normal': blocker['normal'] if blocker else None,
+                'body_geometry': 'descriptor_rigid_obb', 'margin': 0.0,
+                'wait_seconds': 0.0, 'qualification_speed_override': None}
+    if decisions:
+        physics_diagnostics.emit('catalog_contact', evidence, now=now)
+    result = _catalog_motion_result(status, token, accepted_now, False,
+        return_status, return_detail, kinds, requires_commit if proposal_only else None)
+    if isinstance(result, dict):
+        result['evidence'] = evidence
+        result['impact_speed'] = max([r.get('contact_speed', 0.0) for r in decisions] or [0.0])
+    return result
 
 
 def _catalog_motion_proposal(spaceID, pos, yaw, vel, td, now,
-		dt=0.04, kinetic_speed=None, motion_yaw=None,
-		pitch=0.0, roll=0.0, travel_reach=None,
-		replacement_motion=None):
-	"""Return a mutation-free exact hull-sweep proposal for worker review."""
-	return _catalog_motion_blocked(
-		spaceID, pos, yaw, vel, td, now, dt=dt,
-		kinetic_speed=kinetic_speed, return_detail=True,
-		kinetic_commit=True, commit_enabled=True, proposal_only=True,
-		motion_yaw=motion_yaw, pitch=pitch, roll=roll,
-		travel_reach=travel_reach,
-		replacement_motion=replacement_motion)
+        dt=0.04, kinetic_speed=None, motion_yaw=None,
+        pitch=0.0, roll=0.0, travel_reach=None, contact_motion=None):
+    """Return a mutation-free actual body contact proposal."""
+    return _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now, dt=dt,
+        return_detail=True, kinetic_commit=True, commit_enabled=True,
+        proposal_only=True, motion_yaw=motion_yaw, pitch=pitch, roll=roll,
+        travel_reach=travel_reach, contact_motion=contact_motion)
 
 
 def _catalog_instance_boxes(chunkID, itemIndex, filename, kind,
@@ -5434,7 +5200,7 @@ def _vehicle_body_bbox(type_descriptor):
 	return minimum, maximum, None
 
 def LOG_DEBUG(*unused_args):
-	# The user requested no trace-heavy battle logging.
+	# Structured PHYSICS events own decision evidence.
 	pass
 
 
@@ -6891,11 +6657,6 @@ def _fell_trees_near(
 				continue
 			if _tree_vehicle_box is None:
 				_tree_vehicle_box = vehicle_box
-				if vel < 0.0:
-					# Preserve the legacy scanner's fixed 0.8 m reverse reach.
-					# Prepare this query's geometry once across all chunks.
-					_tree_vehicle_box = _vehicle_swept_box(
-						pos, yaw, vel, bbox, travel_reach=0.8)
 			_tree_candidates, unused_tree_isolated_hits = (
 				_tree_candidates_for_sweeps_1513(
 					cid, registry, (_tree_vehicle_box,),
@@ -6933,12 +6694,10 @@ def _fell_trees_near(
 						continue
 					fwd = dx * sin_y + dz * cos_y
 					lat = dx * cos_y - dz * sin_y
-					reach_f = hl_f + 0.8 + min(abs(vel) * 0.25, 1.2)
-					if vel < 0:
-						in_reach = -(hl_b + 0.8) <= fwd <= hl_f
-					else:
-						in_reach = -hl_b <= fwd <= reach_f
-					if abs(lat) > hw + 0.5 or not in_reach:
+					# This scan has no integration interval; only the occupied
+					# body can prove contact, in either travel direction.
+					if not (bbox[0][0] <= lat <= bbox[1][0] and
+							bbox[0][2] <= fwd <= bbox[1][2]):
 						continue
 				_key = ((cid, _ti, _mat_kind) if _mat_kind is not None
 					else (cid, _ti))
@@ -7254,8 +7013,10 @@ def _registered_shot_exit_1513(chunkID, itemIndex, matKind, filename,
 	return exits[0] if len(exits) == 1 else None
 
 
-def _stock_crushable_1513(mat_info, vel, td, item_scale=None):
+def _stock_crushable_1513(mat_info, vel, td, item_scale=None, evidence=None):
 	"""Apply the exact retail Vehicle kinetic law to one proved contact."""
+	if evidence is not None:
+		evidence.update(speed=float(vel), reason='descriptor_or_identity_unavailable')
 	decoded = _decode_mat_info_1513(mat_info)
 	if decoded is None or td is None:
 		return False
@@ -7283,6 +7044,9 @@ def _stock_crushable_1513(mat_info, vel, td, item_scale=None):
 	if item_scale <= 0.0 or mass <= 0.0:
 		raise RuntimeError('#1513 destructible kinetic inputs are invalid')
 	instant_damage = 0.5 * mass * vel * vel * 0.00015
+	if evidence is not None:
+		evidence.update(mass=mass, scale=item_scale, energy_joules=0.5*mass*vel*vel,
+			kinetic_coefficient=0.00015, descriptor=desc)
 	desc_type = desc.get('type')
 	if desc_type == AreaDestructibles.DESTR_TYPE_STRUCTURE:
 		modules = desc.get('modules')
@@ -7319,13 +7083,127 @@ def _stock_crushable_1513(mat_info, vel, td, item_scale=None):
 	else:
 		return False
 	try:
-		return (DestructiblesCache.scaledDestructibleHealth(
-			item_scale, ref_health) < instant_damage)
+		health = DestructiblesCache.scaledDestructibleHealth(item_scale, ref_health)
+		accepted = health < instant_damage
+		if evidence is not None:
+			evidence.update(reference_health=ref_health, scaled_health=health,
+				instant_damage=instant_damage, accepted=accepted,
+				reason='energy_exceeds_health' if accepted else 'energy_below_health')
+		return accepted
 	except Exception as error:
 		if _normalized_filename(fname):
 			_isolate_destructible_1513(
 				'material_descriptor', chunkID, itemIndex, detail=error)
 		return False
+
+
+def static_contact_evidence(spaceID, segment_start, hit_pt, surf_normal):
+	"""Name a reported native blocker without attempting destruction.
+
+	Called only by the two-second stalled-motion diagnostic, never by every
+	hull lane. Material probes may hit neighbours, so preserve the returned
+	point and separation rather than treating the filename as exact proof.
+	"""
+	import BigWorld
+	normal = type(surf_normal)(surf_normal.x, surf_normal.y, surf_normal.z)
+	if normal.length <= 0.001:
+		return []
+	normal.normalise()
+	probes = [(hit_pt - normal.scale(3.0), hit_pt + normal.scale(2.0))]
+	incoming = hit_pt - segment_start
+	if incoming.length > 0.001:
+		incoming.normalise()
+		probes.append((hit_pt + incoming.scale(3.0),
+			hit_pt - incoming.scale(2.0)))
+	result = []
+	for start, end in probes:
+		payload = BigWorld.wg_getMatInfoNearPoint(
+			spaceID, start, end, hit_pt, lambda *args: False)
+		decoded = _decode_mat_info_1513(payload)
+		if decoded is None:
+			result.append({'hit': False})
+			continue
+		point, unused_normal, chunk, item, material, filename = decoded
+		result.append({
+			'hit': True, 'chunk': chunk, 'item': item, 'material': material,
+			'filename': _normalized_filename(filename),
+			'point': (point.x, point.y, point.z),
+			'contact_distance': (point - hit_pt).length,
+		})
+	return result
+
+
+def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
+	"""Resolve a stalled ray's actual surfaces without changing destruction.
+
+	The ordinary callback log is a set of traversal candidates, NOT a nearest
+	hit identity. Replay the filtered ray, then isolate each surviving key on
+	the exact final interval. Called only by the existing two-second diagnostic;
+	its result is never used to accept or reject vehicle movement.
+	"""
+	import BigWorld
+	import Math
+	evidence = {'surface_columns': 'material,flags,item,chunk'}
+	keep = horizontal_collision_filter(segment_start, segment_end)
+	if keep is None:
+		keep = lambda *unused: True
+	result = collide_motion_segment(spaceID, segment_start, segment_end, keep,
+		BigWorld.wg_collideSegment, 'native.motion.diagnostic', evidence=evidence)
+	evidence['replay_clear'] = result is None
+	if result is not None:
+		evidence['replay_contact_distance'] = (result[0] - hit_pt).length
+	queries = evidence.get('queries', ())
+	witnesses = []
+	if result is not None and queries:
+		last = queries[-1]
+		a, b = Math.Vector3(*last['start']), Math.Vector3(*last['end'])
+		for key in last['candidates']:
+			def only_surface(*surface):
+				alias = _anonymous_original_surface_1513(key)
+				return (tuple(surface) == key if alias is None else
+					_anonymous_original_surface_1513(surface) == alias)
+			hit = observed_ray('native.motion.diagnostic',
+				BigWorld.wg_collideSegment, spaceID, a, b,
+				VEHICLE_SKIP_FLAGS, only_surface)
+			witness = {'key': key, 'hit': None}
+			if hit is not None:
+				witness.update(hit=(hit[0].x, hit[0].y, hit[0].z),
+					normal=(hit[1].x, hit[1].y, hit[1].z),
+					contact_distance=(hit[0] - hit_pt).length)
+			witnesses.append(witness)
+	evidence['surface_witnesses'] = witnesses
+	instances = globals().get('g_offh_destr_instances', {})
+	members = globals().get('g_offh_destr_contact_bins', {}).get(
+		_destructible_bin_key(hit_pt.x, hit_pt.z), ())
+	authority = _get_destr_authority()
+	predicted = globals().get('g_offh_destr_speculative', ())
+	owners = []
+	def owner_distance(identity):
+		boxes = instances.get(identity, {}).get('boxes', ())
+		distances = [sum((box[0][index] - value) ** 2 for index, value in
+			enumerate((hit_pt.x, hit_pt.y, hit_pt.z))) for box in boxes]
+		return min(distances) if distances else float('inf')
+	# Preserve all nearby owners; omission here defeated component diagnosis.
+	nearby = sorted(members, key=owner_distance)
+	evidence['owners_omitted'] = 0
+	for identity in nearby:
+		instance = instances.get(identity)
+		if instance is None:
+			continue
+		boxes = instance.get('boxes', ())
+		states = []
+		for box in boxes:
+			material = box[2] if instance['kind'] == 'structure' else None
+			key = identity + (material,)
+			states.append({'material': material, 'center': box[0],
+				'axes': box[1], 'contains_hit': _point_in_world_box(hit_pt, box),
+				'broken': bool(authority.is_destroyed(*key)),
+				'predicted': key in predicted})
+		owners.append({'identity': identity, 'filename': instance['filename'],
+			'kind': instance['kind'], 'boxes': states,
+			'isolated': _destructible_isolated_1513(*identity)})
+	evidence['nearby_owners'] = owners
+	return evidence
 
 
 def _try_destroy_solid_hit(spaceID, segment_start, hit_pt, surf_normal,

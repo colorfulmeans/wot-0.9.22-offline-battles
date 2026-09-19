@@ -13,6 +13,82 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 19: twelve-item physics correction and complete contact evidence
+
+This change supersedes earlier descriptions below of artificial wall damping,
+neutral braking, overspeed caps and fixed recast budgets. It changes shared
+player/worker/Bot physics, without map-coordinate exceptions or an added
+collision skin or collision waiting interval.
+
+| Audit item | Resulting behavior |
+| --- | --- |
+| 1. Pitch/roll shear | Body probes use an orthonormal yaw/pitch/roll transform. |
+| 2. Rotation envelope as a solid | Envelopes select candidates; catalog contacts follow the actual continuous rigid arc. Native candidates are refined in midpoint rigid-body axes until a real arc witness is established or geometry clears; an empty envelope point alone cannot discard an extended wall. Intact walls are queried even before the first destruction. |
+| 3. Fixed probe heights | Native probes use the actual combined chassis/mounted-hull vertical bounds and boundary segments. |
+| 4. Maximum-speed crushing | Destruction qualification uses actual contact-normal velocity, including angular velocity at a rotating contact. Vehicle maximum speed cannot qualify destruction. |
+| 5. Arbitrary wall-avoidance angles | Wall response follows the actual contact tangent. |
+| 6. Repeated wall damping | Remove inward normal velocity from the complete planar velocity; preserve tangential momentum without entry factors, exponential braking or grinding ticks. |
+| 7. Extra uphill drag | Uphill motion uses gravity, available traction and ordinary friction; the extra slip-drag coefficient is removed. |
+| 8. 105-percent downhill cap | The speed governor limits drive contribution; gravity and existing momentum have no percentage cap or artificial overspeed decay. |
+| 9. Neutral automatic braking | Neutral uses rolling resistance. Braking is explicit; a Bot's stop command requests braking. |
+| 10. Pseudo-contact skin and freezing | Ground contact/allowed penetration targets are zero; small heave/angular velocities are no longer forcibly frozen. |
+| 11. Mirrored/minimum collision sizes | Vehicle-pair bodies retain actual asymmetric chassis half sizes and centre offsets through client/server manifests, broad-phase radii, navigation probe widths and arena corners. |
+| 12. Four-skin budget | Accepted-skin recasts continue while identity or geometry advances. An unrelated live component or replacement remains solid. |
+
+Anonymous compiled BSP ownership is evaluated per material/component, rather
+than letting a nearby intact half veto an already accepted fence half through
+their shared whole-model envelope. Recasts retain backing walls, damaged BSPs
+and vehicle-only material 111. Destruction still requires the existing native
+health/kinetic gate and the native authority's acceptance. Removing a wait
+means using an accepted result immediately, not granting unaccepted destruction.
+
+Bot zero-throttle commands now request an explicit brake, while player neutral
+uses rolling resistance. Proved nearby parked traffic remains a navigation
+obstacle until it moves or leaves the nearby set; the old expiration timer
+could forget one half of a blockage while the hull was still braking/turning.
+Cooperative travelling Bots retain the existing short steering lease, rather
+than turning an entire temporarily braking convoy into static geometry.
+This affects planning only and introduces no physical stop delay or skin.
+
+The always-on `PHYSICS` records include real body bounds and poses, timestep,
+linear/angular motion, contact fraction/point/normal, chunk/item/material,
+model path and module boxes when resolved, intact/broken state, descriptor
+health, item scale, energy/kinetic inputs, native callback candidates and the
+explicit rejection reason. Parameter snapshots include gravity, mass, drive,
+friction, slope grip, limits, spring layout/stiffness/damping and the selected
+contact laws. Player/Bot contact frames keep motion and suspension evidence;
+Bot rotation blocks, braking decisions and final pose rollbacks are captured
+from the first affected frame, independently of the old three-second text log. Records do not depend on the optional legacy
+text-debug switch or its per-session/contact caps. Records include a wall-clock timestamp for correlation across the client and
+worker. Only unchanged identical payloads may coalesce for one second, with repeat counts.
+
+The launcher extracts all structured rows within its existing exact session
+byte boundaries into `physics-visible-client.jsonl` and
+`physics-hidden-worker.jsonl`, and adds `physics-summary.json`. The original
+full-session logs remain in the ZIP. The extraction spools to disk rather than
+truncating by bytes or contact count; partial chunks and a final unterminated
+line are supported, and malformed rows are counted. Previous/later sessions
+are not copied into the report.
+
+These are corrections to this port's physical model, not a claim to reproduce
+retail C++ simulation exactly. Catalog narrow-phase uses authored oriented
+boxes; native scene geometry is queried through the existing #1513 segment
+API. Vehicle-pair contact remains a planar OBB model with vertical overlap.
+Numerical convergence tolerances are not physical inflation or waiting time.
+Previously recovered game-unit gravity/power scaling and other unlisted
+native parameters are unchanged. The native callback can expose anonymous
+aggregate keys without the identity of the nearest surface: reports retain
+all candidates, the actual witness, matching provenance and explicitly labelled
+read-only identity replays instead of presenting a guessed owner as certain.
+Only the exact Windows #1513 client can confirm gameplay and performance.
+
+Regression coverage includes empty rotation-envelope corners, thin objects
+crossed only mid-arc, grazing native point contacts, asymmetric chassis bounds,
+normal-only momentum response, real angular-speed crush thresholds, adjacent
+intact modules, more than four accepted skins, uncapped diagnostics and
+full-session report extraction. Package/CI evidence is recorded with the build
+in the pull request; no native playthrough is asserted by those checks.
+
 The post-0.8.3 gameplay follow-up addresses nine reported paths. A hidden remote
 vehicle retires its engine-audition component and detailed-engine callbacks.
 Report `83fea4595275` from the owner's #1513 client records an abort on Lakeville
@@ -781,15 +857,53 @@ present in that exact admitted instance.
 
 Damage does not imply removal of collision. The compiled BSMO destroyed-model
 reference identifies modules with a solid replacement BSP; map catalogs retain
-that per-box fact. Such contacts cannot skip the original whole-item OBB, and
-destroyed-model materials 87–100 remain eligible for native motion, support and
-shell queries even after an item-wide destruction receipt. The native BSP still
-owns the replacement's exact shape, but #1513 exposes no volume-overlap query for
-it. Copied vehicle motion therefore keeps the source module box as a conservative
-no-entry envelope only for catalog boxes proved to retain collision, supplements
-that envelope with native rays for protrusions, and permits a historical overlap
-only through bounded outward-progress intervals. Collision-free destroyed
-modules do not retain the source box and therefore do not become invisible walls.
+that per-box fact, not the replacement's shape. Such contacts cannot use an
+original whole-item OBB exit to skip a native hit, and destroyed-model materials
+87–100 remain eligible for native motion, support and shell queries even after
+an item-wide destruction receipt. Once replaced, both structures and fragile
+props relinquish their intact motion envelopes: keeping a source box creates
+an invisible wall around a lower or narrower wreck. Translation and rotation
+query the actual native BSP, including vehicle-only surfaces, for players and
+Bots. Intact sibling modules and unrelated walls retain their own guards.
+Collision-free destroyed modules also avoid the forced hiding-delay hold.
+Solid replacement swaps release as soon as the matching physical-contact
+callback completes; only unfinished callbacks retain the bounded stock hand-off.
+The native segment sweeps are not a volume-overlap proof for every narrow
+replacement feature. Exact Windows driving and pivot acceptance remains the
+boundary for those shapes; an intact source box is not replacement geometry.
+
+The September 18 v0.9.0 Ruinberg Winter report records soft holds at the catalog's
+`bld000_base` and `bld707_shed` instances, whose destroyed modules have no solid
+replacement. The tractor next to the shed retains collision, but its intact
+box is not the replacement shape. Other native hard contacts in that report
+cannot be identified from unordered collision-filter candidates alone. The
+existing rate-limited stall report now includes two read-only material probes,
+their returned points and distance from the actual hard hit, to distinguish
+a remaining map collider from a nearby destructible without changing motion.
+
+The same-day Malinovka report supplies a second counterexample to retaining
+source envelopes: `mil203_MilitaryDefences01.model` is a two-module structure,
+with both boxes marked as retaining collision. Chunk 32636 items 23–26 receive
+accepted destruction for materials 73 and 74, but repeated catalog hard results
+continue without a native hard-hit reason. The regression uses the reported
+positions and exact baked placements of those barriers. Native-scene tests
+exercise both adapters, forward/reverse travel and both turn signs, allowing a
+lower replacement while preserving damaged faces, vehicle-only obstacles,
+unbroken sibling materials and unrelated walls. These tests establish adapter
+behavior, not the exact client's destroyed mesh or gameplay feel.
+
+Report `20260919-000847-92a20042a102` also runs the original v0.9.0 build
+`colorfulmeans-35356845247-1`. Stalingrad's reported hard/deflected positions
+intersect the retained two-module warehouse at chunk 31614/item 49 and
+four-module sheds at items 23 and 6. Those exact poses reproduce the obsolete
+envelope block and pass once the modules are destroyed and swapped. A second
+regression sweeps all 18 retained fragile prop models in this map in both
+directions, including GazMM trucks, SdKfz251, trams and railway vehicles.
+These tests establish catalogue release, not permission to drive through a
+solid part of a native wreck. The separate native hit near (-301, 0.84, -228)
+has only unordered material candidates in this old build; it cannot be
+identified as a destroyed object from that evidence. The new point-distance
+diagnostics cover it without suppressing unidentified or solid map geometry.
 
 For physical fragile/module crushing, the exact stock manager starts effects
 before scheduling its collision replacement after 0.2 seconds. The adapter
@@ -1727,6 +1841,26 @@ two anchors, not evidence that the retail reward formula or curve was recovered.
 Only Windows play can say how the resulting pace feels.
 
 ## Stock map-selection lifecycle
+
+The September 18 Create Platoon report exposed another unadapted retail
+entry. Public 0.9.22 Python shows `LobbyHeader.showSquad()` and
+`SquadTypeSelectPopover.selectFight(actionName)` independently dispatching
+`doSelectAction`; the squad entry creates a `prebattle/create` waiting context
+and calls `unitMgr.createSquad()`. The offline server has no retail unit reply.
+The existing pre-lobby adapter now consumes both entries and calls
+`LANSession.join(None, 'random')`, before either native waiting request starts.
+Repeated clicks reuse the configured connection; host election, team choice,
+connection errors and explicit battle start retain their existing LAN owners.
+Training remains a separate selector action. No new native API or network
+protocol is introduced, and no shared Waiting state is forcibly dismissed.
+Uninstall restores only the adapter's own functions, including inherited
+members; partial installation and reinstall are covered.
+
+This callback investigation used the public regional 0.9.22 source as
+orientation, plus current adapter/session regression tests. The exact China
+1513 `scripts.pkg` was unavailable for a new bytecode audit here. The tests
+prove the routing and lifecycle logic, not live Flash binding or dropdown
+presentation; both Create Platoon entry points still require Windows play.
 
 Before the local Account creates the lobby, a chain-safe adapter intercepts the
 exact `LobbyHeader.fightClick(self, mapID, actionName)` boundary. Exact `#1513`
@@ -3704,9 +3838,30 @@ these are not described as official 0.9.22 bond prices.
 
 The native store retains its card surface; purchases use the Account command,
 GarageState transaction, common vehicle purchase and durable garage ledger.
-Slot and crew entitlements are shared with native purchase consumers.
+Slot and crew entitlements apply to purchases charged the bond offer.
 Insufficient funds, duplicate purchases and failed save writes roll back.
 Premium purchases use the native six durations and stock price templates.
+
+The September 18 zero-gold reports for 121B and Panzer 58 Mutz came from
+publishing all bond offers into the shared `shopItemPrices`. Native tech-tree
+consumers read gold there, so a crystal-only override became zero gold. Offer
+publication now restores the eight non-retired entries' baked native prices
+and `notInShop` flags, including 32000 gold for `Ch25_121_mod_1971B` and 9000
+for `G119_Pz58_Mutz`. This does not make every reward or unavailable vehicle
+an ordinary purchase. The five explicitly retired offline bond definitions
+keep their bond-only catalogue override.
+
+Special Offers supplies its own complete `ItemPrices(ItemPrice(Money(...)))`
+quote and bond affordability check to the native vehicle-row producer; it
+does not mutate the shared Vehicle object. Its Account service selects the
+published offer explicitly for the common GarageState purchase, which charges
+bonds and grants the included slot/100% crew. An ordinary gold purchase or
+credit recovery keeps its own price and normal slot/crew terms. Merely being
+listed in Special Offers no longer changes either transaction. Regressions
+cover every published offer, republishing stale bond overrides, native card
+prices/affordability, both currencies, recovery precedence and atomic failures.
+The row hooks were checked against public 0.9.22 Python; exact 1513 native
+card rendering and the tech-tree values still need Windows acceptance.
 
 No friendly-fire locale key is overridden. Public 0.9.22 result calculations
 use `details/calculations/friendlyFirePenalty` for credits and XP, and
@@ -4395,3 +4550,349 @@ career reload/deduplication, the roster field and voice resets. Regional source
 orientation and tests do not replace a new #1513 bytecode audit or Windows
 acceptance: the final Scaleform layout and audible Chinese/national female
 banks must still be checked in the actual supported client.
+
+## September 19 Strv S1 downhill ground-exit report
+
+Report `20260919-002743-39ef021b304a` identifies released v0.9.0 build
+`colorfulmeans-35356845247-1`. On `18_cliff`, Strv S1 remains at approximately
+`(-185.979, -1.128, -124.409)` from 00:24:45 through 00:24:52 while receiving
+forward and reverse input. Both stable Siege states (0 and 2) occur;
+`siege_drive_locked` is false and `siege_pending` is null. Five hard-contact
+records identify `ground_profile`, not a destructible or a transition lock.
+
+The captured lower hull ray crosses outward through a drivable terrain top.
+Its seven forward samples descend monotonically, but a later, steeper segment
+exceeds the existing descending gradient limit. The Python collision owner
+incorrectly uses that later drop to block departure from the earlier surface.
+The reported body pitch also remains nearly level and its five-point support
+plane is absent; the report does not contain the individual support samples
+needed to independently diagnose that pose. Hydraulic vehicles intentionally
+use the legacy support path rather than the ten-spring trial.
+
+The shared horizontal collision owner now admits this bounded departure only
+when the sampled lane is descending, the actual native normal is drivable,
+the ray crosses outward, a vertical query confirms the exact hit is the top,
+and a recast of the remaining same-height segment is clear. Occupied upper
+hull lanes require the same proof for their terrain contacts. A backing wall,
+low obstacle, beam, inward hit, unconfirmed top, or mixed rise/drop stays solid.
+Extra queries retain the original vehicle mask and destruction filter. No
+Siege speed, hydraulic provider, support/gravity law or terrain gradient limit
+changes; player and worker adapters use the same corrected owner.
+
+The regression scene reconstructs the recorded airborne and grounded lanes
+from their positions, normals and seven samples. The previous implementation
+reproduces `ground_profile` stops in forward and reverse departure; the fix
+clears those scenes while native backing walls and upper/lower obstructions
+still block. Adapter tests cover both stable Siege states and retain hydraulic
+trial exclusion. This is local Python/geometric evidence, not an exact Cliff
+mesh or Windows playtest. Actual #1513 Strv S1/UDES 03/Strv 103 downhill motion,
+body pose and feel remain native acceptance work.
+
+## September 19 personal-mission event settlement reports
+
+Reports `20260919-010918-4729b816ce4d` (build
+`colorfulmeans-35367691860-1`) and `20260919-012209-5bf66ea2381c`
+(build `colorfulmeans-35356845247-1`) identify the supported Chinese HD
+0.9.22.0.1 #1513 client. The first selects mission 61 (SPG-1), including
+the completed Lakeville round. The second selects mission 32 (MT-2) in
+rounds 4 and 5; their server logs contain respectively 24 and 16 positive
+enemy HP-damage events, with four and five kills. These are selected missions,
+not absent selections. The reports do not contain complete receipt/save
+bodies or individual stun-duration evidence, so they cannot reconstruct
+missing stun totals or justify retroactive reward grants.
+
+Two shared omissions prevented settlement: the authoritative server never
+incremented its already-declared interaction `stun_num`/`stun_duration`
+fields, and the campaign evaluator rejected damage `eventCount` and the
+stun conditions. Total HP damage, direct hits and distinct damaged vehicles
+cannot substitute for damage events. This affected MT-2 and other chains,
+as well as SPG-1 and several additional/honours conditions.
+
+The worker now carries its descriptor-computed imposed stun milliseconds
+with the existing absolute end timer. Only admitted internal-authority
+terminals record the event, and only against living enemies surviving the
+hit. The existing projectile tombstones and duplicate-target admission own
+replay protection. Per-target counts, fractional seconds, distinct targets,
+and two-/three-target shot counts survive receipt validation and JSON
+persistence. Each qualifying shot counts once at each recorded threshold;
+separate single-target hits cannot form a multi-target shot. Shorter overlap
+still leaves the existing live stun/assist owner untouched, while retaining
+the new hit's statistical evidence. Healing/expiry do not erase imposed hit
+duration. Late effects whose stun has already elapsed remain harmless to HP
+settlement and do not create a live stun or stun event. An older terminal
+without duration metadata records only its known remaining interval.
+
+Positive enemy HP changes now count damage events. Live track/stun owners
+also receive assisted-kill facts once per target, including a zero-HP-loss
+crew knockout. Existing critical-transition totals and ever-spotted state
+are projected into receipts for the remaining SPG conditions. Native result
+packing retains its existing interaction serializer and carries stun totals;
+receipt-only event fields are never written into that native serializer.
+Durations preserve milliseconds, and malformed/nonfinite values are rejected.
+Older receipts remain readable but missing event evidence is not invented.
+Task thresholds, tiers, prerequisites, wins and honours continue to come from
+the installed mission resources; the existing atomic reward/replay owner is
+unchanged. Unsupported-condition reasons now appear in the error-report log.
+
+An audit of all 300 regional 0.9.22 reference main/add expressions finds a
+supported solo main path for 203 (previously 149), and both main/honours for
+198 (previously 136). The 60 SPG expression pairs have supported solo paths.
+This is grammar/evidence coverage, not 300 actual #1513 completions, and the
+regional source is not promoted to an exact-client API contract. The new
+fixture stores only reference condition expressions, never production rules.
+Remaining gaps include distance and limited-time filters, invisibility and
+full-health event history, immobilized/ignited/higher-tier victim filters,
+internal-module events and received critical history, penetration streaks,
+spotting-before-detection/invisible spotting assistance, radio-assisted kills,
+own-HP comparisons and mandatory native platoon aggregation. Such conditions
+remain explicitly unsupported; this change does not claim all personal
+missions are repaired. The reports also contain rejected critical proposals
+with `critical crew roster changed mid-round`; that separate combat-profile
+issue is not repaired or masked by counting unaccepted critical effects.
+
+Focused regression coverage includes the real worker-to-server stun adapter,
+wire/durable/native result projections, all 60 reference SPG pairs, all four
+MT-2 thresholds, repeated-target vs distinct-target/multi-shot semantics,
+fractional boundaries, zero HP, friendly/dead/expired targets, overlap and
+healing, assisted kills, spotting history, malformed and legacy receipts,
+and MT-2 rewards across duplicate delivery and restart. 875 related local
+tests pass. Exact Windows #1513 SPG-1/MT-2 completion, result-card appearance,
+and further native gameplay acceptance remain to be checked with the new
+package. Existing completed receipts are not replayed as new battles.
+
+## September 19 follow-up: Malinovka, hard walls, detached guns and mission events
+
+Reports `073337`, `073639` and `080804` use build
+`colorfulmeans-35375700188-1`. They supersede the earlier assumption that
+releasing the catalog envelope alone resolved the reported railing contacts.
+All five captured Malinovka native hit points resolve to unique registered
+modules of chunk 32636, items 23/24/26, `mil203_MilitaryDefences01.model`.
+Both modules of each encountered item were already accepted as destroyed.
+The native callback also exposes original materials 73/74 under anonymous
+compiled IDs with flags 131. The exact live `(chunk,item,material)` filter
+cannot remove those original surfaces. Nearby material probes sometimes hit
+another fence module and cannot identify the nearest ray result.
+
+Motion/support queries now retain the native callback's candidates and
+resolve the returned point against one exact registered destroyed module.
+A bounded recast removes only matching anonymous original-material keys up
+to that module's OBB exit. It still tests replacement material 88 and any
+wall inside the box; beyond the exit it restores the ordinary callback.
+Ambiguous or unaccepted modules and unknown materials remain solid. This
+does not change the global vehicle mask or add a destruction wait. Horizontal
+player/Bot queries and suspension/downward queries share the same operation.
+The fixture preserves all five captured rays and tests reversed callback
+order, an inside-box backing wall, a retained replacement, overlapping live
+modules and a merged key reused beyond the destroyed module.
+
+The Mannerheim report's material-111 contacts were followed by `deflect`
+motion. A sparse ray in another heading can miss the first wall between its
+new lanes. Both player and Bot hard-contact response now retain the primary
+normal and reject deflections that move farther into that blocking plane.
+The captured normals are regression inputs; reverse and outward glancing
+motion remain covered. No destructible whitelist is used to clear real walls.
+
+Detached bodies already contained separate descriptor turret/gun boxes.
+A reproduced thin-barrel contact was nevertheless discarded: the debris and
+chassis had the same ground height, the whole-body side test failed, and a
+shallow vertical/track-roof contact masked the barrel/hull side. Contact
+selection now classifies the individual component pairs and resolves an
+intersecting grounded side before a tangent roof contact. The shared rigid
+body law serves visible-player impulses and worker-owned responses. Existing
+landing-on-vehicle, gravity release, momentum and wall regressions remain
+required. First body creation also records its real component bounds so the
+next exact-client report can verify the exploded visual's alignment.
+
+MT-3, MT-4 and HT-2 failed because `limittedTime`, `enemyImmobilized`, destroyed
+track events and kill distance were unsupported. The server now records
+compact admitted damage, critical-transition and kill events with the combat
+clock, pre-hit immobilization, changed critical mask and available distance.
+Repeated track breaks after repair remain distinct; unchanged states, friendly
+damage and replayed projectile terminals create no additional enemy evidence.
+Final death-state module destruction does not fabricate pre-hit immobilization.
+The evaluator reads thresholds and honours from installed mission resources.
+The fixture covers main/add expressions for these three tasks in all four
+operations, including time and distance boundary failures.
+
+The optional history survives all three receipt readers: server restart,
+client wire validation and durable post-battle storage. It is excluded from
+the native result serializer. Its per-actor cap is explicit; overflow leaves
+an incomplete history rather than inventing success or exceeding the wire
+budget. Old receipts retain absent evidence. Server restart validation also
+now accepts the already shipped fractional stun seconds and optional older
+interaction counters. Settlement remains under the existing exactly-once
+owner; the regression delivers the same receipt twice across server recovery.
+Other unimplemented mission predicates remain explicitly unsupported.
+
+UDES 03 (Bot 26) in `080804` remains a diagnostic boundary. During the long
+reported stationary interval its worker ground position/pitch is stable;
+the report lacks Siege transitions and hydraulic-angle evidence. No native
+mode oscillation or hardware fault is established. State-edge and existing
+stall records now include mode, remaining switch time, intent, terrain pitch,
+hydraulic pitch and gun pitch. Hydraulic laws are unchanged in this follow-up.
+Shell/impact delay likewise remains diagnosis-only as requested.
+
+The new focused collision, turret and mission regressions pass locally.
+Full subsystem/CI and package results are recorded in PR #12. This remains a
+0.9.0 test build, not a release. Actual #1513 Windows traversal, barrel visual
+alignment and UDES mode/pose behaviour still require the new build in game;
+pure geometry fixtures cannot establish those native runtime outcomes.
+
+### All-map railing mechanism follow-up
+
+The user clarified that railings also fail in Paris and across other maps.
+The original compiled-skin recast was shared code, but its structure-only
+guard still excluded item-wide fragile fences. Paris's bridge end, slope and
+tile railings are fragile resources, not structure modules. The same bounded
+recast now accepts registered fragile and falling objects as well as structure
+modules. Item-wide acceptance removes only anonymous original destructible
+materials 71--86 inside the exact object bounds; structures still require the
+specific accepted module material. No map names or model families control the
+production collision rule. Damaged materials, independent walls, overlapping
+live objects, unrecognized materials and merged keys outside the accepted
+object remain solid. Revoking a local prediction restores its collision.
+
+The Paris fixture failed all four original-material variants before this
+extension and passes afterwards. Catalog-driven tests now cover 750 placed
+collider variants across all 40 shipped maps containing fence/gate/barrier
+resources, including Paris bridge railings. Each uses a simulated native
+callback with the shipped transform and bounds; these are mechanism tests,
+not captured gameplay in all 40 maps. All five original Malinovka report rays
+and their backing-wall/replacement regressions remain covered. A player
+ground-query integration test also proves that the recast finds real support
+below an accepted original skin and retains intact support.
+
+The three interrupted actor-suite failures were unconfigured generic mocks
+inventing the newly added optional ray adapter. Their legacy fixtures now
+explicitly omit that adapter; no assertions were removed, and the real-adapter
+ground integration is covered separately. The related collision, physics,
+destructible, turret, rotation and mission suites pass 560 tests locally.
+The complete client/launcher suites and Windows packaging run on PR #12.
+
+### September 19 18:21 wooden-fence follow-up
+
+Report `20260919-182128-7408d7bbfcb2` used build
+`colorfulmeans-35429387931-1`. The user confirmed that the pavement seam now
+works, but wooden barriers remain blocked in both tested maps. The report
+contains six Paris and nine Malinovka hard-contact samples. Malinovka's
+worker accepted destruction of the contacted fence modules, yet subsequent
+rays still blocked. Paris's upper contacts do not fit a registered original
+module box in the shipped catalog. Callback candidate lists contain ordinary,
+original-destructible and damaged materials, but do not identify which one
+produced the nearest hit. They are insufficient evidence for deleting a
+replacement collider, enlarging an object bound, or relaxing a map's walls.
+
+The shared compiled-skin traversal had a separate reproducible early-return
+defect: after excluding one accepted original key, it returned the next hit
+as solid without classifying it. A native traversal is allowed to prune
+farther callbacks until the nearer surface is excluded, so the next key need
+not have appeared in the first query. The traversal now processes bounded
+intervals in near-to-far order, reclassifies newly revealed keys, and restores
+the previous filter outside each owner's interval. All intervals share the
+existing recast budget. Unknown or intact geometry and actual damaged/backing
+walls still stop the ray. No map parameters or collision timers change.
+
+A regression with pruned callbacks fails on the preceding implementation and
+passes with this traversal. It also retains a real wall or damaged collider
+behind two accepted skins and verifies the shared budget. This proves the
+local early-return correction; it does not prove that all reported wooden
+fence contacts have the same cause.
+
+The existing stalled-motion diagnostic now replays the exact filtered ray
+and tests surviving callback keys individually. It records their hit points,
+distance from the reported contact, actual nearby instance boxes, and each
+module's accepted/predicted state. Query stages and per-owner exclusions are
+included. The diagnostic runs only at the existing two-second reporting
+cadence, has bounded surface/owner counts, never destroys an object, and is
+never consulted for a movement verdict. Its errors are contained to logging.
+Further #1513 Windows evidence is needed to distinguish the remaining native
+original-skin, damaged-geometry and catalog-placement cases.
+
+### September 19 19:10 actual-contact follow-up
+
+The user explicitly rejects all added vehicle collision clearance and collision
+waiting. The `190613` upload contains launcher information only. The `191002`
+report runs the previous `9baedc10` build (`colorfulmeans-35438296692-1`) and
+contains five Paris hard-contact rays. Malinovka's improvement and remaining
+contacts are user-observed evidence; this report contains no Malinovka round.
+
+All five Paris replay rays hit original material 74 with flags 131 beside an
+already accepted module. The replay agrees with the reported point, but its
+anonymous item/chunk callback slots differ from the original query. Matching
+the complete old callback tuple therefore fails to exclude the same original
+surface. Four contacts belong to registered `(32384, 24)`, the fifth to
+`(32640, 64)`. Their native vertical side faces lie inside the authored XZ
+footprint but above its baked module bounds. The fixture retains all five
+reported poses, hit points, ray endpoints and nearby owner states.
+
+The common traversal now recognizes a transient original surface by its
+material/flags only inside a proved accepted owner's interval. Registered and
+baked wire identities never enter that alias class. When a vertical side face
+has no 3-D owner, its exact authored XZ footprint can establish ownership;
+every possible stacked owner must be registered and accepted for that material.
+Unregistered baked owners, live neighbours, ground-facing normals and vertical
+ground rays cannot use this fallback. It changes no collider or destruction
+bound and invokes no new native API. Unknown, damaged and backing-wall hits
+remain solid. This is a mechanism fix, without map names or coordinate gates.
+
+The hull/contact paths now use the authored asymmetric body bounds and actual
+frame travel. Removed physical padding includes the 0.5 m side guard, 0.075 m
+contact skin, `max(0.4, abs(speed)*dt + 0.2)` native/catalog lead, airborne
+0.2 m lead and the background scanner's 0.8--2.0 m proximity reach. The contact
+helper no longer accepts an optional padding parameter. The native lateral
+lanes preserve distinct left/right limits instead of mirroring the larger
+side. No collision wait is added. The prior immediate accepted-collider swap
+remains in place. Rotation uses the same unpadded contact helper; its true
+edge speed still feeds the existing destruction eligibility law.
+
+On the preceding implementation the new captured-face, transient-slot and
+rotation-gap repros fail eight cases. The updated related suites pass 1,413
+tests locally. Old tests requiring padding now assert actual body/frame bounds,
+clear gaps and retained physical contacts. Additional controls cover walls
+behind accepted skins, stacked/live owners, both turn directions, asynchronous
+proposal/commit ownership, rolled body corners and asymmetric lateral travel.
+Blocked turns at zero throttle now use the existing bounded stall diagnostic;
+the two-second log cadence is not a movement timer. Windows package/CI results
+are recorded on PR #12. Gameplay clearance in Paris/Malinovka and across all
+maps still needs the new build on #1513; fixtures do not prove that acceptance.
+
+### User-requested physics-parameter review (no additional tuning applied)
+
+The `v0.8.4` tag already contains the old explicit clearance and many of the
+physics approximations below. `vehicle_physics.py` differs from that tag only in the
+later contact-normal filtering of deflection headings; `tank_collision.py` is
+unchanged. This does not negate the user's later runtime regression, but it
+does rule out calling all these constants newly introduced after 0.8.4.
+The old building swap-hold was added in `624ead6a` and removed in `18110f50`;
+the uploaded `9baedc10` build already includes that removal.
+
+| Item | Current code behaviour | Review concern |
+| --- | --- | --- |
+| Pitched/rolled body projection | `_vehicle_pose_axes` changes Y with pitch/roll but retains yaw-only XZ; added in `c1dc3888` after v0.8.4 | This shear is not a rigid rotation and can overstate projected occupancy. The catalog and native lane paths must be reviewed together. |
+| Native lane heights | All vehicles use 0.6/1.1/1.6 m probe heights | Sparse common-height probes are not each descriptor's full physical surface. This may miss a real surface or sample outside a smaller body. |
+| Destruction eligibility speed | Powered contact can use descriptor top speed; a turn can use maximum traverse speed times the farthest-corner radius | These are eligibility shortcuts, not actual point-contact velocity. They do not overwrite vehicle speed, but can create drive/turn differences. The native damage formula itself is unchanged. |
+| Hard-contact response | First slide speed is multiplied by 0.60, then by `0.85 ** (dt*60)`; a blocked speed uses `0.35 ** (dt*60)` | Tangential momentum and contact friction are replaced by fixed decay factors. Four grind ticks control repeated entry damping, not a four-tick movement wait. |
+| Deflection directions | Try yaw offsets +/-0.55 and +/-1.0 radians in a fixed order | The wall tangent can lie between all four probes; grazing contact can become a stop. The newer normal filter prevents inward escape probes but does not derive the actual tangent. |
+| Steep uphill drag | Above 27.5 degrees and 0.5 m/s, add `10*(tan(grade)-tan(27.5deg))*12.2625` m/s2 of braking | This is about 7 m/s2 at 30 degrees and 22 m/s2 at 35 degrees, additional to slope gravity/rolling resistance. It is an offline calibration, not a recovered native force law. |
+| Downhill overspeed | Limit to 105% of descriptor speed; grow surplus by only `0.20*sin(grade)` m/s each second, conditional on throttle | Explicit cap and throttle-dependent surplus replace part of the gravity-integrated result. |
+| Neutral braking | Apply 65% of grip braking in addition to rolling resistance, fading near the parked slope limit | The release curve is an offline approximation. It needs original-client comparison rather than being labelled a collision fix. |
+| Suspension contact/freeze | Pseudo contacts count with up to 0.10 m separation; small vertical/angular speeds are zeroed under acceleration thresholds | Can affect hovering/settling feel. These are ground-support rules, not the removed horizontal fence padding; changing them requires suspension evidence. |
+| Rotation interval box | At most 5 degrees per slice; use enclosing axis bounds of all rotated corners | An enclosing rectangle includes empty corners outside the exact rotational swept set. It is not an explicit clearance constant, but can produce a conservative false contact; a precise narrow-phase review is warranted. |
+| Tank-to-tank shape/receipt | Symmetric chassis half-extents have minima 0.8 m/1.0 m; ram receipt matching allows 0.75 m | Asymmetric bodies can be enlarged; receipt tolerance is not the physical collision shape. These paths are separate from map-object contact and remain unchanged for the user's decision. |
+| Soft-skin traversal budget | Four newly excluded original-surface classes per traversal | Exhaustion retains the unresolved native hit as hard. This is a bounded-query policy, not elapsed-time waiting, but dense accepted skins merit an adversarial traversal review. |
+
+Numerical SAT tolerance (1e-7 m), spatial-index broadphase padding and callback
+identity matching tolerances are not automatically physical clearance. Their
+consumers must be checked before changing them. The recovered 1.25 g arcade
+gravity and client-authored grip curves likewise must not be called accidental
+physics bugs merely because they differ from real-world SI behaviour. The user
+will choose any further physics changes after reviewing these findings.
+
+The first full CI run on `0054dc70` ran 5,998 tests and found ten assertion
+failures, all in seven downhill-departure tests whose synthetic rays retained
+the previous lead. No production padding was restored. Those controls now
+exercise both the original short physical frame (clear without a spurious
+ground graze) and a longer actual step reconstructing the captured lane; all
+original ground-top, backing-wall and upper/low-wall assertions remain. The
+1,413 related cases and these seven departure cases pass locally. The follow-up
+commit changes tests/documentation only; full CI/package evidence is pending.

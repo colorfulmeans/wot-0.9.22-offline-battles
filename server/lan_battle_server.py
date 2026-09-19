@@ -58,6 +58,7 @@ from gui.mods.offline_lan_0922 import effective_params as effective_params_wire
 from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import device_damage
 from gui.mods.offline_lan_0922 import friendly_fire
+from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import player_critical_mechanics
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
@@ -161,6 +162,9 @@ RESULT_INTERACTION_LIMITS = {
     "ricochets_received": (0, 65535),
     "no_damage_direct_hits_received": (0, 65535),
     "target_kills": (0, 255),
+    "damage_events": (0, 65535),
+    "kills_assisted_stun": (0, 1),
+    "kills_assisted_track": (0, 1),
 }
 DEFAULT_MAP = "server_random"
 CLIENT_BUILD_0922 = "wot-0.9.22.0.1-cn-1513"
@@ -1264,11 +1268,15 @@ def _persisted_result_receipt(value):
             len(interactions) > len(public_rows)):
         raise ValueError("invalid persisted interaction details")
     interaction_fields = set(RESULT_INTERACTION_LIMITS)
-    interaction_keys = interaction_fields | {"target_kind", "target_id"}
+    interaction_keys = interaction_fields | {"target_kind", "target_id"} | mission_events.FIELDS
+    optional = {"damage_events", "kills_assisted_stun", "kills_assisted_track"} | mission_events.FIELDS
     interaction_targets = set()
+    mission_event_count = 0
     for interaction in interactions:
         if (not isinstance(interaction, dict) or
-                set(interaction) != interaction_keys):
+                set(interaction) - interaction_keys or
+                not (interaction_keys - optional).issubset(interaction) or
+                not mission_events.valid(interaction)):
             raise ValueError("invalid persisted interaction row")
         target = (interaction.get("target_kind"),
                   interaction.get("target_id"))
@@ -1277,10 +1285,16 @@ def _persisted_result_receipt(value):
                 row_teams[target] == value["team"]):
             raise ValueError("invalid persisted interaction target")
         for name, (minimum, maximum) in RESULT_INTERACTION_LIMITS.items():
+            if name in optional and name not in interaction:
+                continue
             field = interaction.get(name)
-            if (isinstance(field, bool) or not isinstance(field, int) or
-                    field < minimum or field > maximum):
+            types = (int, float) if name == "stun_duration" else (int,)
+            if (isinstance(field, bool) or not isinstance(field, types) or
+                    not minimum <= field <= maximum):
                 raise ValueError("invalid persisted interaction value")
+        mission_event_count += len(interaction.get("mission_events", ()))
+        if mission_event_count > mission_events.MAX_EVENTS:
+            raise ValueError("persisted mission history exceeds wire budget")
         interaction_targets.add(target)
     value["interactions"] = interactions
     encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
@@ -4580,7 +4594,7 @@ class BattleState:
             if (participant is None or player_id in seen or
                     vehicle != expected_vehicle or
                     not math.isfinite(mass) or not 100.0 <= mass <= 500000.0 or
-                    not isinstance(shape, (list, tuple)) or len(shape) != 4):
+                    not isinstance(shape, (list, tuple)) or len(shape) not in (4, 6)):
                 return None
             seen.add(player_id)
             try:
@@ -4588,9 +4602,10 @@ class BattleState:
             except (TypeError, ValueError, OverflowError):
                 return None
             if (not all(math.isfinite(value) for value in shape) or
-                    not 0.5 <= shape[0] <= 20.0 or
-                    not 0.75 <= shape[1] <= 30.0 or
-                    not -20.0 <= shape[2] < shape[3] <= 30.0):
+                    not 0.0 < shape[0] <= 20.0 or
+                    not 0.0 < shape[1] <= 30.0 or
+                    not -20.0 <= shape[2] < shape[3] <= 30.0 or
+                    any(abs(value) > 30.0 for value in shape[4:])):
                 return None
             if not isinstance(ram_profile, dict):
                 return None
@@ -8614,7 +8629,7 @@ class BattleState:
             "x", "y", "z", "critical",
             "critical_target_base_revision", "critical_target_ack_seq",
             "hull_damage", "critical_delta", "potential_damage",
-            "stun_end_server_time_ms", "stun_factors",
+            "stun_end_server_time_ms", "stun_factors", "stun_duration_ms",
             "target_x", "target_y", "target_z",
             "damage_sticker",
             "structural_armor_hit",
@@ -8733,8 +8748,10 @@ class BattleState:
                          "critical_delta"}:
             raise ValueError("critical tokens without critical payload")
         stun_end_server_time_ms = 0
+        stun_duration_ms = 0
         stun_factors = {}
-        if 'stun_factors' in raw and 'stun_end_server_time_ms' not in raw:
+        if (set(raw) & {'stun_factors', 'stun_duration_ms'} and
+                'stun_end_server_time_ms' not in raw):
             raise ValueError('stun factors require an active stun')
         if "stun_end_server_time_ms" in raw:
             if not allow_stun or stun_now_ms is None:
@@ -8746,10 +8763,15 @@ class BattleState:
                            self.battle_duration_seconds) * 1000.0)))
             if 'stun_factors' in raw:
                 stun_factors = stun_mechanics.canonical_factors(raw['stun_factors'])
+            stun_duration_ms = _exact_int(
+                raw.get('stun_duration_ms', max(
+                    0, stun_end_server_time_ms - int(stun_now_ms))),
+                0, stun_end_server_time_ms)
             # An old terminal may arrive after its stun elapsed. Its HP and
             # critical results are still valid; do not reject the whole shot.
             if stun_end_server_time_ms <= int(stun_now_ms):
                 stun_end_server_time_ms = 0
+                stun_duration_ms = 0
                 stun_factors = {}
         return {
             "target_kind": target_kind, "target_id": target_id,
@@ -8765,6 +8787,7 @@ class BattleState:
             "hull_damage": hull_damage, "splash": bool(splash),
             "retired_target": retired_target,
             "stun_end_server_time_ms": stun_end_server_time_ms,
+            "stun_duration_ms": stun_duration_ms,
             "stun_factors": stun_factors,
             "damage_sticker": damage_sticker,
         }
@@ -9145,6 +9168,10 @@ class BattleState:
         self._record_damage(
             shooter, victim, applied, critical_before,
             attacker_team=int(record["team"]))
+        if was_alive and not alive and not applied:
+            # A crew knockout can kill without reducing hull HP.
+            self._record_impairment_kill_assists(
+                shooter, victim, critical_before)
         if _destroyed_tracks(admitted_critical) - _destroyed_tracks(
                 critical_before):
             self.track_immobilisers[victim] = shooter
@@ -9246,6 +9273,7 @@ class BattleState:
                 distance=_shot_distance(record, proposal))
             self._clear_vehicle_stun(victim)
         elif proposal["stun_end_server_time_ms"]:
+            self._record_projectile_stun(record, proposal)
             self._set_canonical_stun(
                 shooter, victim, proposal["stun_end_server_time_ms"],
                 proposal.get('stun_factors'))
@@ -9951,6 +9979,15 @@ class BattleState:
                 row.get("damage_assisted_radio", 0))),
             "assist_stun": max(0, int(
                 row.get("damage_assisted_stun", 0))),
+            "stun_num": max(0, int(row.get("stun_num", 0))),
+            "stun_duration_ms": max(0, int(row.get("stun_duration_ms", 0))),
+            "stunned": max(0, int(row.get("stunned", 0))),
+            "stun_shots_2": max(0, int(row.get("stun_shots_2", 0))),
+            "stun_shots_3": max(0, int(row.get("stun_shots_3", 0))),
+            "kills_assisted_stun": max(0, int(row.get("kills_assisted_stun", 0))),
+            "kills_assisted_track": max(0, int(row.get("kills_assisted_track", 0))),
+            "critical_hits": max(0, int(row.get("critical_hits", 0))),
+            "not_spotted": int(row.get("not_spotted", 0) == 1),
             "damaged": max(0, int(row.get("damaged", 0))),
             "kills": max(0, int(row.get("kills", 0))),
             "spotted": max(0, int(row.get("spotted", 0))),
@@ -12384,6 +12421,38 @@ class BattleState:
         vehicle["stun_attacker_id"] = attacker_id
         return True
 
+    def _record_projectile_stun(self, record, proposal):
+        """Credit an admitted stun hit independently of its live timer.
+
+        The worker supplies the imposed duration. Overlap, healing and
+        expiry only affect the live state, never erase a committed hit.
+        The terminal ledger admits each projectile once and rejects duplicate
+        direct/splash targets before this method can run.
+        """
+        attacker = (str(record['shooter_kind']), int(record['shooter_id']))
+        target = (proposal['target_kind'], proposal['target_id'])
+        state = self._vehicle_stun_state(target)
+        if (not proposal['target_alive'] or state is None or not state['alive'] or
+                int(record['team']) == int(proposal['target_team'])):
+            return
+        targets = record.setdefault('_stunned_targets', set())
+        if target in targets:
+            return
+        targets.add(target)
+        row = self._statistics_row(*attacker)
+        interaction = self._statistics_interaction(attacker, target)
+        row['stunned'] += int(interaction['stun_num'] == 0)
+        row['stun_num'] += 1
+        duration_ms = int(proposal['stun_duration_ms'])
+        row['stun_duration_ms'] += duration_ms
+        self._increment_interaction(attacker, target, 'stun_num')
+        self._increment_interaction(
+            attacker, target, 'stun_duration', duration_ms / 1000.0)
+        # The installed SPG-11 definitions ask for at least two or three
+        # targets per shot, sometimes on more than one distinct shot.
+        if len(targets) in (2, 3):
+            row['stun_shots_%d' % len(targets)] += 1
+
     def _set_canonical_stun(self, attacker, target, end_server_time_ms,
                             factors=None):
         """Carry one internal projectile resolver's final stun state.
@@ -12557,6 +12626,7 @@ class BattleState:
                     visible.setdefault(target, []).append(reporter)
             for target in sorted(set(visible) - self.team_visible_targets[team]):
                 self.ever_spotted_targets.add(target)
+                self._statistics_row(*target)['not_spotted'] = 0
                 for reporter in sorted(visible[target]):
                     interaction = self._statistics_interaction(
                         reporter, target)
@@ -12687,6 +12757,17 @@ class BattleState:
                   else self.bot_states.get(victim[1]))
         critical = (getattr(target, "critical", None) if victim[0] == "player"
                     else (target or {}).get("critical")) or {}
+        interaction = self._statistics_interaction(attacker, victim)
+        immobilized = interaction.pop("_terminal_immobilized", bool(_destroyed_tracks(critical)))
+        mission_distance = distance
+        if mission_distance is None:
+            positions = [self._vehicle_position(identity, alive_only=False)
+                         for identity in (attacker, victim)]
+            if all(position is not None for position in positions):
+                mission_distance = math.sqrt(sum((a - b) ** 2
+                    for a, b in zip(*positions)))
+        self._record_mission_event(attacker, victim, "kill",
+                                   int(death_reason), immobilized, mission_distance)
         self.kill_records.append({
             "actor_kind": attacker[0], "actor_id": attacker[1],
             "victim_kind": victim[0], "victim_id": victim[1],
@@ -12759,6 +12840,10 @@ class BattleState:
                 "damage_dealt": 0, "damage_received": 0,
                 "damage_blocked": 0, "damage_assisted_track": 0,
                 "damage_assisted_radio": 0, "damage_assisted_stun": 0,
+                "stun_num": 0, "stun_duration_ms": 0, "stunned": 0,
+                "stun_shots_2": 0, "stun_shots_3": 0,
+                "kills_assisted_stun": 0, "kills_assisted_track": 0,
+                "not_spotted": 1,
                 "damaged": 0, "kills": 0, "spotted": 0,
                 "capture_points": 0, "dropped_capture_points": 0,
                 # Battle-result fidelity fields.  #1513 shows every one of
@@ -12833,6 +12918,7 @@ class BattleState:
         if interaction is None:
             interaction = {
                 "target_kind": target[0], "target_id": target[1],
+                "mission_events": [], "mission_events_complete": True,
             }
             for name, (minimum, unused_maximum) in (
                     RESULT_INTERACTION_LIMITS.items()):
@@ -12840,11 +12926,24 @@ class BattleState:
             interactions[key] = interaction
         return interaction
 
+    def _record_mission_event(self, actor, target, kind, *values):
+        interaction = self._statistics_interaction(actor, target)
+        histories = self.vehicle_interactions[(str(actor[0]), int(actor[1]))]
+        count = sum(len(row.get("mission_events", ())) for row in histories.values())
+        if count >= mission_events.MAX_EVENTS:
+            interaction["mission_events_complete"] = False
+            return
+        elapsed = max(0, int(round((self.tick / TICK_HZ - PREBATTLE_SECONDS) * 1000)))
+        interaction["mission_events"].append([kind, elapsed] + list(values))
+
     def _increment_interaction(self, actor, target, name, amount=1):
         minimum, maximum = RESULT_INTERACTION_LIMITS[name]
         interaction = self._statistics_interaction(actor, target)
+        number = float if name == 'stun_duration' else int
         interaction[name] = max(minimum, min(
-            maximum, int(interaction.get(name, 0)) + int(amount)))
+            maximum, number(interaction.get(name, 0)) + number(amount)))
+        if name == 'stun_duration':
+            interaction[name] = round(interaction[name], 3)
         return interaction[name]
 
     def _or_interaction(self, actor, target, name, mask):
@@ -12862,7 +12961,8 @@ class BattleState:
         interactions = self.vehicle_interactions.get(actor, {})
         if not isinstance(interactions, dict):
             return []
-        return [dict(value) for value in sorted(
+        return [copy.deepcopy(dict((name, field) for name, field in value.items()
+                                   if not name.startswith("_"))) for value in sorted(
             interactions.values(), key=lambda value: (
                 0 if value.get("target_kind") == "player" else 1,
                 int(value.get("target_id", 0))))]
@@ -12955,6 +13055,39 @@ class BattleState:
         row["critical_hits"] += _popcount(mask)
         self._statistics_row(*target)["crits_received_mask"] |= mask
         self._or_interaction(attacker, target, "crits", mask)
+        self._record_mission_event(attacker, target, "critical", mask)
+        state = self._vehicle_stun_state(target)
+        if state is not None and not state['alive']:
+            self._statistics_interaction(attacker, target)["_terminal_immobilized"] = bool(
+                _destroyed_tracks(previous))
+
+    def _impairment_assisters(self, attacker, target, target_critical):
+        target_team = self._vehicle_team(*target)
+        if self._vehicle_team(*attacker) == target_team:
+            return []
+        owners = []
+        holder = self.track_immobilisers.get(target)
+        if (holder is not None and holder != attacker and
+                self._vehicle_team(*holder) != target_team and
+                _destroyed_tracks(target_critical)):
+            owners.append(('track', holder))
+        holder = self._active_stun_assister(target)
+        if (holder is not None and holder != attacker and
+                self._vehicle_team(*holder) != target_team):
+            owners.append(('stun', holder))
+        return owners
+
+    def _record_impairment_kill_assists(self, attacker, target, target_critical):
+        state = self._vehicle_stun_state(target)
+        if state is None or state['alive']:
+            return
+        for category, holder in self._impairment_assisters(
+                attacker, target, target_critical):
+            field = 'kills_assisted_' + category
+            interaction = self._statistics_interaction(holder, target)
+            if not interaction[field]:
+                interaction[field] = 1
+                self._statistics_row(*holder)[field] += 1
 
     def _record_damage(self, attacker, target, damage, target_critical,
                        attacker_team=None):
@@ -13012,6 +13145,12 @@ class BattleState:
         self.support_targets.setdefault(attacker, set()).add(target)
         self._increment_interaction(
             attacker, target, "damage", damage)
+        self._increment_interaction(attacker, target, "damage_events")
+        immobilized = bool(_destroyed_tracks(target_critical))
+        self._record_mission_event(attacker, target, "damage", damage, immobilized)
+        state = self._vehicle_stun_state(target)
+        if state is not None and not state['alive']:
+            self._statistics_interaction(attacker, target)["_terminal_immobilized"] = immobilized
         self._increment_interaction(
             target, attacker, "damage_received", damage)
         # #1513's Patrol Duty (``evileye``) counts enemies damaged while the
@@ -13021,16 +13160,9 @@ class BattleState:
         if len(spotters) == 1 and spotters[0] != attacker:
             self.exclusive_spot_assists.setdefault(
                 spotters[0], set()).add(target)
-        credits = []
-        holder = self.track_immobilisers.get(target)
-        if (holder is not None and holder != attacker and
-                self._vehicle_team(*holder) != target_team and
-                _destroyed_tracks(target_critical)):
-            credits.append(("track", holder, damage))
-        holder = self._active_stun_assister(target)
-        if (holder is not None and holder != attacker and
-                self._vehicle_team(*holder) != target_team):
-            credits.append(("stun", holder, damage))
+        credits = [(category, holder, damage) for category, holder in
+                   self._impairment_assisters(attacker, target, target_critical)]
+        self._record_impairment_kill_assists(attacker, target, target_critical)
         # A track or a stun has one owner, but a spotting assist is shared by
         # every observer lighting the target, so each of them is paid its
         # share of this damage rather than the whole of it.

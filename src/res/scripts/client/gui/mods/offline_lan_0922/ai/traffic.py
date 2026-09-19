@@ -33,6 +33,13 @@ def _position(body):
     return point[0], point[2]
 
 
+def _body_center(body):
+    position = _position(body)
+    shape = body.get('shape')
+    return (tank_collision.shape_center(position[0], position[1], body['yaw'], shape)
+            if shape is not None else position)
+
+
 def _velocity(body):
     value = body.get('velocity', (0.0, 0.0, 0.0))
     return value[0], value[2]
@@ -60,7 +67,7 @@ def _travel(body):
 
 
 def _same_level(first, second):
-    # The production collision shape ends in lower_y/upper_y, not XZ offsets.
+    # Vertical limits are indices 2/3; optional centre offsets are indices 4/5.
     first_shape, second_shape = first.get('shape'), second.get('shape')
     if first_shape is None or second_shape is None:
         return True
@@ -71,7 +78,7 @@ def _same_level(first, second):
 
 def _separation(first, second):
     """Largest signed gap between the actual hulls on their SAT axes."""
-    first_pos, second_pos = _position(first), _position(second)
+    first_pos, second_pos = _body_center(first), _body_center(second)
     delta = (second_pos[0] - first_pos[0], second_pos[1] - first_pos[1])
     return max(abs(_dot(delta, axis)) - _radius(first, axis) -
                _radius(second, axis) for axis in _axes(first) + _axes(second))
@@ -85,7 +92,7 @@ def _dimensions(body):
 
 def _contact_time(first, second):
     """Intersect exact OBB intervals under their actual relative velocity."""
-    first_pos, second_pos = _position(first), _position(second)
+    first_pos, second_pos = _body_center(first), _body_center(second)
     first_vel, second_vel = _velocity(first), _velocity(second)
     delta = (second_pos[0] - first_pos[0], second_pos[1] - first_pos[1])
     relative = (second_vel[0] - first_vel[0], second_vel[1] - first_vel[1])

@@ -1341,6 +1341,38 @@ class LANSessionTests(unittest.TestCase):
         self.assertEqual({'battle_mode': 'training', 'training_bots': True},
                          calls[-1][1])
 
+    def test_create_platoon_uses_existing_connection_and_requires_host_start(self):
+        class Header(object):
+            def fightClick(self, map_id, action_name):
+                raise AssertionError('retail matchmaking was called')
+
+            def showSquad(self):
+                raise AssertionError('retail squad creation was called')
+
+            def _updatePrebattleControls(self):
+                pass
+
+        adapter = self.module.queue_ui.JoinButtonUI(
+            self.session.join, runtime=Header)
+        # A previous visit to Training must not turn this ordinary room into
+        # a no-rewards training round or start it implicitly.
+        self.session._training_mode = True
+        adapter.install()
+        try:
+            Header().showSquad()
+            self.emit('welcome', {'phase': 'waiting',
+                                  'map_pool': ['01_karelia']})
+            Header().showSquad()
+            self.assertEqual(1, len(self.clients))
+            self.assertEqual(1, self.client.start_calls)
+            self.assertTrue(self.session._picker_open)
+            self.assertFalse(self.session._training_mode)
+            self.assertEqual([], self.client.requests)
+            self.assertTrue(self.session.request_start('01_karelia'))
+            self.assertEqual(['01_karelia'], self.client.requests)
+        finally:
+            adapter.uninstall()
+
     def test_leave_room_leaves_the_stock_queue(self):
         self.emit('welcome', {'phase': 'waiting', 'map_pool': ['01_karelia']})
 

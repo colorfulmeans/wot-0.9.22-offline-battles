@@ -163,6 +163,44 @@ class PersonalCampaignBattleTests(unittest.TestCase):
                 self.assertEqual({}, result['completed'])
                 self.assertIn(modifier, result['unsupported']['270'][0])
 
+    def test_mt2_damage_event_thresholds_for_all_four_operations(self):
+        for target_id in (5, 6):
+            target = dict(self.receipt['public_results'][1], actor_id=target_id)
+            self.receipt['public_results'].append(target)
+            self.receipt['interactions'].append(dict(
+                self.receipt['interactions'][0], target_id=target_id))
+        for operation, required, kills in ((1, 6, 1), (2, 9, 2),
+                                           (3, 12, 3), (4, 15, 5)):
+            with self.subTest(operation=operation):
+                qid = 32 + (operation - 1) * 75
+                self.snapshot['personalMissionSelections']['regular'] = [qid]
+                self.definitions[qid] = definition(
+                    '<vehicleDamage><eventCount/><greaterOrEqual>%d'
+                    '</greaterOrEqual></vehicleDamage>' % required,
+                    '<vehicleKills><greaterOrEqual>%d'
+                    '</greaterOrEqual></vehicleKills>' % kills)
+                for event in self.receipt['interactions']:
+                    event['damage_events'] = 0
+                    event['target_kills'] = 0
+                # Repeated HP damage to the same enemy counts each time.
+                first = self.receipt['interactions'][0]
+                first.update(damage_events=required)
+                for event in self.receipt['interactions'][:kills]:
+                    event['target_kills'] = 1
+                self.assertEqual({str(qid): 2}, self.evaluate()['completed'])
+                self.receipt['interactions'][kills - 1]['target_kills'] = 0
+                self.assertEqual({str(qid): 1}, self.evaluate()['completed'])
+                first['damage_events'] = required - 1
+                self.assertEqual({}, self.evaluate()['completed'])
+
+    def test_damage_event_modifier_payload_is_not_silently_ignored(self):
+        self.use_condition('<vehicleDamage><eventCount><whileInvisible/>'
+                           '</eventCount><greaterOrEqual>1</greaterOrEqual>'
+                           '</vehicleDamage>')
+        self.receipt['interactions'][0]['damage_events'] = 100
+        self.assertEqual({}, self.evaluate()['completed'])
+        self.assertIn('eventCount modifier', self.evaluate()['unsupported']['270'][0])
+
     def test_unsupported_honours_still_allows_proven_main_completion(self):
         self.use_condition(MT15_MAIN, '<multiStunEvent/>')
         result = self.evaluate()

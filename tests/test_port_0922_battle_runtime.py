@@ -7101,7 +7101,7 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
 
         self.assertIs(descriptor, factory.prepare_descriptor(descriptor))
         self.assertEqual(
-            (1.5, 3.5, -0.8, 2.0),
+            (1.5, 3.5, -0.8, 2.0, 0.0, 0.0),
             tank_collision.chassis_shape(descriptor))
         factory.prepare_descriptor(descriptor)
 
@@ -11308,16 +11308,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertFalse(battle._motion_is_clear(
                 entity, (0.0, 7.0, 0.0), 1.0, -1.0, 0.1,
                 hull_yaw=0.25))
-            pending_call = catalog._catalog_pending_at_hull.call_args
+            catalog._catalog_pending_at_hull.assert_not_called()
             hull_call = catalog._catalog_hull_contact.call_args
-            self.assertEqual(0.25, pending_call.args[1])
             self.assertEqual(0.25, hull_call.args[1])
             self.assertAlmostEqual(
-                1.0 + math.pi,
-                pending_call.kwargs['motion_yaw'])
-            self.assertAlmostEqual(
                 1.0 + math.pi, hull_call.kwargs['motion_yaw'])
-            for call in (pending_call, hull_call):
+            for call in (hull_call,):
                 self.assertEqual(0.2, call.kwargs['pitch'])
                 self.assertEqual(-0.15, call.kwargs['roll'])
 
@@ -12687,7 +12683,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 tester.bbox is not None
                 for tester in descriptor.getHitTesters()))
             self.assertEqual(
-                (1.5, 3.5, -0.8, 2.0),
+                (1.5, 3.5, -0.8, 2.0, 0.0, 0.0),
                 tank_collision.chassis_shape(descriptor))
 
         battle.stop(show_login=False)
@@ -19354,7 +19350,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_position = (2.0, 3.0, 4.0)
         battle._local_descriptor = entity.typeDescriptor
         battle._attach_local_presentation()
-        battle._destructibles = mock.Mock()
+        # This legacy sensor double has no compiled-skin ray adapter.
+        battle._destructibles = mock.Mock(collide_motion_segment=None)
 
         def motion_is_clear(*unused_args, **unused_kwargs):
             battle._destructibles._fell_trees_near.assert_not_called()
@@ -19381,7 +19378,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_position = (2.0, 3.0, 4.0)
         battle._local_descriptor = entity.typeDescriptor
         battle._attach_local_presentation()
-        battle._destructibles = mock.Mock()
+        battle._destructibles = mock.Mock(collide_motion_segment=None)
         battle._destructibles._catalog_motion_blocked.return_value = True
 
         with mock.patch(
@@ -19422,7 +19419,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual(1, len(calls))
 
-    def test_player_pending_contact_preserves_speed_but_hard_wall_damps(self):
+    def test_player_native_wall_brakes_without_consulting_visual_deadline(self):
         def exercise(pending):
             runtime = _runtime()
             battle = BattleRuntime(runtime)
@@ -19471,13 +19468,13 @@ class BattleRuntimeContractTests(unittest.TestCase):
         hard_battle, hard_probe = exercise(False)
 
         self.assertEqual((2.0, 3.0, 4.0), pending_battle._local_position)
-        self.assertEqual(6.0, pending_battle._local_speed)
+        self.assertEqual(0.0, pending_battle._local_speed)
         self.assertEqual(1, pending_probe.call_count)
         self.assertEqual((2.0, 3.0, 4.0), hard_battle._local_position)
         self.assertEqual(0.0, hard_battle._local_speed)
-        self.assertEqual(5, hard_probe.call_count)
+        self.assertEqual(1, hard_probe.call_count)
 
-    def test_player_catalog_swap_window_is_soft_but_still_blocks_pose(self):
+    def test_player_hard_contact_cannot_be_softened_by_obsolete_swap_flag(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
@@ -19504,12 +19501,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertFalse(battle._motion_is_clear(
                 entity, (0.0, 0.0, 0.0), 0.0, 4.0, 0.04))
 
-        self.assertTrue(battle._local_motion_soft_block)
-        self.assertEqual('pending', battle._local_motion_status)
-        self.assertEqual('broken', battle._local_motion_kinds)
+        self.assertFalse(battle._local_motion_soft_block)
+        self.assertEqual('hard', battle._local_motion_status)
+        self.assertEqual('structure', battle._local_motion_kinds)
         battle._destructibles._catalog_pending_at_hull.assert_not_called()
 
-    def test_player_hard_contact_uses_shared_second_glancing_path(self):
+    def test_player_hard_contact_preserves_real_wall_tangent_momentum(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle.client = _Client()
@@ -19527,8 +19524,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._attach_local_presentation()
         battle._destructibles = mock.Mock()
         battle._smoothed_drive_pitch = mock.Mock(return_value=0.0)
-        battle._motion_is_clear = mock.Mock(
-            side_effect=(False, False, True))
+        def motion(*unused_args, **unused_kwargs):
+            if battle._motion_is_clear.call_count == 1:
+                battle._local_world_collision_trace = {'normal': (-math.sqrt(.5),0.,-math.sqrt(.5))}
+                return False
+            return True
+        battle._motion_is_clear = mock.Mock(side_effect=motion)
         battle._update_vertical_motion = mock.Mock(
             side_effect=lambda unused_entity, position, unused_yaw,
             unused_dt: position)
@@ -19548,23 +19549,17 @@ class BattleRuntimeContractTests(unittest.TestCase):
                     'vehicle_physics.traverse_step', return_value=0.0):
             battle._drive_local(0.04)
 
-        expected_speed, delta_x, delta_z = \
-            vehicle_physics.hard_contact_step(
-                6.0, 0.04, grinding=False, slide_yaw=-0.55)
-        self.assertAlmostEqual(expected_speed, battle._local_speed)
-        self.assertAlmostEqual(2.0 + delta_x, battle._local_position[0])
-        self.assertAlmostEqual(4.0 + delta_z, battle._local_position[2])
-        self.assertEqual(
-            [0.0, 0.55, -0.55],
-            [call.args[2] for call in battle._motion_is_clear.call_args_list])
-        self.assertNotIn(
-            'hull_yaw', battle._motion_is_clear.call_args_list[0].kwargs)
-        self.assertTrue(all(
-            call.kwargs['hull_yaw'] == 0.0 for call in
-            battle._motion_is_clear.call_args_list[1:]))
-        self.assertEqual(
-            vehicle_physics.HARD_CONTACT_GRIND_TICKS,
-            battle._local_grind)
+        self.assertAlmostEqual(3.,battle._local_speed)
+        self.assertAlmostEqual(-3.,battle._local_push_x)
+        self.assertAlmostEqual(0.,battle._local_push_z)
+        self.assertAlmostEqual(2.-3.*.04,battle._local_position[0])
+        self.assertAlmostEqual(4.+3.*.04,battle._local_position[2])
+        self.assertEqual(2,battle._motion_is_clear.call_count)
+        call=battle._motion_is_clear.call_args
+        self.assertAlmostEqual(-math.pi/4,call.args[2])
+        self.assertAlmostEqual(math.sqrt(18.),call.args[3])
+        self.assertEqual(0.,call.kwargs['hull_yaw'])
+        self.assertEqual(0,battle._local_grind)
 
     def test_player_pivot_cannot_swing_chassis_corners_past_arena_edge(self):
         runtime = _runtime()
@@ -19635,15 +19630,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._avatar = runtime.bigworld.avatar
         first = ((22, 37, None),)
         second = ((22, 38, 73),)
-        resolver = mock.Mock(side_effect=({
-            'status': 'crushed', 'token': first,
-            'accepted_now': False, 'used_kinetic_speed': False,
-            'kinds': 'fragile', 'requires_commit': True,
-        }, {
-            'status': 'hard', 'token': second,
-            'accepted_now': False, 'used_kinetic_speed': False,
-            'kinds': 'structure', 'requires_commit': True,
-        }))
+        resolver = mock.Mock(return_value={
+            'status': 'hard', 'token': first+second, 'accepted_now': False,
+            'used_kinetic_speed': False, 'kinds': 'fragile,structure',
+            'requires_commit': True})
         battle._destructibles = types.SimpleNamespace(
             _vehicle_hull_bbox=lambda descriptor:
                 descriptor.hull.hitTester.bbox,
@@ -19657,15 +19647,11 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(first + second, detail['token'])
         self.assertTrue(detail['requires_commit'])
         self.assertEqual('fragile,structure', detail['kinds'])
-        self.assertEqual(2, resolver.call_count)
-        expected_cap = 0.75 * math.sqrt(1.7 ** 2 + 3.5 ** 2)
-        self.assertTrue(all(
-            abs(call.kwargs['kinetic_speed'] - expected_cap) < 1.0e-9
-            for call in resolver.call_args_list))
-        self.assertEqual(
-            [0.0, 0.0],
-            [call.kwargs['travel_reach']
-             for call in resolver.call_args_list])
+        resolver.assert_called_once()
+        motion = resolver.call_args.kwargs['contact_motion']
+        self.assertAlmostEqual(.16, motion['yaw_delta'])
+        self.assertEqual(.1, motion['dt'])
+        self.assertEqual(motion['start'], motion['end'])
 
     def test_pose_sweep_prefers_the_mounted_body_bbox(self):
         runtime = _runtime()
@@ -19694,15 +19680,13 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual('clear', detail['status'])
         body_reader.assert_called_once_with(descriptor)
         hull_reader.assert_not_called()
-        sweep_descriptor = resolver.call_args.args[4]
-        swept_bbox = sweep_descriptor['hull']['hitTester'].bbox
-        posed_bbox = battle_runtime_module._destructible_posed_bbox(
-            body_bbox, 0.2, -0.15)
-        self.assertEqual(posed_bbox[0][1], swept_bbox[0][1])
-        self.assertEqual(posed_bbox[1][1], swept_bbox[1][1])
-        self.assertNotIn('pitch', resolver.call_args.kwargs)
-        self.assertNotIn('roll', resolver.call_args.kwargs)
-        self.assertEqual(0.0, resolver.call_args.kwargs['travel_reach'])
+        self.assertIs(descriptor, resolver.call_args.args[4])
+        motion=resolver.call_args.kwargs['contact_motion']
+        self.assertEqual(body_bbox,motion['bbox'])
+        self.assertEqual(.2,motion['pitch'])
+        self.assertEqual(-.15,motion['roll'])
+        self.assertEqual((2.,3.,4.),motion['start'])
+        self.assertEqual(motion['start'],motion['end'])
 
     def test_pose_sweep_uses_exact_center_travel_without_drive_lookahead(self):
         runtime = _runtime()
@@ -19724,26 +19708,15 @@ class BattleRuntimeContractTests(unittest.TestCase):
             rotation_speed_cap=0.75)
 
         self.assertEqual('clear', detail['status'])
-        self.assertEqual(2, resolver.call_count)
-        self.assertEqual(
-            [0.5, 0.5],
-            [round(call.kwargs['travel_reach'], 6)
-             for call in resolver.call_args_list])
-        motions = [call.kwargs['replacement_motion']
-                   for call in resolver.call_args_list]
-        self.assertEqual([
-            ((2.0, 3.0, 4.0), (2.5, 3.0, 4.0)),
-            ((2.5, 3.0, 4.0), (3.0, 3.0, 4.0)),
-        ], [(motion[0], motion[2]) for motion in motions])
-        self.assertAlmostEqual(0.0, motions[0][1])
-        self.assertAlmostEqual(0.05, motions[0][3])
-        self.assertAlmostEqual(0.05, motions[1][1])
-        self.assertAlmostEqual(0.1, motions[1][3])
-        self.assertEqual(
-            [((-1.7, -0.2, -3.5), (1.7, 1.4, 3.5))] * 2,
-            [motion[4] for motion in motions])
+        resolver.assert_called_once()
+        motion=resolver.call_args.kwargs['contact_motion']
+        self.assertEqual((2.,3.,4.),motion['start'])
+        self.assertEqual((3.,3.,4.),motion['end'])
+        self.assertEqual(.1,motion['dt'])
+        self.assertAlmostEqual(.1,motion['yaw_delta'])
+        self.assertNotIn('kinetic_speed',resolver.call_args.kwargs)
 
-    def test_first_turn_pose_uses_actual_geometry_and_reachable_crush_cap(self):
+    def test_first_turn_pose_transports_actual_angular_motion_without_a_cap(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
@@ -19762,12 +19735,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
             0.0, _Descriptor(), 12.5, 0.04,
             rotation_speed_cap=0.75)
 
-        radius = math.sqrt(1.7 ** 2 + 3.5 ** 2)
-        call = resolver.call_args
-        self.assertAlmostEqual(0.6 * radius, call.args[3])
-        self.assertAlmostEqual(0.75 * radius,
-                               call.kwargs['kinetic_speed'])
-        self.assertEqual('clear', detail['status'])
+        call=resolver.call_args
+        self.assertEqual(0.,call.args[3])
+        motion=call.kwargs['contact_motion']
+        self.assertAlmostEqual(.6,motion['yaw_delta']/motion['dt'])
+        self.assertNotIn('kinetic_speed',call.kwargs)
+        self.assertEqual('clear',detail['status'])
 
     def test_hard_pose_sweep_commits_fragile_before_blocking_rotation(self):
         runtime = _runtime()
@@ -19846,12 +19819,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 sweep_descriptor['chassis']['hullPosition'])
             self.assertFalse(call.kwargs['commit_enabled'])
             self.assertTrue(call.kwargs['exact_footprint'])
-            self.assertEqual(0.14, call.kwargs['pitch'])
-            self.assertEqual(-0.08, call.kwargs['roll'])
+            self.assertEqual(battle._local_pitch, call.kwargs['pitch'])
+            self.assertEqual(battle._local_roll, call.kwargs['roll'])
         self.assertEqual('hard', battle._local_motion_status)
         self.assertEqual('world', battle._local_motion_kinds)
 
-    def test_native_rotation_recast_stays_off_before_a_structure_breaks(self):
+    def test_native_rotation_checks_intact_walls_before_any_structure_breaks(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
@@ -19864,13 +19837,13 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         with mock.patch(
                 'gui.mods.offline_lan_0922.battle_runtime.'
-                'world_collision.check_horizontal_collision') as probe:
-            self.assertTrue(battle._native_world_rotation_is_clear(
+                'world_collision.check_horizontal_collision', return_value='hard') as probe:
+            self.assertFalse(battle._native_world_rotation_is_clear(
                 (2.0, 3.0, 4.0), 0.0, 0.08, _Descriptor()))
 
-        active.assert_called_once_with()
-        body_reader.assert_not_called()
-        probe.assert_not_called()
+        active.assert_not_called()
+        body_reader.assert_called_once()
+        probe.assert_called_once()
 
     def test_bot_pivot_recasts_damaged_bsp_with_authoritative_pose(self):
         runtime = _runtime()
@@ -19963,7 +19936,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 self.assertEqual(
                     'structure', battle._bot_motion_kinds[101])
 
-    def test_bot_rotation_commits_structure_then_holds_first_swap_frame(self):
+    def test_bot_rotation_recasts_in_the_structure_commit_frame(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
@@ -19986,8 +19959,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         with mock.patch(
                 'gui.mods.offline_lan_0922.battle_runtime.'
-                'world_collision.check_horizontal_collision') as probe:
-            self.assertFalse(battle._resolve_bot_rotation(
+                'world_collision.check_horizontal_collision', return_value='clear') as probe:
+            self.assertTrue(battle._resolve_bot_rotation(
                 101, (2.0, 3.0, 4.0), 0.0, 0.08,
                 _Descriptor(), 0.1, 12.5, 0.75))
 
@@ -19998,7 +19971,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             first.kwargs['rotation_speed_cap'],
             second.kwargs['rotation_speed_cap'])
-        probe.assert_not_called()
+        self.assertGreater(probe.call_count, 0)
         self.assertEqual('structure', battle._bot_motion_kinds[101])
 
     def test_catalog_clear_rotation_still_recasts_replacement_native_bsp(self):
@@ -20203,8 +20176,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(tree_token, tree_commit.args[1])
         self.assertEqual(0.0, tree_commit.args[6])
         self.assertEqual(0.1, tree_commit.kwargs['dt'])
-        self.assertGreater(
-            battle._destructibles._catalog_motion_proposal.call_count, 1)
+        self.assertEqual(
+            1, battle._destructibles._catalog_motion_proposal.call_count)
 
     def test_player_moving_turn_reports_rotation_after_translation(self):
         runtime = _runtime()
@@ -20235,7 +20208,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         def proposal(unused_space, unused_position, unused_yaw,
                      unused_speed, descriptor, unused_now, **unused_kwargs):
-            if not isinstance(descriptor, dict):
+            if 'contact_motion' not in unused_kwargs:
                 return {
                     'status': 'clear', 'token': None,
                     'requires_commit': False,
@@ -20543,7 +20516,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             contact['end_x'], contact['end_y'], contact['end_z'],
             contact['end_yaw']))
 
-    def test_player_structure_commit_sends_contact_but_holds_outside_pose(self):
+    def test_player_structure_commit_sends_contact_and_moves_in_same_frame(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
@@ -20565,16 +20538,93 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'gui.mods.offline_lan_0922.battle_runtime.'
                 'world_collision.check_horizontal_collision',
                 return_value='clear') as world:
-            self.assertFalse(battle._motion_is_clear(
+            self.assertTrue(battle._motion_is_clear(
                 entity, (1.0, 2.0, 3.0), 0.0, 5.0, 0.1))
 
         commit.assert_called_once()
         battle._sender.send_current.assert_called_once_with()
         world.assert_called_once()
-        self.assertTrue(battle._local_motion_soft_block)
-        self.assertEqual('pending', battle._local_motion_status)
+        self.assertFalse(battle._local_motion_soft_block)
+        self.assertEqual('crushed', battle._local_motion_status)
         contact = battle.local_destructible_contacts()[0]
         self.assertEqual([[22, 37, 73]], contact['token'])
+
+    def test_collision_free_building_motion_keeps_native_wall_checks(self):
+        for speed in (-5.0, 5.0):
+            for world_status in ('clear', 'hard'):
+                with self.subTest(speed=speed, world=world_status):
+                    runtime = _runtime()
+                    battle = BattleRuntime(runtime)
+                    battle._avatar = runtime.bigworld.avatar
+                    battle._sender = types.SimpleNamespace(
+                        send_current=mock.Mock(return_value=True))
+                    token = ((22, 37, 73), (22, 37, 74))
+                    battle._destructibles = types.SimpleNamespace(
+                        _catalog_motion_proposal=mock.Mock(return_value={
+                            'status': 'crushed', 'token': token,
+                            'accepted_now': False, 'used_kinetic_speed': False,
+                            'kinds': 'structure', 'requires_commit': True,
+                        }),
+                        structure_collision_swap_required=mock.Mock(
+                            return_value=False),
+                        commit_local_prediction=mock.Mock(return_value=True))
+                    entity = _Vehicle(10, _Descriptor(), _Vector(),
+                                      (0, 0, 0), {'health': 500})
+                    with mock.patch(
+                            'gui.mods.offline_lan_0922.battle_runtime.'
+                            'world_collision.check_horizontal_collision',
+                            return_value=world_status) as world:
+                        self.assertEqual(world_status == 'clear',
+                            battle._motion_is_clear(
+                                entity, (1.0, 2.0, 3.0), 0.0, speed, 0.1))
+                    self.assertFalse(battle._local_motion_soft_block)
+                    world.assert_called_once()
+                    battle._destructibles.commit_local_prediction.assert_called_once()
+                    battle._sender.send_current.assert_called_once_with()
+                    self.assertEqual([list(row) for row in token],
+                        battle.local_destructible_contacts()[0]['token'])
+
+    def test_collision_free_building_allows_player_and_bot_rotation(self):
+        for actor in ('player', 'bot'):
+            for native_clear in (False, True):
+                with self.subTest(actor=actor, native_clear=native_clear):
+                    runtime = _runtime()
+                    battle = BattleRuntime(runtime)
+                    battle._avatar = runtime.bigworld.avatar
+                    battle._bots = types.SimpleNamespace(states={101: {}})
+                    battle._local_physics = _effective_params_snapshot()['physics']
+                    battle._sender = types.SimpleNamespace(
+                        send_current=mock.Mock(return_value=True))
+                    token = ((22, 37, 73),)
+                    proposal = {
+                        'status': 'crushed', 'token': token,
+                        'accepted_now': False, 'used_kinetic_speed': False,
+                        'kinds': 'structure', 'requires_commit': True,
+                        '_catalog_token': token,
+                    }
+                    committed = dict(proposal, accepted_now=True,
+                                     requires_commit=False)
+                    battle._destructible_pose_sweep = mock.Mock(
+                        side_effect=(proposal, committed))
+                    battle._destructibles = types.SimpleNamespace(
+                        structure_collision_swap_required=mock.Mock(
+                            return_value=False),
+                        commit_local_prediction=mock.Mock(return_value=True))
+                    battle._native_world_rotation_is_clear = mock.Mock(
+                        return_value=native_clear)
+                    if actor == 'bot':
+                        result = battle._resolve_bot_rotation(
+                            101, (2.0, 3.0, 4.0), 0.0, 0.08,
+                            _Descriptor(), 0.1, 12.5, 0.75)
+                    else:
+                        entity = _Vehicle(10, _Descriptor(), _Vector(),
+                                          (0, 0, 0), {'health': 500})
+                        result = battle._pose_sweep_is_clear(
+                            entity, (2.0, 3.0, 4.0), 0.0,
+                            (2.0, 3.0, 4.0), 0.08, 0.0, 0.1)
+                    self.assertEqual(native_clear, result)
+                    self.assertFalse(battle._local_motion_soft_block)
+                    battle._native_world_rotation_is_clear.assert_called_once()
 
     def test_player_unavailable_tree_registry_does_not_block_translation(self):
         for status in ('pending', 'hard'):
@@ -20753,7 +20803,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         skin_filter = lambda *unused: True
-        battle._destructibles = mock.Mock()
+        battle._destructibles = mock.Mock(collide_motion_segment=None)
         battle._destructibles.ground_collision_filter.side_effect = (
             lambda x, z: skin_filter if x > 0.0 else None)
         calls = []
@@ -20884,17 +20934,18 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 mock.patch(
                     'gui.mods.offline_lan_0922.battle_runtime.'
                     'world_collision.check_horizontal_collision',
-                    side_effect=('kinetic', 'clear')) as probe:
+                    side_effect=('kinetic', 'clear', 'clear')) as probe:
             battle._drive_local(0.1)
             first_position = battle._local_position
             first_speed = battle._local_speed
             battle._drive_local(0.1)
 
-        self.assertEqual((2.0, 3.0, 4.0), first_position)
-        self.assertEqual(0.0, first_speed)
-        self.assertEqual(1.0, battle._local_speed)
+        self.assertEqual((2.0, 3.0), first_position[:2])
+        self.assertAlmostEqual(4.1, first_position[2])
+        self.assertEqual(1.0, first_speed)
+        self.assertEqual(2.0, battle._local_speed)
         self.assertGreater(battle._local_position[2], first_position[2])
-        self.assertEqual(2, probe.call_count)
+        self.assertEqual(3, probe.call_count)
         self.assertTrue(all(call.args[-2]
                             for call in probe.call_args_list))
         self.assertTrue(all(call.args[-1] is not None
@@ -21899,7 +21950,33 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._destructibles._catalog_hull_contact.assert_not_called()
         battle._destructibles._catalog_motion_blocked.assert_not_called()
 
-    def test_bot_structure_swap_window_is_soft_but_still_blocks_pose(self):
+    def test_bot_commit_moves_now_or_stops_on_actual_replacement_geometry(self):
+        for used_cap in (False, True):
+            for after in ('clear', 'hard'):
+                with self.subTest(cap=used_cap, replacement=after):
+                    runtime = _runtime()
+                    battle = BattleRuntime(runtime)
+                    battle._avatar = runtime.bigworld.avatar
+                    battle._bots = types.SimpleNamespace(states={
+                        11: {'movement_dir': 1, 'rotation_dir': 0, 'airborne': False}})
+                    battle._destructibles = mock.Mock()
+                    battle._destructibles._catalog_motion_blocked.return_value = {
+                        'status': 'crushed', 'token': ((22, 37, 73),),
+                        'accepted_now': True, 'used_kinetic_speed': used_cap,
+                        'kinds': 'structure'}
+                    with mock.patch(
+                            'gui.mods.offline_lan_0922.battle_runtime.'
+                            'world_collision.check_horizontal_collision',
+                            side_effect=('clear', after)) as world:
+                        result = battle._resolve_bot_motion(
+                            11, (0, 0, 0), 0, 1, _Descriptor(), .04, 10)
+                    self.assertEqual('crushed' if after == 'clear' else 'hard', result)
+                    self.assertEqual(2, world.call_count)
+                    self.assertEqual(1, world.call_args.args[5])
+                    self.assertFalse(world.call_args.kwargs['commit_enabled'])
+                    battle._destructibles._catalog_pending_at_hull.assert_not_called()
+
+    def test_bot_real_wall_cannot_be_softened_by_obsolete_swap_flag(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
@@ -21925,9 +22002,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 11, (0.0, 0.0, 0.0), 0.0, 4.0,
                 _Descriptor(), 0.04, 10.0)
 
-        self.assertEqual('soft', native_swap)
-        self.assertEqual('soft', catalog_swap)
-        self.assertEqual('broken', battle._bot_motion_kinds[11])
+        self.assertEqual('hard', native_swap)
+        self.assertEqual('hard', catalog_swap)
+        self.assertEqual('structure', battle._bot_motion_kinds[11])
+        battle._destructibles._catalog_pending_at_hull.assert_not_called()
         battle._destructibles._catalog_motion_blocked.assert_called_once()
 
     def test_bot_residual_turn_speed_keeps_world_probe(self):
@@ -23853,7 +23931,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 entity, position, 0.0, dt)
 
         height_deltas = []
-        saw_partial_without_plane = False
+        saw_partial_support = False
         for unused in range(80):
             before = position
             candidate = (
@@ -23866,14 +23944,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
             spring_memory = battle._local_spring_ground_memory or ()
             contact_samples = sum(
                 value is not None for value in spring_memory)
-            if (0 < contact_samples < 3 and
-                    battle._local_ground_plane is None and
-                    not battle._local_airborne):
-                saw_partial_without_plane = True
+            if 0 < contact_samples < len(battle._local_spring_ground_memory or ()):
+                saw_partial_support = True
             if battle._local_airborne:
                 break
 
-        self.assertTrue(saw_partial_without_plane)
+        self.assertTrue(saw_partial_support)
         self.assertTrue(battle._local_airborne)
         # Releasing successive spring rows may bend the trajectory, but it
         # must not recreate the old abrupt downward steps at the cliff edge.
@@ -25229,6 +25305,31 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 (0.0, 0.0, 0.0), (0.0, 0.0, 0.08), 0.02, 1.0,
                 'advance', 4.0, 4.0, 0.0))
         output.write.assert_not_called()
+
+    def test_stationary_blocked_turn_is_reported_without_drive_throttle(self):
+        battle = BattleRuntime(_runtime())
+        battle._local_drive_turn = 1.0
+        battle._local_turn_speed = 0.0
+        battle._local_motion_status = 'hard'
+        battle._local_support_rise_blocked = False
+        args = ((0, 0, 0), (0, 0, 0), .02, 0.0, 'turn_contact', 0.0, 0.0, 0.0)
+        with mock.patch('sys.stdout') as output:
+            self.assertTrue(battle._report_local_motion_stall(*args))
+            self.assertFalse(battle._report_local_motion_stall(*args))
+        text = ''.join(call.args[0] for call in output.write.call_args_list)
+        self.assertIn('"blocked": true', text)
+        battle._next_local_stall_report = 0.0
+        for turn, speed, status in ((0.0, 0.0, 'hard'), (1.0, .2, 'clear')):
+            battle._local_drive_turn = turn
+            battle._local_turn_speed = speed
+            battle._local_motion_status = status
+            with mock.patch('sys.stdout') as output:
+                self.assertFalse(battle._report_local_motion_stall(*args))
+            rows = ''.join(call.args[0] for call in output.write.call_args_list)
+            self.assertNotIn('LOCAL_STALL', rows)
+            if status == 'hard':
+                self.assertIn('player_contact_frame', rows)
+
 
     def test_destroyed_car_support_report_reuses_probes_and_existing_cadence(self):
         runtime = _runtime()

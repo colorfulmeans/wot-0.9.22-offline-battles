@@ -95,7 +95,7 @@ class BotCorridorWidthTests(unittest.TestCase):
                 (10.0, 0.0, 20.0), math.pi / 2.0, -3.0,
                 _descriptor(1.4, left_width=1.9), 4.0)
         self.assertTrue(result['clear'])
-        self.assertEqual({-1.9, 0.0, 1.9}, {
+        self.assertEqual({-1.9, -0.25, 1.4}, {
             round(20.0 - start.z, 6) for start, unused_end in samples})
         self.assertTrue(all(abs(end.x - 14.0) < 1e-6
                             for unused_start, end in samples))
