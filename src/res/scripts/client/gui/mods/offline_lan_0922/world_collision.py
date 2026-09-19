@@ -59,14 +59,24 @@ def _record_hard_contact(trace, reason, start, end, collision,
 
 
 def _collide_horizontal(spaceID, start, end,
-		collision_filter=_UNPREPARED_COLLISION_FILTER):
+		collision_filter=_UNPREPARED_COLLISION_FILTER, departing_contact=None):
 	"""Raycast while hiding only exact destructibles already marked broken."""
 	import BigWorld
 	broken_filter = collision_filter
 	if broken_filter is _UNPREPARED_COLLISION_FILTER:
 		broken_filter = horizontal_collision_filter(start, end)
-	return collide_motion_segment(spaceID, start, end, broken_filter,
-		BigWorld.wg_collideSegment)
+	current = start
+	for unused in range(_WORLD_SOFT_RECAST_BUDGET + 1):
+		hit = collide_motion_segment(spaceID, current, end, broken_filter,
+			BigWorld.wg_collideSegment)
+		if hit is None or departing_contact is None or not departing_contact(hit):
+			return hit
+		remaining = end - hit[0]
+		if remaining.length <= _GROUND_HIT_EPSILON:
+			return None
+		current = hit[0] + remaining.scale(_GROUND_HIT_EPSILON / remaining.length)
+	# A bounded depenetration must still inspect every later surface.
+	return hit
 
 
 def _profile_gradient_limit(heights):
@@ -402,18 +412,69 @@ def _posed_ray(Math, pos, x1, z1, x2, z2, local_start, local_end,
 		Math.Vector3(x2, end_y, z2))
 
 
+def _supported_seam_is_clear(spaceID, Math, pos, collision, x1, z1, x2, z2,
+		local_start, local_end, pose_y, extents, collision_filter):
+	"""Cross a low support seam already straddled by the posed tracks.
+
+	Paris reports have one track on a 0.6 m pavement and one on the street.
+	The lowered longitudinal witness hits the pavement's vertical side and
+	classifies it as a building. Require native support on both sides, a broad
+	low top within the existing track plane, and a clear lifted body corridor.
+	An upright tank approaching a wall has no such raised support plane.
+	"""
+	import math, BigWorld
+	point, normal = collision[:2]
+	if abs(normal.y) > 0.2:
+		return False
+	length = math.hypot(normal.x, normal.z)
+	if length < 0.9:
+		return False
+	nx, nz = normal.x / length, normal.z / length
+	hw, back, front = extents
+	posed_top = (float(pos.y) + abs(pose_y[0]) * hw +
+		max(-back * pose_y[2], front * pose_y[2]))
+	if posed_top < point.y - _GROUND_HIT_EPSILON:
+		return False
+	tops = []
+	for offset in (0.12, -0.12, -0.60):
+		x, z = point.x + nx * offset, point.z + nz * offset
+		start = Math.Vector3(x, pos.y + 1.6, z)
+		end = Math.Vector3(x, pos.y - 3.0, z)
+		hit = collide_motion_segment(spaceID, start, end, collision_filter,
+			BigWorld.wg_collideSegment, 'native.motion.ground')
+		if hit is None or len(hit) < 2 or not _drivable_surface(hit, 0.5):
+			return False
+		tops.append(float(hit[0].y))
+	rise = max(tops[1:]) - tops[0]
+	if (not 0.03 < rise <= 0.75 or abs(tops[1] - tops[2]) > 0.12 or
+			min(tops[1:]) < point.y - _GROUND_HIT_EPSILON or
+			max(tops[1:]) > posed_top + 0.075):
+		return False
+	for height in (0.6, 1.1, 1.6):
+		start, end = _posed_ray(Math, pos, x1, z1, x2, z2,
+			local_start, local_end, height, pose_y)
+		# Raise the same corridor by only the measured step. Never discard
+		# the rest of the segment or the occupied upper hull heights.
+		offset = Math.Vector3(0.0, rise, 0.0)
+		if _collide_horizontal(spaceID, start + offset, end + offset,
+				collision_filter) is not None:
+			return False
+	return True
+
+
 def _raised_ray_has_wall(spaceID, Math, pos, x1, z1, x2, z2,
 		local_start, local_end, pose_y, target_length,
 		maximum_gradient=_MAX_DRIVABLE_GRADIENT, ground_profile=None,
 		collision_filter=_UNPREPARED_COLLISION_FILTER,
-		ground_ahead=None, trace=None, require_clear_exit=False):
+		ground_ahead=None, trace=None, require_clear_exit=False,
+		departing_contact=None):
 	"""A drivable lower slope must not hide an independent wall above it."""
 	for height in (1.1, 1.6):
 		start, end = _posed_ray(
 			Math, pos, x1, z1, x2, z2, local_start, local_end,
 			height, pose_y, ground_ahead)
 		collision = _collide_horizontal(
-			spaceID, start, end, collision_filter)
+			spaceID, start, end, collision_filter, departing_contact)
 		if collision is None:
 			continue
 		if (collision[0] - start).length >= target_length:
@@ -551,7 +612,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		airborne=False, dt=0.04, return_status=False,
 		allow_kinetic=False, kinetic_speed=None, commit_enabled=True,
 		motion_yaw=None, pitch=0.0, roll=0.0, trace=None,
-		exact_footprint=False):
+		exact_footprint=False, departing_contact=None):
 	import math, BigWorld, Math
 	try:
 		hw = 1.5
@@ -720,7 +781,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 				Math, pos, x1, z1, x2, z2, local_start, local_end,
 				0.6, pose_y, _ground_ahead)
 			col_bot = _collide_horizontal(
-				spaceID, start_bot, end_bot, _sweep_filter)
+				spaceID, start_bot, end_bot, _sweep_filter, departing_contact)
 			# A posed lane is longer than its flat XZ projection, and every
 			# distance test below compares a 3-D ``.length``.  The prepared
 			# sweep filter is keyed on the envelope's x/z bounds only, so
@@ -786,7 +847,8 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 										 profile_sin, profile_cos, profile_direction,
 										 profile_look, _profile_plane),
 										_sweep_filter, _ground_ahead, trace=trace,
-										require_clear_exit=True):
+										require_clear_exit=True,
+										departing_contact=departing_contact):
 									return 'hard' if return_status else True
 								continue
 							_record_hard_contact(trace, 'ground_profile', start_bot,
@@ -814,8 +876,14 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 								 profile_x, profile_z,
 								 profile_sin, profile_cos,
 								 profile_direction, profile_look, _profile_plane),
-								_sweep_filter, _ground_ahead, trace=trace):
+								_sweep_filter, _ground_ahead, trace=trace,
+								departing_contact=departing_contact):
 							return 'hard' if return_status else True
+						continue
+					if (not airborne and _supported_seam_is_clear(
+							spaceID, Math, pos, col_bot, x1, z1, x2, z2,
+							local_start, local_end, pose_y,
+							(hw, hl_back, hl_front), _sweep_filter)):
 						continue
 					# Treat every occupied hull height as independent evidence.  The
 					# previous distance-difference heuristic dropped the whole lane when
@@ -831,7 +899,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 							pose_y, _ground_ahead)
 						_ray_hit = _collide_horizontal(
 							spaceID, _ray_start, _ray_end,
-							_sweep_filter)
+							_sweep_filter, departing_contact)
 						if _ray_hit is None:
 							continue
 						_ray_distance = (_ray_hit[0] - _ray_start).length
@@ -864,7 +932,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 						pose_y, _ground_ahead)
 					_ray_hit = _collide_horizontal(
 							spaceID, _ray_start, _ray_end,
-							_sweep_filter)
+							_sweep_filter, departing_contact)
 					if _ray_hit is None:
 						continue
 					_ray_distance = (_ray_hit[0] - _ray_start).length

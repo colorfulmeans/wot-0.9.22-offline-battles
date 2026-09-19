@@ -158,6 +158,57 @@ class TerrainGrid(object):
 		self._static_hull_edges = {}
 		self._static_hull_key = None
 		self.static_hull_revision = 0
+		self._native_review_cells = set()
+		self._native_review_edges = {}
+		self._native_review_order = deque()
+
+	def review_native_corridor(self, current, target):
+		"""A real contact makes nearby baked links provisional for every Bot.
+
+	Only map geometry is probed. Traffic or a turn in place cannot manufacture
+	blocked edges. A* and shortcuts then use the same measured door openings,
+	and share those answers instead of sending each tank at the old wall.
+	"""
+		if not self.prebaked or not callable(self.obstacle_probe):
+			return False
+		distance = _distance_2d(current, target)
+		amount = min(1.0, 6.0 / max(0.001, distance))
+		centre = self.cell_for(tuple(float(current[i]) +
+			(float(target[i]) - float(current[i])) * amount for i in range(3)))
+		radius = int(math.ceil(24.0 / self.cell_size))
+		before = len(self._native_review_cells)
+		for z in range(centre[1] - radius, centre[1] + radius + 1):
+			for x in range(centre[0] - radius, centre[0] + radius + 1):
+				if self._baked_index((x, z)) is not None:
+					self._native_review_cells.add((x, z))
+		return len(self._native_review_cells) != before
+
+	def invalidate_native_review(self):
+		"""A delivered destruction can open a door or leave new solid debris."""
+		self._native_review_edges.clear()
+		self._native_review_order.clear()
+
+	def _native_edge_clear(self, first, second):
+		if (first not in self._native_review_cells and
+				second not in self._native_review_cells):
+			return True
+		key = tuple(sorted((first, second)))
+		if key in self._native_review_edges:
+			return self._native_review_edges[key]
+		first_y, second_y = (self._baked_cell_height(first),
+			self._baked_cell_height(second))
+		clear = False
+		if first_y is not None and second_y is not None:
+			try:
+				clear = not self.obstacle_probe(self.point_for(first, first_y),
+					self.point_for(second, second_y), 2.15)
+			except Exception:
+				clear = False
+		if len(self._native_review_edges) >= 4096:
+			self._native_review_edges.pop(self._native_review_order.popleft(), None)
+		self._native_review_edges[key] = clear
+		self._native_review_order.append(key)
+		return clear
 
 	def _install_baked_graph(self, graph):
 		if (graph.get('format') != BAKED_FORMAT_NAME or
@@ -346,6 +397,7 @@ class TerrainGrid(object):
 
 	def clear_negative_cache(self):
 		"""Retry cells that may have missed while distant chunks streamed in."""
+		self.invalidate_native_review()
 		for cache in (self._ground_cache, self._edge_cache):
 			for key, value in list(cache.items()):
 				if value is None:
@@ -607,10 +659,12 @@ class TerrainGrid(object):
 		        self.segment_clear(start, end))
 
 	def path_has_penalty(self, path, now):
-		if not self._failed_edges:
+		if not self._failed_edges and not self._native_review_cells:
 			return False
 		for index in range(len(path) - 1):
 			for key in self._edge_keys_for_segment(path[index], path[index + 1]):
+				if not self._native_edge_clear(*key):
+					return True
 				if self._failed_edge_timed_penalty(key, now) > 0.0:
 					return True
 		return False
@@ -670,7 +724,10 @@ class TerrainGrid(object):
 		if distance < 0.25:
 			return True
 		if self.prebaked:
-			return self._baked_corridor(start, end)[0]
+			if not self._baked_corridor(start, end)[0]:
+				return False
+			return all(self._native_edge_clear(*edge)
+				for edge in self._edge_keys_for_segment(start, end))
 		start_key = self._point_key(start)
 		end_key = self._point_key(end)
 		key = (start_key, end_key)
@@ -1058,6 +1115,16 @@ class TerrainGrid(object):
 				if self.prebaked:
 					(next_cell, next_y, run, slope_cost,
 					 plain_penalty, clearance_penalty, edge_key) = edge
+					if ((current in self._native_review_cells or
+							next_cell in self._native_review_cells) and
+							edge_key not in self._native_review_edges):
+						# Charge native sweeps to the existing resumable search
+						# budget. A new review region must not spend hundreds of
+						# uncached model queries in one render callback.
+						for unused_native_credit in range(3):
+							yield None
+					if not self._native_edge_clear(current, next_cell):
+						continue
 					terrain_penalty = (clearance_penalty if prefer_clearance else
 					                   plain_penalty)
 				else:
@@ -1678,6 +1745,7 @@ class TerrainNavigator(object):
 			yaw = float(realised_yaw)
 		except Exception:
 			return False
+		self.grid.review_native_corridor(current, target)
 		dx = float(target[0]) - float(current[0])
 		dz = float(target[2]) - float(current[2])
 		use_navigation_target = bool(

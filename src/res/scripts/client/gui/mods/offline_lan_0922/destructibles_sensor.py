@@ -4285,25 +4285,34 @@ def _compiled_motion_skin_1513(point, start, end, surfaces):
 		interval = _segment_world_box_interval(start, end, envelope)
 		if interval is not None:
 			owners.append((identity, instance, interval))
-	if len(owners) != 1:
+	if not owners:
 		return None
-	identity, instance, interval = owners[0]
 	authority = _get_destr_authority()
 	predicted = globals().get('g_offh_destr_speculative', set())
-	materials = set(box[2] for box in instance['boxes'])
 	excluded = set()
 	for surface in aliases:
-		material = surface[0] if instance['kind'] == 'structure' else None
-		key = identity + (material,)
-		if material in materials and (
-				authority.is_destroyed(*key) or key in predicted):
+		# Touching placements can share the same compiled face. Ambiguity
+		# matters only while one possible owner is still live: requiring a
+		# unique owner kept an invisible wall even after BOTH were destroyed.
+		accepted = True
+		for identity, instance, unused_interval in owners:
+			material = surface[0] if instance['kind'] == 'structure' else None
+			key = identity + (material,)
+			if (material not in set(box[2] for box in instance['boxes']) or
+					not (authority.is_destroyed(*key) or key in predicted)):
+				accepted = False
+				break
+		if accepted:
 			excluded.add(surface)
 	if not excluded:
 		return None
 	# Anonymous keys can be shared by several placements. A later live owner
 	# may begin inside this model envelope even though it did not contain the
 	# first hit. End the filtered query before that owner, then query it normally.
-	limit = interval[1]
+	owner_ids = set(value[0] for value in owners)
+	# Re-resolve ownership at the first exit; do not extend an ambiguous
+	# shared key across the union of all intersecting placements.
+	limit = min(value[2][1] for value in owners)
 	bound = start + (end - start).scale(limit)
 	neighbours = set()
 	bins = globals().get('g_offh_destr_contact_bins', {})
@@ -4312,7 +4321,7 @@ def _compiled_motion_skin_1513(point, start, end, surfaces):
 			min(start.z, bound.z), max(start.z, bound.z)):
 		neighbours.update(bins.get(bin_key, ()))
 	for other_identity in neighbours:
-		if other_identity == identity:
+		if other_identity in owner_ids:
 			continue
 		other = instances.get(other_identity)
 		if other is None:

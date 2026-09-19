@@ -1177,6 +1177,70 @@ def _destructible_rotation_interval_bbox(bbox, half_angle):
     )
 
 
+def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
+                                pitch=0.0, roll=0.0, previous_contacts=None):
+    """Permit only reduced penetration of a face already inside this body.
+
+    A replacement can appear inside an occupied hull. Probing its enclosing
+    yaw box then blocks both turn directions forever. Test the complete
+    analytical corner sweep against that contact plane: the end must improve
+    clearance, and no intermediate corner may go deeper than the start.
+    The caller recasts after this individual hit to retain every other wall.
+    """
+    low, high = bbox[:2]
+    pose_y = world_collision._hull_pose_y(pitch, roll)
+    end_yaw = float(start_yaw) + _angle_delta(start_yaw, end_yaw)
+    sine, cosine = math.sin(start_yaw), math.cos(start_yaw)
+
+    def departing(collision):
+        point, normal = collision[:2]
+        if abs(normal.y) > 0.2 or abs(pose_y[1]) < 0.1:
+            return False
+        dx, dy, dz = (point.x - position[0], point.y - position[1],
+                      point.z - position[2])
+        x, z = dx * cosine - dz * sine, dx * sine + dz * cosine
+        y = (dy - x * pose_y[0] - z * pose_y[2]) / pose_y[1]
+        inside = all(low[i] - 0.001 <= value <= high[i] + 0.001
+                     for i, value in enumerate((x, y, z)))
+        plane = dx * normal.x + dy * normal.y + dz * normal.z
+        # Use the exposed face. A backface enclosing the centre is not
+        # evidence for a safe escape from this side of the object.
+        if plane >= 0.0:
+            return False
+        before, after, swept = [], [], []
+        for cx in (low[0], high[0]):
+            for cy in (low[1], high[1]):
+                for cz in (low[2], high[2]):
+                    a = normal.x * cx + normal.z * cz
+                    b = normal.x * cz - normal.z * cx
+                    height = normal.y * (cx * pose_y[0] +
+                                        cy * pose_y[1] + cz * pose_y[2])
+                    before.append(a * cosine + b * sine + height)
+                    after.append(a * math.cos(end_yaw) +
+                                 b * math.sin(end_yaw) + height)
+                    swept.append(_trig_interval_extrema(
+                        a, b, start_yaw, end_yaw)[0] + height)
+        improves = (min(after) > min(before) + 1.0e-8 and
+                    min(swept) >= min(before) - 1.0e-8)
+        if not improves or inside:
+            return improves
+        # The enclosing interval lane can sit outside the old side while
+        # still striking the same already-penetrated wall. Require another
+        # native hit from the EXACT starting footprint to establish that
+        # contact plane. An outside point alone cannot grant passage.
+        for old_point, old_normal in (previous_contacts()
+                if callable(previous_contacts) else ()):
+            alignment = (normal.x * old_normal.x + normal.y * old_normal.y +
+                         normal.z * old_normal.z)
+            difference = ((point.x - old_point.x) * normal.x +
+                          (point.y - old_point.y) * normal.y +
+                          (point.z - old_point.z) * normal.z)
+            if alignment >= 0.9999 and abs(difference) <= 0.001:
+                return True
+        return False
+    return departing
+
+
 def _destructible_posed_bbox(bbox, pitch=0.0, roll=0.0):
     """Enclose one height-posed body in its zero-yaw collision frame.
 
@@ -5700,18 +5764,28 @@ class BattleRuntime(object):
             return False
         lateral_x, lateral_z = dz / length, -dx / length
         for offset in (-float(half_width), 0.0, float(half_width)):
-            ray_start = self._vector((
-                float(start[0]) + lateral_x * offset,
-                float(start[1]) + 0.9,
-                float(start[2]) + lateral_z * offset))
-            ray_end = self._vector((
-                float(end[0]) + lateral_x * offset,
-                float(end[1]) + 0.9,
-                float(end[2]) + lateral_z * offset))
-            if self._runtime.bigworld.wg_collideSegment(
-                    self._avatar.spaceID, ray_start, ray_end,
-                    VEHICLE_SKIP_FLAGS) is not None:
-                return True
+            for height in (0.9, 1.6):
+                ray_start = self._vector((
+                    float(start[0]) + lateral_x * offset,
+                    float(start[1]) + height,
+                    float(start[2]) + lateral_z * offset))
+                ray_end = self._vector((
+                    float(end[0]) + lateral_x * offset,
+                    float(end[1]) + height,
+                    float(end[2]) + lateral_z * offset))
+                prepare = getattr(self._destructibles,
+                                  'prepare_horizontal_collision_filter', None)
+                collide = getattr(self._destructibles,
+                                  'collide_motion_segment', None)
+                native = self._runtime.bigworld.wg_collideSegment
+                if callable(prepare) and callable(collide):
+                    hit = collide(self._avatar.spaceID, ray_start, ray_end,
+                                  prepare(ray_start, ray_end), native)
+                else:
+                    hit = native(self._avatar.spaceID, ray_start, ray_end,
+                                 VEHICLE_SKIP_FLAGS)
+                if hit is not None:
+                    return True
         return False
 
     def _water_depth(self, point):
@@ -10227,6 +10301,10 @@ class BattleRuntime(object):
         if kind == 'tree':
             foliage_changed = self._activate_fallen_tree_foliage(
                 chunk_id, item_index)
+        grid = getattr(getattr(self._bots, 'navigator', None), 'grid', None)
+        invalidate = getattr(grid, 'invalidate_native_review', None)
+        if callable(invalidate):
+            invalidate()
         if already_destroyed:
             return foliage_changed
         if kind != 'tree' and callable(note_destroyed):
@@ -18898,6 +18976,27 @@ class BattleRuntime(object):
         if not 1 <= steps <= DESTRUCTIBLE_POSE_MAX_SWEEP_STEPS:
             raise RuntimeError(
                 'native world rotation sweep exceeds its bound')
+        previous_contacts = []
+        previous_checked = [False]
+
+        def read_previous_contacts():
+            if not previous_checked[0]:
+                previous_checked[0] = True
+                actual_descriptor = _destructible_world_sweep_descriptor(descriptor, bbox)
+                for direction in (1.0e-6, -1.0e-6):
+                    previous_trace = {}
+                    world_collision.check_horizontal_collision(
+                        self._runtime.bigworld, self._runtime.math,
+                        self._avatar.spaceID, self._vector(position),
+                        start_yaw, direction, actual_descriptor, False, 0.0,
+                        True, False, None, commit_enabled=False,
+                        pitch=pitch, roll=roll, trace=previous_trace,
+                        exact_footprint=True)
+                    if 'hit' in previous_trace and 'normal' in previous_trace:
+                        previous_contacts.append((self._vector(previous_trace['hit']),
+                                                  self._vector(previous_trace['normal'])))
+            return previous_contacts
+
         for index in range(steps):
             lower = float(index) / float(steps)
             upper = float(index + 1) / float(steps)
@@ -18907,6 +19006,10 @@ class BattleRuntime(object):
                 bbox, abs(yaw_delta) * 0.5 / float(steps))
             sweep_descriptor = _destructible_world_sweep_descriptor(
                 descriptor, interval_bbox)
+            departing = _rotation_departing_contact(
+                position, bbox, float(start_yaw) + yaw_delta * lower,
+                float(start_yaw) + yaw_delta * upper, pitch, roll,
+                read_previous_contacts)
             for probe_speed in (1.0e-6, -1.0e-6):
                 trace = {}
                 world_status = world_collision.check_horizontal_collision(
@@ -18915,7 +19018,8 @@ class BattleRuntime(object):
                     slice_yaw, probe_speed, sweep_descriptor, False, 0.0,
                     True, False, None, commit_enabled=False,
                     pitch=pitch, roll=roll,
-                    trace=trace, exact_footprint=True)
+                    trace=trace, exact_footprint=True,
+                    departing_contact=departing)
                 if isinstance(world_status, bool):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status != 'clear':
