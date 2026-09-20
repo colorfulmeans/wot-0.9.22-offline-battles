@@ -180,6 +180,44 @@ class RailSideTreeEvidenceTests(unittest.TestCase):
         self.assertFalse(calls)
         self.assertFalse(destroyed)
 
+    def test_v9_mode_excluded_slot_does_not_disable_other_trees_in_chunk(self):
+        sensor.set_catalog(None)
+        area, native, math_module, descriptor, tree, unused = (
+            fixture.DestructiblesCompatibilityTests()._authored_tree_identity_fixture())
+        catalog = sensor._destructible_catalog
+        catalog['layout_repair_supported'] = True
+        catalog['tree_instances'].pop((22, 1))
+        catalog['excluded_instances'].add((22, 1))
+        category = native.wg_getDestructibleEffectCategory.side_effect
+        matrix = native.wg_getDestructibleMatrix.side_effect
+
+        def category_guard(space, chunk, item, material):
+            self.assertNotEqual(1, item, 'queried absent native scene slot')
+            return category(space, chunk, item, material)
+
+        def matrix_guard(space, chunk, item):
+            self.assertNotEqual(1, item, 'queried absent native scene matrix')
+            return matrix(space, chunk, item)
+
+        native.wg_getDestructibleEffectCategory.side_effect = category_guard
+        native.wg_getDestructibleMatrix.side_effect = matrix_guard
+        authority = types.SimpleNamespace(is_destroyed=lambda *args: False)
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area,
+                'BigWorld': native, 'Math': math_module}), mock.patch.object(
+                    sensor, '_get_destr_authority', return_value=authority):
+            result = sensor._tree_motion_proposal(1,
+                Vector(50, 0, 54), math.pi, Vector(50, 0, 49), math.pi,
+                10, descriptor, 1, dt=.1)
+            self.assertEqual('crushed', result['status'])
+            self.assertEqual(((22, 0, None),), result['token'])
+            self.assertTrue(result['requires_commit'])
+            self.assertEqual(('exact', tree),
+                sensor.resolve_native_item_name_1513(1, 22, 0))
+            self.assertIn((22, 2), sensor.g_offh_destr_instances)
+            self.assertFalse(sensor.is_isolated_1513(22, 0))
+            self.assertTrue(sensor.is_isolated_1513(22, 1))
+        native.wg_getDestructibleFilename.assert_not_called()
+
 
 class LocalTreeDiagnosticBoundaryTests(unittest.TestCase):
     def test_report_serializes_vector_corners_and_reads_existing_authority(self):

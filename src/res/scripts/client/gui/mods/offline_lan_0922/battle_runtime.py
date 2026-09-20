@@ -1847,6 +1847,8 @@ class BattleRuntime(object):
         self._client_ready_received = False
         self._siege_hints = None
         self._local_descriptor = None
+        self._local_hydraulic_motion_window = None
+        self._local_hydraulic_motion_report_failed = False
         self._bot_fire_seen = {}
         self._bot_fire_confirmations = {}
         self._bot_launch_payloads = {}
@@ -2189,6 +2191,8 @@ class BattleRuntime(object):
         self._last_health = {}
         self._client_ready_received = False
         self._local_descriptor = None
+        self._local_hydraulic_motion_window = None
+        self._local_hydraulic_motion_report_failed = False
         self._bot_fire_seen = {}
         self._bot_fire_confirmations = {}
         self._bot_launch_payloads = {}
@@ -4769,6 +4773,41 @@ class BattleRuntime(object):
                 critical.get('crew_ko') or (), 'traverse') *
             device_damage.module_stat_factor(
                 devices, destroyed, descriptor, 'traverse', damaged))
+
+    @staticmethod
+    def _destructible_drive_speed_cap(descriptor, physics, speed,
+                                     travel_descriptor=None):
+        """Keep powered contact eligibility independent of Siege gearing.
+
+        The port already uses a drive cap to admit a powered exact contact
+        which cannot accelerate through an intact prop. Using the active
+        Siege limit here made that same vehicle unable to push over the prop
+        in low gear. Read its mounted travel limit for this gate only; actual
+        motion, impact speed, hull shape and native health/scale laws still
+        belong to the active descriptor. Ordinary vehicles retain their
+        effective cap, and an unavailable drive limit is never fabricated.
+        """
+        reverse = float(speed) < 0.0
+        try:
+            value = float(physics['speedBwd' if reverse else 'speedFwd'])
+            if travel_descriptor is None:
+                travel_descriptor = _field(descriptor, 'defaultVehicleDescr')
+            if travel_descriptor is not None and value > 0.0:
+                travel = float(_field(travel_descriptor, 'physics')[
+                    'speedLimits'][1 if reverse else 0])
+                if math.isnan(travel) or math.isinf(travel) or travel < 0.0:
+                    raise ValueError('invalid travel limit')
+                value = max(value, travel)
+        except (AttributeError, KeyError, IndexError, TypeError,
+                ValueError, OverflowError):
+            raise RuntimeError('destructible drive speed cap is unavailable')
+        if math.isnan(value) or math.isinf(value) or value < 0.0:
+            raise RuntimeError('destructible drive speed cap is invalid')
+        return -value if reverse else value
+
+    def _bot_destructible_travel_descriptor(self, bot_id):
+        pair = getattr(self._bots, '_descriptor_pairs', {}).get(int(bot_id))
+        return pair[0] if pair is not None and pair[1] is not None else None
 
     @staticmethod
     def _destructible_rotation_speed_cap(physics, critical_factor=1.0):
@@ -15228,6 +15267,7 @@ class BattleRuntime(object):
         else:
             critical_target = self._projectile_live_critical_target(
                 record, target)
+        traced_collisions = tuple(collisions)
         collisions, trace_start, trace_end = self._vehicle_trace(
             shot, query[0], query[1], collisions)
         if not combat_rules.is_he(shot):
@@ -15239,6 +15279,7 @@ class BattleRuntime(object):
                         record, target, query[0], trace_end,
                         collision_pose))
                 if extended:
+                    traced_collisions = tuple(extended)
                     collisions, trace_start, trace_end = self._vehicle_trace(
                         shot, query[0], trace_end, tuple(extended))
                     collision_evidence = tuple(extended_evidence)
@@ -15386,7 +15427,52 @@ class BattleRuntime(object):
             blast_contact.get('distance') if blast_contact is not None else
             0.0 if contact is not None and contact.get('layer') == 'structural'
             else None)
+        self._report_projectile_track_outcome(
+            meta, target, traced_collisions, collisions, contact, effect)
         return effect
+
+    @staticmethod
+    def _report_projectile_track_outcome(meta, target, traced, retained,
+                                         contact, effect):
+        """Relate bounded track diagnostics to the same shot's HP proposal."""
+        try:
+            tracks = []
+            structural = []
+            for collision in traced:
+                material = collision.matInfo
+                name = _field(_field(material, 'extra'), 'name')
+                if name in track_damage.TRACK_DEVICE_NAMES:
+                    tracks.append((str(name), float(collision.dist)))
+                if _field(material, 'vehicleDamageFactor', 0.0):
+                    structural.append(float(collision.dist))
+            if not tracks:
+                return
+            kept_structure = any(
+                _field(collision.matInfo, 'vehicleDamageFactor', 0.0)
+                for collision in retained)
+            delta = effect.get('critical_delta') or {}
+            losses = [dict(item) for item in delta.get('devices', ())
+                      if item.get('name') in track_damage.TRACK_DEVICE_NAMES]
+            vehicle = str(_field(target.typeDescriptor, 'name', 'unknown'))
+            result = int(effect['shot_result'])
+            payload = {
+                'projectile': meta.get('projectile_id'),
+                'shooter_kind': meta.get('shooter_kind'),
+                'target': int(target.id), 'vehicle': vehicle,
+                'tracks': tracks, 'structural_distances': structural,
+                'structural_retained': kept_structure,
+                'terminal_layer': (contact or {}).get('layer'),
+                'shot_result': result, 'proposed_hp': int(effect['damage']),
+                'proposed_tracks': losses,
+            }
+            track_damage.report(
+                ('outcome', payload['shooter_kind'], vehicle,
+                 tuple(name for name, unused_distance in tracks), result,
+                 bool(structural), kept_structure, bool(losses)),
+                'OUTCOME ' + json.dumps(payload))
+        except Exception:
+            # Optional evidence must not prevent an otherwise valid hit.
+            pass
 
     def _projectile_stun_effect(self, effect, shot, record, target, state,
                                 distance):
@@ -16338,10 +16424,8 @@ class BattleRuntime(object):
             if requested_catalog:
                 descriptor = self._resolve_player_descriptor(state)
                 params = self._player_effective_snapshot(state)['physics']
-                limit_name = 'speedBwd' if speed < 0.0 else 'speedFwd'
-                kinetic_speed = (
-                    -float(params[limit_name]) if speed < 0.0 else
-                    float(params[limit_name]))
+                kinetic_speed = self._destructible_drive_speed_cap(
+                    descriptor, params, speed)
                 yaw_delta = _angle_delta(yaw, end_yaw)
                 pose_sweep = abs(yaw_delta) > 1.0e-8
                 move_x = end_position[0] - position[0]
@@ -17845,6 +17929,101 @@ class BattleRuntime(object):
             self._report_local_prop_support(end, now)
         return True
 
+    def _report_local_hydraulic_motion(self, entity, start, attitude, dt,
+                                       before, drive, horizontal, path,
+                                       contact):
+        """Retain sub-threshold hitches during otherwise continuous travel.
+
+        Stall-only sampling misses small repeated corrections and clear
+        constant-speed presentation reports. Summarize every moving hydraulic
+        slice, keeping only one worst witness per metric. This reads copied
+        state, never probes native geometry or changes the simulation cadence.
+        """
+        try:
+            descriptor = self._local_descriptor or entity.typeDescriptor
+            if (self._worker_mode or dt <= 0.0 or not
+                    vehicle_physics.suspension_trial_excluded(descriptor)):
+                return
+            moving = (abs(before) + abs(drive) + abs(self._local_turn_speed) +
+                      abs(self._local_drive_throttle) + abs(self._local_drive_turn))
+            if moving <= 1.0e-8:
+                self._local_hydraulic_motion_window = None
+                return
+            now = self._clock()
+            key = (id(entity), self._avatar.spaceID,
+                   getattr(entity, 'siegeState', None))
+            window = getattr(self, '_local_hydraulic_motion_window', None)
+            if window is None or window['key'] != key or now < window['start']:
+                window = {'key': key, 'start': now, 'frames': 0,
+                          'seconds': 0.0, 'paths': {}, 'world_reasons': {},
+                          'airborne_frames': 0, 'support_blocked_frames': 0,
+                          'input_changes': 0, 'worst': {}}
+                self._local_hydraulic_motion_window = window
+            end = self._local_position
+            distance = _distance_2d(start, end)
+            final = self._local_speed
+            inputs = (self._local_drive_throttle, self._local_drive_turn,
+                      bool(getattr(self._sender, 'handbrake', False)))
+            if window.get('input') is not None and window['input'] != inputs:
+                window['input_changes'] += 1
+            window['input'] = inputs
+            window['frames'] += 1
+            window['seconds'] += dt
+            path = path or 'still'
+            window['paths'][path] = window['paths'].get(path, 0) + 1
+            reason = (contact or {}).get('reason') or '-'
+            window['world_reasons'][reason] = window['world_reasons'].get(reason, 0) + 1
+            window['airborne_frames'] += int(bool(self._local_airborne))
+            window['support_blocked_frames'] += int(bool(self._local_support_rise_blocked))
+            metrics = (
+                ('step_seconds', dt),
+                ('drive_speed_loss', max(0.0, abs(before) - abs(drive))),
+                ('horizontal_speed_loss', max(0.0, abs(drive) - abs(horizontal))),
+                ('settling_speed_loss', max(0.0, abs(horizontal) - abs(final))),
+                ('travel_deficit', max(0.0, abs(drive) * dt - distance)),
+                ('height_step', abs(end[1] - start[1])),
+                ('attitude_step', max(abs(self._local_pitch - attitude[0]),
+                                      abs(self._local_roll - attitude[1]))),
+            )
+            witness = None
+            for name, value in metrics:
+                previous = window['worst'].get(name)
+                if previous is not None and previous['value'] >= value:
+                    continue
+                if witness is None:
+                    support = getattr(self, '_local_legacy_support_sample', None)
+                    witness = {
+                        'time': now, 'dt': dt, 'start': tuple(start), 'end': tuple(end),
+                        'speeds': [before, drive, horizontal, final],
+                        'attitude_before': attitude,
+                        'attitude_after': (self._local_pitch, self._local_roll),
+                        'vertical_speed': self._local_vertical_speed,
+                        'airborne': self._local_airborne,
+                        'support_blocked': self._local_support_rise_blocked,
+                        'path': path, 'world': self._local_motion_status,
+                        'kinds': self._local_motion_kinds, 'reason': reason,
+                        'input': inputs, 'legacy_support': support,
+                    }
+                window['worst'][name] = {'value': value, 'sample': witness}
+            if now - window['start'] < 2.0:
+                return
+            payload = dict(window)
+            payload.pop('key')
+            payload['siege_state'] = key[2]
+            payload['end_time'] = now
+            payload['speed_columns'] = 'before,drive,horizontal,final'
+            self._local_hydraulic_motion_window = None
+            sys.stdout.write('[Offline LAN 0.9.22] HYDRAULIC MOTION %s\n' %
+                             json.dumps(payload))
+        except Exception as error:
+            self._local_hydraulic_motion_window = None
+            if not getattr(self, '_local_hydraulic_motion_report_failed', False):
+                self._local_hydraulic_motion_report_failed = True
+                try:
+                    sys.stdout.write('[Offline LAN 0.9.22] hydraulic motion report failed: %s\n' % error)
+                except Exception:
+                    pass
+
     def _report_local_contact_tick(self, path, before, pitch, rise):
         """Close the tick with the drive slope, the hull rise and the skips.
 
@@ -18956,8 +19135,9 @@ class BattleRuntime(object):
         rotation_speed_cap = self._destructible_rotation_speed_cap(
             self._local_physics,
             critical_damage.stat_factor(entity, 'traverse'))
-        drive_speed_cap = (float(self._local_physics[
-            'speedBwd' if speed < 0.0 else 'speedFwd'])
+        drive_speed_cap = (self._destructible_drive_speed_cap(
+            self._local_descriptor or entity.typeDescriptor,
+            self._local_physics, speed)
             if rotation_speed_cap else None)
         catalog_detail = self._destructible_pose_sweep(
             start_position, start_yaw, end_position, end_yaw, speed,
@@ -19166,9 +19346,9 @@ class BattleRuntime(object):
             if not isinstance(params, dict):
                 raise RuntimeError(
                     'player effective physics parameters are unavailable')
-            limit_name = 'speedBwd' if speed < 0.0 else 'speedFwd'
-            kinetic_speed = (-float(params[limit_name]) if speed < 0.0 else
-                             float(params[limit_name]))
+            kinetic_speed = self._destructible_drive_speed_cap(
+                self._local_descriptor or entity.typeDescriptor,
+                params, speed)
         if world_motion_yaw is None:
             contact_end = (
                 float(position[0]) + math.sin(float(yaw)) *
@@ -19352,8 +19532,10 @@ class BattleRuntime(object):
         pitch = _number(bot_state.get(
             'terrain_pitch', bot_state.get('pitch')))
         roll = _number(bot_state.get('roll'))
-        drive_speed_cap = (vehicle_physics.derive_params(descriptor)['speedFwd']
-                           if rotation_speed_cap else None)
+        drive_speed_cap = (self._destructible_drive_speed_cap(
+            descriptor, vehicle_physics.derive_params(descriptor), 0.0,
+            self._bot_destructible_travel_descriptor(bot_id))
+            if rotation_speed_cap else None)
         detail = self._destructible_pose_sweep(
             position, start_yaw, position, end_yaw, 0.0,
             descriptor, now, dt,
@@ -19474,9 +19656,9 @@ class BattleRuntime(object):
         kinetic_speed = None
         if allow_crush_drive:
             params = vehicle_physics.derive_params(descriptor)
-            limit_name = 'speedBwd' if speed < 0.0 else 'speedFwd'
-            kinetic_speed = (-float(params[limit_name]) if speed < 0.0 else
-                             float(params[limit_name]))
+            kinetic_speed = self._destructible_drive_speed_cap(
+                descriptor, params, speed,
+                self._bot_destructible_travel_descriptor(bot_id))
         contact_trace = {}
         world_status = world_collision.check_horizontal_collision(
             self._runtime.bigworld, self._runtime.math,
@@ -22095,6 +22277,7 @@ class BattleRuntime(object):
         dt = max(0.0, min(float(dt), 0.1))
         position = self._local_position
         tick_pose = position
+        tick_attitude = (self._local_pitch, self._local_roll)
         yaw = self._canonicalize_local_attitude(self._local_yaw)
         self._local_yaw = yaw
         turret_tick_pose = None
@@ -22258,6 +22441,7 @@ class BattleRuntime(object):
                         self._local_air_lateral = (0.0, 0.0)
                     contact_path = 'air_contact'
 
+        horizontal_speed = self._local_speed
         if siege_drive_locked or overturned or is_tracked or is_engine_dead:
             turn = 0.0
             self._local_turn_speed = 0.0
@@ -22401,6 +22585,9 @@ class BattleRuntime(object):
             contact_path, previous_speed, slope_pitch,
             position[1] - tick_pose[1])
         self._local_position, self._local_yaw = position, yaw
+        self._report_local_hydraulic_motion(
+            entity, tick_pose, tick_attitude, dt, previous_speed,
+            drive_speed, horizontal_speed, contact_path, primary_contact)
         self._report_local_motion_stall(
             tick_pose, position, dt, throttle, contact_path,
             previous_speed, drive_speed, slope_pitch, primary_contact,
@@ -27568,6 +27755,8 @@ class BattleRuntime(object):
         self._client_ready_received = False
         self._local_descriptor = None
         self._vehicle_ready_deadline = 0.0
+        self._local_hydraulic_motion_window = None
+        self._local_hydraulic_motion_report_failed = False
         self._bot_fire_seen = {}
         self._bot_fire_confirmations = {}
         self._bot_launch_payloads = {}

@@ -1,4 +1,6 @@
+import copy
 import io
+import json
 import math
 from pathlib import Path
 import random
@@ -19,7 +21,7 @@ from gui.mods.offline_lan_0922.battle_runtime import (
 from gui.mods.offline_lan_0922.entities.native_remote_vehicle import \
     NativeRemoteVehicleFactory
 from gui.mods.offline_lan_0922.projectile_manager import InFlightProjectiles
-from gui.mods.offline_lan_0922 import combat_rules, critical_damage
+from gui.mods.offline_lan_0922 import battle_runtime, combat_rules, critical_damage
 from gui.mods.offline_lan_0922 import lan_client
 import lan_battle_server as server_runtime
 
@@ -1309,6 +1311,94 @@ class BattleProjectileTests(unittest.TestCase):
 
                 self.assertEqual(1, effect['shot_result'])
                 self.assertEqual(0, effect['damage'])
+
+    def test_front_wheel_and_hull_damage_resolve_independently(self):
+        # Use the real armour resolver, HP roll and critical-device path.
+        # A wheel hit alone is not evidence that the shell reached the hull.
+        for shooter in ('player', 'bot'):
+            for hull_armor, nominal, expected_hp, expected_track in (
+                    (45.0, 390.0, 390, 250.0),
+                    (None, 390.0, 0, 250.0),
+                    (500.0, 390.0, 0, 250.0),
+                    (45.0, 135.0, 135, 135.0)):
+                with self.subTest(shooter=shooter, hull=hull_armor,
+                                  nominal=nominal):
+                    battle, unused_world, target_key, state = (
+                        self._vehicle_chord_battle(shooter_kind=shooter))
+                    target = battle._server_entity(42)
+                    target.typeDescriptor = _track_target_descriptor()
+                    target.matrix = object()
+                    target.health = 1000
+                    target.devices_hp = {}
+                    target._destroyed_devices = set()
+                    target._crew_ko = set()
+                    target.is_on_fire = False
+                    target.getComponents = lambda: ()
+                    battle._records[target_key]['state'].update(
+                        combat_base_revision=0, combat_ack_seq=0)
+                    meta = battle._projectile_meta[state['key']]
+                    meta['source_shot']['shell']['damage'] = [nominal, 150.0]
+                    track = types.SimpleNamespace(
+                        dist=10.0, hitAngleCos=1.0,
+                        compName='vehicleChassis',
+                        matInfo=_TrackMaterial('leftTrackHealth'))
+                    collisions = [track]
+                    if hull_armor is not None:
+                        collisions.append(types.SimpleNamespace(
+                            dist=10.3, hitAngleCos=1.0, compName='hull',
+                            matInfo=types.SimpleNamespace(
+                                armor=hull_armor, vehicleDamageFactor=1.0)))
+                    terminal = {
+                        'target_key': target_key, 'collisions': collisions,
+                        'collision_evidence': [types.SimpleNamespace(
+                            collision=track, worldNormal=None,
+                            localPoint=(0.0, 0.0, 1.5))],
+                        'query': (_Vector((0.0, 1.0, 0.0)),
+                                  _Vector((12.0, 1.0, 0.0))),
+                        'impact': (10.0, 1.0, 0.0),
+                        'piercing_loss': 0.0, 'penetration_factor': 1.0}
+                    crit_world = types.ModuleType('BigWorld')
+                    crit_world.player = lambda: types.SimpleNamespace(
+                        playerVehicleID=999)
+                    crit_world.time = lambda: 12.0
+                    with mock.patch.dict(sys.modules, {
+                                'BigWorld': crit_world,
+                                'Math': types.ModuleType('Math')}), \
+                            mock.patch('random.gauss',
+                                       side_effect=lambda mean, sigma: mean), \
+                            mock.patch('random.uniform',
+                                       side_effect=lambda low, high: low), \
+                            mock.patch('random.random', return_value=0.0):
+                        effect = battle._projectile_direct_effect(
+                            meta, state, terminal)
+                    self.assertEqual(expected_hp, effect['damage'])
+                    self.assertEqual(
+                        [{'name': 'leftTrackHealth', 'hp_loss': expected_track}],
+                        effect['critical_delta']['devices'])
+
+    def test_track_outcome_distinguishes_clipped_hull_and_contains_log_failure(self):
+        track = types.SimpleNamespace(
+            dist=10.0, matInfo=_TrackMaterial('leftTrackHealth'))
+        hull = types.SimpleNamespace(dist=11.2, matInfo=types.SimpleNamespace(
+            vehicleDamageFactor=1.0))
+        target = types.SimpleNamespace(id=42, typeDescriptor=_track_target_descriptor())
+        effect = {'damage': 0, 'shot_result': 1, 'critical_delta': {
+            'devices': [{'name': 'leftTrackHealth', 'hp_loss': 250.0}]}}
+        before = copy.deepcopy(effect)
+        meta = {'projectile_id': 'player:7:1', 'shooter_kind': 'player'}
+        with mock.patch.object(battle_runtime.track_damage, 'report') as report:
+            BattleRuntime._report_projectile_track_outcome(
+                meta, target, (track, hull), (track,), None, effect)
+        payload = json.loads(report.call_args.args[1].split('OUTCOME ', 1)[1])
+        self.assertEqual([11.2], payload['structural_distances'])
+        self.assertFalse(payload['structural_retained'])
+        self.assertEqual(0, payload['proposed_hp'])
+        self.assertEqual(effect['critical_delta']['devices'], payload['proposed_tracks'])
+        with mock.patch.object(battle_runtime.track_damage, 'report',
+                               side_effect=IOError('closed log')):
+            BattleRuntime._report_projectile_track_outcome(
+                meta, target, (track, hull), (track,), None, effect)
+        self.assertEqual(before, effect)
 
     def test_native_factory_exposes_unblended_projectile_matrix(self):
         canonical_matrix = object()

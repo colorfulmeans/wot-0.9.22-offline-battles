@@ -1015,7 +1015,13 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 	for item_index in range(entry['next_item'], end_item):
 		identity = (int(chunk_id), int(item_index))
 		if (is_excluded_1513(*identity) and
-				not (_destructible_catalog or {}).get('layout_repair_supported')):
+				not _layout_repair_pending_1513(chunk_id)):
+			# Supporting live layout repair does not make an authored absent
+			# slot a failed native item. As with full-width lists, skip it unless
+			# this chunk has an actual pending remap. Otherwise every compacted
+			# v9 list containing such a slot ends as isolated_item, and all the
+			# valid trees/models behind it lose registration. Never query a
+			# mode-excluded scene object merely to finish name enumeration.
 			entry['ignored_items'].add(item_index)
 			continue
 		if _destructible_isolated_1513(*identity):
@@ -4808,7 +4814,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			physical_crushable = _stock_crushable_1513(
 				mat_info, vel, td, candidate[5])
 			cap_crushable = (kinetic_speed is not None and
-				kind in ('fragile', 'structure') and
+				kind in ('fragile', 'structure', 'falling') and
 				_stock_crushable_1513(
 					mat_info, kinetic_speed, td, candidate[5]))
 			if (kinetic_speed is not None and not contact_candidate and
@@ -4816,7 +4822,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 				# A real frame sweep at sufficient physical speed keeps the old
 				# crush-through behaviour.  Only the directional-cap shortcut is
 				# restricted to exact hull contact; otherwise it is planning-only.
-				if kind in ('fragile', 'structure') and cap_crushable:
+				if cap_crushable:
 					approach = True
 				else:
 					blocked = True
@@ -4871,7 +4877,10 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			accepted = auth.destroy_module(
 				spaceID, chunk_id, item_index, mat_kind, point, False)
 			event_kind = 'module'
-		elif kind == 'falling' and not used_cap:
+		elif kind == 'falling':
+			# A powered hull can push over a column just like another fragile
+			# prop. Admission above requires exact contact and the same stock
+			# health/scale law; the column order still receives real speed.
 			accepted = auth.destroy_column(
 				spaceID, chunk_id, item_index, yaw, vel, point)
 			event_kind = 'column'

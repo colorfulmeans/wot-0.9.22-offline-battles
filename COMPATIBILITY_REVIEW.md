@@ -41,9 +41,80 @@ transitions, is idempotent through the service installer, and is rolled back
 with the other service hooks. The affected Windows save still needs a
 barracks-open/filter retest; local tests do not establish Scaleform acceptance.
 
+## September 20 19:49 tree registry and Siege contact follow-up
+
+Report `20260920-194949-1aadaa199835` runs the preceding tree diagnostic build,
+`colorfulmeans-35507658229-1`, on CN HD #1513. The new marked minimap locates
+the same railside row near C6--D6. Poplars in chunk 32642 have exact native
+commit and presentation receipts. Those in chunks 32641, 32640 and 32639
+instead report `name_status=isolated_item`, no registered chunk and no cached
+health. The vehicle reaches 0.637 m from `(32641, 63)` and 0.451 m from
+`(32640, 110)` without a tree contact token. The indexed-vector fix therefore
+did not resolve this separate registration defect.
+
+For a compacted filename list, v9's capability to repair layouts was mistaken
+for an actually pending layout repair. An authored mode-excluded slot then
+terminated enumeration as an isolated native object, preventing valid trees
+and models later in that chunk from registering. The compacted-list path now
+uses the same absent-slot rule as the full-width path: skip an authored absent
+item unless this particular chunk has a pending remap. It does not query an
+excluded scene object, infer a filename, bypass a quarantine, or destroy a
+nearby object by position. A regression reproduces the lost tree proposal and
+requires the valid tree and fence behind the absent slot to register while the
+excluded slot receives no native category or matrix call.
+
+The Paris S1 capture at 19:46:40 shows stable ENABLED state, no pending switch,
+no handbrake, 2.22224 m/s directional limits, and `path=brake`,
+`world=hard`, `kinds=falling,fragile`. The powered contact policy used that
+low-gear limit as crush eligibility, and excluded falling columns altogether.
+The shared player/worker/Bot path now retains the mounted travel descriptor's
+directional limit for powered contact eligibility, including pivot contacts;
+the active mode still owns actual velocity, traverse, geometry and mass.
+Columns now share exact-contact cap admission with fragile and structure
+parts. Their native order and replicated event still carry real impact speed.
+The stock scale/health test, unpowered/traverse-disabled gates, exact overlap
+and native backing-wall recasts remain. This is a correction to the existing
+offline powered-contact policy, not a recovered retail low-gear force law or
+a map-specific collision exception.
+
+The user also reports continuous hitches in both modes. One later slowdown
+has a native material-111/item-11/chunk-33154 wall witness; nearby destructibles
+do not prove ownership of that face, so it remains blocking. Existing 30 s
+visible frame timing is responsive, but stall-only records cannot establish
+the cause of every small repeated correction or native visual hitch. Bounded
+`HYDRAULIC MOTION` windows now summarize all moving slices in either mode and
+retain seven worst witnesses: integration interval, drive/horizontal/settling
+speed loss, missing travel, height change and attitude change. They include
+input changes, airborne/support counts and the already sampled support face.
+The two-second reporting interval only batches diagnostics; it never gates
+motion, performs new native probes or waits for a worker acknowledgement.
+Exact-client tree falling, low-speed/pivot destruction and continuous hydraulic
+travel remain Windows acceptance items.
+
+## September 20 front-wheel and hull damage investigation
+
+The user reports losing the simultaneous track-break/HP-damage outcome. The
+ordered material resolver already continues from a penetrated external track
+to a reached structural plate; a track material alone never proves hull damage.
+A new integrated regression uses real armour resolution, HP rolling and track
+critical damage for both player and Bot launches. It covers a front-wheel hit
+followed by a penetrated hull (both losses), no hull (track only), a hull beyond
+available penetration (track only), and a lower-damage shell (HP loss without
+breaking a fresh track). These establish the code path, not a native collision
+mesh or the user's particular shot. No penetration or track-damage law changes.
+
+The existing bounded track diagnostic now also records a shot-correlated
+`TRACK OUTCOME`: native track/structural distances, whether structural contacts
+survived the existing trace budget, the terminal armour verdict, and proposed
+vehicle/track HP losses. These are proposals, not server-commit receipts. The
+diagnostic has no new native queries, collision mutation or retry behaviour;
+logging failures cannot cost a hit. The historical ten-calibre budget is left
+unchanged pending exact evidence about a missed shot, rather than extending
+projectiles through armour on the basis of a generic aiming guide.
+
 ## September 20 Prokhorovka railside tree follow-up
 
-The user's two screenshots locate the pass-through report on the west side of
+The user's two screenshots locate the pass-through report beside
 the railway near C6. The matching north/south row includes six authored
 Poplar/Poplar_1 placements at X 93.366--96.783, Z 257.074--361.773, including
 `(32641, 64)` at `(94.984, 6.043, 274.026)`. All six have shipped fall-foliage

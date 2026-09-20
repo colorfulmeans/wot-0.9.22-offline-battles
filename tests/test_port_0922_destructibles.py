@@ -9274,9 +9274,9 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         authority.destroy_column.assert_not_called()
         authority.event_sink.assert_called_once()
 
-    def test_stationary_kinetic_gate_fails_closed_for_non_fragile_contacts(self):
+    def test_stationary_kinetic_gate_keeps_uncrushable_contacts_hard(self):
         cases = (
-            ('falling', [{'kind': 'falling'}]),
+            ('falling-health', [{'kind': 'falling', 'health': 100}]),
             ('mixed-hard', [{}, {'health': 100, 'x': 0.5}]),
         )
         for name, specs in cases:
