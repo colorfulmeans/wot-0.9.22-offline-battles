@@ -63,17 +63,6 @@ class VehicleBrakingTests(unittest.TestCase):
         self.assertEqual(0., self.safe(own, [peer], coast=5.)['throttle'])
         self.assertEqual({}, self.traffic._orders)
 
-    def test_traffic_sweep_preserves_asymmetric_body_centres(self):
-        from gui.mods.offline_lan_0922.ai import traffic
-        own = body(25, 0., 0., speed=1.)
-        own['shape'] = (.5, 1., -.8, 2., 2., 0.)
-        peer = body(29, 2., 2.5, speed=0.)
-        peer['shape'] = (.5, 1., -.8, 2.)
-        self.assertAlmostEqual(.5, traffic._contact_time(own, peer))
-        self.assertAlmostEqual(.5, traffic._separation(own, peer))
-        peer['position'] = (-2., 0., 2.5)
-        self.assertIsNone(traffic._contact_time(own, peer))
-
     def test_copied_braking_law_stops_before_a_stationary_player(self):
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
         params = dict(vehicle_physics._DEFAULTS)
@@ -85,8 +74,7 @@ class VehicleBrakingTests(unittest.TestCase):
             order = self.safe(own, [peer], coast=coast, now=frame / 30.)
             brakes += order['throttle'] == 0.
             speed = vehicle_physics.longitudinal_step(
-                params, speed, order['throttle'], False, 0., 1. / 30.,
-                handbrake=order['throttle'] == 0.)
+                params, speed, order['throttle'], False, 0., 1. / 30.)
             z += speed / 30.
             own.update(position=(0., 0., z), velocity=(0., 0., speed))
             self.assertLess(z, 18.)

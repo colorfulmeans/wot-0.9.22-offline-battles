@@ -4,11 +4,11 @@
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 
 from gui.mods.offline_lan_0922.worker_diagnostics import (
-    observed, observed_ray, count as combat_count)
+    observed, observed_ray)
 
 from gui.mods.offline_lan_0922.destructibles_sensor import (
 	_catalog_soft_static_path, _diagnostic_static_recast_1513,
-	_try_destroy_solid_hit, _vehicle_hull_bbox, _vehicle_body_bbox, _descriptor_value,
+	_try_destroy_solid_hit, _vehicle_hull_bbox, _descriptor_value,
 	ground_collision_filter, horizontal_collision_filter,
 	prepare_horizontal_collision_filter, collide_motion_segment)
 
@@ -17,51 +17,12 @@ _MAX_DRIVABLE_GRADIENT = 1.28
 _MAX_DESCENDING_GRADIENT = 1.75
 _MIN_DRIVABLE_HEIGHT_CHANGE = 0.15
 _GROUND_HIT_EPSILON = 1.0e-3
+_WORLD_SOFT_RECAST_BUDGET = 4
 _UNPREPARED_COLLISION_FILTER = object()
 
 
-class ReadOnlyMotionQueries(object):
-    """Share exact native rays inside one synchronous, mutation-free sweep.
-
-    Forward/reverse footprint probes repeat perimeter and support columns.
-    Replay every callback candidate, including rejected candidates, so trace
-    evidence is preserved and a changed accepted-destruction filter forces a
-    fresh native query. Never retain this object across sweeps, frames or a
-    native mutation. Coordinates are exact keys, without rounding or padding.
-    """
-    def __init__(self, bigworld):
-        self._bigworld = bigworld
-        self._queries = {}
-
-    def __getattr__(self, name):
-        return getattr(self._bigworld, name)
-
-    def wg_collideSegment(self, space, start, end, mask, callback=None):
-        key = (space, start.x, start.y, start.z,
-               end.x, end.y, end.z, mask, callback is not None)
-        cached = self._queries.get(key)
-        if cached is not None:
-            result, candidates = cached
-            if callback is None or all(bool(callback(*surface)) == kept
-                                       for surface, kept in candidates):
-                combat_count('native.motion.read_only_reused')
-                return result
-        candidates = []
-        if callback is None:
-            result = self._bigworld.wg_collideSegment(space, start, end, mask)
-        else:
-            def keep(*surface):
-                kept = bool(callback(*surface))
-                candidates.append((surface, kept))
-                return kept
-            result = self._bigworld.wg_collideSegment(space, start, end, mask, keep)
-        self._queries[key] = result, candidates
-        combat_count('native.motion.read_only_queried')
-        return result
-
-
 def _trace_collision_filter(collision_filter, trace):
-    """Observe all native callback candidates without another query.
+    """Observe bounded native callback candidates without another query.
 
     Candidates are not asserted to be the nearest returned hit: the native
     callback supplies identity but no position or ordering guarantee.
@@ -76,7 +37,7 @@ def _trace_collision_filter(collision_filter, trace):
         keep = collision_filter(*hit)
         if len(hit) == 4:
             candidate = tuple(hit) + (bool(keep),)
-            if candidate not in candidates:
+            if len(candidates) < 16 and candidate not in candidates:
                 candidates.append(candidate)
         return keep
     return observed_filter
@@ -95,49 +56,6 @@ def _record_hard_contact(trace, reason, start, end, collision,
                      ground_ahead=ground_ahead, profile=list(heights))
     except Exception:
         trace['reason'] = reason
-    if trace.get('space') is not None:
-        from gui.mods.offline_lan_0922.destructibles_sensor import native_contact_evidence
-        try:
-            trace['identity_evidence'] = native_contact_evidence(trace['space'], start, end, collision[0])
-            trace['identity_evidence_source'] = 'immediate_read_only_replay'
-        except Exception as error:
-            trace['identity_evidence_error'] = str(error)
-    from gui.mods.offline_lan_0922 import physics_diagnostics
-    physics_diagnostics.emit('world_contact', trace)
-
-
-def _native_ray_successor(point, end, normal=None):
-    """Advance along the ray by one representable native float32 coordinate.
-
-    An absolute 1e-7 metre advance rounds back to the same BigWorld point at
-    ordinary map coordinates. A grazing ray must advance across the face,
-    not only along its tangent, or the native query returns the same plane
-    again. This is numerical progress, not a body margin.
-    """
-    import struct
-    values = (point.x, point.y, point.z)
-    delta = end - point
-    changes = (delta.x, delta.y, delta.z)
-    contributions = changes
-    if normal is not None:
-        components = (normal.x, normal.y, normal.z)
-        projected = tuple(changes[i]*components[i] for i in range(3))
-        if any(projected):
-            contributions = projected
-    index = max(range(3), key=lambda i: abs(contributions[i]))
-    if changes[index] == 0.0:
-        return end
-    value = values[index]
-    sign = 1.0 if changes[index] > 0.0 else -1.0
-    rounded = struct.unpack('f', struct.pack('f', value))[0]
-    if rounded == 0.0:
-        successor = sign * struct.unpack('f', struct.pack('I', 1))[0]
-    else:
-        bits = struct.unpack('I', struct.pack('f', rounded))[0]
-        bits += 1 if (rounded > 0.0) == (sign > 0.0) else -1
-        successor = struct.unpack('f', struct.pack('I', bits))[0]
-    fraction = (successor - value) / changes[index]
-    return point + delta.scale(min(1.0, fraction))
 
 
 def _collide_horizontal(spaceID, start, end,
@@ -148,29 +66,15 @@ def _collide_horizontal(spaceID, start, end,
 	if broken_filter is _UNPREPARED_COLLISION_FILTER:
 		broken_filter = horizontal_collision_filter(start, end)
 	current = start
-	while True:
-		evidence = {}
+	for unused in range(_WORLD_SOFT_RECAST_BUDGET + 1):
 		hit = collide_motion_segment(spaceID, current, end, broken_filter,
-			BigWorld.wg_collideSegment, evidence=evidence)
-		if hit is not None or evidence.get('queries') and len(evidence['queries']) > 1:
-			from gui.mods.offline_lan_0922 import physics_diagnostics
-			physics_diagnostics.emit('native_query', dict(evidence,
-				space=spaceID, start=(current.x,current.y,current.z),
-				end=(end.x,end.y,end.z), skip_flags=VEHICLE_SKIP_FLAGS,
-				hit=None if hit is None else (hit[0].x,hit[0].y,hit[0].z),
-				normal=None if hit is None or len(hit) < 2 else (hit[1].x,hit[1].y,hit[1].z),
-				identity_source='callback_candidates_not_nearest_identity'))
+			BigWorld.wg_collideSegment)
 		if hit is None or departing_contact is None or not departing_contact(hit):
 			return hit
 		remaining = end - hit[0]
-		if remaining.length == 0.0:
+		if remaining.length <= _GROUND_HIT_EPSILON:
 			return None
-		next_start = _native_ray_successor(
-			hit[0], end, hit[1] if len(hit) > 1 else None)
-		advance, direction = next_start-current, end-current
-		if advance.x*direction.x + advance.y*direction.y + advance.z*direction.z <= 0.0:
-			raise RuntimeError('native departure recast made no geometric progress')
-		current = next_start
+		current = hit[0] + remaining.scale(_GROUND_HIT_EPSILON / remaining.length)
 	# A bounded depenetration must still inspect every later surface.
 	return hit
 
@@ -194,6 +98,8 @@ def _drivable_ground_profile(heights, segment_length):
 	try:
 		values = [float(value) for value in heights]
 		if len(values) < 2:
+			return False
+		if abs(values[-1] - values[0]) <= _MIN_DRIVABLE_HEIGHT_CHANGE:
 			return False
 		segment = max(0.001, float(segment_length))
 		for index in range(1, len(values)):
@@ -343,41 +249,18 @@ def _vehicle_motion_extents(descriptor):
 	return max(abs(left), abs(right)), back, front
 
 
-class _RigidPose(tuple):
-    def __new__(cls, pitch, roll, yaw=0.0, heights=None):
-        from gui.mods.offline_lan_0922.collision_geometry import pose_axes
-        axes = pose_axes(yaw, pitch, roll)
-        value = tuple.__new__(cls, tuple(a[1] for a in axes))
-        value.axes, value.yaw = axes, float(yaw)
-        value.heights = heights
-        return value
-
-
-def _hull_pose_y(pitch, roll, yaw=0.0, heights=None):
-    """Rigid pose with the legacy three height components for ground probes."""
-    return _RigidPose(pitch, roll, yaw, heights)
-
-
-def _body_probe_heights(descriptor):
-    bbox = _vehicle_body_bbox(descriptor)
-    if bbox is None:
-        raise RuntimeError('native world body height descriptor is unavailable')
-    low, high = float(bbox[0][1]), float(bbox[1][1])
-    if high <= low:
-        raise RuntimeError('native world body height descriptor is invalid')
-    return low, (low+high)*0.5, high
-
-
-def _normal_impact_speed(yaw, speed, collision):
-    """Signed drive speed carrying only inward contact momentum."""
-    import math
-    normal = collision[1]
-    length = math.sqrt(normal.x**2+normal.y**2+normal.z**2)
-    if length <= 0.0:
-        raise RuntimeError('native contact normal is degenerate')
-    closing = max(0.0, -float(speed)*(math.sin(yaw)*normal.x+
-                                    math.cos(yaw)*normal.z)/length)
-    return -closing if speed < 0.0 else closing
+def _hull_pose_y(pitch, roll):
+	"""Return local right/up/forward contributions to world height."""
+	import math
+	pitch = float(pitch)
+	roll = float(roll)
+	if pitch == 0.0 and roll == 0.0:
+		return 0.0, 1.0, 0.0
+	pitch_cos = math.cos(pitch)
+	return (
+		pitch_cos * math.sin(roll),
+		pitch_cos * math.cos(roll),
+		-math.sin(pitch))
 
 
 def _hull_pose_endpoint(local_start, local_end, half_width,
@@ -510,27 +393,32 @@ def _lane_ground_ahead(spaceID, Math, pos, start_x, start_z,
 
 
 def _posed_ray(Math, pos, x1, z1, x2, z2, local_start, local_end,
-        height, pose_y, ground_ahead=None):
-    """Rotate the occupied body rigidly, then add this frame's translation.
+		height, pose_y, ground_ahead=None):
+	"""Rotate one copied collision lane with the authoritative hull pose.
 
-    Ground estimates cannot lower a body corner or shear its footprint.
-    """
-    import math
-    axes = getattr(pose_y, 'axes', None)
-    if axes is None:
-        # Legacy injected helpers are only a level-pose ABI. Production always
-        # passes the complete orthonormal pose above.
-        axes = ((1.0, pose_y[0], 0.0), (0.0, pose_y[1], 0.0), (0.0, pose_y[2], 1.0))
-    yaw = getattr(pose_y, 'yaw', 0.0)
-    sine, cosine = math.sin(yaw), math.cos(yaw)
-    def point(x, z, local):
-        flat_x = pos.x+cosine*local[0]+sine*local[1]
-        flat_z = pos.z-sine*local[0]+cosine*local[1]
-        offset = (x-flat_x, 0.0, z-flat_z)
-        base = (pos.x, pos.y, pos.z)
-        return Math.Vector3(*(base[i]+offset[i]+axes[0][i]*local[0]+
-            axes[1][i]*height+axes[2][i]*local[1] for i in range(3)))
-    return point(x1, z1, local_start), point(x2, z2, local_end)
+	``local_end`` already stops the pose at the first hull edge, but the lane
+	still spans the whole look-ahead segment, so that clamped height would
+	otherwise be reached only at the far endpoint.  A hull pitched over a
+	crest then lifts its own lowest witness above real geometry standing on
+	the ground it is about to reach: on level ground a transiently nose-up
+	hull passed straight over a fully exposed 1.2 m wall.
+
+	``ground_ahead`` is a conservative continuation of the ground witnessed
+	inside the hull footprint.
+	The lane never ends higher than ``height`` above that estimate, and never
+	higher than the hull plane at its own leading edge, so the pose can only ever
+	lower this witness.
+	"""
+	right_y, up_y, forward_y = pose_y
+	start_y = (float(pos.y) + float(local_start[0]) * right_y +
+		float(height) * up_y + float(local_start[1]) * forward_y)
+	end_y = (float(pos.y) + float(local_end[0]) * right_y +
+		float(height) * up_y + float(local_end[1]) * forward_y)
+	if ground_ahead is not None:
+		end_y = min(end_y, float(ground_ahead) + float(height))
+	return (
+		Math.Vector3(x1, start_y, z1),
+		Math.Vector3(x2, end_y, z2))
 
 
 def _supported_seam_is_clear(spaceID, Math, pos, collision, x1, z1, x2, z2,
@@ -559,7 +447,7 @@ def _supported_seam_is_clear(spaceID, Math, pos, collision, x1, z1, x2, z2,
 	tops = []
 	for offset in (0.12, -0.12, -0.60):
 		x, z = point.x + nx * offset, point.z + nz * offset
-		start = Math.Vector3(x, pos.y + pose_y.heights[-1], z)
+		start = Math.Vector3(x, pos.y + 1.6, z)
 		end = Math.Vector3(x, pos.y - 3.0, z)
 		hit = collide_motion_segment(spaceID, start, end, collision_filter,
 			BigWorld.wg_collideSegment, 'native.motion.ground')
@@ -571,7 +459,7 @@ def _supported_seam_is_clear(spaceID, Math, pos, collision, x1, z1, x2, z2,
 			min(tops[1:]) < point.y - _GROUND_HIT_EPSILON or
 			max(tops[1:]) > posed_top + 0.075):
 		return False
-	for height in pose_y.heights:
+	for height in (0.6, 1.1, 1.6):
 		start, end = _posed_ray(Math, pos, x1, z1, x2, z2,
 			local_start, local_end, height, pose_y)
 		# Raise the same corridor by only the measured step. Never discard
@@ -590,7 +478,7 @@ def _raised_ray_has_wall(spaceID, Math, pos, x1, z1, x2, z2,
 		ground_ahead=None, trace=None, require_clear_exit=False,
 		departing_contact=None):
 	"""A drivable lower slope must not hide an independent wall above it."""
-	for height in pose_y.heights[1:]:
+	for height in (1.1, 1.6):
 		start, end = _posed_ray(
 			Math, pos, x1, z1, x2, z2, local_start, local_end,
 			height, pose_y, ground_ahead)
@@ -631,7 +519,7 @@ def _solid_contact_cleared(spaceID, segment_start, segment_end, vel, td,
 	original native key and query the complete ray, including its box interior.  The same read-only helper
 	may classify following light props so the swept catalog commit can destroy
 	them later in this tick.  Unknown geometry, a backing wall, an ambiguous OBB
-	remains solid.
+	or an over-budget chain remains solid.
 	"""
 	import BigWorld
 	recast = _collide_horizontal(
@@ -640,7 +528,7 @@ def _solid_contact_cleared(spaceID, segment_start, segment_end, vel, td,
 		return True
 	return _catalog_soft_static_path(
 		spaceID, segment_start, segment_end, recast, vel, td,
-		None)
+		[_WORLD_SOFT_RECAST_BUDGET])
 
 
 @observed('motion.destroy_recast')
@@ -654,7 +542,7 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 		# second destroy attempt, while every unrelated solid still fails closed.
 		cleared = _catalog_soft_static_path(
 			spaceID, segment_start, segment_end, collision, vel, td,
-			None)
+			[_WORLD_SOFT_RECAST_BUDGET])
 		_diagnostic_static_recast_1513(cleared)
 		return cleared is True
 	# Revisit an already accepted hide skin before probing material again. This
@@ -662,7 +550,7 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 	# requires the exact accepted identity and a filtered query of the whole ray.
 	cleared = _catalog_soft_static_path(
 		spaceID, segment_start, segment_end, collision, vel, td,
-		None, require_pending_first=True,
+		[_WORLD_SOFT_RECAST_BUDGET], require_pending_first=True,
 		allow_kinetic_first=allow_kinetic,
 		kinetic_speed=kinetic_speed)
 	if cleared is True:
@@ -676,7 +564,7 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 	if cleared == 'kinetic':
 		# This is planning evidence only.  The catalog commit seam still requires
 		# the exact current hull plus this frame's physical travel before it may
-		# apply the actual contact-speed gate.
+		# use the directional speed cap.
 		_diagnostic_static_recast_1513(False)
 		return 'kinetic'
 	if not commit_enabled:
@@ -693,7 +581,7 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 		# remain authoritative.
 		cleared = _catalog_soft_static_path(
 			spaceID, segment_start, segment_end, collision, vel, td,
-			None, require_pending_first=True,
+			[_WORLD_SOFT_RECAST_BUDGET], require_pending_first=True,
 			allow_kinetic_first=allow_kinetic,
 			kinetic_speed=kinetic_speed)
 		_diagnostic_static_recast_1513(cleared)
@@ -705,85 +593,6 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 		collision_filter)
 	_diagnostic_static_recast_1513(cleared)
 	return cleared is True
-
-
-def _rigid_sweep_edges(space_id, Math, pos, yaw, vel, descriptor, dt,
-        motion_yaw, pitch, roll, collision_filter, trace, departing_contact,
-        crush_state, allow_kinetic, commit_enabled):
-    """Check boundary segments missed by a single diagonal look-ahead chord.
-
-    Every endpoint belongs to the actual start or end body. Translation of a
-    convex body contains all these segments; none adds a collision margin.
-    Support-facing contacts remain owned by the suspension solver.
-    """
-    from gui.mods.offline_lan_0922 import collision_geometry
-    import math
-    bbox = _vehicle_body_bbox(descriptor)
-    if bbox is None:
-        return 'clear'
-    axes = collision_geometry.pose_axes(yaw, pitch, roll)
-    heading = yaw if motion_yaw is None else motion_yaw
-    travel = float(vel)*max(0.0, float(dt))
-    if motion_yaw is not None:
-        travel = abs(travel)
-    offset = Math.Vector3(math.sin(heading)*travel, 0.0, math.cos(heading)*travel)
-    low, high = bbox[:2]
-    def point(x, y, z):
-        return Math.Vector3(*(v+axes[0][i]*x+axes[1][i]*y+axes[2][i]*z
-            for i, v in enumerate((pos.x, pos.y, pos.z))))
-    segments = []
-    for y in (low[1], (low[1]+high[1])*.5, high[1]):
-        corners = [point(x,y,z) for x,z in (
-            (low[0],low[2]), (high[0],low[2]), (high[0],high[2]), (low[0],high[2]))]
-        for index, start in enumerate(corners):
-            end = corners[(index+1)%4]
-            segments.append((start+offset, end+offset))
-            if travel:
-                segments.append((start, start+offset))
-    # Vertical edges cover thin beams between the sampled horizontal levels.
-    for x in (low[0], high[0]):
-        for z in (low[2], high[2]):
-            start, end = point(x, low[1], z), point(x, high[1], z)
-            segments.append((start, end))
-            if travel:
-                segments.append((start+offset, end+offset))
-                segments.append((start, end+offset))
-                segments.append((end, start+offset))
-    kinetic = False
-    pose = _hull_pose_y(pitch, roll, yaw, _body_probe_heights(descriptor))
-    extents = (max(abs(low[0]), abs(high[0])), -low[2], high[2])
-    for start, end in segments:
-        hit = _collide_horizontal(space_id, start, end, collision_filter, departing_contact)
-        if hit is None or _drivable_surface(hit):
-            continue
-        if (_drivable_surface(hit, _MAX_DESCENDING_GRADIENT) and
-                offset.x*hit[1].x+offset.z*hit[1].z >= 0.0):
-            continue
-        if _hit_matches_exact_ground_top(space_id, Math, pos, hit,
-                (end-start).length, collision_filter=collision_filter):
-            continue
-        def unposed(point):
-            relative = (point.x-pos.x, point.y-pos.y, point.z-pos.z)
-            right, forward = (collision_geometry.dot(axes[i], relative) for i in (0,2))
-            return (right, forward), (pos.x+math.cos(yaw)*right+math.sin(yaw)*forward,
-                                     pos.z-math.sin(yaw)*right+math.cos(yaw)*forward)
-        local_start, flat_start = unposed(start)
-        local_end, flat_end = unposed(end)
-        if _supported_seam_is_clear(space_id, Math, pos, hit,
-                flat_start[0], flat_start[1], flat_end[0], flat_end[1],
-                local_start, local_end, pose, extents, collision_filter):
-            continue
-        impact = _normal_impact_speed(heading,
-            vel if motion_yaw is None else abs(vel), hit)
-        resolved = _destroy_and_recast(space_id, start, end, hit, heading, impact,
-                descriptor, crush_state, allow_kinetic, None,
-                commit_enabled, collision_filter)
-        if resolved == 'kinetic':
-            kinetic = True
-        elif resolved is not True:
-            _record_hard_contact(trace, 'rigid_sweep_boundary', start, end, hit)
-            return 'hard'
-    return 'kinetic' if kinetic else 'clear'
 
 
 def check_horizontal_collision(bigworld, math_module, *args, **kwargs):
@@ -814,8 +623,6 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		motion_yaw=None, pitch=0.0, roll=0.0, trace=None,
 		exact_footprint=False, departing_contact=None):
 	import math, BigWorld, Math
-	if trace is None:
-		trace = {}
 	try:
 		hw = 1.5
 		hl_front = 3.5
@@ -829,10 +636,10 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 
 		if trace is not None:
 			trace.clear()
-			trace.update(space=spaceID, position=(pos.x, pos.y, pos.z), yaw=yaw, speed=vel,
+			trace.update(position=(pos.x, pos.y, pos.z), yaw=yaw, speed=vel,
 				dt=dt, motion_yaw=motion_yaw, pitch=pitch, roll=roll,
 				airborne=airborne, extents=(hw, hl_back, hl_front),
-				lateral_bounds=(left, right), body_bbox=_vehicle_body_bbox(td))
+				lateral_bounds=(left, right))
 
 		# The occupied hull and this frame's actual travel are the entire
 		# collision sweep. A stationary turn already supplies its swept body.
@@ -841,10 +648,9 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			abs(float(vel)) * max(0.0, float(dt)))
 		cos_y = math.cos(yaw)
 		sin_y = math.sin(yaw)
-		probe_heights = _body_probe_heights(td)
-		pose_y = _hull_pose_y(pitch, roll, yaw, probe_heights)
+		pose_y = _hull_pose_y(pitch, roll)
 		ground_plane = (
-			float(pos.x), float(pos.y) + probe_heights[-1] * pose_y[1], float(pos.z),
+			float(pos.x), float(pos.y) + 1.6 * pose_y[1], float(pos.z),
 			cos_y * pose_y[0] + sin_y * pose_y[2],
 			-sin_y * pose_y[0] + cos_y * pose_y[2])
 		lane_segments = []
@@ -915,22 +721,16 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 				lane_segments.append((
 					x1, z1, x2, z2, target_len,
 					x1, z1, motion_sin, motion_cos, 1.0, target_len))
-		from gui.mods.offline_lan_0922 import collision_geometry
-		body = collision_geometry.body_box((pos.x, pos.y, pos.z), yaw,
-			_vehicle_body_bbox(td), pitch, roll)
-		heading = yaw if motion_yaw is None else motion_yaw
-		travel = _ahead * (-1.0 if vel < 0.0 and motion_yaw is None else 1.0)
-		displacement = (math.sin(heading)*travel, 0.0, math.cos(heading)*travel)
-		radius = tuple(sum(abs(axis[i]) for axis in body[1]) for i in range(3))
-		minimum = tuple(body[0][i]-radius[i]+min(0.0, displacement[i]) for i in range(3))
-		maximum = tuple(body[0][i]+radius[i]+max(0.0, displacement[i]) for i in range(3))
+		minimum_x = min(min(lane[0], lane[2]) for lane in lane_segments)
+		maximum_x = max(max(lane[0], lane[2]) for lane in lane_segments)
+		minimum_z = min(min(lane[1], lane[3]) for lane in lane_segments)
+		maximum_z = max(max(lane[1], lane[3]) for lane in lane_segments)
 		_sweep_filter = prepare_horizontal_collision_filter(
-			Math.Vector3(*minimum), Math.Vector3(*maximum))
+			Math.Vector3(minimum_x, pos.y + 0.6, minimum_z),
+			Math.Vector3(maximum_x, pos.y + 1.6, maximum_z))
 		_sweep_filter = _trace_collision_filter(_sweep_filter, trace)
 		_crush_state = [False]
 		_kinetic_contact = False
-		crush_yaw = yaw if motion_yaw is None else motion_yaw
-		crush_velocity = vel if motion_yaw is None else abs(vel)
 
 		for (x1, z1, x2, z2, target_len,
 				profile_x, profile_z, profile_sin, profile_cos,
@@ -976,7 +776,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			# Spodní paprsek pro pevnou geometrii (0.6m nad zemí)
 			start_bot, end_bot = _posed_ray(
 				Math, pos, x1, z1, x2, z2, local_start, local_end,
-				probe_heights[0], pose_y, _ground_ahead)
+				0.6, pose_y, _ground_ahead)
 			col_bot = _collide_horizontal(
 				spaceID, start_bot, end_bot, _sweep_filter, departing_contact)
 			# A posed lane is longer than its flat XZ projection, and every
@@ -1002,7 +802,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 						# upper-lane clearance above that actual surface.
 						_point, _normal = col_bot[0], col_bot[1]
 						_profile_plane = (
-							float(_point.x), float(_point.y) + probe_heights[-1],
+							float(_point.x), float(_point.y) + 1.6,
 							float(_point.z),
 							-float(_normal.x) / float(_normal.y),
 							-float(_normal.z) / float(_normal.y))
@@ -1089,7 +889,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 					# contacts front-to-back; after the first native acceptance, later
 					# heights use the same read-only exact-OBB recast path.
 					_lane_hits = [(d_bot, start_bot, end_bot, col_bot)]
-					for _height in probe_heights[1:]:
+					for _height in (1.1, 1.6):
 						_ray_start, _ray_end = _posed_ray(
 							Math, pos, x1, z1, x2, z2,
 							local_start, local_end, _height,
@@ -1107,7 +907,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 					for _unused_distance, _ray_start, _ray_end, _ray_hit in _lane_hits:
 						_resolve_args = (
 							spaceID, _ray_start, _ray_end, _ray_hit,
-							crush_yaw, _normal_impact_speed(crush_yaw, crush_velocity, col_bot), td, _crush_state, allow_kinetic,
+							yaw, vel, td, _crush_state, allow_kinetic,
 							kinetic_speed)
 						_resolved = _destroy_and_recast(*(
 							_resolve_args + (commit_enabled, _sweep_filter)))
@@ -1122,7 +922,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 				# Probe the remaining hull heights even on a lower-ray miss; otherwise
 				# three empty lower lanes could classify a real upper collision clear.
 				_upper_hits = []
-				for _height in probe_heights[1:]:
+				for _height in (1.1, 1.6):
 					_ray_start, _ray_end = _posed_ray(
 						Math, pos, x1, z1, x2, z2,
 						local_start, local_end, _height,
@@ -1140,7 +940,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 				for _unused_distance, _ray_start, _ray_end, _ray_hit in _upper_hits:
 					_resolve_args = (
 						spaceID, _ray_start, _ray_end, _ray_hit,
-						crush_yaw, _normal_impact_speed(crush_yaw, crush_velocity, _ray_hit), td, _crush_state, allow_kinetic,
+						yaw, vel, td, _crush_state, allow_kinetic,
 						kinetic_speed)
 					_resolved = _destroy_and_recast(*(
 						_resolve_args + (commit_enabled, _sweep_filter)))
@@ -1152,13 +952,6 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 						return 'hard' if return_status else True
 	except Exception:
 		raise
-	boundary_status = _rigid_sweep_edges(spaceID, Math, pos, yaw, vel, td,
-			0.0 if exact_footprint else dt, motion_yaw, pitch, roll,
-			_sweep_filter, trace, departing_contact, _crush_state,
-			allow_kinetic, commit_enabled)
-	if boundary_status == 'hard':
-		return 'hard' if return_status else True
-	_kinetic_contact = _kinetic_contact or boundary_status == 'kinetic'
 	if return_status:
 		return 'kinetic' if _kinetic_contact else 'clear'
 	return bool(_kinetic_contact)

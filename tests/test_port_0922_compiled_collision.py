@@ -143,23 +143,6 @@ class CompiledCollisionTests(unittest.TestCase):
                                            identity, neighbour)
         self.assertIs(wall, self.query(start, end, [(hit, alias), (wall, alias)])[0])
 
-    def test_intact_other_half_cannot_veto_broken_material_at_this_contact(self):
-        start, end, hit, candidate, alias = self.evidence(self.contacts[1])
-        material = alias[0]
-        direction = end-start
-        direction.normalise()
-        later = hit+direction.scale(.3)
-        end = end+direction.scale(2.)
-        axes = ((.025,0.,0.),(0.,.025,0.),(0.,0.,.025))
-        other = dict(sensor.g_offh_destr_instances[candidate[:2]])
-        other['boxes'] = [((hit.x,hit.y,hit.z), axes, 74 if material != 74 else 73),
-                          ((later.x,later.y,later.z), axes, material)]
-        identity = (32636,900)
-        sensor.g_offh_destr_instances[identity] = other
-        sensor._index_catalog_instance_1513(sensor.g_offh_destr_contact_bins, identity, other)
-        self.assertIsNone(self.query(start,end,[(hit,alias)]))
-        self.assertIs(later,self.query(start,end,[(hit,alias),(later,alias)])[0])
-
     def test_ambiguous_overlapping_live_module_stays_solid(self):
         start, end, hit, candidate, alias = self.evidence(self.contacts[1])
         instance = dict(sensor.g_offh_destr_instances[candidate[:2]])
@@ -387,7 +370,7 @@ class CrossMapRailingCollisionTests(unittest.TestCase):
                         (wall, (material, 0, 50000, identity[0]))]))
                 self.assertIs(wall, result[0])
 
-    def test_nested_recasts_exhaust_accepted_skins_by_geometric_progress(self):
+    def test_nested_recasts_share_one_budget_and_keep_unexamined_surface_solid(self):
         identity, instance, (start, end, hit) = self.paris()
         self.broken.add(identity + (None,))
         direction = end - start
@@ -398,9 +381,9 @@ class CrossMapRailingCollisionTests(unittest.TestCase):
         result = sensor.collide_motion_segment(1, start, end,
             sensor.horizontal_collision_filter(start, end),
             self.pruned_native(surfaces), evidence=evidence)
-        self.assertIsNone(result)
-        self.assertFalse(evidence.get('budget_exhausted', False))
-        self.assertGreater(len(evidence['queries']), 6)
+        self.assertIs(surfaces[4][0], result[0])
+        self.assertTrue(evidence['budget_exhausted'])
+        self.assertEqual(5, len(evidence['queries']))
 
     def test_contact_diagnostic_distinguishes_actual_wall_from_callback_candidates(self):
         identity, instance, (start, end, hit) = self.paris()

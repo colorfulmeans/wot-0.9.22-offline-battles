@@ -1442,10 +1442,7 @@ def _diagnostic_flush_1513(now=None):
 
 
 def _diagnostic_enqueue_1513(category, key, fields, now=None):
-	"""Write uncapped structured evidence, plus the optional legacy text view."""
-	from gui.mods.offline_lan_0922 import physics_diagnostics
-	physics_diagnostics.emit(
-		'destructible_'+category, dict(fields), key=key, now=now)
+	"""Queue one bounded line; never query the engine or log per frame/slot."""
 	if not _DIAGNOSTICS_ENABLED:
 		return
 	state = globals().setdefault('g_offh_destr_diagnostics', {
@@ -3143,9 +3140,26 @@ def _stream_baked_motion_instances_1513(spaceID, vehicle_box):
 
 
 def _vehicle_pose_axes(yaw, pitch=0.0, roll=0.0):
-	"""Rigid BigWorld YPR axes; collision dimensions never shear with tilt."""
-	from gui.mods.offline_lan_0922.collision_geometry import pose_axes
-	return pose_axes(float(yaw), float(pitch), float(roll))
+	"""Return #1513's collision-lane right/up/forward generators.
+
+	The native horizontal collision lanes keep their full yaw-only X/Z hull
+	footprint and apply pitch/roll only to occupied height.  Mirror that shear
+	here: a full 3-D rotation would shorten the catalog footprint by roughly
+	half a metre at the allowed pitch limit and could let a native hard contact
+	escape catalog revalidation.  Keeping the body level, on the other hand,
+	misses a raised nose/side and lets a tank enter below a live upper module.
+	"""
+	import math
+	cos_yaw = math.cos(float(yaw))
+	sin_yaw = math.sin(float(yaw))
+	cos_pitch = math.cos(float(pitch))
+	sin_pitch = math.sin(float(pitch))
+	cos_roll = math.cos(float(roll))
+	sin_roll = math.sin(float(roll))
+	return (
+		(cos_yaw, sin_roll * cos_pitch, -sin_yaw),
+		(0.0, cos_roll * cos_pitch, 0.0),
+		(sin_yaw, -sin_pitch, cos_yaw))
 
 
 def _vehicle_swept_box(pos, yaw, vel, bbox, travel_reach=None,
@@ -3860,8 +3874,9 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	but it must never destroy from that distance or skip unrelated geometry
 	behind the item.  Every skipped hit therefore needs one unique registered
 	OBB, the retail kinetic gate and an exact original-material filter. The
-	filtered query covers the whole ray, including the prop's interior.  Unknown and ambiguous chains remain solid. Each recast must add a new
-	exact identity; chain length has no arbitrary collision budget.
+	filtered query covers the whole ray, including the prop's interior.  Unknown and ambiguous chains remain solid.  Exhausting the shared
+	native recast budget instead returns ``'deferred'`` so the caller can avoid
+	caching a false hard wall.
 	"""
 	if (_destructible_catalog is None or collision is None or td is None):
 		return False
@@ -3882,8 +3897,7 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	kinetic_contact = False
 	pending_contact = False
 	excluded_keys = set()
-	candidate_index = 0
-	while True:
+	for candidate_index in range(_SOFT_STATIC_MAX_SKIPS):
 		try:
 			hit_point = current_hit[0]
 		except (TypeError, IndexError):
@@ -3911,20 +3925,33 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 				# The visible player asks this read-only path to prove the
 				# complete native ray before submitting an exact catalog
 				# proposal.  A prop already crushable at the current physical
-				# speed still requires a whole-segment recast for a backing wall.
+				# speed is just as valid as one admitted by the directional cap;
+				# both still require an OBB-exit recast for a backing wall.
 				kinetic_contact = True
+			elif (allow_kinetic_first and kinetic_speed is not None and
+					not current_crushable and _stock_crushable_1513(
+						mat_info, kinetic_speed, td, candidate[5])):
+				kinetic_contact = True
+				current_crushable = True
 			else:
 				return False
+		elif (allow_kinetic_first and
+				kinetic_speed is not None and not current_crushable and
+				_stock_crushable_1513(
+					mat_info, kinetic_speed, td, candidate[5])):
+			kinetic_contact = True
+			current_crushable = True
 		if not current_crushable:
 			return 'pending_hard' if pending_contact else False
 		# A box is identity evidence, not proof that its interior is empty.
 		# Exact native keys are unique across the space, so one filtered query
 		# can inspect BOTH the interior and the rest of the original segment.
 		# Never jump to a box exit: a real wall can be inside that same box.
-		if candidate[:3] in excluded_keys:
-			return 'pending_hard' if pending_contact else False
 		excluded_keys.add(candidate[:3])
-		candidate_index += 1
+		if recast_budget is not None:
+			if not recast_budget or int(recast_budget[0]) <= 0:
+				return 'pending_hard' if pending_contact else 'deferred'
+			recast_budget[0] = int(recast_budget[0]) - 1
 		def keep_interior(*surface):
 			if (len(surface) != 4 or
 					not all(type(value) in _INTEGER_TYPES for value in surface) or
@@ -4255,44 +4282,35 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 	predicted = globals().get('g_offh_destr_speculative', set())
 	excluded = set()
 	for surface in aliases:
-		# Only a component containing this witness can own this material.
-		# A neighbouring placement's intact opposite half must not veto an
-		# already broken fence segment merely because their model envelopes meet.
-		accepted = True
-		matched = False
-		for identity, instance, unused_interval in owners:
+		# A model envelope contains all its modules. Only the component for
+		# this material can contradict an accepted skin at the native witness;
+		# an intact opposite half of a neighbouring fence is not that owner.
+		component_owners = []
+		for identity, instance, interval in owners:
 			material = surface[0] if instance['kind'] == 'structure' else None
-			component_boxes = [box for box in instance['boxes']
-				if material is None or box[2] == material]
-			contains = any(_point_in_world_box(point, box) or
-				(normal is not None and abs(normal.y) <= 1.0e-6 and
-				 _projected_box_interval_1513(point, point, box) is not None)
-				for box in component_boxes)
-			if not contains:
-				continue
-			matched = True
+			if any((material is None or box[2] == material) and
+					(_point_in_world_box(point, box) or
+					 (normal is not None and abs(normal.y) <= 1.0e-6 and
+					  _projected_box_interval_1513(point, point, box) is not None))
+					for box in instance['boxes']):
+				component_owners.append((identity, instance, interval))
+		# Original BSP faces can extend beyond damage-module bounds. In that
+		# case retain the baseline's unanimous whole-model acceptance proof.
+		accepted = True
+		for identity, instance, unused_interval in component_owners or owners:
+			material = surface[0] if instance['kind'] == 'structure' else None
 			key = identity + (material,)
-			if not (authority.is_destroyed(*key) or key in predicted):
+			if (material not in set(box[2] for box in instance['boxes']) or
+					not (authority.is_destroyed(*key) or key in predicted)):
 				accepted = False
 				break
-		if not matched:
-			# Some original BSP faces extend outside damage-module boxes.
-			# Retain the whole-model proof only when EVERY possible owner
-			# has already accepted this material; never infer a live part gone.
-			accepted = all((surface[0] if instance['kind'] == 'structure' else None)
-				in set(box[2] for box in instance['boxes']) and
-				(authority.is_destroyed(*(identity+((surface[0] if instance['kind'] == 'structure' else None),))) or
-				 identity+((surface[0] if instance['kind'] == 'structure' else None),) in predicted)
-				for identity, instance, unused_interval in owners)
-			matched = accepted
-		if accepted and matched:
+		if accepted:
 			excluded.add(surface)
 	if not excluded:
 		return None
 	# Anonymous keys can be shared by several placements. A later live owner
 	# may begin inside this model envelope even though it did not contain the
 	# first hit. End the filtered query before that owner, then query it normally.
-	owner_ids = set(value[0] for value in owners)
 	# Re-resolve ownership at the first exit; do not extend an ambiguous
 	# shared key across the union of all intersecting placements.
 	limit = min(value[2][1] for value in owners)
@@ -4314,20 +4332,24 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 			other = baked.get(other_identity)
 		if other is None:
 			continue
-		materials = (set(surface[0] for surface in excluded)
-			if other['kind'] == 'structure' else (None,))
-		clip = (_projected_box_interval_1513 if projected else _segment_world_box_interval)
-		for material in materials:
+		clip = (_projected_box_interval_1513 if projected else
+			_segment_world_box_interval)
+		for material in (set(surface[0] for surface in excluded)
+				if other['kind'] == 'structure' else (None,)):
 			key = other_identity + (material,)
 			if authority.is_destroyed(*key) or key in predicted:
 				continue
+			# Re-enable this shared key before a live component begins, even
+			# when its whole model also owned a different accepted component.
 			for other_box in other['boxes']:
 				if material is not None and other_box[2] != material:
 					continue
 				other_interval = clip(start, end, other_box)
 				if (other_interval is not None and
-						other_interval[1] * (end-start).length >= (point-start).length):
-					limit = min(limit, max(0.0, other_interval[0]))
+						other_interval[1] * (end - start).length >=
+						(point - start).length):
+					limit = min(limit, max(0.0, other_interval[0] -
+						2.0 * _SHOT_RAY_EPSILON / (end - start).length))
 	distance = limit * (end - start).length
 	if distance + 1.0e-7 < (point - start).length:
 		return None
@@ -4364,7 +4386,7 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 			alias = _anonymous_original_surface_1513(hit)
 			accepted = accepted and tuple(hit) not in excluded and not (
 				alias is not None and alias in excluded_aliases)
-			if accepted and len(hit) == 4:
+			if accepted and len(hit) == 4 and len(candidates) < 16:
 				candidates.add(tuple(hit))
 			return accepted
 		hit = observed_ray(ray_label, native_collide,
@@ -4384,22 +4406,17 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 	# Resume its tail with the previous filter: the same compiled key may
 	# belong to an intact neighbour immediately outside that interval.
 	segments = [(start, end, frozenset())]
-	seen_segments = set()
+	remaining_budget = _SOFT_STATIC_MAX_SKIPS
 	while segments:
 		current, segment_end, excluded = segments.pop()
-		state_key = ((current.x, current.y, current.z),
-			(segment_end.x, segment_end.y, segment_end.z), excluded)
-		if state_key in seen_segments:
-			raise RuntimeError('compiled original recast made no geometric progress')
-		seen_segments.add(state_key)
 		hit, surfaces = query(current, segment_end, excluded)
 		if hit is None:
 			continue
 		skin = _compiled_motion_skin_1513(
 			hit[0], current, segment_end, surfaces, hit[1])
-		if skin is None:
+		if skin is None or remaining_budget <= 0:
 			if evidence is not None:
-				evidence['budget_exhausted'] = False
+				evidence['budget_exhausted'] = bool(skin is not None)
 			return hit
 		exit_distance, newly_excluded = skin
 		direction = segment_end - current
@@ -4409,10 +4426,7 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 		direction.normalise()
 		bounded_end = (segment_end if exit_distance >= length else
 			current + direction.scale(exit_distance))
-		if not newly_excluded.difference(excluded):
-			if evidence is not None:
-				evidence['rejection_reason'] = 'native_filter_no_progress'
-			return hit
+		remaining_budget -= 1
 		if exit_distance + _SHOT_RAY_EPSILON < length:
 			segments.append((bounded_end + direction.scale(_SHOT_RAY_EPSILON),
 				segment_end, excluded))
@@ -4541,175 +4555,241 @@ def _catalog_motion_result(status, token=None, accepted_now=False,
 
 @observed('destructible.motion')
 def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
-        return_status=False, dt=0.04, kinetic_speed=None,
-        return_detail=False, kinetic_commit=False, commit_enabled=True,
-        proposal_only=False, motion_yaw=None, pitch=0.0, roll=0.0,
-        travel_reach=None, contact_motion=None):
-    """Classify actual rigid-body contact; enclosing boxes only find candidates.
+		return_status=False, dt=0.04, kinetic_speed=None,
+		return_detail=False, kinetic_commit=False, commit_enabled=True,
+		proposal_only=False, motion_yaw=None, pitch=0.0, roll=0.0,
+		travel_reach=None):
+	"""Resolve exact streamed OBB contact before committing local movement."""
+	if proposal_only and (not return_detail or not kinetic_commit):
+		raise ValueError(
+			'catalog motion proposals require detail and kinetic classification')
+	_diagnostic_flush_1513(now)
+	# Native acceptance already decided collision. Keep transport retries in
+	# their frozen ledger; a delayed event must not hold this or another hull.
+	_retry_catalog_publications_1513(spaceID)
+	if _destructible_catalog is None:
+		return _catalog_motion_result(
+			'clear',
+			return_status=return_status, return_detail=return_detail,
+			requires_commit=False if proposal_only else None)
+	bbox = _vehicle_body_bbox(td)
+	if bbox is None:
+		return _catalog_motion_result(
+			'clear',
+			return_status=return_status, return_detail=return_detail,
+			requires_commit=False if proposal_only else None)
+	import Math
+	auth = _get_destr_authority()
+	_refresh_destroyed_falling_instances_1513(spaceID, auth, now)
+	if travel_reach is None:
+		sweep_reach = _motion_travel_reach(vel, dt)
+	else:
+		import math
+		try:
+			sweep_reach = float(travel_reach)
+		except (TypeError, ValueError, OverflowError):
+			raise ValueError('catalog travel reach is invalid')
+		if (sweep_reach < 0.0 or math.isnan(sweep_reach) or
+				math.isinf(sweep_reach)):
+			raise ValueError('catalog travel reach is invalid')
+	vehicle_box = _vehicle_swept_box(
+		pos, yaw, vel, bbox, sweep_reach,
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
+	# The visible player does not run the authority Bot scan that normally
+	# populates the live item registry.  Admit only checksum-pinned wires in the
+	# current hull bins through the same read-only native validation as shells.
+	unresolved = _stream_baked_motion_instances_1513(spaceID, vehicle_box)
+	candidates = _catalog_contact_candidates(vehicle_box)
+	# An unidentified model is real geometry this sweep cannot name, destroy or
+	# publish.  #1513 keeps it solid, so the hull stops on it until a later tick
+	# resolves its identity and the ordinary crush law can decide.
+	unidentified = bool(unresolved) and _unidentified_hull_contact_1513(
+		unresolved, vehicle_box, auth)
+	if not candidates and not unidentified:
+		return _catalog_motion_result(
+			'clear',
+			return_status=return_status, return_detail=return_detail,
+			requires_commit=False if proposal_only else None)
 
-    The old kinetic_speed argument remains an adapter ABI, but cannot qualify
-    destruction. Each component uses its own actual closing contact velocity.
-    """
-    import math
-    from gui.mods.offline_lan_0922 import collision_geometry as geometry
-    from gui.mods.offline_lan_0922 import physics_diagnostics
-    if proposal_only and not return_detail:
-        raise ValueError('catalog motion proposals require detail')
-    _diagnostic_flush_1513(now)
-    _retry_catalog_publications_1513(spaceID)
-    if _destructible_catalog is None:
-        return _catalog_motion_result('clear', return_status=return_status,
-            return_detail=return_detail, requires_commit=False if proposal_only else None)
-    bbox = _vehicle_body_bbox(td)
-    if bbox is None:
-        raise RuntimeError('physics contact body descriptor is unavailable')
-    import Math
-    auth = _get_destr_authority()
-    _refresh_destroyed_falling_instances_1513(spaceID, auth, now)
-    if contact_motion is None:
-        direction = float(yaw) if motion_yaw is None else float(motion_yaw)
-        distance = float(vel)*max(0.0, float(dt))
-        if motion_yaw is not None:
-            distance = abs(distance)
-        start = (float(pos.x), float(pos.y), float(pos.z))
-        contact_motion = {'start': start,
-            'end': (start[0]+math.sin(direction)*distance, start[1],
-                    start[2]+math.cos(direction)*distance),
-            'yaw': float(yaw), 'yaw_delta': 0.0,
-            'pitch': float(pitch), 'roll': float(roll), 'bbox': bbox,
-            'dt': max(0.0, float(dt))}
-    vehicle_box = geometry.motion_envelope(contact_motion)
-    unresolved = _stream_baked_motion_instances_1513(spaceID, vehicle_box)
-    candidates = _catalog_contact_candidates(vehicle_box)
-    instances = globals().get('g_offh_destr_instances', {})
-    decisions = []
-    token, kinds = set(), set()
-    blocked = crushed = accepted_now = requires_commit = False
-    blocker = None
-    for identity, boxes in unresolved or ():
-        for box in boxes:
-            if auth.is_destroyed(identity[0], identity[1], box[2]):
-                continue
-            witness = geometry.sweep_contact(contact_motion, box)
-            if witness is None:
-                continue
-            blocked = True
-            kinds.add('unidentified')
-            blocker = blocker or witness
-            decisions.append({'identity': identity+(box[2],), 'box': box,
-                'reason': 'streamed_identity_unresolved', 'witness': witness})
-    grouped = {}
-    for candidate in candidates:
-        grouped.setdefault(candidate[:3], candidate)
-    for key in sorted(grouped, key=lambda k: (k[0], k[1], -1 if k[2] is None else k[2])):
-        candidate = grouped[key]
-        chunk_id, item_index, material, filename, kind = candidate[:5]
-        instance = instances.get((chunk_id, item_index), {})
-        boxes = tuple(box for box in instance.get('boxes', ())
-                      if kind != 'structure' or box[2] == material)
-        contacts = [(geometry.sweep_contact(contact_motion, box), box) for box in boxes]
-        contacts = [(w, box) for w, box in contacts if w is not None]
-        row = {'identity': key, 'filename': filename, 'kind': kind,
-               'scale': candidate[5], 'boxes': boxes,
-               'identity_source': 'registered_catalog_component',
-               'slot': _diagnostic_slot_1513(chunk_id, item_index)}
-        if not contacts:
-            row['reason'] = 'envelope_only_no_rigid_contact'
-            decisions.append(row)
-            continue
-        witness, box = min(contacts, key=lambda pair: pair[0]['fraction'])
-        closing_speed = geometry.contact_speed(contact_motion, witness)
-        row.update(witness=witness, contact_speed=closing_speed,
-                   broken=bool(auth.is_destroyed(*key)))
-        kinds.add(kind)
-        if row['broken']:
-            if kind != 'falling':
-                note_destroyed('module' if material is not None else 'fragile',
-                               chunk_id, item_index, material, now)
-            crushed = True
-            token.add(key)
-            row['reason'] = 'accepted_original_yields_native_replacement_checked_separately'
-            decisions.append(row)
-            continue
-        # A contact already inside the body may release along its outward
-        # normal. This never authorizes destroying it or ignoring a new impact.
-        if closing_speed <= 1.0e-10 and witness['fraction'] == 0.0:
-            end_box = geometry.body_box(contact_motion['end'],
-                contact_motion['yaw']+contact_motion.get('yaw_delta', 0.0),
-                contact_motion['bbox'], contact_motion.get('pitch', 0.0),
-                contact_motion.get('roll', 0.0))
-            ending = geometry.contact(end_box, box)
-            normal = witness['normal']
-            initial_projection = geometry.projection_range(contact_motion, normal, 0.0, 0.0)[0]
-            whole_projection = geometry.projection_range(contact_motion, normal)[0]
-            final_projection = geometry.projection_range(contact_motion, normal, 1.0, 1.0)[0]
-            if final_projection > initial_projection and whole_projection >= initial_projection-1.0e-9:
-                row['reason'] = 'departing_existing_contact'
-                decisions.append(row)
-                continue
-        material_info = _synthetic_mat_info(candidate, Math)
-        law = {}
-        crushable = _stock_crushable_1513(material_info, closing_speed, td,
-                                         candidate[5], evidence=law)
-        row['kinetic'] = law
-        if not crushable or not commit_enabled:
-            blocked = True
-            blocker = blocker or witness
-            row['reason'] = 'insufficient_contact_energy' if not crushable else 'commit_disabled'
-        elif proposal_only:
-            token.add(key)
-            requires_commit = crushed = True
-            row['reason'] = 'actual_contact_proposed'
-        elif _destructible_isolated_1513(chunk_id, item_index):
-            blocked = True
-            blocker = blocker or witness
-            row['reason'] = 'isolated_native_identity'
-        else:
-            point = Math.Vector3(*witness['point'])
-            if kind == 'fragile':
-                accepted = auth.destroy_fragile(spaceID, chunk_id, item_index, point, False)
-                event_kind = 'fragile'
-            elif kind == 'structure':
-                accepted = auth.destroy_module(spaceID, chunk_id, item_index, material, point, False)
-                event_kind = 'module'
-            elif kind == 'falling':
-                accepted = auth.destroy_column(spaceID, chunk_id, item_index, yaw, closing_speed, point)
-                event_kind = 'column'
-            else:
-                raise RuntimeError('unsupported physical destructible kind: %s' % kind)
-            if not accepted:
-                raise RuntimeError('native contact destroy rejected: chunk=%s item=%s material=%s' % key)
-            token.add(key)
-            note_destroyed(event_kind, chunk_id, item_index, material, now)
-            _publish_catalog_once_1513(event_kind, chunk_id, item_index, point,
-                yaw, closing_speed, material if event_kind == 'module' else None)
-            accepted_now = crushed = True
-            row['reason'] = 'native_destroy_accepted'
-        decisions.append(row)
-    status = 'hard' if blocked else 'crushed' if crushed else 'clear'
-    evidence = {'space': spaceID, 'motion': contact_motion, 'status': status,
-                'proposal_only': proposal_only, 'commit_enabled': commit_enabled,
-                'contacts': decisions, 'normal': blocker['normal'] if blocker else None,
-                'body_geometry': 'descriptor_rigid_obb', 'margin': 0.0,
-                'wait_seconds': 0.0, 'qualification_speed_override': None}
-    if decisions:
-        physics_diagnostics.emit('catalog_contact', evidence, now=now)
-    result = _catalog_motion_result(status, token, accepted_now, False,
-        return_status, return_detail, kinds, requires_commit if proposal_only else None)
-    if isinstance(result, dict):
-        result['evidence'] = evidence
-        result['impact_speed'] = max([r.get('contact_speed', 0.0) for r in decisions] or [0.0])
-    return result
+	grouped = {}
+	for candidate in candidates:
+		grouped.setdefault((candidate[0], candidate[1]), []).append(candidate)
+	instances = globals().get('g_offh_destr_instances', {})
+	contact_box = (_vehicle_contact_box(
+		pos, yaw, bbox, travel=float(vel) * max(0.0, float(dt)),
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
+		if kinetic_speed is not None else None)
+	blocked = bool(unidentified)
+	crushed = False
+	kinetic = False
+	approach = False
+	exact_token = set()
+	contact_kinds = set()
+	if unidentified:
+		contact_kinds.add('unidentified')
+	commit_candidates = []
+
+	for identity in sorted(grouped):
+		by_material = {}
+		for candidate in grouped[identity]:
+			by_material.setdefault(candidate[2], candidate)
+		active = []
+		for mat_kind in sorted(
+				by_material, key=lambda value: -1 if value is None else value):
+			candidate = by_material[mat_kind]
+			chunk_id, item_index, unused_mat, unused_filename, kind = (
+				candidate[:5])
+			key = (chunk_id, item_index, mat_kind)
+			contact_candidate = (contact_box is not None and
+				kind in ('fragile', 'structure', 'falling') and
+				any(_boxes_intersect(contact_box, world_box)
+					for world_box in instances.get(
+						(chunk_id, item_index), {}).get('boxes', ())
+					if (kind != 'structure' or world_box[2] == mat_kind)))
+			contact_kinds.add(kind)
+			# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True for any
+			# item the chunk controller already reports broken, so a hiding skin
+			# and a felled column are both transparent from that moment.
+			if auth.is_destroyed(chunk_id, item_index, mat_kind):
+				if kind != 'falling':
+					note_destroyed(
+						'module' if mat_kind is not None else 'fragile',
+						chunk_id, item_index, mat_kind, now)
+				# Retained collision proves that a replacement BSP exists, not
+				# that it fills the intact module's box. Buildings, railings and
+				# fragile props all yield their source envelope on acceptance.
+				# Translation and rotation still query the actual native BSP;
+				# damaged and vehicle-only faces cannot be skipped by this receipt.
+				crushed = True
+				if contact_candidate:
+					exact_token.add(key)
+				_diagnostic_contact_1513(
+					'swept_destroyed', chunk_id, item_index,
+					fields=(('kind', kind), ('mat', mat_kind)), now=now)
+				continue
+			active.append((candidate, contact_candidate))
+
+		if not active:
+			continue
+		for candidate, contact_candidate in active:
+			chunk_id, item_index, mat_kind, unused_filename, kind = (
+				candidate[:5])
+			key = (chunk_id, item_index, mat_kind)
+			mat_info = _synthetic_mat_info(candidate, Math)
+			physical_crushable = _stock_crushable_1513(
+				mat_info, vel, td, candidate[5])
+			cap_crushable = (kinetic_speed is not None and
+				kind in ('fragile', 'structure') and
+				_stock_crushable_1513(
+					mat_info, kinetic_speed, td, candidate[5]))
+			if (kinetic_speed is not None and not contact_candidate and
+					not physical_crushable):
+				# A real frame sweep at sufficient physical speed keeps the old
+				# crush-through behaviour.  Only the directional-cap shortcut is
+				# restricted to exact hull contact; otherwise it is planning-only.
+				if kind in ('fragile', 'structure') and cap_crushable:
+					approach = True
+				else:
+					blocked = True
+				continue
+			if physical_crushable and commit_enabled:
+				commit_candidates.append((candidate, vel, False))
+			elif physical_crushable:
+				exact_token.add(key)
+				blocked = True
+			elif cap_crushable:
+				# Cap-only admission reaches here only for exact current-hull
+				# contact; planning look-ahead returned ``approach`` above.
+				exact_token.add(key)
+				if kinetic_commit:
+					commit_candidates.append((candidate, kinetic_speed, True))
+				else:
+					kinetic = True
+			else:
+				blocked = True
+			_diagnostic_contact_1513(
+				('swept_kinetic_hold' if cap_crushable else
+				'swept_kinetic_reject'), chunk_id, item_index,
+				fields=(('kind', kind), ('mat', mat_kind),
+					('speed', '%.3f' % float(vel)),
+					('scale', '%.5f' % float(candidate[5]))), now=now)
+
+	accepted_now = False
+	used_kinetic_speed = False
+	requires_commit = False
+	# A hard or still-kinetic sibling may stop the chassis, but it must not hide
+	# an independently proved crushable identity in the same sweep.  Preserve
+	# and, when requested, commit that exact subset before returning the overall
+	# blocking status.
+	for candidate, gate_speed, used_cap in commit_candidates:
+		chunk_id, item_index, mat_kind, unused_filename, kind = (
+			candidate[:5])
+		if _destructible_isolated_1513(chunk_id, item_index):
+			continue
+		if proposal_only:
+			exact_token.add((chunk_id, item_index, mat_kind))
+			requires_commit = True
+			used_kinetic_speed = used_kinetic_speed or used_cap
+			crushed = True
+			continue
+		mat_info = _synthetic_mat_info(candidate, Math)
+		point = mat_info[1]
+		if kind == 'fragile':
+			accepted = auth.destroy_fragile(
+				spaceID, chunk_id, item_index, point, False)
+			event_kind = 'fragile'
+		elif kind == 'structure':
+			accepted = auth.destroy_module(
+				spaceID, chunk_id, item_index, mat_kind, point, False)
+			event_kind = 'module'
+		elif kind == 'falling' and not used_cap:
+			accepted = auth.destroy_column(
+				spaceID, chunk_id, item_index, yaw, vel, point)
+			event_kind = 'column'
+		else:
+			blocked = True
+			continue
+		if not accepted:
+			raise RuntimeError(
+				'native catalog contact destroy was not accepted: '
+				'chunk=%s item=%s' % (chunk_id, item_index))
+		# Return every identity that authority was asked to mutate.  This
+		# includes physical-speed look-ahead and exact cap-qualified contact;
+		# the native mutation itself is the authoritative commit receipt.
+		exact_token.add((chunk_id, item_index, mat_kind))
+		note_destroyed(
+			event_kind, chunk_id, item_index, mat_kind, now)
+		_publish_catalog_once_1513(
+				event_kind, chunk_id, item_index, point, yaw, vel,
+				mat_kind if event_kind == 'module' else None)
+		accepted_now = True
+		used_kinetic_speed = used_kinetic_speed or used_cap
+		_diagnostic_contact_1513(
+			'swept_native_accept', chunk_id, item_index,
+			fields=(('kind', kind), ('mat', mat_kind),
+				('speed', '%.3f' % float(gate_speed))), now=now)
+		crushed = True
+
+	status = ('hard' if blocked else
+		'kinetic' if kinetic else
+		'crushed' if crushed else
+		'approach' if approach else 'clear')
+	return _catalog_motion_result(
+		status, exact_token, accepted_now,
+		used_kinetic_speed, return_status, return_detail, contact_kinds,
+		requires_commit if proposal_only else None)
 
 
 def _catalog_motion_proposal(spaceID, pos, yaw, vel, td, now,
-        dt=0.04, kinetic_speed=None, motion_yaw=None,
-        pitch=0.0, roll=0.0, travel_reach=None, contact_motion=None):
-    """Return a mutation-free actual body contact proposal."""
-    return _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now, dt=dt,
-        return_detail=True, kinetic_commit=True, commit_enabled=True,
-        proposal_only=True, motion_yaw=motion_yaw, pitch=pitch, roll=roll,
-        travel_reach=travel_reach, contact_motion=contact_motion)
+		dt=0.04, kinetic_speed=None, motion_yaw=None,
+		pitch=0.0, roll=0.0, travel_reach=None):
+	"""Return a mutation-free exact hull-sweep proposal for worker review."""
+	return _catalog_motion_blocked(
+		spaceID, pos, yaw, vel, td, now, dt=dt,
+		kinetic_speed=kinetic_speed, return_detail=True,
+		kinetic_commit=True, commit_enabled=True, proposal_only=True,
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll,
+		travel_reach=travel_reach)
 
 
 def _catalog_instance_boxes(chunkID, itemIndex, filename, kind,
@@ -5200,7 +5280,7 @@ def _vehicle_body_bbox(type_descriptor):
 	return minimum, maximum, None
 
 def LOG_DEBUG(*unused_args):
-	# Structured PHYSICS events own decision evidence.
+	# The user requested no trace-heavy battle logging.
 	pass
 
 
@@ -7013,10 +7093,8 @@ def _registered_shot_exit_1513(chunkID, itemIndex, matKind, filename,
 	return exits[0] if len(exits) == 1 else None
 
 
-def _stock_crushable_1513(mat_info, vel, td, item_scale=None, evidence=None):
+def _stock_crushable_1513(mat_info, vel, td, item_scale=None):
 	"""Apply the exact retail Vehicle kinetic law to one proved contact."""
-	if evidence is not None:
-		evidence.update(speed=float(vel), reason='descriptor_or_identity_unavailable')
 	decoded = _decode_mat_info_1513(mat_info)
 	if decoded is None or td is None:
 		return False
@@ -7044,9 +7122,6 @@ def _stock_crushable_1513(mat_info, vel, td, item_scale=None, evidence=None):
 	if item_scale <= 0.0 or mass <= 0.0:
 		raise RuntimeError('#1513 destructible kinetic inputs are invalid')
 	instant_damage = 0.5 * mass * vel * vel * 0.00015
-	if evidence is not None:
-		evidence.update(mass=mass, scale=item_scale, energy_joules=0.5*mass*vel*vel,
-			kinetic_coefficient=0.00015, descriptor=desc)
 	desc_type = desc.get('type')
 	if desc_type == AreaDestructibles.DESTR_TYPE_STRUCTURE:
 		modules = desc.get('modules')
@@ -7083,13 +7158,8 @@ def _stock_crushable_1513(mat_info, vel, td, item_scale=None, evidence=None):
 	else:
 		return False
 	try:
-		health = DestructiblesCache.scaledDestructibleHealth(item_scale, ref_health)
-		accepted = health < instant_damage
-		if evidence is not None:
-			evidence.update(reference_health=ref_health, scaled_health=health,
-				instant_damage=instant_damage, accepted=accepted,
-				reason='energy_exceeds_health' if accepted else 'energy_below_health')
-		return accepted
+		return (DestructiblesCache.scaledDestructibleHealth(
+			item_scale, ref_health) < instant_damage)
 	except Exception as error:
 		if _normalized_filename(fname):
 			_isolate_destructible_1513(
@@ -7183,10 +7253,10 @@ def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 		distances = [sum((box[0][index] - value) ** 2 for index, value in
 			enumerate((hit_pt.x, hit_pt.y, hit_pt.z))) for box in boxes]
 		return min(distances) if distances else float('inf')
-	# Preserve all nearby owners; omission here defeated component diagnosis.
+	# Dense prop clusters must not produce unbounded diagnostic records.
 	nearby = sorted(members, key=owner_distance)
-	evidence['owners_omitted'] = 0
-	for identity in nearby:
+	evidence['owners_omitted'] = max(0, len(nearby) - 16)
+	for identity in nearby[:16]:
 		instance = instances.get(identity)
 		if instance is None:
 			continue

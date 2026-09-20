@@ -8,7 +8,6 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
 import copy
 import math
 from gui.mods.offline_lan_0922 import stun_mechanics
-from gui.mods.offline_lan_0922 import physics_diagnostics
 from gui.mods.offline_lan_0922 import tank_contact_ledger
 import json
 import random
@@ -4500,7 +4499,7 @@ class BotRuntime(object):
                           tank_collision.chassis_shape(descriptor))
             ram_profile = snapshot['ramming']
             if (math.isnan(mass) or math.isinf(mass) or mass <= 0.0 or
-                    len(shape) not in (4, 6) or
+                    len(shape) != 4 or
                     any(math.isnan(value) or math.isinf(value)
                         for value in shape)):
                 raise ValueError('player collision manifest body is invalid')
@@ -6319,27 +6318,6 @@ class BotRuntime(object):
         Emit at most once per three seconds per hull; movement resets the timer.
         """
         position = _position(state)
-        state.pop('_rotation_contact_trace', None)
-        state['_motion_stall_pending'] = {
-            'id': int(state['id']), 'vehicle': state.get('vehicle'),
-            'native_motion': bool(self.native_motion),
-            'start': position, 'speed_before': state.get('speed', 0.0),
-            'requested_throttle': throttle, 'turn': turn,
-            'yaw': state.get('yaw'), 'pitch': state.get('pitch'),
-            'roll': state.get('roll'), 'shape': state.get('collision_shape'),
-            'siege_state': state.get('siege_state'),
-            'siege_time_left_ms': state.get('siege_time_left_ms'),
-            'siege_intent': state.get('_siege_intent'),
-            'terrain_pitch': state.get('terrain_pitch'),
-            'hydraulic_pitch': state.get('suspension_pitch'),
-            'gun_pitch': state.get('gun_pitch'),
-        }
-        state['_motion_stall_pending'].update({
-            'legacy_text': False, 'movement_intent': command.get('movement_intent'),
-            'goal': command.get('move_position'), 'target_yaw': command.get('target_yaw'),
-            'recovery_mode': command.get('recovery_mode'),
-            'traffic_braking': state.get('traffic_braking', False),
-        })
         previous = state.get('_motion_stall_log')
         moved = (previous is not None and
                  (position[0] - previous[0][0]) ** 2 +
@@ -6356,7 +6334,20 @@ class BotRuntime(object):
         strategic = self._server_orders.get(state['id']) or {}
         # Finish this rare diagnostic after every authority gate has run.
         # The control verdict alone cannot explain a later pose rollback.
-        state['_motion_stall_pending']['legacy_text'] = True
+        state['_motion_stall_pending'] = {
+            'id': int(state['id']), 'vehicle': state.get('vehicle'),
+            'native_motion': bool(self.native_motion),
+            'start': position, 'speed_before': state.get('speed', 0.0),
+            'requested_throttle': throttle, 'turn': turn,
+            'yaw': state.get('yaw'), 'pitch': state.get('pitch'),
+            'roll': state.get('roll'), 'shape': state.get('collision_shape'),
+            'siege_state': state.get('siege_state'),
+            'siege_time_left_ms': state.get('siege_time_left_ms'),
+            'siege_intent': state.get('_siege_intent'),
+            'terrain_pitch': state.get('terrain_pitch'),
+            'hydraulic_pitch': state.get('suspension_pitch'),
+            'gun_pitch': state.get('gun_pitch'),
+        }
         print('[BOT STALL] id=%s pos=(%.1f,%.1f) mode=%s recovery=%s '
               'traffic=%s intent=%s goal=%s strategic_goal=%s '
               'yaw=%.3f target_yaw=%s speed=%.2f throttle=%.2f turn=%.2f '
@@ -6375,7 +6366,6 @@ class BotRuntime(object):
                   pose_frozen, state.get('hull_aiming', False),
                   self._hard_contact_grinds.get(state['id'], 0), planner_age))
 
-    @physics_diagnostics.observational
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
                              settled_position):
         """Log the actual authority outcome without extra world queries."""
@@ -6383,13 +6373,6 @@ class BotRuntime(object):
         if trace is None:
             return
         position = _position(state)
-        legacy = trace.pop('legacy_text', False)
-        stalled = ((trace.get('movement_intent') or abs(trace.get('turn', 0.)) > 0.01) and
-                   sum((position[i] - trace['start'][i]) ** 2 for i in (0, 2)) <= 1.0e-12)
-        if not (legacy or stalled or support_rollback or pose_rollback or
-                trace.get('hard_contact') or trace.get('rotation_blocked') or
-                trace.get('world_status') not in (None, 'clear', 'crushed')):
-            return
         nearby = []
         for other in self.states.values():
             if int(other['id']) == int(state['id']):
@@ -6415,14 +6398,8 @@ class BotRuntime(object):
             'contact_pairs': sorted(pair for pair in self._ram_contacts
                                     if int(state['id']) in pair),
         })
-        trace.update(rotation_contact=state.pop('_rotation_contact_trace', None),
-                     yaw_final=state.get('yaw'),
-                     angular_speed=self._turn_speeds.get(state['id'], 0.0))
-        from gui.mods.offline_lan_0922 import physics_diagnostics
-        physics_diagnostics.emit('bot_motion_frame', trace, key=state['id'])
-        if legacy:
-            print('[BOT MOTION] %s' % physics_diagnostics.encode(trace, compact=True))
-
+        print('[BOT MOTION] %s' % json.dumps(
+            trace, separators=(',', ':')))
 
     def set_camera_position(self, position):
         """Publish the viewpoint that drives the presentation detail tiers."""
@@ -6609,43 +6586,35 @@ class BotRuntime(object):
     @observed('bot.contact_response')
     def _hard_contact_response(self, state, position, yaw, speed,
                                descriptor, step, now, normal=None):
-        """Project the complete planar velocity onto the actual contact tangent."""
-        velocity = (math.sin(yaw)*speed+state.get('push_x', 0.0), 0.0,
-                    math.cos(yaw)*speed+state.get('push_z', 0.0))
-        outgoing = vehicle_physics.world_contact_velocity(velocity, normal) if normal else (0.0, 0.0, 0.0)
-        tangent_speed = math.hypot(outgoing[0], outgoing[2])
+        """Probe the shared glancing paths and apply copied hull damping."""
         slide_yaw = None
-        if tangent_speed > 1.0e-10:
-            candidate_yaw = math.atan2(outgoing[0], outgoing[2])
+        for candidate_yaw in vehicle_physics.hard_contact_candidate_yaws(
+                yaw, speed, normal):
             if callable(self.motion_resolver):
-                status = self._passive_motion_status(state, position, candidate_yaw,
-                    tangent_speed, descriptor, step, now, commit_enabled=False)
+                status = self._passive_motion_status(
+                    state, position, candidate_yaw, speed,
+                    descriptor, step, now, commit_enabled=False)
                 clear = status in ('clear', 'crushed')
             else:
                 clear = self._probe_is_clear(self._probe_direction(
-                    position, candidate_yaw, tangent_speed, descriptor))
+                    position, candidate_yaw, speed, descriptor))
             if clear:
-                if not callable(self.motion_resolver) or self._passive_motion_status(
-                        state, position, candidate_yaw, tangent_speed, descriptor,
-                        step, now, commit_enabled=True) in ('clear', 'crushed'):
+                if callable(self.motion_resolver):
+                    status = self._passive_motion_status(
+                        state, position, candidate_yaw, speed,
+                        descriptor, step, now, commit_enabled=True)
+                    if status in ('clear', 'crushed'):
+                        slide_yaw = candidate_yaw
+                else:
                     slide_yaw = candidate_yaw
+                break
         bot_id = int(state['id'])
-        speed = delta_x = delta_z = 0.0
-        if slide_yaw is not None:
-            speed = outgoing[0]*math.sin(yaw)+outgoing[2]*math.cos(yaw)
-            lateral = (outgoing[0]-math.sin(yaw)*speed,
-                       outgoing[2]-math.cos(yaw)*speed)
-            state['push_x'], state['push_z'] = lateral
-            state['_wall_integrated_push'] = lateral
-            delta_x, delta_z = outgoing[0]*step, outgoing[2]*step
-        from gui.mods.offline_lan_0922 import physics_diagnostics
-        physics_diagnostics.emit('bot_contact_frame', {
-            'bot_id': bot_id, 'position': position, 'yaw': yaw, 'dt': step,
-            'speed_after': speed, 'slide_yaw': slide_yaw, 'normal': normal,
-            'contact': state.get('_world_contact_trace'),
-            'push': (state.get('push_x', 0.0), state.get('push_z', 0.0)),
-        }, key=bot_id, now=now)
-        self._hard_contact_grinds[bot_id] = 0
+        speed, delta_x, delta_z = vehicle_physics.hard_contact_step(
+            speed, step,
+            grinding=self._hard_contact_grinds.get(bot_id, 0) > 0,
+            slide_yaw=slide_yaw)
+        self._hard_contact_grinds[bot_id] = (
+            vehicle_physics.HARD_CONTACT_GRIND_TICKS)
         return (speed,
                 (position[0] + delta_x, position[1], position[2] + delta_z),
                 slide_yaw is not None)
@@ -6693,9 +6662,6 @@ class BotRuntime(object):
     def _apply_world_contact_impact(self, state, speed, now):
         """Consume primary native hull contact; speculative probes own no HP."""
         trace = state.pop('_world_contact_trace', None)
-        pending = state.get('_motion_stall_pending')
-        if pending is not None and trace:
-            pending['world_contact'] = trace
         if not isinstance(trace, dict) or 'hit' not in trace:
             return 0
         if not state.get('airborne', False):
@@ -8014,7 +7980,7 @@ class BotRuntime(object):
         Traffic is evaluated before this authority tick's longitudinal step,
         so there is no separate reaction-distance term.  Advancing with the
         same nominal 30 Hz semi-implicit step used by copied physics gives the
-        actual forward travel remaining after the planner commands braking.  A grade
+        actual forward travel remaining after throttle is released.  A grade
         which cannot reduce forward speed has no finite stopping distance.
         """
         current = abs(_number(speed))
@@ -8028,7 +7994,7 @@ class BotRuntime(object):
         for unused_step in range(4096):
             following = vehicle_physics.longitudinal_step(
                 physics_params, current, 0.0, bool(steering),
-                float(slope_pitch), step, False, 0, True)
+                float(slope_pitch), step, False, 0, False)
             if math.isnan(following) or math.isinf(following):
                 return float('inf')
             if following <= TRAFFIC_DIRECTION_SPEED_EPSILON:
@@ -8240,14 +8206,11 @@ class BotRuntime(object):
         push_z = (state.get('push_z', 0.0) + delta_z -
                   applied_forward * math.cos(yaw))
         if advance_push:
-            undamped_push = (push_x, push_z)
             push_x, push_z = self._bleed_contact_push(state, push_x, push_z, step)
         correction_x, correction_z = (result['correction'] if
                                       apply_correction else (0.0, 0.0))
-        integrated = state.pop('_wall_integrated_push', (0.0, 0.0)) if advance_push else (0.0, 0.0)
-        travel_push = undamped_push if integrated != (0.0, 0.0) else (push_x, push_z)
-        move_x = correction_x + ((travel_push[0]-integrated[0]) * step if advance_push else 0.0)
-        move_z = correction_z + ((travel_push[1]-integrated[1]) * step if advance_push else 0.0)
+        move_x = correction_x + (push_x * step if advance_push else 0.0)
+        move_z = correction_z + (push_z * step if advance_push else 0.0)
         move_distance = math.sqrt(move_x * move_x + move_z * move_z)
         if move_distance > 0.0001:
             contact_yaw = math.atan2(move_x, move_z)
@@ -8817,7 +8780,8 @@ class BotRuntime(object):
         maximum_radius = 4.0
         for tank in tanks:
             shape = tank_collision._tank_shape(tank)
-            radius = tank_collision.shape_radius(shape)
+            radius = math.sqrt(
+                shape[0] * shape[0] + shape[1] * shape[1])
             maximum_radius = max(maximum_radius, radius)
             collision_radii[tank['id']] = radius
             collision_bodies[tank['id']] = {
@@ -10712,7 +10676,7 @@ class BotRuntime(object):
             return False
         shape = state.get('collision_shape')
         try:
-            source_radius = tank_collision.shape_radius(shape)
+            source_radius = math.hypot(float(shape[0]), float(shape[1]))
         except (TypeError, ValueError, IndexError):
             source_radius = math.hypot(
                 max(0.3, _number(state.get('half_width'), 1.7)),
@@ -11853,28 +11817,13 @@ class BotRuntime(object):
             throttle, turn = safety['throttle'], safety['turn']
             state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
             vehicle_obstacles = state.get('traffic_obstacles', {})
-            nearby = dict((peer['id'], peer) for peer in
-                          self._neighbours_for(state, neighbours))
-            def travelling_peer(peer_id):
-                decision = self._decision_cache.get(peer_id)
-                return bool(peer_id in self.states and decision and
-                            decision[3].get('movement_intent', False))
             for peer_id, until in list(vehicle_obstacles.items()):
-                peer = nearby.get(peer_id)
-                velocity = (peer or {}).get('velocity', (0., 0., 0.))
-                if (peer is None or not peer.get('alive', True) or now >= until or
-                        (not travelling_peer(peer_id) and
-                         math.hypot(velocity[0], velocity[2]) > 0.35)):
+                if now >= until:
                     del vehicle_obstacles[peer_id]
-                elif travelling_peer(peer_id) and until == float('inf'):
-                    vehicle_obstacles[peer_id] = now + 1.2
-            blocker_id = safety.get('forward_blocked_by')
-            if blocker_id is not None:
-                # Keep the existing short steering lease for cooperative
-                # travelling traffic. A parked hull does not become clear
-                # because that lease expired while its neighbour was braking.
-                vehicle_obstacles[blocker_id] = (now + 1.2
-                    if travelling_peer(blocker_id) else float('inf'))
+            if safety.get('forward_blocked_by') is not None:
+                # Match LocalDriver's 1.20-second avoidance-heading lease;
+                # an older obstruction must not outlive that local plan.
+                vehicle_obstacles[safety['forward_blocked_by']] = now + 1.2
             state['traffic_obstacles'] = vehicle_obstacles
             if siege_motion_locked:
                 # Stock Siege transitions immobilize the hull for the whole
@@ -12362,22 +12311,17 @@ class BotRuntime(object):
                 if supported_pitch is not None:
                     slope_pitch = supported_pitch
                 previous_speed = state['speed']
-                # The planner's zero throttle is a stop command. Request the
-                # real brake explicitly now that neutral no longer invents one.
-                braking = throttle == 0.0
                 speed = (0.0 if siege_motion_locked else
                     vehicle_physics.longitudinal_step(
                         params, previous_speed, throttle,
                         steer_dir != 0, slope_pitch, step,
-                        bool(state.get('airborne', False)), 0, braking))
+                        bool(state.get('airborne', False)), 0, False))
                 state['last_drive_pitch'] = slope_pitch
                 trace = state.get('_motion_stall_pending')
                 if trace is not None:
                     trace.update({
-                        'dt': step, 'drive_speed': speed, 'physics': params,
-                        'rotation_blocked': bool(rotation_blocked or state.get('_rotation_contact_blocked')),
-                        'candidate_yaw': candidate_hull_yaw,
-                        'drive_pitch': slope_pitch, 'throttle': throttle, 'braking': braking,
+                        'dt': step, 'drive_speed': speed,
+                        'drive_pitch': slope_pitch, 'throttle': throttle,
                         'baked_veto': committed_corridor is False,
                         'path_clear': bool(path_clear),
                         'frozen': bool(pose_frozen),

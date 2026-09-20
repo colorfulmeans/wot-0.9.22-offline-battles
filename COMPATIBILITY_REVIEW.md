@@ -13,166 +13,55 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
-## September 20: contact-report abort and repeated rotation work in the 08:37 report
+## September 20: restore the requested baseline and correct fence ownership
 
-Report `wot-error-report-20260920-083710-116e07c594fa.zip` confirms build
-`colorfulmeans-35478361781-1`. Its visible-client log identifies the terminal
-failure: `_report_local_motion_stall` serializes `LOCAL HARD CONTACT` with a
-plain JSON encoder, but the kinetic descriptor contains native `EffectsList`
-objects. The resulting `TypeError` escapes into `_frame`, aborts the battle
-and restores the lobby. Session-header-only native exception trails do not
-exclude this Python failure; the full client log supplies its traceback.
-The Bot legacy `[BOT MOTION]` writer had the same defect.
+The owner reports that `ead138e3` still freezes and leaves fence air walls.
+The requested screenshot names report
+`wot-error-report-20260919-202347-ee921fa2d946.zip`. Its installed build
+`colorfulmeans-35441583755-1` and the corresponding workflow run both identify
+`f84001a4f7bc8d80c92e648f7d0cacb98703af0c` as the baseline.
 
-Both legacy writers now use the native-safe encoder used by structured
-physics evidence. Report-only boundaries contain stream/formatting failures
-and emit a `diagnostic_error` when the remaining stream permits it; no
-simulation or contact decision is inside that exception boundary. Regression
-tests replay the reported contact values with a real non-JSON effect object,
-retain identity, health, energy and effect evidence, and exercise both player
-and Bot paths as well as a failed output stream.
+The new `094514-d77cc4339add` report confirms the previously delivered
+`colorfulmeans-35481400764-1` build. Its player capture records 3,679 rotation
+envelope refinements at one body origin, reaching about 3.49e-17 radians.
+The worker's last complete performance window averages 475.1 ms of Python
+execution per frame and 2.06 frames/second. The two clients emit 466,503 valid
+structured physics rows; their raw logs total 475,441,607 bytes. This disproves
+the earlier implication that the query reuse and encoding correction were
+sufficient to resolve the reported freeze. The final worker disconnect alone
+does not identify a native crash.
 
-The Bot catalog-hard branch also returned before delivering its contact
-normal. Move that evidence assignment before the return so the existing
-normal/tangent response and the report receive the actual contact. A parity
-regression requires the normal and catalog reason to reach the Bot state.
+Restore the complete f84001a4 implementation before applying the focused
+ownership correction below. This removes the later rotation refinement,
+full-query diagnostic emission and broad contact/drive/suspension changes,
+including their follow-up patches and tests. The older movement laws and
+diagnostic cadence are those of the explicitly requested baseline. The
+rollback is a new branch commit; it does not rewrite published history.
 
-The same session's worker capture spends 15.74 seconds in 34 Bot updates,
-with a 1.334-second maximum update. That is separate from the terminal JSON
-failure. Structured diagnostics previously encoded every payload twice;
-the row now embeds the exact payload already encoded for repeat detection.
-Nothing is sampled away, deferred or capped. `physics.diagnostics` and
-`motion.rotation` receive distinct nested timing stages for the next report.
-The encoder also reuses immutable formatting options while keeping each
-traversal independent. Replaying all 20,761 player rows and 65,063 worker rows
-produces identical decoded records and byte counts. In a local Python 3
-encoding-only comparison, player time falls from 0.509 to 0.343 seconds and
-worker time from 1.553 to 1.125 seconds. These measurements exclude native
-Windows execution and disk output; they do not establish the resulting ping.
+The baseline report contains five Malinovka fence witnesses for original
+compiled material 73. The contacted component has already been accepted as
+destroyed, while the next placement's material-73 half remains intact farther
+along the fence. Their whole-model envelopes overlap. The previous ownership
+predicate let that unrelated live half veto the destroyed component at the
+actual hit, so its invisible original BSP remained solid.
 
-Forward/reverse rotation probes also repeated identical perimeter rays and
-support columns. A synchronous, read-only query scope now shares only exact
-space/endpoints/mask matches. Every native filter callback candidate is
-replayed for evidence; any changed filter decision triggers a fresh native
-query. The scope ends with that rotation check, before any future destruction
-or frame. Existing reported support replays use 82/76 native calls instead of
-99/92, with unchanged clear verdicts; added walls remain blocked. This is a
-query-work reduction, not proof of native frame pacing or corrected ping.
+Resolve each anonymous original material against the components containing
+the native witness. Use the unanimous whole-model proof only when no module
+box contains that original face. Bound the filtered segment before a later
+live component, including another component in a model already considered at
+the first hit. Recast the complete bounded segment so replacement material
+88 and vehicle-only material 111 still block, including a wall one millimetre
+behind the removed skin. No map/model-name exceptions are used.
 
-No collision geometry, dimensions, waits, map parameters, destruction energy
-thresholds or damaged-material permissions change in this correction. Native
-Windows playtesting remains necessary for performance and fence behavior.
-
-## September 20: collision-query starvation reproduced from the 07:58 report
-
-Report `wot-error-report-20260920-075844-84edb4755fc8.zip` confirms installation
-of build `colorfulmeans-35450341244-1` on #1513. Both clients remain inside one
-rotation query: the worker records 22,150 envelope refinements at one body
-origin, and the visible client records 43,250 at another. Refinement continues
-down to approximately 1e-16 radians while the server times out the worker.
-The exception trails contain session headers only; this is evidence of an
-event-loop stall, not an identified native exception.
-
-The new fixture preserves both reported body poses and their native support
-points/normals. Float32 plane replays reproduce the runaway work in the old
-code. The envelope predicate was intercepting drivable support before the
-ordinary ground/profile classifier could see it. Support hits now reach that
-classifier unchanged; they cannot create an ambiguous-wall subdivision merely
-because native point rounding places them outside the exact double-precision
-arc. Existing slope, seam, raised-wall and backing-wall checks still decide
-whether the contact is passable.
-
-Two related numerical paths are covered by the same controls. Grazing recasts
-advance across a coordinate contributing to the contacted face, rather than
-advancing only along its tangent and repeatedly returning the same plane.
-They still query the remainder and retain an immediately adjacent wall.
-An ambiguous enclosing-box hit also gets a native query at the exact interval
-endpoint body before more subdivision: a real wall there is an actual-pose
-witness, without requiring its rounded boundary point to fit a double-precision
-arc. Empty envelope corners and walls crossed only during a turn still use
-the existing refinement and departure checks.
-
-No map parameters, vehicle dimensions, collision waits, report caps or
-logging switches change. The regression controls require reported support to
-clear promptly and a wall entered by either reported turn to remain solid.
-These tests establish the query regression and protections; driving the new
-build on the native Windows client remains the gameplay acceptance boundary.
-
-## September 19: twelve-item physics correction and complete contact evidence
-
-This change supersedes earlier descriptions below of artificial wall damping,
-neutral braking, overspeed caps and fixed recast budgets. It changes shared
-player/worker/Bot physics, without map-coordinate exceptions or an added
-collision skin or collision waiting interval.
-
-| Audit item | Resulting behavior |
-| --- | --- |
-| 1. Pitch/roll shear | Body probes use an orthonormal yaw/pitch/roll transform. |
-| 2. Rotation envelope as a solid | Envelopes select candidates; catalog contacts follow the actual continuous rigid arc. Native candidates are refined in midpoint rigid-body axes until a real arc witness is established or geometry clears; an empty envelope point alone cannot discard an extended wall. Intact walls are queried even before the first destruction. |
-| 3. Fixed probe heights | Native probes use the actual combined chassis/mounted-hull vertical bounds and boundary segments. |
-| 4. Maximum-speed crushing | Destruction qualification uses actual contact-normal velocity, including angular velocity at a rotating contact. Vehicle maximum speed cannot qualify destruction. |
-| 5. Arbitrary wall-avoidance angles | Wall response follows the actual contact tangent. |
-| 6. Repeated wall damping | Remove inward normal velocity from the complete planar velocity; preserve tangential momentum without entry factors, exponential braking or grinding ticks. |
-| 7. Extra uphill drag | Uphill motion uses gravity, available traction and ordinary friction; the extra slip-drag coefficient is removed. |
-| 8. 105-percent downhill cap | The speed governor limits drive contribution; gravity and existing momentum have no percentage cap or artificial overspeed decay. |
-| 9. Neutral automatic braking | Neutral uses rolling resistance. Braking is explicit; a Bot's stop command requests braking. |
-| 10. Pseudo-contact skin and freezing | Ground contact/allowed penetration targets are zero; small heave/angular velocities are no longer forcibly frozen. |
-| 11. Mirrored/minimum collision sizes | Vehicle-pair bodies retain actual asymmetric chassis half sizes and centre offsets through client/server manifests, broad-phase radii, navigation probe widths and arena corners. |
-| 12. Four-skin budget | Accepted-skin recasts continue while identity or geometry advances. An unrelated live component or replacement remains solid. |
-
-Anonymous compiled BSP ownership is evaluated per material/component, rather
-than letting a nearby intact half veto an already accepted fence half through
-their shared whole-model envelope. Recasts retain backing walls, damaged BSPs
-and vehicle-only material 111. Destruction still requires the existing native
-health/kinetic gate and the native authority's acceptance. Removing a wait
-means using an accepted result immediately, not granting unaccepted destruction.
-
-Bot zero-throttle commands now request an explicit brake, while player neutral
-uses rolling resistance. Proved nearby parked traffic remains a navigation
-obstacle until it moves or leaves the nearby set; the old expiration timer
-could forget one half of a blockage while the hull was still braking/turning.
-Cooperative travelling Bots retain the existing short steering lease, rather
-than turning an entire temporarily braking convoy into static geometry.
-This affects planning only and introduces no physical stop delay or skin.
-
-The always-on `PHYSICS` records include real body bounds and poses, timestep,
-linear/angular motion, contact fraction/point/normal, chunk/item/material,
-model path and module boxes when resolved, intact/broken state, descriptor
-health, item scale, energy/kinetic inputs, native callback candidates and the
-explicit rejection reason. Parameter snapshots include gravity, mass, drive,
-friction, slope grip, limits, spring layout/stiffness/damping and the selected
-contact laws. Player/Bot contact frames keep motion and suspension evidence;
-Bot rotation blocks, braking decisions and final pose rollbacks are captured
-from the first affected frame, independently of the old three-second text log. Records do not depend on the optional legacy
-text-debug switch or its per-session/contact caps. Records include a wall-clock timestamp for correlation across the client and
-worker. Only unchanged identical payloads may coalesce for one second, with repeat counts.
-
-The launcher extracts all structured rows within its existing exact session
-byte boundaries into `physics-visible-client.jsonl` and
-`physics-hidden-worker.jsonl`, and adds `physics-summary.json`. The original
-full-session logs remain in the ZIP. The extraction spools to disk rather than
-truncating by bytes or contact count; partial chunks and a final unterminated
-line are supported, and malformed rows are counted. Previous/later sessions
-are not copied into the report.
-
-These are corrections to this port's physical model, not a claim to reproduce
-retail C++ simulation exactly. Catalog narrow-phase uses authored oriented
-boxes; native scene geometry is queried through the existing #1513 segment
-API. Vehicle-pair contact remains a planar OBB model with vertical overlap.
-Numerical convergence tolerances are not physical inflation or waiting time.
-Previously recovered game-unit gravity/power scaling and other unlisted
-native parameters are unchanged. The native callback can expose anonymous
-aggregate keys without the identity of the nearest surface: reports retain
-all candidates, the actual witness, matching provenance and explicitly labelled
-read-only identity replays instead of presenting a guessed owner as certain.
-Only the exact Windows #1513 client can confirm gameplay and performance.
-
-Regression coverage includes empty rotation-envelope corners, thin objects
-crossed only mid-arc, grazing native point contacts, asymmetric chassis bounds,
-normal-only momentum response, real angular-speed crush thresholds, adjacent
-intact modules, more than four accepted skins, uncapped diagnostics and
-full-session report extraction. Package/CI evidence is recorded with the build
-in the pull request; no native playthrough is asserted by those checks.
+The fixture preserves all five complete contact records and their component
+states. Before this correction, every reported original face remains blocked;
+afterward each clears in at most four native replay calls. Revoking accepted
+destruction restores the block. Controls retain live neighbouring components,
+damaged replacements and vehicle-only backing walls with both reordered and
+pruned native callbacks. Existing cross-map railing replays cover 40 maps and
+750 placed collider variants. These establish the ownership correction in the
+shared query adapter. Actual fence traversal and frame pacing still require
+the restored build on Windows #1513.
 
 The post-0.8.3 gameplay follow-up addresses nine reported paths. A hidden remote
 vehicle retires its engine-audition component and detailed-engine callbacks.

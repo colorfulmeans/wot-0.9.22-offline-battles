@@ -458,15 +458,6 @@ This is a reconstruction from the frozen clients and same-era mechanics, not
 Wargaming's retail server. LAN play assumes trusted clients. Native rendering,
 physics and frame pacing can only be judged in the Windows client.
 
-Physics contact diagnostics are recorded automatically. The launcher's error
-report includes the full player/worker session logs plus
-`physics-visible-client.jsonl`, `physics-hidden-worker.jsonl` and
-`physics-summary.json`. These retain contact geometry, component candidates,
-destruction decisions and physical parameters without a contact-count cap.
-Anonymous native keys remain explicitly marked as uncertain. The twelve-item
-physics correction and its Windows validation boundary are documented in
-[COMPATIBILITY_REVIEW.md](COMPATIBILITY_REVIEW.md#september-19-twelve-item-physics-correction-and-complete-contact-evidence).
-
 ## Build it yourself
 
 The `Build Windows launcher` GitHub Actions workflow builds the server, client

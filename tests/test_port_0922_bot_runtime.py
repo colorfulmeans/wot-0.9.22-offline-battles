@@ -3834,7 +3834,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         hard_runtime.update(.04, 1.0)
 
-        self.assertEqual(1, len(hard_calls))
+        self.assertEqual(5, len(hard_calls))
         self.assertEqual(before_position,
                          (hard_state['x'], hard_state['y'], hard_state['z']))
         self.assertAlmostEqual(
@@ -3885,7 +3885,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertLess(positions[1], positions[2])
         self.assertEqual(0, runtime._hard_contact_grinds.get(11, 0))
 
-    def test_bot_hard_contact_preserves_real_wall_tangent_momentum(self):
+    def test_bot_hard_contact_uses_shared_second_glancing_path(self):
         command = {
             'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
             'shell_index': 0, 'fire_allowed': False, 'target_id': None,
@@ -3902,11 +3902,10 @@ class BotRuntimeTests(unittest.TestCase):
             commit_enabled = args[7] if len(args) > 7 else True
             calls.append((args, kwargs, commit_enabled))
             if len(calls) == 1:
-                state['_world_contact_trace']={'normal':(-math.sqrt(.5),0.,-math.sqrt(.5))}
                 return 'hard'
             if commit_enabled:
                 destroyed.append(kwargs['motion_yaw'])
-            if abs(kwargs['motion_yaw']+math.pi/4) < 1e-8:
+            if kwargs['motion_yaw'] == -0.55:
                 return 'crushed' if commit_enabled else 'clear'
             return 'hard'
 
@@ -3926,16 +3925,24 @@ class BotRuntimeTests(unittest.TestCase):
 
         runtime.update(.04, 1.0)
 
-        contact_speed=calls[0][0][3]
-        self.assertEqual(3,len(calls))
-        self.assertEqual([False,True],[call[2] for call in calls[1:]])
-        for call in calls[1:]:
-            self.assertAlmostEqual(-math.pi/4,call[1]['motion_yaw'])
-            self.assertAlmostEqual(contact_speed/math.sqrt(2.),call[0][3])
-        self.assertAlmostEqual(-contact_speed*.5*.04,state['x'])
-        self.assertAlmostEqual(contact_speed*.5*.04,state['z'])
-        self.assertAlmostEqual(contact_speed*.5,state['speed'])
-        self.assertEqual(1,len(destroyed))
+        contact_speed = calls[0][0][3]
+        expected_speed, delta_x, delta_z = \
+            self.module.vehicle_physics.hard_contact_step(
+                contact_speed, .04, grinding=False, slide_yaw=-0.55)
+        self.assertEqual(4, len(calls))
+        self.assertEqual([0.0, 0.0, 0.0],
+                         [call[0][2] for call in calls[1:]])
+        self.assertEqual([0.55, -0.55, -0.55],
+                         [call[1]['motion_yaw'] for call in calls[1:]])
+        self.assertEqual([False, False, True],
+                         [call[2] for call in calls[1:]])
+        self.assertEqual([-0.55], destroyed)
+        self.assertAlmostEqual(expected_speed, state['speed'])
+        self.assertAlmostEqual(delta_x, state['x'])
+        self.assertAlmostEqual(delta_z, state['z'])
+        self.assertEqual(
+            self.module.vehicle_physics.HARD_CONTACT_GRIND_TICKS,
+            runtime._hard_contact_grinds[11])
 
     def test_reverse_passive_probe_uses_signed_motion_not_hull_yaw(self):
         calls = []
@@ -4773,7 +4780,7 @@ class BotRuntimeTests(unittest.TestCase):
     def test_bot_support_uses_wide_chassis_not_narrower_hull(self):
         descriptor = _wide_track_descriptor()
         half_length, half_width = self.module._hull_dimensions(descriptor)
-        self.assertAlmostEqual((2.648682+2.648121)*.5, half_length)
+        self.assertAlmostEqual(2.648682, half_length)
         self.assertAlmostEqual(1.565461, half_width)
         state = {
             'x': 0.0, 'y': 10.0, 'z': 0.0, 'yaw': 0.0,
@@ -4982,12 +4989,7 @@ class BotRuntimeTests(unittest.TestCase):
                         state, 1.0 / 30.0))
                     self.assertEqual(4.0, state['speed'])
                     self.assertTrue(state['grounded_once'])
-                    for unused in range(120):
-                        runtime._update_vertical_motion(state, 1./30.)
-                    self.assertEqual(4.0, state['speed'])
-                    self.assertLess(abs(state['vertical_speed']), .05)
-                    self.assertGreaterEqual(state['y'], -.001)
-                    self.assertLess(state['y'], .4)
+                    self.assertFalse(state['airborne'])
         finally:
             self.module.tank_collision.support_rise_is_obstacle = original
 
@@ -6348,7 +6350,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([51000.0, 48000.0],
                          [profile['mass'] for profile in profiles])
         self.assertEqual(
-            [[1.5, 3.5, -0.8, 2.0, 0.0, 0.0], [1.5, 3.5, -0.8, 2.0, 0.0, 0.0]],
+            [[1.5, 3.5, -0.8, 2.0], [1.5, 3.5, -0.8, 2.0]],
             [profile['shape'] for profile in profiles])
         self.assertEqual([0.15, 0.10], [
             profile['ram_profile']['ramming_bonus']
@@ -7482,9 +7484,8 @@ class BotRuntimeTests(unittest.TestCase):
         finally:
             self.module.prebaked_navigation.pose_is_safe = original_pose_safe
 
-        self.assertGreater(len(direction_calls), 1)
-        # Existing 35 m/s momentum is no longer clamped to engine top speed.
-        self.assertGreater(state['z'], 50.0)
+        self.assertEqual(3, len(direction_calls))
+        self.assertGreater(state['z'], 20.0)
         self.assertEqual(1, state['movement_dir'])
         self.assertGreater(state['speed'], 0.0)
         self.assertEqual(2000000, runtime._sample_time_us)
@@ -20381,15 +20382,15 @@ class BotRuntimeTests(unittest.TestCase):
         self.runtime.update(.04, 1.0)
 
         decision = self.adapters[0].calls[0][0]
-        self.assertEqual(4.0, decision['half_length'])
-        self.assertEqual(2.2, decision['half_width'])
+        self.assertEqual(4.2, decision['half_length'])
+        self.assertEqual(2.3, decision['half_width'])
         expected_velocity = (
             math.sin(self.runtime.states[11]['yaw']) * 6.0, 0.0,
             math.cos(self.runtime.states[11]['yaw']) * 6.0)
         self.assertEqual(expected_velocity, decision['velocity'])
         neighbour = decision['neighbours'][0]
-        self.assertEqual(4.0, neighbour['half_length'])
-        self.assertEqual(2.2, neighbour['half_width'])
+        self.assertEqual(4.2, neighbour['half_length'])
+        self.assertEqual(2.3, neighbour['half_width'])
 
     def test_the_load_report_names_the_busiest_planners_once(self):
         runtime = self.runtime

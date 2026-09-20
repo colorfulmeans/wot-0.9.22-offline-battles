@@ -219,7 +219,7 @@ class GroundContactTests(unittest.TestCase):
         def response(mass, horsepower, target_mass, dt):
             params = dict(drive._DEFAULTS, mass=mass, powerW=horsepower*735.49875)
             speed = drive.longitudinal_step(params, 0., 1., False, 0., dt)
-            a = _tank(1, -5.0 + speed*dt, 0, mass=mass, vx=speed, yaw=math.pi/2)
+            a = _tank(1, -2.9, 0, mass=mass, vx=speed, yaw=math.pi/2)
             b = _tank(2, 0, 0, mass=target_mass)
             b['contact_decel'] = drive.contact_push_decel(dict(params, mass=target_mass), False)
             return contact.resolve_tank(b, [a], dt=dt)
@@ -230,9 +230,7 @@ class GroundContactTests(unittest.TestCase):
             self.assertEqual((0., 0.), weak['correction'])
             self.assertEqual((0., 0.), weak_engine['correction'])
             self.assertGreater(stronger['delta_velocity'][0], 0)
-            # An impulse transfers momentum even when the integrated overlap
-            # is smaller than the solver's positional roundoff tolerance.
-            self.assertGreaterEqual(stronger['correction'][0], 0)
+            self.assertGreater(stronger['correction'][0], 0)
 
     def test_high_speed_impact_exceeds_static_hold_and_preserves_mass_ratio(self):
         a = _tank(1, -2.9, 0, mass=20000, vx=20)

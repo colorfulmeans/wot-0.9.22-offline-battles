@@ -2,7 +2,6 @@
 
 import datetime
 import io
-import json
 import os
 import shutil
 import struct
@@ -18,44 +17,6 @@ import error_reports
 class ErrorReportTest(unittest.TestCase):
     SESSION_1 = "20260823T120000Z-111111111111"
     SESSION_2 = "20260823T130000Z-222222222222"
-
-    def test_physics_rows_preserve_all_contacts_and_session_boundaries(self):
-        visible = self._game_log(error_reports.ROLE_VISIBLE_CLIENT)
-        prefix = error_reports.PhysicsLogScanner.PREFIX
-        def row(index):
-            return prefix + json.dumps({'schema': 1, 'event': 'catalog_contact',
-                'data': {'contacts': [{'identity': [22, index, 73],
-                    'filename': 'wood-fence.model', 'reason': 'insufficient_contact_energy',
-                    'kinetic': {'mass': 21000, 'speed': 1.1, 'scaled_health': 5}}]}}).encode('utf-8') + b'\n'
-        self._write(visible, row(-1))
-        session = error_reports.begin_session(self.game, session_id=self.SESSION_1, started_at='start')
-        current = b''.join(row(index) for index in range(80))
-        self._write(visible, current, 'ab')
-        error_reports.finalize_session(session, ended_at='end')
-        self._write(visible, row(1000), 'ab')
-        with mock.patch.object(error_reports, '_CHUNK_BYTES', 7):
-            report = error_reports.create_report()
-        payloads = self._archive_all(report)
-        rows = [json.loads(line) for line in payloads['physics-visible-client.jsonl'].splitlines()]
-        self.assertEqual(list(range(80)), [r['data']['contacts'][0]['identity'][1] for r in rows])
-        self.assertEqual(current, payloads['visible-client.log'])
-        summary = json.loads(payloads['physics-summary.json'])['roles']['visible-client']
-        self.assertEqual(80, summary['rows'])
-        self.assertEqual({'insufficient_contact_energy': 80}, summary['contact_reasons'])
-        self.assertEqual(0, summary['invalid_rows'])
-
-    def test_physics_scanner_records_malformed_rows_without_losing_later_rows(self):
-        scanner = error_reports.PhysicsLogScanner()
-        try:
-            scanner.feed(scanner.PREFIX+b'broken json\n')
-            scanner.feed(scanner.PREFIX+b'{"schema":1,"event":"parameters","data":{"mass":42}}')
-            target = io.BytesIO()
-            with zipfile.ZipFile(target, 'w') as archive:
-                unused, summary = scanner.write(archive, error_reports.ROLE_VISIBLE_CLIENT)
-            self.assertEqual(1, summary['invalid_rows'])
-            self.assertEqual(1, summary['rows'])
-        finally:
-            scanner.close()
 
     def test_retention_keeps_latest_three_without_a_prompt_response(self):
         directory = error_reports._prepare_reports_directory()
@@ -165,8 +126,7 @@ class ErrorReportTest(unittest.TestCase):
         drift. `_archive_all` sees everything.
         """
         generated = set(error_reports._CRASH_TEXT_FILENAMES.values())
-        generated.update(("physics-visible-client.jsonl", "physics-hidden-worker.jsonl", "physics-summary.json",
-                          "environment.txt", "installed-mods.txt",
+        generated.update(("environment.txt", "installed-mods.txt",
                           "missing-dependencies.txt"))
         return dict((name, payload)
                     for name, payload in cls._archive_all(report).items()
@@ -739,8 +699,7 @@ class ErrorReportTest(unittest.TestCase):
         # The generated sections are named too: the player is sending a
         # description of their machine and mod list, so the launcher says so.
         self.assertEqual(
-            ("physics-visible-client.jsonl", "visible-client.log", "physics-summary.json",
-             "environment.txt", "installed-mods.txt",
+            ("visible-client.log", "environment.txt", "installed-mods.txt",
              "missing-dependencies.txt"), report["included"])
         self.assertEqual(
             ("server.log", "hidden-worker.log"), report["missing"])
