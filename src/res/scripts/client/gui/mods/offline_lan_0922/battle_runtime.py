@@ -18428,7 +18428,7 @@ class BattleRuntime(object):
                     for corner in bbox[:2]) if bbox is not None else None)
                 payload['start_yaw'] = start_yaw
                 sys.stdout.write('[Offline LAN 0.9.22] LOCAL TREE %s\n' %
-                                 json.dumps(payload, sort_keys=True))
+                                 json.dumps(payload))
         except Exception as error:
             # Evidence collection cannot change the already-decided contact.
             if not getattr(self, '_local_tree_diagnostic_error', False):
