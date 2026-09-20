@@ -7,14 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.9.1** — [Release notes](docs/releases/v0.9.1.md).
-The **v0.9.2 candidate** is unreleased; see its
-[complete draft notes](docs/releases/v0.9.2.md). Publication is paused pending
-the drowning-warning and sustained crushing investigations.
+Current release: **v0.9.2** — [Release notes](docs/releases/v0.9.2.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.9.1-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.9.2-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -69,7 +66,7 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
-The [v0.9.2 draft notes](docs/releases/v0.9.2.md) cover all changes since
+The [v0.9.2 release notes](docs/releases/v0.9.2.md) cover all changes since
 v0.9.1: HT-4, TD-2, LT-5 and MT-11 mission completion, barracks sorting,
 hydraulic terrain support, Siege-mode obstacle destruction, tree registration,
 track direction, braking before mode changes, map collision and capture
