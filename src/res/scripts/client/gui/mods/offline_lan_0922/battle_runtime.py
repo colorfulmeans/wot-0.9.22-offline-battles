@@ -18310,10 +18310,11 @@ class BattleRuntime(object):
             self._local_ground_plane = None
             self._local_surface_up_cosine = None
             return self._local_pitch
-        force_raw = (
-            math.atan(float(plane['slope_tangent'])) >
-            GROUND_RAW_TILT_RADIANS)
-        return self._commit_ground_plane(plane, force_raw=force_raw)
+        # This is the physical hull pose used by the next collision sweep.
+        # Easing it after settling Y leaves a nose or track below the fitted
+        # surface at the end of a slope (the reported Paris travel contact).
+        # The drive-gravity history has its own smoothing; support does not.
+        return self._commit_ground_plane(plane, force_raw=True)
 
     def _drive_pitch(self, position, yaw):
         """Use contacted terrain for drive gravity, then the legacy probe.
@@ -21293,6 +21294,10 @@ class BattleRuntime(object):
         self._local_support_rise_blocked = False
         snap_gap = vehicle_physics.ground_follow_gap(
             self._local_speed, self._local_last_pitch, dt)
+        if not self._local_airborne:
+            self._local_vertical_speed = vehicle_physics.supported_vertical_speed(
+                self._local_speed, self._local_last_pitch,
+                self._local_vertical_speed)
         highest, centre = self._terrain_support(
             position, yaw, entity.typeDescriptor, follow_gap=snap_gap)
         # Front/rear hits keep a hull supported across a narrow ditch, but the
@@ -21354,9 +21359,10 @@ class BattleRuntime(object):
                         rise = ground - position[1]
                         next_y = position[1] + min(rise, max_climb)
                     else:
-                        next_y = position[1] + (
-                            ground - position[1]) * min(1.0, dt * 15.0)
-                        next_y = min(next_y, ground + 0.12)
+                        # Reachable support owns the physical pose immediately.
+                        # Easing it here leaves a gap which the next tick
+                        # mistakes for flight and repeatedly collides with.
+                        next_y = ground
                     # Carry actual supported vertical motion into the next
                     # tick; a crest cannot erase upward/downward momentum.
                     self._local_vertical_speed = (

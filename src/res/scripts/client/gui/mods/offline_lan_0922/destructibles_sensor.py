@@ -4245,7 +4245,17 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 	instances = globals().get('g_offh_destr_instances', {})
 	aliases = set(surface for surface in surfaces
 		if _anonymous_original_surface_1513(surface) is not None)
-	if not aliases:
+	# A repaired live WGDE layout and its static BSP can use different item
+	# slots (Murovanka #1513 report, 2026-09-20). These original-material
+	# callbacks have flags=0, so they are not anonymous compiled aliases.
+	# Admit an exact key only after spatial proof below; never infer an offset
+	# or apply the anonymous material/flags wildcard to a real chunk slot.
+	remapped = set(surface for surface in surfaces if len(surface) == 4 and
+		all(type(value) in _INTEGER_TYPES for value in surface) and
+		71 <= surface[0] <= 86 and surface[1] == 0 and
+		_layout_generation_1513(surface[3]) > 0 and
+		not _layout_repair_pending_1513(surface[3]))
+	if not aliases and not remapped:
 		return None
 	members = globals().get('g_offh_destr_contact_bins', {}).get(
 		_destructible_bin_key(point.x, point.z), ())
@@ -4262,6 +4272,29 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		interval = _segment_world_box_interval(start, end, envelope)
 		if interval is not None:
 			owners.append((identity, instance, interval))
+	for surface in remapped:
+		wire = (surface[3], surface[2])
+		# A key that actually owns the witness keeps its ordinary live-ledger
+		# semantics. Only a different, proved placement in the same repaired
+		# chunk can identify a leftover original face.
+		if any(identity == wire for identity, unused, interval in owners):
+			continue
+		catalog = _destructible_catalog or {}
+		if wire in catalog.get('tree_instances', {}):
+			continue
+		registered = instances.get(wire) or catalog.get('baked_instances', {}).get(wire)
+		if registered is not None:
+			envelope = _instance_motion_envelope_1513(registered)
+			if envelope is not None and _point_in_world_box(point, envelope):
+				continue
+		if any(identity[0] == wire[0] and
+				_original_side_face_1513(normal, box) and
+				_point_in_world_box(point, box)
+				for identity, instance, unused_interval in owners
+				for box in instance['boxes']):
+			aliases.add(surface)
+	if not aliases:
+		return None
 	projected = False
 	# A neighbouring model's union may contain the witness even when the
 	# actual material belongs to a tilted component just outside its Y bounds.

@@ -165,6 +165,7 @@ RESULT_INTERACTION_LIMITS = {
     "damage_events": (0, 65535),
     "kills_assisted_stun": (0, 1),
     "kills_assisted_track": (0, 1),
+    "kills_assisted_radio": (0, 1),
 }
 DEFAULT_MAP = "server_random"
 CLIENT_BUILD_0922 = "wot-0.9.22.0.1-cn-1513"
@@ -1180,11 +1181,12 @@ def _persisted_result_receipt(value):
     if isinstance(booster, bool) or not isinstance(booster, int) or not 0 <= booster <= 2 ** 31 - 1:
         raise ValueError("invalid persisted battle directive")
     for name in stat_names:
-        stats.setdefault(name, 0)
+        if name != "internal_crits_at_end":
+            stats.setdefault(name, 0)
     for mapping, names in ((stats, stat_names), (rewards, reward_names)):
-        if any(isinstance(mapping.get(name), bool) or
-               not isinstance(mapping.get(name), int) or
-               mapping.get(name) < 0 for name in names):
+        if any(isinstance(mapping.get(name, 0), bool) or
+               not isinstance(mapping.get(name, 0), int) or
+               mapping.get(name, 0) < 0 for name in names):
             raise ValueError("invalid persisted battle receipt statistic")
     if rewards["repair_cost"] or rewards["ammo_cost"]:
         raise ValueError("offline service costs must be zero")
@@ -1232,10 +1234,11 @@ def _persisted_result_receipt(value):
                 not isinstance(row.get("stats"), dict)):
             raise ValueError("invalid persisted public result row")
         for name in stat_names:
-            row["stats"].setdefault(name, 0)
-        if any(isinstance(row["stats"].get(name), bool) or
-               not isinstance(row["stats"].get(name), int) or
-               row["stats"].get(name) < 0 for name in stat_names):
+            if name != "internal_crits_at_end":
+                row["stats"].setdefault(name, 0)
+        if any(isinstance(row["stats"].get(name, 0), bool) or
+               not isinstance(row["stats"].get(name, 0), int) or
+               row["stats"].get(name, 0) < 0 for name in stat_names):
             raise ValueError("invalid persisted public result statistic")
         killer_kind = row.get("killer_kind", "")
         killer_id = row.get("killer_id", 0)
@@ -1269,7 +1272,7 @@ def _persisted_result_receipt(value):
         raise ValueError("invalid persisted interaction details")
     interaction_fields = set(RESULT_INTERACTION_LIMITS)
     interaction_keys = interaction_fields | {"target_kind", "target_id"} | mission_events.FIELDS
-    optional = {"damage_events", "kills_assisted_stun", "kills_assisted_track"} | mission_events.FIELDS
+    optional = {"damage_events", "kills_assisted_stun", "kills_assisted_track", "kills_assisted_radio"} | mission_events.FIELDS
     interaction_targets = set()
     mission_event_count = 0
     for interaction in interactions:
@@ -9965,7 +9968,7 @@ class BattleState:
     @staticmethod
     def _receipt_statistics(row):
         """Project only statistics the battle server actually records."""
-        return {
+        result = {
             "shots": max(0, int(row.get("shots_fired", 0))),
             "direct_hits": max(0, int(row.get("shots_hit", 0))),
             "piercings": max(0, int(row.get("shots_penetrated", 0))),
@@ -10012,6 +10015,11 @@ class BattleState:
             "mileage": max(0, int(round(row.get("mileage", 0)))),
             "life_time": max(0, int(row.get("life_time", 0))),
         }
+        # Missing end-state evidence is unknown, not a clean vehicle. TD2's
+        # secondary condition asks whether this value equals zero.
+        if "internal_crits_at_end" in row:
+            result["internal_crits_at_end"] = int(bool(row["internal_crits_at_end"]))
+        return result
 
     def _catalogued_vehicle(self, vehicle):
         """Return one client catalog row for this vehicle name, or None."""
@@ -12905,6 +12913,14 @@ class BattleState:
             end_tick = self.vehicle_end_ticks.get(identity, self.tick)
             elapsed = max(0.0, float(end_tick) / TICK_HZ - PREBATTLE_SECONDS)
             self._statistics_row(*identity)["life_time"] = int(elapsed)
+            if identity[0] == "player":
+                player = self.players.get(identity[1])
+                critical = player.critical if player is not None else None
+            else:
+                critical = (self.bot_states.get(identity[1]) or {}).get("critical")
+            if critical is not None:
+                self._statistics_row(*identity)["internal_crits_at_end"] = int(bool(
+                    _crits_mask({}, critical) & mission_events.INTERNAL_CRITICAL_MASK))
 
     def _statistics_interaction(self, actor, target):
         """Return one bounded per-target row owned by ``actor``."""
@@ -13166,6 +13182,14 @@ class BattleState:
         # every observer lighting the target, so each of them is paid its
         # share of this damage rather than the whole of it.
         assisters = self._radio_assisters(attacker, target, target_team)
+        target_state = self._vehicle_stun_state(target)
+        if target_state is not None and not target_state['alive']:
+            # Credit the spotters of the lethal hit, not everyone who earned
+            # radio damage at some earlier time. One terminal target counts
+            # once per observer, including when its final HP share rounds to 0.
+            for assister in assisters:
+                self._statistics_interaction(assister, target)[
+                    "kills_assisted_radio"] = 1
         credits.extend(
             ("radio", assister, share) for assister, share in
             zip(assisters, _even_shares(damage, len(assisters))))

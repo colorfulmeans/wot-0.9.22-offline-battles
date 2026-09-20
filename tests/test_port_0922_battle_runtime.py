@@ -25059,6 +25059,25 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertLess(battle._local_vertical_speed, 0.0)
         self.assertGreater(position[1], -2.0)
 
+    def test_legacy_suspension_tracks_continuous_downhill_without_airborne_pulses(self):
+        for speed in (10.0, -10.0):
+            with self.subTest(speed=speed):
+                runtime = _runtime()
+                battle = BattleRuntime(runtime)
+                battle._avatar = runtime.bigworld.avatar
+                battle._local_fall_armed = True
+                battle._local_speed = speed
+                battle._local_last_pitch = math.atan(0.25 if speed > 0 else -0.25)
+                entity = _Vehicle(10, _Descriptor(), _Vector(), (0, 0, 0), {'health': 500})
+                position = (0.0, 0.0, 0.0)
+                for unused in range(50):
+                    ground = position[1] - 0.1
+                    battle._terrain_support = mock.Mock(return_value=(ground, ground))
+                    position = battle._update_vertical_motion_legacy(
+                        entity, position, 0.0, 0.04)
+                    self.assertFalse(battle._local_airborne)
+                    self.assertAlmostEqual(ground, position[1])
+
     def test_armed_ledge_fall_only_queues_an_impact_observation(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
@@ -25117,6 +25136,16 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([
             'pose', ('landing', 18.5),
             'pose', ('landing', 18.5)], calls)
+
+    def test_legacy_ground_pose_settles_on_flat_without_a_buried_nose(self):
+        battle = BattleRuntime(_runtime())
+        battle._local_pitch = 0.210305
+        battle._local_roll = -0.024822
+        battle._ground_y = lambda x, z, hint=0., **unused: 0.97
+        battle._ground_pitch((248.273468, 0.97, 265.614166),
+                             -1.538, _Descriptor())
+        self.assertAlmostEqual(0.0, battle._local_pitch)
+        self.assertAlmostEqual(0.0, battle._local_roll)
 
     def test_cross_heading_steep_slope_uses_copied_slide_law(self):
         runtime = _runtime()

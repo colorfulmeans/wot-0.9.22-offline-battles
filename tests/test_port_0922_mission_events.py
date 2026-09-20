@@ -206,3 +206,126 @@ class MissionEventReceiptTests(unittest.TestCase):
                     server._persisted_result_receipt(value)
                 with self.assertRaises(ValueError):
                     postbattle_store._receipt(value)
+
+
+class TD2LT5ConditionsTests(unittest.TestCase):
+    def setUp(self):
+        self.rows = json.loads((Path(__file__).parent /
+            'fixtures/td2_lt5_conditions_0922.json').read_text())
+        self.receipt = {
+            'team': 1, 'death_reason': -1,
+            'stats': {'damage': 5000, 'internal_crits_at_end': 0},
+            'public_results': [dict(actor_kind='bot', actor_id=i, team=2)
+                               for i in range(2, 8)],
+            'interactions': [dict(target_kind='bot', target_id=i,
+                mission_events=[['critical', 1000, (1 << 12) | (1 << 24)]],
+                mission_events_complete=True, kills_assisted_radio=1,
+                assist_radio=100) for i in range(2, 8)]}
+
+    def check(self, row, part='main'):
+        return policy._condition('postBattle', node(row[part]),
+                                 policy._Facts(self.receipt, None))[0]
+
+    def test_all_four_campaigns_main_and_honours(self):
+        for row in self.rows:
+            with self.subTest(name=row['name']):
+                self.assertTrue(self.check(row))
+                self.assertTrue(self.check(row, 'add'))
+                if row['chain'] == 4:
+                    self.receipt['stats']['internal_crits_at_end'] = 1
+                    self.assertTrue(self.check(row))
+                    self.assertFalse(self.check(row, 'add'))
+                    self.receipt['stats']['internal_crits_at_end'] = 0
+
+    def test_external_or_yellow_modules_do_not_complete_td2(self):
+        for mask in (1 << 16, 1 << 17, 1 << 19, 1 << 0, 1 << 6):
+            for item in self.receipt['interactions']:
+                item['mission_events'][0][2] = mask
+            for row in self.rows:
+                if row['chain'] == 4:
+                    self.assertFalse(self.check(row))
+
+    def test_lt5_requires_lethal_spot_assist_not_previous_damage_or_spot(self):
+        for item in self.receipt['interactions']:
+            item.update(kills_assisted_radio=0, spotted=1, target_kills=1)
+        for row in self.rows:
+            if row['chain'] == 1:
+                self.assertFalse(self.check(row))
+        for item in self.receipt['interactions']:
+            item.pop('kills_assisted_radio')
+        self.assertIsNone(self.check(self.rows[0]))
+
+    def test_friendly_and_incomplete_critical_history_cannot_award_td2(self):
+        td = next(row for row in self.rows if row['chain'] == 4)
+        for item in self.receipt['interactions']:
+            item['mission_events_complete'] = False
+        self.assertIsNone(self.check(td))
+        for item in self.receipt['public_results']:
+            item['team'] = 1
+        self.assertFalse(self.check(td))
+
+
+class SpotKillReceiptTests(MissionEventReceiptTests):
+    def test_historical_receipt_does_not_invent_a_clean_end_state(self):
+        state, spotter, unused = self.state()
+        state._finish_battle(1, 'elimination')
+        receipt = _latest_receipt(state, spotter.account_key)
+        receipt['stats'].pop('internal_crits_at_end')
+        for row in receipt['public_results']:
+            row['stats'].pop('internal_crits_at_end', None)
+        for restored in (server._persisted_result_receipt(receipt),
+                         postbattle_store._receipt(receipt)):
+            self.assertNotIn('internal_crits_at_end', restored['stats'])
+            self.assertIsNone(policy._Facts(restored, None).result(
+                'isAnyOurCrittedInnerModules'))
+
+    def test_lethal_radio_credit_survives_receipt_and_is_idempotent(self):
+        for target_kind in ('player', 'bot'):
+            with self.subTest(target_kind=target_kind):
+                state, spotter, target_player = self.state()
+                shooter = Player(3, _Socket(), ('127.0.0.1', 3), team=1)
+                state.players[3] = shooter
+                target = (target_kind, 2)
+                if target_kind == 'bot':
+                    state.bot_manifest = [{'id': 2, 'team': 2, 'name': 'Bot',
+                        'vehicle': 'ussr:R11_MS-1'}]
+                    state.bot_states[2] = {'id': 2, 'team': 2, 'alive': True,
+                        'health': 100, 'vehicle': 'ussr:R11_MS-1',
+                        'x': 100., 'y': 0., 'z': 0.}
+                state.player_spotted[1] = {target}
+                state._record_damage(('player', 3), target, 20, {})
+                interaction = state._statistics_interaction(('player', 1), target)
+                self.assertEqual(0, interaction['kills_assisted_radio'])
+                if target_kind == 'player':
+                    target_player.alive, target_player.health = False, 0
+                else:
+                    state.bot_states[2].update(alive=False, health=0)
+                state._record_damage(('player', 3), target, 1, {})
+                self.assertEqual(1, interaction['kills_assisted_radio'])
+                state._record_damage(('player', 3), target, 1, {})
+                self.assertEqual(1, interaction['kills_assisted_radio'])
+                state._finish_battle(1, 'elimination')
+                receipt = _latest_receipt(state, spotter.account_key)
+                self.assertTrue(client._valid_battle_receipt(receipt))
+                self.assertEqual(1, postbattle_store._receipt(receipt)[
+                    'interactions'][0]['kills_assisted_radio'])
+
+    def test_shooter_own_spot_suppresses_radio_kill_credit(self):
+        state, spotter, target_player = self.state()
+        state.players[3] = Player(3, _Socket(), ('127.0.0.1', 3), team=1)
+        target = ('player', 2)
+        state.player_spotted.update({1: {target}, 3: {target}})
+        target_player.alive, target_player.health = False, 0
+        state._record_damage(('player', 3), target, 100, {})
+        self.assertEqual([], state._receipt_interactions(('player', 1)))
+
+    def test_td2_secondary_reads_repaired_final_internal_state(self):
+        state, player, enemy = self.state()
+        critical = {'destroyed': ['engineHealth'], 'crew_ko': ['driver']}
+        state._record_critical_damage(('player', 2), ('player', 1), {}, critical)
+        for current, expected in ((critical, 1), ({'destroyed': ['leftTrackHealth']}, 0),
+                                  ({'devices': [], 'destroyed': [], 'crew_ko': []}, 0)):
+            player.critical = current
+            state._finalize_vehicle_statistics()
+            self.assertEqual(expected, state._receipt_statistics(
+                state._statistics_row('player', 1))['internal_crits_at_end'])

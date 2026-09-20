@@ -6353,6 +6353,18 @@ class BotRuntime(object):
             'hydraulic_pitch': state.get('suspension_pitch'),
             'gun_pitch': state.get('gun_pitch'),
         }
+        navigator_state = getattr(self.navigator, 'bot_states', {}).get(
+            int(state['id']))
+        if isinstance(navigator_state, dict):
+            navigation = dict((key, navigator_state.get(key)) for key in (
+                'navigation_status', 'target_is_terminal', 'index',
+                'path_key', 'request_path_key', 'planned_goal', 'last_target',
+                'controlled_shallow_target', 'blocked_step_replans'))
+            path = getattr(self.navigator, 'paths', {}).get(
+                navigator_state.get('path_key')) or ()
+            index = max(0, int(navigator_state.get('index', 0)))
+            navigation['path_near_target'] = path[max(0, index - 1):index + 3]
+            state['_motion_stall_pending']['navigation'] = navigation
         print('[BOT STALL] id=%s pos=(%.1f,%.1f) mode=%s recovery=%s '
               'traffic=%s intent=%s goal=%s strategic_goal=%s '
               'yaw=%.3f target_yaw=%s speed=%.2f throttle=%.2f turn=%.2f '
@@ -7086,6 +7098,10 @@ class BotRuntime(object):
                 return True
         snap_gap = vehicle_physics.ground_follow_gap(
             state['speed'], state.get('last_drive_pitch', 0.0), step)
+        if not state.get('airborne', False):
+            state['vertical_speed'] = vehicle_physics.supported_vertical_speed(
+                state['speed'], state.get('last_drive_pitch', 0.0),
+                state.get('vertical_speed', 0.0))
         highest, centre = self._terrain_support(state, snap_gap)
         # Front/rear hits keep a bot supported across a narrow ditch, but use
         # their real CoM distance below so a remote valley floor cannot pull
@@ -7164,9 +7180,7 @@ class BotRuntime(object):
                     rise = ground - state['y']
                     state['y'] += min(rise, max_climb)
                 else:
-                    state['y'] += ((ground - state['y']) *
-                                   min(1.0, step * 15.0))
-                    state['y'] = min(state['y'], ground + 0.12)
+                    state['y'] = ground
                 state['vertical_speed'] = (
                     ((state['y'] - previous_y) / step if state['y'] < previous_y
                      else vehicle_physics.launch_vertical_speed(

@@ -2459,6 +2459,19 @@ def ground_reachable(height, ground, vertical_speed, dt):
 	return float(ground) >= reachable_y - 0.002
 
 
+def supported_vertical_speed(speed, slope_pitch, vertical_speed):
+	'''Retain the signed tangent velocity while following a supported slope.
+
+	The copied integrator's speed is horizontal travel per second. A downhill
+	track therefore already has downward velocity before gravity is applied.
+	Discarding that component makes even a continuous ramp a repeated fall.
+	This is momentum, not permission to snap through an arbitrary ledge.
+	'''
+	pitch = max(-GROUND_PITCH_LIMIT, min(
+		GROUND_PITCH_LIMIT, float(slope_pitch)))
+	return min(float(vertical_speed), -float(speed) * math.tan(pitch))
+
+
 def world_impact_speed(velocity, normal):
 	'''Closing speed against an outward world normal, including vertical walls.'''
 	try:

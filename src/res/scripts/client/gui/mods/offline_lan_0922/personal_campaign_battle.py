@@ -25,6 +25,7 @@ _STAT_KEYS = {
     'killsAssistedStun': 'kills_assisted_stun',
     'killsAssistedTrack': 'kills_assisted_track',
     'critsCount': 'critical_hits', 'isNotSpotted': 'not_spotted',
+    'isAnyOurCrittedInnerModules': 'internal_crits_at_end',
     'capturePoints': 'capture_points',
     'droppedCapturePoints': 'dropped_capture_points',
 }
@@ -131,6 +132,29 @@ class _Facts(object):
             return (self.receipt.get('rewards') or {}).get('xp')
         if row is not None:
             return None
+        if key in ('innerModuleDestrCount', 'killsAssistedRadio'):
+            if 'interactions' not in source:
+                return None
+            count = 0
+            for interaction in source['interactions']:
+                target = self.rows.get((interaction.get('target_kind'),
+                                        interaction.get('target_id')))
+                if target is None:
+                    return None
+                if target.get('team') == source.get('team'):
+                    continue
+                if key == 'killsAssistedRadio':
+                    value = interaction.get('kills_assisted_radio')
+                    if value is None:
+                        return None
+                    count += value
+                else:
+                    history = _mission_history(interaction)
+                    if history is None:
+                        return None
+                    count += sum(mission_events.internal_destroyed_count(event[2])
+                                 for event in history if event[0] == 'critical')
+            return count
         if key == 'percentFromTotalTeamDamage':
             damage = self.result('damageDealt')
             team = self.receipt.get('team')

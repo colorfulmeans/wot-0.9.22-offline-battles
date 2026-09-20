@@ -17,6 +17,18 @@ MAX_EVENTS = 1024
 FIELDS = frozenset(('mission_events', 'mission_events_complete'))
 
 
+# #1513 device indices: engine, ammo bay, fuel tank, radio and turret drive
+# are internal; tracks, gun and observation device are external. Crew occupies
+# bits 24..28. A yellow device is damage, not a destroyed-module event.
+INTERNAL_DEVICE_MASK = sum(1 << index for index in (0, 1, 2, 3, 6))
+INTERNAL_DESTROYED_MASK = (INTERNAL_DEVICE_MASK << 12) | (31 << 24)
+INTERNAL_CRITICAL_MASK = INTERNAL_DEVICE_MASK | INTERNAL_DESTROYED_MASK
+
+
+def internal_destroyed_count(mask):
+    return bin(int(mask) & INTERNAL_DESTROYED_MASK).count('1')
+
+
 def _integer(value, minimum, maximum):
     return (type(value) in INTEGER_TYPES and minimum <= value <= maximum)
 

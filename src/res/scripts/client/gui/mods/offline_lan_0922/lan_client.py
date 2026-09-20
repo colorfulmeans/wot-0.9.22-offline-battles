@@ -150,6 +150,7 @@ RESULT_INTERACTION_LIMITS = {
     'damage_events': (0, 65535),
     'kills_assisted_stun': (0, 1),
     'kills_assisted_track': (0, 1),
+    'kills_assisted_radio': (0, 1),
 }
 BOT_TIER_MODES = frozenset((
     'random', 'same', 'minus1_0', '0_plus1', 'minus1_plus1'))
@@ -1442,7 +1443,7 @@ def _valid_battle_receipt(message):
     interaction_keys = set(RESULT_INTERACTION_LIMITS) | {
         'target_kind', 'target_id'} | mission_events.FIELDS
     optional_interactions = {'damage_events', 'kills_assisted_stun',
-                             'kills_assisted_track'} | mission_events.FIELDS
+                             'kills_assisted_track', 'kills_assisted_radio'} | mission_events.FIELDS
     required_interactions = interaction_keys - optional_interactions
     interaction_targets = set()
     mission_event_count = 0

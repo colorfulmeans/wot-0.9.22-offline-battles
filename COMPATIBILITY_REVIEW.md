@@ -13,6 +13,90 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20 v0.9.1 follow-up: downhill contact, missions and Murovanka
+
+Reports `125847-f5293210b1b9`, `132016-abb5404de554`,
+`135507-8b1562002689` and `143656-a905f3fed979` run the v0.9.1 build
+`colorfulmeans-35488817004-1`. This follow-up has no added movement delay,
+performance policy change, map-specific driving coefficient or capture-radius
+guess. The changes below are logic fixes pending exact Windows acceptance.
+
+The Strv S1 travel reports show disabled Siege, no handbrake and no Siege
+drive lock. An allegedly airborne hull repeatedly contacts upward-facing
+ground. The legacy vertical integrator omitted the downward tangent velocity
+while following a slope and eased reachable support Y, opening another gap on
+the next tick. Player and Bot legacy paths now preserve signed tangent
+velocity and commit reachable support directly. Their ballistic reach check
+still rejects remote cliff floors. Player physical pitch/roll now immediately
+match an accepted ground plane: easing the physical pose after settling Y
+buried the nose at a slope-to-flat transition and fed the tilted shape into
+the next collision sweep. Drive-gravity smoothing remains separate. Continuous
+forward/reverse downhill, cliff departure and the reported Paris flat-ground
+pose have focused regressions. They do not prove every Paris sinking report
+is resolved in native gameplay.
+
+TD2 lacked `innerModuleDestrCount` and the final own internal-critical state.
+Count only destroyed internal devices and knocked-out crew from complete
+accepted critical-event histories; external tracks/gun/observation devices and
+yellow-only internal damage do not satisfy the destruction requirement.
+The secondary condition reads current final state, including repairs, rather
+than accumulated damage history. Missing historical end-state evidence stays
+unknown through persistence and client normalization. LT5 now records a
+per-victim radio-assisted kill for the observers eligible at the lethal hit,
+including a final HP share rounded to zero. Earlier spotting damage alone
+does not award a later kill, and repeated publication cannot double this
+per-victim count. The receipt field survives server storage, client validation
+and account normalization. Fixtures contain the four campaigns' TD2/LT5
+conditions transcribed from the public 0.9.22 personal-mission definitions;
+they are version reference evidence, not a fresh #1513 archive audit.
+
+Murovanka's chunk 32635 reports a completed native layout repair (63 proved
+items, 67 native slots, 30 remapped). Four captured contacts have original
+material 73, flags 0 and a callback item different from the registered,
+already-broken stone-fence placement containing the witness. These exact keys
+can now be recast only inside the proved owner envelope in the same repaired
+chunk. This does not extend the anonymous material/flags wildcard. Live owners,
+unknown layouts, trees, damaged replacements and backing walls remain solid.
+The fifth captured end face lies outside all recorded owner boxes and remains
+unresolved; the test deliberately preserves it. Exact native collider/owner
+evidence is needed before excluding that face safely.
+
+Paris E-line AI is not declared fixed. Captured movement orders can select a
+nearby point behind the hull, while other stationary vehicles have deliberate
+`support_hold` orders. A baked-graph replay of the recorded poses advances to
+the next corridor point; the live obstruction/planner state is not present in
+the old diagnostic. Existing rate-limited Bot stall output now includes the
+selected path index, nearby path points, planned goal and navigation status,
+without additional native probes or changed planner timing.
+
+Mittengard capture remains unresolved: the server uses a fixed 50 m radius
+for both occupancy and threat detection, while the reported painted circle is
+smaller. The shipped navigation catalog contains flag centers but no circle
+size. The exact `100_thepit.pkg` circle geometry/placement is unavailable in
+this checkout, so no radius is fabricated. The black stun-assist presentation
+also remains unresolved: numeric fields and the SPG redesign enable flag are
+already populated; the report lacks the affected screenshot and native UI
+state. A display-color patch would currently be speculative.
+
+Performance diagnosis only, from live PERF windows:
+
+| Map / report | Visible FPS range | Worker FPS range | Maximum worker execution |
+| --- | ---: | ---: | ---: |
+| Paris / 125847 | 66.75-74.42 | 5.69-31.62 | 337.473 ms |
+| Ruinberg / 132016 | 58.60-82.25 | 0.88-26.66 | 1259.174 ms |
+| Swamp / 132016 | 67.02-75.71 | 1.95-27.12 | 858.159 ms |
+| Highway / 135507 | 99.42-109.69 | 35.85-85.45 | 164.371 ms |
+
+Windows and hardware differ, and the first live window can include prebattle
+samples, so these ranges are not comparable benchmarks. The worst Paris
+sample spends 328.593 ms of 337.473 ms in `bots_update`; the worst Ruinberg
+sample spends 1222.600 ms of 1259.174 ms there. Detailed traces include dense
+motion, support and collision queries. Visible rendering remains responsive
+while the localhost authority falls behind, which explains delayed AI/shot
+feedback without attributing it to internet ping. Murovanka's fence report has
+no equivalent worker slowdown (maximum execution 16.565 ms). No performance
+optimization is included, as requested.
+
 ## September 20 follow-up: remaining fence normals and concrete support
 
 Report `wot-error-report-20260920-111808-ab28648cb0ee.zip` runs
