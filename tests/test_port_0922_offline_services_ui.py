@@ -123,8 +123,36 @@ class NativeServiceUITests(unittest.TestCase):
                 return 'ShopVehiclesFiltersVO', True
 
             def itemWrapper(self, row):
-                return {'type': row[0].icon, 'disabled': False,
-                        'price': (0, 0, 8000), 'currency': 'crystal'}
+                prices = self._getItemPrices(row[0])
+                return {'type': row[0].icon,
+                        'disabled': not self._isPurchaseEnabled(row[0], self._items.stats.money),
+                        'price': prices.getSum().price.toMoneyTuple(),
+                        'currency': prices.itemPrice.getCurrency(byWeight=False)}
+
+        class Money(object):
+            def __init__(self, **values):
+                self.values = values
+
+            def toMoneyTuple(self):
+                return tuple(self.getSignValue(key) for key in ('credits', 'gold', 'crystal'))
+
+            def getSignValue(self, key):
+                return self.values.get(key, 0)
+
+        class ItemPrice(object):
+            def __init__(self, price, default):
+                self.price, self.defPrice = price, default
+
+            def getCurrency(self, byWeight=True):
+                return next(key for key in ('credits', 'gold', 'crystal')
+                            if self.price.getSignValue(key))
+
+        class ItemPrices(object):
+            def __init__(self, price):
+                self.itemPrice = price
+
+            def getSum(self):
+                return self.itemPrice
 
         class StoreView(object):
             def __init__(self):
@@ -174,6 +202,9 @@ class NativeServiceUITests(unittest.TestCase):
             'gui.Scaleform.genConsts.STORE_CONSTANTS': {'STORE_CONSTANTS': types.SimpleNamespace(
                 STORE_ACTIONS='storeActions', SHOP_LINKAGE='ShopUI', VEHICLE='vehicle')},
             'gui.shared.gui_items.Vehicle': {'VEHICLE_TYPES_ORDER': ['lightTank', 'heavyTank']},
+            'gui.shared.money': {'Money': Money},
+            'gui.shared.gui_items.gui_item_economics': {
+                'ItemPrice': ItemPrice, 'ItemPrices': ItemPrices},
             'gui.Scaleform.framework': {'g_entitiesFactories': factory},
             'gui.shared.utils': {'flashObject2Dict': lambda value:
                                  dict(value) if value is not None else None},
@@ -293,11 +324,17 @@ class NativeServiceUITests(unittest.TestCase):
             items = {cd: types.SimpleNamespace(intCD=cd, nationID=0,
                      level=8, isRented=False, type='heavyTank', icon='garage-art-%d' % cd)
                      for cd in (2, 3)}
-            tab._items = types.SimpleNamespace(getItemByCD=items.get)
+            tab._items = types.SimpleNamespace(getItemByCD=items.get,
+                stats=types.SimpleNamespace(money=Money(gold=0, crystal=8000)))
             rows = tab.buildItems([])
             self.assertEqual([3], [row[0].intCD for row in rows])
             self.assertEqual('garage-art-3', tab.itemWrapper(rows[0])['type'])
             self.assertEqual('crystal', tab.itemWrapper(rows[0])['currency'])
+            self.assertEqual((0, 0, 8000), tab.itemWrapper(rows[0])['price'])
+            self.assertFalse(tab.itemWrapper(rows[0])['disabled'])
+            tab._items.stats.money = Money(gold=1000000, crystal=7999)
+            self.assertTrue(tab.itemWrapper(rows[0])['disabled'])
+            tab._items.stats.money = Money(gold=0, crystal=8000)
             tab._filterData['extra'] = ['inHangar']
             owned_rows = tab.buildItems([])
             self.assertEqual([2], [row[0].intCD for row in owned_rows])

@@ -3008,6 +3008,7 @@ class BotRuntime(object):
         if transition_total is None:
             transition_total = duration
         transition_total = max(0.0, float(transition_total))
+        previous = state.get('siege_state', siege_mechanics.DISABLED)
         if siege_state not in (siege_mechanics.SWITCHING_ON,
                                siege_mechanics.SWITCHING_OFF):
             duration = 0.0
@@ -3023,6 +3024,18 @@ class BotRuntime(object):
             if transition_total > 0.0 else 0)
         self._install_bot_descriptor(
             int(state['id']), state, siege_state)
+        if previous != siege_state:
+            print('[BOT SIEGE] %s' % json.dumps({
+                'id': state['id'], 'vehicle': state.get('vehicle'),
+                'previous': previous, 'state': siege_state,
+                'time_left_ms': state['siege_time_left_ms'],
+                'intent': state.get('_siege_intent'),
+                'target_kind': state.get('target_kind'),
+                'target_id': state.get('target_id'),
+                'pitch': state.get('pitch'),
+                'terrain_pitch': state.get('terrain_pitch'),
+                'hydraulic_pitch': state.get('suspension_pitch'),
+            }, separators=(',', ':')))
         return True
 
     @observed('bot.siege_tick')
@@ -5983,6 +5996,9 @@ class BotRuntime(object):
         pitch = _number(
             state.get('terrain_pitch', state.get('pitch')))
         roll = _number(state.get('roll'))
+        flat_limit = (None if state.get('airborne') else
+                      vehicle_physics.suspension_flat_support_limit(
+                          params, body_height, pitch, roll))
         result = []
         for index, point in enumerate(points):
             x, z = point
@@ -6001,7 +6017,9 @@ class BotRuntime(object):
                 spring_height + params['clearance'] +
                 vehicle_physics.CONTACT_PENETRATION)
             ground = self._suspension_ground_value(
-                x, z, minimum_y, maximum_y, spring_maximum_y)
+                x, z, minimum_y, maximum_y,
+                spring_maximum_y if flat_limit is None else
+                max(spring_maximum_y, flat_limit))
             ground = vehicle_physics.suspension_footprint_support(
                 params, point, ground, memory[index], yaw,
                 lambda px, pz, low, high: self._suspension_ground_value(
@@ -6328,6 +6346,12 @@ class BotRuntime(object):
             'requested_throttle': throttle, 'turn': turn,
             'yaw': state.get('yaw'), 'pitch': state.get('pitch'),
             'roll': state.get('roll'), 'shape': state.get('collision_shape'),
+            'siege_state': state.get('siege_state'),
+            'siege_time_left_ms': state.get('siege_time_left_ms'),
+            'siege_intent': state.get('_siege_intent'),
+            'terrain_pitch': state.get('terrain_pitch'),
+            'hydraulic_pitch': state.get('suspension_pitch'),
+            'gun_pitch': state.get('gun_pitch'),
         }
         print('[BOT STALL] id=%s pos=(%.1f,%.1f) mode=%s recovery=%s '
               'traffic=%s intent=%s goal=%s strategic_goal=%s '
@@ -6566,10 +6590,11 @@ class BotRuntime(object):
 
     @observed('bot.contact_response')
     def _hard_contact_response(self, state, position, yaw, speed,
-                               descriptor, step, now):
+                               descriptor, step, now, normal=None):
         """Probe the shared glancing paths and apply copied hull damping."""
         slide_yaw = None
-        for candidate_yaw in vehicle_physics.hard_contact_candidate_yaws(yaw):
+        for candidate_yaw in vehicle_physics.hard_contact_candidate_yaws(
+                yaw, speed, normal):
             if callable(self.motion_resolver):
                 status = self._passive_motion_status(
                     state, position, candidate_yaw, speed,
@@ -12311,6 +12336,7 @@ class BotRuntime(object):
                         'specificFriction': params['specificFriction'],
                     })
                 hard_contact = False
+                hard_contact_normal = None
                 contact_position = position
                 contact_deflected = False
                 if not path_clear:
@@ -12376,6 +12402,8 @@ class BotRuntime(object):
                             speed = previous_speed
                             state.pop('destructible_contact_speed', None)
                         elif motion_status == 'hard':
+                            hard_contact_normal = (state.get(
+                                '_world_contact_trace') or {}).get('normal')
                             self._apply_world_contact_impact(state, speed, now)
                             if not state.get('alive', True):
                                 speed = 0.0
@@ -12393,7 +12421,7 @@ class BotRuntime(object):
                     speed, contact_position, contact_deflected = \
                         self._hard_contact_response(
                             state, position, state['yaw'], speed,
-                            descriptor, step, now)
+                            descriptor, step, now, normal=hard_contact_normal)
                     report_hard_contact = getattr(
                         self.navigator, 'report_hard_contact', None)
                     report_contact = getattr(

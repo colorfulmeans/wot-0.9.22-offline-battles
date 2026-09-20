@@ -31,15 +31,19 @@ ask for the EULA and display settings again.
 Play
 ----
 
-1. In the launcher, select LAN and click Start LAN room. It starts the LAN
-   server and its one hidden simulation worker; a room never uses a visible
-   player client as a fallback authority. Start the client without logging
-   into an online account. On a fresh profile, accept the stock EULA once.
-2. Fit a tank in the garage and click Battle!. The client joins the LAN room.
+1. On the host PC, select Host a LAN battle in the launcher. Other players
+   select Join a LAN battle and enter the host's address. Click Start game.
+   The host launcher starts the server and its one hidden simulation worker;
+   a room never uses a visible player client as a fallback authority. Start
+   without logging into an online account. On a fresh profile, accept the
+   stock EULA once. Single player creates a separate local room.
+2. Fit a tank in the garage and click Battle! or Create Platoon. Both join
+   the configured LAN room; Create Platoon does not use retail invitations.
    The battle runs the tank the garage fitted, with its modules, health, armour
    and gun.
 3. Every player sees the waiting room, drawn over the stock battle queue
-   screen. The first player is the room host. RANDOM MAP lets the server pick;
+   screen. The first player is the room host. Select the same team to play
+   together. RANDOM MAP lets the server pick;
    MAP opens the client's own map window, where the host picks a standard map
    and a battle time and confirms. The room comes back with that choice, and
    START BATTLE starts it. LEAVE closes the room and returns you to the

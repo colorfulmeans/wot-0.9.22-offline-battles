@@ -902,8 +902,12 @@ class BootstrapLifecycleTests(unittest.TestCase):
                                 for row in snapshot['vehicles'])
                     self.assertEqual(owned, snapshot['vehicleTypeCompactDescrs'])
                     self.assertNotIn(offer_cd, owned)
-                    self.assertEqual({'crystal': 15000},
+                    self.assertEqual({'gold': 22500},
                                      snapshot['shopItemPrices'][offer_cd])
+                    published_offer = next(row for row in snapshot['offlineVehicleOffers']
+                                           if row['cd'] == offer_cd)
+                    self.assertEqual(15000, published_offer['price'])
+                    self.assertIn(offer_cd, snapshot['notInShopItems'])
                     self.assertIn(offer_cd, synced['stats']['unlocks'])
                     if mode == 'new_account':
                         self.assertNotIn(offer_cd, snapshot['unlockItemCompactDescrs'])

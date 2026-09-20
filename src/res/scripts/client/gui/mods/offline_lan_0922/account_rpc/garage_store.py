@@ -971,6 +971,12 @@ class GarageStore(object):
             campaign = personal_campaign_battle.evaluate(
                 state.snapshot(), campaign_receipt, vehicles_module,
                 evaluations=evaluations)
+            # Error reports contain logs, not the private account save. Keep
+            # missing condition evidence visible there instead of silently
+            # leaving the user with an unchanged mission card.
+            if campaign['unsupported']:
+                _log('personal mission unsupported receipt=%s conditions=%s' %
+                     (receipt_id, json.dumps(campaign['unsupported'], sort_keys=True)))
             state.snapshot().setdefault('personalMissionProgress', {}).update(
                 campaign['completed'])
             result['personal_missions'] = personal_campaign.settle(state)

@@ -1,13 +1,14 @@
 """Evaluate personal missions from installed definitions and settled facts.
 
 This deliberately does not infer event history from final counters. Conditions
-requiring hit timing, visibility or a damage-event count remain unevaluated
+requiring unrecorded hit timing or visibility remain unevaluated
 until the authoritative receipt carries those facts. Unknown XML modifiers
 must never silently turn a harder mission into an easier one.
 """
 
 from __future__ import division
 
+from gui.mods.offline_lan_0922 import mission_events
 
 _CLASSES = frozenset(('lightTank', 'heavyTank', 'mediumTank', 'AT-SPG', 'SPG'))
 _DECORATION = frozenset(('title', 'description', 'hideInGui'))
@@ -20,6 +21,10 @@ _STAT_KEYS = {
     'damageAssistedRadio': 'assist_radio',
     'damageAssistedTrack': 'assist_track',
     'damageAssistedStun': 'assist_stun',
+    'stunNum': 'stun_num', 'stunned': 'stunned',
+    'killsAssistedStun': 'kills_assisted_stun',
+    'killsAssistedTrack': 'kills_assisted_track',
+    'critsCount': 'critical_hits', 'isNotSpotted': 'not_spotted',
     'capturePoints': 'capture_points',
     'droppedCapturePoints': 'dropped_capture_points',
 }
@@ -117,6 +122,9 @@ class _Facts(object):
         source = self.receipt if row is None else row
         if key in _STAT_KEYS:
             return (source.get('stats') or {}).get(_STAT_KEYS[key])
+        if key == 'stunDuration':
+            duration = (source.get('stats') or {}).get('stun_duration_ms')
+            return None if duration is None else duration / 1000.0
         if key == 'xp':
             if row is not None:
                 return row.get('xp')
@@ -210,21 +218,49 @@ def _results(node, facts):
 def _vehicle_events(name, node, facts):
     allowed = (_DECORATION | _RELATIONS |
                set(('classes', 'classesDiversity')))
+    if name in ('vehicleDamage', 'vehicleStun'):
+        allowed = allowed | set(('eventCount',))
     if name == 'vehicleKills':
-        allowed = allowed | set(('attackReason',))
+        allowed = allowed | set(('attackReason', 'distance'))
+    if name in ('vehicleDamage', 'vehicleKills'):
+        allowed = allowed | set(('limittedTime', 'enemyImmobilized'))
     unexpected = _names(node) - allowed
     if unexpected:
         return _unknown(name + ' modifier: ' + ','.join(sorted(unexpected)))
     if 'interactions' not in facts.receipt:
         return _unknown('per-target interactions')
     classes = set(_value(node, 'classes').split())
+    event_count = _child(node, 'eventCount')
+    if (event_count is not None and
+            (_names(event_count) or event_count.get('value', ''))):
+        return _unknown(name + ' eventCount modifier')
     diversity = _child(node, 'classesDiversity')
+    filtered_history = bool(_names(node) & set((
+        'limittedTime', 'enemyImmobilized', 'distance')))
+    try:
+        time_limit = (int(_value(node, 'limittedTime')) * 1000
+                      if _child(node, 'limittedTime') is not None else None)
+        distance_limit = (int(_value(node, 'distance'))
+                          if _child(node, 'distance') is not None else None)
+        if time_limit is not None and time_limit < 0:
+            raise ValueError('negative event deadline')
+    except (TypeError, ValueError):
+        return _unknown(name + ' limittedTime or distance boundary')
+    immobilized = _child(node, 'enemyImmobilized')
+    if immobilized is not None and (_names(immobilized) or immobilized.get('value', '')):
+        return _unknown(name + ' enemyImmobilized modifier')
     amount, seen_classes = 0, set()
     for event in facts.receipt['interactions']:
-        field = 'damage' if name == 'vehicleDamage' else 'target_kills'
+        if name == 'vehicleStun':
+            field = 'stun_num' if event_count is not None else 'stun_duration'
+        elif name == 'vehicleDamage':
+            field = 'damage_events' if event_count is not None else 'damage'
+        else:
+            field = 'target_kills'
         value = event.get(field)
         if value is None:
-            return _unknown('interaction: ' + field)
+            return _unknown('interaction: ' + field +
+                            (' (eventCount)' if event_count is not None else ''))
         if value <= 0:
             continue
         row = facts.rows.get((event.get('target_kind'), event.get('target_id')))
@@ -241,6 +277,31 @@ def _vehicle_events(name, node, facts):
                 continue
         else:
             tags = set()
+        if filtered_history:
+            history = _mission_history(event)
+            if history is None:
+                return _unknown('interaction: complete mission event history (' +
+                                ','.join(sorted(_names(node) & set((
+                                    'limittedTime', 'enemyImmobilized', 'distance')))) + ')')
+            value = 0
+            for occurrence in history:
+                if occurrence[0] != ('damage' if name == 'vehicleDamage' else 'kill'):
+                    continue
+                if time_limit is not None and occurrence[1] > time_limit:
+                    continue
+                if immobilized is not None and not occurrence[3]:
+                    continue
+                if distance_limit is not None:
+                    distance = occurrence[4]
+                    if distance is None:
+                        return _unknown('interaction: kill distance')
+                    # Signed XML ranges use an inclusive lower bound and an
+                    # exclusive negative upper bound (-101 covers 100 m).
+                    if (distance_limit < 0 and distance >= -distance_limit or
+                            distance_limit >= 0 and distance < distance_limit):
+                        continue
+                value += (occurrence[2] if name == 'vehicleDamage' and
+                          event_count is None else 1)
         if _child(node, 'attackReason') is not None:
             try:
                 reason = int(_value(node, 'attackReason'))
@@ -250,8 +311,13 @@ def _vehicle_events(name, node, facts):
                 return _unknown('interaction: death_reason')
             if event['death_reason'] != reason:
                 continue
-        amount += value
+        # Sum the worker's milliseconds, including across targets. A binary
+        # float addition must not leave an exact 50 seconds just below 50.
+        amount += (int(round(value * 1000))
+                   if field == 'stun_duration' else value)
         seen_classes.update(tags)
+    if name == 'vehicleStun' and event_count is None:
+        amount /= 1000.0
     checks = [_compare(node, amount)]
     if diversity is not None:
         try:
@@ -260,6 +326,61 @@ def _vehicle_events(name, node, facts):
         except (TypeError, ValueError):
             return _unknown('vehicle class diversity')
     return _combine(checks)
+
+
+def _mission_history(interaction):
+    if (interaction.get('mission_events_complete') is not True or
+            not mission_events.valid(interaction)):
+        return None
+    return interaction.get('mission_events')
+
+
+def _critical_events(node, facts):
+    if _names(node) - (_DECORATION | set(('destroyed',))):
+        return _unknown('crits modifier')
+    destroyed = _child(node, 'destroyed')
+    if destroyed is None or _names(destroyed) != set(('crit',)):
+        return _unknown('crits destroyed condition')
+    checks = []
+    for condition in _children(destroyed, 'crit'):
+        if (_names(condition) - (_DECORATION | _RELATIONS | set(('critName',))) or
+                _value(condition, 'critName') != 'track'):
+            return _unknown('destroyed critical type or modifier')
+        if 'interactions' not in facts.receipt:
+            return _unknown('per-target critical history')
+        count = 0
+        for interaction in facts.receipt['interactions']:
+            row = facts.rows.get((interaction.get('target_kind'), interaction.get('target_id')))
+            if row is None:
+                return _unknown('target roster')
+            if row.get('team') == facts.receipt.get('team'):
+                continue
+            history = _mission_history(interaction)
+            if history is None:
+                return _unknown('interaction: complete mission critical history')
+            # #1513 destroyed-device bits start at 12; track is device 4.
+            count += sum(1 for event in history
+                         if event[0] == 'critical' and event[2] & (1 << 16))
+        checks.append(_compare(condition, count))
+    return _combine(checks)
+
+
+def _multi_stun_event(node, facts):
+    if _names(node) - (_DECORATION | _RELATIONS | set(('stunnedByShot',))):
+        return _unknown('multiStunEvent modifier')
+    try:
+        targets = int(_value(node, 'stunnedByShot'))
+    except (TypeError, ValueError):
+        return _unknown('multiStunEvent target count')
+    # Only these two per-shot thresholds are recorded. Never infer a third
+    # threshold from the total number of hits or distinct stunned vehicles.
+    if targets not in (2, 3):
+        return _unknown('multiStunEvent target count')
+    count = (facts.receipt.get('stats') or {}).get('stun_shots_%d' % targets)
+    if count is None:
+        return _unknown('multiStunEvent shot evidence')
+    return (_compare(node, count) if _names(node) & _RELATIONS
+            else _known(count >= 1))
 
 
 def _condition(name, node, facts):
@@ -282,8 +403,12 @@ def _condition(name, node, facts):
         return _known(facts.receipt['death_reason'] == -1)
     if name == 'results':
         return _results(node, facts)
-    if name in ('vehicleDamage', 'vehicleKills'):
+    if name in ('vehicleDamage', 'vehicleKills', 'vehicleStun'):
         return _vehicle_events(name, node, facts)
+    if name == 'multiStunEvent':
+        return _multi_stun_event(node, facts)
+    if name == 'crits':
+        return _critical_events(node, facts)
     return _unknown('condition: ' + name)
 
 

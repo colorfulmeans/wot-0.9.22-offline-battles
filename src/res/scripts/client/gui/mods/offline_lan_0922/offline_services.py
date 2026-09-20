@@ -256,7 +256,8 @@ def daily_state(snapshot, now=None):
 
 
 def publish_offers(snapshot, vehicles):
-    """Publish one price and entitlement to all native purchase consumers."""
+    """Keep native catalogue prices separate from Special Offers quotes."""
+    from gui.mods.offline_lan_0922 import price_catalogue
     rows = []
     for name, price in sorted(BOND_OFFERS.items()):
         try:
@@ -266,8 +267,21 @@ def publish_offers(snapshot, vehicles):
             cd = vehicles.makeIntCompactDescrByID('vehicle', nation, vehicle_id)
         except (KeyError, ValueError):
             continue
-        snapshot.setdefault('shopItemPrices', {})[cd] = {'crystal': price}
-        snapshot.setdefault('notInShopItems', set()).discard(cd)
+        native_prices = snapshot.setdefault('shopItemPrices', {})
+        unavailable = snapshot.setdefault('notInShopItems', set())
+        if name in RETIRED_BOND_OFFERS:
+            # These definitions intentionally have only an offline bond offer;
+            # their old credit/placeholder prices are not purchase terms.
+            native_prices[cd] = {'crystal': price}
+            unavailable.discard(cd)
+        else:
+            catalogue_price = price_catalogue.vehicle_price(*name.split(':', 1))
+            if catalogue_price is not None:
+                native_prices[cd] = price_catalogue.money(catalogue_price)
+                if catalogue_price[price_catalogue.NOT_IN_SHOP]:
+                    unavailable.add(cd)
+                else:
+                    unavailable.discard(cd)
         snapshot.setdefault('shopVehicleOfferCompactDescrs', set()).add(cd)
         # Offers grant purchase access, not inventory ownership. Account sync
         # requires vehicleTypeCompactDescrs to match complete garage records;
@@ -294,7 +308,7 @@ def transact(state, action, key, now=None):
                 raise GarageError('the account already owns this vehicle')
             # The common purchase owns duplicate/slot/affordability checks,
             # real stock modules and crew. Never construct a reward clone.
-            state.buy_vehicle(offer['cd'], recruit_crew=True)
+            state.buy_vehicle(offer['cd'], recruit_crew=True, bond_offer=True)
         elif action in ('buy_reserve', 'activate_reserve'):
             if key not in RESERVE_BY_ID:
                 raise GarageError('Unknown personal reserve.')

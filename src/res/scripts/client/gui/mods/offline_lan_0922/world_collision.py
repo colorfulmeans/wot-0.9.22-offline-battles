@@ -10,7 +10,7 @@ from gui.mods.offline_lan_0922.destructibles_sensor import (
 	_catalog_soft_static_path, _diagnostic_static_recast_1513,
 	_try_destroy_solid_hit, _vehicle_hull_bbox, _descriptor_value,
 	ground_collision_filter, horizontal_collision_filter,
-	prepare_horizontal_collision_filter)
+	prepare_horizontal_collision_filter, collide_motion_segment)
 
 
 _MAX_DRIVABLE_GRADIENT = 1.28
@@ -59,19 +59,24 @@ def _record_hard_contact(trace, reason, start, end, collision,
 
 
 def _collide_horizontal(spaceID, start, end,
-		collision_filter=_UNPREPARED_COLLISION_FILTER):
+		collision_filter=_UNPREPARED_COLLISION_FILTER, departing_contact=None):
 	"""Raycast while hiding only exact destructibles already marked broken."""
 	import BigWorld
 	broken_filter = collision_filter
 	if broken_filter is _UNPREPARED_COLLISION_FILTER:
 		broken_filter = horizontal_collision_filter(start, end)
-	if broken_filter is None:
-		return observed_ray(
-			'native.motion.ray', BigWorld.wg_collideSegment,
-			spaceID, start, end, VEHICLE_SKIP_FLAGS)
-	return observed_ray(
-		'native.motion.ray', BigWorld.wg_collideSegment,
-		spaceID, start, end, VEHICLE_SKIP_FLAGS, broken_filter)
+	current = start
+	for unused in range(_WORLD_SOFT_RECAST_BUDGET + 1):
+		hit = collide_motion_segment(spaceID, current, end, broken_filter,
+			BigWorld.wg_collideSegment)
+		if hit is None or departing_contact is None or not departing_contact(hit):
+			return hit
+		remaining = end - hit[0]
+		if remaining.length <= _GROUND_HIT_EPSILON:
+			return None
+		current = hit[0] + remaining.scale(_GROUND_HIT_EPSILON / remaining.length)
+	# A bounded depenetration must still inspect every later surface.
+	return hit
 
 
 def _profile_gradient_limit(heights):
@@ -83,7 +88,7 @@ def _profile_gradient_limit(heights):
 		return _MAX_DRIVABLE_GRADIENT
 
 
-def _drivable_ground_profile(heights, segment_length):
+def _drivable_ground_profile(heights, segment_length, allow_flat=False):
 	"""Recognise a continuous, bounded slope in either travel direction.
 
 	A flat profile is deliberately not terrain evidence: a horizontal wall on a
@@ -94,7 +99,8 @@ def _drivable_ground_profile(heights, segment_length):
 		values = [float(value) for value in heights]
 		if len(values) < 2:
 			return False
-		if abs(values[-1] - values[0]) <= _MIN_DRIVABLE_HEIGHT_CHANGE:
+		if (not allow_flat and
+				abs(values[-1] - values[0]) <= _MIN_DRIVABLE_HEIGHT_CHANGE):
 			return False
 		segment = max(0.001, float(segment_length))
 		for index in range(1, len(values)):
@@ -184,7 +190,41 @@ def _hit_matches_exact_ground_top(spaceID, Math, pos, collision, look,
 		return False
 
 
-def _vehicle_motion_extents(descriptor):
+def _ground_exit_is_clear(spaceID, Math, pos, start, end, collision,
+		look, ground_plane, collision_filter):
+	"""Prove an outward terrain contact and query the rest of the same ray.
+
+	A steeper drop beyond a supported slope is not a horizontal wall. Only an
+	actual drivable top, crossed outward, earns this exception; a second native
+	hit remains solid. In particular, a low wall behind the slope must not be
+	hidden by the first terrain triangle or by the raised hull rays.
+	"""
+	if not _drivable_surface(collision, _MAX_DESCENDING_GRADIENT):
+		return False
+	delta = end - start
+	length = delta.length
+	if length <= _GROUND_HIT_EPSILON:
+		return False
+	normal = collision[1]
+	outward = (delta.x * normal.x + delta.y * normal.y +
+		delta.z * normal.z) / length
+	if outward <= _GROUND_HIT_EPSILON:
+		return False
+	if not _hit_matches_exact_ground_top(
+			spaceID, Math, pos, collision, look, ground_plane,
+			collision_filter):
+		return False
+	remaining = end - collision[0]
+	remaining_length = remaining.length
+	if remaining_length <= _GROUND_HIT_EPSILON:
+		return False
+	recast_start = collision[0] + remaining.scale(
+		_GROUND_HIT_EPSILON / remaining_length)
+	return _collide_horizontal(
+		spaceID, recast_start, end, collision_filter) is None
+
+
+def _vehicle_motion_bounds(descriptor):
 	"""Cover the chassis and mounted hull instead of only the narrow armour."""
 	hull_box = _vehicle_hull_bbox(descriptor)
 	if hull_box is None:
@@ -199,7 +239,15 @@ def _vehicle_motion_extents(descriptor):
 		float(hull_box[0][i]) + float(hull_position[i])) for i in (0, 2))
 	upper = tuple(max(float(chassis_box[1][i]),
 		float(hull_box[1][i]) + float(hull_position[i])) for i in (0, 2))
-	return max(abs(lower[0]), abs(upper[0])), -lower[1], upper[1]
+	return lower[0], upper[0], -lower[1], upper[1]
+
+
+def _vehicle_motion_extents(descriptor):
+	bounds = _vehicle_motion_bounds(descriptor)
+	if bounds is None:
+		return None
+	left, right, back, front = bounds
+	return max(abs(left), abs(right)), back, front
 
 
 def _hull_pose_y(pitch, roll):
@@ -217,15 +265,16 @@ def _hull_pose_y(pitch, roll):
 
 
 def _hull_pose_endpoint(local_start, local_end, half_width,
-		half_length_back, half_length_front):
+		half_length_back, half_length_front, lateral_bounds=None):
 	"""Stop pose extrapolation where a lane leaves the hull footprint."""
 	start_right = float(local_start[0])
 	start_forward = float(local_start[1])
 	delta_right = float(local_end[0]) - start_right
 	delta_forward = float(local_end[1]) - start_forward
 	fraction = 1.0
+	left, right = lateral_bounds or (-float(half_width), float(half_width))
 	for start, delta, lower, upper in (
-			(start_right, delta_right, -float(half_width), float(half_width)),
+			(start_right, delta_right, left, right),
 			(start_forward, delta_forward, -float(half_length_back),
 				float(half_length_front))):
 		if delta > 0.0:
@@ -272,13 +321,8 @@ def _ground_top(spaceID, Math, pos, x, z, look, ground_plane=None,
 		broken_filter = collision_filter
 		if broken_filter is _UNPREPARED_COLLISION_FILTER:
 			broken_filter = ground_collision_filter(x, z)
-		ground = (observed_ray(
-			'native.motion.ground', BigWorld.wg_collideSegment,
-			spaceID, start, end, VEHICLE_SKIP_FLAGS)
-			if broken_filter is None else
-			observed_ray(
-				'native.motion.ground', BigWorld.wg_collideSegment,
-				spaceID, start, end, VEHICLE_SKIP_FLAGS, broken_filter))
+		ground = collide_motion_segment(spaceID, start, end, broken_filter,
+			BigWorld.wg_collideSegment, 'native.motion.ground')
 		return None if ground is None else float(ground[0].y)
 	except (AttributeError, IndexError, TypeError, ValueError):
 		return None
@@ -378,25 +422,113 @@ def _posed_ray(Math, pos, x1, z1, x2, z2, local_start, local_end,
 		Math.Vector3(x2, end_y, z2))
 
 
+def _posed_support_top(pos, pose_y, extents):
+	hw, back, front = extents
+	return (float(pos.y) + abs(pose_y[0]) * hw +
+		max(-back * pose_y[2], front * pose_y[2]))
+
+
+def _supported_flat_top_is_clear(spaceID, Math, pos, end, collision,
+		pose_y, extents, heights, segment, look, ground_plane, collision_filter):
+	'''Recognise a level deck already inside the posed track height range.
+
+	A small net height change cannot prove a wall. Require the actual upward
+	face, a bounded profile, the exact native top and a clear ray remainder.
+	The caller still checks both occupied upper lanes.
+	'''
+	if (not heights or abs(float(heights[-1]) - float(heights[0])) >
+			_MIN_DRIVABLE_HEIGHT_CHANGE or
+			not _drivable_surface(collision) or
+			collision[0].y > _posed_support_top(pos, pose_y, extents) +
+			_GROUND_HIT_EPSILON or
+			not _drivable_ground_profile(heights, segment, allow_flat=True) or
+			not _hit_matches_exact_ground_top(spaceID, Math, pos, collision,
+				look, ground_plane, collision_filter)):
+		return False
+	remaining = end - collision[0]
+	if remaining.length <= _GROUND_HIT_EPSILON:
+		return True
+	start = collision[0] + remaining.scale(
+		_GROUND_HIT_EPSILON / remaining.length)
+	return _collide_horizontal(spaceID, start, end, collision_filter) is None
+
+
+def _supported_seam_is_clear(spaceID, Math, pos, collision, x1, z1, x2, z2,
+		local_start, local_end, pose_y, extents, collision_filter):
+	"""Cross a low support seam already straddled by the posed tracks.
+
+	Paris reports have one track on a 0.6 m pavement and one on the street.
+	The lowered longitudinal witness hits the pavement's vertical side and
+	classifies it as a building. Require native support on both sides, a broad
+	low top within the existing track plane, and a clear lifted body corridor.
+	An upright tank approaching a wall has no such raised support plane.
+	"""
+	import math, BigWorld
+	point, normal = collision[:2]
+	normal_length = math.sqrt(normal.x ** 2 + normal.y ** 2 + normal.z ** 2)
+	if (normal_length <= 1.0e-12 or normal.y / normal_length < -0.2 or
+			_drivable_surface(collision)):
+		return False
+	length = math.hypot(normal.x, normal.z)
+	if length <= 1.0e-12:
+		return False
+	nx, nz = normal.x / length, normal.z / length
+	posed_top = _posed_support_top(pos, pose_y, extents)
+	if posed_top < point.y - _GROUND_HIT_EPSILON:
+		return False
+	tops = []
+	for offset in (0.12, -0.12, -0.60):
+		x, z = point.x + nx * offset, point.z + nz * offset
+		start = Math.Vector3(x, pos.y + 1.6, z)
+		end = Math.Vector3(x, pos.y - 3.0, z)
+		hit = collide_motion_segment(spaceID, start, end, collision_filter,
+			BigWorld.wg_collideSegment, 'native.motion.ground')
+		# The outside column can land on the bevel itself. Both columns
+		# inside the step must still establish its broad, nearly level top.
+		if (hit is None or len(hit) < 2 or hit[1].y <= 0.0 or
+				(offset < 0.0 and not _drivable_surface(hit, 0.5))):
+			return False
+		tops.append(float(hit[0].y))
+	rise = max(tops[1:]) - tops[0]
+	if (not 0.03 < rise <= 0.75 or abs(tops[1] - tops[2]) > 0.12 or
+			min(tops[1:]) < point.y - _GROUND_HIT_EPSILON or
+			max(tops[1:]) > posed_top + 0.075):
+		return False
+	for height in (0.6, 1.1, 1.6):
+		start, end = _posed_ray(Math, pos, x1, z1, x2, z2,
+			local_start, local_end, height, pose_y)
+		# Raise the same corridor by only the measured step. Never discard
+		# the rest of the segment or the occupied upper hull heights.
+		offset = Math.Vector3(0.0, rise, 0.0)
+		if _collide_horizontal(spaceID, start + offset, end + offset,
+				collision_filter) is not None:
+			return False
+	return True
+
+
 def _raised_ray_has_wall(spaceID, Math, pos, x1, z1, x2, z2,
 		local_start, local_end, pose_y, target_length,
 		maximum_gradient=_MAX_DRIVABLE_GRADIENT, ground_profile=None,
 		collision_filter=_UNPREPARED_COLLISION_FILTER,
-		ground_ahead=None, trace=None):
+		ground_ahead=None, trace=None, require_clear_exit=False,
+		departing_contact=None):
 	"""A drivable lower slope must not hide an independent wall above it."""
 	for height in (1.1, 1.6):
 		start, end = _posed_ray(
 			Math, pos, x1, z1, x2, z2, local_start, local_end,
 			height, pose_y, ground_ahead)
 		collision = _collide_horizontal(
-			spaceID, start, end, collision_filter)
+			spaceID, start, end, collision_filter, departing_contact)
 		if collision is None:
 			continue
 		if (collision[0] - start).length >= target_length:
 			continue
 		if _drivable_surface(collision, maximum_gradient):
-			continue
-		if (ground_profile is not None and
+			if (not require_clear_exit or _ground_exit_is_clear(
+					spaceID, Math, pos, start, end, collision,
+					ground_profile[7], ground_profile[8], collision_filter)):
+				continue
+		if (not require_clear_exit and ground_profile is not None and
 				_hit_matches_ground_profile(
 					collision, ground_profile[0], ground_profile[1],
 					ground_profile[2], ground_profile[3],
@@ -418,8 +550,8 @@ def _solid_contact_cleared(spaceID, segment_start, segment_end, vel, td,
 	"""Admit only a clear ray or a bounded chain of proved light props.
 
 	#1513 keeps a destroyed fragile/module skin solid until its hide callback.
-	After native authority has accepted the first contact, skip that residual
-	skin only through its unique registered OBB exit.  The same read-only helper
+	After native authority has accepted the first contact, filter that exact
+	original native key and query the complete ray, including its box interior.  The same read-only helper
 	may classify following light props so the swept catalog commit can destroy
 	them later in this tick.  Unknown geometry, a backing wall, an ambiguous OBB
 	or an over-budget chain remains solid.
@@ -450,7 +582,7 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 		return cleared is True
 	# Revisit an already accepted hide skin before probing material again. This
 	# keeps the 0.2 s native callback window out of the hot path and still
-	# requires the exact pending identity, OBB exit and a real backing-ray recast.
+	# requires the exact accepted identity and a filtered query of the whole ray.
 	cleared = _catalog_soft_static_path(
 		spaceID, segment_start, segment_end, collision, vel, td,
 		[_WORLD_SOFT_RECAST_BUDGET], require_pending_first=True,
@@ -479,7 +611,7 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 			spaceID, segment_start, collision[0], collision[1], yaw, vel, td):
 		# A previously accepted fragile/module may remain in the native static
 		# skin until #1513's hide callback.  Only that exact pending identity may
-		# be skipped here, through its registered OBB exit and another real ray.
+		# be filtered here; the complete ray still checks every other surface.
 		# Active kinetic rejects, expired skins, falling bodies and unknown solids
 		# remain authoritative.
 		cleared = _catalog_soft_static_path(
@@ -524,7 +656,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		airborne=False, dt=0.04, return_status=False,
 		allow_kinetic=False, kinetic_speed=None, commit_enabled=True,
 		motion_yaw=None, pitch=0.0, roll=0.0, trace=None,
-		exact_footprint=False):
+		exact_footprint=False, departing_contact=None):
 	import math, BigWorld, Math
 	try:
 		hw = 1.5
@@ -534,32 +666,21 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		extents = _vehicle_motion_extents(td)
 		if extents is not None:
 			hw, hl_back, hl_front = extents
+		bounds = _vehicle_motion_bounds(td)
+		left, right = bounds[:2] if bounds is not None else (-hw, hw)
 
 		if trace is not None:
 			trace.clear()
 			trace.update(position=(pos.x, pos.y, pos.z), yaw=yaw, speed=vel,
 				dt=dt, motion_yaw=motion_yaw, pitch=pitch, roll=roll,
-				airborne=airborne, extents=(hw, hl_back, hl_front))
+				airborne=airborne, extents=(hw, hl_back, hl_front),
+				lateral_bounds=(left, right))
 
-		# Look-ahead beyond the hull. The old flat +2.0 m made an invisible
-		# wall 2 m before every obstacle, and DURING A FALL it saw the cliff
-		# face below-ahead and zeroed the speed mid-air - the tank then hugged
-		# the wall and trickled down instead of flying a ballistic arc.
-		# Grounded: just enough to not tunnel at speed. Airborne: only the
-		# distance actually travelled this tick - contact stops, proximity not.
-		if exact_footprint:
-			# A continuous-yaw caller already enlarged the descriptor to the
-			# complete occupied interval.  Keep both signed probes inside that
-			# exact envelope; the normal 0.4 m translation look-ahead would make
-			# a tank which stopped short of a wall unable to rotate away from it.
-			_ahead = 0.0
-		elif airborne:
-			_ahead = abs(vel) * dt + 0.2
-		else:
-			# Cover the complete copied-pose translation of this frame.  A fixed
-			# 1.2 m cap was shorter than a 20 m/s tank's 2 m slow-frame step and
-			# could miss a hard wall immediately behind a crushed light prop.
-			_ahead = max(0.4, abs(vel) * dt + 0.2)
+		# The occupied hull and this frame's actual travel are the entire
+		# collision sweep. A stationary turn already supplies its swept body.
+		# Neither contact path has a proximity margin or a waiting interval.
+		_ahead = (0.0 if exact_footprint else
+			abs(float(vel)) * max(0.0, float(dt)))
 		cos_y = math.cos(yaw)
 		sin_y = math.sin(yaw)
 		pose_y = _hull_pose_y(pitch, roll)
@@ -569,16 +690,14 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			-sin_y * pose_y[0] + cos_y * pose_y[2])
 		lane_segments = []
 		if motion_yaw is None:
-			# Keep the shipped longitudinal probe byte-for-byte in geometry and
-			# lane order.  The explicit path below is only for cross-heading
-			# translation introduced by ram, slip and wall deflection.
+			# Preserve the lane order, using both actual body edges separately.
 			back_margin = -0.5 if vel > 0.0 else 0.5
 			front_margin = ((hl_front + _ahead) if vel > 0.0 else
 				-(hl_back + _ahead))
 			direction = 1.0 if vel >= 0.0 else -1.0
 			look = (hl_front if vel > 0.0 else hl_back) + _ahead
 			target_len = abs(back_margin) + look
-			for offset_x in (-hw, 0.0, hw):
+			for offset_x in (left, 0.0, right):
 				sx = pos.x + cos_y * offset_x
 				sz = pos.z - sin_y * offset_x
 				x1 = sx + sin_y * back_margin
@@ -603,16 +722,16 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			forward_v = perp_x * sin_y + perp_z * cos_y
 			projected = []
 			for hull_right, hull_forward in (
-					(-hw, -hl_back), (hw, -hl_back),
-					(hw, hl_front), (-hw, hl_front)):
+					(left, -hl_back), (right, -hl_back),
+					(right, hl_front), (left, hl_front)):
 				corner_u = right_u * hull_right + forward_u * hull_forward
 				corner_v = right_v * hull_right + forward_v * hull_forward
 				projected.append((corner_v, corner_u, corner_u + _ahead))
 			limits = []
 			if right_u > 1.0e-9:
-				limits.append(hw / right_u)
+				limits.append(right / right_u)
 			elif right_u < -1.0e-9:
-				limits.append(-hw / right_u)
+				limits.append(left / right_u)
 			if forward_u > 1.0e-9:
 				limits.append(hl_front / forward_u)
 			elif forward_u < -1.0e-9:
@@ -663,7 +782,8 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			# This chord is a conservative witness inside the swept hull volume;
 			# extrapolating pitch/roll through look-ahead can pass over a real wall.
 			local_end = _hull_pose_endpoint(
-				local_start, ray_local_end, hw, hl_back, hl_front)
+				local_start, ray_local_end, hw, hl_back, hl_front,
+				lateral_bounds=(left, right))
 			pose_clamped = (
 				pose_y != (0.0, 1.0, 0.0) and
 				(abs(local_end[0] - ray_local_end[0]) > 1.0e-9 or
@@ -693,7 +813,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 				Math, pos, x1, z1, x2, z2, local_start, local_end,
 				0.6, pose_y, _ground_ahead)
 			col_bot = _collide_horizontal(
-				spaceID, start_bot, end_bot, _sweep_filter)
+				spaceID, start_bot, end_bot, _sweep_filter, departing_contact)
 			# A posed lane is longer than its flat XZ projection, and every
 			# distance test below compares a 3-D ``.length``.  The prepared
 			# sweep filter is keyed on the envelope's x/z bounds only, so
@@ -739,9 +859,30 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 								_MIN_DRIVABLE_HEIGHT_CHANGE and
 								not _drivable_ground_profile(
 									_heights, _segment)):
-							# This is a proved continuous-direction terrain profile, not
-							# a small prop. An ascent/descent outside its directional
-							# bound remains solid instead of falling into prop handling.
+							# A descending lane can leave the actual surface before a
+							# steeper drop farther ahead. Do not turn that lower ground
+							# into a wall: prove the outward native top and a clear
+							# remainder at every occupied hull height. Ascents, mixed
+							# profiles and contacts entering terrain retain the limit.
+							departing = (
+								all(_heights[index] <= _heights[index - 1]
+									for index in range(1, len(_heights))) and
+								_ground_exit_is_clear(
+									spaceID, Math, pos, start_bot, end_bot, col_bot,
+									profile_look, _profile_plane, _sweep_filter))
+							if departing:
+								if _raised_ray_has_wall(
+										spaceID, Math, pos, x1, z1, x2, z2,
+										local_start, local_end, pose_y, target_len,
+										_gradient_limit,
+										(_heights, _segment, profile_x, profile_z,
+										 profile_sin, profile_cos, profile_direction,
+										 profile_look, _profile_plane),
+										_sweep_filter, _ground_ahead, trace=trace,
+										require_clear_exit=True,
+										departing_contact=departing_contact):
+									return 'hard' if return_status else True
+								continue
 							_record_hard_contact(trace, 'ground_profile', start_bot,
 								end_bot, col_bot, _ground_ahead, _heights)
 							return 'hard' if return_status else True
@@ -756,9 +897,14 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 						_surface_is_ground = _hit_matches_exact_ground_top(
 							spaceID, Math, pos, col_bot, profile_look,
 							_profile_plane, _sweep_filter)
-					if (_heights and
+					_supported_flat_top = (not airborne and
+						_supported_flat_top_is_clear(
+							spaceID, Math, pos, end_bot, col_bot, pose_y,
+							(hw, hl_back, hl_front), _heights, _segment,
+							profile_look, _profile_plane, _sweep_filter))
+					if ((_heights and
 							_drivable_ground_profile(_heights, _segment) and
-							_surface_is_ground):
+							_surface_is_ground) or _supported_flat_top):
 						if _raised_ray_has_wall(
 								spaceID, Math, pos, x1, z1, x2, z2,
 								local_start, local_end, pose_y,
@@ -767,8 +913,14 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 								 profile_x, profile_z,
 								 profile_sin, profile_cos,
 								 profile_direction, profile_look, _profile_plane),
-								_sweep_filter, _ground_ahead, trace=trace):
+								_sweep_filter, _ground_ahead, trace=trace,
+								departing_contact=departing_contact):
 							return 'hard' if return_status else True
+						continue
+					if (not airborne and _supported_seam_is_clear(
+							spaceID, Math, pos, col_bot, x1, z1, x2, z2,
+							local_start, local_end, pose_y,
+							(hw, hl_back, hl_front), _sweep_filter)):
 						continue
 					# Treat every occupied hull height as independent evidence.  The
 					# previous distance-difference heuristic dropped the whole lane when
@@ -784,7 +936,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 							pose_y, _ground_ahead)
 						_ray_hit = _collide_horizontal(
 							spaceID, _ray_start, _ray_end,
-							_sweep_filter)
+							_sweep_filter, departing_contact)
 						if _ray_hit is None:
 							continue
 						_ray_distance = (_ray_hit[0] - _ray_start).length
@@ -817,7 +969,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 						pose_y, _ground_ahead)
 					_ray_hit = _collide_horizontal(
 							spaceID, _ray_start, _ray_end,
-							_sweep_filter)
+							_sweep_filter, departing_contact)
 					if _ray_hit is None:
 						continue
 					_ray_distance = (_ray_hit[0] - _ray_start).length

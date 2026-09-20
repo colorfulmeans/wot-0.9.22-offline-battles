@@ -156,7 +156,7 @@ class LanProtocolTests(unittest.TestCase):
             human_ram_armors=[result]))
         self.assertEqual([result], self.sent[-1]['human_ram_armors'])
 
-    def test_projectile_effect_carries_only_an_exact_stun_end_time(self):
+    def test_projectile_effect_carries_stun_timer_and_optional_duration_fact(self):
         effect = {
             'target_kind': 'bot', 'target_id': 7,
             'damage': 0, 'shot_result': 2,
@@ -167,8 +167,13 @@ class LanProtocolTests(unittest.TestCase):
         self.assertEqual(effect, _strict_projectile_effect(effect))
         self.assertIsNone(_strict_projectile_effect(dict(
             effect, stun_end_server_time_ms=True)))
-        self.assertIsNone(_strict_projectile_effect(dict(
-            effect, stun_duration_ms=7000)))
+        timed = dict(effect, stun_duration_ms=7000)
+        self.assertEqual(timed, _strict_projectile_effect(timed))
+        for duration in (True, 7000.5, -1, 22001, '7000'):
+            self.assertIsNone(_strict_projectile_effect(dict(
+                effect, stun_duration_ms=duration)))
+        del timed['stun_end_server_time_ms']
+        self.assertIsNone(_strict_projectile_effect(timed))
 
     def test_projectile_effect_target_pose_is_an_atomic_vector(self):
         effect = {
@@ -697,6 +702,9 @@ class LanProtocolTests(unittest.TestCase):
             'explosion_hits_received', 'explosion_hits', 'damaged',
             'team_hits', 'team_damage', 'team_kills', 'mileage', 'life_time',
             'team_crits', 'critical_hits',
+            'stun_num', 'stun_duration_ms', 'stunned', 'not_spotted',
+            'stun_shots_2', 'stun_shots_3',
+            'kills_assisted_stun', 'kills_assisted_track',
             'damaging_hits_received', 'deflected_hits_received',
             'crits_received_mask', 'hits_with_damage',
             'sniper_damage_dealt', 'deflection_streak',

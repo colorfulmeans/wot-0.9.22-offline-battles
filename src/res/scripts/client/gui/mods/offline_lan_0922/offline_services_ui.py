@@ -308,6 +308,28 @@ def _install_shop():
         defaults[key] = value
 
     class BondVehicleTab(ShopVehicleTab):
+        def _offerPrice(self, item):
+            offer = next((row for row in snapshot().get('offlineVehicleOffers', ())
+                          if row['cd'] == item.intCD), None)
+            if offer is None or offer['price'] <= 0:
+                raise ValueError('the bond vehicle row has no published quote')
+            return offer['price']
+
+        def _getItemPrices(self, item):
+            from gui.shared.gui_items.gui_item_economics import ItemPrices, ItemPrice
+            from gui.shared.money import Money
+            price = Money(crystal=self._offerPrice(item))
+            # Supply the native row producer's complete price object, without
+            # mutating the shared Vehicle or its ordinary catalogue price.
+            return ItemPrices(ItemPrice(price, price))
+
+        def _isPurchaseEnabled(self, item, money):
+            return (item.intCD not in policy.owned_vehicle_types(snapshot()) and
+                    money.getSignValue('crystal') >= self._offerPrice(item))
+
+        def _isItemOnDiscount(self, item):
+            return False
+
         def buildItems(self, inv_vehicles):
             data = snapshot()
             owned = policy.owned_vehicle_types(data)

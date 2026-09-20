@@ -247,9 +247,29 @@ def apply_tuning(overrides):
 	return applied
 
 
-def hard_contact_candidate_yaws(yaw):
-	'''Return the shared ordered glancing paths for one blocked hull heading.'''
-	return tuple(float(yaw) + delta for delta in HARD_CONTACT_YAW_DELTAS)
+def hard_contact_candidate_yaws(yaw, speed=1.0, normal=None):
+	'''Keep deflection rays on the outside of the primary blocking plane.
+
+	A clear sparse ray in a different heading does not undo an existing hull
+	contact. In particular it can miss a wall between the new corner lanes.
+	Preserve the first normal before those probes replace their trace.
+	'''
+	candidates = tuple(float(yaw) + delta for delta in HARD_CONTACT_YAW_DELTAS)
+	if normal is None:
+		return candidates
+	try:
+		nx, nz = float(normal[0]), float(normal[2])
+		length = math.hypot(nx, nz)
+		if math.isnan(length) or math.isinf(length) or length <= 1.0e-9:
+			return ()
+	except (IndexError, TypeError, ValueError):
+		return ()
+	nx, nz = nx / length, nz / length
+	direction = -1.0 if speed < 0.0 else 1.0
+	if direction * (math.sin(yaw) * nx + math.cos(yaw) * nz) > 0.0:
+		nx, nz = -nx, -nz
+	return tuple(candidate for candidate in candidates if direction * (
+		math.sin(candidate) * nx + math.cos(candidate) * nz) >= -1.0e-9)
 
 
 def hard_contact_step(speed, dt, grinding=False, slide_yaw=None):
@@ -1440,6 +1460,21 @@ def suspension_path_probe_fractions(distance):
 		0, int(math.ceil(distance / SUSPENSION_PATH_PROBE_SPACING)) - 1))
 	return tuple(
 		float(index + 1) / float(steps + 1) for index in range(steps))
+
+
+def suspension_flat_support_limit(params, body_height, pitch, roll):
+	'''Bound a flat support by the existing posed track compression envelope.
+
+	A low carrier on a pitched/rolled chassis can enter a flat deck that is
+	already below the high carriers. Its local compression ceiling alone
+	incorrectly selects the terrain underneath that deck. Share only the
+	highest legal carrier height; the original per-column travel band still
+	bounds the query and a level chassis earns no extra roof reach.
+	'''
+	rotation = _suspension_rotation(pitch, roll)
+	return max(float(body_height) + _suspension_point_offset(spring, rotation)[1] +
+		spring['max_compression'] - spring['static_compression'] + 0.05
+		for spring in params['springs'])
 
 
 def suspension_support_allowed(height, normal_y, flat_maximum_y=None):

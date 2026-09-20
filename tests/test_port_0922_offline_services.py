@@ -268,6 +268,7 @@ class OfflineServicesTests(unittest.TestCase):
         self.assertEqual(1, len(pushed))
 
     def test_offer_prices_and_entitlements_use_the_exact_retired_names(self):
+        from gui.mods.offline_lan_0922 import price_catalogue
         names = sorted(self.policy.BOND_OFFERS)
         types_by_name = dict((name, types.SimpleNamespace(
             id=(1, index), level=7 if 'Auf_Panther' in name else 10,
@@ -287,8 +288,36 @@ class OfflineServicesTests(unittest.TestCase):
             'ussr:R93_Object263B': 15000,
             'germany:G98_Waffentrager_E100': 15000}, retired)
         for row in data['offlineVehicleOffers']:
-            self.assertEqual({'crystal': row['price']}, data['shopItemPrices'][row['cd']])
-            self.assertNotIn(row['cd'], data['notInShopItems'])
+            if row['retired']:
+                self.assertEqual({'crystal': row['price']}, data['shopItemPrices'][row['cd']])
+                self.assertNotIn(row['cd'], data['notInShopItems'])
+            else:
+                catalogue = price_catalogue.vehicle_price(*row['name'].split(':', 1))
+                self.assertEqual(price_catalogue.money(catalogue),
+                                 data['shopItemPrices'][row['cd']])
+                self.assertEqual(catalogue[2], row['cd'] in data['notInShopItems'])
+        for name, gold, bonds in (
+                ('china:Ch25_121_mod_1971B', 32000, 15000),
+                ('germany:G119_Pz58_Mutz', 9000, 8000)):
+            row = next(row for row in data['offlineVehicleOffers'] if row['name'] == name)
+            self.assertEqual({'gold': gold}, data['shopItemPrices'][row['cd']])
+            self.assertEqual(bonds, row['price'])
+            # A stale price from v0.9.0 must be repaired on republishing too.
+            data['shopItemPrices'][row['cd']] = {'crystal': bonds}
+        self.policy.publish_offers(data, vehicles)
+        self.assertEqual({'gold': 32000}, data['shopItemPrices'][100 + names.index(
+            'china:Ch25_121_mod_1971B')])
+        self.assertEqual({'gold': 9000}, data['shopItemPrices'][100 + names.index(
+            'germany:G119_Pz58_Mutz')])
+
+    def test_vehicle_service_selects_the_bond_quote_explicitly(self):
+        data = self.state.snapshot()
+        data['offlineVehicleOffers'] = [{'cd': 50002, 'name': 'offer', 'price': 8000}]
+        data['shopItemPrices'] = {50002: {'gold': 9000}}
+        with mock.patch.object(self.state, 'buy_vehicle') as buy:
+            self.policy.transact(self.state, 'vehicle', 'offer')
+        buy.assert_called_once_with(50002, recruit_crew=True, bond_offer=True)
+        self.assertEqual({'gold': 9000}, data['shopItemPrices'][50002])
 
     def test_panel_close_and_escape_release_every_native_resource(self):
         ui = garage_fixture._load_port_module('offline_services_ui')

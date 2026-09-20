@@ -1177,6 +1177,70 @@ def _destructible_rotation_interval_bbox(bbox, half_angle):
     )
 
 
+def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
+                                pitch=0.0, roll=0.0, previous_contacts=None):
+    """Permit only reduced penetration of a face already inside this body.
+
+    A replacement can appear inside an occupied hull. Probing its enclosing
+    yaw box then blocks both turn directions forever. Test the complete
+    analytical corner sweep against that contact plane: the end must improve
+    clearance, and no intermediate corner may go deeper than the start.
+    The caller recasts after this individual hit to retain every other wall.
+    """
+    low, high = bbox[:2]
+    pose_y = world_collision._hull_pose_y(pitch, roll)
+    end_yaw = float(start_yaw) + _angle_delta(start_yaw, end_yaw)
+    sine, cosine = math.sin(start_yaw), math.cos(start_yaw)
+
+    def departing(collision):
+        point, normal = collision[:2]
+        if abs(normal.y) > 0.2 or abs(pose_y[1]) < 0.1:
+            return False
+        dx, dy, dz = (point.x - position[0], point.y - position[1],
+                      point.z - position[2])
+        x, z = dx * cosine - dz * sine, dx * sine + dz * cosine
+        y = (dy - x * pose_y[0] - z * pose_y[2]) / pose_y[1]
+        inside = all(low[i] - 0.001 <= value <= high[i] + 0.001
+                     for i, value in enumerate((x, y, z)))
+        plane = dx * normal.x + dy * normal.y + dz * normal.z
+        # Use the exposed face. A backface enclosing the centre is not
+        # evidence for a safe escape from this side of the object.
+        if plane >= 0.0:
+            return False
+        before, after, swept = [], [], []
+        for cx in (low[0], high[0]):
+            for cy in (low[1], high[1]):
+                for cz in (low[2], high[2]):
+                    a = normal.x * cx + normal.z * cz
+                    b = normal.x * cz - normal.z * cx
+                    height = normal.y * (cx * pose_y[0] +
+                                        cy * pose_y[1] + cz * pose_y[2])
+                    before.append(a * cosine + b * sine + height)
+                    after.append(a * math.cos(end_yaw) +
+                                 b * math.sin(end_yaw) + height)
+                    swept.append(_trig_interval_extrema(
+                        a, b, start_yaw, end_yaw)[0] + height)
+        improves = (min(after) > min(before) + 1.0e-8 and
+                    min(swept) >= min(before) - 1.0e-8)
+        if not improves or inside:
+            return improves
+        # The enclosing interval lane can sit outside the old side while
+        # still striking the same already-penetrated wall. Require another
+        # native hit from the EXACT starting footprint to establish that
+        # contact plane. An outside point alone cannot grant passage.
+        for old_point, old_normal in (previous_contacts()
+                if callable(previous_contacts) else ()):
+            alignment = (normal.x * old_normal.x + normal.y * old_normal.y +
+                         normal.z * old_normal.z)
+            difference = ((point.x - old_point.x) * normal.x +
+                          (point.y - old_point.y) * normal.y +
+                          (point.z - old_point.z) * normal.z)
+            if alignment >= 0.9999 and abs(difference) <= 0.001:
+                return True
+        return False
+    return departing
+
+
 def _destructible_posed_bbox(bbox, pitch=0.0, roll=0.0):
     """Enclose one height-posed body in its zero-yaw collision frame.
 
@@ -5204,6 +5268,11 @@ class BattleRuntime(object):
 
     def _collide_down(self, start, end, ground_filter):
         """Vertical probe that skips the skin of an already broken item."""
+        collide = getattr(self._destructibles, 'collide_motion_segment', None)
+        if callable(collide):
+            return collide(self._avatar.spaceID, start, end, ground_filter,
+                           self._runtime.bigworld.wg_collideSegment,
+                           'native.motion.ground')
         if ground_filter is None:
             return self._runtime.bigworld.wg_collideSegment(
                 self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS)
@@ -5695,18 +5764,28 @@ class BattleRuntime(object):
             return False
         lateral_x, lateral_z = dz / length, -dx / length
         for offset in (-float(half_width), 0.0, float(half_width)):
-            ray_start = self._vector((
-                float(start[0]) + lateral_x * offset,
-                float(start[1]) + 0.9,
-                float(start[2]) + lateral_z * offset))
-            ray_end = self._vector((
-                float(end[0]) + lateral_x * offset,
-                float(end[1]) + 0.9,
-                float(end[2]) + lateral_z * offset))
-            if self._runtime.bigworld.wg_collideSegment(
-                    self._avatar.spaceID, ray_start, ray_end,
-                    VEHICLE_SKIP_FLAGS) is not None:
-                return True
+            for height in (0.9, 1.6):
+                ray_start = self._vector((
+                    float(start[0]) + lateral_x * offset,
+                    float(start[1]) + height,
+                    float(start[2]) + lateral_z * offset))
+                ray_end = self._vector((
+                    float(end[0]) + lateral_x * offset,
+                    float(end[1]) + height,
+                    float(end[2]) + lateral_z * offset))
+                prepare = getattr(self._destructibles,
+                                  'prepare_horizontal_collision_filter', None)
+                collide = getattr(self._destructibles,
+                                  'collide_motion_segment', None)
+                native = self._runtime.bigworld.wg_collideSegment
+                if callable(prepare) and callable(collide):
+                    hit = collide(self._avatar.spaceID, ray_start, ray_end,
+                                  prepare(ray_start, ray_end), native)
+                else:
+                    hit = native(self._avatar.spaceID, ray_start, ray_end,
+                                 VEHICLE_SKIP_FLAGS)
+                if hit is not None:
+                    return True
         return False
 
     def _water_depth(self, point):
@@ -10222,6 +10301,10 @@ class BattleRuntime(object):
         if kind == 'tree':
             foliage_changed = self._activate_fallen_tree_foliage(
                 chunk_id, item_index)
+        grid = getattr(getattr(self._bots, 'navigator', None), 'grid', None)
+        invalidate = getattr(grid, 'invalidate_native_review', None)
+        if callable(invalidate):
+            invalidate()
         if already_destroyed:
             return foliage_changed
         if kind != 'tree' and callable(note_destroyed):
@@ -15336,6 +15419,9 @@ class BattleRuntime(object):
             if end <= impact_time:
                 return False
             effect['stun_end_server_time_ms'] = end
+            # Preserve the imposed duration at the impact, before transport
+            # latency or a later consumable changes the live stun timer.
+            effect['stun_duration_ms'] = end - impact_time
             effect['stun_factors'] = factors
             return True
         except Exception as error:
@@ -16278,6 +16364,7 @@ class BattleRuntime(object):
                         position, yaw, end_position, end_yaw, speed,
                         descriptor, now, dt,
                         rotation_speed_cap=rotation_speed_cap,
+                        drive_speed_cap=kinetic_speed,
                         pitch=pitch, roll=roll)
                 else:
                     proposal = (
@@ -16321,6 +16408,7 @@ class BattleRuntime(object):
                         position, yaw, end_position, end_yaw, speed,
                         descriptor, now, dt, commit_enabled=True,
                         rotation_speed_cap=rotation_speed_cap,
+                        drive_speed_cap=kinetic_speed,
                         pitch=pitch, roll=roll)
                 else:
                     committed = self._destructibles._catalog_motion_blocked(
@@ -17661,7 +17749,10 @@ class BattleRuntime(object):
                                    before=None, drive=None, pitch=None,
                                    contact=None, entity=None):
         """Record bounded pose evidence when powered travel cannot advance."""
-        if dt <= 0.0 or abs(throttle) <= 0.01:
+        blocked_turn = (abs(self._local_drive_turn) > 0.01 and
+                        abs(self._local_turn_speed) <= 1.0e-8 and
+                        self._local_motion_status == 'hard')
+        if dt <= 0.0 or (abs(throttle) <= 0.01 and not blocked_turn):
             return False
         dx, dz = end[0] - start[0], end[2] - start[2]
         stalled = dx * dx + dz * dz <= (0.2 * dt) ** 2
@@ -17702,6 +17793,12 @@ class BattleRuntime(object):
                     if self._local_motion_status == 'pending' else None),
                 'world_soft_block': self._local_motion_soft_block,
                 'pending_contacts': len(self._local_destructible_contacts),
+                'rotation': {
+                    'intent': self._local_drive_turn,
+                    'speed': self._local_turn_speed,
+                    'limit': physics.get('rotSpd'),
+                    'blocked': blocked_turn,
+                },
             }
             sys.stdout.write(
                 '[Offline LAN 0.9.22] LOCAL DRIVE '
@@ -17713,6 +17810,27 @@ class BattleRuntime(object):
                     json.dumps(self._local_ground_plane)))
         if trace and trace.get('reason'):
             trace = dict(trace)
+            evidence = getattr(self._destructibles, 'static_contact_evidence', None)
+            if callable(evidence) and all(key in trace for key in (
+                    'ray_start', 'hit', 'normal')):
+                try:
+                    trace['material_probes'] = evidence(
+                        self._avatar.spaceID, self._vector(trace['ray_start']),
+                        self._vector(trace['hit']), self._vector(trace['normal']))
+                except Exception as error:
+                    # A diagnostic failure never changes motion or the native
+                    # collision verdict that has already been applied.
+                    trace['material_probe_error'] = str(error)
+            native_evidence = getattr(
+                self._destructibles, 'native_contact_evidence', None)
+            if callable(native_evidence) and all(key in trace for key in (
+                    'ray_start', 'ray_end', 'hit')):
+                try:
+                    trace['native_contact_evidence'] = native_evidence(
+                        self._avatar.spaceID, self._vector(trace['ray_start']),
+                        self._vector(trace['ray_end']), self._vector(trace['hit']))
+                except Exception as error:
+                    trace['native_contact_evidence_error'] = str(error)
             trace['motion_skip_flags'] = VEHICLE_SKIP_FLAGS
             trace['spring_columns'] = (
                 'x,z,minimum,maximum,direct,support,flat_maximum,layers')
@@ -18493,7 +18611,8 @@ class BattleRuntime(object):
     def _destructible_pose_sweep(
             self, start_position, start_yaw, end_position, end_yaw,
             speed, descriptor, now, dt, commit_enabled=False,
-            rotation_speed_cap=None, pitch=0.0, roll=0.0):
+            rotation_speed_cap=None, pitch=0.0, roll=0.0,
+            drive_speed_cap=None):
         """Resolve the complete translating and rotating catalog hull sweep.
 
         Each slice is a fixed-orientation zonotope understood by the pinned
@@ -18566,6 +18685,22 @@ class BattleRuntime(object):
                 raise RuntimeError(
                     'destructible rotation speed cap is invalid')
             rotation_kinetic_speed = rotation_speed_cap * corner_radius
+            if rotation_speed_cap > 0.0 and drive_speed_cap is not None:
+                try:
+                    drive_speed_cap = abs(float(drive_speed_cap))
+                except (TypeError, ValueError, OverflowError):
+                    raise RuntimeError('destructible drive speed cap is invalid')
+                if math.isnan(drive_speed_cap) or math.isinf(drive_speed_cap):
+                    raise RuntimeError('destructible drive speed cap is invalid')
+                # Powered pivot contact has the same crush eligibility as
+                # powered translation. The old angular-edge-only cap could
+                # never reach the health gate of a prop that forward drive
+                # crushes from rest, so every rejected first turn repeated.
+                # This is gate evidence only: the sensor still requires exact
+                # contact, and geometry, real speed and receipts use the actual
+                # frame motion below. Native replacement BSPs remain blocking.
+                rotation_kinetic_speed = max(
+                    rotation_kinetic_speed, drive_speed_cap)
         angular_edge_speed = abs(yaw_delta) * corner_radius / duration
         impact_magnitude = min(200.0, math.sqrt(
             max(abs(float(speed)), center_distance / duration) ** 2 +
@@ -18596,8 +18731,6 @@ class BattleRuntime(object):
             slice_end = tuple(
                 start[axis] + (end[axis] - start[axis]) * upper
                 for axis in range(3))
-            slice_start_yaw = float(start_yaw) + yaw_delta * lower
-            slice_end_yaw = float(start_yaw) + yaw_delta * upper
             slice_yaw = float(start_yaw) + yaw_delta * middle
             interval_bbox = _destructible_rotation_interval_bbox(
                 posed_bbox, abs(yaw_delta) * 0.5 / float(steps))
@@ -18611,12 +18744,9 @@ class BattleRuntime(object):
             # Geometry needs the realised centre travel, while kinetic
             # classification needs the faster rotating hull edge.  Choosing a
             # duration whose product with impact speed equals centre travel
-            # preserves that path; the sensor's normal contact skin remains.
+            # preserves that path without adding a proximity skin.
             slice_dt = (move_distance / impact_magnitude
                         if move_distance > 1.0e-8 else 0.0)
-            replacement_motion = (
-                slice_start, slice_start_yaw,
-                slice_end, slice_end_yaw, posed_bbox)
             if commit_enabled:
                 detail = resolver(
                     self._avatar.spaceID, self._vector(slice_start),
@@ -18625,16 +18755,14 @@ class BattleRuntime(object):
                     return_detail=True,
                     kinetic_commit=True, commit_enabled=True,
                     motion_yaw=motion_yaw,
-                    travel_reach=move_distance,
-                    replacement_motion=replacement_motion)
+                    travel_reach=move_distance)
             else:
                 detail = resolver(
                     self._avatar.spaceID, self._vector(slice_start),
                     slice_yaw, impact_speed, sweep_descriptor, now,
                     dt=slice_dt, kinetic_speed=rotation_kinetic_speed,
                     motion_yaw=motion_yaw,
-                    travel_reach=move_distance,
-                    replacement_motion=replacement_motion)
+                    travel_reach=move_distance)
             if isinstance(detail, bool):
                 detail = {'status': 'hard' if detail else 'clear'}
             elif isinstance(detail, str):
@@ -18765,10 +18893,14 @@ class BattleRuntime(object):
         rotation_speed_cap = self._destructible_rotation_speed_cap(
             self._local_physics,
             critical_damage.stat_factor(entity, 'traverse'))
+        drive_speed_cap = (float(self._local_physics[
+            'speedBwd' if speed < 0.0 else 'speedFwd'])
+            if rotation_speed_cap else None)
         catalog_detail = self._destructible_pose_sweep(
             start_position, start_yaw, end_position, end_yaw, speed,
             entity.typeDescriptor, now, dt,
             rotation_speed_cap=rotation_speed_cap,
+            drive_speed_cap=drive_speed_cap,
             pitch=self._local_pitch, roll=self._local_roll)
         tree_detail = self._tree_motion_proposal(
             start_position, start_yaw, end_position, end_yaw,
@@ -18830,24 +18962,10 @@ class BattleRuntime(object):
         # bound to the translated rotation start.
         self._send_pending_local_destructible_contacts_at_pose(
             start_position, start_yaw)
-        committed_catalog = self._destructible_contact_token(
-            detail.get('_catalog_token') or detail.get('token'))
-        catalog_kinds = set(value for value in str(
-            detail.get('kinds', '-')).split(',') if value and value != '-')
         if (status in ('clear', 'crushed', 'approach') and
                 not self._native_world_rotation_is_clear(
                     start_position, start_yaw, end_yaw,
                     entity.typeDescriptor)):
-            return False
-        if (status == 'crushed' and 'structure' in catalog_kinds and
-                committed_catalog is not None and
-                any(row[2] is not None for row in committed_catalog)):
-            # The native module replacement is not atomic with its logical
-            # destroy receipt.  Hold this pre-contact pose for the first swap
-            # frame; the sensor keeps subsequent frames outside for the
-            # complete bounded hiding interval.
-            self._local_motion_soft_block = True
-            self._local_motion_status = 'pending'
             return False
         return status in ('clear', 'crushed', 'approach')
 
@@ -18900,6 +19018,27 @@ class BattleRuntime(object):
         if not 1 <= steps <= DESTRUCTIBLE_POSE_MAX_SWEEP_STEPS:
             raise RuntimeError(
                 'native world rotation sweep exceeds its bound')
+        previous_contacts = []
+        previous_checked = [False]
+
+        def read_previous_contacts():
+            if not previous_checked[0]:
+                previous_checked[0] = True
+                actual_descriptor = _destructible_world_sweep_descriptor(descriptor, bbox)
+                for direction in (1.0e-6, -1.0e-6):
+                    previous_trace = {}
+                    world_collision.check_horizontal_collision(
+                        self._runtime.bigworld, self._runtime.math,
+                        self._avatar.spaceID, self._vector(position),
+                        start_yaw, direction, actual_descriptor, False, 0.0,
+                        True, False, None, commit_enabled=False,
+                        pitch=pitch, roll=roll, trace=previous_trace,
+                        exact_footprint=True)
+                    if 'hit' in previous_trace and 'normal' in previous_trace:
+                        previous_contacts.append((self._vector(previous_trace['hit']),
+                                                  self._vector(previous_trace['normal'])))
+            return previous_contacts
+
         for index in range(steps):
             lower = float(index) / float(steps)
             upper = float(index + 1) / float(steps)
@@ -18909,6 +19048,10 @@ class BattleRuntime(object):
                 bbox, abs(yaw_delta) * 0.5 / float(steps))
             sweep_descriptor = _destructible_world_sweep_descriptor(
                 descriptor, interval_bbox)
+            departing = _rotation_departing_contact(
+                position, bbox, float(start_yaw) + yaw_delta * lower,
+                float(start_yaw) + yaw_delta * upper, pitch, roll,
+                read_previous_contacts)
             for probe_speed in (1.0e-6, -1.0e-6):
                 trace = {}
                 world_status = world_collision.check_horizontal_collision(
@@ -18917,7 +19060,8 @@ class BattleRuntime(object):
                     slice_yaw, probe_speed, sweep_descriptor, False, 0.0,
                     True, False, None, commit_enabled=False,
                     pitch=pitch, roll=roll,
-                    trace=trace, exact_footprint=True)
+                    trace=trace, exact_footprint=True,
+                    departing_contact=departing)
                 if isinstance(world_status, bool):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status != 'clear':
@@ -19042,16 +19186,6 @@ class BattleRuntime(object):
                         self._send_pending_local_destructible_contacts()
                     return False
                 self._send_pending_local_destructible_contacts()
-                committed_catalog = self._destructible_contact_token(
-                    proposal.get('_catalog_token') or proposal.get('token'))
-                catalog_kinds = set(value for value in str(
-                    proposal.get('kinds', '-')).split(',')
-                    if value and value != '-')
-                structure_swap_hold = (
-                    proposal.get('status') == 'crushed' and
-                    'structure' in catalog_kinds and
-                    committed_catalog is not None and
-                    any(row[2] is not None for row in committed_catalog))
                 world_status = world_collision.check_horizontal_collision(
                     self._runtime.bigworld, self._runtime.math,
                     self._avatar.spaceID, self._vector(position),
@@ -19065,14 +19199,6 @@ class BattleRuntime(object):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status not in ('clear', 'kinetic'):
                     self._local_motion_status = 'hard'
-                    return False
-                if structure_swap_hold:
-                    # Preserve the last outside pose while #1513 exchanges
-                    # the live module for its destroyed model.  The native
-                    # recast above still gets first say about an unrelated
-                    # backing wall in this same frame.
-                    self._local_motion_soft_block = True
-                    self._local_motion_status = 'pending'
                     return False
                 return proposal.get('status') in (
                     'clear', 'crushed', 'approach')
@@ -19092,13 +19218,7 @@ class BattleRuntime(object):
             world_status = 'hard' if world_status else 'clear'
         if world_status == 'hard':
             if self._destructibles is not None:
-                if self._destructibles._catalog_pending_at_hull(
-                        self._vector(position), world_hull_yaw, speed,
-                        entity.typeDescriptor, self._clock(), dt,
-                        **destructible_motion):
-                    self._local_motion_soft_block = True
-                    self._local_motion_kinds = 'broken'
-                elif self._destructibles._catalog_hull_contact(
+                if self._destructibles._catalog_hull_contact(
                         self._vector(position), world_hull_yaw, speed,
                         entity.typeDescriptor, dt, **destructible_motion):
                     self._local_motion_kinds = 'world'
@@ -19129,10 +19249,6 @@ class BattleRuntime(object):
         self._local_motion_kinds = str(detail.get('kinds', '-'))
         self._local_motion_status = status
         if status == 'hard':
-            if detail.get('swap_pending') is True:
-                self._local_motion_soft_block = True
-                self._local_motion_kinds = 'broken'
-                self._local_motion_status = 'pending'
             return False
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
@@ -19146,9 +19262,21 @@ class BattleRuntime(object):
                 'local contact receipt is inconsistent')
         if status == 'approach':
             status = 'clear'
-        if accepted_now and used_kinetic_speed:
-            self._local_motion_cap_crushed = True
-            return False
+        if accepted_now:
+            # Acceptance changes native geometry in this frame. Recast it
+            # immediately; the kinetic eligibility speed never becomes motion.
+            after = world_collision.check_horizontal_collision(
+                self._runtime.bigworld, self._runtime.math,
+                self._avatar.spaceID, self._vector(position),
+                world_hull_yaw, speed, entity.typeDescriptor,
+                self._local_airborne, dt, True,
+                bool(kinetic_speed is not None), kinetic_speed,
+                commit_enabled=False, pitch=self._local_pitch,
+                roll=self._local_roll, motion_yaw=world_motion_yaw,
+                trace=self._local_world_collision_trace)
+            if after is True or after not in (False, 'clear', 'kinetic'):
+                self._local_motion_status = 'hard'
+                return False
         if status == 'soft':
             self._local_motion_soft_block = True
         return status in ('clear', 'crushed')
@@ -19161,10 +19289,13 @@ class BattleRuntime(object):
         pitch = _number(bot_state.get(
             'terrain_pitch', bot_state.get('pitch')))
         roll = _number(bot_state.get('roll'))
+        drive_speed_cap = (vehicle_physics.derive_params(descriptor)['speedFwd']
+                           if rotation_speed_cap else None)
         detail = self._destructible_pose_sweep(
             position, start_yaw, position, end_yaw, 0.0,
             descriptor, now, dt,
             rotation_speed_cap=rotation_speed_cap,
+            drive_speed_cap=drive_speed_cap,
             pitch=pitch, roll=roll)
         status = detail.get('status')
         if status not in (
@@ -19183,6 +19314,7 @@ class BattleRuntime(object):
                 position, start_yaw, position, end_yaw, 0.0,
                 descriptor, now, dt, commit_enabled=True,
                 rotation_speed_cap=rotation_speed_cap,
+                drive_speed_cap=drive_speed_cap,
                 pitch=pitch, roll=roll)
             committed_token = self._destructible_contact_token(
                 detail.get('token'))
@@ -19199,16 +19331,6 @@ class BattleRuntime(object):
             self._bot_motion_kinds[int(bot_id)] = str(
                 detail.get('kinds', '-'))
         if status not in ('clear', 'crushed', 'approach'):
-            return False
-        token = self._destructible_contact_token(detail.get('token'))
-        kinds = set(value for value in str(
-            detail.get('kinds', '-')).split(',') if value and value != '-')
-        if (bool(detail.get('accepted_now', False)) and
-                'structure' in kinds and token is not None and
-                any(row[2] is not None for row in token)):
-            # The accepted native module starts an asynchronous model swap.
-            # Commit its exact event, but keep this Bot outside for the first
-            # frame; later frames remain blocked by the catalog deadline.
             return False
         clear = self._native_world_rotation_is_clear(
             position, start_yaw, end_yaw, descriptor,
@@ -19304,12 +19426,6 @@ class BattleRuntime(object):
             world_status = 'hard' if world_status else 'clear'
         self._bot_motion_kinds[int(bot_id)] = '-'
         if world_status == 'hard':
-            if (self._destructibles is not None and
-                    self._destructibles._catalog_pending_at_hull(
-                    pos, yaw, speed, descriptor, now, dt,
-                    **destructible_motion)):
-                self._bot_motion_kinds[int(bot_id)] = 'broken'
-                return 'soft'
             bot_state['_world_contact_trace'] = contact_trace
             return 'hard'
         if self._destructibles is None:
@@ -19336,9 +19452,6 @@ class BattleRuntime(object):
                 'bot motion resolver returned an invalid status')
         self._bot_motion_kinds[int(bot_id)] = str(detail.get('kinds', '-'))
         if status == 'hard':
-            if detail.get('swap_pending') is True:
-                self._bot_motion_kinds[int(bot_id)] = 'broken'
-                return 'soft'
             return 'hard'
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
@@ -19350,8 +19463,20 @@ class BattleRuntime(object):
             raise RuntimeError('bot contact receipt is inconsistent')
         if status == 'approach':
             return 'clear'
-        if accepted_now and used_kinetic_speed:
-            return 'cap_crushed'
+        if accepted_now:
+            # The catalog has committed this exact contact. Check the new BSP
+            # now so a real replacement wall blocks on the very same frame.
+            after = world_collision.check_horizontal_collision(
+                self._runtime.bigworld, self._runtime.math,
+                self._avatar.spaceID, pos, yaw, speed,
+                descriptor, airborne, dt, True,
+                allow_crush_drive, kinetic_speed, commit_enabled=False,
+                pitch=pose_pitch, roll=pose_roll,
+                motion_yaw=motion_yaw, trace=contact_trace)
+            if after is True or after not in (False, 'clear', 'kinetic'):
+                bot_state['_world_contact_trace'] = contact_trace
+                self._bot_motion_kinds[int(bot_id)] = 'world'
+                return 'hard'
         return status
 
     @staticmethod
@@ -20853,6 +20978,9 @@ class BattleRuntime(object):
         probe_height = float(probe_height)
         points = vehicle_physics.suspension_world_points(
             params, position, yaw, self._local_pitch, self._local_roll)
+        flat_limit = (None if self._local_airborne else
+                      vehicle_physics.suspension_flat_support_limit(
+                          params, probe_height, self._local_pitch, self._local_roll))
         prepared_filter = self._prepared_ground_filter(points)
         memory = self._local_spring_ground_memory
         if not isinstance(memory, list) or len(memory) != len(points):
@@ -20875,9 +21003,11 @@ class BattleRuntime(object):
                 spring_maximum_y,
                 spring_height + params['clearance'] +
                 vehicle_physics.CONTACT_PENETRATION)
+            flat_maximum_y = (spring_maximum_y if flat_limit is None else
+                              max(spring_maximum_y, flat_limit))
             value = self._suspension_ground_y(
                 x, z, minimum_y, maximum_y,
-                flat_maximum_y=spring_maximum_y,
+                flat_maximum_y=flat_maximum_y,
                 prepared_filter=prepared_filter)
             direct = value
             layers = self._suspension_ground_probe_layers
@@ -20893,7 +21023,7 @@ class BattleRuntime(object):
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
             probe_trace.append((x, z, minimum_y, maximum_y, direct, value,
-                                spring_maximum_y, layers))
+                                flat_maximum_y, layers))
             result.append(value)
         self._local_spring_ground_memory = memory
         self._local_suspension_probe_trace = tuple(probe_trace)
@@ -21998,7 +22128,9 @@ class BattleRuntime(object):
                         entity, primary_contact, self._local_speed, yaw)
                     deflected = False
                     for slide_yaw in \
-                            vehicle_physics.hard_contact_candidate_yaws(yaw):
+                            vehicle_physics.hard_contact_candidate_yaws(
+                                yaw, self._local_speed,
+                                primary_contact.get('normal')):
                         if self._motion_is_clear(
                                 entity, position, slide_yaw,
                                 self._local_speed, dt, hull_yaw=yaw):
@@ -25941,6 +26073,10 @@ class BattleRuntime(object):
                     components = turret_obstacles.turret_components(entity.typeDescriptor)
                     body = rigid_turret.Body(components, rigid_turret.frame_at(row, 0.0))
                     self._turret_bodies[key] = body
+                    sys.stdout.write(
+                        '[Offline LAN 0.9.22] TURRET GEOMETRY source=%s components=%s\n' % (
+                            key, tuple((name, offset, bounds)
+                                       for name, unused_component, offset, bounds in components)))
                 rollback = (body.frame(), list(body.support_points),
                             getattr(body, '_last_published_frame', None))
                 acknowledgements = dict((r[0], r) for r in body.acks)

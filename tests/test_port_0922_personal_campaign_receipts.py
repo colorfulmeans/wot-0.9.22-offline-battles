@@ -126,6 +126,38 @@ class PersonalCampaignReceiptTests(unittest.TestCase):
         self.assertEqual([], mission['rewards'])
         self.assertFalse(mission['tankwoman_pending'])
 
+    def test_mt2_event_completion_rewards_survive_replay_and_restart(self):
+        qid = 32
+        self.definition = battle_fixture.definition(
+            '<vehicleDamage><eventCount/><greaterOrEqual>6</greaterOrEqual>'
+            '</vehicleDamage>',
+            '<vehicleKills><greaterOrEqual>1</greaterOrEqual></vehicleKills>')
+        for stage, reward in (('main', 50000), ('add', 25000)):
+            self.definition[stage]['children'].extend([
+                ('id', {'value': 'regular_1_3_2_' + stage, 'children': []}),
+                ('bonus', battle_fixture.node('<bonus><credits>%d</credits>'
+                                              '</bonus>' % reward))])
+        self.snapshot['personalMissionSelections'] = {'regular': [qid]}
+        for event in self.receipt['interactions']:
+            event['damage_events'] = 2
+        with mock.patch.object(self.campaign, 'mission_definition',
+                               side_effect=lambda current, *args:
+                               self.definition if current == qid else None):
+            first = self.settle('campaign:mt2')
+            self.assertEqual([qid], first['personal_missions']['completed'])
+            self.assertEqual({'32': 2}, self.snapshot['personalMissionProgress'])
+            self.assertEqual({'32': 2}, self.snapshot['personalMissionRewarded'])
+            self.assertEqual(175100, self.snapshot['wallet']['credits'])
+            duplicate = self.settle('campaign:mt2')
+            self.assertFalse(duplicate['applied'])
+            restarted = self.fresh_snapshot()
+            restarted_store = self.fixture._store()
+            self.assertTrue(restarted_store.apply(restarted))
+            replay = self.settle('campaign:mt2', restarted_store, restarted)
+            self.assertFalse(replay['applied'])
+            self.assertEqual({'32': 2}, restarted['personalMissionProgress'])
+            self.assertEqual(175100, restarted['wallet']['credits'])
+
     def test_unsupported_condition_never_becomes_a_completed_result_card(self):
         conditions = self.definition['main']['children'][0][1]
         conditions['children'][0][1]['children'].append(('unavailableEvent',
