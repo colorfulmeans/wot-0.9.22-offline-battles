@@ -5996,6 +5996,9 @@ class BotRuntime(object):
         pitch = _number(
             state.get('terrain_pitch', state.get('pitch')))
         roll = _number(state.get('roll'))
+        flat_limit = (None if state.get('airborne') else
+                      vehicle_physics.suspension_flat_support_limit(
+                          params, body_height, pitch, roll))
         result = []
         for index, point in enumerate(points):
             x, z = point
@@ -6014,7 +6017,9 @@ class BotRuntime(object):
                 spring_height + params['clearance'] +
                 vehicle_physics.CONTACT_PENETRATION)
             ground = self._suspension_ground_value(
-                x, z, minimum_y, maximum_y, spring_maximum_y)
+                x, z, minimum_y, maximum_y,
+                spring_maximum_y if flat_limit is None else
+                max(spring_maximum_y, flat_limit))
             ground = vehicle_physics.suspension_footprint_support(
                 params, point, ground, memory[index], yaw,
                 lambda px, pz, low, high: self._suspension_ground_value(

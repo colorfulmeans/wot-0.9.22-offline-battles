@@ -1462,6 +1462,21 @@ def suspension_path_probe_fractions(distance):
 		float(index + 1) / float(steps + 1) for index in range(steps))
 
 
+def suspension_flat_support_limit(params, body_height, pitch, roll):
+	'''Bound a flat support by the existing posed track compression envelope.
+
+	A low carrier on a pitched/rolled chassis can enter a flat deck that is
+	already below the high carriers. Its local compression ceiling alone
+	incorrectly selects the terrain underneath that deck. Share only the
+	highest legal carrier height; the original per-column travel band still
+	bounds the query and a level chassis earns no extra roof reach.
+	'''
+	rotation = _suspension_rotation(pitch, roll)
+	return max(float(body_height) + _suspension_point_offset(spring, rotation)[1] +
+		spring['max_compression'] - spring['static_compression'] + 0.05
+		for spring in params['springs'])
+
+
 def suspension_support_allowed(height, normal_y, flat_maximum_y=None):
 	'''Validate spring travel and the incline-only penetration extension.'''
 	height = float(height)

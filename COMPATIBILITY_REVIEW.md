@@ -13,6 +13,58 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20 follow-up: remaining fence normals and concrete support
+
+Report `wot-error-report-20260920-111808-ab28648cb0ee.zip` runs
+`colorfulmeans-35485084742-1` (`03acfc7e`). The owner reports another substantial
+improvement, a few remaining Malinovka fence blockers, and a Paris concrete
+surface that the chassis sinks into and cannot cross.
+
+The fourteen Malinovka witnesses still belong to accepted broken original
+components. Their normalized native-normal/authored-up dot products are
+approximately `1.065e-6` to `1.537e-6`, just outside the previous `1e-6`
+parallelism tolerance. Accept float32 transform/normal disagreement with a
+`1e-5` angular tolerance. This changes neither the authored ownership footprint
+nor the native ray budget, and cannot bypass live modules or backing walls.
+All fourteen captured witnesses replay with both full and nearest-first native
+callback traversal; the previous predicate fails 56 replay subcases.
+
+Paris contacts around X -12 to +4, Z 195 to 201 identify vehicle-only material
+111, not a destroyed prop. The captured spring layers show the real concrete
+top near Y 2.62 rejected as `above_flat_limit`, followed by terrain near Y 1.8
+to 2.0 underneath it. A tilted chassis's low carriers were allowed to sample
+an incline in their existing penetration band, but could not acquire a flat
+deck inside the height range already reached by the high carriers. Share the
+highest posed carrier compression ceiling for grounded suspension queries in
+both player and Bot adapters. Each original column's vertical interval still
+bounds the query; airborne queries retain their individual compression limit,
+and a roof above the whole compression envelope still cannot become support.
+No extra suspension columns or solver iterations are introduced.
+
+Two horizontal checks complete that support correction. A gently sloping
+concrete top must not become a wall merely because the lane's net height
+change is below 0.15 m: require an upward native face inside the posed track
+height range, the exact native top, a continuous bounded profile, a clear
+remainder and the existing upper hull lanes. The established supported-step
+check also accepts a bevel as its outside face while retaining two broad,
+nearly level inside support columns, its existing height limits and a clear
+lifted body corridor. Neither check is keyed to a map, material or filename.
+
+The new fixtures retain the report's 34 hard-contact records. Concrete tests
+use captured deck/bevel planes and three road samples, with explicitly
+controlled unrecorded geometry and suspension descriptors; they do not claim
+to reconstruct the complete native map or vehicle. They cover recovery from
+the reported poses, continuous forward/reverse deck crossing, player/Bot
+support parity, airborne limits, roofs and backing walls. The previous
+support/world code fails sixteen concrete replay subcases. Existing cross-map
+fence, wall, bridge, slope, pivot and Bot checks remain part of validation.
+
+The report also has a Malinovka worker window near 4.8 FPS with roughly 180 ms
+per frame in Bot updates, while the visible client remains around 90 FPS.
+That is retained as a Windows performance comparison point, not attributed
+to the fence normal or declared fixed by these logic tests. Exact Windows
+support, collision feel and frame pacing remain the acceptance boundary.
+
 ## September 20 follow-up: tilted fence skins and powered pivot contact
 
 Report `wot-error-report-20260920-102444-ea19226db90e.zip` runs the restored

@@ -4233,8 +4233,11 @@ def _original_side_face_1513(normal, box):
 	up = box[1][1]
 	face = (normal.x, normal.y, normal.z)
 	length_squared = _vector_dot(up, up) * _vector_dot(face, face)
+	# The baked transform and native BSP normal round independently through
+	# float32. Reported parallel sides differ by up to 1.54e-6 after that
+	# round trip. This angular tolerance does not expand the owner footprint.
 	return (length_squared > 1.0e-12 and
-		_vector_dot(up, face) ** 2 <= 1.0e-12 * length_squared)
+		_vector_dot(up, face) ** 2 <= 1.0e-10 * length_squared)
 
 
 def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):

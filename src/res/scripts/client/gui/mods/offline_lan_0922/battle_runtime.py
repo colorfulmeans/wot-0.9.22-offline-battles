@@ -20978,6 +20978,9 @@ class BattleRuntime(object):
         probe_height = float(probe_height)
         points = vehicle_physics.suspension_world_points(
             params, position, yaw, self._local_pitch, self._local_roll)
+        flat_limit = (None if self._local_airborne else
+                      vehicle_physics.suspension_flat_support_limit(
+                          params, probe_height, self._local_pitch, self._local_roll))
         prepared_filter = self._prepared_ground_filter(points)
         memory = self._local_spring_ground_memory
         if not isinstance(memory, list) or len(memory) != len(points):
@@ -21000,9 +21003,11 @@ class BattleRuntime(object):
                 spring_maximum_y,
                 spring_height + params['clearance'] +
                 vehicle_physics.CONTACT_PENETRATION)
+            flat_maximum_y = (spring_maximum_y if flat_limit is None else
+                              max(spring_maximum_y, flat_limit))
             value = self._suspension_ground_y(
                 x, z, minimum_y, maximum_y,
-                flat_maximum_y=spring_maximum_y,
+                flat_maximum_y=flat_maximum_y,
                 prepared_filter=prepared_filter)
             direct = value
             layers = self._suspension_ground_probe_layers
@@ -21018,7 +21023,7 @@ class BattleRuntime(object):
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
             probe_trace.append((x, z, minimum_y, maximum_y, direct, value,
-                                spring_maximum_y, layers))
+                                flat_maximum_y, layers))
             result.append(value)
         self._local_spring_ground_memory = memory
         self._local_suspension_probe_trace = tuple(probe_trace)

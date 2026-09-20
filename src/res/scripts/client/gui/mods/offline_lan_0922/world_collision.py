@@ -88,7 +88,7 @@ def _profile_gradient_limit(heights):
 		return _MAX_DRIVABLE_GRADIENT
 
 
-def _drivable_ground_profile(heights, segment_length):
+def _drivable_ground_profile(heights, segment_length, allow_flat=False):
 	"""Recognise a continuous, bounded slope in either travel direction.
 
 	A flat profile is deliberately not terrain evidence: a horizontal wall on a
@@ -99,7 +99,8 @@ def _drivable_ground_profile(heights, segment_length):
 		values = [float(value) for value in heights]
 		if len(values) < 2:
 			return False
-		if abs(values[-1] - values[0]) <= _MIN_DRIVABLE_HEIGHT_CHANGE:
+		if (not allow_flat and
+				abs(values[-1] - values[0]) <= _MIN_DRIVABLE_HEIGHT_CHANGE):
 			return False
 		segment = max(0.001, float(segment_length))
 		for index in range(1, len(values)):
@@ -421,6 +422,37 @@ def _posed_ray(Math, pos, x1, z1, x2, z2, local_start, local_end,
 		Math.Vector3(x2, end_y, z2))
 
 
+def _posed_support_top(pos, pose_y, extents):
+	hw, back, front = extents
+	return (float(pos.y) + abs(pose_y[0]) * hw +
+		max(-back * pose_y[2], front * pose_y[2]))
+
+
+def _supported_flat_top_is_clear(spaceID, Math, pos, end, collision,
+		pose_y, extents, heights, segment, look, ground_plane, collision_filter):
+	'''Recognise a level deck already inside the posed track height range.
+
+	A small net height change cannot prove a wall. Require the actual upward
+	face, a bounded profile, the exact native top and a clear ray remainder.
+	The caller still checks both occupied upper lanes.
+	'''
+	if (not heights or abs(float(heights[-1]) - float(heights[0])) >
+			_MIN_DRIVABLE_HEIGHT_CHANGE or
+			not _drivable_surface(collision) or
+			collision[0].y > _posed_support_top(pos, pose_y, extents) +
+			_GROUND_HIT_EPSILON or
+			not _drivable_ground_profile(heights, segment, allow_flat=True) or
+			not _hit_matches_exact_ground_top(spaceID, Math, pos, collision,
+				look, ground_plane, collision_filter)):
+		return False
+	remaining = end - collision[0]
+	if remaining.length <= _GROUND_HIT_EPSILON:
+		return True
+	start = collision[0] + remaining.scale(
+		_GROUND_HIT_EPSILON / remaining.length)
+	return _collide_horizontal(spaceID, start, end, collision_filter) is None
+
+
 def _supported_seam_is_clear(spaceID, Math, pos, collision, x1, z1, x2, z2,
 		local_start, local_end, pose_y, extents, collision_filter):
 	"""Cross a low support seam already straddled by the posed tracks.
@@ -433,15 +465,15 @@ def _supported_seam_is_clear(spaceID, Math, pos, collision, x1, z1, x2, z2,
 	"""
 	import math, BigWorld
 	point, normal = collision[:2]
-	if abs(normal.y) > 0.2:
+	normal_length = math.sqrt(normal.x ** 2 + normal.y ** 2 + normal.z ** 2)
+	if (normal_length <= 1.0e-12 or normal.y / normal_length < -0.2 or
+			_drivable_surface(collision)):
 		return False
 	length = math.hypot(normal.x, normal.z)
-	if length < 0.9:
+	if length <= 1.0e-12:
 		return False
 	nx, nz = normal.x / length, normal.z / length
-	hw, back, front = extents
-	posed_top = (float(pos.y) + abs(pose_y[0]) * hw +
-		max(-back * pose_y[2], front * pose_y[2]))
+	posed_top = _posed_support_top(pos, pose_y, extents)
 	if posed_top < point.y - _GROUND_HIT_EPSILON:
 		return False
 	tops = []
@@ -451,7 +483,10 @@ def _supported_seam_is_clear(spaceID, Math, pos, collision, x1, z1, x2, z2,
 		end = Math.Vector3(x, pos.y - 3.0, z)
 		hit = collide_motion_segment(spaceID, start, end, collision_filter,
 			BigWorld.wg_collideSegment, 'native.motion.ground')
-		if hit is None or len(hit) < 2 or not _drivable_surface(hit, 0.5):
+		# The outside column can land on the bevel itself. Both columns
+		# inside the step must still establish its broad, nearly level top.
+		if (hit is None or len(hit) < 2 or hit[1].y <= 0.0 or
+				(offset < 0.0 and not _drivable_surface(hit, 0.5))):
 			return False
 		tops.append(float(hit[0].y))
 	rise = max(tops[1:]) - tops[0]
@@ -862,9 +897,14 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 						_surface_is_ground = _hit_matches_exact_ground_top(
 							spaceID, Math, pos, col_bot, profile_look,
 							_profile_plane, _sweep_filter)
-					if (_heights and
+					_supported_flat_top = (not airborne and
+						_supported_flat_top_is_clear(
+							spaceID, Math, pos, end_bot, col_bot, pose_y,
+							(hw, hl_back, hl_front), _heights, _segment,
+							profile_look, _profile_plane, _sweep_filter))
+					if ((_heights and
 							_drivable_ground_profile(_heights, _segment) and
-							_surface_is_ground):
+							_surface_is_ground) or _supported_flat_top):
 						if _raised_ray_has_wall(
 								spaceID, Math, pos, x1, z1, x2, z2,
 								local_start, local_end, pose_y,
