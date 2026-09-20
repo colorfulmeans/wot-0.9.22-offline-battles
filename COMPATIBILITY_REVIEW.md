@@ -13,6 +13,350 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20 MT-11 ramming mission follow-up
+
+The user reports that MT-11 cannot complete. The available 0.9.22 RU #788
+reference definitions reproduce three unsupported evaluator boundaries:
+operation 1 uses `vehicleDamage/attackReason=2`, operation 3 adds
+`rammingInfo=stayedAlive`, and operation 4 requires `lvlDiff=1`. Operation 2's
+ram-kill condition already has a supported death-reason counter. The four
+main/honours expressions are retained in `mt11_conditions_0922.json`; this is
+reference XML evidence, not a newly audited #1513 archive. Production still
+reads the installed #1513 mission definitions and changes no quest resource,
+reward, collision force, or matchmaking rule.
+
+The evaluator now consumes per-collision ramming evidence for damage and
+survival-qualified kills, and compares the actual attacker/target descriptor
+levels for a nonnegative minimum `lvlDiff`. The shared `stayedAlive` and
+`dealtMoreDamage` modifiers require the same killing collision; surviving an
+earlier ram or dying later in battle cannot substitute for its outcome.
+Likewise, a later shell kill cannot erase already earned ramming damage.
+The generic modifiers also serve other installed missions using those fields;
+unrecorded filters such as `fireStarted` remain explicitly unsupported.
+
+Version 2 of the existing bounded mission history adds
+`[ram, elapsed_ms, damage_dealt, damage_received, killed, survived, immobilized]`.
+Both server-owned human contacts and worker-proved Bot/human or Bot/Bot
+contacts record these facts only after both HP changes settle, before battle
+completion. Damage is the applied, HP-capped amount. Existing operation
+deduplication and friendly-contact no-op gates precede publication. Ram rows
+share the existing per-actor event budget; overflow remains incomplete.
+Client validation, receipt persistence and post-battle normalization use the
+same field contract. Legacy histories remain readable but do not fabricate
+ramming evidence. Existing ordinary damage and kill rows are unchanged.
+
+Regressions cover all four main/honours conditions, nonlethal rams, later
+shell kills, simultaneous destruction, later death, same/higher/lower target
+tiers, strictly greater damage, missing/legacy/capped evidence, all three
+contact pairings, duplicate worker reports, receipt restart and exactly-once
+mission settlement. Actual completion and rewards on the user's #1513 client
+remain the Windows acceptance boundary.
+
+The preceding full CI also found that the visible pivot adapter forwarded a
+negative reverse drive cap where its existing contract expects a magnitude.
+It now passes the selected directional cap's absolute value, preserving the
+real signed movement speed and the shared sweep's existing magnitude policy.
+The original forward/reverse pivot regression is retained.
+
+## September 20 barracks sorting follow-up
+
+Report `20260920-193111-5b5930c0e65c`, build
+`colorfulmeans-35488817004-1`, records 18 failures in
+`Barracks.__showActiveTankmen`: `TypeError: comparison function must return
+int, not long`. Four inventory publications agree on 222 seated crew and 7
+barracks crew, with 229 descriptors and vehicle references, no missing or
+extra foreign keys, and 30 berths. This is an observed sorting failure, not
+evidence of a crew-count limit or a failed inventory transfer.
+
+The port deliberately publishes shop currency amounts as Python 2 `long`
+for the native price formatter. The reference Python call chain forwards
+`FittingItem.__cmp__` price subtraction through `Vehicle.__cmp__` and
+`TankmenComparator` into the barracks `sorted` call. That reference is an
+investigation lead, not a new exact-archive audit; the supplied #1513 runtime
+trace establishes the failing comparison boundary. The regression executes
+the port's real price conversion and the new comparison adapter on Python 3
+with strict integer-type checking, and on real CPython 2.7.18 in packaging CI.
+
+The existing reversible lobby-service adapter now normalizes the original
+fitting comparator's result to the integer sign -1, 0 or 1. It preserves all
+stock comparison decisions, exceptions, crew identities and native price
+longs. Existing vehicle subclasses and direct fitting-item sorts share the
+fix. Installation precedes account/lobby creation, survives battle/garage
+transitions, is idempotent through the service installer, and is rolled back
+with the other service hooks. The affected Windows save still needs a
+barracks-open/filter retest; local tests do not establish Scaleform acceptance.
+
+## September 20 19:49 tree registry and Siege contact follow-up
+
+Report `20260920-194949-1aadaa199835` runs the preceding tree diagnostic build,
+`colorfulmeans-35507658229-1`, on CN HD #1513. The new marked minimap locates
+the same railside row near C6--D6. Poplars in chunk 32642 have exact native
+commit and presentation receipts. Those in chunks 32641, 32640 and 32639
+instead report `name_status=isolated_item`, no registered chunk and no cached
+health. The vehicle reaches 0.637 m from `(32641, 63)` and 0.451 m from
+`(32640, 110)` without a tree contact token. The indexed-vector fix therefore
+did not resolve this separate registration defect.
+
+For a compacted filename list, v9's capability to repair layouts was mistaken
+for an actually pending layout repair. An authored mode-excluded slot then
+terminated enumeration as an isolated native object, preventing valid trees
+and models later in that chunk from registering. The compacted-list path now
+uses the same absent-slot rule as the full-width path: skip an authored absent
+item unless this particular chunk has a pending remap. It does not query an
+excluded scene object, infer a filename, bypass a quarantine, or destroy a
+nearby object by position. A regression reproduces the lost tree proposal and
+requires the valid tree and fence behind the absent slot to register while the
+excluded slot receives no native category or matrix call.
+
+The Paris S1 capture at 19:46:40 shows stable ENABLED state, no pending switch,
+no handbrake, 2.22224 m/s directional limits, and `path=brake`,
+`world=hard`, `kinds=falling,fragile`. The powered contact policy used that
+low-gear limit as crush eligibility, and excluded falling columns altogether.
+The shared player/worker/Bot path now retains the mounted travel descriptor's
+directional limit for powered contact eligibility, including pivot contacts;
+the active mode still owns actual velocity, traverse, geometry and mass.
+Columns now share exact-contact cap admission with fragile and structure
+parts. Their native order and replicated event still carry real impact speed.
+The stock scale/health test, unpowered/traverse-disabled gates, exact overlap
+and native backing-wall recasts remain. This is a correction to the existing
+offline powered-contact policy, not a recovered retail low-gear force law or
+a map-specific collision exception.
+
+The user also reports continuous hitches in both modes. One later slowdown
+has a native material-111/item-11/chunk-33154 wall witness; nearby destructibles
+do not prove ownership of that face, so it remains blocking. Existing 30 s
+visible frame timing is responsive, but stall-only records cannot establish
+the cause of every small repeated correction or native visual hitch. Bounded
+`HYDRAULIC MOTION` windows now summarize all moving slices in either mode and
+retain seven worst witnesses: integration interval, drive/horizontal/settling
+speed loss, missing travel, height change and attitude change. They include
+input changes, airborne/support counts and the already sampled support face.
+The two-second reporting interval only batches diagnostics; it never gates
+motion, performs new native probes or waits for a worker acknowledgement.
+Exact-client tree falling, low-speed/pivot destruction and continuous hydraulic
+travel remain Windows acceptance items.
+
+## September 20 front-wheel and hull damage investigation
+
+The user reports losing the simultaneous track-break/HP-damage outcome. The
+ordered material resolver already continues from a penetrated external track
+to a reached structural plate; a track material alone never proves hull damage.
+A new integrated regression uses real armour resolution, HP rolling and track
+critical damage for both player and Bot launches. It covers a front-wheel hit
+followed by a penetrated hull (both losses), no hull (track only), a hull beyond
+available penetration (track only), and a lower-damage shell (HP loss without
+breaking a fresh track). These establish the code path, not a native collision
+mesh or the user's particular shot. No penetration or track-damage law changes.
+
+The existing bounded track diagnostic now also records a shot-correlated
+`TRACK OUTCOME`: native track/structural distances, whether structural contacts
+survived the existing trace budget, the terminal armour verdict, and proposed
+vehicle/track HP losses. These are proposals, not server-commit receipts. The
+diagnostic has no new native queries, collision mutation or retry behaviour;
+logging failures cannot cost a hit. The historical ten-calibre budget is left
+unchanged pending exact evidence about a missed shot, rather than extending
+projectiles through armour on the basis of a generic aiming guide.
+
+## September 20 Prokhorovka railside tree follow-up
+
+The user's two screenshots locate the pass-through report beside
+the railway near C6. The matching north/south row includes six authored
+Poplar/Poplar_1 placements at X 93.366--96.783, Z 257.074--361.773, including
+`(32641, 64)` at `(94.984, 6.043, 274.026)`. All six have shipped fall-foliage
+profiles. Screenshot coordinates identify the row, not a measured vehicle pose
+or a uniquely proved individual contact. The earlier unnamed item at
+`(-80.100, 6.997, 337.100)` is elsewhere and does not diagnose this report.
+The user clarifies that the vehicle passes through without contact handling.
+
+The continuous tree sweep sliced each hit-tester corner with `corner[:3]`.
+An indexed coordinate vector that does not support list slicing made the
+entire sweep return `None`; the sensor then returned `hard`, which the visible
+adapter intentionally treats as unavailable tree evidence rather than a wall.
+This representation-dependent loss is reproduced by a strict indexed-vector
+fixture, both directly and through tree proposal/registration. Corners now use
+indices 0, 1 and 2, matching the other hull consumers. Geometry tests cover all
+six shipped placements and a separate lane that must not knock them down.
+This establishes the local failure and fix; it does not prove that the corner
+objects in the user's Windows session caused this particular pass-through.
+
+Ordinary reports now include bounded `LOCAL TREE` records without requiring
+debug mode or additional native queries. They preserve the raw tree verdict
+before the visible adapter, the actual sweep endpoints/yaws and corner type,
+nearby authored identities/positions, registry position, cached tree health,
+name-alignment progress, isolation/layout state, and contact/publication state.
+The original native order's presentation observation and fall-pitch constraint
+remain labeled as acceptance-time evidence; reading them does not replay an
+order or restart an animation. A fresh local commit is recorded immediately;
+unchanged vicinity samples are suppressed. The 0.5 s limit belongs only to
+diagnostic sampling, never movement, collision admission or destruction.
+Index caches follow space and proved layout changes, and observer failures do
+not change motion. Exact #1513 Windows retesting is still needed to establish
+that this fixes the reported trees. No map object is destroyed merely because
+it is near a screenshot coordinate.
+
+## September 20 Paris ledge, Prague doors and Mittengard follow-up
+
+Reports `172803-3d53240d5fa3` and `173230-78dde2547f94` identify installed
+build `colorfulmeans-35500571635-1` on the Chinese HD #1513 client. The
+accompanying `100_thepit.pkg` contains the compiled WTCP v2 control points;
+its two CTF flags both author a 30 m radius, at the already-shipped objective
+centres. The baker now matches circle radii by team and objective coordinates,
+and the spawn planner carries those circles through worker readiness to the
+server. Capture occupancy and defense threats use the same radius. Only this
+supplied map catalog is updated; old catalogs without a decoded radius retain
+the previous 50 m behavior. No repair-point radius or estimated visual size is
+used. Tests cover the 30 m boundary for humans and Bots, both bases, malformed
+explicit radii, and ambiguous/missing authored control points.
+
+Prague captures four original-material-73 contacts against two workshop door
+placements, `(32640, 89)` and `(32384, 67)`. Every witness is inside that live
+item's already-broken material-74 panel and outside its intact 73/75 parts.
+The new exact-key recast is bounded by the broken component, stops before any
+intact component, and retains replacement materials and backing walls. It
+requires live, non-isolated ownership; it does not infer a global material
+translation or clear the complete building. All four native witnesses are
+stored in the regression fixture, including their original owner bounds.
+
+Paris records pitch `-0.566140128737696`, roll `-0.3627829348825807`, and
+`plane=null` unchanged in travel and siege, while the blocking native terrain
+normal has Y approximately 0.993. The logs explicitly exclude hydraulic tanks
+from the ten-spring trial; these are legacy support contacts, not spring
+solver failures. Legacy height previously followed the centre column while
+attitude rejected non-planar five-point samples and retained the old tilt.
+The legacy player and hydraulic Bot paths now derive height and attitude from
+one supporting face of the sampled chassis footprint. The face covers the
+centre and does not penetrate any sampled point. Equal-height ridge faces
+share their gradients rather than choosing an arbitrary diagonal. A face
+bridging different surfaces is not published as a continuous grade for slope
+slide. The existing gravity/reachability and raised-obstacle gates remain;
+there are no added waits or drive/brake coefficient changes. The player reuses
+its five support columns for attitude; ordinary Bot probe budgets are
+unchanged. Local hard-contact reports include the accepted legacy support
+sample. This geometry fixes the reproduced stale-attitude/centre-height
+mismatch, but cannot prove native Paris ledge feel or hydraulic rendering.
+Windows travel/siege acceptance at the reported edge is still required.
+
+Prohorovka trees remain unproved: the report has anonymous placement and name
+alignment gaps, but no contact identity tying a failed tree to one of them.
+In particular `(32386, 3)` has an unnamed transform absent from the shipped
+placement catalog; the log does not establish that it is the reported tree.
+Do not assign it a neighboring tree's name or relax the native identity guard.
+The affected tree's position and native resource/placement evidence are still
+needed. The new Murovanka end-face witnesses remain outside the recorded owner
+boxes, so no additional blanket exclusion is introduced. Paris E-line traces
+include active turning and safe navigation with zero throttle, followed by
+progress, as well as deliberate tactical holds; this does not prove that every
+reported opening stall is fixed. No AI timing or performance change is made.
+The owner currently cannot reproduce the black stun-assist display; its UI
+remains unchanged. TD2/LT5/HT4 fixes from the preceding revisions are retained.
+
+## September 20 additional HT4 follow-up
+
+HT4's four regular definitions request `innerModuleCritCount`, whereas TD2
+requests `innerModuleDestrCount`. The former was missing from the mission
+evaluator, so a qualifying battle remained unknown rather than completing.
+HT4 now counts damaged or destroyed internal devices and knocked-out crew
+from complete accepted critical-event histories. Damage and destruction bits
+for the same device in one transition count once; subsequent recorded
+transitions after repair still count. External devices, friendly targets,
+unchanged repeated critical-state publication and incomplete histories cannot
+award progress. TD2 retains its destruction-only condition.
+
+The four main thresholds (1, 3, 5, 6) and their distinct honor requirements
+are captured in `ht4_conditions_0922.json` from the public 0.9.22 definitions,
+not a new exact #1513 archive audit. Tests cover exact thresholds, one below,
+server receipt persistence, client normalization, mission selection and honor
+rejection. No thresholds or rewards were changed.
+
+The later Paris/Prague/Mittengard follow-up above supersedes the missing
+map-circle evidence and records the new native reports. Murovanka's unproved
+end face still needs its owner geometry.
+The stock reference reader obtains only base centers from teamBasePositions;
+repair/resource-point radii in ArenaType are unrelated to base capture.
+
+## September 20 v0.9.1 follow-up: downhill contact, missions and Murovanka
+
+Reports `125847-f5293210b1b9`, `132016-abb5404de554`,
+`135507-8b1562002689` and `143656-a905f3fed979` run the v0.9.1 build
+`colorfulmeans-35488817004-1`. This follow-up has no added movement delay,
+performance policy change, map-specific driving coefficient or capture-radius
+guess. The changes below are logic fixes pending exact Windows acceptance.
+
+The Strv S1 travel reports show disabled Siege, no handbrake and no Siege
+drive lock. An allegedly airborne hull repeatedly contacts upward-facing
+ground. The legacy vertical integrator omitted the downward tangent velocity
+while following a slope and eased reachable support Y, opening another gap on
+the next tick. Player and Bot legacy paths now preserve signed tangent
+velocity from the supported chassis pitch and commit reachable support
+directly. The ahead-looking drive probe is not a momentum source: it can see
+a drop while the tracks still rest on a rim. Their ballistic reach check
+still rejects remote cliff floors. Player physical pitch/roll now immediately
+match an accepted ground plane: easing the physical pose after settling Y
+buried the nose at a slope-to-flat transition and fed the tilted shape into
+the next collision sweep. Drive-gravity smoothing remains separate. Continuous
+forward/reverse downhill, cliff departure and the reported Paris flat-ground
+pose have focused regressions. They do not prove every Paris sinking report
+is resolved in native gameplay.
+
+TD2 lacked `innerModuleDestrCount` and the final own internal-critical state.
+Count only destroyed internal devices and knocked-out crew from complete
+accepted critical-event histories; external tracks/gun/observation devices and
+yellow-only internal damage do not satisfy the destruction requirement.
+The secondary condition reads current final state, including repairs, rather
+than accumulated damage history. Missing historical end-state evidence stays
+unknown through persistence and client normalization. LT5 now records a
+per-victim radio-assisted kill for the observers eligible at the canonical
+kill, including a crew knockout without HP loss or a final HP share rounded
+to zero. Earlier spotting damage alone
+does not award a later kill, and repeated publication cannot double this
+per-victim count. The receipt field survives server storage, client validation
+and account normalization. Fixtures contain the four campaigns' TD2/LT5
+conditions transcribed from the public 0.9.22 personal-mission definitions;
+they are version reference evidence, not a fresh #1513 archive audit.
+
+Murovanka's chunk 32635 reports a completed native layout repair (63 proved
+items, 67 native slots, 30 remapped). Four captured contacts have original
+material 73, flags 0 and a callback item different from the registered,
+already-broken stone-fence placement containing the witness. These exact keys
+can now be recast only inside the proved owner envelope in the same repaired
+chunk. This does not extend the anonymous material/flags wildcard. Live owners,
+unknown layouts, trees, damaged replacements and backing walls remain solid.
+The fifth captured end face lies outside all recorded owner boxes and remains
+unresolved; the test deliberately preserves it. Exact native collider/owner
+evidence is needed before excluding that face safely.
+
+Paris E-line AI is not declared fixed. Captured movement orders can select a
+nearby point behind the hull, while other stationary vehicles have deliberate
+`support_hold` orders. A baked-graph replay of the recorded poses advances to
+the next corridor point; the live obstruction/planner state is not present in
+the old diagnostic. Existing rate-limited Bot stall output now includes the
+selected path index, nearby path points, planned goal and navigation status,
+without additional native probes or changed planner timing.
+
+At this earlier checkpoint Mittengard lacked the original circle asset.
+The subsequently supplied WTCP data resolves that gap as described above.
+Numeric stun-assist fields and the SPG redesign flag were already populated;
+the latest owner report no longer reproduces the color issue.
+
+Performance diagnosis only, from live PERF windows:
+
+| Map / report | Visible FPS range | Worker FPS range | Maximum worker execution |
+| --- | ---: | ---: | ---: |
+| Paris / 125847 | 66.75-74.42 | 5.69-31.62 | 337.473 ms |
+| Ruinberg / 132016 | 58.60-82.25 | 0.88-26.66 | 1259.174 ms |
+| Swamp / 132016 | 67.02-75.71 | 1.95-27.12 | 858.159 ms |
+| Highway / 135507 | 99.42-109.69 | 35.85-85.45 | 164.371 ms |
+
+Windows and hardware differ, and the first live window can include prebattle
+samples, so these ranges are not comparable benchmarks. The worst Paris
+sample spends 328.593 ms of 337.473 ms in `bots_update`; the worst Ruinberg
+sample spends 1222.600 ms of 1259.174 ms there. Detailed traces include dense
+motion, support and collision queries. Visible rendering remains responsive
+while the localhost authority falls behind, which explains delayed AI/shot
+feedback without attributing it to internet ping. Murovanka's fence report has
+no equivalent worker slowdown (maximum execution 16.565 ms). No performance
+optimization is included, as requested.
+
 ## September 20 follow-up: remaining fence normals and concrete support
 
 Report `wot-error-report-20260920-111808-ab28648cb0ee.zip` runs
@@ -3702,7 +4046,9 @@ along an existing face is permitted when centre distance initially stays
 constant; an offset contact prefers the nearer end. Other rear blockers and
 world hazards still veto. Supplied neighbour positions retain their tuple or
 XYZ wire coordinates in the traffic snapshot instead of defaulting to origin.
-Continuous stacked-hull/debris crushing HP remains unimplemented.
+Continuous stacked-hull/debris crushing HP remains unimplemented. See the
+2026-09-20 release-pause investigation below for the requested state rules and
+the missing retail calibration evidence.
 
 ## Gameplay follow-up: 2026-09-14
 
@@ -4971,3 +5317,103 @@ ground graze) and a longer actual step reconstructing the captured lane; all
 original ground-top, backing-wall and upper/low-wall assertions remain. The
 1,413 related cases and these seven departure cases pass locally. The follow-up
 commit changes tests/documentation only; full CI/package evidence is pending.
+
+## Release-pause investigation: 2026-09-20
+
+The user paused v0.9.2 publication to investigate track direction, both-way
+Siege transitions, drowning warnings and sustained stacked-body damage.
+The release notes remain a draft and no release/tag is authorized while that
+pause remains in effect.
+
+### Track direction and braking before mode switches
+
+The hull transform uses forward `(sin(yaw), cos(yaw))`, so positive yaw is a
+right turn: the left side advances and the right side retreats. The shared
+`vehicle_physics.track_scroll` previously applied the opposite signs to the
+yaw contribution. It now returns `v + omega * trackCenter` on the left and
+`v - omega * trackCenter` on the right, retaining the existing scroll cap.
+Local `updateTracksScroll`, auxiliary physics, Bot `setExternal` and remote
+pose-derived turns all consume that same ordered pair. The finite-difference
+regression independently transforms the left/right hull points through an
+actual rotation, including forward/reverse motion and multiple track gauges.
+All four Siege-capable vehicles also exercise both active descriptors and
+both presentation feeds. This proves the supplied speeds, not native animated
+rendering on Windows.
+
+Previously the local switch request immediately set the pending-drive lock;
+the next motion step therefore zeroed speed before any braking took place.
+The local pending brake intent is now separate from the sent request. It
+suppresses drive/turn input while the existing longitudinal handbrake and
+traverse deceleration settle motion. At zero longitudinal and yaw rate, one
+input contains the stopped pose and mode request. Only then does the existing
+acknowledgement lock and server-owned transition timer apply. Cancellation,
+death and teardown clear the unsent intent, and failed enqueue can retry.
+The server checks the speed in that same admitted input, not an older packet.
+Bots likewise retain the current descriptor and normal motion integration
+while braking after their existing intent debounce. Neither switch direction
+adds a new braking coefficient, delay or wire field. Airborne motion remains
+governed by the existing physics. Regression coverage includes all four
+vehicle types in both directions, reverse travel, a pivot, cancellation,
+failed enqueue, death and Bot behaviour.
+
+### Drowning evidence and unresolved warning threshold
+
+[Wargaming Wiki's Battle Mechanics](https://wiki.wargaming.net/en/Battle_Mechanics)
+describes the icon as a warning for water deep enough to enter the crew or
+engine compartment. It does not specify the warning sensor's exact point or
+height. The Wiki is community-maintained material hosted by Wargaming, not
+proof of the private 0.9.22 server implementation. The
+[official 9.14 physics article](https://worldoftanks.eu/en/news/general-news/version-914-sounds-physics/)
+and [official 9.14 patch notes](https://worldoftanks.com/en/content/docs/release_notes/914-updatenotes/)
+confirm the server-owned physics change and reworked vehicle collisions;
+neither supplies a drowning-warning height or continuous crushing HP formula.
+The pages were read in the browser because the text fetch exposed only their
+loading page. Forum searches and the Wiki discussion did not provide a
+verifiable 0.9.22 experiment establishing those missing values.
+
+Two repository defects are identified but not repaired in this candidate:
+
+- `_native_drowning_level` equates the appearance effect's `isInWater` with
+  CAUTION. The stock Avatar instead receives `VEHICLE_DROWN_WARNING` from the
+  server; the effect getter is not that server warning contract.
+- `_drowning_sensor_thresholds` treats `topRightCarryingPoint` as a vertical
+  coordinate. The available reference reader/fixtures use a two-component
+  X/Z carrying footprint. It also clamps the danger height above that mistaken
+  caution value, and omits pitch/roll. The Bot danger fallback already uses
+  the transformed turret-mount point. The reference is RU #788; it does not
+  replace an exact CN #1513 warning-threshold capture.
+
+The `0.5` in `assembleWaterSensor` is explicitly the minimum heavy-splash
+depth, not evidence for a caution threshold. No global metre value, hull-height
+fraction or substitute timer was introduced. The existing ten-second danger
+countdown remains unchanged pending a verified warning-depth rule.
+
+### Requested sustained crushing states
+
+These are the user's requested acceptance cases, not independently verified
+retail formulas. "Damage" below means sustained pressure damage after contact;
+it does not replace an initial landing impact or horizontal ramming event.
+
+| Upper body | Lower body | Required sustained recipients |
+| --- | --- | --- |
+| Live vehicle | Live vehicle | Both vehicles |
+| Wreck | Live vehicle | Lower vehicle only |
+| Detached turret | Live vehicle | Lower vehicle only |
+| Live vehicle | Wreck | Neither |
+| Live vehicle | Detached turret | Neither |
+
+When the upper vehicle dies, its still-supported wreck must continue damaging
+the live lower vehicle. When the lower vehicle dies, damage to the live upper
+vehicle must stop. A detached turret must use its actual supported contact,
+not an arbitrary nearby wreck or horizontal overlap. Removing that support
+must stop sustained damage. Vehicle death, turret detachment, repeated worker
+publications and a new battle must not duplicate a damage interval.
+
+Current hull ramming uses horizontal closing velocity and deliberately admits
+no wreck ram events. Detached turrets already have worker-owned compound-box
+contact and support, but neither path produces sustained crushing HP. Applying
+an invented minimum impact speed to `ram_damage`, or treating `mass * gravity`
+as HP per second, would not recover the missing retail law. The exact pressure
+damage rate, mass/armour dependence and any initial grace period still need
+0.9.22 source or controlled replay/video evidence before this can be claimed
+as an official-mechanics repair. No new crushing coefficient is enabled here.

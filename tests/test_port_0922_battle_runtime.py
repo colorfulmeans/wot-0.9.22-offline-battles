@@ -16392,8 +16392,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
             10.1)
 
         left, right = vehicle.track_scroll.external
-        self.assertLess(left, 0.0)
-        self.assertGreater(right, 0.0)
+        # Positive hull yaw turns right: the left track advances and the
+        # right track reverses. Opposed speeds alone did not prove direction.
+        self.assertGreater(left, 0.0)
+        self.assertLess(right, 0.0)
         self.assertAlmostEqual(left, -right)
         # A bot with no forward speed still needs a running engine, or the
         # native tick pins both belts to zero.
@@ -16408,6 +16410,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             10.3)
         self.assertEqual((ENGINE_MODE_RUNNING, _MOVEMENT_ROTATE_LEFT),
                          vehicle.track_scroll.mode)
+        left, right = vehicle.track_scroll.external
+        self.assertLess(left, 0.0)
+        self.assertGreater(right, 0.0)
 
     def test_the_still_devices_and_view_circle_reach_the_battle_hud(self):
         runtime = _runtime()
@@ -20850,7 +20855,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(5, len(calls[0]))
         self.assertIs(skin_filter, calls[0][4])
         self.assertEqual(4, len(calls[1]))
-        self.assertTrue(all(len(call) == 5 for call in calls[2:]))
+        for call in calls[2:]:
+            self.assertEqual(5 if call[1].x > 0.0 else 4, len(call))
+            if call[1].x > 0.0:
+                self.assertIs(skin_filter, call[4])
 
     def test_crushed_destructible_costs_no_speed_and_names_the_path(self):
         runtime = _runtime()
@@ -23529,7 +23537,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_descriptor = entity.typeDescriptor
         battle._attach_local_presentation()
         battle._motion_is_clear = mock.Mock(return_value=True)
-        battle._ground_y = mock.Mock(return_value=0.0)
+        battle._support_column = mock.Mock(wraps=battle._support_column)
 
         with mock.patch(
                 'gui.mods.offline_lan_0922.battle_runtime.'
@@ -23538,7 +23546,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         step.assert_called_once()
         battle._motion_is_clear.assert_called()
-        battle._ground_y.assert_called()
+        battle._support_column.assert_called()
         self.assertGreater(battle._local_position[2], 8.0)
         self.assertEqual(4.0, battle._local_speed)
 
@@ -23681,7 +23689,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         position = battle._update_vertical_motion(
             entity, (0.0, 10.0, 0.0), 0.0, 0.1)
 
-        self.assertAlmostEqual(10.0, position[1], places=6)
+        self.assertAlmostEqual((9.95 + 10.0) / 2.0, position[1], places=6)
         self.assertFalse(battle._local_airborne)
 
     def test_player_support_uses_wide_chassis_not_narrower_hull(self):
@@ -23709,7 +23717,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertTrue(battle._local_airborne)
         self.assertLess(position[1], 10.0)
 
-    def test_player_flat_ground_keeps_the_three_column_support_probe(self):
+    def test_player_support_samples_height_and_attitude_in_five_columns(self):
         battle, entity, calls = self._legacy_support_battle({}, 10.0)
 
         position = battle._update_vertical_motion(
@@ -23717,7 +23725,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertAlmostEqual(10.0, position[1], places=6)
         self.assertEqual(
-            [(0.0, 3.5), (0.0, 0.0), (0.0, -3.5)], calls)
+            [(0.0, 3.5), (0.0, 0.0), (0.0, -3.5), (1.5, 0.0), (-1.5, 0.0)], calls)
 
     def test_local_suspension_samples_twenty_two_columns_once_per_tick(self):
         runtime = _runtime()
@@ -25059,6 +25067,26 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertLess(battle._local_vertical_speed, 0.0)
         self.assertGreater(position[1], -2.0)
 
+    def test_legacy_suspension_tracks_continuous_downhill_without_airborne_pulses(self):
+        for speed in (10.0, -10.0):
+            with self.subTest(speed=speed):
+                runtime = _runtime()
+                battle = BattleRuntime(runtime)
+                battle._avatar = runtime.bigworld.avatar
+                battle._local_fall_armed = True
+                battle._local_speed = speed
+                battle._local_last_pitch = math.atan(0.25 if speed > 0 else -0.25)
+                battle._local_pitch = battle._local_last_pitch
+                entity = _Vehicle(10, _Descriptor(), _Vector(), (0, 0, 0), {'health': 500})
+                position = (0.0, 0.0, 0.0)
+                for unused in range(50):
+                    ground = position[1] - 0.1
+                    battle._terrain_support = mock.Mock(return_value=(ground, ground))
+                    position = battle._update_vertical_motion_legacy(
+                        entity, position, 0.0, 0.04)
+                    self.assertFalse(battle._local_airborne)
+                    self.assertAlmostEqual(ground, position[1])
+
     def test_armed_ledge_fall_only_queues_an_impact_observation(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
@@ -25117,6 +25145,35 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([
             'pose', ('landing', 18.5),
             'pose', ('landing', 18.5)], calls)
+
+    def test_legacy_uneven_support_replaces_frozen_paris_attitude_without_extra_rays(self):
+        battle, entity, calls = self._legacy_support_battle({
+            (1.5, 0.0): 4.0, (-1.5, 0.0): 3.2}, 3.2)
+        # The report kept exactly this attitude in travel and siege with
+        # plane=null. These uneven samples model that failed planarity gate.
+        battle._local_pitch = -0.566140128737696
+        battle._local_roll = -0.3627829348825807
+        position = battle._update_vertical_motion_legacy(
+            entity, (0.0, 3.6, 0.0), 0.0, .04)
+        battle._ground_y = mock.Mock(side_effect=AssertionError('different support layer'))
+        battle._ground_pitch(position, 0.0, entity.typeDescriptor)
+        self.assertAlmostEqual(3.6, position[1])
+        self.assertAlmostEqual(0.0, battle._local_pitch)
+        self.assertAlmostEqual(math.atan(.8 / 3.0), battle._local_roll)
+        self.assertEqual(5, len(calls))
+        self.assertFalse(battle._local_airborne)
+        self.assertIsNone(battle._local_ground_plane)
+        self.assertEqual(0.0, battle._local_slope_tangent)
+
+    def test_legacy_ground_pose_settles_on_flat_without_a_buried_nose(self):
+        battle = BattleRuntime(_runtime())
+        battle._local_pitch = 0.210305
+        battle._local_roll = -0.024822
+        battle._ground_y = lambda x, z, hint=0., **unused: 0.97
+        battle._ground_pitch((248.273468, 0.97, 265.614166),
+                             -1.538, _Descriptor())
+        self.assertAlmostEqual(0.0, battle._local_pitch)
+        self.assertAlmostEqual(0.0, battle._local_roll)
 
     def test_cross_heading_steep_slope_uses_copied_slide_law(self):
         runtime = _runtime()
@@ -30489,6 +30546,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             (ENGINE_MODE_RUNNING, _MOVEMENT_ROTATE_RIGHT),
             vehicle.update_tracks.call_args.args[2])
+        self.assertAlmostEqual(1.0, vehicle.update_tracks.call_args.args[0])
+        self.assertAlmostEqual(-1.0, vehicle.update_tracks.call_args.args[1])
 
         # The first still frame is inside the native 20 Hz window. It must
         # stay pending and retry at the deadline, or rotate mode sticks.
@@ -33515,6 +33574,39 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual((2, 1), entity.engineMode)
         self.assertEqual([(2, 1)], entity.engine_modes)
         self.assertEqual([(5.0, 5.0)], entity.track_scrolls)
+
+    def test_local_track_and_auxiliary_feeds_follow_actual_hull_turn(self):
+        for speed in (-5.0, 0.0, 5.0):
+            for turn in (-1.0, 1.0):
+                with self.subTest(speed=speed, turn=turn):
+                    battle = BattleRuntime(_runtime())
+                    entity = _Vehicle(
+                        10, _Descriptor(), _Vector(), (0, 0, 0),
+                        {'health': 500})
+                    battle._sender = types.SimpleNamespace(
+                        forward=0.0, turn=0.0)
+                    battle._binding = mock.Mock()
+                    battle._local_descriptor = entity.typeDescriptor
+                    battle._local_physics = {
+                        'trackCenter': 1.5, 'speedFwd': 30.0}
+                    battle._local_speed = speed
+                    battle._local_turn_speed = turn
+                    battle._local_drive_turn = turn
+
+                    self.assertTrue(battle._update_local_tracks(entity))
+                    self.assertTrue(battle._publish_rpm(10.0, force=True))
+
+                    left, right = entity.track_scrolls[-1]
+                    self.assertAlmostEqual(speed, (left + right) / 2.0)
+                    if turn > 0.0:
+                        self.assertGreater(left, speed)
+                        self.assertLess(right, speed)
+                    else:
+                        self.assertLess(left, speed)
+                        self.assertGreater(right, speed)
+                    self.assertEqual(
+                        (left, right),
+                        battle._binding.avatar_aux_physics.call_args.args[3:5])
 
     def test_local_track_feed_turns_the_engine_off_on_death(self):
         runtime = _runtime()

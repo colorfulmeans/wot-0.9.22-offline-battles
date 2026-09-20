@@ -55,7 +55,7 @@ jobs:
           docker run --rm --platform linux/amd64 -v "$PWD:/work"
           -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
           -w /work python:2.7.18
-          python build_wotmod.py
+          sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python build_wotmod.py'
       - name: Validate 0.9.22 wotmod package
         run: >-
           python tools/validate_wotmod.py

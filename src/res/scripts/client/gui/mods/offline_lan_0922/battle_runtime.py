@@ -1711,8 +1711,13 @@ class _LANInputSender(object):
             keyword_args['pose_time_us'] = pose_time
         if siege_enabled is not None:
             keyword_args['siege_enabled'] = bool(siege_enabled)
+        braking_for_siege = getattr(
+            self.owner, '_local_siege_braking', None) is not None
+        forward, turn = self.forward, self.turn
+        if braking_for_siege or siege_enabled is not None:
+            forward, turn = 0.0, 0.0
         result = self.owner.client.send_input(
-            self.forward, self.turn, self.aim_yaw, self.gun_pitch,
+            forward, turn, self.aim_yaw, self.gun_pitch,
             position, yaw, **keyword_args)
         if result:
             enqueued = getattr(
@@ -1847,6 +1852,8 @@ class BattleRuntime(object):
         self._client_ready_received = False
         self._siege_hints = None
         self._local_descriptor = None
+        self._local_hydraulic_motion_window = None
+        self._local_hydraulic_motion_report_failed = False
         self._bot_fire_seen = {}
         self._bot_fire_confirmations = {}
         self._bot_launch_payloads = {}
@@ -1858,6 +1865,7 @@ class BattleRuntime(object):
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
+        self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
         self._local_push_x = 0.0
@@ -2189,6 +2197,8 @@ class BattleRuntime(object):
         self._last_health = {}
         self._client_ready_received = False
         self._local_descriptor = None
+        self._local_hydraulic_motion_window = None
+        self._local_hydraulic_motion_report_failed = False
         self._bot_fire_seen = {}
         self._bot_fire_confirmations = {}
         self._bot_launch_payloads = {}
@@ -2200,6 +2210,7 @@ class BattleRuntime(object):
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
+        self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
         self._local_push_x = 0.0
@@ -4769,6 +4780,41 @@ class BattleRuntime(object):
                 critical.get('crew_ko') or (), 'traverse') *
             device_damage.module_stat_factor(
                 devices, destroyed, descriptor, 'traverse', damaged))
+
+    @staticmethod
+    def _destructible_drive_speed_cap(descriptor, physics, speed,
+                                     travel_descriptor=None):
+        """Keep powered contact eligibility independent of Siege gearing.
+
+        The port already uses a drive cap to admit a powered exact contact
+        which cannot accelerate through an intact prop. Using the active
+        Siege limit here made that same vehicle unable to push over the prop
+        in low gear. Read its mounted travel limit for this gate only; actual
+        motion, impact speed, hull shape and native health/scale laws still
+        belong to the active descriptor. Ordinary vehicles retain their
+        effective cap, and an unavailable drive limit is never fabricated.
+        """
+        reverse = float(speed) < 0.0
+        try:
+            value = float(physics['speedBwd' if reverse else 'speedFwd'])
+            if travel_descriptor is None:
+                travel_descriptor = _field(descriptor, 'defaultVehicleDescr')
+            if travel_descriptor is not None and value > 0.0:
+                travel = float(_field(travel_descriptor, 'physics')[
+                    'speedLimits'][1 if reverse else 0])
+                if math.isnan(travel) or math.isinf(travel) or travel < 0.0:
+                    raise ValueError('invalid travel limit')
+                value = max(value, travel)
+        except (AttributeError, KeyError, IndexError, TypeError,
+                ValueError, OverflowError):
+            raise RuntimeError('destructible drive speed cap is unavailable')
+        if math.isnan(value) or math.isinf(value) or value < 0.0:
+            raise RuntimeError('destructible drive speed cap is invalid')
+        return -value if reverse else value
+
+    def _bot_destructible_travel_descriptor(self, bot_id):
+        pair = getattr(self._bots, '_descriptor_pairs', {}).get(int(bot_id))
+        return pair[0] if pair is not None and pair[1] is not None else None
 
     @staticmethod
     def _destructible_rotation_speed_cap(physics, critical_factor=1.0):
@@ -8627,21 +8673,23 @@ class BattleRuntime(object):
             descriptor = getattr(entity, 'typeDescriptor', None)
             if not bool(getattr(descriptor, 'hasSiegeMode', False)):
                 return False
-            if not self._sender.send_current(siege_enabled=bool(value)):
+            if bool(getattr(entity, 'is_engine_dead', False)):
                 return False
-            request_seq = getattr(self.client, '_input_seq', None)
-            if (isinstance(request_seq, bool) or
-                    not isinstance(request_seq, _INTEGER_TYPES) or
-                    request_seq <= 0):
-                request_seq = None
-            # The server echo can be one or more snapshots behind this
-            # request. Keep the drivetrain locked from the successful send
-            # edge until a stable snapshot acknowledges this exact input.
-            self._local_siege_pending = (bool(value), request_seq)
-            self._report_local_siege_edge(
-                'request', getattr(entity, 'siegeState', None),
-                input_seq=request_seq)
-            return True
+            enabled = bool(value)
+            states = self._runtime.constants.VEHICLE_SIEGE_STATE
+            desired = states.ENABLED if enabled else states.DISABLED
+            if (self._local_siege_braking is not None and
+                    self._local_siege_pending is None and
+                    getattr(entity, 'siegeState', states.DISABLED) == desired):
+                self._local_siege_braking = None
+                self._report_local_siege_edge('cancel_brake', desired)
+                return True
+            if self._local_speed != 0.0 or self._local_turn_speed != 0.0:
+                self._local_siege_braking = enabled
+                self._report_local_siege_edge(
+                    'brake', getattr(entity, 'siegeState', None))
+                return True
+            return self._send_local_siege_request(entity, enabled)
         if code == getattr(settings, 'ACTIVATE_EQUIPMENT', None):
             return self._activate_equipment(value)
         partial_clip = getattr(settings, 'RELOAD_PARTIAL_CLIP', None)
@@ -15228,6 +15276,7 @@ class BattleRuntime(object):
         else:
             critical_target = self._projectile_live_critical_target(
                 record, target)
+        traced_collisions = tuple(collisions)
         collisions, trace_start, trace_end = self._vehicle_trace(
             shot, query[0], query[1], collisions)
         if not combat_rules.is_he(shot):
@@ -15239,6 +15288,7 @@ class BattleRuntime(object):
                         record, target, query[0], trace_end,
                         collision_pose))
                 if extended:
+                    traced_collisions = tuple(extended)
                     collisions, trace_start, trace_end = self._vehicle_trace(
                         shot, query[0], trace_end, tuple(extended))
                     collision_evidence = tuple(extended_evidence)
@@ -15386,7 +15436,52 @@ class BattleRuntime(object):
             blast_contact.get('distance') if blast_contact is not None else
             0.0 if contact is not None and contact.get('layer') == 'structural'
             else None)
+        self._report_projectile_track_outcome(
+            meta, target, traced_collisions, collisions, contact, effect)
         return effect
+
+    @staticmethod
+    def _report_projectile_track_outcome(meta, target, traced, retained,
+                                         contact, effect):
+        """Relate bounded track diagnostics to the same shot's HP proposal."""
+        try:
+            tracks = []
+            structural = []
+            for collision in traced:
+                material = collision.matInfo
+                name = _field(_field(material, 'extra'), 'name')
+                if name in track_damage.TRACK_DEVICE_NAMES:
+                    tracks.append((str(name), float(collision.dist)))
+                if _field(material, 'vehicleDamageFactor', 0.0):
+                    structural.append(float(collision.dist))
+            if not tracks:
+                return
+            kept_structure = any(
+                _field(collision.matInfo, 'vehicleDamageFactor', 0.0)
+                for collision in retained)
+            delta = effect.get('critical_delta') or {}
+            losses = [dict(item) for item in delta.get('devices', ())
+                      if item.get('name') in track_damage.TRACK_DEVICE_NAMES]
+            vehicle = str(_field(target.typeDescriptor, 'name', 'unknown'))
+            result = int(effect['shot_result'])
+            payload = {
+                'projectile': meta.get('projectile_id'),
+                'shooter_kind': meta.get('shooter_kind'),
+                'target': int(target.id), 'vehicle': vehicle,
+                'tracks': tracks, 'structural_distances': structural,
+                'structural_retained': kept_structure,
+                'terminal_layer': (contact or {}).get('layer'),
+                'shot_result': result, 'proposed_hp': int(effect['damage']),
+                'proposed_tracks': losses,
+            }
+            track_damage.report(
+                ('outcome', payload['shooter_kind'], vehicle,
+                 tuple(name for name, unused_distance in tracks), result,
+                 bool(structural), kept_structure, bool(losses)),
+                'OUTCOME ' + json.dumps(payload))
+        except Exception:
+            # Optional evidence must not prevent an otherwise valid hit.
+            pass
 
     def _projectile_stun_effect(self, effect, shot, record, target, state,
                                 distance):
@@ -16338,10 +16433,8 @@ class BattleRuntime(object):
             if requested_catalog:
                 descriptor = self._resolve_player_descriptor(state)
                 params = self._player_effective_snapshot(state)['physics']
-                limit_name = 'speedBwd' if speed < 0.0 else 'speedFwd'
-                kinetic_speed = (
-                    -float(params[limit_name]) if speed < 0.0 else
-                    float(params[limit_name]))
+                kinetic_speed = self._destructible_drive_speed_cap(
+                    descriptor, params, speed)
                 yaw_delta = _angle_delta(yaw, end_yaw)
                 pose_sweep = abs(yaw_delta) > 1.0e-8
                 move_x = end_position[0] - position[0]
@@ -17837,11 +17930,108 @@ class BattleRuntime(object):
             trace['spring_layer_columns'] = 'height,normal_y,verdict'
             trace['spring_probes'] = getattr(
                 self, '_local_suspension_probe_trace', ())
+            trace['legacy_support'] = getattr(
+                self, '_local_legacy_support_sample', None)
             sys.stdout.write('[Offline LAN 0.9.22] LOCAL HARD CONTACT %s\n' %
                              json.dumps(trace))
         else:
             self._report_local_prop_support(end, now)
         return True
+
+    def _report_local_hydraulic_motion(self, entity, start, attitude, dt,
+                                       before, drive, horizontal, path,
+                                       contact):
+        """Retain sub-threshold hitches during otherwise continuous travel.
+
+        Stall-only sampling misses small repeated corrections and clear
+        constant-speed presentation reports. Summarize every moving hydraulic
+        slice, keeping only one worst witness per metric. This reads copied
+        state, never probes native geometry or changes the simulation cadence.
+        """
+        try:
+            descriptor = self._local_descriptor or entity.typeDescriptor
+            if (self._worker_mode or dt <= 0.0 or not
+                    vehicle_physics.suspension_trial_excluded(descriptor)):
+                return
+            moving = (abs(before) + abs(drive) + abs(self._local_turn_speed) +
+                      abs(self._local_drive_throttle) + abs(self._local_drive_turn))
+            if moving <= 1.0e-8:
+                self._local_hydraulic_motion_window = None
+                return
+            now = self._clock()
+            key = (id(entity), self._avatar.spaceID,
+                   getattr(entity, 'siegeState', None))
+            window = getattr(self, '_local_hydraulic_motion_window', None)
+            if window is None or window['key'] != key or now < window['start']:
+                window = {'key': key, 'start': now, 'frames': 0,
+                          'seconds': 0.0, 'paths': {}, 'world_reasons': {},
+                          'airborne_frames': 0, 'support_blocked_frames': 0,
+                          'input_changes': 0, 'worst': {}}
+                self._local_hydraulic_motion_window = window
+            end = self._local_position
+            distance = _distance_2d(start, end)
+            final = self._local_speed
+            inputs = (self._local_drive_throttle, self._local_drive_turn,
+                      bool(getattr(self._sender, 'handbrake', False)))
+            if window.get('input') is not None and window['input'] != inputs:
+                window['input_changes'] += 1
+            window['input'] = inputs
+            window['frames'] += 1
+            window['seconds'] += dt
+            path = path or 'still'
+            window['paths'][path] = window['paths'].get(path, 0) + 1
+            reason = (contact or {}).get('reason') or '-'
+            window['world_reasons'][reason] = window['world_reasons'].get(reason, 0) + 1
+            window['airborne_frames'] += int(bool(self._local_airborne))
+            window['support_blocked_frames'] += int(bool(self._local_support_rise_blocked))
+            metrics = (
+                ('step_seconds', dt),
+                ('drive_speed_loss', max(0.0, abs(before) - abs(drive))),
+                ('horizontal_speed_loss', max(0.0, abs(drive) - abs(horizontal))),
+                ('settling_speed_loss', max(0.0, abs(horizontal) - abs(final))),
+                ('travel_deficit', max(0.0, abs(drive) * dt - distance)),
+                ('height_step', abs(end[1] - start[1])),
+                ('attitude_step', max(abs(self._local_pitch - attitude[0]),
+                                      abs(self._local_roll - attitude[1]))),
+            )
+            witness = None
+            for name, value in metrics:
+                previous = window['worst'].get(name)
+                if previous is not None and previous['value'] >= value:
+                    continue
+                if witness is None:
+                    support = getattr(self, '_local_legacy_support_sample', None)
+                    witness = {
+                        'time': now, 'dt': dt, 'start': tuple(start), 'end': tuple(end),
+                        'speeds': [before, drive, horizontal, final],
+                        'attitude_before': attitude,
+                        'attitude_after': (self._local_pitch, self._local_roll),
+                        'vertical_speed': self._local_vertical_speed,
+                        'airborne': self._local_airborne,
+                        'support_blocked': self._local_support_rise_blocked,
+                        'path': path, 'world': self._local_motion_status,
+                        'kinds': self._local_motion_kinds, 'reason': reason,
+                        'input': inputs, 'legacy_support': support,
+                    }
+                window['worst'][name] = {'value': value, 'sample': witness}
+            if now - window['start'] < 2.0:
+                return
+            payload = dict(window)
+            payload.pop('key')
+            payload['siege_state'] = key[2]
+            payload['end_time'] = now
+            payload['speed_columns'] = 'before,drive,horizontal,final'
+            self._local_hydraulic_motion_window = None
+            sys.stdout.write('[Offline LAN 0.9.22] HYDRAULIC MOTION %s\n' %
+                             json.dumps(payload))
+        except Exception as error:
+            self._local_hydraulic_motion_window = None
+            if not getattr(self, '_local_hydraulic_motion_report_failed', False):
+                self._local_hydraulic_motion_report_failed = True
+                try:
+                    sys.stdout.write('[Offline LAN 0.9.22] hydraulic motion report failed: %s\n' % error)
+                except Exception:
+                    pass
 
     def _report_local_contact_tick(self, path, before, pitch, rise):
         """Close the tick with the drive slope, the hull rise and the skips.
@@ -18217,7 +18407,8 @@ class BattleRuntime(object):
         ready = getattr(self.client, 'send_battle_ready', None)
         if not callable(ready):
             return False
-        bases = getattr(self._spawn_planner, 'bases', None)
+        bases = getattr(self._spawn_planner, 'capture_bases',
+                        getattr(self._spawn_planner, 'bases', None))
         if not ready(bases):
             raise RuntimeError('LAN server did not accept battle readiness')
         self._ready_sent = True
@@ -18302,7 +18493,19 @@ class BattleRuntime(object):
         return self._local_pitch
 
     def _ground_pitch(self, position, yaw, descriptor=None):
-        """Sample one continuous four-point suspension pose."""
+        """Publish the settled support pose; otherwise sample continuous terrain."""
+        support = getattr(self, '_local_legacy_support_sample', None)
+        if support is not None and support[:3] == (position[0], position[2], yaw):
+            plane = support[3]
+            if plane is not None:
+                self._commit_ground_plane(plane, force_raw=True)
+                if plane.get('contact_residual', 0.0) > GROUND_PLANE_EPSILON:
+                    # The support face bridges different surfaces; it is not
+                    # a continuous terrain grade that may drive slope slide.
+                    self._local_ground_plane = None
+                    self._local_downhill = (0.0, 0.0, 0.0)
+                    self._local_slope_tangent = 0.0
+                return self._local_pitch
         plane = self._sample_ground_plane(position, yaw, descriptor)
         if plane is None:
             self._local_downhill = (0.0, 0.0, 0.0)
@@ -18310,10 +18513,11 @@ class BattleRuntime(object):
             self._local_ground_plane = None
             self._local_surface_up_cosine = None
             return self._local_pitch
-        force_raw = (
-            math.atan(float(plane['slope_tangent'])) >
-            GROUND_RAW_TILT_RADIANS)
-        return self._commit_ground_plane(plane, force_raw=force_raw)
+        # This is the physical hull pose used by the next collision sweep.
+        # Easing it after settling Y leaves a nose or track below the fitted
+        # surface at the end of a slope (the reported Paris travel contact).
+        # The drive-gravity history has its own smoothing; support does not.
+        return self._commit_ground_plane(plane, force_raw=True)
 
     def _drive_pitch(self, position, yaw):
         """Use contacted terrain for drive gravity, then the legacy probe.
@@ -18383,6 +18587,46 @@ class BattleRuntime(object):
         self._local_last_pitch = pitch
         return pitch
 
+    def _report_local_tree_motion(self, start, end, yaw, speed, dt,
+                                  now, detail, stage='proposal',
+                                  descriptor=None, start_yaw=None):
+        """Keep missing tree contacts observable without native probes."""
+        if self._worker_mode:
+            return
+        try:
+            from gui.mods.offline_lan_0922.tree_diagnostics import (
+                TreeContactDiagnostics)
+            observer = getattr(self, '_local_tree_diagnostics', None)
+            if observer is None:
+                observer = TreeContactDiagnostics()
+                self._local_tree_diagnostics = observer
+            payload = observer.sample(
+                self._destructibles, sys.modules.get(
+                    'gui.mods.offline_lan_0922.destructibles_authority'),
+                self._avatar.spaceID, start, end, yaw, speed, dt,
+                now, detail, stage)
+            if payload is not None:
+                bbox_reader = getattr(self._destructibles, '_vehicle_hull_bbox', None)
+                bbox = (bbox_reader(descriptor) if callable(bbox_reader) and
+                        descriptor is not None else None)
+                payload['hull_bbox'] = (tuple(tuple(float(corner[index])
+                    for index in range(3)) for corner in bbox[:2])
+                    if bbox is not None else None)
+                payload['hull_corner_types'] = (tuple(type(corner).__name__
+                    for corner in bbox[:2]) if bbox is not None else None)
+                payload['start_yaw'] = start_yaw
+                sys.stdout.write('[Offline LAN 0.9.22] LOCAL TREE %s\n' %
+                                 json.dumps(payload))
+        except Exception as error:
+            # Evidence collection cannot change the already-decided contact.
+            if not getattr(self, '_local_tree_diagnostic_error', False):
+                self._local_tree_diagnostic_error = True
+                try:
+                    sys.stdout.write('[Offline LAN 0.9.22] LOCAL TREE '
+                                     'diagnostic_error=%s\n' % error)
+                except Exception:
+                    pass
+
     def _tree_motion_proposal(
             self, start_position, start_yaw, end_position, end_yaw,
             speed, descriptor, now, dt):
@@ -18415,6 +18659,9 @@ class BattleRuntime(object):
             raise RuntimeError('tree motion proposal lost its exact token')
         if token is not None and any(row[2] is not None for row in token):
             raise RuntimeError('tree motion proposal has a material token')
+        self._report_local_tree_motion(
+            start_position, end_position, end_yaw, speed, dt, now, detail,
+            descriptor=descriptor, start_yaw=start_yaw)
         if status in ('pending', 'hard') and not self._worker_mode:
             # Missing, ambiguous or isolated tree registry evidence is not a
             # hard-world contact.  The visible tank may keep moving while
@@ -18568,6 +18815,10 @@ class BattleRuntime(object):
                 contact, start_position, start_yaw,
                 end_position, end_yaw, descriptor, speed, now, dt):
             return False
+        self._report_local_tree_motion(
+            start_position, end_position, end_yaw, speed, dt,
+            now, tree_detail, stage='commit', descriptor=descriptor,
+            start_yaw=start_yaw)
         return contact
 
     @staticmethod
@@ -18893,8 +19144,9 @@ class BattleRuntime(object):
         rotation_speed_cap = self._destructible_rotation_speed_cap(
             self._local_physics,
             critical_damage.stat_factor(entity, 'traverse'))
-        drive_speed_cap = (float(self._local_physics[
-            'speedBwd' if speed < 0.0 else 'speedFwd'])
+        drive_speed_cap = (abs(self._destructible_drive_speed_cap(
+            self._local_descriptor or entity.typeDescriptor,
+            self._local_physics, speed))
             if rotation_speed_cap else None)
         catalog_detail = self._destructible_pose_sweep(
             start_position, start_yaw, end_position, end_yaw, speed,
@@ -19103,9 +19355,9 @@ class BattleRuntime(object):
             if not isinstance(params, dict):
                 raise RuntimeError(
                     'player effective physics parameters are unavailable')
-            limit_name = 'speedBwd' if speed < 0.0 else 'speedFwd'
-            kinetic_speed = (-float(params[limit_name]) if speed < 0.0 else
-                             float(params[limit_name]))
+            kinetic_speed = self._destructible_drive_speed_cap(
+                self._local_descriptor or entity.typeDescriptor,
+                params, speed)
         if world_motion_yaw is None:
             contact_end = (
                 float(position[0]) + math.sin(float(yaw)) *
@@ -19289,8 +19541,10 @@ class BattleRuntime(object):
         pitch = _number(bot_state.get(
             'terrain_pitch', bot_state.get('pitch')))
         roll = _number(bot_state.get('roll'))
-        drive_speed_cap = (vehicle_physics.derive_params(descriptor)['speedFwd']
-                           if rotation_speed_cap else None)
+        drive_speed_cap = (self._destructible_drive_speed_cap(
+            descriptor, vehicle_physics.derive_params(descriptor), 0.0,
+            self._bot_destructible_travel_descriptor(bot_id))
+            if rotation_speed_cap else None)
         detail = self._destructible_pose_sweep(
             position, start_yaw, position, end_yaw, 0.0,
             descriptor, now, dt,
@@ -19411,9 +19665,9 @@ class BattleRuntime(object):
         kinetic_speed = None
         if allow_crush_drive:
             params = vehicle_physics.derive_params(descriptor)
-            limit_name = 'speedBwd' if speed < 0.0 else 'speedFwd'
-            kinetic_speed = (-float(params[limit_name]) if speed < 0.0 else
-                             float(params[limit_name]))
+            kinetic_speed = self._destructible_drive_speed_cap(
+                descriptor, params, speed,
+                self._bot_destructible_travel_descriptor(bot_id))
         contact_trace = {}
         world_status = world_collision.check_horizontal_collision(
             self._runtime.bigworld, self._runtime.math,
@@ -20803,11 +21057,10 @@ class BattleRuntime(object):
         while a harmless overhead/top face must not replace the floor and
         trap the vehicle in an endless support rollback.
 
-        ``follow_gap`` enables the chassis-end straddle law.  A tracked hull
-        rests on its chassis ends, so a trench, slot or crater narrower than
-        the tank must not lower the whole body into it merely because the
-        centre column found its floor.  The two extra lateral columns are
-        sampled only at that fall transition.
+        Five chassis columns own both the supported height and attitude.
+        A trench, slot or crater narrower than the tracks must not lower
+        the body to its centre-column floor. ``follow_gap`` retains the
+        straddle fallback when a complete supporting face is unavailable.
         """
         half_length = 2.5
         half_width = 1.5
@@ -20844,16 +21097,25 @@ class BattleRuntime(object):
                 front = value
             else:
                 rear = value
-        if (follow_gap is None or not self._local_fall_armed or
-                (centre is not None and
-                 position[1] - centre <= float(follow_gap))):
-            return highest, centre
         lateral = tuple(
             self._support_column(
                 position[0] + offset[0], position[2] + offset[1],
                 position[1], maximum_y)
             for offset in tank_collision.chassis_span_offsets(
                 yaw, half_width, half_length)[1])
+        # Height and attitude must use the same sampled support layer. A
+        # higher bridge/ledge found by the broad presentation query is not it.
+        plane = vehicle_physics.sampled_chassis_support(
+            front, rear, lateral[0], lateral[1], centre,
+            yaw, half_length * 2.0, half_width * 2.0)
+        self._local_legacy_support_sample = (
+            position[0], position[2], yaw, plane)
+        if plane is not None:
+            return highest, plane['center_y']
+        if (follow_gap is None or not self._local_fall_armed or
+                (centre is not None and
+                 position[1] - centre <= float(follow_gap))):
+            return highest, centre
         bridged = tank_collision.straddled_support(
             position[1], follow_gap, ((front, rear), lateral))
         if centre is None:
@@ -21291,8 +21553,13 @@ class BattleRuntime(object):
     def _update_vertical_motion_legacy(self, entity, position, yaw, dt):
         """Copy vertical motion while rejecting false raised support."""
         self._local_support_rise_blocked = False
+        self._local_legacy_support_sample = None
         snap_gap = vehicle_physics.ground_follow_gap(
             self._local_speed, self._local_last_pitch, dt)
+        if not self._local_airborne:
+            self._local_vertical_speed = vehicle_physics.supported_vertical_speed(
+                self._local_speed, self._local_pitch,
+                self._local_vertical_speed)
         highest, centre = self._terrain_support(
             position, yaw, entity.typeDescriptor, follow_gap=snap_gap)
         # Front/rear hits keep a hull supported across a narrow ditch, but the
@@ -21354,9 +21621,10 @@ class BattleRuntime(object):
                         rise = ground - position[1]
                         next_y = position[1] + min(rise, max_climb)
                     else:
-                        next_y = position[1] + (
-                            ground - position[1]) * min(1.0, dt * 15.0)
-                        next_y = min(next_y, ground + 0.12)
+                        # Reachable support owns the physical pose immediately.
+                        # Easing it here leaves a gap which the next tick
+                        # mistakes for flight and repeatedly collides with.
+                        next_y = ground
                     # Carry actual supported vertical motion into the next
                     # tick; a crest cannot erase upward/downward momentum.
                     self._local_vertical_speed = (
@@ -21938,6 +22206,23 @@ class BattleRuntime(object):
         return getattr(entity, 'siegeState', states.DISABLED) in (
             states.SWITCHING_ON, states.SWITCHING_OFF)
 
+    def _send_local_siege_request(self, entity, enabled):
+        """Submit a stopped drivetrain and the mode request in one input."""
+        if not self._sender.send_current(siege_enabled=enabled):
+            return False
+        request_seq = getattr(self.client, '_input_seq', None)
+        if (isinstance(request_seq, bool) or
+                not isinstance(request_seq, _INTEGER_TYPES) or request_seq <= 0):
+            request_seq = None
+        self._local_siege_braking = None
+        # Only the already-stopped drivetrain is locked while the server
+        # acknowledges the request and advances the native transition timer.
+        self._local_siege_pending = (enabled, request_seq)
+        self._report_local_siege_edge(
+            'request', getattr(entity, 'siegeState', None),
+            input_seq=request_seq)
+        return True
+
     def _drive_local(self, elapsed):
         """Advance local copied physics through all elapsed battle time."""
         if self._sender is None or self._server is None:
@@ -21953,12 +22238,19 @@ class BattleRuntime(object):
             stopped = bool(self._drive_local_step(step))
             remaining = max(0.0, remaining - step)
         if stopped:
+            self._local_siege_braking = None
             if self._pending_landing_impacts:
                 self._flush_landing_observation()
             elif (self._local_damage_report is not None or
                     self._drown_level == 2 or self._overturn_level == 2):
                 self._sender.send_current()
             return
+        if (self._local_siege_braking is not None and
+                self._local_speed == 0.0 and self._local_turn_speed == 0.0):
+            entity = self._server_entity(self._server.vehicle_id)
+            if entity is not None and self._send_local_siege_request(
+                    entity, self._local_siege_braking):
+                self._local_input_sent_during_drive = True
         if self._local_input_sent_during_drive:
             self._input_accumulator = 0.0
         else:
@@ -22018,6 +22310,7 @@ class BattleRuntime(object):
         dt = max(0.0, min(float(dt), 0.1))
         position = self._local_position
         tick_pose = position
+        tick_attitude = (self._local_pitch, self._local_roll)
         yaw = self._canonicalize_local_attitude(self._local_yaw)
         self._local_yaw = yaw
         turret_tick_pose = None
@@ -22033,6 +22326,9 @@ class BattleRuntime(object):
         slope_pitch = (0.0 if self._local_airborne else
                        self._smoothed_drive_pitch(position, yaw))
         siege_drive_locked = self._local_siege_drive_locked(entity)
+        if bool(getattr(entity, 'is_engine_dead', False)):
+            self._local_siege_braking = None
+        siege_braking = self._local_siege_braking is not None
         overturned = self._overturn_level == 2
         if overturned:
             # Lock powered input without stopping passive gravity or momentum.
@@ -22042,9 +22338,9 @@ class BattleRuntime(object):
                                  'notifyInputKeysDown', None)
             if callable(stop_input):
                 stop_input(0, 0)
-        throttle = (0.0 if siege_drive_locked or overturned else
+        throttle = (0.0 if siege_drive_locked or siege_braking or overturned else
                     self._sender.forward)
-        turn = (0.0 if siege_drive_locked or overturned else
+        turn = (0.0 if siege_drive_locked or siege_braking or overturned else
                 self._local_autorotation_turn(
                     entity, self._sender.turn, throttle,
                     tracks_blocked=self._sender.handbrake))
@@ -22059,7 +22355,7 @@ class BattleRuntime(object):
         # torque, so existing momentum continues to coast.
         handbrake = ((bool(self._sender.handbrake) and not overturned) or
                      is_tracked or
-                     siege_drive_locked)
+                     siege_drive_locked or siege_braking)
         previous_speed = self._local_speed
         if siege_drive_locked:
             # Freeze only powered longitudinal/traverse motion. Gravity,
@@ -22181,6 +22477,7 @@ class BattleRuntime(object):
                         self._local_air_lateral = (0.0, 0.0)
                     contact_path = 'air_contact'
 
+        horizontal_speed = self._local_speed
         if siege_drive_locked or overturned or is_tracked or is_engine_dead:
             turn = 0.0
             self._local_turn_speed = 0.0
@@ -22324,6 +22621,9 @@ class BattleRuntime(object):
             contact_path, previous_speed, slope_pitch,
             position[1] - tick_pose[1])
         self._local_position, self._local_yaw = position, yaw
+        self._report_local_hydraulic_motion(
+            entity, tick_pose, tick_attitude, dt, previous_speed,
+            drive_speed, horizontal_speed, contact_path, primary_contact)
         self._report_local_motion_stall(
             tick_pose, position, dt, throttle, contact_path,
             previous_speed, drive_speed, slope_pitch, primary_contact,
@@ -27491,6 +27791,8 @@ class BattleRuntime(object):
         self._client_ready_received = False
         self._local_descriptor = None
         self._vehicle_ready_deadline = 0.0
+        self._local_hydraulic_motion_window = None
+        self._local_hydraulic_motion_report_failed = False
         self._bot_fire_seen = {}
         self._bot_fire_confirmations = {}
         self._bot_launch_payloads = {}
@@ -27502,6 +27804,7 @@ class BattleRuntime(object):
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
+        self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
         self._local_push_x = 0.0

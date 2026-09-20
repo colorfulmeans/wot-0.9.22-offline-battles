@@ -3,6 +3,8 @@
 Rows are [kind, combat_elapsed_ms, value, ...]. Damage carries HP and the
 pre-hit immobilized state; kills carry reason, pre-hit immobilization and
 distance; critical events carry the newly changed native critical mask.
+Version 2 adds ram rows containing applied damage in both directions, victim
+death, attacker survival and pre-hit immobilization from the same collision.
 The cap is per actor, across targets, keeping receipts below the wire budget.
 An incomplete history stays explicitly unknown to the mission evaluator.
 """
@@ -14,7 +16,33 @@ except NameError:
     INTEGER_TYPES = (int,)
 
 MAX_EVENTS = 1024
-FIELDS = frozenset(('mission_events', 'mission_events_complete'))
+VERSION = 2
+_HISTORY_FIELDS = frozenset(('mission_events', 'mission_events_complete'))
+FIELDS = _HISTORY_FIELDS | frozenset(('mission_events_version',))
+
+
+# #1513 device indices: engine, ammo bay, fuel tank, radio and turret drive
+# are internal; tracks, gun and observation device are external. Crew occupies
+# bits 24..28. A yellow device is damage, not a destroyed-module event.
+INTERNAL_DEVICE_MASK = sum(1 << index for index in (0, 1, 2, 3, 6))
+INTERNAL_DESTROYED_MASK = (INTERNAL_DEVICE_MASK << 12) | (31 << 24)
+INTERNAL_CRITICAL_MASK = INTERNAL_DEVICE_MASK | INTERNAL_DESTROYED_MASK
+
+
+def internal_destroyed_count(mask):
+    return bin(int(mask) & INTERNAL_DESTROYED_MASK).count('1')
+
+
+def internal_critical_count(mask):
+    """Count internal devices affected by one hit, plus knocked-out crew.
+
+    Damage and destruction of the same device in one transition are one
+    affected device. Separate accepted transitions remain separate events.
+    """
+    mask = int(mask)
+    devices = (mask | (mask >> 12)) & INTERNAL_DEVICE_MASK
+    crew = mask & (31 << 24)
+    return bin(devices).count('1') + bin(crew).count('1')
 
 
 def _integer(value, minimum, maximum):
@@ -25,7 +53,9 @@ def valid(row):
     if not FIELDS.intersection(row):
         return True
     events = row.get('mission_events')
-    if (not FIELDS.issubset(row) or
+    version = row.get('mission_events_version', 1)
+    if (not _HISTORY_FIELDS.issubset(row) or
+            not _integer(version, 1, VERSION) or
             not isinstance(row.get('mission_events_complete'), bool) or
             not isinstance(events, list) or len(events) > MAX_EVENTS):
         return False
@@ -53,6 +83,12 @@ def valid(row):
                 return False
         elif kind == 'critical':
             if len(event) != 3 or not _integer(event[2], 1, 4294967295):
+                return False
+        elif kind == 'ram':
+            if (version < 2 or len(event) != 7 or
+                    not _integer(event[2], 1, 65535) or
+                    not _integer(event[3], 0, 65535) or
+                    not all(isinstance(value, bool) for value in event[4:7])):
                 return False
         else:
             return False

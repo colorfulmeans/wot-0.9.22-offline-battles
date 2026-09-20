@@ -418,9 +418,9 @@ class NativeFenceFollowupTests(unittest.TestCase):
     paris = CrossMapRailingCollisionTests.paris
     ray = staticmethod(CrossMapRailingCollisionTests.ray)
 
-    def install_report(self, contact):
+    def install_report(self, contact, map_name='112_eiffel_tower_ctf'):
         sensor.set_catalog(json.loads(
-            (ROOT / 'destructibles/112_eiffel_tower_ctf.json').read_text()))
+            (ROOT / ('destructibles/%s.json' % map_name)).read_text()))
         sensor.g_offh_destr_instances = {}
         sensor.g_offh_destr_contact_bins = {}
         sensor.g_offh_destr_speculative = set()
@@ -435,6 +435,105 @@ class NativeFenceFollowupTests(unittest.TestCase):
                 sensor.g_offh_destr_contact_bins, identity, instance)
             self.broken.update(identity + (b['material'],)
                                for b in owner['boxes'] if b['broken'])
+
+    def test_murovanka_remapped_chunk_original_faces_use_spatial_owner(self):
+        rows = json.loads((ROOT / 'tests/fixtures/murovanka_143656_contacts.json').read_text())
+        self.assertEqual(5, len(rows))
+        for row in rows:
+            with self.subTest(hit=row['hit']):
+                self.install_report(row, '11_murovanka')
+                a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+                # Leave room for a distinct backing face inside the same ray.
+                direction = b - a
+                direction.normalise()
+                b = b + direction.scale(.01)
+                key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
+                keep = sensor.horizontal_collision_filter(a, b)
+                def cast(surfaces):
+                    native = CompiledCollisionTests.native(surfaces)
+                    def query(*args):
+                        result = native(*args)
+                        return None if result is None else (result[0], V(row['normal']))
+                    return sensor.collide_motion_segment(1, a, b, keep, query)
+                # The log proves a completed live-layout repair for 32635.
+                self.assertIs(point, cast([(point, key)])[0])
+                sensor._destructible_catalog['layout_generations'][32635] = 1
+                if not any(box['contains_hit'] for owner in
+                        row['native_contact_evidence']['nearby_owners']
+                        for box in owner['boxes']):
+                    # One recorded end face has no proved owner volume. Keep
+                    # that unresolved face solid; the report cannot prove a
+                    # safe exclusion outside the authored bounds.
+                    self.assertIs(point, cast([(point, key)])[0])
+                    continue
+                self.assertIsNone(cast([(point, key)]))
+                direction = b - a
+                direction.normalise()
+                wall = point + direction.scale(.001)
+                for material in (88, 111):
+                    self.assertIs(wall, cast([(point, key),
+                        (wall, (material, 0, key[2], key[3]))])[0])
+                self.broken.clear()
+                self.assertIs(point, cast([(point, key)])[0])
+
+    def test_prague_broken_door_uses_live_component_bounds_not_stale_material(self):
+        rows = json.loads((ROOT / 'tests/fixtures/prague_173230_contacts.json').read_text())
+        self.assertEqual(4, len(rows))
+        for row in rows:
+            with self.subTest(time=row['log_time']):
+                self.install_report(row, '114_czech')
+                a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+                key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
+                keep = sensor.horizontal_collision_filter(a, b)
+                def cast(surfaces):
+                    return sensor.collide_motion_segment(
+                        1, a, b, keep, CompiledCollisionTests.native(surfaces))
+                self.assertIsNone(cast([(point, key)]))
+                direction = b - a
+                direction.normalise()
+                wall = point + direction.scale(.001)
+                for material in (88, 111):
+                    self.assertIs(wall, cast([(point, key),
+                        (wall, (material, 0, key[2], key[3]))])[0])
+                self.broken.clear()
+                self.assertIs(point, cast([(point, key)])[0])
+                self.broken.add((key[3], key[2], 74))
+                # An overlapping intact component makes ownership ambiguous.
+                instance = sensor.g_offh_destr_instances[(key[3], key[2])]
+                instance['boxes'].append(((point.x, point.y, point.z),
+                    ((.1, 0, 0), (0, .1, 0), (0, 0, .1)), 75))
+                self.assertIs(point, cast([(point, key)])[0])
+
+    def test_prague_material_alias_stops_before_intact_component(self):
+        row = json.loads((ROOT / 'tests/fixtures/prague_173230_contacts.json').read_text())[0]
+        self.install_report(row, '114_czech')
+        a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+        direction = b - a
+        direction.normalise()
+        b = b + direction.scale(2)
+        wall = point + direction.scale(.1)
+        instance = sensor.g_offh_destr_instances[(32640, 89)]
+        instance['boxes'].append(((wall.x, wall.y, wall.z),
+            ((.01, 0, 0), (0, .01, 0), (0, 0, .01)), 75))
+        key = (73, 0, 89, 32640)
+        result = sensor.collide_motion_segment(1, a, b,
+            sensor.horizontal_collision_filter(a, b),
+            CompiledCollisionTests.native([(point, key), (wall, key)]))
+        self.assertIs(wall, result[0])
+
+    def test_remapped_key_cannot_erase_its_own_intact_owner(self):
+        row = json.loads((ROOT / 'tests/fixtures/murovanka_143656_contacts.json').read_text())[0]
+        self.install_report(row, '11_murovanka')
+        sensor._destructible_catalog['layout_generations'][32635] = 1
+        a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+        key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
+        identity = (key[3], key[2])
+        instance = dict(sensor.g_offh_destr_instances[(32635, 31)])
+        sensor.g_offh_destr_instances[identity] = instance
+        sensor._index_catalog_instance_1513(sensor.g_offh_destr_contact_bins,
+                                           identity, instance)
+        self.assertIsNone(sensor._compiled_motion_skin_1513(
+            point, a, b, {key}, V(row['normal'])))
 
     @staticmethod
     def transient_native(surfaces):

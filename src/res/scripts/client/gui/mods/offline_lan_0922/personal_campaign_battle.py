@@ -25,6 +25,7 @@ _STAT_KEYS = {
     'killsAssistedStun': 'kills_assisted_stun',
     'killsAssistedTrack': 'kills_assisted_track',
     'critsCount': 'critical_hits', 'isNotSpotted': 'not_spotted',
+    'isAnyOurCrittedInnerModules': 'internal_crits_at_end',
     'capturePoints': 'capture_points',
     'droppedCapturePoints': 'dropped_capture_points',
 }
@@ -131,6 +132,33 @@ class _Facts(object):
             return (self.receipt.get('rewards') or {}).get('xp')
         if row is not None:
             return None
+        if key in ('innerModuleDestrCount', 'innerModuleCritCount',
+                   'killsAssistedRadio'):
+            if 'interactions' not in source:
+                return None
+            count = 0
+            for interaction in source['interactions']:
+                target = self.rows.get((interaction.get('target_kind'),
+                                        interaction.get('target_id')))
+                if target is None:
+                    return None
+                if target.get('team') == source.get('team'):
+                    continue
+                if key == 'killsAssistedRadio':
+                    value = interaction.get('kills_assisted_radio')
+                    if value is None:
+                        return None
+                    count += value
+                else:
+                    history = _mission_history(interaction)
+                    if history is None:
+                        return None
+                    counter = (mission_events.internal_critical_count
+                               if key == 'innerModuleCritCount' else
+                               mission_events.internal_destroyed_count)
+                    count += sum(counter(event[2])
+                                 for event in history if event[0] == 'critical')
+            return count
         if key == 'percentFromTotalTeamDamage':
             damage = self.result('damageDealt')
             team = self.receipt.get('team')
@@ -221,9 +249,10 @@ def _vehicle_events(name, node, facts):
     if name in ('vehicleDamage', 'vehicleStun'):
         allowed = allowed | set(('eventCount',))
     if name == 'vehicleKills':
-        allowed = allowed | set(('attackReason', 'distance'))
+        allowed = allowed | set(('distance', 'rammingInfo'))
     if name in ('vehicleDamage', 'vehicleKills'):
-        allowed = allowed | set(('limittedTime', 'enemyImmobilized'))
+        allowed = allowed | set(('limittedTime', 'enemyImmobilized',
+                                 'attackReason', 'lvlDiff'))
     unexpected = _names(node) - allowed
     if unexpected:
         return _unknown(name + ' modifier: ' + ','.join(sorted(unexpected)))
@@ -235,8 +264,29 @@ def _vehicle_events(name, node, facts):
             (_names(event_count) or event_count.get('value', ''))):
         return _unknown(name + ' eventCount modifier')
     diversity = _child(node, 'classesDiversity')
+    ram_info = _child(node, 'rammingInfo')
+    ram_flags = set(_value(node, 'rammingInfo').split())
+    if ram_info is not None and (_names(ram_info) or not ram_flags or
+            ram_flags - set(('stayedAlive', 'dealtMoreDamage'))):
+        return _unknown(name + ' rammingInfo modifier')
+    try:
+        attack_reason = (int(_value(node, 'attackReason'))
+                         if _child(node, 'attackReason') is not None else None)
+        level_diff = (int(_value(node, 'lvlDiff'))
+                      if _child(node, 'lvlDiff') is not None else None)
+        if (level_diff is not None and not 0 <= level_diff <= 9 or
+                _names(_child(node, 'lvlDiff')) or
+                _names(_child(node, 'attackReason'))):
+            raise ValueError('invalid event filter')
+    except (TypeError, ValueError):
+        return _unknown(name + ' attackReason or lvlDiff modifier')
+    if (name == 'vehicleDamage' and attack_reason not in (None, 2) or
+            ram_flags and attack_reason != 2):
+        return _unknown(name + ' attack reason evidence')
+    ram_history = bool(ram_flags or
+                       name == 'vehicleDamage' and attack_reason == 2)
     filtered_history = bool(_names(node) & set((
-        'limittedTime', 'enemyImmobilized', 'distance')))
+        'limittedTime', 'enemyImmobilized', 'distance'))) or ram_history
     try:
         time_limit = (int(_value(node, 'limittedTime')) * 1000
                       if _child(node, 'limittedTime') is not None else None)
@@ -246,6 +296,8 @@ def _vehicle_events(name, node, facts):
             raise ValueError('negative event deadline')
     except (TypeError, ValueError):
         return _unknown(name + ' limittedTime or distance boundary')
+    if ram_history and distance_limit is not None:
+        return _unknown('interaction: ram distance')
     immobilized = _child(node, 'enemyImmobilized')
     if immobilized is not None and (_names(immobilized) or immobilized.get('value', '')):
         return _unknown(name + ' enemyImmobilized modifier')
@@ -268,29 +320,46 @@ def _vehicle_events(name, node, facts):
             return _unknown('target roster')
         if row.get('team') == facts.receipt.get('team'):
             continue
-        if classes or diversity is not None:
+        if classes or diversity is not None or level_diff is not None:
             info = facts.describe(row.get('vehicle'))
             if info is None:
                 return _unknown('target vehicle descriptor')
             tags = info['tags'] & _CLASSES
             if classes and not tags & classes:
                 continue
+            if level_diff is not None:
+                own = facts.describe(facts.receipt.get('vehicle'))
+                if own is None:
+                    return _unknown('attacker vehicle descriptor')
+                if info['level'] - own['level'] < level_diff:
+                    continue
         else:
             tags = set()
         if filtered_history:
             history = _mission_history(event)
-            if history is None:
+            if (history is None or ram_history and
+                    event.get('mission_events_version', 1) < 2):
                 return _unknown('interaction: complete mission event history (' +
                                 ','.join(sorted(_names(node) & set((
-                                    'limittedTime', 'enemyImmobilized', 'distance')))) + ')')
+                                    'limittedTime', 'enemyImmobilized', 'distance',
+                                    'attackReason', 'rammingInfo')))) + ')')
             value = 0
             for occurrence in history:
-                if occurrence[0] != ('damage' if name == 'vehicleDamage' else 'kill'):
+                if occurrence[0] != ('ram' if ram_history else
+                                    'damage' if name == 'vehicleDamage' else 'kill'):
                     continue
                 if time_limit is not None and occurrence[1] > time_limit:
                     continue
-                if immobilized is not None and not occurrence[3]:
+                if immobilized is not None and not occurrence[6 if ram_history else 3]:
                     continue
+                if ram_history:
+                    if name == 'vehicleKills' and not occurrence[4]:
+                        continue
+                    if 'stayedAlive' in ram_flags and not occurrence[5]:
+                        continue
+                    if ('dealtMoreDamage' in ram_flags and
+                            occurrence[2] <= occurrence[3]):
+                        continue
                 if distance_limit is not None:
                     distance = occurrence[4]
                     if distance is None:
@@ -302,14 +371,10 @@ def _vehicle_events(name, node, facts):
                         continue
                 value += (occurrence[2] if name == 'vehicleDamage' and
                           event_count is None else 1)
-        if _child(node, 'attackReason') is not None:
-            try:
-                reason = int(_value(node, 'attackReason'))
-            except (TypeError, ValueError):
-                return _unknown('attack reason')
+        if name == 'vehicleKills' and attack_reason is not None:
             if 'death_reason' not in event:
                 return _unknown('interaction: death_reason')
-            if event['death_reason'] != reason:
+            if event['death_reason'] != attack_reason:
                 continue
         # Sum the worker's milliseconds, including across targets. A binary
         # float addition must not leave an exact 50 seconds just below 50.

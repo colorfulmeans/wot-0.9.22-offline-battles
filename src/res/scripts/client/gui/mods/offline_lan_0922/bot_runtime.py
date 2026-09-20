@@ -3084,6 +3084,7 @@ class BotRuntime(object):
 
     @observed('bot.siege_intent')
     def _update_bot_siege_intent(self, state, command, target, step):
+        state['_siege_braking'] = False
         pair = self._descriptor_pairs.get(int(state['id']))
         if pair is None or pair[1] is None:
             return False
@@ -3124,6 +3125,13 @@ class BotRuntime(object):
             _critical_parts(state)
         if 'engineHealth' in destroyed:
             state['_siege_intent_elapsed'] = 0.0
+            return False
+        if (not switching and
+                (state.get('speed', 0.0) != 0.0 or
+                 self._turn_speeds.get(int(state['id']), 0.0) != 0.0)):
+            # Keep the current descriptor and timer while ordinary track grip
+            # brakes the accepted motion. Re-evaluate the intent next tick.
+            state['_siege_braking'] = True
             return False
         next_state, remaining, transition_total, changed = \
             siege_mechanics.request_transition(
@@ -6249,8 +6257,23 @@ class BotRuntime(object):
         sine, cosine = math.sin(yaw), math.cos(yaw)
         centre = self._ground_probe_at(
             position[0], position[2], position[1])
+        state.pop('_legacy_support_sample', None)
         if centre is not None:
             centre = float(centre)
+            descriptor = self._descriptors.get(int(state.get('id', -1)))
+            if vehicle_physics.suspension_trial_excluded(descriptor):
+                half_width = max(0.3, _number(state.get('half_width'), 1.7))
+                samples = [self._ground_probe_at(
+                    position[0] + offset[0], position[2] + offset[1], position[1])
+                    for pair in tank_collision.chassis_span_offsets(
+                        yaw, half_width, half_length) for offset in pair]
+                plane = vehicle_physics.sampled_chassis_support(
+                    samples[0], samples[1], samples[2], samples[3], centre,
+                    yaw, half_length * 2.0, half_width * 2.0)
+                state['_legacy_support_sample'] = (
+                    position[0], position[2], yaw, plane)
+                if plane is not None:
+                    return max(samples + [centre]), plane['center_y']
             # Speed and a forward corridor grade can enlarge follow_gap
             # beyond an entire trench. Check the tracks before accepting that
             # drop; the dynamic envelope alone proves no surface continuity.
@@ -6353,6 +6376,18 @@ class BotRuntime(object):
             'hydraulic_pitch': state.get('suspension_pitch'),
             'gun_pitch': state.get('gun_pitch'),
         }
+        navigator_state = getattr(self.navigator, 'bot_states', {}).get(
+            int(state['id']))
+        if isinstance(navigator_state, dict):
+            navigation = dict((key, navigator_state.get(key)) for key in (
+                'navigation_status', 'target_is_terminal', 'index',
+                'path_key', 'request_path_key', 'planned_goal', 'last_target',
+                'controlled_shallow_target', 'blocked_step_replans'))
+            path = getattr(self.navigator, 'paths', {}).get(
+                navigator_state.get('path_key')) or ()
+            index = max(0, int(navigator_state.get('index', 0)))
+            navigation['path_near_target'] = path[max(0, index - 1):index + 3]
+            state['_motion_stall_pending']['navigation'] = navigation
         print('[BOT STALL] id=%s pos=(%.1f,%.1f) mode=%s recovery=%s '
               'traffic=%s intent=%s goal=%s strategic_goal=%s '
               'yaw=%.3f target_yaw=%s speed=%.2f throttle=%.2f turn=%.2f '
@@ -6508,6 +6543,24 @@ class BotRuntime(object):
         yaw = state['yaw']
         x = state['x']
         z = state['z']
+        support = state.get('_legacy_support_sample')
+        if support is not None and support[:3] == (x, z, yaw) and support[3] is not None:
+            plane = support[3]
+            suspension_pitch = state.get('suspension_pitch', 0.0)
+            if self._turret_motion_probe is not None:
+                before = self._turret_state_pose(state)
+                after = dict(before, pitch=plane['pitch'] + suspension_pitch,
+                             roll=plane['roll'])
+                after['chassis'] = dict(before['chassis'], pitch=plane['pitch'],
+                                        roll=plane['roll'])
+                if not self._turret_motion_probe(
+                        before, after, self._descriptors.get(int(state['id']))):
+                    return False
+            state['terrain_pitch'] = plane['pitch']
+            state['pitch'] = plane['pitch'] + suspension_pitch
+            state['roll'] = plane['roll']
+            state['pose_sample'] = (x, z, yaw)
+            return True
         tier = self._detail_tier(state)
         travel = SLOPE_SAMPLE_METRES[tier]
         turn = SLOPE_SAMPLE_RADIANS[tier]
@@ -7086,6 +7139,10 @@ class BotRuntime(object):
                 return True
         snap_gap = vehicle_physics.ground_follow_gap(
             state['speed'], state.get('last_drive_pitch', 0.0), step)
+        if not state.get('airborne', False):
+            state['vertical_speed'] = vehicle_physics.supported_vertical_speed(
+                state['speed'], state.get('terrain_pitch', 0.0),
+                state.get('vertical_speed', 0.0))
         highest, centre = self._terrain_support(state, snap_gap)
         # Front/rear hits keep a bot supported across a narrow ditch, but use
         # their real CoM distance below so a remote valley floor cannot pull
@@ -7164,9 +7221,7 @@ class BotRuntime(object):
                     rise = ground - state['y']
                     state['y'] += min(rise, max_climb)
                 else:
-                    state['y'] += ((ground - state['y']) *
-                                   min(1.0, step * 15.0))
-                    state['y'] = min(state['y'], ground + 0.12)
+                    state['y'] = ground
                 state['vertical_speed'] = (
                     ((state['y'] - previous_y) / step if state['y'] < previous_y
                      else vehicle_physics.launch_vertical_speed(
@@ -11690,6 +11745,7 @@ class BotRuntime(object):
                 self._update_bot_siege_intent(
                     state, command, target, step) or
                 siege_motion_locked)
+            siege_braking = bool(state.get('_siege_braking', False))
             if diagnostic is not None:
                 diagnostic.phase('bot.weapon_prepare')
             descriptor = self._descriptors.get(state['id'], {})
@@ -11830,6 +11886,14 @@ class BotRuntime(object):
                 # an older obstruction must not outlive that local plan.
                 vehicle_obstacles[safety['forward_blocked_by']] = now + 1.2
             state['traffic_obstacles'] = vehicle_obstacles
+            if siege_braking:
+                command['throttle'] = 0.0
+                command['turn'] = 0.0
+                command['movement_intent'] = False
+                throttle = 0.0
+                turn = 0.0
+                state['movement_dir'] = 0
+                state['rotation_dir'] = 0
             if siege_motion_locked:
                 # Stock Siege transitions immobilize the hull for the whole
                 # transition tick, including the publication which starts or
@@ -12320,7 +12384,7 @@ class BotRuntime(object):
                     vehicle_physics.longitudinal_step(
                         params, previous_speed, throttle,
                         steer_dir != 0, slope_pitch, step,
-                        bool(state.get('airborne', False)), 0, False))
+                        bool(state.get('airborne', False)), 0, siege_braking))
                 state['last_drive_pitch'] = slope_pitch
                 trace = state.get('_motion_stall_pending')
                 if trace is not None:

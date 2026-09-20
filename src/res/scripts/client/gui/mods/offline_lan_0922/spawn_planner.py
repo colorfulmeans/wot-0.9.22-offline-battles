@@ -67,6 +67,23 @@ class SpawnPlanner(object):
                 _finite(point[1], 'map %s team %d objective base z' %
                         (self.map_name, team))),)
 
+    @property
+    def capture_bases(self):
+        """Keep navigation coordinates separate from authored capture circles."""
+        radii = self.navigation_graph.get('objective_base_radii')
+        if radii is None:
+            return self.bases
+        if not isinstance(radii, (list, tuple)) or len(radii) != 2:
+            raise ValueError('objective base radii must contain two teams')
+        result = {}
+        for team in (1, 2):
+            radius = _finite(radii[team - 1], 'objective base radius')
+            if radius <= 0.0:
+                raise ValueError('objective base radius must be positive')
+            result[team] = tuple(dict(x=x, z=z, radius=radius)
+                                 for x, z in self.bases[team])
+        return result
+
     def _validate_separation(self):
         all_slots = []
         for team in (1, 2):

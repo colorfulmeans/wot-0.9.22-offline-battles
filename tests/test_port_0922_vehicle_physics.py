@@ -32,6 +32,77 @@ class _Strict1513Component(object):
     values = _forbidden
 
 
+class TrackScrollTests(unittest.TestCase):
+    def test_belt_speeds_follow_the_motion_of_their_chassis_sides(self):
+        # Measure the longitudinal velocity of points on each chassis side
+        # under the same yaw transform as the hull. This independently checks
+        # the turn sign instead of repeating the track-scroll equation.
+        step = 1.0e-5
+        for half_gauge in (0.8, 1.5, 2.2):
+            params = {'trackCenter': half_gauge, 'speedFwd': 30.0}
+            for yaw in (0.0, 1.1, math.pi - 0.001):
+                for speed in (-5.0, 0.0, 5.0):
+                    for omega in (-0.7, 0.7):
+                        with self.subTest(gauge=half_gauge, yaw=yaw,
+                                          speed=speed, omega=omega):
+                            forward = (math.sin(yaw), math.cos(yaw))
+                            expected = []
+                            for side in (-half_gauge, half_gauge):
+                                before = (side * math.cos(yaw),
+                                          -side * math.sin(yaw))
+                                after = (
+                                    speed * forward[0] * step +
+                                    side * math.cos(yaw + omega * step),
+                                    speed * forward[1] * step -
+                                    side * math.sin(yaw + omega * step))
+                                expected.append(sum(
+                                    (end - start) * direction / step
+                                    for start, end, direction in
+                                    zip(before, after, forward)))
+                            actual = vehicle_physics.track_scroll(
+                                params, speed, omega)
+                            for observed, required in zip(actual, expected):
+                                self.assertAlmostEqual(required, observed,
+                                                       places=6)
+
+    def test_straight_travel_and_existing_animation_caps_are_preserved(self):
+        params = {'trackCenter': 1.5, 'speedFwd': 20.0}
+        for speed in (-10.0, 0.0, 10.0):
+            self.assertEqual((speed, speed),
+                             vehicle_physics.track_scroll(params, speed, 0))
+        cap = params['speedFwd'] * vehicle_physics.SCROLL_CAP
+        self.assertEqual((cap, -cap),
+                         vehicle_physics.track_scroll(params, 0, 100))
+        self.assertEqual((-cap, cap),
+                         vehicle_physics.track_scroll(params, 0, -100))
+
+
+class ChassisSupportGeometryTests(unittest.TestCase):
+    def test_uneven_ledge_support_contains_com_and_never_penetrates_samples(self):
+        for yaw in (0.0, 1.1, -2.0):
+            for heights in ((3.2, 3.2, 9.93, 3.2, 3.2),
+                            (9.93, 9.93, 9.93, 3.2, 3.2),
+                            (10.0, 10.0, 7.0, 7.0, 7.0)):
+                with self.subTest(yaw=yaw, heights=heights):
+                    plane = vehicle_physics.sampled_chassis_support(
+                        *(heights + (yaw, 7.0, 3.0)))
+                    self.assertIsNotNone(plane)
+                    offsets = ((0, 3.5), (0, -3.5), (1.5, 0), (-1.5, 0), (0, 0))
+                    for (right, front), height in zip(offsets, heights):
+                        x = right * math.cos(yaw) + front * math.sin(yaw)
+                        z = -right * math.sin(yaw) + front * math.cos(yaw)
+                        support = plane['center_y'] + plane['gradient_x'] * x + plane['gradient_z'] * z
+                        self.assertGreaterEqual(support + 1e-7, height)
+                    self.assertLessEqual(plane['center_y'], max(heights))
+
+    def test_true_cliff_floor_remains_far_below_com(self):
+        plane = vehicle_physics.sampled_chassis_support(
+            10, -20, -20, -20, -20, 0, 7, 3)
+        self.assertLess(plane['center_y'], 0.0)
+        self.assertIsNone(vehicle_physics.sampled_chassis_support(
+            10, None, -20, -20, -20, 0, 7, 3))
+
+
 class VehiclePhysicsDescriptorTests(unittest.TestCase):
 
     @staticmethod

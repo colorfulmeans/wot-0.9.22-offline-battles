@@ -80,6 +80,7 @@ INTERACTION_FIELDS = (
     ('damage_events', None, 0, 65535),
     ('kills_assisted_stun', None, 0, 1),
     ('kills_assisted_track', None, 0, 1),
+    ('kills_assisted_radio', None, 0, 1),
 )
 
 
@@ -152,6 +153,9 @@ def _receipt(value):
         raise ValueError('battle receipt summary is invalid')
     stats = dict((name, max(0, _int(raw_stats.get(name))))
                  for name in RECEIPT_STAT_NAMES)
+    if 'internal_crits_at_end' not in raw_stats:
+        # Old receipts cannot prove the zero-valued TD2 honor condition.
+        stats.pop('internal_crits_at_end', None)
     rewards = dict((name, max(0, _int(raw_rewards.get(name)))) for name in (
         'credits', 'xp', 'free_xp', 'repair_cost', 'ammo_cost', 'crystal'))
     # The client owns service prices and debits. A server receipt may not

@@ -53,6 +53,7 @@ RECEIPT_STAT_NAMES = (
     "team_crits", "stun_num", "stun_duration_ms", "stunned",
     "kills_assisted_stun", "kills_assisted_track", "critical_hits",
     "not_spotted", "stun_shots_2", "stun_shots_3",
+    "internal_crits_at_end",
 )
 
 # The #1513 table holds 62 entries across every game mode this build ever

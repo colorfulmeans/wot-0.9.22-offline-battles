@@ -537,6 +537,7 @@ def _destroy_tree(
 			initial_signature = None
 	entry = {
 		'data': data,
+		'fallPitch': pitch,
 		'pos': (float(pos[0]), float(pos[1]), float(pos[2])),
 		'initialMatrixSignature': initial_signature,
 		'status': 'pending',

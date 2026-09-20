@@ -701,7 +701,7 @@ class LanProtocolTests(unittest.TestCase):
             'piercings_received', 'no_damage_direct_hits_received',
             'explosion_hits_received', 'explosion_hits', 'damaged',
             'team_hits', 'team_damage', 'team_kills', 'mileage', 'life_time',
-            'team_crits', 'critical_hits',
+            'team_crits', 'critical_hits', 'internal_crits_at_end',
             'stun_num', 'stun_duration_ms', 'stunned', 'not_spotted',
             'stun_shots_2', 'stun_shots_3',
             'kills_assisted_stun', 'kills_assisted_track',

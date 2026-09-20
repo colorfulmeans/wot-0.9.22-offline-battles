@@ -1015,7 +1015,13 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 	for item_index in range(entry['next_item'], end_item):
 		identity = (int(chunk_id), int(item_index))
 		if (is_excluded_1513(*identity) and
-				not (_destructible_catalog or {}).get('layout_repair_supported')):
+				not _layout_repair_pending_1513(chunk_id)):
+			# Supporting live layout repair does not make an authored absent
+			# slot a failed native item. As with full-width lists, skip it unless
+			# this chunk has an actual pending remap. Otherwise every compacted
+			# v9 list containing such a slot ends as isolated_item, and all the
+			# valid trees/models behind it lose registration. Never query a
+			# mode-excluded scene object merely to finish name enumeration.
 			entry['ignored_items'].add(item_index)
 			continue
 		if _destructible_isolated_1513(*identity):
@@ -3240,10 +3246,13 @@ def _tree_pose_sweep_boxes_1513(
 	(sx, sy, sz, start_yaw, ex, ey, ez, end_yaw) = values
 	try:
 		minimum, maximum = bbox[:2]
-		minimum = tuple(_finite_tree_motion_value_1513(value)
-			for value in minimum[:3])
-		maximum = tuple(_finite_tree_motion_value_1513(value)
-			for value in maximum[:3])
+		# Hit-tester corners are coordinate vectors, not Python lists.  Match
+		# the other hull consumers' indexed access; slicing can reject an
+		# otherwise valid native box and silently discard every tree contact.
+		minimum = tuple(_finite_tree_motion_value_1513(minimum[index])
+			for index in range(3))
+		maximum = tuple(_finite_tree_motion_value_1513(maximum[index])
+			for index in range(3))
 	except (AttributeError, KeyError, TypeError, IndexError):
 		return None
 	if (any(value is None for value in minimum + maximum) or
@@ -4240,12 +4249,85 @@ def _original_side_face_1513(normal, box):
 		_vector_dot(up, face) ** 2 <= 1.0e-10 * length_squared)
 
 
+def _owned_component_skin_1513(point, start, end, surfaces):
+	"""Bound a stale original material to its proved, broken live component.
+
+	The Prague workshop door reports original material 73 for its already
+	broken material-74 panel. The same live item owns intact parts above it.
+	Only a witness inside broken component bounds can disambiguate this key;
+	never let the exclusion extend into an intact component or another item.
+	"""
+	instances = globals().get('g_offh_destr_instances', {})
+	authority = None
+	predicted = globals().get('g_offh_destr_speculative', set())
+	excluded = set()
+	length = (end - start).length
+	if length <= _SHOT_RAY_EPSILON:
+		return None
+	limit = 1.0
+	for surface in surfaces:
+		if (len(surface) != 4 or
+				not all(type(value) in _INTEGER_TYPES for value in surface) or
+				not 71 <= surface[0] <= 86 or surface[1] != 0):
+			continue
+		identity = (surface[3], surface[2])
+		instance = instances.get(identity)
+		if (instance is None or instance['kind'] != 'structure' or
+				_destructible_isolated_1513(*identity) or
+				_layout_repair_pending_1513(identity[0])):
+			continue
+		boxes = instance['boxes']
+		if surface[0] not in set(box[2] for box in boxes):
+			continue
+		containing = [box for box in boxes if _point_in_world_box(point, box)]
+		if not containing:
+			continue
+		if authority is None:
+			authority = _get_destr_authority()
+		def broken(box):
+			key = identity + (box[2],)
+			return authority.is_destroyed(*key) or key in predicted
+		if (not containing or any(not broken(box) for box in containing) or
+				any(box[2] == surface[0] for box in containing)):
+			continue
+		intervals = [_segment_world_box_interval(start, end, box)
+			for box in containing]
+		if any(interval is None for interval in intervals):
+			continue
+		local_limit = min(interval[1] for interval in intervals)
+		for box in boxes:
+			if broken(box):
+				continue
+			interval = _segment_world_box_interval(start, end, box)
+			if interval is not None and interval[1] * length >= (point - start).length:
+				local_limit = min(local_limit,
+					max(0.0, interval[0] - 2.0 * _SHOT_RAY_EPSILON / length))
+		if local_limit * length + 1.0e-7 < (point - start).length:
+			continue
+		limit = min(limit, local_limit)
+		excluded.add(surface)
+	return (limit * length, excluded) if excluded else None
+
+
 def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 	"""Resolve anonymous original keys without conflating adjacent live owners."""
+	component_skin = _owned_component_skin_1513(point, start, end, surfaces)
+	if component_skin is not None:
+		return component_skin
 	instances = globals().get('g_offh_destr_instances', {})
 	aliases = set(surface for surface in surfaces
 		if _anonymous_original_surface_1513(surface) is not None)
-	if not aliases:
+	# A repaired live WGDE layout and its static BSP can use different item
+	# slots (Murovanka #1513 report, 2026-09-20). These original-material
+	# callbacks have flags=0, so they are not anonymous compiled aliases.
+	# Admit an exact key only after spatial proof below; never infer an offset
+	# or apply the anonymous material/flags wildcard to a real chunk slot.
+	remapped = set(surface for surface in surfaces if len(surface) == 4 and
+		all(type(value) in _INTEGER_TYPES for value in surface) and
+		71 <= surface[0] <= 86 and surface[1] == 0 and
+		_layout_generation_1513(surface[3]) > 0 and
+		not _layout_repair_pending_1513(surface[3]))
+	if not aliases and not remapped:
 		return None
 	members = globals().get('g_offh_destr_contact_bins', {}).get(
 		_destructible_bin_key(point.x, point.z), ())
@@ -4262,6 +4344,29 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		interval = _segment_world_box_interval(start, end, envelope)
 		if interval is not None:
 			owners.append((identity, instance, interval))
+	for surface in remapped:
+		wire = (surface[3], surface[2])
+		# A key that actually owns the witness keeps its ordinary live-ledger
+		# semantics. Only a different, proved placement in the same repaired
+		# chunk can identify a leftover original face.
+		if any(identity == wire for identity, unused, interval in owners):
+			continue
+		catalog = _destructible_catalog or {}
+		if wire in catalog.get('tree_instances', {}):
+			continue
+		registered = instances.get(wire) or catalog.get('baked_instances', {}).get(wire)
+		if registered is not None:
+			envelope = _instance_motion_envelope_1513(registered)
+			if envelope is not None and _point_in_world_box(point, envelope):
+				continue
+		if any(identity[0] == wire[0] and
+				_original_side_face_1513(normal, box) and
+				_point_in_world_box(point, box)
+				for identity, instance, unused_interval in owners
+				for box in instance['boxes']):
+			aliases.add(surface)
+	if not aliases:
+		return None
 	projected = False
 	# A neighbouring model's union may contain the witness even when the
 	# actual material belongs to a tilted component just outside its Y bounds.
@@ -4709,7 +4814,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			physical_crushable = _stock_crushable_1513(
 				mat_info, vel, td, candidate[5])
 			cap_crushable = (kinetic_speed is not None and
-				kind in ('fragile', 'structure') and
+				kind in ('fragile', 'structure', 'falling') and
 				_stock_crushable_1513(
 					mat_info, kinetic_speed, td, candidate[5]))
 			if (kinetic_speed is not None and not contact_candidate and
@@ -4717,7 +4822,7 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 				# A real frame sweep at sufficient physical speed keeps the old
 				# crush-through behaviour.  Only the directional-cap shortcut is
 				# restricted to exact hull contact; otherwise it is planning-only.
-				if kind in ('fragile', 'structure') and cap_crushable:
+				if cap_crushable:
 					approach = True
 				else:
 					blocked = True
@@ -4772,7 +4877,10 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			accepted = auth.destroy_module(
 				spaceID, chunk_id, item_index, mat_kind, point, False)
 			event_kind = 'module'
-		elif kind == 'falling' and not used_cap:
+		elif kind == 'falling':
+			# A powered hull can push over a column just like another fragile
+			# prop. Admission above requires exact contact and the same stock
+			# health/scale law; the column order still receives real speed.
 			accepted = auth.destroy_column(
 				spaceID, chunk_id, item_index, yaw, vel, point)
 			event_kind = 'column'
@@ -6388,6 +6496,7 @@ def _fell_trees_near(
 					'bins': {}, 'extended_bins': {}, 'count': 0,
 					'native_count': _native_count,
 					'max_radius': 0.0, 'slot_diagnostics': {},
+					'tree_health': {},
 				}
 				_retry_registry = False
 				try:
@@ -6659,6 +6768,7 @@ def _fell_trees_near(
 						# ChristmasTree sentinels use 40000 = unrammable.
 						if typ == AreaDestructibles.DESTR_TYPE_TREE:
 							_hp_gate = desc.get('health', 0)
+							registry['tree_health'][_ti] = _hp_gate
 							if _hp_gate < 10 or _hp_gate > 1000:
 								_slot_diag['result'] = 'health_gate'
 								continue

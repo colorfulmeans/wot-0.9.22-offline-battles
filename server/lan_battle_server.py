@@ -165,6 +165,7 @@ RESULT_INTERACTION_LIMITS = {
     "damage_events": (0, 65535),
     "kills_assisted_stun": (0, 1),
     "kills_assisted_track": (0, 1),
+    "kills_assisted_radio": (0, 1),
 }
 DEFAULT_MAP = "server_random"
 CLIENT_BUILD_0922 = "wot-0.9.22.0.1-cn-1513"
@@ -1180,11 +1181,12 @@ def _persisted_result_receipt(value):
     if isinstance(booster, bool) or not isinstance(booster, int) or not 0 <= booster <= 2 ** 31 - 1:
         raise ValueError("invalid persisted battle directive")
     for name in stat_names:
-        stats.setdefault(name, 0)
+        if name != "internal_crits_at_end":
+            stats.setdefault(name, 0)
     for mapping, names in ((stats, stat_names), (rewards, reward_names)):
-        if any(isinstance(mapping.get(name), bool) or
-               not isinstance(mapping.get(name), int) or
-               mapping.get(name) < 0 for name in names):
+        if any(isinstance(mapping.get(name, 0), bool) or
+               not isinstance(mapping.get(name, 0), int) or
+               mapping.get(name, 0) < 0 for name in names):
             raise ValueError("invalid persisted battle receipt statistic")
     if rewards["repair_cost"] or rewards["ammo_cost"]:
         raise ValueError("offline service costs must be zero")
@@ -1232,10 +1234,11 @@ def _persisted_result_receipt(value):
                 not isinstance(row.get("stats"), dict)):
             raise ValueError("invalid persisted public result row")
         for name in stat_names:
-            row["stats"].setdefault(name, 0)
-        if any(isinstance(row["stats"].get(name), bool) or
-               not isinstance(row["stats"].get(name), int) or
-               row["stats"].get(name) < 0 for name in stat_names):
+            if name != "internal_crits_at_end":
+                row["stats"].setdefault(name, 0)
+        if any(isinstance(row["stats"].get(name, 0), bool) or
+               not isinstance(row["stats"].get(name, 0), int) or
+               row["stats"].get(name, 0) < 0 for name in stat_names):
             raise ValueError("invalid persisted public result statistic")
         killer_kind = row.get("killer_kind", "")
         killer_id = row.get("killer_id", 0)
@@ -1269,7 +1272,7 @@ def _persisted_result_receipt(value):
         raise ValueError("invalid persisted interaction details")
     interaction_fields = set(RESULT_INTERACTION_LIMITS)
     interaction_keys = interaction_fields | {"target_kind", "target_id"} | mission_events.FIELDS
-    optional = {"damage_events", "kills_assisted_stun", "kills_assisted_track"} | mission_events.FIELDS
+    optional = {"damage_events", "kills_assisted_stun", "kills_assisted_track", "kills_assisted_radio"} | mission_events.FIELDS
     interaction_targets = set()
     mission_event_count = 0
     for interaction in interactions:
@@ -4017,8 +4020,16 @@ class BattleState:
                     z = _finite_float(z, float("nan"))
                     if not math.isfinite(x) or not math.isfinite(z):
                         continue
-                    points.append((round(_clamp(x, -2000.0, 2000.0), 3),
-                                   round(_clamp(z, -2000.0, 2000.0), 3)))
+                    point = (round(_clamp(x, -2000.0, 2000.0), 3),
+                             round(_clamp(z, -2000.0, 2000.0), 3))
+                    if isinstance(value, dict) and 'radius' in value:
+                        radius = _finite_float(value['radius'], float('nan'))
+                        if (not math.isfinite(radius * radius) or
+                                radius <= 0.0):
+                            continue
+                        points.append(dict(x=point[0], z=point[1], radius=radius))
+                    else:
+                        points.append(point)
                 except (KeyError, TypeError, ValueError, IndexError):
                     continue
             if points:
@@ -9890,6 +9901,11 @@ class BattleState:
                 ("bot", bot_id),
                 ("bot" if target_kind == "bot" else "player", target_id),
                 applied_target, target_critical_before)
+            self._record_ram_mission_events(
+                ("bot", bot_id),
+                ("bot" if target_kind == "bot" else "player", target_id),
+                applied_bot, applied_target, bot_combat_before[2],
+                target_critical_before)
 
             if not bot["alive"]:
                 bot["death_attacker_kind"] = (
@@ -9965,7 +9981,7 @@ class BattleState:
     @staticmethod
     def _receipt_statistics(row):
         """Project only statistics the battle server actually records."""
-        return {
+        result = {
             "shots": max(0, int(row.get("shots_fired", 0))),
             "direct_hits": max(0, int(row.get("shots_hit", 0))),
             "piercings": max(0, int(row.get("shots_penetrated", 0))),
@@ -10012,6 +10028,11 @@ class BattleState:
             "mileage": max(0, int(round(row.get("mileage", 0)))),
             "life_time": max(0, int(row.get("life_time", 0))),
         }
+        # Missing end-state evidence is unknown, not a clean vehicle. TD2's
+        # secondary condition asks whether this value equals zero.
+        if "internal_crits_at_end" in row:
+            result["internal_crits_at_end"] = int(bool(row["internal_crits_at_end"]))
+        return result
 
     def _catalogued_vehicle(self, vehicle):
         """Return one client catalog row for this vehicle name, or None."""
@@ -11321,11 +11342,6 @@ class BattleState:
                     while (len(player.gun_checkpoints) >
                            MAX_PLAYER_INPUT_FINGERPRINTS):
                         player.gun_checkpoints.popitem(last=False)
-            if (player.alive and self.phase == "battle" and
-                    self.battle_result is None and
-                    "siege_enabled" in message):
-                self._request_siege_state(
-                    player, message.get("siege_enabled"))
             if not self._combat_accepting() or self.battle_result is not None:
                 player.forward = 0.0
                 player.turn = 0.0
@@ -11351,6 +11367,11 @@ class BattleState:
                         player.speed = _clamp(
                             _finite_float(message.get("speed")),
                             -speed_limit, speed_limit)
+                if (self.phase == "battle" and "siege_enabled" in message):
+                    # The stopped pose and mode request share one admitted
+                    # input. Inspect this frame's speed, not the last packet's.
+                    self._request_siege_state(
+                        player, message.get("siege_enabled"))
                 if "aim_yaw" in message:
                     player.aim_yaw = _finite_float(message.get("aim_yaw"), player.aim_yaw)
                 if "gun_pitch" in message:
@@ -11619,6 +11640,8 @@ class BattleState:
                 return True
             next_state = SIEGE_SWITCHING_OFF
             duration = params[1]
+        if player.speed != 0.0:
+            return False
         if self._engine_damaged(player):
             duration *= params[3]
         player.siege_state = next_state
@@ -12756,6 +12779,13 @@ class BattleState:
                   else self.bot_states.get(victim[1]))
         critical = (getattr(target, "critical", None) if victim[0] == "player"
                     else (target or {}).get("critical")) or {}
+        # LT5 counts assisted kills, including a crew knockout that deals no
+        # hull HP. Freeze spotting eligibility at the canonical kill, not in
+        # the positive-damage path or from earlier radio-assist damage.
+        for assister in self._radio_assisters(
+                attacker, victim, self._vehicle_team(*victim)):
+            self._statistics_interaction(assister, victim)[
+                "kills_assisted_radio"] = 1
         interaction = self._statistics_interaction(attacker, victim)
         immobilized = interaction.pop("_terminal_immobilized", bool(_destroyed_tracks(critical)))
         mission_distance = distance
@@ -12905,6 +12935,14 @@ class BattleState:
             end_tick = self.vehicle_end_ticks.get(identity, self.tick)
             elapsed = max(0.0, float(end_tick) / TICK_HZ - PREBATTLE_SECONDS)
             self._statistics_row(*identity)["life_time"] = int(elapsed)
+            if identity[0] == "player":
+                player = self.players.get(identity[1])
+                critical = player.critical if player is not None else None
+            else:
+                critical = (self.bot_states.get(identity[1]) or {}).get("critical")
+            if critical is not None:
+                self._statistics_row(*identity)["internal_crits_at_end"] = int(bool(
+                    _crits_mask({}, critical) & mission_events.INTERNAL_CRITICAL_MASK))
 
     def _statistics_interaction(self, actor, target):
         """Return one bounded per-target row owned by ``actor``."""
@@ -12918,6 +12956,7 @@ class BattleState:
             interaction = {
                 "target_kind": target[0], "target_id": target[1],
                 "mission_events": [], "mission_events_complete": True,
+                "mission_events_version": mission_events.VERSION,
             }
             for name, (minimum, unused_maximum) in (
                     RESULT_INTERACTION_LIMITS.items()):
@@ -12934,6 +12973,35 @@ class BattleState:
             return
         elapsed = max(0, int(round((self.tick / TICK_HZ - PREBATTLE_SECONDS) * 1000)))
         interaction["mission_events"].append([kind, elapsed] + list(values))
+
+    def _record_ram_mission_events(self, first, second, damage_first,
+                                   damage_second, critical_first,
+                                   critical_second):
+        """Record only the admitted pair after both HP changes have settled.
+
+        A survivor of the first half may die in the second half. Conversely,
+        dying later in battle does not undo survival of this collision.
+        The ordinary damage/kill events retain their existing meanings.
+        """
+        if self._vehicle_team(*first) == self._vehicle_team(*second):
+            return
+        first_state = self._vehicle_stun_state(first)
+        second_state = self._vehicle_stun_state(second)
+        if first_state is None or second_state is None:
+            for actor, target in ((first, second), (second, first)):
+                self._statistics_interaction(actor, target)[
+                    "mission_events_complete"] = False
+            return
+        for actor, target, dealt, received, own, other, critical in (
+                (first, second, damage_second, damage_first,
+                 first_state, second_state, critical_second),
+                (second, first, damage_first, damage_second,
+                 second_state, first_state, critical_first)):
+            if dealt > 0:
+                self._record_mission_event(
+                    actor, target, "ram", int(dealt), int(received),
+                    not bool(other['alive']), bool(own['alive']),
+                    bool(_destroyed_tracks(critical)))
 
     def _increment_interaction(self, actor, target, name, amount=1):
         minimum, maximum = RESULT_INTERACTION_LIMITS[name]
@@ -13623,6 +13691,10 @@ class BattleState:
             ("player", first.player_id),
             ("player", second.player_id), damage_second,
             second_critical_before)
+        self._record_ram_mission_events(
+            ("player", first.player_id), ("player", second.player_id),
+            damage_first, damage_second, first_critical_before,
+            second_critical_before)
         if not first.alive:
             first.death_attacker_kind = "player"
             first.death_attacker_id = second.player_id
@@ -13829,7 +13901,7 @@ class BattleState:
         return dropped_total
 
     def _update_capture(self):
-        """Apply the standard-mode 50 m, 1 Hz capture law."""
+        """Apply authored standard-mode circles and the 1 Hz capture law."""
         if (not self._combat_accepting() or
                 self.tick % max(1, int(round(TICK_HZ))) != 0 or
                 self.battle_result is not None):
@@ -13861,7 +13933,7 @@ class BattleState:
             if raw_base is None:
                 continue
             if isinstance(raw_base, dict):
-                base_positions = [(raw_base.get('x'), raw_base.get('z'))]
+                base_positions = [raw_base]
             elif (isinstance(raw_base, (list, tuple)) and len(raw_base) >= 2 and
                   not isinstance(raw_base[0], (list, tuple, dict))):
                 base_positions = [(raw_base[0], raw_base[1])]
@@ -13871,17 +13943,18 @@ class BattleState:
             for point in base_positions:
                 try:
                     if isinstance(point, dict):
-                        normalized.append((float(point['x']), float(point['z'])))
+                        normalized.append((float(point['x']), float(point['z']),
+                                           float(point.get('radius', 50.0))))
                     else:
-                        normalized.append((float(point[0]), float(point[1])))
+                        normalized.append((float(point[0]), float(point[1]), 50.0))
                 except (KeyError, TypeError, ValueError, IndexError):
                     continue
             if not normalized:
                 continue
             invading_team = 3 - base_team
             threatened = []
-            for index, (bx, bz) in enumerate(normalized):
-                if any((x - bx) ** 2 + (z - bz) ** 2 <= 2500.0
+            for index, (bx, bz, radius) in enumerate(normalized):
+                if any((x - bx) ** 2 + (z - bz) ** 2 <= radius ** 2
                        for unused_key, x, z in vehicles[invading_team]):
                     threatened.append({
                         "id": "%d:%d" % (base_team, index),
@@ -13891,8 +13964,8 @@ class BattleState:
             self.capture_threat_bases[base_team] = threatened
             invader_keys = sorted(set(
                 key for key, x, z in vehicles[invading_team]
-                if any((x - bx) ** 2 + (z - bz) ** 2 <= 2500.0
-                       for bx, bz in normalized)))
+                if any((x - bx) ** 2 + (z - bz) ** 2 <= radius ** 2
+                       for bx, bz, radius in normalized)))
             self.capture_invaders[base_team] = set(
                 _capture_key_actor(key) for key in invader_keys)
             state = self.rules_state['bases'][str(base_team)]

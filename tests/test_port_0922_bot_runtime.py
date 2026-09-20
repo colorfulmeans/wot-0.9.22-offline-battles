@@ -5617,6 +5617,26 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(
             1, runtime.diagnostic_totals()['suspension_param_failures'])
 
+    def test_hydraulic_bot_height_and_attitude_share_uneven_contact_plane(self):
+        runtime, state, unused = self._suspension_case(lambda x, z: 3.2)
+        runtime._descriptors[11].isPitchHullAimingAvailable = True
+        self.assertIsNone(runtime._suspension_params_for(11))
+        state.update(x=0.0, y=3.6, z=0.0, yaw=0.0, speed=0.0,
+                     half_width=1.5, half_length=3.5, terrain_pitch=-.566,
+                     pitch=-.566, roll=-.363, airborne=False, grounded_once=True)
+        runtime._physics_ground_probe = lambda x, z, hint: 4.0 if x > 1.0 else 3.2
+        self.assertFalse(runtime._update_vertical_motion(state, .04))
+        self.assertTrue(runtime._update_slope_pose(state))
+        self.assertAlmostEqual(3.6, state['y'])
+        self.assertAlmostEqual(0.0, state['terrain_pitch'])
+        self.assertAlmostEqual(math.atan(.8 / 3.0), state['roll'])
+        # Repeat at the same position; a visual LOD lease cannot freeze the
+        # physical hull on its old slope after a support-layer change.
+        runtime._physics_ground_probe = lambda x, z, hint: 3.6
+        runtime._update_vertical_motion(state, .04)
+        runtime._update_slope_pose(state)
+        self.assertAlmostEqual(0.0, state['roll'])
+
     def test_hydraulic_bot_is_excluded_without_disabling_ordinary_bot(self):
         runtime, state, calls = self._suspension_case(
             lambda unused_x, unused_z: 0.0)
@@ -5943,6 +5963,26 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(falling['airborne'])
         self.assertLess(falling['vertical_speed'], 0.0)
         self.assertLess(falling['y'], 3.0)
+
+    def test_legacy_bot_downhill_keeps_contact_but_departure_still_falls(self):
+        for speed in (10.0, -10.0):
+            with self.subTest(speed=speed):
+                runtime = self.module.BotRuntime(1)
+                state = {'id': 11, 'x': 0., 'y': 0., 'z': 0., 'yaw': 0.,
+                    'speed': speed, 'half_length': 3., 'vertical_speed': 0.,
+                    'airborne': False, 'grounded_once': True,
+                    'terrain_pitch': math.atan(0.25 if speed > 0 else -0.25),
+                    'last_drive_pitch': math.atan(0.25 if speed > 0 else -0.25)}
+                for unused in range(50):
+                    ground = state['y'] - 0.1
+                    runtime._terrain_support = mock.Mock(return_value=(ground, ground))
+                    runtime._update_vertical_motion(state, 0.04)
+                    self.assertFalse(state['airborne'])
+                    self.assertAlmostEqual(ground, state['y'])
+                runtime._terrain_support = mock.Mock(return_value=(-20., -20.))
+                runtime._update_vertical_motion(state, 0.04)
+                self.assertTrue(state['airborne'])
+                self.assertGreater(state['y'], -6.)
 
     def test_bot_landing_applies_the_shared_fall_damage_once(self):
         runtime = self.module.BotRuntime(
@@ -16261,6 +16301,13 @@ class BotRuntimeTests(unittest.TestCase):
         order = {'movement_intent': True, 'recovery_mode': 'drive',
                  'combat_mode': 'route', 'traffic_mode': 'yield',
                  'move_position': (0.0, 0.0, 200.0)}
+        path_key = ('route', 2, 'center', 1)
+        path = ((210., 7.443, 38.), (190., 7.584, 38.),
+                (166., 8.455, 26.))
+        self.runtime.navigator = types.SimpleNamespace(
+            bot_states={11: {'navigation_status': 'safe', 'index': 0,
+                'path_key': path_key, 'last_target': path[0]}},
+            paths={path_key: path})
         output = io.StringIO()
         with redirect_stdout(output):
             for now in (0.0, 0.1, 2.9, 3.0, 3.1):
@@ -16275,6 +16322,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertIn('traffic=yield', output.getvalue())
         self.assertIn('planner_age=', output.getvalue())
         self.assertIn('slope=1e-06 probe_water=False', output.getvalue())
+        evidence = state['_motion_stall_pending']['navigation']
+        self.assertEqual(path, evidence['path_near_target'])
+        self.assertEqual('safe', evidence['navigation_status'])
 
     def test_stall_diagnostic_includes_arrival_wait_and_physical_hold(self):
         from contextlib import redirect_stdout

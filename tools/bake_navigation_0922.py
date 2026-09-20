@@ -816,6 +816,24 @@ def _compiled_models(space_data):
     return UniversalSpace._from_compiled_space(compiled), compiled
 
 
+def ctf_base_radii(control_points, bases):
+    """Match authored WTCP circles to the decoded standard-mode objectives."""
+    result = []
+    for team, base in enumerate(bases, 1):
+        matches = [point for point in control_points
+                   if point['team'] == team and
+                   abs(point['transform'][12] - base[0]) <= 0.001 and
+                   abs(point['transform'][14] - base[1]) <= 0.001]
+        radii = set(float(point['radius']) for point in matches)
+        if (len(radii) != 1 or
+                any(not math.isfinite(value) or value <= 0.0
+                    for value in radii)):
+            raise UnsafeBakeInputError(
+                'CTF team %d has no unambiguous authored capture radius' % team)
+        result.append(radii.pop())
+    return result
+
+
 def _processed_primitives_name(strings, render):
     """Return the processed primitive archive used by ``UniversalSpace``."""
     name = strings.get(render['prims_name_fnv'])
@@ -2680,6 +2698,8 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
             spawn_config['anchors'] = tuple(spawn_anchors)
             graph['bases'] = [list(point) for point in spawn_anchors]
             graph['objective_bases'] = [list(point) for point in bases]
+            graph['objective_base_radii'] = ctf_base_radii(
+                compiled.sections['WTCP']._data['control_points'], bases)
             graph['ctf_spawn_points'] = [[list(point) for point in team]
                                          for team in stock_spawns]
             graph['spawn_anchors'] = [list(point) for point in spawn_anchors]
