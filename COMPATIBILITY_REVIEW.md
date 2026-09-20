@@ -13,6 +13,43 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20 Prokhorovka railside tree follow-up
+
+The user's two screenshots locate the pass-through report on the west side of
+the railway near C6. The matching north/south row includes six authored
+Poplar/Poplar_1 placements at X 93.366--96.783, Z 257.074--361.773, including
+`(32641, 64)` at `(94.984, 6.043, 274.026)`. All six have shipped fall-foliage
+profiles. Screenshot coordinates identify the row, not a measured vehicle pose
+or a uniquely proved individual contact. The earlier unnamed item at
+`(-80.100, 6.997, 337.100)` is elsewhere and does not diagnose this report.
+The user clarifies that the vehicle passes through without contact handling.
+
+The continuous tree sweep sliced each hit-tester corner with `corner[:3]`.
+An indexed coordinate vector that does not support list slicing made the
+entire sweep return `None`; the sensor then returned `hard`, which the visible
+adapter intentionally treats as unavailable tree evidence rather than a wall.
+This representation-dependent loss is reproduced by a strict indexed-vector
+fixture, both directly and through tree proposal/registration. Corners now use
+indices 0, 1 and 2, matching the other hull consumers. Geometry tests cover all
+six shipped placements and a separate lane that must not knock them down.
+This establishes the local failure and fix; it does not prove that the corner
+objects in the user's Windows session caused this particular pass-through.
+
+Ordinary reports now include bounded `LOCAL TREE` records without requiring
+debug mode or additional native queries. They preserve the raw tree verdict
+before the visible adapter, the actual sweep endpoints/yaws and corner type,
+nearby authored identities/positions, registry position, cached tree health,
+name-alignment progress, isolation/layout state, and contact/publication state.
+The original native order's presentation observation and fall-pitch constraint
+remain labeled as acceptance-time evidence; reading them does not replay an
+order or restart an animation. A fresh local commit is recorded immediately;
+unchanged vicinity samples are suppressed. The 0.5 s limit belongs only to
+diagnostic sampling, never movement, collision admission or destruction.
+Index caches follow space and proved layout changes, and observer failures do
+not change motion. Exact #1513 Windows retesting is still needed to establish
+that this fixes the reported trees. No map object is destroyed merely because
+it is near a screenshot coordinate.
+
 ## September 20 Paris ledge, Prague doors and Mittengard follow-up
 
 Reports `172803-3d53240d5fa3` and `173230-78dde2547f94` identify installed

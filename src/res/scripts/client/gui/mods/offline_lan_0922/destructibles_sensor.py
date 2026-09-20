@@ -3240,10 +3240,13 @@ def _tree_pose_sweep_boxes_1513(
 	(sx, sy, sz, start_yaw, ex, ey, ez, end_yaw) = values
 	try:
 		minimum, maximum = bbox[:2]
-		minimum = tuple(_finite_tree_motion_value_1513(value)
-			for value in minimum[:3])
-		maximum = tuple(_finite_tree_motion_value_1513(value)
-			for value in maximum[:3])
+		# Hit-tester corners are coordinate vectors, not Python lists.  Match
+		# the other hull consumers' indexed access; slicing can reject an
+		# otherwise valid native box and silently discard every tree contact.
+		minimum = tuple(_finite_tree_motion_value_1513(minimum[index])
+			for index in range(3))
+		maximum = tuple(_finite_tree_motion_value_1513(maximum[index])
+			for index in range(3))
 	except (AttributeError, KeyError, TypeError, IndexError):
 		return None
 	if (any(value is None for value in minimum + maximum) or
@@ -6484,6 +6487,7 @@ def _fell_trees_near(
 					'bins': {}, 'extended_bins': {}, 'count': 0,
 					'native_count': _native_count,
 					'max_radius': 0.0, 'slot_diagnostics': {},
+					'tree_health': {},
 				}
 				_retry_registry = False
 				try:
@@ -6755,6 +6759,7 @@ def _fell_trees_near(
 						# ChristmasTree sentinels use 40000 = unrammable.
 						if typ == AreaDestructibles.DESTR_TYPE_TREE:
 							_hp_gate = desc.get('health', 0)
+							registry['tree_health'][_ti] = _hp_gate
 							if _hp_gate < 10 or _hp_gate > 1000:
 								_slot_diag['result'] = 'health_gate'
 								continue

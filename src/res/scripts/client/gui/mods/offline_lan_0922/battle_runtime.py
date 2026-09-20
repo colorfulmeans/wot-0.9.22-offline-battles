@@ -18399,6 +18399,46 @@ class BattleRuntime(object):
         self._local_last_pitch = pitch
         return pitch
 
+    def _report_local_tree_motion(self, start, end, yaw, speed, dt,
+                                  now, detail, stage='proposal',
+                                  descriptor=None, start_yaw=None):
+        """Keep missing tree contacts observable without native probes."""
+        if self._worker_mode:
+            return
+        try:
+            from gui.mods.offline_lan_0922.tree_diagnostics import (
+                TreeContactDiagnostics)
+            observer = getattr(self, '_local_tree_diagnostics', None)
+            if observer is None:
+                observer = TreeContactDiagnostics()
+                self._local_tree_diagnostics = observer
+            payload = observer.sample(
+                self._destructibles, sys.modules.get(
+                    'gui.mods.offline_lan_0922.destructibles_authority'),
+                self._avatar.spaceID, start, end, yaw, speed, dt,
+                now, detail, stage)
+            if payload is not None:
+                bbox_reader = getattr(self._destructibles, '_vehicle_hull_bbox', None)
+                bbox = (bbox_reader(descriptor) if callable(bbox_reader) and
+                        descriptor is not None else None)
+                payload['hull_bbox'] = (tuple(tuple(float(corner[index])
+                    for index in range(3)) for corner in bbox[:2])
+                    if bbox is not None else None)
+                payload['hull_corner_types'] = (tuple(type(corner).__name__
+                    for corner in bbox[:2]) if bbox is not None else None)
+                payload['start_yaw'] = start_yaw
+                sys.stdout.write('[Offline LAN 0.9.22] LOCAL TREE %s\n' %
+                                 json.dumps(payload, sort_keys=True))
+        except Exception as error:
+            # Evidence collection cannot change the already-decided contact.
+            if not getattr(self, '_local_tree_diagnostic_error', False):
+                self._local_tree_diagnostic_error = True
+                try:
+                    sys.stdout.write('[Offline LAN 0.9.22] LOCAL TREE '
+                                     'diagnostic_error=%s\n' % error)
+                except Exception:
+                    pass
+
     def _tree_motion_proposal(
             self, start_position, start_yaw, end_position, end_yaw,
             speed, descriptor, now, dt):
@@ -18431,6 +18471,9 @@ class BattleRuntime(object):
             raise RuntimeError('tree motion proposal lost its exact token')
         if token is not None and any(row[2] is not None for row in token):
             raise RuntimeError('tree motion proposal has a material token')
+        self._report_local_tree_motion(
+            start_position, end_position, end_yaw, speed, dt, now, detail,
+            descriptor=descriptor, start_yaw=start_yaw)
         if status in ('pending', 'hard') and not self._worker_mode:
             # Missing, ambiguous or isolated tree registry evidence is not a
             # hard-world contact.  The visible tank may keep moving while
@@ -18584,6 +18627,10 @@ class BattleRuntime(object):
                 contact, start_position, start_yaw,
                 end_position, end_yaw, descriptor, speed, now, dt):
             return False
+        self._report_local_tree_motion(
+            start_position, end_position, end_yaw, speed, dt,
+            now, tree_detail, stage='commit', descriptor=descriptor,
+            start_yaw=start_yaw)
         return contact
 
     @staticmethod
