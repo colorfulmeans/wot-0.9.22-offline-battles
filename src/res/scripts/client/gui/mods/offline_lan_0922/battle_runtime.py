@@ -19135,9 +19135,9 @@ class BattleRuntime(object):
         rotation_speed_cap = self._destructible_rotation_speed_cap(
             self._local_physics,
             critical_damage.stat_factor(entity, 'traverse'))
-        drive_speed_cap = (self._destructible_drive_speed_cap(
+        drive_speed_cap = (abs(self._destructible_drive_speed_cap(
             self._local_descriptor or entity.typeDescriptor,
-            self._local_physics, speed)
+            self._local_physics, speed))
             if rotation_speed_cap else None)
         catalog_detail = self._destructible_pose_sweep(
             start_position, start_yaw, end_position, end_yaw, speed,

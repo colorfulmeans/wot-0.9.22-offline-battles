@@ -9901,6 +9901,11 @@ class BattleState:
                 ("bot", bot_id),
                 ("bot" if target_kind == "bot" else "player", target_id),
                 applied_target, target_critical_before)
+            self._record_ram_mission_events(
+                ("bot", bot_id),
+                ("bot" if target_kind == "bot" else "player", target_id),
+                applied_bot, applied_target, bot_combat_before[2],
+                target_critical_before)
 
             if not bot["alive"]:
                 bot["death_attacker_kind"] = (
@@ -12949,6 +12954,7 @@ class BattleState:
             interaction = {
                 "target_kind": target[0], "target_id": target[1],
                 "mission_events": [], "mission_events_complete": True,
+                "mission_events_version": mission_events.VERSION,
             }
             for name, (minimum, unused_maximum) in (
                     RESULT_INTERACTION_LIMITS.items()):
@@ -12965,6 +12971,35 @@ class BattleState:
             return
         elapsed = max(0, int(round((self.tick / TICK_HZ - PREBATTLE_SECONDS) * 1000)))
         interaction["mission_events"].append([kind, elapsed] + list(values))
+
+    def _record_ram_mission_events(self, first, second, damage_first,
+                                   damage_second, critical_first,
+                                   critical_second):
+        """Record only the admitted pair after both HP changes have settled.
+
+        A survivor of the first half may die in the second half. Conversely,
+        dying later in battle does not undo survival of this collision.
+        The ordinary damage/kill events retain their existing meanings.
+        """
+        if self._vehicle_team(*first) == self._vehicle_team(*second):
+            return
+        first_state = self._vehicle_stun_state(first)
+        second_state = self._vehicle_stun_state(second)
+        if first_state is None or second_state is None:
+            for actor, target in ((first, second), (second, first)):
+                self._statistics_interaction(actor, target)[
+                    "mission_events_complete"] = False
+            return
+        for actor, target, dealt, received, own, other, critical in (
+                (first, second, damage_second, damage_first,
+                 first_state, second_state, critical_second),
+                (second, first, damage_first, damage_second,
+                 second_state, first_state, critical_first)):
+            if dealt > 0:
+                self._record_mission_event(
+                    actor, target, "ram", int(dealt), int(received),
+                    not bool(other['alive']), bool(own['alive']),
+                    bool(_destroyed_tracks(critical)))
 
     def _increment_interaction(self, actor, target, name, amount=1):
         minimum, maximum = RESULT_INTERACTION_LIMITS[name]
@@ -13653,6 +13688,10 @@ class BattleState:
         self._record_damage(
             ("player", first.player_id),
             ("player", second.player_id), damage_second,
+            second_critical_before)
+        self._record_ram_mission_events(
+            ("player", first.player_id), ("player", second.player_id),
+            damage_first, damage_second, first_critical_before,
             second_critical_before)
         if not first.alive:
             first.death_attacker_kind = "player"

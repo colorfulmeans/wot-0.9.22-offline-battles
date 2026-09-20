@@ -13,6 +13,51 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20 MT-11 ramming mission follow-up
+
+The user reports that MT-11 cannot complete. The available 0.9.22 RU #788
+reference definitions reproduce three unsupported evaluator boundaries:
+operation 1 uses `vehicleDamage/attackReason=2`, operation 3 adds
+`rammingInfo=stayedAlive`, and operation 4 requires `lvlDiff=1`. Operation 2's
+ram-kill condition already has a supported death-reason counter. The four
+main/honours expressions are retained in `mt11_conditions_0922.json`; this is
+reference XML evidence, not a newly audited #1513 archive. Production still
+reads the installed #1513 mission definitions and changes no quest resource,
+reward, collision force, or matchmaking rule.
+
+The evaluator now consumes per-collision ramming evidence for damage and
+survival-qualified kills, and compares the actual attacker/target descriptor
+levels for a nonnegative minimum `lvlDiff`. The shared `stayedAlive` and
+`dealtMoreDamage` modifiers require the same killing collision; surviving an
+earlier ram or dying later in battle cannot substitute for its outcome.
+Likewise, a later shell kill cannot erase already earned ramming damage.
+The generic modifiers also serve other installed missions using those fields;
+unrecorded filters such as `fireStarted` remain explicitly unsupported.
+
+Version 2 of the existing bounded mission history adds
+`[ram, elapsed_ms, damage_dealt, damage_received, killed, survived, immobilized]`.
+Both server-owned human contacts and worker-proved Bot/human or Bot/Bot
+contacts record these facts only after both HP changes settle, before battle
+completion. Damage is the applied, HP-capped amount. Existing operation
+deduplication and friendly-contact no-op gates precede publication. Ram rows
+share the existing per-actor event budget; overflow remains incomplete.
+Client validation, receipt persistence and post-battle normalization use the
+same field contract. Legacy histories remain readable but do not fabricate
+ramming evidence. Existing ordinary damage and kill rows are unchanged.
+
+Regressions cover all four main/honours conditions, nonlethal rams, later
+shell kills, simultaneous destruction, later death, same/higher/lower target
+tiers, strictly greater damage, missing/legacy/capped evidence, all three
+contact pairings, duplicate worker reports, receipt restart and exactly-once
+mission settlement. Actual completion and rewards on the user's #1513 client
+remain the Windows acceptance boundary.
+
+The preceding full CI also found that the visible pivot adapter forwarded a
+negative reverse drive cap where its existing contract expects a magnitude.
+It now passes the selected directional cap's absolute value, preserving the
+real signed movement speed and the shared sweep's existing magnitude policy.
+The original forward/reverse pivot regression is retained.
+
 ## September 20 barracks sorting follow-up
 
 Report `20260920-193111-5b5930c0e65c`, build
