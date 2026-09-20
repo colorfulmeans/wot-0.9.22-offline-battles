@@ -13,6 +13,41 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20: collision-query starvation reproduced from the 07:58 report
+
+Report `wot-error-report-20260920-075844-84edb4755fc8.zip` confirms installation
+of build `colorfulmeans-35450341244-1` on #1513. Both clients remain inside one
+rotation query: the worker records 22,150 envelope refinements at one body
+origin, and the visible client records 43,250 at another. Refinement continues
+down to approximately 1e-16 radians while the server times out the worker.
+The exception trails contain session headers only; this is evidence of an
+event-loop stall, not an identified native exception.
+
+The new fixture preserves both reported body poses and their native support
+points/normals. Float32 plane replays reproduce the runaway work in the old
+code. The envelope predicate was intercepting drivable support before the
+ordinary ground/profile classifier could see it. Support hits now reach that
+classifier unchanged; they cannot create an ambiguous-wall subdivision merely
+because native point rounding places them outside the exact double-precision
+arc. Existing slope, seam, raised-wall and backing-wall checks still decide
+whether the contact is passable.
+
+Two related numerical paths are covered by the same controls. Grazing recasts
+advance across a coordinate contributing to the contacted face, rather than
+advancing only along its tangent and repeatedly returning the same plane.
+They still query the remainder and retain an immediately adjacent wall.
+An ambiguous enclosing-box hit also gets a native query at the exact interval
+endpoint body before more subdivision: a real wall there is an actual-pose
+witness, without requiring its rounded boundary point to fit a double-precision
+arc. Empty envelope corners and walls crossed only during a turn still use
+the existing refinement and departure checks.
+
+No map parameters, vehicle dimensions, collision waits, report caps or
+logging switches change. The regression controls require reported support to
+clear promptly and a wall entered by either reported turn to remain solid.
+These tests establish the query regression and protections; driving the new
+build on the native Windows client remains the gameplay acceptance boundary.
+
 ## September 19: twelve-item physics correction and complete contact evidence
 
 This change supersedes earlier descriptions below of artificial wall damping,

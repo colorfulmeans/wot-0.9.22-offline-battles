@@ -66,17 +66,25 @@ def _record_hard_contact(trace, reason, start, end, collision,
     physics_diagnostics.emit('world_contact', trace)
 
 
-def _native_ray_successor(point, end):
+def _native_ray_successor(point, end, normal=None):
     """Advance along the ray by one representable native float32 coordinate.
 
     An absolute 1e-7 metre advance rounds back to the same BigWorld point at
-    ordinary map coordinates. This is numerical progress, not a body margin.
+    ordinary map coordinates. A grazing ray must advance across the face,
+    not only along its tangent, or the native query returns the same plane
+    again. This is numerical progress, not a body margin.
     """
     import struct
     values = (point.x, point.y, point.z)
     delta = end - point
     changes = (delta.x, delta.y, delta.z)
-    index = max(range(3), key=lambda i: abs(changes[i]))
+    contributions = changes
+    if normal is not None:
+        components = (normal.x, normal.y, normal.z)
+        projected = tuple(changes[i]*components[i] for i in range(3))
+        if any(projected):
+            contributions = projected
+    index = max(range(3), key=lambda i: abs(contributions[i]))
     if changes[index] == 0.0:
         return end
     value = values[index]
@@ -117,7 +125,8 @@ def _collide_horizontal(spaceID, start, end,
 		remaining = end - hit[0]
 		if remaining.length == 0.0:
 			return None
-		next_start = _native_ray_successor(hit[0], end)
+		next_start = _native_ray_successor(
+			hit[0], end, hit[1] if len(hit) > 1 else None)
 		advance, direction = next_start-current, end-current
 		if advance.x*direction.x + advance.y*direction.y + advance.z*direction.z <= 0.0:
 			raise RuntimeError('native departure recast made no geometric progress')

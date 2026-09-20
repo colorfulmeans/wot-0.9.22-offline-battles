@@ -18889,6 +18889,16 @@ class BattleRuntime(object):
             ambiguous = []
 
             def departing(hit):
+                # Let the world probe classify support before testing a wall
+                # witness against the rotation envelope. Native float32 ground
+                # hits can lie just outside the exact body; treating them as
+                # ambiguous walls recursively subdivides an otherwise clear
+                # turn, starving both client and worker event loops. Returning
+                # False retains this hit for the existing slope/profile and
+                # backing-wall checks; it does not grant passage through it.
+                if world_collision._drivable_surface(
+                        hit, world_collision._MAX_DESCENDING_GRADIENT):
+                    return False
                 normal = (hit[1].x, hit[1].y, hit[1].z)
                 point = (hit[0].x, hit[0].y, hit[0].z)
                 plane = collision_geometry.dot(point, normal)
@@ -18923,6 +18933,35 @@ class BattleRuntime(object):
                         self._local_motion_status = 'hard'
                     return False
             if ambiguous:
+                # Test a real pose before subdividing the candidate envelope.
+                # Native hit coordinates are float32: a rounded boundary hit
+                # can remain outside the double-precision arc test even after
+                # many splits. The exact endpoint body has no envelope-only
+                # corners, so its ordinary native wall verdict is already a
+                # physical witness. Departure filtering still preserves an
+                # escape from an existing contact and recasts later walls.
+                exact_descriptor = _destructible_world_sweep_descriptor(
+                    descriptor, bbox)
+                for probe_speed in (1.0e-6, -1.0e-6):
+                    trace = {}
+                    world_status = world_collision.check_horizontal_collision(
+                        self._runtime.bigworld, self._runtime.math,
+                        self._avatar.spaceID, self._vector(position),
+                        float(start_yaw) + yaw_delta * upper, probe_speed,
+                        exact_descriptor, False, 0.0, True, False, None,
+                        commit_enabled=False, pitch=pitch, roll=roll,
+                        trace=trace, exact_footprint=True,
+                        departing_contact=departure_test)
+                    if isinstance(world_status, bool):
+                        world_status = 'hard' if world_status else 'clear'
+                    if world_status != 'clear':
+                        if evidence is not None:
+                            evidence.update(trace)
+                        if record_local:
+                            self._local_world_collision_trace = trace
+                            self._local_motion_kinds = 'world'
+                            self._local_motion_status = 'hard'
+                        return False
                 physics_diagnostics.emit('rotation_envelope_refine', {
                     'motion': actual_motion, 'candidates': ambiguous})
                 # Stop only when native float32 yaw can no longer distinguish
