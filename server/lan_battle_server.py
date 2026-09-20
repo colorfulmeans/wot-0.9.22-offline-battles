@@ -12764,6 +12764,13 @@ class BattleState:
                   else self.bot_states.get(victim[1]))
         critical = (getattr(target, "critical", None) if victim[0] == "player"
                     else (target or {}).get("critical")) or {}
+        # LT5 counts assisted kills, including a crew knockout that deals no
+        # hull HP. Freeze spotting eligibility at the canonical kill, not in
+        # the positive-damage path or from earlier radio-assist damage.
+        for assister in self._radio_assisters(
+                attacker, victim, self._vehicle_team(*victim)):
+            self._statistics_interaction(assister, victim)[
+                "kills_assisted_radio"] = 1
         interaction = self._statistics_interaction(attacker, victim)
         immobilized = interaction.pop("_terminal_immobilized", bool(_destroyed_tracks(critical)))
         mission_distance = distance
@@ -13182,14 +13189,6 @@ class BattleState:
         # every observer lighting the target, so each of them is paid its
         # share of this damage rather than the whole of it.
         assisters = self._radio_assisters(attacker, target, target_team)
-        target_state = self._vehicle_stun_state(target)
-        if target_state is not None and not target_state['alive']:
-            # Credit the spotters of the lethal hit, not everyone who earned
-            # radio damage at some earlier time. One terminal target counts
-            # once per observer, including when its final HP share rounds to 0.
-            for assister in assisters:
-                self._statistics_interaction(assister, target)[
-                    "kills_assisted_radio"] = 1
         credits.extend(
             ("radio", assister, share) for assister, share in
             zip(assisters, _even_shares(damage, len(assisters))))

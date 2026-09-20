@@ -44,8 +44,9 @@ yellow-only internal damage do not satisfy the destruction requirement.
 The secondary condition reads current final state, including repairs, rather
 than accumulated damage history. Missing historical end-state evidence stays
 unknown through persistence and client normalization. LT5 now records a
-per-victim radio-assisted kill for the observers eligible at the lethal hit,
-including a final HP share rounded to zero. Earlier spotting damage alone
+per-victim radio-assisted kill for the observers eligible at the canonical
+kill, including a crew knockout without HP loss or a final HP share rounded
+to zero. Earlier spotting damage alone
 does not award a later kill, and repeated publication cannot double this
 per-victim count. The receipt field survives server storage, client validation
 and account normalization. Fixtures contain the four campaigns' TD2/LT5
