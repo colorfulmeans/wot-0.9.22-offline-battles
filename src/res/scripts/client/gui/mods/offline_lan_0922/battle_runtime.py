@@ -1711,8 +1711,13 @@ class _LANInputSender(object):
             keyword_args['pose_time_us'] = pose_time
         if siege_enabled is not None:
             keyword_args['siege_enabled'] = bool(siege_enabled)
+        braking_for_siege = getattr(
+            self.owner, '_local_siege_braking', None) is not None
+        forward, turn = self.forward, self.turn
+        if braking_for_siege or siege_enabled is not None:
+            forward, turn = 0.0, 0.0
         result = self.owner.client.send_input(
-            self.forward, self.turn, self.aim_yaw, self.gun_pitch,
+            forward, turn, self.aim_yaw, self.gun_pitch,
             position, yaw, **keyword_args)
         if result:
             enqueued = getattr(
@@ -1860,6 +1865,7 @@ class BattleRuntime(object):
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
+        self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
         self._local_push_x = 0.0
@@ -2204,6 +2210,7 @@ class BattleRuntime(object):
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
+        self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
         self._local_push_x = 0.0
@@ -8666,21 +8673,23 @@ class BattleRuntime(object):
             descriptor = getattr(entity, 'typeDescriptor', None)
             if not bool(getattr(descriptor, 'hasSiegeMode', False)):
                 return False
-            if not self._sender.send_current(siege_enabled=bool(value)):
+            if bool(getattr(entity, 'is_engine_dead', False)):
                 return False
-            request_seq = getattr(self.client, '_input_seq', None)
-            if (isinstance(request_seq, bool) or
-                    not isinstance(request_seq, _INTEGER_TYPES) or
-                    request_seq <= 0):
-                request_seq = None
-            # The server echo can be one or more snapshots behind this
-            # request. Keep the drivetrain locked from the successful send
-            # edge until a stable snapshot acknowledges this exact input.
-            self._local_siege_pending = (bool(value), request_seq)
-            self._report_local_siege_edge(
-                'request', getattr(entity, 'siegeState', None),
-                input_seq=request_seq)
-            return True
+            enabled = bool(value)
+            states = self._runtime.constants.VEHICLE_SIEGE_STATE
+            desired = states.ENABLED if enabled else states.DISABLED
+            if (self._local_siege_braking is not None and
+                    self._local_siege_pending is None and
+                    getattr(entity, 'siegeState', states.DISABLED) == desired):
+                self._local_siege_braking = None
+                self._report_local_siege_edge('cancel_brake', desired)
+                return True
+            if self._local_speed != 0.0 or self._local_turn_speed != 0.0:
+                self._local_siege_braking = enabled
+                self._report_local_siege_edge(
+                    'brake', getattr(entity, 'siegeState', None))
+                return True
+            return self._send_local_siege_request(entity, enabled)
         if code == getattr(settings, 'ACTIVATE_EQUIPMENT', None):
             return self._activate_equipment(value)
         partial_clip = getattr(settings, 'RELOAD_PARTIAL_CLIP', None)
@@ -22197,6 +22206,23 @@ class BattleRuntime(object):
         return getattr(entity, 'siegeState', states.DISABLED) in (
             states.SWITCHING_ON, states.SWITCHING_OFF)
 
+    def _send_local_siege_request(self, entity, enabled):
+        """Submit a stopped drivetrain and the mode request in one input."""
+        if not self._sender.send_current(siege_enabled=enabled):
+            return False
+        request_seq = getattr(self.client, '_input_seq', None)
+        if (isinstance(request_seq, bool) or
+                not isinstance(request_seq, _INTEGER_TYPES) or request_seq <= 0):
+            request_seq = None
+        self._local_siege_braking = None
+        # Only the already-stopped drivetrain is locked while the server
+        # acknowledges the request and advances the native transition timer.
+        self._local_siege_pending = (enabled, request_seq)
+        self._report_local_siege_edge(
+            'request', getattr(entity, 'siegeState', None),
+            input_seq=request_seq)
+        return True
+
     def _drive_local(self, elapsed):
         """Advance local copied physics through all elapsed battle time."""
         if self._sender is None or self._server is None:
@@ -22212,12 +22238,19 @@ class BattleRuntime(object):
             stopped = bool(self._drive_local_step(step))
             remaining = max(0.0, remaining - step)
         if stopped:
+            self._local_siege_braking = None
             if self._pending_landing_impacts:
                 self._flush_landing_observation()
             elif (self._local_damage_report is not None or
                     self._drown_level == 2 or self._overturn_level == 2):
                 self._sender.send_current()
             return
+        if (self._local_siege_braking is not None and
+                self._local_speed == 0.0 and self._local_turn_speed == 0.0):
+            entity = self._server_entity(self._server.vehicle_id)
+            if entity is not None and self._send_local_siege_request(
+                    entity, self._local_siege_braking):
+                self._local_input_sent_during_drive = True
         if self._local_input_sent_during_drive:
             self._input_accumulator = 0.0
         else:
@@ -22293,6 +22326,9 @@ class BattleRuntime(object):
         slope_pitch = (0.0 if self._local_airborne else
                        self._smoothed_drive_pitch(position, yaw))
         siege_drive_locked = self._local_siege_drive_locked(entity)
+        if bool(getattr(entity, 'is_engine_dead', False)):
+            self._local_siege_braking = None
+        siege_braking = self._local_siege_braking is not None
         overturned = self._overturn_level == 2
         if overturned:
             # Lock powered input without stopping passive gravity or momentum.
@@ -22302,9 +22338,9 @@ class BattleRuntime(object):
                                  'notifyInputKeysDown', None)
             if callable(stop_input):
                 stop_input(0, 0)
-        throttle = (0.0 if siege_drive_locked or overturned else
+        throttle = (0.0 if siege_drive_locked or siege_braking or overturned else
                     self._sender.forward)
-        turn = (0.0 if siege_drive_locked or overturned else
+        turn = (0.0 if siege_drive_locked or siege_braking or overturned else
                 self._local_autorotation_turn(
                     entity, self._sender.turn, throttle,
                     tracks_blocked=self._sender.handbrake))
@@ -22319,7 +22355,7 @@ class BattleRuntime(object):
         # torque, so existing momentum continues to coast.
         handbrake = ((bool(self._sender.handbrake) and not overturned) or
                      is_tracked or
-                     siege_drive_locked)
+                     siege_drive_locked or siege_braking)
         previous_speed = self._local_speed
         if siege_drive_locked:
             # Freeze only powered longitudinal/traverse motion. Gravity,
@@ -27768,6 +27804,7 @@ class BattleRuntime(object):
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
+        self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
         self._local_push_x = 0.0

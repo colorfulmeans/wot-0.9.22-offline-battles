@@ -16392,8 +16392,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
             10.1)
 
         left, right = vehicle.track_scroll.external
-        self.assertLess(left, 0.0)
-        self.assertGreater(right, 0.0)
+        # Positive hull yaw turns right: the left track advances and the
+        # right track reverses. Opposed speeds alone did not prove direction.
+        self.assertGreater(left, 0.0)
+        self.assertLess(right, 0.0)
         self.assertAlmostEqual(left, -right)
         # A bot with no forward speed still needs a running engine, or the
         # native tick pins both belts to zero.
@@ -16408,6 +16410,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             10.3)
         self.assertEqual((ENGINE_MODE_RUNNING, _MOVEMENT_ROTATE_LEFT),
                          vehicle.track_scroll.mode)
+        left, right = vehicle.track_scroll.external
+        self.assertLess(left, 0.0)
+        self.assertGreater(right, 0.0)
 
     def test_the_still_devices_and_view_circle_reach_the_battle_hud(self):
         runtime = _runtime()
@@ -30541,6 +30546,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             (ENGINE_MODE_RUNNING, _MOVEMENT_ROTATE_RIGHT),
             vehicle.update_tracks.call_args.args[2])
+        self.assertAlmostEqual(1.0, vehicle.update_tracks.call_args.args[0])
+        self.assertAlmostEqual(-1.0, vehicle.update_tracks.call_args.args[1])
 
         # The first still frame is inside the native 20 Hz window. It must
         # stay pending and retry at the deadline, or rotate mode sticks.
@@ -33567,6 +33574,39 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual((2, 1), entity.engineMode)
         self.assertEqual([(2, 1)], entity.engine_modes)
         self.assertEqual([(5.0, 5.0)], entity.track_scrolls)
+
+    def test_local_track_and_auxiliary_feeds_follow_actual_hull_turn(self):
+        for speed in (-5.0, 0.0, 5.0):
+            for turn in (-1.0, 1.0):
+                with self.subTest(speed=speed, turn=turn):
+                    battle = BattleRuntime(_runtime())
+                    entity = _Vehicle(
+                        10, _Descriptor(), _Vector(), (0, 0, 0),
+                        {'health': 500})
+                    battle._sender = types.SimpleNamespace(
+                        forward=0.0, turn=0.0)
+                    battle._binding = mock.Mock()
+                    battle._local_descriptor = entity.typeDescriptor
+                    battle._local_physics = {
+                        'trackCenter': 1.5, 'speedFwd': 30.0}
+                    battle._local_speed = speed
+                    battle._local_turn_speed = turn
+                    battle._local_drive_turn = turn
+
+                    self.assertTrue(battle._update_local_tracks(entity))
+                    self.assertTrue(battle._publish_rpm(10.0, force=True))
+
+                    left, right = entity.track_scrolls[-1]
+                    self.assertAlmostEqual(speed, (left + right) / 2.0)
+                    if turn > 0.0:
+                        self.assertGreater(left, speed)
+                        self.assertLess(right, speed)
+                    else:
+                        self.assertLess(left, speed)
+                        self.assertGreater(right, speed)
+                    self.assertEqual(
+                        (left, right),
+                        battle._binding.avatar_aux_physics.call_args.args[3:5])
 
     def test_local_track_feed_turns_the_engine_off_on_death(self):
         runtime = _runtime()

@@ -3084,6 +3084,7 @@ class BotRuntime(object):
 
     @observed('bot.siege_intent')
     def _update_bot_siege_intent(self, state, command, target, step):
+        state['_siege_braking'] = False
         pair = self._descriptor_pairs.get(int(state['id']))
         if pair is None or pair[1] is None:
             return False
@@ -3124,6 +3125,13 @@ class BotRuntime(object):
             _critical_parts(state)
         if 'engineHealth' in destroyed:
             state['_siege_intent_elapsed'] = 0.0
+            return False
+        if (not switching and
+                (state.get('speed', 0.0) != 0.0 or
+                 self._turn_speeds.get(int(state['id']), 0.0) != 0.0)):
+            # Keep the current descriptor and timer while ordinary track grip
+            # brakes the accepted motion. Re-evaluate the intent next tick.
+            state['_siege_braking'] = True
             return False
         next_state, remaining, transition_total, changed = \
             siege_mechanics.request_transition(
@@ -11737,6 +11745,7 @@ class BotRuntime(object):
                 self._update_bot_siege_intent(
                     state, command, target, step) or
                 siege_motion_locked)
+            siege_braking = bool(state.get('_siege_braking', False))
             if diagnostic is not None:
                 diagnostic.phase('bot.weapon_prepare')
             descriptor = self._descriptors.get(state['id'], {})
@@ -11877,6 +11886,14 @@ class BotRuntime(object):
                 # an older obstruction must not outlive that local plan.
                 vehicle_obstacles[safety['forward_blocked_by']] = now + 1.2
             state['traffic_obstacles'] = vehicle_obstacles
+            if siege_braking:
+                command['throttle'] = 0.0
+                command['turn'] = 0.0
+                command['movement_intent'] = False
+                throttle = 0.0
+                turn = 0.0
+                state['movement_dir'] = 0
+                state['rotation_dir'] = 0
             if siege_motion_locked:
                 # Stock Siege transitions immobilize the hull for the whole
                 # transition tick, including the publication which starts or
@@ -12367,7 +12384,7 @@ class BotRuntime(object):
                     vehicle_physics.longitudinal_step(
                         params, previous_speed, throttle,
                         steer_dir != 0, slope_pitch, step,
-                        bool(state.get('airborne', False)), 0, False))
+                        bool(state.get('airborne', False)), 0, siege_braking))
                 state['last_drive_pitch'] = slope_pitch
                 trace = state.get('_motion_stall_pending')
                 if trace is not None:

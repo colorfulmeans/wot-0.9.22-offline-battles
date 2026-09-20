@@ -2419,10 +2419,11 @@ def _traverse_step(p, omega, steer_dir, v, dt, terrainIdx=0, drive_intent=0.0):
 
 
 def track_scroll(p, v, omega):
-	'''Per-track surface speeds for WGVehicleFashion.movementInfo:
-	v_track = v -/+ omega * halfGauge, clamped strictly below maxMovement.'''
-	tls = v - omega * p['trackCenter']
-	trs = v + omega * p['trackCenter']
+	'''Left/right belt speeds, clamped strictly below maxMovement.
+	Positive hull yaw turns toward local +X: the left side advances and the
+	right side retreats. Use the actual yaw rate for forward/reverse travel.'''
+	tls = v + omega * p['trackCenter']
+	trs = v - omega * p['trackCenter']
 	cap = p['speedFwd'] * SCROLL_CAP
 	if tls > cap: tls = cap
 	elif tls < -cap: tls = -cap

@@ -8,6 +8,9 @@ rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
 Current release: **v0.9.1** — [Release notes](docs/releases/v0.9.1.md).
+The **v0.9.2 candidate** is unreleased; see its
+[complete draft notes](docs/releases/v0.9.2.md). Publication is paused pending
+the drowning-warning and sustained crushing investigations.
 
 ## Play
 
@@ -66,9 +69,11 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
-The [v0.9.1 release notes](docs/releases/v0.9.1.md) cover all changes since
-v0.9.0: scenery collisions, terrain support, detached turrets, personal mission
-statistics, vehicle prices, LAN platoon entry, Bot navigation and diagnostics.
+The [v0.9.2 draft notes](docs/releases/v0.9.2.md) cover all changes since
+v0.9.1: HT-4, TD-2, LT-5 and MT-11 mission completion, barracks sorting,
+hydraulic terrain support, Siege-mode obstacle destruction, tree registration,
+track direction, braking before mode changes, map collision and capture
+fixes, and targeted diagnostics. Unresolved reports are listed separately.
 
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched

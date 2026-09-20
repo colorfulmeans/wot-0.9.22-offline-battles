@@ -11342,11 +11342,6 @@ class BattleState:
                     while (len(player.gun_checkpoints) >
                            MAX_PLAYER_INPUT_FINGERPRINTS):
                         player.gun_checkpoints.popitem(last=False)
-            if (player.alive and self.phase == "battle" and
-                    self.battle_result is None and
-                    "siege_enabled" in message):
-                self._request_siege_state(
-                    player, message.get("siege_enabled"))
             if not self._combat_accepting() or self.battle_result is not None:
                 player.forward = 0.0
                 player.turn = 0.0
@@ -11372,6 +11367,11 @@ class BattleState:
                         player.speed = _clamp(
                             _finite_float(message.get("speed")),
                             -speed_limit, speed_limit)
+                if (self.phase == "battle" and "siege_enabled" in message):
+                    # The stopped pose and mode request share one admitted
+                    # input. Inspect this frame's speed, not the last packet's.
+                    self._request_siege_state(
+                        player, message.get("siege_enabled"))
                 if "aim_yaw" in message:
                     player.aim_yaw = _finite_float(message.get("aim_yaw"), player.aim_yaw)
                 if "gun_pitch" in message:
@@ -11640,6 +11640,8 @@ class BattleState:
                 return True
             next_state = SIEGE_SWITCHING_OFF
             duration = params[1]
+        if player.speed != 0.0:
+            return False
         if self._engine_damaged(player):
             duration *= params[3]
         player.siege_state = next_state

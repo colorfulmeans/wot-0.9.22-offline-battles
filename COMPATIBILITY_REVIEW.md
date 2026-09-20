@@ -4046,7 +4046,9 @@ along an existing face is permitted when centre distance initially stays
 constant; an offset contact prefers the nearer end. Other rear blockers and
 world hazards still veto. Supplied neighbour positions retain their tuple or
 XYZ wire coordinates in the traffic snapshot instead of defaulting to origin.
-Continuous stacked-hull/debris crushing HP remains unimplemented.
+Continuous stacked-hull/debris crushing HP remains unimplemented. See the
+2026-09-20 release-pause investigation below for the requested state rules and
+the missing retail calibration evidence.
 
 ## Gameplay follow-up: 2026-09-14
 
@@ -5315,3 +5317,103 @@ ground graze) and a longer actual step reconstructing the captured lane; all
 original ground-top, backing-wall and upper/low-wall assertions remain. The
 1,413 related cases and these seven departure cases pass locally. The follow-up
 commit changes tests/documentation only; full CI/package evidence is pending.
+
+## Release-pause investigation: 2026-09-20
+
+The user paused v0.9.2 publication to investigate track direction, both-way
+Siege transitions, drowning warnings and sustained stacked-body damage.
+The release notes remain a draft and no release/tag is authorized while that
+pause remains in effect.
+
+### Track direction and braking before mode switches
+
+The hull transform uses forward `(sin(yaw), cos(yaw))`, so positive yaw is a
+right turn: the left side advances and the right side retreats. The shared
+`vehicle_physics.track_scroll` previously applied the opposite signs to the
+yaw contribution. It now returns `v + omega * trackCenter` on the left and
+`v - omega * trackCenter` on the right, retaining the existing scroll cap.
+Local `updateTracksScroll`, auxiliary physics, Bot `setExternal` and remote
+pose-derived turns all consume that same ordered pair. The finite-difference
+regression independently transforms the left/right hull points through an
+actual rotation, including forward/reverse motion and multiple track gauges.
+All four Siege-capable vehicles also exercise both active descriptors and
+both presentation feeds. This proves the supplied speeds, not native animated
+rendering on Windows.
+
+Previously the local switch request immediately set the pending-drive lock;
+the next motion step therefore zeroed speed before any braking took place.
+The local pending brake intent is now separate from the sent request. It
+suppresses drive/turn input while the existing longitudinal handbrake and
+traverse deceleration settle motion. At zero longitudinal and yaw rate, one
+input contains the stopped pose and mode request. Only then does the existing
+acknowledgement lock and server-owned transition timer apply. Cancellation,
+death and teardown clear the unsent intent, and failed enqueue can retry.
+The server checks the speed in that same admitted input, not an older packet.
+Bots likewise retain the current descriptor and normal motion integration
+while braking after their existing intent debounce. Neither switch direction
+adds a new braking coefficient, delay or wire field. Airborne motion remains
+governed by the existing physics. Regression coverage includes all four
+vehicle types in both directions, reverse travel, a pivot, cancellation,
+failed enqueue, death and Bot behaviour.
+
+### Drowning evidence and unresolved warning threshold
+
+[Wargaming Wiki's Battle Mechanics](https://wiki.wargaming.net/en/Battle_Mechanics)
+describes the icon as a warning for water deep enough to enter the crew or
+engine compartment. It does not specify the warning sensor's exact point or
+height. The Wiki is community-maintained material hosted by Wargaming, not
+proof of the private 0.9.22 server implementation. The
+[official 9.14 physics article](https://worldoftanks.eu/en/news/general-news/version-914-sounds-physics/)
+and [official 9.14 patch notes](https://worldoftanks.com/en/content/docs/release_notes/914-updatenotes/)
+confirm the server-owned physics change and reworked vehicle collisions;
+neither supplies a drowning-warning height or continuous crushing HP formula.
+The pages were read in the browser because the text fetch exposed only their
+loading page. Forum searches and the Wiki discussion did not provide a
+verifiable 0.9.22 experiment establishing those missing values.
+
+Two repository defects are identified but not repaired in this candidate:
+
+- `_native_drowning_level` equates the appearance effect's `isInWater` with
+  CAUTION. The stock Avatar instead receives `VEHICLE_DROWN_WARNING` from the
+  server; the effect getter is not that server warning contract.
+- `_drowning_sensor_thresholds` treats `topRightCarryingPoint` as a vertical
+  coordinate. The available reference reader/fixtures use a two-component
+  X/Z carrying footprint. It also clamps the danger height above that mistaken
+  caution value, and omits pitch/roll. The Bot danger fallback already uses
+  the transformed turret-mount point. The reference is RU #788; it does not
+  replace an exact CN #1513 warning-threshold capture.
+
+The `0.5` in `assembleWaterSensor` is explicitly the minimum heavy-splash
+depth, not evidence for a caution threshold. No global metre value, hull-height
+fraction or substitute timer was introduced. The existing ten-second danger
+countdown remains unchanged pending a verified warning-depth rule.
+
+### Requested sustained crushing states
+
+These are the user's requested acceptance cases, not independently verified
+retail formulas. "Damage" below means sustained pressure damage after contact;
+it does not replace an initial landing impact or horizontal ramming event.
+
+| Upper body | Lower body | Required sustained recipients |
+| --- | --- | --- |
+| Live vehicle | Live vehicle | Both vehicles |
+| Wreck | Live vehicle | Lower vehicle only |
+| Detached turret | Live vehicle | Lower vehicle only |
+| Live vehicle | Wreck | Neither |
+| Live vehicle | Detached turret | Neither |
+
+When the upper vehicle dies, its still-supported wreck must continue damaging
+the live lower vehicle. When the lower vehicle dies, damage to the live upper
+vehicle must stop. A detached turret must use its actual supported contact,
+not an arbitrary nearby wreck or horizontal overlap. Removing that support
+must stop sustained damage. Vehicle death, turret detachment, repeated worker
+publications and a new battle must not duplicate a damage interval.
+
+Current hull ramming uses horizontal closing velocity and deliberately admits
+no wreck ram events. Detached turrets already have worker-owned compound-box
+contact and support, but neither path produces sustained crushing HP. Applying
+an invented minimum impact speed to `ram_damage`, or treating `mass * gravity`
+as HP per second, would not recover the missing retail law. The exact pressure
+damage rate, mass/armour dependence and any initial grace period still need
+0.9.22 source or controlled replay/video evidence before this can be claimed
+as an official-mechanics repair. No new crushing coefficient is enabled here.

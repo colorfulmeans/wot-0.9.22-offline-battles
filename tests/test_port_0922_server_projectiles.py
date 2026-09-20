@@ -1344,7 +1344,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         player.vehicle = 'sweden:S21_UDES_03'
         _update_player_input(
             state, 1, siege_enabled=True, forward=1.0, turn=1.0,
-            speed=99.0, x=10.0, y=4.0, z=11.0, yaw=0.5)
+            speed=0.0, x=10.0, y=4.0, z=11.0, yaw=0.5)
 
         self.assertEqual(SIEGE_SWITCHING_ON, player.siege_state)
         self.assertEqual(60, player.siege_transition_ticks)
