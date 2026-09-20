@@ -29,6 +29,18 @@ def internal_destroyed_count(mask):
     return bin(int(mask) & INTERNAL_DESTROYED_MASK).count('1')
 
 
+def internal_critical_count(mask):
+    """Count internal devices affected by one hit, plus knocked-out crew.
+
+    Damage and destruction of the same device in one transition are one
+    affected device. Separate accepted transitions remain separate events.
+    """
+    mask = int(mask)
+    devices = (mask | (mask >> 12)) & INTERNAL_DEVICE_MASK
+    crew = mask & (31 << 24)
+    return bin(devices).count('1') + bin(crew).count('1')
+
+
 def _integer(value, minimum, maximum):
     return (type(value) in INTEGER_TYPES and minimum <= value <= maximum)
 

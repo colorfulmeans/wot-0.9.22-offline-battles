@@ -132,7 +132,8 @@ class _Facts(object):
             return (self.receipt.get('rewards') or {}).get('xp')
         if row is not None:
             return None
-        if key in ('innerModuleDestrCount', 'killsAssistedRadio'):
+        if key in ('innerModuleDestrCount', 'innerModuleCritCount',
+                   'killsAssistedRadio'):
             if 'interactions' not in source:
                 return None
             count = 0
@@ -152,7 +153,10 @@ class _Facts(object):
                     history = _mission_history(interaction)
                     if history is None:
                         return None
-                    count += sum(mission_events.internal_destroyed_count(event[2])
+                    counter = (mission_events.internal_critical_count
+                               if key == 'innerModuleCritCount' else
+                               mission_events.internal_destroyed_count)
+                    count += sum(counter(event[2])
                                  for event in history if event[0] == 'critical')
             return count
         if key == 'percentFromTotalTeamDamage':

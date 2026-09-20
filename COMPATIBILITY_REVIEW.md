@@ -13,6 +13,31 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20 additional HT4 follow-up
+
+HT4's four regular definitions request `innerModuleCritCount`, whereas TD2
+requests `innerModuleDestrCount`. The former was missing from the mission
+evaluator, so a qualifying battle remained unknown rather than completing.
+HT4 now counts damaged or destroyed internal devices and knocked-out crew
+from complete accepted critical-event histories. Damage and destruction bits
+for the same device in one transition count once; subsequent recorded
+transitions after repair still count. External devices, friendly targets,
+unchanged repeated critical-state publication and incomplete histories cannot
+award progress. TD2 retains its destruction-only condition.
+
+The four main thresholds (1, 3, 5, 6) and their distinct honor requirements
+are captured in `ht4_conditions_0922.json` from the public 0.9.22 definitions,
+not a new exact #1513 archive audit. Tests cover exact thresholds, one below,
+server receipt persistence, client normalization, mission selection and honor
+rejection. No thresholds or rewards were changed.
+
+The remaining native gaps in the section below are unchanged: Paris needs a
+report from the new path diagnostics; the unproved Murovanka end face needs
+its native owner geometry; Mittengard needs the exact painted-circle asset;
+the black stun-assist presentation needs the affected screen/native UI state.
+The stock reference reader obtains only base centers from teamBasePositions;
+repair/resource-point radii in ArenaType are unrelated to base capture.
+
 ## September 20 v0.9.1 follow-up: downhill contact, missions and Murovanka
 
 Reports `125847-f5293210b1b9`, `132016-abb5404de554`,

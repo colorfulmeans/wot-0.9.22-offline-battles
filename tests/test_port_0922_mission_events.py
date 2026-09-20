@@ -208,6 +208,97 @@ class MissionEventReceiptTests(unittest.TestCase):
                     postbattle_store._receipt(value)
 
 
+class HT4ConditionsTests(MissionEventReceiptTests):
+    def test_internal_critical_mask_counts_devices_and_crew_not_external_parts(self):
+        for index in range(8):
+            expected = int(index in (0, 1, 2, 3, 6))
+            for mask in (1 << index, 1 << (index + 12),
+                         (1 << index) | (1 << (index + 12))):
+                self.assertEqual(expected, mission_events.internal_critical_count(mask))
+        self.assertEqual(5, mission_events.internal_critical_count(31 << 24))
+        self.assertEqual(10, mission_events.internal_critical_count(
+            mission_events.INTERNAL_CRITICAL_MASK))
+
+    def test_all_four_ht4_conditions_at_threshold_and_one_below(self):
+        rows = json.loads((Path(__file__).parent /
+            'fixtures/ht4_conditions_0922.json').read_text())
+        for row, threshold in zip(rows, (1, 3, 5, 6)):
+            with self.subTest(name=row['name']):
+                state, player, victim = self.state()
+                yellow = {'devices': [{'name': 'engineHealth', 'state': 'critical'}]}
+                for unused in range(threshold - 1):
+                    state._record_critical_damage(('player', 1), ('player', 2), {}, yellow)
+                # Each newly damaged device after repair is a fresh transition.
+                before = state._receipt_interactions(('player', 1))
+                state._record_critical_damage(('player', 1), ('player', 2), {}, yellow)
+                # Re-publication of the unchanged yellow state is not a new hit.
+                state._record_critical_damage(('player', 1), ('player', 2), yellow, yellow)
+                for pid in range(3, 7):
+                    state.players[pid] = Player(pid, _Socket(), ('127.0.0.1', pid),
+                        name='Enemy%d' % pid, vehicle='ussr:R11_MS-1', team=2,
+                        account_key=str(pid) * 32)
+                state._freeze_round_participants(tuple(state.players.values()))
+                for pid in range(2, 7):
+                    state.players[pid].alive = False
+                    state.players[pid].health = 0
+                    state.players[pid].death_reason = 0
+                    state._record_frag('player', 1, 2, 'player', pid)
+                state._finish_battle(1, 'elimination')
+                receipt = _latest_receipt(state, player.account_key)
+                self.assertTrue(client._valid_battle_receipt(receipt))
+                restored = postbattle_store._receipt(server._persisted_result_receipt(receipt))
+                facts = policy._Facts(restored, None)
+                self.assertEqual(threshold, facts.result('innerModuleCritCount'))
+                self.assertEqual(0, facts.result('innerModuleDestrCount'))
+                for part in ('main', 'add'):
+                    self.assertEqual((True, set()), policy._condition(
+                        'postBattle', node(row[part]), facts))
+                quest = definition('', tags='heavyTank', minimum=1)
+                for part in ('main', 'add'):
+                    quest[part] = node('<quest><conditions>' + row[part] +
+                                       '</conditions></quest>')
+                selection = {'personalMissionSelections': {'regular': [row['qid']]},
+                             'personalMissionProgress': {}}
+                vehicles = types.SimpleNamespace(VehicleDescr=lambda **unused:
+                    types.SimpleNamespace(type=types.SimpleNamespace(
+                        tags={'heavyTank'}, level=10)))
+                completed = policy.evaluate(selection, restored, vehicles,
+                                            lambda unused: quest)
+                self.assertEqual({str(row['qid']): 2}, completed['completed'])
+                self.assertEqual({}, completed['unsupported'])
+                if row['operation'] == 1:
+                    restored['winner'] = 2
+                else:
+                    for item in restored['interactions']:
+                        item['target_kills'] = 0
+                self.assertEqual((True, set()), policy._condition(
+                    'postBattle', node(row['main']), policy._Facts(restored, None)))
+                self.assertEqual((False, set()), policy._condition(
+                    'postBattle', node(row['add']), policy._Facts(restored, None)))
+                restored['interactions'] = before
+                self.assertEqual((False, set()), policy._condition(
+                    'postBattle', node(row['main']), policy._Facts(restored, None)))
+
+    def test_ht4_external_friendly_and_missing_evidence_do_not_award(self):
+        state, player, victim = self.state()
+        state._record_critical_damage(('player', 1), ('player', 2), {},
+            {'destroyed': ['leftTrackHealth', 'gunHealth', 'surveyingDeviceHealth']})
+        state._finish_battle(1, 'elimination')
+        receipt = _latest_receipt(state, player.account_key)
+        self.assertEqual(0, policy._Facts(receipt, None).result('innerModuleCritCount'))
+        receipt['interactions'][0]['mission_events'] = [['critical', 1000, 1]]
+        self.assertEqual(1, policy._Facts(receipt, None).result('innerModuleCritCount'))
+        for row in receipt['public_results']:
+            row['team'] = 1
+        self.assertEqual(0, policy._Facts(receipt, None).result('innerModuleCritCount'))
+        for row in receipt['public_results']:
+            row['team'] = 2
+        receipt['interactions'][0]['mission_events_complete'] = False
+        self.assertIsNone(policy._Facts(receipt, None).result('innerModuleCritCount'))
+        receipt.pop('interactions')
+        self.assertIsNone(policy._Facts(receipt, None).result('innerModuleCritCount'))
+
+
 class TD2LT5ConditionsTests(unittest.TestCase):
     def setUp(self):
         self.rows = json.loads((Path(__file__).parent /
