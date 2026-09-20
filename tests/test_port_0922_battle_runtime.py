@@ -19753,13 +19753,14 @@ class BattleRuntimeContractTests(unittest.TestCase):
         detail = battle._destructible_pose_sweep(
             (2.0, 3.0, 4.0), 0.0, (2.0, 3.0, 4.0), 0.6 * 0.04,
             0.0, _Descriptor(), 12.5, 0.04,
-            rotation_speed_cap=0.75)
+            rotation_speed_cap=0.75, drive_speed_cap=14.0)
 
         radius = math.sqrt(1.7 ** 2 + 3.5 ** 2)
         call = resolver.call_args
         self.assertAlmostEqual(0.6 * radius, call.args[3])
-        self.assertAlmostEqual(0.75 * radius,
-                               call.kwargs['kinetic_speed'])
+        self.assertEqual(14.0, call.kwargs['kinetic_speed'])
+        self.assertEqual(0.0, call.kwargs['dt'])
+        self.assertEqual(0.0, call.kwargs['travel_reach'])
         self.assertEqual('clear', detail['status'])
 
     def test_hard_pose_sweep_commits_fragile_before_blocking_rotation(self):
@@ -19791,6 +19792,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             0.75, battle._destructible_pose_sweep.call_args.kwargs[
                 'rotation_speed_cap'])
+        self.assertEqual(battle._local_physics['speedFwd'],
+                         battle._destructible_pose_sweep.call_args.kwargs[
+                             'drive_speed_cap'])
         self.assertEqual('hard', battle._local_motion_status)
         self.assertEqual([list(token[0])],
                          battle.local_destructible_contacts()[0]['token'])
@@ -19909,6 +19913,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(12.5, pose_call.args[6])
         self.assertEqual(0.1, pose_call.args[7])
         self.assertEqual(0.75, pose_call.kwargs['rotation_speed_cap'])
+        self.assertEqual(14.0, pose_call.kwargs['drive_speed_cap'])
         self.assertEqual(0.14, pose_call.kwargs['pitch'])
         self.assertEqual(-0.08, pose_call.kwargs['roll'])
         proposal.assert_not_called()
@@ -19991,6 +19996,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             first.kwargs['rotation_speed_cap'],
             second.kwargs['rotation_speed_cap'])
+        self.assertEqual(14.0, first.kwargs['drive_speed_cap'])
+        self.assertEqual(first.kwargs['drive_speed_cap'],
+                         second.kwargs['drive_speed_cap'])
         self.assertGreater(probe.call_count, 0)
         self.assertEqual('structure', battle._bot_motion_kinds[101])
 
@@ -29045,6 +29053,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
                           (1.0, 2.0, 3.0), 0.4), first.args[:4])
         self.assertFalse(first.kwargs.get('commit_enabled', False))
         self.assertEqual(0.75, first.kwargs['rotation_speed_cap'])
+        self.assertEqual(
+            battle._player_effective_snapshot(player)['physics']['speedFwd'],
+            first.kwargs['drive_speed_cap'])
         self.assertEqual(0.14, first.kwargs['pitch'])
         self.assertEqual(-0.08, first.kwargs['roll'])
         committed_call = battle._destructible_pose_sweep.call_args_list[1]
@@ -29054,6 +29065,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             first.kwargs['rotation_speed_cap'],
             committed_call.kwargs['rotation_speed_cap'])
+        self.assertEqual(first.kwargs['drive_speed_cap'],
+                         committed_call.kwargs['drive_speed_cap'])
         tree_classifier.assert_has_calls([
             mock.call(7, 22, 37), mock.call(7, 22, 38)], any_order=True)
         trusted_call = tree_commit.call_args

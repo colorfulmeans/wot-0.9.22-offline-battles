@@ -13,6 +13,55 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20 follow-up: tilted fence skins and powered pivot contact
+
+Report `wot-error-report-20260920-102444-ea19226db90e.zip` runs the restored
+`colorfulmeans-35483012880-1` build (`842a3fe2`). The owner reports much better
+Malinovka collision, with remaining invisible fence blockers, and Paris props
+which yield to forward movement but not chassis rotation.
+
+All thirteen Malinovka hard-contact records identify anonymous original
+material 73/74 on accepted broken military-fence components. The witnesses
+sit above their damage boxes. These placements are tilted: their native side
+normals are perpendicular to the model's authored up axis, but their world-Y
+normal components are nonzero. The old world-vertical test therefore misses
+them. A neighbouring model's union can also contain the witness while its
+same-material component does not; that must not suppress the actual owner's
+projected search.
+
+Clip the ownership footprint along the authored up axis, using the box's
+dual face axes, and require a native side-face normal in that same frame.
+Keep live, isolated and unregistered stacked owners blocking. Bound the
+exclusion before live components and retain the existing native recast budget.
+This changes ownership evidence only, without enlarging destruction geometry
+or filtering damaged/vehicle-only materials. The new fixture keeps all thirteen
+rays, normals, nearby component states and native witness records. Their
+before-fix replay fails 52 subcases; the corrected replays preserve backing
+walls one millimetre behind the original skin and restore blocking when
+destruction is revoked. Existing cross-map coverage still exercises 40 maps
+and 750 placed collider variants.
+
+Paris logs five zero-speed `turn_contact` stops at four distinct positions.
+The rotating path qualifies crushes with only angular limit times hull radius,
+whereas powered translation already admits exact contact using the directional
+drive limit. A prop above the angular gate can therefore reject every first
+turn and still crush when driven into. Pass the same effective directional
+drive limit to the pivot proposal and commit, for the visible client, worker
+revalidation and Bots. A disabled traverse cap cannot grant this admission.
+The stock mass, scale and live descriptor-health law remains the final gate;
+actual impact speed, sweep geometry and published motion remain unchanged.
+The ordinary native world check still owns real walls and replacement BSPs.
+
+Tests reconstruct the four report positions against the shipped Paris catalog
+and exercise the real sensor/kinetic gate, proposal and commit with controlled
+descriptor health. The report does not contain the rejected candidate yaw or
+live health cache; these tests establish the adapter defect and its correction,
+not those missing native values. Controls cover high-health props, insufficient
+vehicle mass, disabled traverse, distant/no-turn hulls, one-time exact commits,
+directional limits, and player/worker/Bot forwarding. No movement law, recursive
+rotation refinement or per-query logging is introduced. Actual Windows #1513
+destruction, remaining collision and frame pacing require another playtest.
+
 ## September 20: restore the requested baseline and correct fence ownership
 
 The owner reports that `ead138e3` still freezes and leaves fence air walls.

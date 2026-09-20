@@ -16364,6 +16364,7 @@ class BattleRuntime(object):
                         position, yaw, end_position, end_yaw, speed,
                         descriptor, now, dt,
                         rotation_speed_cap=rotation_speed_cap,
+                        drive_speed_cap=kinetic_speed,
                         pitch=pitch, roll=roll)
                 else:
                     proposal = (
@@ -16407,6 +16408,7 @@ class BattleRuntime(object):
                         position, yaw, end_position, end_yaw, speed,
                         descriptor, now, dt, commit_enabled=True,
                         rotation_speed_cap=rotation_speed_cap,
+                        drive_speed_cap=kinetic_speed,
                         pitch=pitch, roll=roll)
                 else:
                     committed = self._destructibles._catalog_motion_blocked(
@@ -18609,7 +18611,8 @@ class BattleRuntime(object):
     def _destructible_pose_sweep(
             self, start_position, start_yaw, end_position, end_yaw,
             speed, descriptor, now, dt, commit_enabled=False,
-            rotation_speed_cap=None, pitch=0.0, roll=0.0):
+            rotation_speed_cap=None, pitch=0.0, roll=0.0,
+            drive_speed_cap=None):
         """Resolve the complete translating and rotating catalog hull sweep.
 
         Each slice is a fixed-orientation zonotope understood by the pinned
@@ -18682,6 +18685,22 @@ class BattleRuntime(object):
                 raise RuntimeError(
                     'destructible rotation speed cap is invalid')
             rotation_kinetic_speed = rotation_speed_cap * corner_radius
+            if rotation_speed_cap > 0.0 and drive_speed_cap is not None:
+                try:
+                    drive_speed_cap = abs(float(drive_speed_cap))
+                except (TypeError, ValueError, OverflowError):
+                    raise RuntimeError('destructible drive speed cap is invalid')
+                if math.isnan(drive_speed_cap) or math.isinf(drive_speed_cap):
+                    raise RuntimeError('destructible drive speed cap is invalid')
+                # Powered pivot contact has the same crush eligibility as
+                # powered translation. The old angular-edge-only cap could
+                # never reach the health gate of a prop that forward drive
+                # crushes from rest, so every rejected first turn repeated.
+                # This is gate evidence only: the sensor still requires exact
+                # contact, and geometry, real speed and receipts use the actual
+                # frame motion below. Native replacement BSPs remain blocking.
+                rotation_kinetic_speed = max(
+                    rotation_kinetic_speed, drive_speed_cap)
         angular_edge_speed = abs(yaw_delta) * corner_radius / duration
         impact_magnitude = min(200.0, math.sqrt(
             max(abs(float(speed)), center_distance / duration) ** 2 +
@@ -18874,10 +18893,14 @@ class BattleRuntime(object):
         rotation_speed_cap = self._destructible_rotation_speed_cap(
             self._local_physics,
             critical_damage.stat_factor(entity, 'traverse'))
+        drive_speed_cap = (float(self._local_physics[
+            'speedBwd' if speed < 0.0 else 'speedFwd'])
+            if rotation_speed_cap else None)
         catalog_detail = self._destructible_pose_sweep(
             start_position, start_yaw, end_position, end_yaw, speed,
             entity.typeDescriptor, now, dt,
             rotation_speed_cap=rotation_speed_cap,
+            drive_speed_cap=drive_speed_cap,
             pitch=self._local_pitch, roll=self._local_roll)
         tree_detail = self._tree_motion_proposal(
             start_position, start_yaw, end_position, end_yaw,
@@ -19266,10 +19289,13 @@ class BattleRuntime(object):
         pitch = _number(bot_state.get(
             'terrain_pitch', bot_state.get('pitch')))
         roll = _number(bot_state.get('roll'))
+        drive_speed_cap = (vehicle_physics.derive_params(descriptor)['speedFwd']
+                           if rotation_speed_cap else None)
         detail = self._destructible_pose_sweep(
             position, start_yaw, position, end_yaw, 0.0,
             descriptor, now, dt,
             rotation_speed_cap=rotation_speed_cap,
+            drive_speed_cap=drive_speed_cap,
             pitch=pitch, roll=roll)
         status = detail.get('status')
         if status not in (
@@ -19288,6 +19314,7 @@ class BattleRuntime(object):
                 position, start_yaw, position, end_yaw, 0.0,
                 descriptor, now, dt, commit_enabled=True,
                 rotation_speed_cap=rotation_speed_cap,
+                drive_speed_cap=drive_speed_cap,
                 pitch=pitch, roll=roll)
             committed_token = self._destructible_contact_token(
                 detail.get('token'))

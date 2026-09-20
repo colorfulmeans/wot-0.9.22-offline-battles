@@ -4202,17 +4202,19 @@ def _anonymous_original_surface_1513(surface):
 
 
 def _projected_box_interval_1513(start, end, box):
-	"""Clip a ray to the exact XZ projection of a possibly sheared box."""
+	"""Clip to the authored footprint, extruded along the model's own up axis."""
 	center, axes = box[:2]
 	entry, leave = 0.0, 1.0
-	for generator in axes:
-		nx, nz = -generator[2], generator[0]
-		length = (nx * nx + nz * nz) ** 0.5
-		if length <= 1.0e-12:
-			continue
-		radius = sum(abs(nx * axis[0] + nz * axis[2]) for axis in axes)
-		value = nx * (start.x - center[0]) + nz * (start.z - center[2])
-		delta = nx * (end.x - start.x) + nz * (end.z - start.z)
+	normals = _box_face_axes(axes)
+	for index in (0, 2):
+		normal = normals[index]
+		radius = abs(_vector_dot(normal, axes[index]))
+		if radius <= 1.0e-12:
+			return None
+		value = _vector_dot(normal, (
+			start.x - center[0], start.y - center[1], start.z - center[2]))
+		delta = _vector_dot(normal, (
+			end.x - start.x, end.y - start.y, end.z - start.z))
 		if abs(delta) <= 1.0e-12:
 			if abs(value) > radius:
 				return None
@@ -4222,6 +4224,17 @@ def _projected_box_interval_1513(start, end, box):
 		if entry > leave:
 			return None
 	return entry, leave
+
+
+def _original_side_face_1513(normal, box):
+	"""A native original side is parallel to the model's authored up axis."""
+	if normal is None:
+		return False
+	up = box[1][1]
+	face = (normal.x, normal.y, normal.z)
+	length_squared = _vector_dot(up, up) * _vector_dot(face, face)
+	return (length_squared > 1.0e-12 and
+		_vector_dot(up, face) ** 2 <= 1.0e-12 * length_squared)
 
 
 def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
@@ -4247,16 +4260,25 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		if interval is not None:
 			owners.append((identity, instance, interval))
 	projected = False
-	if (not owners and normal is not None and
-			abs(normal.y) <= 1.0e-6 and
-			normal.x * normal.x + normal.z * normal.z > 1.0e-12 and
+	# A neighbouring model's union may contain the witness even when the
+	# actual material belongs to a tilted component just outside its Y bounds.
+	needs_projection = not all(any(
+		(instance['kind'] != 'structure' or box[2] == surface[0]) and
+		(_point_in_world_box(point, box) or
+		 (_original_side_face_1513(normal, box) and
+		  _projected_box_interval_1513(point, point, box) is not None))
+		for unused_identity, instance, unused_interval in owners
+		for box in instance['boxes']) for surface in aliases)
+	if (needs_projection and normal is not None and
 			(end.x - start.x) ** 2 + (end.z - start.z) ** 2 > 1.0e-12):
-		# Native vertical original faces can extend above a module's baked
-		# bounds. Use their authored footprint only for ownership of this
-		# material, never to invent a solid or enlarge the destruction volume.
+		# Original side faces can extend above the module bounds, including
+		# fences tilted on a slope. Prove parallelism in the authored frame;
+		# testing world normal.y incorrectly keeps these destroyed faces solid.
+		# This footprint establishes ownership, never a new collision volume.
 		# Every possible stacked owner must agree, including unstreamed baked
 		# items: a missing live registration cannot authorize an exclusion.
-		projected = True
+		projected_owners = []
+		has_side_face = False
 		catalog = _destructible_catalog or {}
 		baked = catalog.get('baked_instances', {})
 		possible = set(members)
@@ -4273,9 +4295,14 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 				continue
 			if identity not in instances or _destructible_isolated_1513(*identity):
 				return None
+			has_side_face = has_side_face or _original_side_face_1513(
+				normal, envelope)
 			interval = _projected_box_interval_1513(start, end, envelope)
 			if interval is not None:
-				owners.append((identity, instance, interval))
+				projected_owners.append((identity, instance, interval))
+		if has_side_face:
+			projected = True
+			owners = projected_owners
 	if not owners:
 		return None
 	authority = _get_destr_authority()
@@ -4290,7 +4317,7 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 			material = surface[0] if instance['kind'] == 'structure' else None
 			if any((material is None or box[2] == material) and
 					(_point_in_world_box(point, box) or
-					 (normal is not None and abs(normal.y) <= 1.0e-6 and
+					 ((projected or _original_side_face_1513(normal, box)) and
 					  _projected_box_interval_1513(point, point, box) is not None))
 					for box in instance['boxes']):
 				component_owners.append((identity, instance, interval))
