@@ -25068,6 +25068,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 battle._local_fall_armed = True
                 battle._local_speed = speed
                 battle._local_last_pitch = math.atan(0.25 if speed > 0 else -0.25)
+                battle._local_pitch = battle._local_last_pitch
                 entity = _Vehicle(10, _Descriptor(), _Vector(), (0, 0, 0), {'health': 500})
                 position = (0.0, 0.0, 0.0)
                 for unused in range(50):

@@ -26,7 +26,9 @@ drive lock. An allegedly airborne hull repeatedly contacts upward-facing
 ground. The legacy vertical integrator omitted the downward tangent velocity
 while following a slope and eased reachable support Y, opening another gap on
 the next tick. Player and Bot legacy paths now preserve signed tangent
-velocity and commit reachable support directly. Their ballistic reach check
+velocity from the supported chassis pitch and commit reachable support
+directly. The ahead-looking drive probe is not a momentum source: it can see
+a drop while the tracks still rest on a rim. Their ballistic reach check
 still rejects remote cliff floors. Player physical pitch/roll now immediately
 match an accepted ground plane: easing the physical pose after settling Y
 buried the nose at a slope-to-flat transition and fed the tilted shape into

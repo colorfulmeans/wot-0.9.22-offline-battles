@@ -5951,6 +5951,7 @@ class BotRuntimeTests(unittest.TestCase):
                 state = {'id': 11, 'x': 0., 'y': 0., 'z': 0., 'yaw': 0.,
                     'speed': speed, 'half_length': 3., 'vertical_speed': 0.,
                     'airborne': False, 'grounded_once': True,
+                    'terrain_pitch': math.atan(0.25 if speed > 0 else -0.25),
                     'last_drive_pitch': math.atan(0.25 if speed > 0 else -0.25)}
                 for unused in range(50):
                     ground = state['y'] - 0.1

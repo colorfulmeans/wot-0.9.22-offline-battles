@@ -7100,7 +7100,7 @@ class BotRuntime(object):
             state['speed'], state.get('last_drive_pitch', 0.0), step)
         if not state.get('airborne', False):
             state['vertical_speed'] = vehicle_physics.supported_vertical_speed(
-                state['speed'], state.get('last_drive_pitch', 0.0),
+                state['speed'], state.get('terrain_pitch', 0.0),
                 state.get('vertical_speed', 0.0))
         highest, centre = self._terrain_support(state, snap_gap)
         # Front/rear hits keep a bot supported across a narrow ditch, but use

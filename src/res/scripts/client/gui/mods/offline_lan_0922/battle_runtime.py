@@ -21296,7 +21296,7 @@ class BattleRuntime(object):
             self._local_speed, self._local_last_pitch, dt)
         if not self._local_airborne:
             self._local_vertical_speed = vehicle_physics.supported_vertical_speed(
-                self._local_speed, self._local_last_pitch,
+                self._local_speed, self._local_pitch,
                 self._local_vertical_speed)
         highest, centre = self._terrain_support(
             position, yaw, entity.typeDescriptor, follow_gap=snap_gap)

@@ -2466,6 +2466,8 @@ def supported_vertical_speed(speed, slope_pitch, vertical_speed):
 	track therefore already has downward velocity before gravity is applied.
 	Discarding that component makes even a continuous ramp a repeated fall.
 	This is momentum, not permission to snap through an arbitrary ledge.
+	Use the supported chassis pitch, never the ahead-looking drive probe:
+	that probe can already see a drop while the tracks still rest on a rim.
 	'''
 	pitch = max(-GROUND_PITCH_LIMIT, min(
 		GROUND_PITCH_LIMIT, float(slope_pitch)))
