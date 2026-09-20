@@ -942,10 +942,32 @@ def _install_settings():
     _patch(VOIPSupportSetting, '_VOIPSupportSetting__isSupported', lambda unused: False)
 
 
+def _install_item_comparisons(item_type=None):
+    """Keep native price longs out of Python 2's strict cmp return boundary.
+
+    Barracks forwards the seated vehicle's comparison to sorted(). The stock
+    fitting comparator can return a price subtraction, and our shop supplies
+    longs for the native price formatter. Preserve the stock ordering and
+    price objects; only the comparison result becomes an int sign. Patching
+    the producer also covers direct vehicle/module sorts using that result.
+    """
+    if item_type is None:
+        from gui.shared.gui_items.fitting_item import FittingItem
+        item_type = FittingItem
+    original = item_type.__cmp__
+
+    def compare_items(first, second):
+        result = original(first, second)
+        return (result > 0) - (result < 0)
+
+    _patch(item_type, '__cmp__', compare_items)
+
+
 def install():
     if _patches:
         return
     try:
+        _install_item_comparisons()
         _install_store_filters()
         _install_shop()
         _install_vehicle_filters_and_recovery()

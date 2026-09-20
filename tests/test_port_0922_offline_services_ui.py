@@ -58,6 +58,47 @@ class NativeServiceUITests(unittest.TestCase):
         self.addCleanup(patch.stop)
         self.addCleanup(self.ui.uninstall)
 
+    def test_item_sort_adapter_installs_once_and_restores_with_services(self):
+        class FittingItem(object):
+            def __cmp__(self, other):
+                return 200 - other
+
+        original = FittingItem.__dict__['__cmp__']
+        other_installs = ('_install_store_filters', '_install_shop',
+            '_install_vehicle_filters_and_recovery', '_install_reserves',
+            '_install_account', '_install_daily', '_install_mission_results',
+            '_install_settings', '_schedule_daily_rollover')
+        with native_modules({
+                'gui.shared.gui_items.fitting_item': {'FittingItem': FittingItem},
+                'gui.mods.offline_lan_0922.crew_voice': {'install': lambda patch: None}
+                }), mock.patch.multiple(self.ui, **{
+                    name: mock.Mock() for name in other_installs}):
+            self.ui.install()
+            wrapper = FittingItem.__dict__['__cmp__']
+            self.assertIsNot(wrapper, original)
+            self.assertEqual(1, FittingItem().__cmp__(100))
+            self.ui.install()
+            self.assertIs(wrapper, FittingItem.__dict__['__cmp__'])
+            self.ui._install_store_filters.assert_called_once_with()
+            self.ui.uninstall()
+            self.ui.uninstall()
+            self.assertIs(original, FittingItem.__dict__['__cmp__'])
+
+    def test_failed_service_startup_restores_item_comparator(self):
+        class FittingItem(object):
+            def __cmp__(self, other):
+                return 200 - other
+
+        original = FittingItem.__dict__['__cmp__']
+        with native_modules({
+                'gui.shared.gui_items.fitting_item': {'FittingItem': FittingItem}
+                }), mock.patch.object(self.ui, '_install_store_filters',
+                                      side_effect=RuntimeError('startup failed')):
+            with self.assertRaises(RuntimeError):
+                self.ui.install()
+            self.assertIs(original, FittingItem.__dict__['__cmp__'])
+            self.assertEqual([], self.ui._patches)
+
     def test_bond_shop_reuses_native_rows_and_filters_owned_vehicles(self):
         class UnboundMethod(object):
             def __init__(self, function):

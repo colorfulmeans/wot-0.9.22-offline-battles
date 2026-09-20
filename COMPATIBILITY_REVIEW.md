@@ -13,6 +13,34 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20 barracks sorting follow-up
+
+Report `20260920-193111-5b5930c0e65c`, build
+`colorfulmeans-35488817004-1`, records 18 failures in
+`Barracks.__showActiveTankmen`: `TypeError: comparison function must return
+int, not long`. Four inventory publications agree on 222 seated crew and 7
+barracks crew, with 229 descriptors and vehicle references, no missing or
+extra foreign keys, and 30 berths. This is an observed sorting failure, not
+evidence of a crew-count limit or a failed inventory transfer.
+
+The port deliberately publishes shop currency amounts as Python 2 `long`
+for the native price formatter. The reference Python call chain forwards
+`FittingItem.__cmp__` price subtraction through `Vehicle.__cmp__` and
+`TankmenComparator` into the barracks `sorted` call. That reference is an
+investigation lead, not a new exact-archive audit; the supplied #1513 runtime
+trace establishes the failing comparison boundary. The regression executes
+the port's real price conversion and the new comparison adapter on Python 3
+with strict integer-type checking, and on real CPython 2.7.18 in packaging CI.
+
+The existing reversible lobby-service adapter now normalizes the original
+fitting comparator's result to the integer sign -1, 0 or 1. It preserves all
+stock comparison decisions, exceptions, crew identities and native price
+longs. Existing vehicle subclasses and direct fitting-item sorts share the
+fix. Installation precedes account/lobby creation, survives battle/garage
+transitions, is idempotent through the service installer, and is rolled back
+with the other service hooks. The affected Windows save still needs a
+barracks-open/filter retest; local tests do not establish Scaleform acceptance.
+
 ## September 20 Prokhorovka railside tree follow-up
 
 The user's two screenshots locate the pass-through report on the west side of
