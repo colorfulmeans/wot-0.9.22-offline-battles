@@ -13,6 +13,56 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20: contact-report abort and repeated rotation work in the 08:37 report
+
+Report `wot-error-report-20260920-083710-116e07c594fa.zip` confirms build
+`colorfulmeans-35478361781-1`. Its visible-client log identifies the terminal
+failure: `_report_local_motion_stall` serializes `LOCAL HARD CONTACT` with a
+plain JSON encoder, but the kinetic descriptor contains native `EffectsList`
+objects. The resulting `TypeError` escapes into `_frame`, aborts the battle
+and restores the lobby. Session-header-only native exception trails do not
+exclude this Python failure; the full client log supplies its traceback.
+The Bot legacy `[BOT MOTION]` writer had the same defect.
+
+Both legacy writers now use the native-safe encoder used by structured
+physics evidence. Report-only boundaries contain stream/formatting failures
+and emit a `diagnostic_error` when the remaining stream permits it; no
+simulation or contact decision is inside that exception boundary. Regression
+tests replay the reported contact values with a real non-JSON effect object,
+retain identity, health, energy and effect evidence, and exercise both player
+and Bot paths as well as a failed output stream.
+
+The Bot catalog-hard branch also returned before delivering its contact
+normal. Move that evidence assignment before the return so the existing
+normal/tangent response and the report receive the actual contact. A parity
+regression requires the normal and catalog reason to reach the Bot state.
+
+The same session's worker capture spends 15.74 seconds in 34 Bot updates,
+with a 1.334-second maximum update. That is separate from the terminal JSON
+failure. Structured diagnostics previously encoded every payload twice;
+the row now embeds the exact payload already encoded for repeat detection.
+Nothing is sampled away, deferred or capped. `physics.diagnostics` and
+`motion.rotation` receive distinct nested timing stages for the next report.
+The encoder also reuses immutable formatting options while keeping each
+traversal independent. Replaying all 20,761 player rows and 65,063 worker rows
+produces identical decoded records and byte counts. In a local Python 3
+encoding-only comparison, player time falls from 0.509 to 0.343 seconds and
+worker time from 1.553 to 1.125 seconds. These measurements exclude native
+Windows execution and disk output; they do not establish the resulting ping.
+
+Forward/reverse rotation probes also repeated identical perimeter rays and
+support columns. A synchronous, read-only query scope now shares only exact
+space/endpoints/mask matches. Every native filter callback candidate is
+replayed for evidence; any changed filter decision triggers a fresh native
+query. The scope ends with that rotation check, before any future destruction
+or frame. Existing reported support replays use 82/76 native calls instead of
+99/92, with unchanged clear verdicts; added walls remain blocked. This is a
+query-work reduction, not proof of native frame pacing or corrected ping.
+
+No collision geometry, dimensions, waits, map parameters, destruction energy
+thresholds or damaged-material permissions change in this correction. Native
+Windows playtesting remains necessary for performance and fence behavior.
+
 ## September 20: collision-query starvation reproduced from the 07:58 report
 
 Report `wot-error-report-20260920-075844-84edb4755fc8.zip` confirms installation

@@ -64,3 +64,38 @@ class PhysicsDiagnosticsTests(unittest.TestCase):
             raise IOError('closed stream')
         with mock.patch.object(diagnostics,'_writer',fail):
             diagnostics.emit('contact', {'item': 4})
+
+    def test_native_payload_is_snapshotted_once_and_kept_in_full(self):
+        calls = []
+        class NativeEffect(object):
+            def __repr__(self):
+                calls.append(1)
+                return '<EffectsList snapshot %d>' % len(calls)
+        diagnostics.emit('catalog_contact', {'identity': [32636, 24, 74],
+            'kinetic': {'health': 15, 'damage': 8.40534220802027},
+            'effects': [NativeEffect()]}, now=10.)
+        self.assertEqual(1, len(calls))
+        data = self.rows()[0]['data']
+        self.assertEqual([32636, 24, 74], data['identity'])
+        self.assertEqual(8.40534220802027, data['kinetic']['damage'])
+        self.assertEqual(['<EffectsList snapshot 1>'], data['effects'])
+
+    def test_unprintable_native_object_keeps_other_contact_fields(self):
+        class BrokenEffect(object):
+            def __repr__(self):
+                raise RuntimeError('detached native object')
+        diagnostics.emit('contact', {'item': 24, 'effect': BrokenEffect()})
+        self.assertEqual(24, self.rows()[0]['data']['item'])
+        self.assertIn('BrokenEffect', self.rows()[0]['data']['effect'])
+
+    def test_reused_encoder_observes_mutation_and_recovers_after_invalid_data(self):
+        payload = {'contact': {'item': 24, 'health': 15}}
+        first = diagnostics.encode(payload, compact=True)
+        payload['contact']['health'] = 0
+        payload['cycle'] = payload
+        with self.assertRaises(ValueError):
+            diagnostics.encode(payload, compact=True)
+        del payload['cycle']
+        second = diagnostics.encode(payload, compact=True)
+        self.assertEqual(15, json.loads(first)['contact']['health'])
+        self.assertEqual(0, json.loads(second)['contact']['health'])

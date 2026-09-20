@@ -25,6 +25,7 @@ from gui.mods.offline_lan_0922.authority_worker_probe import \
 from gui.mods.offline_lan_0922.battle_feedback import (
     SixthSenseController, VehicleStatePresenter, is_gold_shell)
 from gui.mods.offline_lan_0922 import battle_missions
+from gui.mods.offline_lan_0922 import physics_diagnostics
 from gui.mods.offline_lan_0922.bot_runtime import (
     BOT_WATER_AVOID_DEPTH, BotRuntime, PROBE_KINDS,
     WORKER_CONTROL_SECONDS)
@@ -58,7 +59,7 @@ from gui.mods.offline_lan_0922.siege_hud import PersistentSiegeHints
 from gui.mods.offline_lan_0922.spawn_planner import SpawnPlanner
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.worker_diagnostics import (
-    WorkerCombatDiagnostics, timed, call as timed_call)
+    WorkerCombatDiagnostics, timed, observed, call as timed_call)
 from gui.mods.offline_lan_0922 import (
     ballistics, combat_rules, critical_damage, descriptor_donation,
     destructibles_compat, device_damage, effective_params,
@@ -17729,12 +17730,12 @@ class BattleRuntime(object):
             }))
         return True
 
+    @physics_diagnostics.observational
     def _report_local_motion_stall(self, start, end, dt, throttle, path,
                                    before=None, drive=None, pitch=None,
                                    contact=None, entity=None):
         """Record bounded pose evidence when powered travel cannot advance."""
         if self._local_motion_status != 'clear' or path not in (None, 'still', 'advance'):
-            from gui.mods.offline_lan_0922 import physics_diagnostics
             physics_diagnostics.emit('player_contact_frame', {
                 'start': start, 'end': end, 'dt': dt, 'path': path,
                 'yaw': self._local_yaw, 'pitch': self._local_pitch, 'roll': self._local_roll,
@@ -17805,8 +17806,8 @@ class BattleRuntime(object):
                 'travel=%.4f dt=%.4f context=%s plane=%s\n' % (
                     before, drive, self._local_speed, pitch,
                     math.sqrt(dx * dx + dz * dz), dt,
-                    json.dumps(context),
-                    json.dumps(self._local_ground_plane)))
+                    physics_diagnostics.encode(context),
+                    physics_diagnostics.encode(self._local_ground_plane)))
         if trace and trace.get('reason'):
             trace = dict(trace)
             evidence = getattr(self._destructibles, 'static_contact_evidence', None)
@@ -17838,7 +17839,7 @@ class BattleRuntime(object):
             trace['spring_probes'] = getattr(
                 self, '_local_suspension_probe_trace', ())
             sys.stdout.write('[Offline LAN 0.9.22] LOCAL HARD CONTACT %s\n' %
-                             json.dumps(trace))
+                             physics_diagnostics.encode(trace))
         else:
             self._report_local_prop_support(end, now)
         return True
@@ -18799,6 +18800,7 @@ class BattleRuntime(object):
             return False
         return status in ('clear', 'crushed', 'approach')
 
+    @observed('motion.rotation')
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
             pitch=None, roll=None, record_local=True, evidence=None):
@@ -18844,6 +18846,9 @@ class BattleRuntime(object):
                 'native world rotation sweep exceeds its bound')
         previous_contacts = []
         previous_checked = [False]
+        # This scope contains only read-only native probes. Destruction has
+        # already committed before entry; no receipt survives this call.
+        query_world = world_collision.ReadOnlyMotionQueries(self._runtime.bigworld)
 
         def read_previous_contacts():
             if not previous_checked[0]:
@@ -18852,7 +18857,7 @@ class BattleRuntime(object):
                 for direction in (1.0e-6, -1.0e-6):
                     previous_trace = {}
                     world_collision.check_horizontal_collision(
-                        self._runtime.bigworld, self._runtime.math,
+                        query_world, self._runtime.math,
                         self._avatar.spaceID, self._vector(position),
                         start_yaw, direction, actual_descriptor, False, 0.0,
                         True, False, None, commit_enabled=False,
@@ -18916,7 +18921,7 @@ class BattleRuntime(object):
             for probe_speed in (1.0e-6, -1.0e-6):
                 trace = {}
                 world_status = world_collision.check_horizontal_collision(
-                    self._runtime.bigworld, self._runtime.math,
+                    query_world, self._runtime.math,
                     self._avatar.spaceID, self._vector(position),
                     slice_yaw, probe_speed, sweep_descriptor, False, 0.0,
                     True, False, None, commit_enabled=False,
@@ -18945,7 +18950,7 @@ class BattleRuntime(object):
                 for probe_speed in (1.0e-6, -1.0e-6):
                     trace = {}
                     world_status = world_collision.check_horizontal_collision(
-                        self._runtime.bigworld, self._runtime.math,
+                        query_world, self._runtime.math,
                         self._avatar.spaceID, self._vector(position),
                         float(start_yaw) + yaw_delta * upper, probe_speed,
                         exact_descriptor, False, 0.0, True, False, None,
@@ -19355,9 +19360,10 @@ class BattleRuntime(object):
                 'bot motion resolver returned an invalid status')
         self._bot_motion_kinds[int(bot_id)] = str(detail.get('kinds', '-'))
         if status == 'hard':
+            if detail.get('evidence'):
+                bot_state['_world_contact_trace'] = dict(
+                    detail['evidence'], reason='catalog_rigid_contact')
             return 'hard'
-        if status == 'hard' and detail.get('evidence'):
-            bot_state['_world_contact_trace'] = dict(detail['evidence'], reason='catalog_rigid_contact')
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
         if used_kinetic_speed and not (

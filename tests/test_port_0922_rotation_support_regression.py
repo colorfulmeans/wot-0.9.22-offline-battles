@@ -84,6 +84,10 @@ class RotationSupportRegressionTests(unittest.TestCase):
             with self.subTest(role=row['role']):
                 clear, events, count = self.replay(row)
                 self.assertTrue(clear)
+                # The original report replay used 99/92 native calls. Exact
+                # shared perimeter/support rays now need at most 82, while
+                # all logical evidence and the ground decision remain intact.
+                self.assertLessEqual(count, 82)
                 self.assertFalse(any(c.args[0] == 'rotation_envelope_refine'
                                      for c in events))
 

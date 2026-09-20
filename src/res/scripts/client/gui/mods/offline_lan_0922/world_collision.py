@@ -4,7 +4,7 @@
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 
 from gui.mods.offline_lan_0922.worker_diagnostics import (
-    observed, observed_ray)
+    observed, observed_ray, count as combat_count)
 
 from gui.mods.offline_lan_0922.destructibles_sensor import (
 	_catalog_soft_static_path, _diagnostic_static_recast_1513,
@@ -18,6 +18,46 @@ _MAX_DESCENDING_GRADIENT = 1.75
 _MIN_DRIVABLE_HEIGHT_CHANGE = 0.15
 _GROUND_HIT_EPSILON = 1.0e-3
 _UNPREPARED_COLLISION_FILTER = object()
+
+
+class ReadOnlyMotionQueries(object):
+    """Share exact native rays inside one synchronous, mutation-free sweep.
+
+    Forward/reverse footprint probes repeat perimeter and support columns.
+    Replay every callback candidate, including rejected candidates, so trace
+    evidence is preserved and a changed accepted-destruction filter forces a
+    fresh native query. Never retain this object across sweeps, frames or a
+    native mutation. Coordinates are exact keys, without rounding or padding.
+    """
+    def __init__(self, bigworld):
+        self._bigworld = bigworld
+        self._queries = {}
+
+    def __getattr__(self, name):
+        return getattr(self._bigworld, name)
+
+    def wg_collideSegment(self, space, start, end, mask, callback=None):
+        key = (space, start.x, start.y, start.z,
+               end.x, end.y, end.z, mask, callback is not None)
+        cached = self._queries.get(key)
+        if cached is not None:
+            result, candidates = cached
+            if callback is None or all(bool(callback(*surface)) == kept
+                                       for surface, kept in candidates):
+                combat_count('native.motion.read_only_reused')
+                return result
+        candidates = []
+        if callback is None:
+            result = self._bigworld.wg_collideSegment(space, start, end, mask)
+        else:
+            def keep(*surface):
+                kept = bool(callback(*surface))
+                candidates.append((surface, kept))
+                return kept
+            result = self._bigworld.wg_collideSegment(space, start, end, mask, keep)
+        self._queries[key] = result, candidates
+        combat_count('native.motion.read_only_queried')
+        return result
 
 
 def _trace_collision_filter(collision_filter, trace):

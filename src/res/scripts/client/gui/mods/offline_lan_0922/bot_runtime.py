@@ -8,6 +8,7 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
 import copy
 import math
 from gui.mods.offline_lan_0922 import stun_mechanics
+from gui.mods.offline_lan_0922 import physics_diagnostics
 from gui.mods.offline_lan_0922 import tank_contact_ledger
 import json
 import random
@@ -6374,6 +6375,7 @@ class BotRuntime(object):
                   pose_frozen, state.get('hull_aiming', False),
                   self._hard_contact_grinds.get(state['id'], 0), planner_age))
 
+    @physics_diagnostics.observational
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
                              settled_position):
         """Log the actual authority outcome without extra world queries."""
@@ -6419,7 +6421,7 @@ class BotRuntime(object):
         from gui.mods.offline_lan_0922 import physics_diagnostics
         physics_diagnostics.emit('bot_motion_frame', trace, key=state['id'])
         if legacy:
-            print('[BOT MOTION] %s' % json.dumps(trace, separators=(',', ':')))
+            print('[BOT MOTION] %s' % physics_diagnostics.encode(trace, compact=True))
 
 
     def set_camera_position(self, position):
