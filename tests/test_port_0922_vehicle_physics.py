@@ -32,6 +32,32 @@ class _Strict1513Component(object):
     values = _forbidden
 
 
+class ChassisSupportGeometryTests(unittest.TestCase):
+    def test_uneven_ledge_support_contains_com_and_never_penetrates_samples(self):
+        for yaw in (0.0, 1.1, -2.0):
+            for heights in ((3.2, 3.2, 9.93, 3.2, 3.2),
+                            (9.93, 9.93, 9.93, 3.2, 3.2),
+                            (10.0, 10.0, 7.0, 7.0, 7.0)):
+                with self.subTest(yaw=yaw, heights=heights):
+                    plane = vehicle_physics.sampled_chassis_support(
+                        *(heights + (yaw, 7.0, 3.0)))
+                    self.assertIsNotNone(plane)
+                    offsets = ((0, 3.5), (0, -3.5), (1.5, 0), (-1.5, 0), (0, 0))
+                    for (right, front), height in zip(offsets, heights):
+                        x = right * math.cos(yaw) + front * math.sin(yaw)
+                        z = -right * math.sin(yaw) + front * math.cos(yaw)
+                        support = plane['center_y'] + plane['gradient_x'] * x + plane['gradient_z'] * z
+                        self.assertGreaterEqual(support + 1e-7, height)
+                    self.assertLessEqual(plane['center_y'], max(heights))
+
+    def test_true_cliff_floor_remains_far_below_com(self):
+        plane = vehicle_physics.sampled_chassis_support(
+            10, -20, -20, -20, -20, 0, 7, 3)
+        self.assertLess(plane['center_y'], 0.0)
+        self.assertIsNone(vehicle_physics.sampled_chassis_support(
+            10, None, -20, -20, -20, 0, 7, 3))
+
+
 class VehiclePhysicsDescriptorTests(unittest.TestCase):
 
     @staticmethod

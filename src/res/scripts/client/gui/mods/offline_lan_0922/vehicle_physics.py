@@ -1189,6 +1189,66 @@ def sampled_ground_plane(front_y, rear_y, right_y, left_y, center_y,
 	}
 
 
+def sampled_chassis_support(front_y, rear_y, right_y, left_y, center_y,
+		yaw, length, width):
+	'''Find a supporting face over the centre of the sampled track footprint.
+
+	A road edge is not one terrain plane. Rejecting its residual freezes the
+	old chassis attitude, while a centre-only height lets a track penetrate
+	the upper bank. Use a face of the upper sample hull: it contains the
+	centre of mass and leaves every sampled contact on or below the chassis.
+	This is support geometry, not a continuous terrain grade for driving.
+	'''
+	from itertools import combinations
+	values = (front_y, rear_y, right_y, left_y, center_y, yaw, length, width)
+	try:
+		values = tuple(float(value) for value in values)
+	except (TypeError, ValueError, OverflowError):
+		return None
+	if (any(math.isnan(value) or math.isinf(value) for value in values) or
+			values[6] <= 0.0 or values[7] <= 0.0):
+		return None
+	front, rear, right, left, centre, yaw, length, width = values
+	points = ((0.0, length * 0.5, front), (0.0, -length * 0.5, rear),
+		(width * 0.5, 0.0, right), (-width * 0.5, 0.0, left),
+		(0.0, 0.0, centre))
+	faces = []
+	for a, b, c in combinations(points, 3):
+		dx1, dz1, dy1 = (b[i] - a[i] for i in range(3))
+		dx2, dz2, dy2 = (c[i] - a[i] for i in range(3))
+		determinant = dx1 * dz2 - dx2 * dz1
+		if abs(determinant) <= 1.0e-12:
+			continue
+		# Barycentric coordinates of the chassis origin in this triangle.
+		u = (-a[0] * dz2 + a[1] * dx2) / determinant
+		v = (-dx1 * a[1] + dz1 * a[0]) / determinant
+		if min(u, v, 1.0 - u - v) < -1.0e-9:
+			continue
+		gx = (dy1 * dz2 - dy2 * dz1) / determinant
+		gz = (dx1 * dy2 - dx2 * dy1) / determinant
+		height = a[2] - gx * a[0] - gz * a[1]
+		if any(y > height + gx * x + gz * z + 1.0e-7 for x, z, y in points):
+			continue
+		faces.append((height, gx * gx + gz * gz, gx, gz))
+	if not faces:
+		return None
+	lowest = min(face[0] for face in faces)
+	# A ridge can support the centre with several equally low faces. Average
+	# those supporting gradients instead of choosing an arbitrary diagonal
+	# (or letting float round-off choose which way a symmetric hull pitches).
+	active = [face for face in faces if face[0] <= lowest + 1.0e-7]
+	gx = sum(face[2] for face in active) / len(active)
+	gz = sum(face[3] for face in active) / len(active)
+	height = max(y - gx * x - gz * z for x, z, y in points)
+	plane = sampled_ground_plane(height + gz * length * 0.5,
+		height - gz * length * 0.5, height + gx * width * 0.5,
+		height - gx * width * 0.5, height, yaw, length, width, 1.0e-6)
+	if plane is not None:
+		plane['contact_residual'] = max(height + gx * x + gz * z - y
+			for x, z, y in points)
+	return plane
+
+
 def suspension_ground_plane(params, ground_heights,
 		maximum_residual=None, sample_points=None):
 	'''Fit terrain gradients from contacted springs, not body attitude.

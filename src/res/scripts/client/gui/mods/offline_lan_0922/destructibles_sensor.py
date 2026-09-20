@@ -4240,8 +4240,71 @@ def _original_side_face_1513(normal, box):
 		_vector_dot(up, face) ** 2 <= 1.0e-10 * length_squared)
 
 
+def _owned_component_skin_1513(point, start, end, surfaces):
+	"""Bound a stale original material to its proved, broken live component.
+
+	The Prague workshop door reports original material 73 for its already
+	broken material-74 panel. The same live item owns intact parts above it.
+	Only a witness inside broken component bounds can disambiguate this key;
+	never let the exclusion extend into an intact component or another item.
+	"""
+	instances = globals().get('g_offh_destr_instances', {})
+	authority = None
+	predicted = globals().get('g_offh_destr_speculative', set())
+	excluded = set()
+	length = (end - start).length
+	if length <= _SHOT_RAY_EPSILON:
+		return None
+	limit = 1.0
+	for surface in surfaces:
+		if (len(surface) != 4 or
+				not all(type(value) in _INTEGER_TYPES for value in surface) or
+				not 71 <= surface[0] <= 86 or surface[1] != 0):
+			continue
+		identity = (surface[3], surface[2])
+		instance = instances.get(identity)
+		if (instance is None or instance['kind'] != 'structure' or
+				_destructible_isolated_1513(*identity) or
+				_layout_repair_pending_1513(identity[0])):
+			continue
+		boxes = instance['boxes']
+		if surface[0] not in set(box[2] for box in boxes):
+			continue
+		containing = [box for box in boxes if _point_in_world_box(point, box)]
+		if not containing:
+			continue
+		if authority is None:
+			authority = _get_destr_authority()
+		def broken(box):
+			key = identity + (box[2],)
+			return authority.is_destroyed(*key) or key in predicted
+		if (not containing or any(not broken(box) for box in containing) or
+				any(box[2] == surface[0] for box in containing)):
+			continue
+		intervals = [_segment_world_box_interval(start, end, box)
+			for box in containing]
+		if any(interval is None for interval in intervals):
+			continue
+		local_limit = min(interval[1] for interval in intervals)
+		for box in boxes:
+			if broken(box):
+				continue
+			interval = _segment_world_box_interval(start, end, box)
+			if interval is not None and interval[1] * length >= (point - start).length:
+				local_limit = min(local_limit,
+					max(0.0, interval[0] - 2.0 * _SHOT_RAY_EPSILON / length))
+		if local_limit * length + 1.0e-7 < (point - start).length:
+			continue
+		limit = min(limit, local_limit)
+		excluded.add(surface)
+	return (limit * length, excluded) if excluded else None
+
+
 def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 	"""Resolve anonymous original keys without conflating adjacent live owners."""
+	component_skin = _owned_component_skin_1513(point, start, end, surfaces)
+	if component_skin is not None:
+		return component_skin
 	instances = globals().get('g_offh_destr_instances', {})
 	aliases = set(surface for surface in surfaces
 		if _anonymous_original_surface_1513(surface) is not None)

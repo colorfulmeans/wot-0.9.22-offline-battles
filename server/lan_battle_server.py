@@ -4020,8 +4020,16 @@ class BattleState:
                     z = _finite_float(z, float("nan"))
                     if not math.isfinite(x) or not math.isfinite(z):
                         continue
-                    points.append((round(_clamp(x, -2000.0, 2000.0), 3),
-                                   round(_clamp(z, -2000.0, 2000.0), 3)))
+                    point = (round(_clamp(x, -2000.0, 2000.0), 3),
+                             round(_clamp(z, -2000.0, 2000.0), 3))
+                    if isinstance(value, dict) and 'radius' in value:
+                        radius = _finite_float(value['radius'], float('nan'))
+                        if (not math.isfinite(radius * radius) or
+                                radius <= 0.0):
+                            continue
+                        points.append(dict(x=point[0], z=point[1], radius=radius))
+                    else:
+                        points.append(point)
                 except (KeyError, TypeError, ValueError, IndexError):
                     continue
             if points:
@@ -13852,7 +13860,7 @@ class BattleState:
         return dropped_total
 
     def _update_capture(self):
-        """Apply the standard-mode 50 m, 1 Hz capture law."""
+        """Apply authored standard-mode circles and the 1 Hz capture law."""
         if (not self._combat_accepting() or
                 self.tick % max(1, int(round(TICK_HZ))) != 0 or
                 self.battle_result is not None):
@@ -13884,7 +13892,7 @@ class BattleState:
             if raw_base is None:
                 continue
             if isinstance(raw_base, dict):
-                base_positions = [(raw_base.get('x'), raw_base.get('z'))]
+                base_positions = [raw_base]
             elif (isinstance(raw_base, (list, tuple)) and len(raw_base) >= 2 and
                   not isinstance(raw_base[0], (list, tuple, dict))):
                 base_positions = [(raw_base[0], raw_base[1])]
@@ -13894,17 +13902,18 @@ class BattleState:
             for point in base_positions:
                 try:
                     if isinstance(point, dict):
-                        normalized.append((float(point['x']), float(point['z'])))
+                        normalized.append((float(point['x']), float(point['z']),
+                                           float(point.get('radius', 50.0))))
                     else:
-                        normalized.append((float(point[0]), float(point[1])))
+                        normalized.append((float(point[0]), float(point[1]), 50.0))
                 except (KeyError, TypeError, ValueError, IndexError):
                     continue
             if not normalized:
                 continue
             invading_team = 3 - base_team
             threatened = []
-            for index, (bx, bz) in enumerate(normalized):
-                if any((x - bx) ** 2 + (z - bz) ** 2 <= 2500.0
+            for index, (bx, bz, radius) in enumerate(normalized):
+                if any((x - bx) ** 2 + (z - bz) ** 2 <= radius ** 2
                        for unused_key, x, z in vehicles[invading_team]):
                     threatened.append({
                         "id": "%d:%d" % (base_team, index),
@@ -13914,8 +13923,8 @@ class BattleState:
             self.capture_threat_bases[base_team] = threatened
             invader_keys = sorted(set(
                 key for key, x, z in vehicles[invading_team]
-                if any((x - bx) ** 2 + (z - bz) ** 2 <= 2500.0
-                       for bx, bz in normalized)))
+                if any((x - bx) ** 2 + (z - bz) ** 2 <= radius ** 2
+                       for bx, bz, radius in normalized)))
             self.capture_invaders[base_team] = set(
                 _capture_key_actor(key) for key in invader_keys)
             state = self.rules_state['bases'][str(base_team)]

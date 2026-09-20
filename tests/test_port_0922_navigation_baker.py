@@ -50,6 +50,18 @@ def compiled_space(sections):
 
 class CompiledSpace0922Test(unittest.TestCase):
 
+    def test_authored_mittengard_capture_circles_match_ctf_objectives(self):
+        data = json.loads((ROOT / 'tests/fixtures/thepit_wtcp_circles.json').read_text())
+        graph = json.loads((ROOT / 'navgraphs/100_thepit.json').read_text())
+        points = data['control_points']
+        self.assertEqual([30.0, 30.0], baker.ctf_base_radii(
+            points, graph['objective_bases']))
+        self.assertEqual(graph['objective_base_radii'], baker.ctf_base_radii(
+            list(reversed(points)), graph['objective_bases']))
+        for invalid in (points[:1], points + [dict(points[1], radius=50.0)]):
+            with self.assertRaises(baker.UnsafeBakeInputError):
+                baker.ctf_base_radii(invalid, graph['objective_bases'])
+
     def test_ordinary_routes_use_one_canonical_reversible_polyline(self):
         graph = {'bake': {'soft_route_fallbacks': []}}
         routes = {

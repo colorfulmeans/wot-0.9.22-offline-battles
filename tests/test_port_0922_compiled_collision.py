@@ -476,6 +476,51 @@ class NativeFenceFollowupTests(unittest.TestCase):
                 self.broken.clear()
                 self.assertIs(point, cast([(point, key)])[0])
 
+    def test_prague_broken_door_uses_live_component_bounds_not_stale_material(self):
+        rows = json.loads((ROOT / 'tests/fixtures/prague_173230_contacts.json').read_text())
+        self.assertEqual(4, len(rows))
+        for row in rows:
+            with self.subTest(time=row['log_time']):
+                self.install_report(row, '114_czech')
+                a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+                key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
+                keep = sensor.horizontal_collision_filter(a, b)
+                def cast(surfaces):
+                    return sensor.collide_motion_segment(
+                        1, a, b, keep, CompiledCollisionTests.native(surfaces))
+                self.assertIsNone(cast([(point, key)]))
+                direction = b - a
+                direction.normalise()
+                wall = point + direction.scale(.001)
+                for material in (88, 111):
+                    self.assertIs(wall, cast([(point, key),
+                        (wall, (material, 0, key[2], key[3]))])[0])
+                self.broken.clear()
+                self.assertIs(point, cast([(point, key)])[0])
+                self.broken.add((key[3], key[2], 74))
+                # An overlapping intact component makes ownership ambiguous.
+                instance = sensor.g_offh_destr_instances[(key[3], key[2])]
+                instance['boxes'].append(((point.x, point.y, point.z),
+                    ((.1, 0, 0), (0, .1, 0), (0, 0, .1)), 75))
+                self.assertIs(point, cast([(point, key)])[0])
+
+    def test_prague_material_alias_stops_before_intact_component(self):
+        row = json.loads((ROOT / 'tests/fixtures/prague_173230_contacts.json').read_text())[0]
+        self.install_report(row, '114_czech')
+        a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+        direction = b - a
+        direction.normalise()
+        b = b + direction.scale(2)
+        wall = point + direction.scale(.1)
+        instance = sensor.g_offh_destr_instances[(32640, 89)]
+        instance['boxes'].append(((wall.x, wall.y, wall.z),
+            ((.01, 0, 0), (0, .01, 0), (0, 0, .01)), 75))
+        key = (73, 0, 89, 32640)
+        result = sensor.collide_motion_segment(1, a, b,
+            sensor.horizontal_collision_filter(a, b),
+            CompiledCollisionTests.native([(point, key), (wall, key)]))
+        self.assertIs(wall, result[0])
+
     def test_remapped_key_cannot_erase_its_own_intact_owner(self):
         row = json.loads((ROOT / 'tests/fixtures/murovanka_143656_contacts.json').read_text())[0]
         self.install_report(row, '11_murovanka')

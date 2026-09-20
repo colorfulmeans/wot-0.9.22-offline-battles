@@ -13,6 +13,62 @@ root layout, including `client_overlay/`, `server/`, `src/`, `tools/` and
 `tests/`. Paths under `mods/` and `res_mods/` below describe the installed
 client or package layout.
 
+## September 20 Paris ledge, Prague doors and Mittengard follow-up
+
+Reports `172803-3d53240d5fa3` and `173230-78dde2547f94` identify installed
+build `colorfulmeans-35500571635-1` on the Chinese HD #1513 client. The
+accompanying `100_thepit.pkg` contains the compiled WTCP v2 control points;
+its two CTF flags both author a 30 m radius, at the already-shipped objective
+centres. The baker now matches circle radii by team and objective coordinates,
+and the spawn planner carries those circles through worker readiness to the
+server. Capture occupancy and defense threats use the same radius. Only this
+supplied map catalog is updated; old catalogs without a decoded radius retain
+the previous 50 m behavior. No repair-point radius or estimated visual size is
+used. Tests cover the 30 m boundary for humans and Bots, both bases, malformed
+explicit radii, and ambiguous/missing authored control points.
+
+Prague captures four original-material-73 contacts against two workshop door
+placements, `(32640, 89)` and `(32384, 67)`. Every witness is inside that live
+item's already-broken material-74 panel and outside its intact 73/75 parts.
+The new exact-key recast is bounded by the broken component, stops before any
+intact component, and retains replacement materials and backing walls. It
+requires live, non-isolated ownership; it does not infer a global material
+translation or clear the complete building. All four native witnesses are
+stored in the regression fixture, including their original owner bounds.
+
+Paris records pitch `-0.566140128737696`, roll `-0.3627829348825807`, and
+`plane=null` unchanged in travel and siege, while the blocking native terrain
+normal has Y approximately 0.993. The logs explicitly exclude hydraulic tanks
+from the ten-spring trial; these are legacy support contacts, not spring
+solver failures. Legacy height previously followed the centre column while
+attitude rejected non-planar five-point samples and retained the old tilt.
+The legacy player and hydraulic Bot paths now derive height and attitude from
+one supporting face of the sampled chassis footprint. The face covers the
+centre and does not penetrate any sampled point. Equal-height ridge faces
+share their gradients rather than choosing an arbitrary diagonal. A face
+bridging different surfaces is not published as a continuous grade for slope
+slide. The existing gravity/reachability and raised-obstacle gates remain;
+there are no added waits or drive/brake coefficient changes. The player reuses
+its five support columns for attitude; ordinary Bot probe budgets are
+unchanged. Local hard-contact reports include the accepted legacy support
+sample. This geometry fixes the reproduced stale-attitude/centre-height
+mismatch, but cannot prove native Paris ledge feel or hydraulic rendering.
+Windows travel/siege acceptance at the reported edge is still required.
+
+Prohorovka trees remain unproved: the report has anonymous placement and name
+alignment gaps, but no contact identity tying a failed tree to one of them.
+In particular `(32386, 3)` has an unnamed transform absent from the shipped
+placement catalog; the log does not establish that it is the reported tree.
+Do not assign it a neighboring tree's name or relax the native identity guard.
+The affected tree's position and native resource/placement evidence are still
+needed. The new Murovanka end-face witnesses remain outside the recorded owner
+boxes, so no additional blanket exclusion is introduced. Paris E-line traces
+include active turning and safe navigation with zero throttle, followed by
+progress, as well as deliberate tactical holds; this does not prove that every
+reported opening stall is fixed. No AI timing or performance change is made.
+The owner currently cannot reproduce the black stun-assist display; its UI
+remains unchanged. TD2/LT5/HT4 fixes from the preceding revisions are retained.
+
 ## September 20 additional HT4 follow-up
 
 HT4's four regular definitions request `innerModuleCritCount`, whereas TD2
@@ -31,10 +87,9 @@ not a new exact #1513 archive audit. Tests cover exact thresholds, one below,
 server receipt persistence, client normalization, mission selection and honor
 rejection. No thresholds or rewards were changed.
 
-The remaining native gaps in the section below are unchanged: Paris needs a
-report from the new path diagnostics; the unproved Murovanka end face needs
-its native owner geometry; Mittengard needs the exact painted-circle asset;
-the black stun-assist presentation needs the affected screen/native UI state.
+The later Paris/Prague/Mittengard follow-up above supersedes the missing
+map-circle evidence and records the new native reports. Murovanka's unproved
+end face still needs its owner geometry.
 The stock reference reader obtains only base centers from teamBasePositions;
 repair/resource-point radii in ArenaType are unrelated to base capture.
 
@@ -97,14 +152,10 @@ the old diagnostic. Existing rate-limited Bot stall output now includes the
 selected path index, nearby path points, planned goal and navigation status,
 without additional native probes or changed planner timing.
 
-Mittengard capture remains unresolved: the server uses a fixed 50 m radius
-for both occupancy and threat detection, while the reported painted circle is
-smaller. The shipped navigation catalog contains flag centers but no circle
-size. The exact `100_thepit.pkg` circle geometry/placement is unavailable in
-this checkout, so no radius is fabricated. The black stun-assist presentation
-also remains unresolved: numeric fields and the SPG redesign enable flag are
-already populated; the report lacks the affected screenshot and native UI
-state. A display-color patch would currently be speculative.
+At this earlier checkpoint Mittengard lacked the original circle asset.
+The subsequently supplied WTCP data resolves that gap as described above.
+Numeric stun-assist fields and the SPG redesign flag were already populated;
+the latest owner report no longer reproduces the color issue.
 
 Performance diagnosis only, from live PERF windows:
 

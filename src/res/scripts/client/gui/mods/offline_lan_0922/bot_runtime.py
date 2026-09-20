@@ -6249,8 +6249,23 @@ class BotRuntime(object):
         sine, cosine = math.sin(yaw), math.cos(yaw)
         centre = self._ground_probe_at(
             position[0], position[2], position[1])
+        state.pop('_legacy_support_sample', None)
         if centre is not None:
             centre = float(centre)
+            descriptor = self._descriptors.get(int(state.get('id', -1)))
+            if vehicle_physics.suspension_trial_excluded(descriptor):
+                half_width = max(0.3, _number(state.get('half_width'), 1.7))
+                samples = [self._ground_probe_at(
+                    position[0] + offset[0], position[2] + offset[1], position[1])
+                    for pair in tank_collision.chassis_span_offsets(
+                        yaw, half_width, half_length) for offset in pair]
+                plane = vehicle_physics.sampled_chassis_support(
+                    samples[0], samples[1], samples[2], samples[3], centre,
+                    yaw, half_length * 2.0, half_width * 2.0)
+                state['_legacy_support_sample'] = (
+                    position[0], position[2], yaw, plane)
+                if plane is not None:
+                    return max(samples + [centre]), plane['center_y']
             # Speed and a forward corridor grade can enlarge follow_gap
             # beyond an entire trench. Check the tracks before accepting that
             # drop; the dynamic envelope alone proves no surface continuity.
@@ -6520,6 +6535,24 @@ class BotRuntime(object):
         yaw = state['yaw']
         x = state['x']
         z = state['z']
+        support = state.get('_legacy_support_sample')
+        if support is not None and support[:3] == (x, z, yaw) and support[3] is not None:
+            plane = support[3]
+            suspension_pitch = state.get('suspension_pitch', 0.0)
+            if self._turret_motion_probe is not None:
+                before = self._turret_state_pose(state)
+                after = dict(before, pitch=plane['pitch'] + suspension_pitch,
+                             roll=plane['roll'])
+                after['chassis'] = dict(before['chassis'], pitch=plane['pitch'],
+                                        roll=plane['roll'])
+                if not self._turret_motion_probe(
+                        before, after, self._descriptors.get(int(state['id']))):
+                    return False
+            state['terrain_pitch'] = plane['pitch']
+            state['pitch'] = plane['pitch'] + suspension_pitch
+            state['roll'] = plane['roll']
+            state['pose_sample'] = (x, z, yaw)
+            return True
         tier = self._detail_tier(state)
         travel = SLOPE_SAMPLE_METRES[tier]
         turn = SLOPE_SAMPLE_RADIANS[tier]

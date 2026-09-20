@@ -17837,6 +17837,8 @@ class BattleRuntime(object):
             trace['spring_layer_columns'] = 'height,normal_y,verdict'
             trace['spring_probes'] = getattr(
                 self, '_local_suspension_probe_trace', ())
+            trace['legacy_support'] = getattr(
+                self, '_local_legacy_support_sample', None)
             sys.stdout.write('[Offline LAN 0.9.22] LOCAL HARD CONTACT %s\n' %
                              json.dumps(trace))
         else:
@@ -18217,7 +18219,8 @@ class BattleRuntime(object):
         ready = getattr(self.client, 'send_battle_ready', None)
         if not callable(ready):
             return False
-        bases = getattr(self._spawn_planner, 'bases', None)
+        bases = getattr(self._spawn_planner, 'capture_bases',
+                        getattr(self._spawn_planner, 'bases', None))
         if not ready(bases):
             raise RuntimeError('LAN server did not accept battle readiness')
         self._ready_sent = True
@@ -18302,7 +18305,19 @@ class BattleRuntime(object):
         return self._local_pitch
 
     def _ground_pitch(self, position, yaw, descriptor=None):
-        """Sample one continuous four-point suspension pose."""
+        """Publish the settled support pose; otherwise sample continuous terrain."""
+        support = getattr(self, '_local_legacy_support_sample', None)
+        if support is not None and support[:3] == (position[0], position[2], yaw):
+            plane = support[3]
+            if plane is not None:
+                self._commit_ground_plane(plane, force_raw=True)
+                if plane.get('contact_residual', 0.0) > GROUND_PLANE_EPSILON:
+                    # The support face bridges different surfaces; it is not
+                    # a continuous terrain grade that may drive slope slide.
+                    self._local_ground_plane = None
+                    self._local_downhill = (0.0, 0.0, 0.0)
+                    self._local_slope_tangent = 0.0
+                return self._local_pitch
         plane = self._sample_ground_plane(position, yaw, descriptor)
         if plane is None:
             self._local_downhill = (0.0, 0.0, 0.0)
@@ -20804,11 +20819,10 @@ class BattleRuntime(object):
         while a harmless overhead/top face must not replace the floor and
         trap the vehicle in an endless support rollback.
 
-        ``follow_gap`` enables the chassis-end straddle law.  A tracked hull
-        rests on its chassis ends, so a trench, slot or crater narrower than
-        the tank must not lower the whole body into it merely because the
-        centre column found its floor.  The two extra lateral columns are
-        sampled only at that fall transition.
+        Five chassis columns own both the supported height and attitude.
+        A trench, slot or crater narrower than the tracks must not lower
+        the body to its centre-column floor. ``follow_gap`` retains the
+        straddle fallback when a complete supporting face is unavailable.
         """
         half_length = 2.5
         half_width = 1.5
@@ -20845,16 +20859,25 @@ class BattleRuntime(object):
                 front = value
             else:
                 rear = value
-        if (follow_gap is None or not self._local_fall_armed or
-                (centre is not None and
-                 position[1] - centre <= float(follow_gap))):
-            return highest, centre
         lateral = tuple(
             self._support_column(
                 position[0] + offset[0], position[2] + offset[1],
                 position[1], maximum_y)
             for offset in tank_collision.chassis_span_offsets(
                 yaw, half_width, half_length)[1])
+        # Height and attitude must use the same sampled support layer. A
+        # higher bridge/ledge found by the broad presentation query is not it.
+        plane = vehicle_physics.sampled_chassis_support(
+            front, rear, lateral[0], lateral[1], centre,
+            yaw, half_length * 2.0, half_width * 2.0)
+        self._local_legacy_support_sample = (
+            position[0], position[2], yaw, plane)
+        if plane is not None:
+            return highest, plane['center_y']
+        if (follow_gap is None or not self._local_fall_armed or
+                (centre is not None and
+                 position[1] - centre <= float(follow_gap))):
+            return highest, centre
         bridged = tank_collision.straddled_support(
             position[1], follow_gap, ((front, rear), lateral))
         if centre is None:
@@ -21292,6 +21315,7 @@ class BattleRuntime(object):
     def _update_vertical_motion_legacy(self, entity, position, yaw, dt):
         """Copy vertical motion while rejecting false raised support."""
         self._local_support_rise_blocked = False
+        self._local_legacy_support_sample = None
         snap_gap = vehicle_physics.ground_follow_gap(
             self._local_speed, self._local_last_pitch, dt)
         if not self._local_airborne:

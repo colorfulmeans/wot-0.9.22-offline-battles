@@ -20850,7 +20850,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(5, len(calls[0]))
         self.assertIs(skin_filter, calls[0][4])
         self.assertEqual(4, len(calls[1]))
-        self.assertTrue(all(len(call) == 5 for call in calls[2:]))
+        for call in calls[2:]:
+            self.assertEqual(5 if call[1].x > 0.0 else 4, len(call))
+            if call[1].x > 0.0:
+                self.assertIs(skin_filter, call[4])
 
     def test_crushed_destructible_costs_no_speed_and_names_the_path(self):
         runtime = _runtime()
@@ -23529,7 +23532,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_descriptor = entity.typeDescriptor
         battle._attach_local_presentation()
         battle._motion_is_clear = mock.Mock(return_value=True)
-        battle._ground_y = mock.Mock(return_value=0.0)
+        battle._support_column = mock.Mock(wraps=battle._support_column)
 
         with mock.patch(
                 'gui.mods.offline_lan_0922.battle_runtime.'
@@ -23538,7 +23541,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         step.assert_called_once()
         battle._motion_is_clear.assert_called()
-        battle._ground_y.assert_called()
+        battle._support_column.assert_called()
         self.assertGreater(battle._local_position[2], 8.0)
         self.assertEqual(4.0, battle._local_speed)
 
@@ -23681,7 +23684,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         position = battle._update_vertical_motion(
             entity, (0.0, 10.0, 0.0), 0.0, 0.1)
 
-        self.assertAlmostEqual(10.0, position[1], places=6)
+        self.assertAlmostEqual((9.95 + 10.0) / 2.0, position[1], places=6)
         self.assertFalse(battle._local_airborne)
 
     def test_player_support_uses_wide_chassis_not_narrower_hull(self):
@@ -23709,7 +23712,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertTrue(battle._local_airborne)
         self.assertLess(position[1], 10.0)
 
-    def test_player_flat_ground_keeps_the_three_column_support_probe(self):
+    def test_player_support_samples_height_and_attitude_in_five_columns(self):
         battle, entity, calls = self._legacy_support_battle({}, 10.0)
 
         position = battle._update_vertical_motion(
@@ -23717,7 +23720,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertAlmostEqual(10.0, position[1], places=6)
         self.assertEqual(
-            [(0.0, 3.5), (0.0, 0.0), (0.0, -3.5)], calls)
+            [(0.0, 3.5), (0.0, 0.0), (0.0, -3.5), (1.5, 0.0), (-1.5, 0.0)], calls)
 
     def test_local_suspension_samples_twenty_two_columns_once_per_tick(self):
         runtime = _runtime()
@@ -25137,6 +25140,25 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([
             'pose', ('landing', 18.5),
             'pose', ('landing', 18.5)], calls)
+
+    def test_legacy_uneven_support_replaces_frozen_paris_attitude_without_extra_rays(self):
+        battle, entity, calls = self._legacy_support_battle({
+            (1.5, 0.0): 4.0, (-1.5, 0.0): 3.2}, 3.2)
+        # The report kept exactly this attitude in travel and siege with
+        # plane=null. These uneven samples model that failed planarity gate.
+        battle._local_pitch = -0.566140128737696
+        battle._local_roll = -0.3627829348825807
+        position = battle._update_vertical_motion_legacy(
+            entity, (0.0, 3.6, 0.0), 0.0, .04)
+        battle._ground_y = mock.Mock(side_effect=AssertionError('different support layer'))
+        battle._ground_pitch(position, 0.0, entity.typeDescriptor)
+        self.assertAlmostEqual(3.6, position[1])
+        self.assertAlmostEqual(0.0, battle._local_pitch)
+        self.assertAlmostEqual(math.atan(.8 / 3.0), battle._local_roll)
+        self.assertEqual(5, len(calls))
+        self.assertFalse(battle._local_airborne)
+        self.assertIsNone(battle._local_ground_plane)
+        self.assertEqual(0.0, battle._local_slope_tangent)
 
     def test_legacy_ground_pose_settles_on_flat_without_a_buried_nose(self):
         battle = BattleRuntime(_runtime())
