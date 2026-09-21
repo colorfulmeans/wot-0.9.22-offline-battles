@@ -5651,3 +5651,78 @@ Regression geometry uses the shipped `31_airfield` small village house's boxes,
 with controlled placement, health and native query responses. It proves the
 Python approach/driver boundary, including forward commands at 60/15/5 Hz,
 not the user's exact unlogged position or native Windows #1513 gameplay.
+
+### Post-0.9.3 Airfield navigation and directive purchases
+
+The `20260921-225339-7e2477662ca8` and
+`20260921-234319-c7cf068c7df3` reports both identify semantic version 0.9.3,
+build `colorfulmeans-35611837404-1`. The published ZIP's navigation source
+matches the current release tree after Windows newline normalization; this
+follow-up is not based on an assumed older installation.
+
+In the Airfield report, 379 of 412 motion samples have pending navigation and
+403 have clear world-motion checks. Six recorded stationary positions lie in
+cells without a baked height. The baked corridor can snap its start to a
+nearby supported cell, but its native-review gate previously checked the
+original unsupported cell and rejected the candidate before consulting live
+ground and collision evidence. Report-position regressions reproduce this
+failure even with a clear native corridor.
+
+Reviewed boundary joins now check the actual world-space start and proposed
+endpoint through the existing live support, slope and obstacle probes.
+Missing support, real walls and excessive slopes remain vetoes. No map
+coordinates or physical collision laws are changed. The regression's live
+query responses are controlled fixtures; they do not establish that every
+native obstacle at those positions is passable.
+
+A separate deterministic lifecycle regression shows that queued searches can
+stop progressing while every Bot reuses a cached/direct movement decision.
+The authority control refresh now advances the existing navigation queue once
+per frame. The original elapsed-time credit and same-frame idempotence remain
+in force; this does not increase its search budget. The report itself records
+ongoing search work, so this independent defect is not claimed as the sole
+cause of its stationary vehicles. Bounded motion diagnostics now include the
+actual grid cell, available baked height, pending age and search progress.
+
+The second report identifies CMD 308 and `BattleBooster<intCD:27131>` rejected
+by the ordinary-equipment slot validator. The six-field command width is
+already audited above, but the report does not retain the slot field's value.
+The repair therefore uses the installed descriptor's `equipmentType` to select
+the unique directive slot in the existing four-slot representation. Ordinary
+consumables retain their requested slot and all requests retain slot bounds
+and descriptor validation. It does not claim a newly audited GUI-local index.
+
+Buying and mounting one item also previously replaced the entire desired
+consumable layout with the currently loaded items. That erased unrelated
+consumed items' resupply targets and signed currency choices. Only the chosen
+slot's desired layout now changes. Transaction, inventory publication and
+save/restart regressions cover direct purchases, existing stock, replacement,
+unmounting, insufficient bonds and invalid requests; failed transactions
+retain the original balances, stock, fitting and layout.
+
+### Shared spotting: verified behavior and historical limits
+
+The official [Spotting and Concealment support article](https://wargaming.net/support/en/products/wot/article/10222/)
+confirms that allied position sharing requires radio contact. It does not
+specify assistance attribution at shell launch versus impact. Search-index
+excerpts of the Wargaming-hosted [Battle Mechanics Wiki](https://wiki.wargaming.net/en/Battle_Mechanics)
+describe splitting spotting XP between spotters when the shooter cannot spot
+the target itself; its full article was blocked by a verification page during
+this review. That excerpt is not evidence for the exact historical HP or
+integer-rounding algorithm.
+
+Existing server regressions confirm that 240 damage is shared as 120/120
+between two direct spotters, a single spotter receives the entire assistance,
+and a shooter spotting its own target grants no radio assistance to others.
+For 241 damage, the current stable-order 121/120 split is an offline accounting
+choice, not a recovered official rounding contract. Existing in-flight shell
+and assisted-kill behavior remains unchanged.
+
+No spotting behavior is changed by this follow-up. A proposed per-shooter
+radio filter was not retained because a newer observation after the shooter's
+death removed its radio relationships before an in-flight shell hit; public
+sources did not resolve the correct historical attribution time. Other
+unverified boundaries are shared initial-discovery counts, assistance during
+retained visibility without direct observation, and simultaneous tracking and
+spotting assistance. The existing implementation must not be described as a
+complete reconstruction of the 0.9.22 proprietary reward rules.
