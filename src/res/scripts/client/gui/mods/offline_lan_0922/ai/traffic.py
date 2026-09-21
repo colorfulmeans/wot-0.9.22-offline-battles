@@ -179,6 +179,15 @@ class TrafficCoordinator(object):
         return self._escape_probe._reverse_blocked_by_vehicle(
             peer['position'], peer['yaw'], [body], length, width) is not None
 
+    def clearance_distance(self, bot_id, position):
+        """Remaining translation in an already admitted finite yield."""
+        lease = self._parked.get(bot_id)
+        if lease is None:
+            return None
+        travelled = math.hypot(position[0] - lease['origin'][0],
+                               position[2] - lease['origin'][1])
+        return max(0.0, lease['distance'] - travelled)
+
     def _parked_yield(self, bot_id, body, command, peers, neighbours, now,
                       direction_clear):
         """Ask a parked ally to clear a persistent, observed traffic blockage.
@@ -291,10 +300,15 @@ class TrafficCoordinator(object):
             return None
         length, width = _dimensions(body)
         heading = body['yaw'] + (math.pi if lease['sign'] < 0.0 else 0.0)
-        clear = (self._escape_probe._clear(direction_clear, heading, length * 1.6) and
+        # This manoeuvre has a fixed endpoint. Requiring a fresh full-length
+        # corridor after every metre travelled asks for space beyond that
+        # endpoint and can stop a valid escape against a distant wall.
+        remaining = min(length * 1.6, self.clearance_distance(
+            bot_id, body['position']))
+        clear = (self._escape_probe._clear(direction_clear, heading, remaining) and
                  self._escape_probe._reverse_blocked_by_vehicle(
                      body['position'], heading + math.pi,
-                     neighbours, length, width) is None)
+                     neighbours, length, width, remaining) is None)
         result = dict(command)
         result.update(throttle=0.65 * lease['sign'] if clear else 0.0,
                       brake=not clear,

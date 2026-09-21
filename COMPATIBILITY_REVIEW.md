@@ -5526,6 +5526,15 @@ including its slope unloading near the static hold limit. Its 0.65 grip share
 is retained calibration, not a newly established retail coefficient. Explicit
 braking remains stronger and airborne motion remains inertial.
 
+Restoring that brake exposed a finite Bot-yield deadlock in the recorded
+Himmelsdorf departure case. A yielding vehicle repeatedly requested a fresh
+full escape corridor after most of its admitted manoeuvre was complete; a
+wall beyond the intended endpoint stopped it before it could clear the lane.
+Traffic checks now use the remaining translation of that existing yield.
+Dynamic checks retain the entire swept hull, and native motion receipts still
+cover the leading hull plus the current slice's reach. The original 15/24 FPS
+departure distances and parking/recovery duration limits remain unchanged.
+
 The former 1.05 downhill envelope and separate artificial overspeed build/drag
 are replaced by force-integrated gravity and a **user-authorized approximate
 1.35 envelope**. Engine acceleration remains limited by the installed

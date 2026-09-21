@@ -12077,11 +12077,32 @@ class BotRuntime(object):
                 # Recovery is intentionally a short backing manoeuvre. A wall
                 # beyond that escape edge must not veto clear space at the rear.
                 maximum_probe_distance = reactive_horizon
-            elif (reactive_horizon is not None and
-                    command.get('recovery_mode') == 'friendly_yield'):
+            elif command.get('recovery_mode') == 'friendly_yield':
                 # A blocked teammate yields only a short, hull-checked gap.
-                # The distant tactical route does not own this manoeuvre.
+                # Neither the tactical route nor space beyond the fixed yield
+                # endpoint belongs to this manoeuvre. Recompute the remaining
+                # distance per slice, including between planner refreshes.
                 maximum_probe_distance = reactive_horizon
+                remaining = self._traffic_coordinator.clearance_distance(
+                    state['id'], position)
+                if remaining is not None:
+                    leading = max(0.5, state.get('half_length', 3.5))
+                    frame_reach = max(
+                        0.4, abs(state['speed']) * min(0.2, step) + 0.2)
+                    # Native receipts measure from the chassis origin and
+                    # must still contain the full leading hull plus this
+                    # slice's reach. The yield endpoint bounds centre travel,
+                    # never the evidence required for an occupied body.
+                    endpoint_reach = leading + remaining
+                    maximum_probe_distance = (
+                        endpoint_reach if reactive_horizon is None else
+                        min(endpoint_reach, reactive_horizon))
+                    maximum_probe_distance = max(
+                        leading + frame_reach, maximum_probe_distance)
+                    if remaining <= 0.0:
+                        throttle = 0.0
+                        turn = 0.0
+                        active_brake = True
             cached_motion_probe = self._motion_probe_cache.get(state['id'])
             # A frozen pose keeps this slice's realised translation at zero
             # without claiming that the corridor is blocked, so it must not

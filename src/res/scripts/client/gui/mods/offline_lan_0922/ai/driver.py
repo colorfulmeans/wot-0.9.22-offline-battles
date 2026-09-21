@@ -362,7 +362,7 @@ class LocalDriver(object):
 
 	@observed('driver.reverse_contacts')
 	def _reverse_blocked_by_vehicle(self, position, yaw, neighbours,
-			half_length, half_width):
+			half_length, half_width, maximum_distance=None):
 		"""Reject a blind reverse whose reachable hull sweep is occupied.
 
 		``direction_clear`` answers for terrain and static world geometry only.
@@ -370,7 +370,8 @@ class LocalDriver(object):
 		second of every other one, so an unchecked reverse recovery drives each
 		hull straight into the one behind it and the whole formation grinds.
 		"""
-		reverse_distance = recovery_probe_distance(half_length)
+		reverse_distance = (recovery_probe_distance(half_length)
+			if maximum_distance is None else max(0.0, float(maximum_distance)))
 		# Translating an OBB along its longitudinal axis sweeps one exact longer
 		# OBB. Sampling only the final pose misses a hull at the current or an
 		# intermediate reachable position.
