@@ -5622,3 +5622,32 @@ reflect the authority's accepted input; it does not reduce network latency.
 These changes still require native Windows #1513 acceptance for vehicle feel,
 hydraulic poses and reticle presentation. Pure-data regressions and packaging
 checks do not substitute for that gameplay test.
+
+
+### September 21 Airfield Bot approach: cold props and roof support
+
+The reported symptom is a stationary Bot in front of a destructible house.
+Two approach-gate defects can produce it independently of actual destruction:
+`_catalog_soft_static_path` previously searched only proximity-registered items,
+while the Bot proximity body scan requires motion; `_direction_probe` treated the
+first vertical hit at its lookahead endpoint as ground and could veto an
+unreachable house roof before considering the horizontal soft-wall path.
+
+The shared planning resolver now selects bounded candidates from the existing
+baked spatial bins and reuses `_stream_baked_shot_instance_1513` for the exact
+live wire, name, matrix, descriptor and effect-category checks. Baked geometry
+alone cannot authorize clearance. Registration and extra casts use the existing
+shared soft-recast budget; an unavailable stream/budget yields a retryable result.
+
+Only an unreachable roof owned by a live-validated, kinetically crushable item
+can be excluded from a planning ground column. The recast covers the complete
+original column with the existing vehicle flags and exact original-material
+filter, not a jump to the OBB exit. Ground absence, slopes, deep water, uncrushable
+items and backing/replacement geometry remain vetoes. Reachable decks and
+physical suspension probes are not softened. Actual contact still performs the
+original destruction law; planning never calls a destruction RPC.
+
+Regression geometry uses the shipped `31_airfield` small village house's boxes,
+with controlled placement, health and native query responses. It proves the
+Python approach/driver boundary, including forward commands at 60/15/5 Hz,
+not the user's exact unlogged position or native Windows #1513 gameplay.
