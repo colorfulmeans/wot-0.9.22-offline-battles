@@ -779,18 +779,18 @@ class TerrainGrid(object):
 		if distance < 0.25:
 			return True
 		if self.prebaked:
-			if not self._baked_corridor(start, end)[0]:
-				return False
 			edges = self._edge_keys_for_segment(start, end)
 			if (self._baked_cell_height(self.cell_for(start)) is None and
 					any(first in self._native_review_cells or
 						second in self._native_review_cells
 						for first, second in edges)):
-				# The bake proved a corridor from a nearby supported cell, but
-				# native review cannot use the occupied cell's missing height.
-				# Prove the physical connector; do not invent a solid edge or
-				# move the tank to the snapped position.
+				# Neither the snapped bake corridor nor a raw edge with a missing
+				# height proves the actual short connector. Recheck it before
+				# either coarse-grid verdict can veto motion. A small physical
+				# move can change the snapped corridor without adding a wall.
 				return self._live_baked_egress_clear(start, end)
+			if not self._baked_corridor(start, end)[0]:
+				return False
 			if not edges and self.cell_for(start) in self._native_review_cells:
 				# A short escape can stay inside one four-metre cell. There is
 				# then no graph edge to recheck, but the contact already disproved
