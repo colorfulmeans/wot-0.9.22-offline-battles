@@ -429,15 +429,8 @@ COMBAT_SOURCE_KINDS = {
     "player_left": frozenset(("health",)),
     "environment": frozenset(("health",)),
 }
-CRITICAL_DEVICE_NAMES = frozenset((
-    "engineHealth", "ammoBayHealth", "fuelTankHealth", "radioHealth",
-    "leftTrackHealth", "rightTrackHealth", "gunHealth",
-    "turretRotatorHealth", "surveyingDeviceHealth",
-))
-CRITICAL_CREW_NAMES = frozenset((
-    "commander", "driver", "gunner1", "gunner2", "loader1",
-    "loader2", "radioman1", "radioman2",
-))
+CRITICAL_DEVICE_NAMES = equipment_mechanics.ACTIVATION_DEVICE_NAMES
+CRITICAL_CREW_NAMES = equipment_mechanics.ACTIVATION_CREW_NAMES
 # #1513 ``items.vehicles.VEHICLE_DEVICE_TYPE_NAMES`` and
 # ``VEHICLE_TANKMAN_TYPE_NAMES`` positions, which the client's crits mask
 # parser indexes.  Both server track devices map onto the single "track" slot
@@ -3865,6 +3858,13 @@ class BattleState:
                 "battle_booster": int(((participant.effective_params or {}).get(
                     "battle_booster") or {}).get("compact_descr", 0)),
             }
+            # The accepted start freezes the equipment that earned passive
+            # benefits, including participants who subsequently disconnect.
+            # Loading cancellation clears these round-local facts; worker
+            # failures deliberately mint no result receipts.
+            for equipment in participant.equipment_states:
+                self._record_equipment_consumption(
+                    participant.player_id, equipment)
         self.round_participants = frozen
 
     def store_vehicle_catalog(self, player_id, message):
@@ -12217,6 +12217,17 @@ class BattleState:
                 player.track_repair_fingerprints.popitem(last=False)
             return True
 
+    def _record_equipment_consumption(self, player_id, equipment,
+                                      activated=False):
+        """Record one inventory charge, independently of trigger use count."""
+        if not equipment_mechanics.consumed_in_battle(equipment, activated):
+            return
+        compact_descr = _exact_int(
+            equipment.contract.get("compactDescr"), 1, 2 ** 31 - 1)
+        if compact_descr is not None:
+            self._statistics_row(
+                "player", player_id)["equipment_used"][str(compact_descr)] = 1
+
     @staticmethod
     def _finish_equipment_intent(player, intent_seq, accepted, reason):
         player.equipment_intent_result = {
@@ -12227,15 +12238,12 @@ class BattleState:
         return True
 
     def submit_equipment_intent(self, player_id, message):
-        """Commit one visible trigger against the server-owned kit ledger."""
+        """Commit or terminally reject one identified, ordered trigger."""
         with self.lock:
-            if (self.client_build != CLIENT_BUILD_0922 or
+            if (not isinstance(message, dict) or
+                    self.client_build != CLIENT_BUILD_0922 or
                     not self._message_round_matches(message) or
-                    message.get("type") != "equipment_intent" or
-                    set(message) != {
-                        "type", "round_id", "intent_seq", "equipment_id",
-                        "activation_code", "selected",
-                        "requested_active"}):
+                    message.get("type") != "equipment_intent"):
                 return False
             player = self.players.get(player_id)
             if player is None or not player.connected:
@@ -12243,36 +12251,16 @@ class BattleState:
             try:
                 intent_seq = _exact_int(
                     message.get("intent_seq"), 1, PROJECTILE_MAX_ID)
-                equipment_id = _exact_int(
-                    message.get("equipment_id"), 0, 65535)
-                activation_code = _exact_int(
-                    message.get("activation_code"), 0,
-                    PROJECTILE_MAX_ID)
             except (TypeError, ValueError, OverflowError):
                 return False
-            if (intent_seq is None or equipment_id is None or
-                    activation_code is None or
-                    activation_code & 65535 != equipment_id):
+            # A valid session/round/sequence owns a terminal result even when
+            # its payload is bad. Rejecting that payload before advancing
+            # the frontier permanently rejects every subsequent TCP request.
+            # Include the complete payload in duplicate/conflict identity.
+            try:
+                fingerprint = _message_fingerprint(message)
+            except (TypeError, ValueError, OverflowError):
                 return False
-            selected = message.get("selected")
-            if selected is not None:
-                if (not isinstance(selected, str) or not selected or
-                        len(selected) > 64 or
-                        selected not in CRITICAL_DEVICE_NAMES and
-                        selected not in CRITICAL_CREW_NAMES):
-                    return False
-            requested_active = message.get("requested_active")
-            if (requested_active is not None and
-                    not isinstance(requested_active, bool)):
-                return False
-            normalized = {
-                "intent_seq": intent_seq,
-                "equipment_id": equipment_id,
-                "activation_code": activation_code,
-                "selected": selected,
-                "requested_active": requested_active,
-            }
-            fingerprint = _message_fingerprint(normalized)
             previous = player.equipment_intent_fingerprints.get(intent_seq)
             if previous is not None:
                 return previous == fingerprint
@@ -12283,6 +12271,35 @@ class BattleState:
             while (len(player.equipment_intent_fingerprints) >
                    MAX_PLAYER_EQUIPMENT_FINGERPRINTS):
                 player.equipment_intent_fingerprints.popitem(last=False)
+            if set(message) != {
+                    "type", "round_id", "intent_seq", "equipment_id",
+                    "activation_code", "selected", "requested_active"}:
+                return self._finish_equipment_intent(
+                    player, intent_seq, False, "invalid_equipment_request")
+            try:
+                equipment_id = _exact_int(
+                    message.get("equipment_id"), 0, 65535)
+                activation_code = _exact_int(
+                    message.get("activation_code"), 0, PROJECTILE_MAX_ID)
+            except (TypeError, ValueError, OverflowError):
+                return self._finish_equipment_intent(
+                    player, intent_seq, False, "invalid_activation_code")
+            if activation_code & 65535 != equipment_id:
+                return self._finish_equipment_intent(
+                    player, intent_seq, False, "invalid_activation_code")
+            selected = message.get("selected")
+            if selected is not None:
+                if (not isinstance(selected, str) or not selected or
+                        len(selected) > 64 or
+                        selected not in CRITICAL_DEVICE_NAMES and
+                        selected not in CRITICAL_CREW_NAMES):
+                    return self._finish_equipment_intent(
+                        player, intent_seq, False, "invalid_equipment_target")
+            requested_active = message.get("requested_active")
+            if (requested_active is not None and
+                    not isinstance(requested_active, bool)):
+                return self._finish_equipment_intent(
+                    player, intent_seq, False, "invalid_activation_mode")
             if (not self._combat_accepting() or
                     self.battle_result is not None or
                     not player.participating or not player.alive):
@@ -12400,11 +12417,8 @@ class BattleState:
                 if not self._clear_vehicle_stun(("player", player_id)):
                     raise RuntimeError("canonical medkit stun clear diverged")
             player.equipment_revision += 1
-            consumed = _exact_int(
-                equipment.contract.get("compactDescr"), 1, 2 ** 31 - 1)
-            if consumed is not None:
-                self._statistics_row(
-                    "player", player_id)["equipment_used"][str(consumed)] = 1
+            self._record_equipment_consumption(
+                player_id, equipment, activated=True)
             return self._finish_equipment_intent(
                 player, intent_seq, True, "")
 
@@ -12433,11 +12447,8 @@ class BattleState:
                 self._commit_player_critical_progress(
                     player, _critical_payload(payload))
                 player.equipment_revision += 1
-                consumed = _exact_int(
-                    equipment.contract.get("compactDescr"), 1, 2 ** 31 - 1)
-                if consumed is not None:
-                    self._statistics_row(
-                        "player", player.player_id)["equipment_used"][str(consumed)] = 1
+                self._record_equipment_consumption(
+                    player.player_id, equipment, activated=True)
                 changed += 1
             payload = player_critical_mechanics.advance_critical(
                 player, max(0.0, float(dt)), now)
@@ -13075,10 +13086,9 @@ class BattleState:
                 # and can turn it back into a shell, which the server cannot:
                 # only the client owns the item definitions.
                 "shells_fired": {},
-                # Consumables activated, by compact descriptor, which the
-                # client does send with the mounted equipment.  #1513 consumes
-                # one of each however many times it was activated, so this is
-                # a set rather than a count.
+                # Inventory charges, not activation counts: food/fuel at
+                # accepted start, kits/extinguishers only when used, never
+                # the permanent governor. Repeated uses still cost one item.
                 "equipment_used": {},
             }
             self.vehicle_statistics[key] = row

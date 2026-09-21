@@ -5598,6 +5598,20 @@ not an invented worker-side aiming model. The marker receives shot velocity
 (unit direction times the frozen loaded shell speed), as the native contract
 requires.
 
+The #1513 `setShotPosition` consumer is not a read-only renderer: it writes
+reply dispersion into element zero of `_VehicleGunRotator__dispersionAngles`,
+the same mutable two-element list behind the read-only `dispersionAngle`
+property. Server-marker publication therefore saves that element and restores
+it in `finally` after the synchronous native display call, including display
+failure. Only the captured list is restored; a replacement native list or gun
+rotator installed by a synchronous refresh is not overwritten. The reply still
+reaches the marker, while the next input checkpoint and immediate fire intent
+retain current native convergence/bloom. No property setter, extra aiming
+formula, timer or global class patch is introduced. The regression fake models
+the audited read-only property and in-place write instead of only recording
+callback arguments; tests include both switch states and both native client
+modes, exception containment, repeated feedback and native-owner replacement.
+
 Round, authority epoch, input sequence and bounded age checks reject stale
 feedback. Missing feedback does not generate a local substitute server marker.
 Old inputs without the new checkpoint remain compatible but cannot publish

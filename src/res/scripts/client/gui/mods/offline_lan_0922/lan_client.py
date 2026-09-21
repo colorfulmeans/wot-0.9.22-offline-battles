@@ -2736,7 +2736,9 @@ class LANClient(object):
             return None
         if selected is not None:
             if (not isinstance(selected, string_types) or not selected or
-                    len(selected) > 64):
+                    len(selected) > 64 or
+                    selected not in equipment_mechanics.ACTIVATION_DEVICE_NAMES and
+                    selected not in equipment_mechanics.ACTIVATION_CREW_NAMES):
                 return None
             selected = str(selected)
         if (requested_active is not None and
