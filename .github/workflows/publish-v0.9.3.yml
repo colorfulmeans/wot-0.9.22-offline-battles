@@ -1,19 +1,27 @@
 name: Publish v0.9.3 release
-# Publication is intentionally paused at the user's request while Airfield
-# Bot obstruction handling is repaired. Restore the publisher only afterward.
+# Explicitly paused for the user's Airfield Bot obstruction report.
 on:
   push:
     branches: [main]
     paths: [".github/workflows/publish-v0.9.3.yml"]
 permissions:
   contents: read
-concurrency:
-  group: publish-v0.9.3
-  cancel-in-progress: true
+  actions: write
 jobs:
   publication-paused:
     if: github.repository == 'colorfulmeans/wot-0.9.22-offline-battles'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Keep release unpublished until the Airfield fix is ready
-        run: echo 'v0.9.3 publication paused; this workflow creates no tag, release or asset.'
+      - name: Cancel the superseded publisher without creating a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=$(gh api "repos/$GH_REPO/actions/runs/35607602289" --jq .status)
+          if [ "$state" != completed ]; then
+            gh api --method POST "repos/$GH_REPO/actions/runs/35607602289/cancel"
+          fi
+          echo 'v0.9.3 publication paused. No tag, release or asset is created by this job.'
