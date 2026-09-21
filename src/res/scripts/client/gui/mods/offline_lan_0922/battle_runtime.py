@@ -5622,11 +5622,28 @@ class BattleRuntime(object):
                 probe_up = max(4.5, run * 0.52)
                 probe_down = max(5.0, run * 0.45)
                 try:
-                    ground = self._runtime.bigworld.wg_collideSegment(
-                        self._avatar.spaceID,
-                        self._vector((nx, previous_y + probe_up, nz)),
-                        self._vector((nx, previous_y - probe_down, nz)),
-                        VEHICLE_SKIP_FLAGS)
+                    ground_start = self._vector((nx, previous_y + probe_up, nz))
+                    ground_end = self._vector((nx, previous_y - probe_down, nz))
+                    ground = self._collide_down(
+                        ground_start, ground_end, self._ground_filter(nx, nz))
+                    support_probe = getattr(
+                        self._destructibles, 'planning_support_below_soft_roof', None)
+                    if (ground is not None and planning_params is not None and
+                            float(ground[0].y) > previous_y + run * 0.48 and
+                            callable(support_probe)):
+                        # A far endpoint can lie on a crushable house roof.
+                        # Recheck only an exact original soft material, not a
+                        # terrain height or arbitrary overhead structure.
+                        ground = support_probe(
+                            self._avatar.spaceID, ground_start, ground_end,
+                            ground, previous_y + run * 0.48,
+                            planned_impact_speed, descriptor,
+                            kinetic_speed=float(planning_params[
+                                'speedBwd' if signed_speed < 0.0 else 'speedFwd']),
+                            recast_budget=self._soft_static_recast_budget)
+                        if ground == 'deferred':
+                            return {'clear': False, 'collision': False,
+                                    'water': False, 'slope': 0.0, 'deferred': True}
                 except Exception:
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': 99.0}

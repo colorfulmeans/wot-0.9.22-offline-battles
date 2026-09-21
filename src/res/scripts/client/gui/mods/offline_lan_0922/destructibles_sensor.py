@@ -3882,6 +3882,124 @@ def _catalog_retains_collision_1513(candidate):
 	return index in record['retained_collision_boxes']
 
 
+def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
+		segment_end, recast_budget=None, prefer_destroyed=False,
+		excluded_keys=()):
+	"""Name a far-probe hit without waiting for a moving hull's registry scan.
+
+	A stationary Bot can see a prop before proximity scanning registers it.
+	Use the baked point/ray overlap only to select live validation candidates;
+	it is never destruction or clearance evidence on its own. Share the soft
+	recast budget, so a cold chunk cannot create an unbounded planning spike.
+	"""
+	candidate = _catalog_candidate_on_ray_1513(
+		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys)
+	if candidate is not None:
+		return candidate
+	catalog = _destructible_catalog or {}
+	baked_instances = catalog.get('baked_instances', {})
+	if not baked_instances:
+		return None
+	margin = _CATALOG_POINT_EPSILON
+	identities = set()
+	for key in _baked_bin_keys_for_bounds_1513(
+			hit_point.x - margin, hit_point.x + margin,
+			hit_point.z - margin, hit_point.z + margin):
+		identities.update(catalog.get('baked_shot_bins', {}).get(key, ()))
+	pending = False
+	attempted = 0
+	for identity in sorted(identities):
+		if (identity in globals().get('g_offh_destr_instances', {}) or
+				_destructible_isolated_1513(*identity)):
+			continue
+		baked = baked_instances.get(identity)
+		if baked is None:
+			continue
+		if not any(
+				identity + (box[2] if baked['kind'] == 'structure' else None,)
+				not in excluded_keys and _point_in_world_box(hit_point, box) and
+				_segment_world_box_interval(segment_start, segment_end, box, 0.0)
+				is not None for box in baked['boxes']):
+			continue
+		if attempted >= _SOFT_STATIC_MAX_SKIPS:
+			return 'deferred'
+		if recast_budget is not None:
+			if not recast_budget or int(recast_budget[0]) <= 0:
+				return 'deferred'
+			recast_budget[0] = int(recast_budget[0]) - 1
+		attempted += 1
+		combat_count('destructible_planning_registrations')
+		if (_stream_baked_shot_instance_1513(spaceID, identity) is None and
+				not _destructible_isolated_1513(*identity)):
+			pending = True
+	if pending:
+		return 'deferred'
+	return _catalog_candidate_on_ray_1513(
+		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys)
+
+
+def _soft_static_original_filter_1513(excluded_keys):
+	"""Skip only the named original materials, never replacement or backing BSP."""
+	def keep_original(*surface):
+		if (len(surface) != 4 or
+				not all(type(value) in _INTEGER_TYPES for value in surface) or
+				not 71 <= surface[0] <= 86):
+			return True
+		identity = (surface[3], surface[2])
+		return (identity + (surface[0],) not in excluded_keys and
+			identity + (None,) not in excluded_keys)
+	return keep_original
+
+
+def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
+		collision, maximum_y, vel, td, kinetic_speed=None, recast_budget=None):
+	"""Recheck an unreachable crushable roof without changing physical support.
+
+	Only the approach probe uses this: a roof above its existing climb envelope
+	is not the terrain the tank would climb. Keep the original column and mask,
+	filter each exact crushable original material, then test the real ground
+	below. Reachable decks, unproved roofs and non-crushable geometry retain
+	the original result; the later hull contact still owns destruction.
+	"""
+	if _destructible_catalog is None or td is None:
+		return collision
+	import BigWorld
+	import Math
+	current_hit = collision
+	excluded_keys = set()
+	authority = _get_destr_authority()
+	for unused in range(_SOFT_STATIC_MAX_SKIPS):
+		if current_hit is None or float(current_hit[0].y) <= maximum_y:
+			return current_hit
+		hit_point = current_hit[0]
+		candidate = _planning_catalog_candidate_1513(
+			spaceID, hit_point, segment_start, segment_end, recast_budget,
+			excluded_keys=excluded_keys)
+		if candidate == 'deferred':
+			return 'deferred'
+		if candidate is None:
+			return current_hit
+		mat_info = _synthetic_mat_info(candidate + ((
+			float(hit_point.x), float(hit_point.y), float(hit_point.z)),), Math)
+		if not (authority.is_destroyed(*candidate[:3]) or
+				_stock_crushable_1513(mat_info, vel, td, candidate[5]) or
+				(kinetic_speed is not None and _stock_crushable_1513(
+					mat_info, kinetic_speed, td, candidate[5]))):
+			return current_hit
+		if recast_budget is not None:
+			if not recast_budget or int(recast_budget[0]) <= 0:
+				return 'deferred'
+			recast_budget[0] = int(recast_budget[0]) - 1
+		excluded_keys.add(candidate[:3])
+		current_hit = observed_ray(
+			'native.destructible.planning_ground', BigWorld.wg_collideSegment,
+			spaceID, segment_start, segment_end, VEHICLE_SKIP_FLAGS,
+			_soft_static_original_filter_1513(excluded_keys))
+	# The fixed layer bound is not a transient budget deferral. Preserve the
+	# final measured surface so the caller can reject/reroute a deep stack.
+	return current_hit
+
+
 def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 		collision, vel, td, recast_budget=None,
 		require_pending_first=False, allow_kinetic_first=False,
@@ -3921,10 +4039,12 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			hit_point = current_hit[0]
 		except (TypeError, IndexError):
 			return 'pending_hard' if pending_contact else False
-		candidate = _catalog_candidate_on_ray_1513(
-			hit_point, current_start, segment_end,
+		candidate = _planning_catalog_candidate_1513(
+			spaceID, hit_point, current_start, segment_end, recast_budget,
 			prefer_destroyed=(require_pending_first and candidate_index == 0),
 			excluded_keys=excluded_keys)
+		if candidate == 'deferred':
+			return 'pending_hard' if pending_contact else 'deferred'
 		if candidate is None:
 			return 'pending_hard' if pending_contact else False
 		# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True as soon as the
@@ -3971,18 +4091,10 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			if not recast_budget or int(recast_budget[0]) <= 0:
 				return 'pending_hard' if pending_contact else 'deferred'
 			recast_budget[0] = int(recast_budget[0]) - 1
-		def keep_interior(*surface):
-			if (len(surface) != 4 or
-					not all(type(value) in _INTEGER_TYPES for value in surface) or
-					not 71 <= surface[0] <= 86):
-				return True
-			identity = (surface[3], surface[2])
-			return (identity + (surface[0],) not in excluded_keys and
-				identity + (None,) not in excluded_keys)
 		current_hit = observed_ray(
 			'native.destructible.ray', BigWorld.wg_collideSegment,
 			spaceID, current_start, segment_end, VEHICLE_SKIP_FLAGS,
-			keep_interior)
+			_soft_static_original_filter_1513(excluded_keys))
 		if current_hit is None:
 			return 'kinetic' if kinetic_contact else True
 	return 'pending_hard' if pending_contact else False
