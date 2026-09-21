@@ -30,6 +30,127 @@ class ServerAimTests(unittest.TestCase):
         battle._start_message = {'round_id': 7}
         return battle, runtime
 
+    def test_native_fake_pins_read_only_property_and_in_place_feedback(self):
+        battle, unused = self.battle()
+        rotator = battle._avatar.gunRotator
+        local = rotator._VehicleGunRotator__dispersionAngles
+        with self.assertRaises(AttributeError):
+            rotator.dispersionAngle = .5
+        battle._avatar.updateGunMarker(10, None, None, .02)
+        self.assertIs(local, rotator._VehicleGunRotator__dispersionAngles)
+        self.assertEqual([.02, .01], local)
+        self.assertEqual(.02, rotator.dispersionAngle)
+
+    def _reply(self, battle, angle=.02):
+        sample = server_aim.sample(fixture._Descriptor(), checkpoint(), 8, 625.)
+        sample['dispersion_angle'] = angle
+        battle._last_snapshot = {
+            'round_id': 7, 'authority_epoch': 4,
+            'players': [{'id': battle.client.player_id, 'gun_marker': sample}]}
+
+    def test_reply_then_immediate_fire_keeps_local_dispersion_with_either_switch(self):
+        case = fixture.BattleRuntimeContractTests()
+        for enabled in (False, True):
+            for client_mode in (False, True):
+                for local_angle, reply_angle in ((.25, .02), (.02, .25)):
+                    with self.subTest(enabled=enabled, client_mode=client_mode,
+                                      local=local_angle, reply=reply_angle):
+                        battle, gun, unused, client, unused_record = (
+                            case._pending_fire_shell_change_battle())
+                        client.authority_epoch = 4
+                        rotator = battle._avatar.gunRotator
+                        rotator.showServerMarker = enabled
+                        rotator.clientMode = client_mode
+                        local = [local_angle, .005]
+                        rotator._VehicleGunRotator__dispersionAngles = local
+                        self._reply(battle, reply_angle)
+                        before = (list(gun.ammo), gun.clip, gun.reload_time)
+                        self.assertEqual(enabled, battle._sync_local_server_marker())
+                        self.assertIs(local, rotator._VehicleGunRotator__dispersionAngles)
+                        self.assertEqual([local_angle, .005], local)
+                        self.assertEqual(before, (gun.ammo, gun.clip, gun.reload_time))
+                        if enabled:
+                            self.assertEqual(reply_angle, battle._avatar.gun_marker_updates[-1][3])
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            self.assertTrue(battle.shoot(0., 0.))
+                        message = [row for row in client.sent if row[0] == 'input'][-1]
+                        self.assertEqual(local_angle, message[2]['gun_aim_checkpoint']['dispersion_angle'])
+                        fire = [row for row in client.sent if row[0] == 'fire_intent'][-1]
+                        self.assertEqual(local_angle, fire[2]['dispersion_angle'])
+
+    def test_repeated_feedback_does_not_freeze_later_native_convergence(self):
+        battle, unused = self.battle()
+        rotator = battle._avatar.gunRotator
+        self._reply(battle)
+        for angle in (.25, .12, .04, .30):
+            local = [angle, .003]
+            rotator._VehicleGunRotator__dispersionAngles = local
+            for unused_repeat in range(3):
+                self.assertTrue(battle._sync_local_server_marker())
+                self.assertIs(local, rotator._VehicleGunRotator__dispersionAngles)
+                self.assertEqual([angle, .003], local)
+                self.assertEqual(angle, battle._native_gun_aim_checkpoint()['dispersion_angle'])
+        self.assertEqual([.02] * 12, [row[3] for row in battle._avatar.gun_marker_updates])
+
+    def test_marker_exception_restores_source_before_optional_failure_is_contained(self):
+        case = fixture.BattleRuntimeContractTests()
+        battle, gun, unused, client, unused_record = case._pending_fire_shell_change_battle()
+        client.authority_epoch = 4
+        rotator = battle._avatar.gunRotator
+        rotator.showServerMarker = True
+        local = rotator._VehicleGunRotator__dispersionAngles
+        self._reply(battle)
+        original = battle._avatar.updateGunMarker
+
+        def broken_marker(*args):
+            original(*args)
+            raise RuntimeError('native marker presentation failed')
+
+        battle._avatar.updateGunMarker = broken_marker
+        with contextlib.redirect_stdout(io.StringIO()):
+            battle._ammo_tick()
+            self.assertTrue(battle.shoot(0., 0.))
+        self.assertEqual('running', battle.state)
+        self.assertIsNone(battle.error)
+        self.assertIs(local, rotator._VehicleGunRotator__dispersionAngles)
+        self.assertEqual([.25, .01], local)
+        self.assertEqual(.25, [row for row in client.sent if row[0] == 'fire_intent'][-1][2]['dispersion_angle'])
+
+    def test_restoration_does_not_overwrite_a_new_native_list_or_rotator(self):
+        for replace_rotator in (False, True):
+            with self.subTest(replace_rotator=replace_rotator):
+                battle, unused = self.battle()
+                rotator = battle._avatar.gunRotator
+                old = rotator._VehicleGunRotator__dispersionAngles
+                self._reply(battle)
+                original = battle._avatar.updateGunMarker
+                newer = [.17, .004]
+
+                def refresh(*args):
+                    original(*args)
+                    if replace_rotator:
+                        battle._avatar.gunRotator = fixture._GunRotator(
+                            _VehicleGunRotator__dispersionAngles=newer)
+                    else:
+                        rotator._VehicleGunRotator__dispersionAngles = newer
+
+                battle._avatar.updateGunMarker = refresh
+                self.assertTrue(battle._sync_local_server_marker())
+                self.assertEqual([.25, .01], old)
+                self.assertIs(newer, battle._avatar.gunRotator._VehicleGunRotator__dispersionAngles)
+                self.assertEqual(.17, battle._native_dispersion_angle())
+
+    def test_missing_or_invalid_native_list_never_enters_mutating_marker(self):
+        for invalid in (None, (), (.25, .01), [], [.25], [.25, .01, .02]):
+            with self.subTest(invalid=invalid):
+                battle, unused = self.battle()
+                self._reply(battle)
+                battle._avatar.gunRotator._VehicleGunRotator__dispersionAngles = invalid
+                battle._avatar.updateGunMarker = mock.Mock()
+                with self.assertRaisesRegex(RuntimeError, 'dispersion storage'):
+                    battle._sync_local_server_marker()
+                battle._avatar.updateGunMarker.assert_not_called()
+
     def test_worker_geometry_uses_mounts_and_rotations_not_a_client_ray(self):
         descriptor = fixture._Descriptor()
         descriptor.hull.turretPositions = (fixture._Vector(1., 2., 3.),)
@@ -86,7 +207,7 @@ class ServerAimTests(unittest.TestCase):
         rotator = battle._avatar.gunRotator
         rotator.getCurShotPosition = mock.Mock(side_effect=AssertionError(
             'server marker must not sample the current client ray'))
-        rotator.dispersionAngle = .25
+        self.assertEqual(.25, rotator.dispersionAngle)
         self.assertTrue(battle._sync_local_server_marker())
         call = battle._avatar.gun_marker_updates[-1]
         self.assertEqual((10., 21.5, 30.), tuple(call[1]))

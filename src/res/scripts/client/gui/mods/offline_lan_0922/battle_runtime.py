@@ -17534,9 +17534,24 @@ class BattleRuntime(object):
         shot_position = self._vector(marker['origin'])
         shot_vector = self._vector(tuple(
             value * marker['shot_speed'] for value in marker['direction']))
-        update_marker(
-            self._server.vehicle_id, shot_position, shot_vector,
-            marker['dispersion_angle'])
+        # #1513 setShotPosition writes the reply into element zero of the
+        # same mutable list exposed by dispersionAngle. This call publishes
+        # delayed display evidence, not a new native aim input: keep the
+        # current local bloom for the next input/trigger, including failure.
+        # Restore the captured list in place, not the read-only property or
+        # a newly installed rotator/list after a synchronous native refresh.
+        dispersion_angles = getattr(
+            gun_rotator, '_VehicleGunRotator__dispersionAngles', None)
+        if (not isinstance(dispersion_angles, list) or
+                len(dispersion_angles) != 2):
+            raise RuntimeError('#1513 native dispersion storage is unavailable')
+        local_dispersion = dispersion_angles[0]
+        try:
+            update_marker(
+                self._server.vehicle_id, shot_position, shot_vector,
+                marker['dispersion_angle'])
+        finally:
+            dispersion_angles[0] = local_dispersion
         if self._server_marker_waiting:
             self._avatar.inputHandler.showGunMarker2(True)
             self._server_marker_waiting = False
