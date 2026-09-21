@@ -264,7 +264,8 @@ class AuthorityWorkerLANClient(LANClient):
                                  human_ram_armors=None,
                                  edge_sample_time_us=None,
                                  edge_revision=None,
-                                 detached_turrets=None):
+                                 detached_turrets=None,
+                                 player_gun_markers=None):
         """Queue BotRuntime's canonical publication as one frozen wire blob."""
         if not self.is_bot_authority():
             return False
@@ -292,6 +293,9 @@ class AuthorityWorkerLANClient(LANClient):
             return False
         if human_ram_armors is not None:
             message['human_ram_armors'] = human_ram_armors
+        if player_gun_markers is not None:
+            message['player_gun_markers'] = player_gun_markers
+            message['authority_epoch'] = self.authority_epoch
         if detached_turrets is not None:
             self._attach_detached_turret_proposals(message, detached_turrets)
         try:

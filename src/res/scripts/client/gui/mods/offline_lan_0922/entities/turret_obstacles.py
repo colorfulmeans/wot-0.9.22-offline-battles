@@ -12,6 +12,7 @@ import math
 from gui.mods.offline_lan_0922 import destructibles_sensor
 from gui.mods.offline_lan_0922 import shot_geometry
 from gui.mods.offline_lan_0922 import turret_detachment
+from gui.mods.offline_lan_0922 import vehicle_physics
 
 
 _ROTATION_SLICE = math.pi / 36.0
@@ -173,13 +174,15 @@ def _moving_components(descriptor):
             ('hull', component_bounds(hull), hull_position))
 
 
-def _component_sweeps(bounds, offset, start, end):
+def _component_sweeps(bounds, offset, start, end, pivot=None):
     """Cover the continuous translated and rotated box without contact rays.
 
     Fixed orientation uses its exact four-generator swept zonotope. For a
     changing Euler pose, a bounded angular slice adds the analytic maximum
     displacement of any descriptor corner from its midpoint orientation.
-    Translation stays exact within each slice. This includes pitch and roll.
+    Translation stays exact within each slice. Track pivots rotate the origin
+    around the stationary belt as well; an analytic radial bound covers that
+    arc rather than replacing it with its endpoint chord.
     """
     start_position, start_attitude = start
     end_position, end_attitude = end
@@ -187,18 +190,32 @@ def _component_sweeps(bounds, offset, start, end):
     deltas = tuple((end_attitude[axis] - start_attitude[axis] + math.pi) %
                    (2.0 * math.pi) - math.pi for axis in range(3))
     rotation = sum(abs(value) for value in deltas)
-    steps = max(1, int(math.ceil(rotation / _ROTATION_SLICE)))
+    pivot_angle = abs(pivot[1]) if pivot is not None else 0.0
+    steps = max(1, int(math.ceil(max(rotation, pivot_angle) / _ROTATION_SLICE)))
     radius = max(math.sqrt(_dot(corner, corner))
                  for corner in _corners(bounds, offset))
     # Every vector differs by at most 2*r*sin(theta/2), with theta bounded
     # by the sum of the three Euler rotations from the slice midpoint.
     padding = 2.0 * radius * math.sin(rotation / (4.0 * steps))
+    if pivot is not None:
+        pivot_position, pivot_delta = pivot
+        radial = _subtract(start_position, pivot_position)
+        arc_end = _add(pivot_position,
+                      shot_geometry.transform_vehicle_vector(radial, pivot_delta))
+        travel = _subtract(end_position, arc_end)
+        radial_length = math.sqrt(radial[0] ** 2 + radial[2] ** 2)
+        padding += 2.0 * radial_length * math.sin(pivot_angle / (4.0 * steps))
     boxes = []
     for index in range(steps):
         middle = (float(index) + 0.5) / steps
         attitude = tuple(start_attitude[axis] + deltas[axis] * middle
                          for axis in range(3))
-        position = _add(start_position, _scale(travel, middle))
+        if pivot is None:
+            position = _add(start_position, _scale(travel, middle))
+        else:
+            position = _add(_add(pivot_position,
+                shot_geometry.transform_vehicle_vector(radial, pivot_delta * middle)),
+                _scale(travel, middle))
         center, axes = _world_box(bounds, offset, position, attitude)
         axes = axes + (_scale(travel, 0.5 / steps),)
         if padding > 0.0:
@@ -422,6 +439,22 @@ class DetachedTurretObstacles(object):
         ready = tuple(self._ready(server_time_ms))
         if not ready:
             return False
+        # Use the physical chassis root even when a hydraulic hull supplies
+        # a separate body frame. The endpoint proof excludes ordinary drives
+        # and vehicles whose descriptor permits centre counter-rotation.
+        root_start = _read_pose(start_pose.get('chassis', start_pose))
+        root_end = _read_pose(end_pose.get('chassis', end_pose))
+        pivot_offset = vehicle_physics.track_pivot_from_poses(
+            vehicle_physics.track_pivot_descriptor_params(descriptor), root_start[0],
+            root_start[1][0], root_end[0], root_end[1][0])
+        pivot = None
+        if pivot_offset:
+            pivot_position = _add(root_start[0],
+                shot_geometry.transform_vehicle_vector(
+                    (pivot_offset, 0.0, 0.0), root_start[1][0]))
+            pivot_delta = (root_end[1][0] - root_start[1][0] + math.pi) % (
+                2.0 * math.pi) - math.pi
+            pivot = pivot_position, pivot_delta
         for name, bounds, offset in _moving_components(descriptor):
             # Hydraulic bodies use a different frame from their chassis.
             # Ordinary vehicles keep the shared root pose contract.
@@ -429,9 +462,15 @@ class DetachedTurretObstacles(object):
             end = _read_pose(end_pose.get(name, end_pose))
             initial = _world_box(bounds, offset, *start)
             final = _world_box(bounds, offset, *end)
-            sweeps = _component_sweeps(bounds, offset, start, end)
+            sweeps = _component_sweeps(bounds, offset, start, end, pivot)
             moving_radius = max(math.sqrt(_dot(corner, corner))
                                 for corner in _corners(bounds, offset))
+            if pivot is not None:
+                # The curved origin can leave its endpoint chord by this
+                # exact sagitta; the broad phase must not discard such hits.
+                radial = _subtract(start[0], pivot[0])
+                moving_radius += math.sqrt(radial[0] ** 2 + radial[2] ** 2) * (
+                    1.0 - math.cos(abs(pivot[1]) * 0.5))
             for turret in ready:
                 if 'body' in turret['row']['flight']:
                     # A dynamic body is resolved by the mass/impulse owner,

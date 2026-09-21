@@ -61,6 +61,7 @@ from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import player_critical_mechanics
 from gui.mods.offline_lan_0922 import siege_mechanics
+from gui.mods.offline_lan_0922 import server_aim
 from gui.mods.offline_lan_0922 import spotting
 from gui.mods.offline_lan_0922 import stun_mechanics
 from gui.mods.offline_lan_0922 import vehicle_physics
@@ -107,6 +108,9 @@ PLAYER_DROWNING_SECONDS = 10.0
 PLAYER_OVERTURN_IGNORE_SECONDS = 0.10
 PLAYER_OVERTURN_DEATH_SECONDS = 30.0
 PLAYER_ENVIRONMENT_STALE_TICKS = int(round(TICK_HZ))
+# Mission evidence tolerates a missed 2.5 Hz observation, then becomes unknown.
+MISSION_VIEW_RANGE_STALE_TICKS = int(round(TICK_HZ))
+PLAYER_GUN_MARKER_STALE_SECONDS = 1.0
 PLAYER_LANDING_MAX_IMPACT_SPEED = 200.0
 PLAYER_LANDING_HISTORY = 64
 BOT_FIRE_DURATION_SECONDS = 10.0
@@ -330,7 +334,7 @@ MODERN_INPUT_FIELDS = frozenset((
     "fire_seq", "shell_index", "next_shell_index",
     "shell_change_pending", "gun_checkpoint", "ram_contacts", "tank_pushes", "turret_pushes",
     "ram_contact", "destructible_contacts", "siege_enabled",
-    "up_cosine",
+    "up_cosine", "gun_aim_checkpoint",
 ))
 MODERN_INPUT_REQUIRED_FIELDS = frozenset(("round_id",))
 HUMAN_RAM_CONTACT_FIELDS = frozenset((
@@ -425,15 +429,8 @@ COMBAT_SOURCE_KINDS = {
     "player_left": frozenset(("health",)),
     "environment": frozenset(("health",)),
 }
-CRITICAL_DEVICE_NAMES = frozenset((
-    "engineHealth", "ammoBayHealth", "fuelTankHealth", "radioHealth",
-    "leftTrackHealth", "rightTrackHealth", "gunHealth",
-    "turretRotatorHealth", "surveyingDeviceHealth",
-))
-CRITICAL_CREW_NAMES = frozenset((
-    "commander", "driver", "gunner1", "gunner2", "loader1",
-    "loader2", "radioman1", "radioman2",
-))
+CRITICAL_DEVICE_NAMES = equipment_mechanics.ACTIVATION_DEVICE_NAMES
+CRITICAL_CREW_NAMES = equipment_mechanics.ACTIVATION_CREW_NAMES
 # #1513 ``items.vehicles.VEHICLE_DEVICE_TYPE_NAMES`` and
 # ``VEHICLE_TANKMAN_TYPE_NAMES`` positions, which the client's crits mask
 # parser indexes.  Both server track devices map onto the single "track" slot
@@ -1166,6 +1163,8 @@ def _persisted_result_receipt(value):
             ("watched_battle_to_end" in value and not isinstance(
                 value["watched_battle_to_end"], bool))):
         raise ValueError("invalid persisted battle receipt leave state")
+    if "vehicle_compact_descr" in value:
+        _validated_vehicle_compact_descr(value["vehicle_compact_descr"])
     stats = value.get("stats")
     rewards = value.get("rewards")
     stat_names = RECEIPT_STAT_NAMES
@@ -2177,6 +2176,12 @@ class Player(_EndpointSendMixin):
     gun_checkpoint: dict = field(default_factory=dict, repr=False)
     gun_checkpoints: OrderedDict = field(
         default_factory=OrderedDict, repr=False)
+    gun_aim_checkpoint_seq: int = 0
+    gun_aim_checkpoint: dict = field(default_factory=dict, repr=False)
+    gun_aim_checkpoints: OrderedDict = field(
+        default_factory=OrderedDict, repr=False)
+    gun_marker: dict = field(default_factory=dict, repr=False)
+    gun_marker_received_at: float = 0.0
     pose_time_us: Optional[int] = None
     pose_history: deque = field(default_factory=deque, repr=False)
     connected: bool = True
@@ -2711,6 +2716,11 @@ class BattleState:
             self.player_environment_seq = -1
             self.player_environment_authority_epoch = -1
             self.player_drowning_seconds = {}
+            self.player_mission_view_ranges = {}
+            self.player_mission_view_ranges_tick = -1
+            for player in self.players.values():
+                player.gun_marker = {}
+                player.gun_marker_received_at = 0.0
         if old != self.bot_authority_id:
             self.authority_epoch += 1
             self.bot_pending_projectile_launches.clear()
@@ -3274,6 +3284,7 @@ class BattleState:
                     participant['team_killer'] = bool(player.team_killer)
                 self.state_revision += 1
             self.player_spotted.pop(player_id, None)
+            self.player_mission_view_ranges.pop(player_id, None)
             self.player_environment.pop(player_id, None)
             self.player_drowning_seconds.pop(player_id, None)
             self.player_overturn_state.pop(player_id, None)
@@ -3441,6 +3452,11 @@ class BattleState:
             player.gun_checkpoint_seq = 0
             player.gun_checkpoint = {}
             player.gun_checkpoints.clear()
+            player.gun_aim_checkpoint_seq = 0
+            player.gun_aim_checkpoint = {}
+            player.gun_aim_checkpoints.clear()
+            player.gun_marker = {}
+            player.gun_marker_received_at = 0.0
             player.pose_time_us = None
             player.pose_history.clear()
             if self._requested_team_for_player(player) == 0:
@@ -3826,6 +3842,7 @@ class BattleState:
                 "account_key": participant.account_key,
                 "name": participant.name,
                 "vehicle": participant.vehicle,
+                "vehicle_compact_descr": participant.vehicle_compact_descr,
                 "vehicle_tier": tier,
                 "team": int(participant.team),
                 "alive": bool(participant.alive),
@@ -3841,6 +3858,13 @@ class BattleState:
                 "battle_booster": int(((participant.effective_params or {}).get(
                     "battle_booster") or {}).get("compact_descr", 0)),
             }
+            # The accepted start freezes the equipment that earned passive
+            # benefits, including participants who subsequently disconnect.
+            # Loading cancellation clears these round-local facts; worker
+            # failures deliberately mint no result receipts.
+            for equipment in participant.equipment_states:
+                self._record_equipment_consumption(
+                    participant.player_id, equipment)
         self.round_participants = frozen
 
     def store_vehicle_catalog(self, player_id, message):
@@ -5056,6 +5080,25 @@ class BattleState:
             radio_actors.update({
                 ("bot", identity): (int(bot["team"]), bool(bot["alive"]))
                 for identity, bot in known_bots.items()})
+            mission_ranges = None
+            if "player_vision_ranges" in message:
+                raw_ranges = message["player_vision_ranges"]
+                if not isinstance(raw_ranges, list) or len(raw_ranges) > 30:
+                    return False
+                mission_ranges = {}
+                try:
+                    for row in raw_ranges:
+                        if not isinstance(row, dict):
+                            return False
+                        identity = _exact_int(row.get("id"), 1, PROJECTILE_MAX_ID)
+                        radius = _bounded_float(row.get("radius"), 0.0, 100000.0)
+                        if identity in mission_ranges:
+                            return False
+                        # A disconnected observer is an ordinary in-flight race.
+                        if identity in known_players:
+                            mission_ranges[identity] = radius
+                except (TypeError, ValueError):
+                    return False
             radio_links = None
             if "radio_links" in message:
                 raw_links = message["radio_links"]
@@ -5274,6 +5317,8 @@ class BattleState:
                 message.get("affordances"), known_bots, known_targets, now)
             self._replace_bot_spotted(direct_bot_spots)
             self._replace_player_spotted(direct_player_spots)
+            self.player_mission_view_ranges = mission_ranges or {}
+            self.player_mission_view_ranges_tick = self.tick
             self._replace_team_lit(team_lit, now=now)
             self._commit_detections()
             if accepted_visibility or radio_links is not None:
@@ -6692,6 +6737,60 @@ class BattleState:
                 row["created_time_ms"] = now_ms
             self.detached_turrets[key] = row
 
+    def _admit_player_gun_markers(self, message):
+        """Contain late or malformed display samples to their own actor.
+
+        A worker normally trails the latest input by a network round trip.
+        Bind its result to retained admitted inputs instead of requiring the
+        current frontier, which would starve markers while a player moves.
+        """
+        try:
+            epoch = _exact_int(message.get("authority_epoch"), 0,
+                               PROJECTILE_MAX_ID)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if (self.bot_authority_id != SIMULATION_WORKER_AUTHORITY_ID or
+                not self._trusted_internal_projectile_authority(
+                    SIMULATION_WORKER_AUTHORITY_ID) or
+                epoch != self.authority_epoch):
+            return
+        rows = message.get("player_gun_markers")
+        if not isinstance(rows, list) or len(rows) > self.max_players:
+            return
+        seen = set()
+        for raw in rows:
+            if (not isinstance(raw, dict) or
+                    set(raw) != set(server_aim.SAMPLE_FIELDS) | {"player_id"}):
+                continue
+            try:
+                player_id = _exact_int(raw.get("player_id"), 1,
+                                       PROJECTILE_MAX_ID)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if player_id in seen:
+                continue
+            seen.add(player_id)
+            sample = server_aim.canonical_sample(dict(
+                (key, value) for key, value in raw.items()
+                if key != "player_id"))
+            player = self.players.get(player_id)
+            if (sample is None or player is None or not player.connected or
+                    not player.participating or not player.alive):
+                continue
+            sequence = sample["input_seq"]
+            checkpoint = player.gun_aim_checkpoints.get(sequence)
+            if (checkpoint is None or sequence > player.input_seq or
+                    sequence <= player.gun_marker.get("input_seq", 0)):
+                continue
+            if sample["dispersion_angle"] != checkpoint["dispersion_angle"]:
+                continue
+            if sum((sample["origin"][index] - coordinate) ** 2
+                   for index, coordinate in enumerate(
+                       checkpoint["position"])) > PLAYER_FIRE_ORIGIN_RADIUS ** 2:
+                continue
+            player.gun_marker = sample
+            player.gun_marker_received_at = time.monotonic()
+
     def update_bot_states(self, player_id, message):
         received_raw_motion_time_us = self._motion_time_us()
         with self.lock:
@@ -7135,6 +7234,7 @@ class BattleState:
                 self.bot_launch_clock_offset_us = (
                     next_launch_clock_offset_us)
             self.bot_state_revision += 1
+            self._admit_player_gun_markers(message)
             return True
 
     def update_simulation_progress(self, worker, message):
@@ -7936,6 +8036,10 @@ class BattleState:
                 "shells_before_shot": _optional_exact_int(
                     message.get("shells_before_shot"), 1, 1000),
             }
+            if player.gun_aim_checkpoint_seq == input_seq:
+                relay["gun_aim_checkpoint_seq"] = input_seq
+                relay["gun_aim_checkpoint"] = copy.deepcopy(
+                    player.gun_aim_checkpoint)
             player.fire_intent_seq = intent_seq
             player.fire_intent_fingerprints[intent_seq] = fingerprint
             # The visible client supplies a trigger claim in the round-clock
@@ -10546,6 +10650,8 @@ class BattleState:
                         self._statistics_row(
                             "player", player_id)["equipment_used"]),
                 }
+                if participant.get("vehicle_compact_descr"):
+                    receipt["vehicle_compact_descr"] = participant["vehicle_compact_descr"]
                 receipt_id = receipt["receipt_id"]
                 # One account may finish another arena before an earlier ACK
                 # reaches the server. Keep both idempotent receipts; delivery
@@ -10783,7 +10889,7 @@ class BattleState:
         return contact, None
 
     @staticmethod
-    def _validated_player_destructible_contact(raw_contact):
+    def _validated_player_destructible_contact(raw_contact, physics=None):
         """Validate one client proposal without trusting its map verdict."""
         if (not isinstance(raw_contact, dict) or
                 set(raw_contact) != {
@@ -10824,9 +10930,12 @@ class BattleState:
         move_distance = math.hypot(move_x, move_z)
         yaw_delta = (end_yaw - yaw + math.pi) % (
             2.0 * math.pi) - math.pi
+        pivot = vehicle_physics.track_pivot_from_poses(
+            physics, (x, y, z), yaw, (end_x, end_y, end_z), end_yaw)
+        pivot_travel = abs(pivot * yaw_delta)
         if (abs(move_y) > MAX_PLAYER_DESTRUCTIBLE_VERTICAL_TRAVEL or
                 move_distance > abs(speed) * step +
-                MAX_PLAYER_DESTRUCTIBLE_LINEAR_SLOP or
+                MAX_PLAYER_DESTRUCTIBLE_LINEAR_SLOP + pivot_travel or
                 abs(yaw_delta) >
                 MAX_PLAYER_DESTRUCTIBLE_ANGULAR_SPEED * step + 0.001 or
                 (move_distance <= 0.0001 and abs(yaw_delta) <= 0.00001)):
@@ -10852,16 +10961,18 @@ class BattleState:
             row[0], row[1], -1 if row[2] is None else row[2]))
         return {
             "seq": seq,
-            "x": round(x, 4),
-            "y": round(y, 4),
-            "z": round(z, 4),
-            "yaw": round(yaw, 5),
+            # These paired endpoints identify a curved track pivot. Rounding
+            # them independently can turn a real arc into an unrelated chord.
+            "x": x,
+            "y": y,
+            "z": z,
+            "yaw": yaw,
             "speed": round(speed, 4),
             "dt": round(step, 6),
-            "end_x": round(end_x, 4),
-            "end_y": round(end_y, 4),
-            "end_z": round(end_z, 4),
-            "end_yaw": round(end_yaw, 5),
+            "end_x": end_x,
+            "end_y": end_y,
+            "end_z": end_z,
+            "end_yaw": end_yaw,
             "token": [list(row) for row in ordered],
         }
 
@@ -11096,7 +11207,8 @@ class BattleState:
                 MAX_PENDING_PLAYER_DESTRUCTIBLE_CONTACTS):
             return "envelope_contacts", "destructible_contacts"
         for raw in raw_destructible_contacts:
-            if self._validated_player_destructible_contact(raw) is None:
+            if self._validated_player_destructible_contact(
+                    raw, player.effective_params.get("physics")) is None:
                 return "envelope_contacts", "destructible_contacts"
         return "", ""
 
@@ -11111,6 +11223,7 @@ class BattleState:
         parsed = {
             "shell_selection": None,
             "gun_checkpoint": None,
+            "gun_aim_checkpoint": None,
             "up_cosine": None,
         }
         fields = set(message)
@@ -11177,6 +11290,19 @@ class BattleState:
             player, message, validate_contacts=inactive_modern)
         if reason:
             return (reason, field), parsed
+        if "gun_aim_checkpoint" in message:
+            checkpoint = server_aim.canonical_checkpoint(
+                message.get("gun_aim_checkpoint"))
+            if checkpoint is None:
+                return ("gun_aim_checkpoint_shape", "gun_aim_checkpoint"), parsed
+            if (parsed["gun_checkpoint"] is None or
+                    not all(key in message for key in ("x", "y", "z"))):
+                return ("gun_aim_checkpoint_context", "gun_aim_checkpoint"), parsed
+            if sum((checkpoint["position"][index] - float(message[key])) ** 2
+                   for index, key in enumerate(("x", "y", "z"))) > \
+                    PLAYER_FIRE_ORIGIN_RADIUS ** 2:
+                return ("gun_aim_checkpoint_position", "gun_aim_checkpoint"), parsed
+            parsed["gun_aim_checkpoint"] = checkpoint
         return ("", ""), parsed
 
     @staticmethod
@@ -11313,6 +11439,7 @@ class BattleState:
                     active=not inactive_modern)
             shell_selection = parsed["shell_selection"]
             gun_checkpoint = parsed["gun_checkpoint"]
+            gun_aim_checkpoint = parsed["gun_aim_checkpoint"]
             reported_up_cosine = parsed["up_cosine"]
             if inactive_modern:
                 # A complete input frame may already be queued when death,
@@ -11342,6 +11469,23 @@ class BattleState:
                     while (len(player.gun_checkpoints) >
                            MAX_PLAYER_INPUT_FINGERPRINTS):
                         player.gun_checkpoints.popitem(last=False)
+                if gun_aim_checkpoint is not None:
+                    player.gun_aim_checkpoint_seq = int(player.input_seq)
+                    player.gun_aim_checkpoint = copy.deepcopy(
+                        gun_aim_checkpoint)
+                    player.gun_aim_checkpoints[player.input_seq] = copy.deepcopy(
+                        gun_aim_checkpoint)
+                    while (len(player.gun_aim_checkpoints) >
+                           MAX_PLAYER_INPUT_FINGERPRINTS):
+                        player.gun_aim_checkpoints.popitem(last=False)
+                else:
+                    # No native angle witness means no server marker. Do not
+                    # let an older in-flight worker result revive one either.
+                    player.gun_aim_checkpoint_seq = 0
+                    player.gun_aim_checkpoint = {}
+                    player.gun_aim_checkpoints.clear()
+                    player.gun_marker = {}
+                    player.gun_marker_received_at = 0.0
             if not self._combat_accepting() or self.battle_result is not None:
                 player.forward = 0.0
                 player.turn = 0.0
@@ -11540,7 +11684,8 @@ class BattleState:
                         contact = (
                             None if seq in conflicting else
                             self._validated_player_destructible_contact(
-                                by_seq[seq]))
+                                by_seq[seq],
+                                player.effective_params.get("physics")))
                         sample = (None if contact is None else
                                   self._player_pose_for_destructible_contact(
                                       player, contact))
@@ -11551,6 +11696,14 @@ class BattleState:
                             self._reject_player_destructible_contact(
                                 player, seq)
                             continue
+                        pivot = vehicle_physics.track_pivot_from_poses(
+                            player.effective_params.get("physics"),
+                            (contact["x"], contact["y"], contact["z"]),
+                            contact["yaw"],
+                            (contact["end_x"], contact["end_y"],
+                             contact["end_z"]), contact["end_yaw"])
+                        pivot_delta = (contact["end_yaw"] - contact["yaw"] +
+                                       math.pi) % (2.0 * math.pi) - math.pi
                         contact.update({
                             "input_seq": int(sample["input_seq"]),
                             "pose_time_us": int(sample["time_us"]),
@@ -11564,6 +11717,19 @@ class BattleState:
                                 "roll", 0.0)), 5),
                             "forward": round(float(sample["forward"]), 4),
                         })
+                        if pivot:
+                            # Preserve the existing admitted-pose anchor, but
+                            # move both ends of a verified arc together. The
+                            # worker must still prove the exact contact token
+                            # on this authority-bound path before committing.
+                            contact["end_yaw"] = (
+                                contact["yaw"] + pivot_delta + math.pi) % (
+                                    2.0 * math.pi) - math.pi
+                            end = vehicle_physics.track_pivot_position(
+                                (contact["x"], contact["y"], contact["z"]),
+                                contact["yaw"], contact["end_yaw"], pivot)
+                            contact.update(zip(
+                                ("end_x", "end_y", "end_z"), end))
                         player.destructible_contacts[seq] = contact
                         worker = self.simulation_worker
                         if (self.bot_authority_id ==
@@ -12051,6 +12217,17 @@ class BattleState:
                 player.track_repair_fingerprints.popitem(last=False)
             return True
 
+    def _record_equipment_consumption(self, player_id, equipment,
+                                      activated=False):
+        """Record one inventory charge, independently of trigger use count."""
+        if not equipment_mechanics.consumed_in_battle(equipment, activated):
+            return
+        compact_descr = _exact_int(
+            equipment.contract.get("compactDescr"), 1, 2 ** 31 - 1)
+        if compact_descr is not None:
+            self._statistics_row(
+                "player", player_id)["equipment_used"][str(compact_descr)] = 1
+
     @staticmethod
     def _finish_equipment_intent(player, intent_seq, accepted, reason):
         player.equipment_intent_result = {
@@ -12061,15 +12238,12 @@ class BattleState:
         return True
 
     def submit_equipment_intent(self, player_id, message):
-        """Commit one visible trigger against the server-owned kit ledger."""
+        """Commit or terminally reject one identified, ordered trigger."""
         with self.lock:
-            if (self.client_build != CLIENT_BUILD_0922 or
+            if (not isinstance(message, dict) or
+                    self.client_build != CLIENT_BUILD_0922 or
                     not self._message_round_matches(message) or
-                    message.get("type") != "equipment_intent" or
-                    set(message) != {
-                        "type", "round_id", "intent_seq", "equipment_id",
-                        "activation_code", "selected",
-                        "requested_active"}):
+                    message.get("type") != "equipment_intent"):
                 return False
             player = self.players.get(player_id)
             if player is None or not player.connected:
@@ -12077,36 +12251,16 @@ class BattleState:
             try:
                 intent_seq = _exact_int(
                     message.get("intent_seq"), 1, PROJECTILE_MAX_ID)
-                equipment_id = _exact_int(
-                    message.get("equipment_id"), 0, 65535)
-                activation_code = _exact_int(
-                    message.get("activation_code"), 0,
-                    PROJECTILE_MAX_ID)
             except (TypeError, ValueError, OverflowError):
                 return False
-            if (intent_seq is None or equipment_id is None or
-                    activation_code is None or
-                    activation_code & 65535 != equipment_id):
+            # A valid session/round/sequence owns a terminal result even when
+            # its payload is bad. Rejecting that payload before advancing
+            # the frontier permanently rejects every subsequent TCP request.
+            # Include the complete payload in duplicate/conflict identity.
+            try:
+                fingerprint = _message_fingerprint(message)
+            except (TypeError, ValueError, OverflowError):
                 return False
-            selected = message.get("selected")
-            if selected is not None:
-                if (not isinstance(selected, str) or not selected or
-                        len(selected) > 64 or
-                        selected not in CRITICAL_DEVICE_NAMES and
-                        selected not in CRITICAL_CREW_NAMES):
-                    return False
-            requested_active = message.get("requested_active")
-            if (requested_active is not None and
-                    not isinstance(requested_active, bool)):
-                return False
-            normalized = {
-                "intent_seq": intent_seq,
-                "equipment_id": equipment_id,
-                "activation_code": activation_code,
-                "selected": selected,
-                "requested_active": requested_active,
-            }
-            fingerprint = _message_fingerprint(normalized)
             previous = player.equipment_intent_fingerprints.get(intent_seq)
             if previous is not None:
                 return previous == fingerprint
@@ -12117,6 +12271,35 @@ class BattleState:
             while (len(player.equipment_intent_fingerprints) >
                    MAX_PLAYER_EQUIPMENT_FINGERPRINTS):
                 player.equipment_intent_fingerprints.popitem(last=False)
+            if set(message) != {
+                    "type", "round_id", "intent_seq", "equipment_id",
+                    "activation_code", "selected", "requested_active"}:
+                return self._finish_equipment_intent(
+                    player, intent_seq, False, "invalid_equipment_request")
+            try:
+                equipment_id = _exact_int(
+                    message.get("equipment_id"), 0, 65535)
+                activation_code = _exact_int(
+                    message.get("activation_code"), 0, PROJECTILE_MAX_ID)
+            except (TypeError, ValueError, OverflowError):
+                return self._finish_equipment_intent(
+                    player, intent_seq, False, "invalid_activation_code")
+            if activation_code & 65535 != equipment_id:
+                return self._finish_equipment_intent(
+                    player, intent_seq, False, "invalid_activation_code")
+            selected = message.get("selected")
+            if selected is not None:
+                if (not isinstance(selected, str) or not selected or
+                        len(selected) > 64 or
+                        selected not in CRITICAL_DEVICE_NAMES and
+                        selected not in CRITICAL_CREW_NAMES):
+                    return self._finish_equipment_intent(
+                        player, intent_seq, False, "invalid_equipment_target")
+            requested_active = message.get("requested_active")
+            if (requested_active is not None and
+                    not isinstance(requested_active, bool)):
+                return self._finish_equipment_intent(
+                    player, intent_seq, False, "invalid_activation_mode")
             if (not self._combat_accepting() or
                     self.battle_result is not None or
                     not player.participating or not player.alive):
@@ -12234,11 +12417,8 @@ class BattleState:
                 if not self._clear_vehicle_stun(("player", player_id)):
                     raise RuntimeError("canonical medkit stun clear diverged")
             player.equipment_revision += 1
-            consumed = _exact_int(
-                equipment.contract.get("compactDescr"), 1, 2 ** 31 - 1)
-            if consumed is not None:
-                self._statistics_row(
-                    "player", player_id)["equipment_used"][str(consumed)] = 1
+            self._record_equipment_consumption(
+                player_id, equipment, activated=True)
             return self._finish_equipment_intent(
                 player, intent_seq, True, "")
 
@@ -12267,11 +12447,8 @@ class BattleState:
                 self._commit_player_critical_progress(
                     player, _critical_payload(payload))
                 player.equipment_revision += 1
-                consumed = _exact_int(
-                    equipment.contract.get("compactDescr"), 1, 2 ** 31 - 1)
-                if consumed is not None:
-                    self._statistics_row(
-                        "player", player.player_id)["equipment_used"][str(consumed)] = 1
+                self._record_equipment_consumption(
+                    player.player_id, equipment, activated=True)
                 changed += 1
             payload = player_critical_mechanics.advance_critical(
                 player, max(0.0, float(dt)), now)
@@ -12562,6 +12739,8 @@ class BattleState:
         # team -> the enemies that team can currently see, so a vehicle that
         # goes dark and reappears is a new detection for whoever finds it.
         self.team_visible_targets = {1: set(), 2: set()}
+        self.player_mission_view_ranges = {}
+        self.player_mission_view_ranges_tick = -1
         # team -> enemy -> server monotonic deadline for the worker's spot
         # lease. A target stays detected for as long as its lease holds, so
         # neither a blocked line of sight nor a budgeted-out visibility probe
@@ -12635,6 +12814,7 @@ class BattleState:
         observers.extend(
             (("player", int(player_id)), spotted)
             for player_id, spotted in self.player_spotted.items())
+        visible_by_team = {}
         for team in (1, 2):
             visible = {}
             for reporter, spotted in observers:
@@ -12646,8 +12826,12 @@ class BattleState:
                     if not target_team or target_team == team:
                         continue
                     visible.setdefault(target, []).append(reporter)
+            visible_by_team[team] = visible
+        for visible in visible_by_team.values():
+            self.ever_spotted_targets.update(visible)
+        for team in (1, 2):
+            visible = visible_by_team[team]
             for target in sorted(set(visible) - self.team_visible_targets[team]):
-                self.ever_spotted_targets.add(target)
                 self._statistics_row(*target)['not_spotted'] = 0
                 for reporter in sorted(visible[target]):
                     interaction = self._statistics_interaction(
@@ -12655,6 +12839,9 @@ class BattleState:
                     if interaction["spotted"]:
                         continue
                     interaction["spotted"] = 1
+                    self._record_mission_event(
+                        reporter, target, "spot",
+                        reporter not in self.ever_spotted_targets)
                     row = self._statistics_row(*reporter)
                     row["spotted"] = int(row.get("spotted", 0)) + 1
                     self._publish_detection(reporter, target)
@@ -12796,7 +12983,8 @@ class BattleState:
                 mission_distance = math.sqrt(sum((a - b) ** 2
                     for a, b in zip(*positions)))
         self._record_mission_event(attacker, victim, "kill",
-                                   int(death_reason), immobilized, mission_distance)
+                                   int(death_reason), immobilized, mission_distance,
+                                   self._mission_invisible(attacker))
         self.kill_records.append({
             "actor_kind": attacker[0], "actor_id": attacker[1],
             "victim_kind": victim[0], "victim_id": victim[1],
@@ -12898,10 +13086,9 @@ class BattleState:
                 # and can turn it back into a shell, which the server cannot:
                 # only the client owns the item definitions.
                 "shells_fired": {},
-                # Consumables activated, by compact descriptor, which the
-                # client does send with the mounted equipment.  #1513 consumes
-                # one of each however many times it was activated, so this is
-                # a set rather than a count.
+                # Inventory charges, not activation counts: food/fuel at
+                # accepted start, kits/extinguishers only when used, never
+                # the permanent governor. Repeated uses still cost one item.
                 "equipment_used": {},
             }
             self.vehicle_statistics[key] = row
@@ -12973,6 +13160,27 @@ class BattleState:
             return
         elapsed = max(0, int(round((self.tick / TICK_HZ - PREBATTLE_SECONDS) * 1000)))
         interaction["mission_events"].append([kind, elapsed] + list(values))
+
+    def _mission_invisible(self, actor):
+        """Use the enemy team's current visibility lease, not sixth sense delay."""
+        enemy = 3 - self._vehicle_team(*actor)
+        return (actor not in self.team_visible_targets.get(enemy, ()) and
+                actor not in self.team_lit_targets.get(enemy, ()) and
+                not self._direct_spotters(actor))
+
+    def _mission_view_range(self, actor):
+        age = self.tick - self.player_mission_view_ranges_tick
+        if (actor[0] != "player" or self.player_mission_view_ranges_tick < 0 or
+                not 0 <= age <= MISSION_VIEW_RANGE_STALE_TICKS):
+            return None
+        return self.player_mission_view_ranges.get(actor[1])
+
+    def _mission_distance(self, actor, target):
+        positions = [self._vehicle_position(identity, alive_only=False)
+                     for identity in (actor, target)]
+        if all(position is not None for position in positions):
+            return math.sqrt(sum((a - b) ** 2 for a, b in zip(*positions)))
+        return None
 
     def _record_ram_mission_events(self, first, second, damage_first,
                                    damage_second, critical_first,
@@ -13112,6 +13320,12 @@ class BattleState:
         """Attribute admitted critical transitions, including fire and zero HP hits."""
         if attacker is None or attacker == target:
             return
+        enemy = self._vehicle_team(*attacker) != self._vehicle_team(*target)
+        if (enemy and not (previous or {}).get("fire", False) and
+                (current or {}).get("fire", False)):
+            # Starting a fire is one event even when the igniting shell has
+            # no hull damage; later burn ticks and repeated state are not.
+            self._record_mission_event(attacker, target, "fire", 1)
         mask = _crits_mask(previous, current)
         if not mask:
             return
@@ -13214,7 +13428,11 @@ class BattleState:
             attacker, target, "damage", damage)
         self._increment_interaction(attacker, target, "damage_events")
         immobilized = bool(_destroyed_tracks(target_critical))
-        self._record_mission_event(attacker, target, "damage", damage, immobilized)
+        self._record_mission_event(
+            attacker, target, "damage", damage, immobilized,
+            self._mission_distance(attacker, target),
+            self._mission_invisible(attacker),
+            self._mission_view_range(attacker))
         state = self._vehicle_stun_state(target)
         if state is not None and not state['alive']:
             self._statistics_interaction(attacker, target)["_terminal_immobilized"] = immobilized
@@ -14619,6 +14837,18 @@ class BattleState:
             result["gun_checkpoint_seq"] = int(
                 player.gun_checkpoint_seq)
             result["gun_checkpoint"] = dict(player.gun_checkpoint)
+        if player.gun_aim_checkpoint_seq > 0:
+            result["gun_aim_checkpoint_seq"] = int(
+                player.gun_aim_checkpoint_seq)
+            result["gun_aim_checkpoint"] = copy.deepcopy(
+                player.gun_aim_checkpoint)
+        if (player.gun_marker and player.connected and
+                player.participating and player.alive and
+                player.gun_marker.get("input_seq") in
+                player.gun_aim_checkpoints and
+                0.0 <= time.monotonic() - player.gun_marker_received_at <=
+                PLAYER_GUN_MARKER_STALE_SECONDS):
+            result["gun_marker"] = copy.deepcopy(player.gun_marker)
         if player.ram_contact:
             result["ram_contact"] = dict(player.ram_contact)
         if player.ram_contacts:

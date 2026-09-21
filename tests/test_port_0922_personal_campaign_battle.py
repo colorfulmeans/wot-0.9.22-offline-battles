@@ -286,7 +286,7 @@ class PersonalCampaignBattleTests(unittest.TestCase):
             '<postBattle><win/></postBattle></conditions></quest>')
         result = self.evaluate()
         self.assertEqual({}, result['completed'])
-        self.assertEqual(['mission condition groups'], result['unsupported']['270'])
+        self.assertEqual(['preBattle restriction'], result['unsupported']['270'])
 
     def test_resource_read_failure_is_reported_without_blocking_settlement(self):
         def unavailable(unused_qid):

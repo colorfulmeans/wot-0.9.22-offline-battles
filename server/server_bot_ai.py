@@ -1342,6 +1342,14 @@ class BotPlanner(object):
         staging_index = max(0, len(waypoints) - 2)
         if route_index < staging_index:
             return False
+        if route_index > staging_index:
+            # A Bot can finish the lane while a contact is still known, or
+            # join an already advanced lane after a route rebalance. The last
+            # anchor is often a spawn connector rather than the real flag.
+            # Once the staging gate is passed, losing that contact must hand
+            # movement to the exact capture circle even outside the old gate's
+            # arrival radius.
+            return True
         point = waypoints[staging_index]
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         return math.hypot(

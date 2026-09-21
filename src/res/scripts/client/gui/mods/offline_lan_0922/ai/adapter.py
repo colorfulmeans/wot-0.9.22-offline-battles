@@ -149,6 +149,7 @@ class BotAdapter(object):
                 position[2] + math.cos(heading) * distance)
             return target, {
                 'throttle': 0.72 * sign,
+                'brake': False,
                 'turn': 0.0,
                 'target_yaw': yaw,
                 'recovery_mode': 'contact_escape',
@@ -253,6 +254,7 @@ class BotAdapter(object):
             # not physical evidence that should advance LocalDriver recovery.
             local = {
                 'throttle': 0.0,
+                'brake': True,
                 'turn': 0.0,
                 'target_yaw': float(state.get('yaw', 0.0)),
                 'recovery_mode': 'nav_wait',
@@ -302,6 +304,7 @@ class BotAdapter(object):
             'fire_allowed': bool(strategic.get('fire_allowed', False)),
             'shell_index': int(strategic.get('shell_index', 0)),
             'throttle': float(local['throttle']),
+            'brake': bool(local.get('brake', False)),
             'turn': turn,
             'target_yaw': target_yaw,
             'recovery_mode': recovery_mode,
@@ -322,4 +325,5 @@ class BotAdapter(object):
                 abs(difference) < 0.65):
             result['throttle'] = max(
                 -1.0, min(1.0, float(throttle_override)))
+            result['brake'] = result['throttle'] == 0.0
         return result

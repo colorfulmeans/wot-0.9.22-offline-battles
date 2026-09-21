@@ -467,7 +467,8 @@ def _obb_overlap(x_a, z_a, yaw_a, shape_a,
     return best_x, best_z, best_overlap
 
 
-def rotation_fraction(position, yaw, candidate_yaw, shape, others):
+def rotation_fraction(position, yaw, candidate_yaw, shape, others,
+                      pivot_offset=0.0):
     """Project kinematic traverse onto the first legal chassis contact.
 
     Translation and its mass/track-force response run separately. Traverse
@@ -480,7 +481,7 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others):
     """
     delta = (candidate_yaw-yaw+math.pi) % (2.0*math.pi)-math.pi
     radius = math.hypot(shape[0], shape[1])
-    travel = abs(delta)*radius
+    travel = abs(delta)*(radius+abs(pivot_offset))
     if travel <= 1e-9:
         return 1.0
     samples = max(1, int(math.ceil(travel/(POSITION_SLOP*0.5))))
@@ -490,13 +491,17 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others):
         if where is None:
             where = (other['x'], other.get('y', 0.0), other['z'])
         other_shape = _tank_shape(other)
-        reach = radius+math.hypot(other_shape[0], other_shape[1])
+        reach = (radius+math.hypot(other_shape[0], other_shape[1]) +
+                 abs(pivot_offset)*abs(delta))
         if ((position[0]-where[0])**2+(position[2]-where[2])**2 > reach*reach or
                 not vertical_overlap(position[1], shape, where[1], other_shape)):
             continue
         other_yaw = other.get('yaw', 0.0)
         def depth(at):
-            hit = _obb_overlap(position[0], position[2], yaw+delta*at, shape,
+            angle = yaw+delta*at
+            px = position[0]+pivot_offset*(math.cos(yaw)-math.cos(angle))
+            pz = position[2]+pivot_offset*(math.sin(angle)-math.sin(yaw))
+            hit = _obb_overlap(px, pz, angle, shape,
                               where[0], where[2], other_yaw, other_shape)
             return hit[2]
         allowed = max(POSITION_SLOP, depth(0.0))
@@ -505,7 +510,8 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others):
         # sample and the first-contact refinement of the former dense scan.
         # Planning a large recovery turn beside a hull no longer performs
         # hundreds of redundant trigonometric/SAT queries each callback.
-        lipschitz = reach + math.hypot(position[0]-where[0], position[2]-where[2])
+        lipschitz = (reach + abs(pivot_offset) +
+                     math.hypot(position[0]-where[0], position[2]-where[2]))
         def first_blocked(lo, hi, dl, dh):
             span = (hi-lo)*fraction/float(samples)
             if max(dl, dh)+lipschitz*abs(delta)*span*.5 <= allowed+1e-9:

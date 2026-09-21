@@ -17,6 +17,8 @@ Account and per-vehicle progress, including medal counts, is carried by
 
 from __future__ import print_function
 
+import base64
+import binascii
 import copy
 import json
 import os
@@ -147,6 +149,15 @@ def _receipt(value):
     if ('watched_battle_to_end' in value and not isinstance(
             value['watched_battle_to_end'], bool)):
         raise ValueError('battle receipt watched state is invalid')
+    mounted = value.get('vehicle_compact_descr')
+    if 'vehicle_compact_descr' in value:
+        try:
+            decoded = base64.b64decode(mounted.encode('ascii'))
+            if (not decoded or len(decoded) > 64 * 1024 or
+                    base64.b64encode(decoded).decode('ascii') != mounted):
+                raise ValueError('invalid mounted descriptor')
+        except (AttributeError, TypeError, ValueError, UnicodeError, binascii.Error):
+            raise ValueError('battle receipt mounted descriptor is invalid')
     raw_stats = value.get('stats')
     raw_rewards = value.get('rewards')
     if not isinstance(raw_stats, dict) or not isinstance(raw_rewards, dict):
@@ -334,7 +345,7 @@ def _receipt(value):
                 interaction[field_name] = copy.deepcopy(raw[field_name])
         interactions.append(interaction)
         interaction_targets.add(target)
-    return {
+    result = {
         'receipt_id': receipt_id,
         'battle_mode': value.get('battle_mode', 'regular'),
         'arena_unique_id': arena_unique_id,
@@ -384,6 +395,9 @@ def _receipt(value):
         'public_results': public_results,
         'interactions': interactions,
     }
+    if mounted is not None:
+        result['vehicle_compact_descr'] = mounted
+    return result
 
 
 def _sanitise_badges(row):

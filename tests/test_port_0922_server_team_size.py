@@ -181,6 +181,28 @@ class ServerTeamSizeTests(unittest.TestCase):
             guest.player_id, 'same'))
         self.assertEqual('random', state.bot_tier_mode)
 
+    def test_two_tier_offset_presets_survive_lobby_and_battle_delivery(self):
+        for mode in ('0_plus2', 'minus2_0'):
+            state = BattleState(team_size=2, bot_tier_mode=mode)
+            worker = _attach_worker(state)
+            host, error = state.add_player(
+                _Connection(), ('10.0.0.1', 1000), _hello(1))
+            self.assertIsNone(error)
+            self.assertEqual((True, None), state.set_bot_tier_mode(
+                host.player_id, mode))
+            self.assertEqual(mode, state.lobby_message()['bot_tier_mode'])
+            start, error = state.request_start(host.player_id)
+            self.assertIsNone(error)
+            self.assertEqual(mode, start['bot_tier_mode'])
+            with mock.patch.object(host, 'offer_reliable', return_value=True) \
+                    as visible_offer, mock.patch.object(
+                        worker, 'offer_reliable', return_value=True) as worker_offer:
+                self.assertTrue(state.broadcast_loading_transition(start))
+            for offer in (visible_offer, worker_offer):
+                self.assertEqual(mode, offer.call_args.args[0]['bot_tier_mode'])
+            state.phase = 'battle'
+            self.assertEqual(mode, state.current_battle_message()['bot_tier_mode'])
+
     def test_host_can_select_a_bot_skill_preset(self):
         self.assertIn('set_bot_skill_mode', MODERN_VISIBLE_MESSAGE_TYPES)
         state = BattleState()

@@ -162,6 +162,52 @@ class BotLineupIntegrationTests(unittest.TestCase):
         self.assertIn(battle._bot_vehicle_assignments[(1, 1)],
                       ('ussr:regular', 'ussr:artillery'))
 
+    def test_mixed_tier_lan_clients_share_one_random_tier_window(self):
+        entries = {
+            level: types.SimpleNamespace(
+                name='ussr:medium_%d' % level, level=level,
+                tags=('mediumTank',)) for level in range(1, 11)
+        }
+        descriptors = {entry.name: types.SimpleNamespace(type=entry)
+                       for entry in entries.values()}
+        runtime = types.SimpleNamespace(
+            nations=types.SimpleNamespace(AVAILABLE_NAMES=('all',), INDICES={'all': 0}),
+            vehicles=types.SimpleNamespace(g_list=types.SimpleNamespace(
+                getList=lambda unused: entries)))
+        bots = [{'id': team * 100 + slot, 'team': team, 'slot': slot}
+                for team in (1, 2) for slot in range(1, 15)]
+        for human_tiers in ((6, 8), (6, 4), (1, 3), (10, 8), (4, 8)):
+            players = [{'id': index + 1, 'team': index + 1, 'slot': 0,
+                        'vehicle': entries[level].name}
+                       for index, level in enumerate(human_tiers)]
+            for round_id in range(1, 9):
+                assignments = []
+                for worker, player_id in ((False, 1), (False, 2), (True, -1)):
+                    name = entries[human_tiers[max(0, player_id - 1)]].name
+                    descriptor = descriptors[name]
+                    battle = BattleRuntime.__new__(BattleRuntime)
+                    battle._runtime = runtime
+                    battle._worker_mode = worker
+                    battle._config = {'vehicle': name}
+                    battle.client = types.SimpleNamespace(team=1, player_id=player_id)
+                    battle._resolve_descriptor = descriptors.__getitem__
+                    battle._start_message = {
+                        'round_id': round_id, 'map': '01_karelia',
+                        'players': players, 'bots': bots, 'bot_tier_mode': 'random',
+                    }
+                    self.assertTrue(battle._prepare_bot_vehicle_assignments(descriptor))
+                    selected = battle._bot_vehicle_assignments
+                    self.assertEqual(28, len(selected))
+                    levels = set(descriptors[value].type.level
+                                 for value in selected.values()).union(human_tiers)
+                    if max(human_tiers) - min(human_tiers) <= 2:
+                        self.assertLessEqual(max(levels) - min(levels), 2)
+                    else:
+                        self.assertEqual(set(human_tiers), levels)
+                    assignments.append(selected)
+                self.assertEqual(assignments[0], assignments[1])
+                self.assertEqual(assignments[0], assignments[2])
+
     def _profile_exclusion_runtime(self, worker, mode, excluded, lineup=()):
         names = ('ussr:Edited', 'usa:Regular', 'germany:Regular')
         entries = {

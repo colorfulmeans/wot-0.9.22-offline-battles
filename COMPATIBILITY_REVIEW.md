@@ -31,8 +31,9 @@ levels for a nonnegative minimum `lvlDiff`. The shared `stayedAlive` and
 `dealtMoreDamage` modifiers require the same killing collision; surviving an
 earlier ram or dying later in battle cannot substitute for its outcome.
 Likewise, a later shell kill cannot erase already earned ramming damage.
-The generic modifiers also serve other installed missions using those fields;
-unrecorded filters such as `fireStarted` remain explicitly unsupported.
+The generic modifiers also serve other installed missions using those fields.
+The September 21 follow-up below adds recorded `fireStarted` evidence;
+other unrecorded filters remain explicitly unsupported.
 
 Version 2 of the existing bounded mission history adds
 `[ram, elapsed_ms, damage_dealt, damage_received, killed, survived, immobilized]`.
@@ -5356,7 +5357,7 @@ governed by the existing physics. Regression coverage includes all four
 vehicle types in both directions, reverse travel, a pivot, cancellation,
 failed enqueue, death and Bot behaviour.
 
-### Drowning evidence and unresolved warning threshold
+### Drowning evidence and vehicle-specific warning thresholds
 
 [Wargaming Wiki's Battle Mechanics](https://wiki.wargaming.net/en/Battle_Mechanics)
 describes the icon as a warning for water deep enough to enter the crew or
@@ -5371,22 +5372,27 @@ The pages were read in the browser because the text fetch exposed only their
 loading page. Forum searches and the Wiki discussion did not provide a
 verifiable 0.9.22 experiment establishing those missing values.
 
-Two repository defects are identified but not repaired in this candidate:
+The user's subsequent September 21 retail-server experiment supplies the
+missing product rule: no warning below half the hull, CAUTION above half,
+and the existing ten-second DANGER countdown above the hull top. This is
+recorded gameplay evidence and an explicit implementation instruction, not
+a claim that a public article disclosed a private server constant.
 
-- `_native_drowning_level` equates the appearance effect's `isInWater` with
-  CAUTION. The stock Avatar instead receives `VEHICLE_DROWN_WARNING` from the
-  server; the effect getter is not that server warning contract.
-- `_drowning_sensor_thresholds` treats `topRightCarryingPoint` as a vertical
-  coordinate. The available reference reader/fixtures use a two-component
-  X/Z carrying footprint. It also clamps the danger height above that mistaken
-  caution value, and omits pitch/roll. The Bot danger fallback already uses
-  the transformed turret-mount point. The reference is RU #788; it does not
-  replace an exact CN #1513 warning-threshold capture.
+`water_geometry` now derives those two heights from the actual descriptor's
+`hull.hitTester.bbox` and `chassis.hullPosition`. It transforms all eight
+corners through the current yaw, pitch and roll, including the existing
+descriptor-owned hydraulic body pose, and samples the water above the
+resulting world-space hull bottom. The visible player, copied human
+worker pose and Bots share that geometry and classification. Neither a
+turret mount nor a universal metre threshold determines the vehicle's hull
+height. Missing or invalid hull geometry does not invent a threshold.
 
-The `0.5` in `assembleWaterSensor` is explicitly the minimum heavy-splash
-depth, not evidence for a caution threshold. No global metre value, hull-height
-fraction or substitute timer was introduced. The existing ten-second danger
-countdown remains unchanged pending a verified warning-depth rule.
+The appearance effect's `isInWater` and `isUnderwater` flags no longer override
+these gameplay thresholds. The stock Avatar receives `VEHICLE_DROWN_WARNING`
+from the server; a splash effect is not the authority for that event. The
+`0.5` in `assembleWaterSensor` remains a minimum heavy-splash depth and was
+not used as evidence for the user's independently observed half-hull rule.
+The existing ten-second danger duration and worker/server authority remain.
 
 ### Requested sustained crushing states
 
@@ -5417,3 +5423,202 @@ as HP per second, would not recover the missing retail law. The exact pressure
 damage rate, mass/armour dependence and any initial grace period still need
 0.9.22 source or controlled replay/video evidence before this can be claimed
 as an official-mechanics repair. No new crushing coefficient is enabled here.
+
+### September 21 post-0.9.2 report follow-up
+
+The eight submitted report archives contain four distinct 0.9.2 sessions
+and an older 0.9.1 session; repeated archives from the same session are
+cumulative evidence, not independent reproductions. The following repairs
+are based on source contracts and report replay. None constitutes native
+Windows gameplay acceptance.
+
+- Unsupported hulls no longer obtain track-powered yaw from A/D. Existing
+  angular momentum is retained, while rebasing forward/lateral components
+  preserves the world-space flight trajectory.
+- Local Siege presentation no longer freezes an unsynchronized native
+  body/ground world translation as a permanent local offset. Copied chassis
+  placement and the descriptor's hydraulic pivot own the rendered and
+  collision poses. Autorotation checks the gun's local target direction in
+  the pitched/rolled hull, retaining stock autorotation/X-lock ownership.
+- The first candidate removed the existing neutral drivetrain brake. The
+  user's subsequent retail test confirmed that releasing the accelerator
+  does decelerate the vehicle. The follow-up below restores that behavior
+  while correcting the separately identified downhill speed ceiling.
+- Bot arrivals, tactical holds and traffic yields now request active braking
+  explicitly rather than depending on released-throttle drag. Stopping
+  distance integrates that same brake law with signed speed and slope;
+  checked forward/reverse escape commands clear any inherited brake request.
+  Close-target and crowded-departure regressions retain their original
+  stopping-distance and recovery-duration limits.
+- Airfield's recorded trapped pose has no exit in the original forward
+  fallback fan. A rear exit is now considered after the entire forward fan
+  fails, using the same terrain, hazard and collision checks. A driver's
+  static-probe refusal also reviews the affected baked corridor even when
+  zero throttle prevents an actual movement contact. Failed probes and
+  traffic holds are not evidence for marking solid terrain.
+- Newly published wrecks invalidate private join/recovery paths as well as
+  shared paths. A Bot that has reached a route's final segment can resume
+  advancing to the real capture objective after contact ends without first
+  returning to the penultimate waypoint. No speculative aggression or map
+  coordinate changes are included.
+- The Westfield 11:41 report contains eleven retained contact witnesses.
+  Ten lie inside exact, already-broken component boxes in a proved remapped
+  chunk. Their bevel/top normals no longer disqualify that ownership proof.
+  The remaining face lies outside all recorded component boxes and remains
+  blocking. No inflated box or nearest-owner guess makes it passable; bounded
+  diagnostics now include its live slot signature/category and mapping state.
+- Wreck pushing has no accumulated-distance cap. Pure worker-path tests
+  continue pushing through successive intervals beyond ten metres and query
+  new obstacles from the current wreck position. New bounded diagnostics
+  distinguish track hold, a world blocker, missing support, a support step
+  and actual movement. They do not change unverified friction coefficients.
+- Hydraulic diagnostics retain bounded takeoff/landing transition samples
+  with preceding and current support/motion evidence, alongside worst-frame
+  samples. The submitted aggregate windows omit the actual airborne frames,
+  so they do not yet distinguish all downhill stutter from real steps.
+
+The official [9.14 physics description](https://worldoftanks.eu/en/news/general-news/version-914-sounds-physics/)
+distinguishes released drive input from SPACE braking and describes
+SPACE-plus-turn single-track manoeuvres. It supplies no numerical coast
+coefficient or pressure-damage law. Those limits must not be described as
+restored official physics merely because the pure-data regressions pass.
+
+The personal-mission follow-up adds the missing evidence used by LT-6,
+LT-9, MT-12, HT-5 and TD-4 across all four operations. Reference expressions
+are labelled as 0.9.22 RU #788, not a replacement for the installed #1513
+mission resources. LT-6's prebattle optional-device check reads the compact
+vehicle descriptor frozen when the battle starts, including normal optics,
+bond optics and binoculars. A later garage edit cannot change that check.
+LT-9 records detection before the observer has ever been spotted, with both
+teams' simultaneous visibility transitions considered before counting.
+MT-12 records each admitted fire ignition once. TD-4 records invisibility at
+the relevant damage/kill event, using enemy visibility rather than the
+sixth-sense display delay. HT-5's `distance=0` means damage inside the current
+vehicle view range, not unlimited range: worker observations donate the same
+effective radius already used for visibility, including crew/equipment
+state. The newest admitted radius and actual distance are frozen in the
+mission event. The visibility sampling boundary (up to one normal 0.4-second
+observation interval around a loadout-state change) remains a native
+acceptance limitation.
+
+Version 3 extends the existing bounded event history and preserves legacy
+v1/v2 receipt reads without inventing missing event-time evidence. Tests
+exercise reference conditions for every operation, event boundaries,
+re-ignition after extinguishing, loadout freezing, server restart and client
+receipt persistence. Mission thresholds and rewards still come from the
+installed client; this change does not edit them.
+
+The official [9.18 matchmaking article](https://worldoftanks.eu/en/news/general-news/matchmaking-918/)
+allows three-tier battles in which the player is at the top, middle or bottom.
+Waiting-room options now include `0/+1/+2` and `-2/-1/0`. Random selection
+admits a wider candidate pool but chooses only one contiguous one-, two- or
+three-tier window, considering all configured human tiers before selecting
+it. Automatic substitutions cannot escape that window. Existing manual
+presets and explicitly selected human vehicles remain user-owned. The
+existing offline tier/class proportions are unchanged and are not claimed
+to implement the complete retail 3/5/7 matchmaker.
+
+### September 21 retail-observation corrections
+
+The subsequent user tests supersede the earlier neutral-drive assumption.
+Released throttle once again applies the existing offline drivetrain brake,
+including its slope unloading near the static hold limit. Its 0.65 grip share
+is retained calibration, not a newly established retail coefficient. Explicit
+braking remains stronger and airborne motion remains inertial.
+
+Restoring that brake exposed a finite Bot-yield deadlock in the recorded
+Himmelsdorf departure case. A yielding vehicle repeatedly requested a fresh
+full escape corridor after most of its admitted manoeuvre was complete; a
+wall beyond the intended endpoint stopped it before it could clear the lane.
+Traffic checks now use the remaining translation of that existing yield.
+Dynamic checks retain the entire swept hull, and native motion receipts still
+cover the leading hull plus the current slice's reach. The original 15/24 FPS
+departure distances and parking/recovery duration limits remain unchanged.
+
+The former 1.05 downhill envelope and separate artificial overspeed build/drag
+are replaced by force-integrated gravity and a **user-authorized approximate
+1.35 envelope**. Engine acceleration remains limited by the installed
+descriptor's rated speed; gravity can carry a grounded vehicle to 1.35 times
+the current directional limit. Forward, reverse and the active Siege-mode
+descriptor use their own limits. Thus a configured 45 km/h limit admits
+60.75 km/h downhill; no T-34-85 vehicle limit is hard-coded. An official
+[T71 article](https://worldoftanks.com/en/news/general-news/tank-month-t71/)
+documents downhill travel above its rated speed, but predates the 9.14 physics
+revision and supplies no universal multiplier. Neither that article nor the
+user's single-vehicle experiment proves that 1.35 is the retail server law.
+
+The increased moving-target speed also exposed an SPG proof prediction error.
+A new lead can shorten the ballistic flight and require fewer collision-query
+segments than the preceding proof. The prediction now uses observed time per
+segment and the new arc's actual workload. The existing four-query shared
+frame budget, 1.5-metre stale-target limit, frozen launch trajectory and random
+dispersion are unchanged. Eight-SPG tests retain their original 20-second
+completion bound at 20, 24, 30 and 60 FPS.
+
+#### Descriptor-owned track pivot
+
+Single-track low-speed steering is not inferred from a vehicle-name list.
+The 0.9.22 chassis reader exposes `rotationIsAroundCenter`, consumed by the
+reviewed #1513 sniper autorotation contract. Public
+[0.7.0 source](https://github.com/StranikS-Scan/WorldOfTanks-Decompiled/blob/0.7.0/source/res/scripts/common/items/vehicles.py)
+already contains that field; this establishes that the distinction predates
+9.22, not its first release date. The later
+[9.14 SPACE-plus-turn manoeuvre](https://worldoftanks.eu/en/news/general-news/version-914-sounds-physics/)
+describes a separate moving handbrake turn and is not evidence that this flag
+was introduced in 9.14.
+
+For a chassis whose flag is false, the hull centre now follows the stationary
+inner track when the ordinary differential motion would reverse that track.
+The pivot width comes from `physics.trackCenterOffset`; a missing width does
+not fall back to a guessed hull width. Vehicles whose flag is true retain
+centre rotation. Track animation, local movement and Bot movement share this
+geometry. Airborne yaw cannot create the new ground-driven translation.
+Collision sweeps cover the curved root path, including trees, catalog/native
+obstacles, vehicles and detached turrets. This does not claim to complete the
+separate moving handbrake-drift simulation.
+
+#### Stock server-reticle selection and authoritative feedback
+
+The server reticle predates 9.22: official release notes list it in
+[6.4](https://worldoftanks.com/en/content/docs/release_notes/update-6-4-list-of-changes/)
+and add the settings control in
+[7.4](https://worldoftanks.com/en/content/docs/release_notes/update-74-release-notes/).
+The existing stock `useServerAim` setting and persistence are retained. The
+release client's single-marker selection is respected: enabled selects the
+server result, disabled selects the stock local client marker.
+
+The previous local shot-vector echo no longer masquerades as server feedback.
+An ordered input freezes the native stabilized pose, turret/gun angles and
+dispersion. The authority worker calculates shot geometry using the installed
+descriptor and the reviewed `shot_geometry` contract, then returns an
+input-sequenced result through the existing server snapshot. Trigger-time
+geometry uses the same frozen input; a later replica pose cannot redirect an
+already admitted shot. Native gun laying and dispersion remain input evidence,
+not an invented worker-side aiming model. The marker receives shot velocity
+(unit direction times the frozen loaded shell speed), as the native contract
+requires.
+
+The #1513 `setShotPosition` consumer is not a read-only renderer: it writes
+reply dispersion into element zero of `_VehicleGunRotator__dispersionAngles`,
+the same mutable two-element list behind the read-only `dispersionAngle`
+property. Server-marker publication therefore saves that element and restores
+it in `finally` after the synchronous native display call, including display
+failure. Only the captured list is restored; a replacement native list or gun
+rotator installed by a synchronous refresh is not overwritten. The reply still
+reaches the marker, while the next input checkpoint and immediate fire intent
+retain current native convergence/bloom. No property setter, extra aiming
+formula, timer or global class patch is introduced. The regression fake models
+the audited read-only property and in-place write instead of only recording
+callback arguments; tests include both switch states and both native client
+modes, exception containment, repeated feedback and native-owner replacement.
+
+Round, authority epoch, input sequence and bounded age checks reject stale
+feedback. Missing feedback does not generate a local substitute server marker.
+Old inputs without the new checkpoint remain compatible but cannot publish
+server markers. Switching the display setting does not change reload, ammo,
+launch barriers or idempotent projectile admission. This makes the display
+reflect the authority's accepted input; it does not reduce network latency.
+
+These changes still require native Windows #1513 acceptance for vehicle feel,
+hydraulic poses and reticle presentation. Pure-data regressions and packaging
+checks do not substitute for that gameplay test.

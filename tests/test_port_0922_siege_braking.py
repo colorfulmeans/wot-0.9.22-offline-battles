@@ -1,4 +1,5 @@
 import copy
+import math
 import types
 import unittest
 from unittest import mock
@@ -191,6 +192,47 @@ class BotSiegeBrakingTests(unittest.TestCase):
 
     def tearDown(self):
         self.harness.tearDown()
+
+    def test_each_mode_uses_its_installed_directional_downhill_limits(self):
+        for current in (0, 2):
+            for sign in (-1.0, 1.0):
+                with self.subTest(state=current, sign=sign):
+                    travel = bot_fixture._combat_descriptor()
+                    travel.physics['speedLimits'] = (9.0, 4.0)
+                    siege = copy.deepcopy(travel)
+                    siege.physics['speedLimits'] = (2.0, 1.5)
+                    composite = types.SimpleNamespace(
+                        hasSiegeMode=True, defaultVehicleDescr=travel,
+                        siegeVehicleDescr=siege)
+                    command = dict(self.harness._stationary_command(),
+                                   throttle=sign, movement_intent=True,
+                                   recovery_mode='drive', brake=False)
+                    runtime = self.module.BotRuntime(
+                        1, descriptor_resolver=lambda unused: composite,
+                        adapter_factory=lambda *args: bot_fixture._FixedAdapter(command),
+                        direction_probe=lambda *args: {
+                            'clear': True, 'slope': -math.tan(math.radians(20.0))},
+                        ground_probe=lambda *args: 0.0,
+                        physics_ground_probe=lambda *args: 0.0,
+                        spawn_resolver=lambda *args: ((0.0, 0.0, 0.0), 0.0),
+                        baked_graph=bot_fixture._flat_open_graph())
+                    start = copy.deepcopy(self.harness.start)
+                    start['bots'][0]['vehicle'] = 'sweden:S22_Strv_S1'
+                    runtime.battle_start(start)
+                    runtime.navigator = None
+                    state = runtime.states[11]
+                    runtime._set_bot_siege_state(state, current)
+                    runtime._siege_desired = lambda *args: current == 2
+                    installed = travel if current == 0 else siege
+                    limit = installed.physics['speedLimits'][0 if sign > 0.0 else 1]
+                    maximum = limit * self.module.vehicle_physics.OVERSPEED_MAX_FACTOR
+                    state.update(speed=sign * (maximum - 0.01), grounded_once=True,
+                                 _siege_intent=current == 2)
+                    runtime.update(0.1, 1.0)
+                    self.assertEqual(current, state['siege_state'])
+                    self.assertIs(installed, runtime._descriptors[11])
+                    self.assertAlmostEqual(sign * maximum, state['speed'])
+                    self.assertGreater(abs(state['speed']), limit)
 
     def test_both_modes_brake_with_current_descriptor_before_the_transition(self):
         for current in (0, 2):

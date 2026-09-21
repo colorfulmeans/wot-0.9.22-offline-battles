@@ -278,6 +278,30 @@ class ArtilleryControllerTests(unittest.TestCase):
         self.assertGreaterEqual(len(path), 2)
         self.assertLessEqual(0.8 / float(len(path) - 1), 0.12)
 
+    def test_launch_workload_receipt_matches_the_completed_native_queries(self):
+        for step in (0.04, 0.12, 0.20):
+            with self.subTest(step=step):
+                controller = self.module.ArtilleryController(maximum_step=step)
+                arguments = (
+                    self.source(), dict(self.target(), speed=0.0),
+                    _descriptor(), 0, 1,
+                    (0.0, 2.0, 0.0), 0.01, 0.08, 0.81)
+                queries = []
+                controller.request_launch(*(arguments + (1.0,)))
+                for frame in range(1, 20):
+                    now = 1.0 + frame / 20.0
+                    used = controller.advance(
+                        now, 4, lambda start, end: (
+                            queries.append((start, end)) or None))
+                    self.assertLessEqual(used, 4)
+                    ready, receipt = controller.request_launch(
+                        *(arguments + (now,)))
+                    if ready:
+                        break
+                self.assertIsNotNone(receipt)
+                self.assertEqual(len(queries), receipt['proof_chords'])
+                self.assertEqual(step, receipt['proof_maximum_step'])
+
     def test_cancel_launch_discards_pending_and_pinned_receipts(self):
         controller = self.module.ArtilleryController(maximum_step=0.2)
         source = self.source()

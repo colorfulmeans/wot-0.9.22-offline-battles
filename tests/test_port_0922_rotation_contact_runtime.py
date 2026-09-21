@@ -58,7 +58,7 @@ class PlayerRotationContactTests(unittest.TestCase):
                 shape = battle._collision_shape(entity.typeDescriptor)
                 peer = dict(id=1000001, x=2*shape[0], y=0., z=0.,
                             yaw=0., shape=shape)
-                battle._contact_tanks = lambda *args: [peer]
+                battle._contact_tanks = lambda *args, **kwargs: [peer]
                 battle._smoothed_drive_pitch = lambda *args: 0.
                 battle._update_vertical_motion = lambda e, p, y, dt: p
                 battle._ground_pitch = lambda *args: 0.

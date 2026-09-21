@@ -48,7 +48,8 @@ _PHYSICS_FLOATS = (
     'specificFriction', 'brakeDecel', 'trackCenter', 'minPlaneNormalY',
     'nativePowerRatio',
 )
-_PHYSICS_KEYS = frozenset(_PHYSICS_FLOATS + ('terrainResist',))
+_PHYSICS_KEYS = frozenset(_PHYSICS_FLOATS + (
+    'terrainResist', 'rotationIsAroundCenter'))
 
 _SPOTTING_FLOATS = (
     'commander_level', 'recon_level', 'situational_level',
@@ -251,6 +252,10 @@ def _canonical_physics(value):
     if terrain is None:
         return None
     result['terrainResist'] = terrain
+    pivot = _bool(value.get('rotationIsAroundCenter'))
+    if pivot is None:
+        return None
+    result['rotationIsAroundCenter'] = pivot
     return result
 
 

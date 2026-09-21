@@ -124,7 +124,8 @@ class MissionEventReceiptTests(unittest.TestCase):
             history = receipt['interactions'][0]['mission_events']
             self.assertEqual([
                 ['critical', 60000, 1 << 16], ['critical', 60000, 1 << 16],
-                ['damage', 60000, 240, True], ['kill', 60000, 0, True, 100.]], history)
+                ['damage', 60000, 240, True, 100., True, None],
+                ['kill', 60000, 0, True, 100., True]], history)
             self.assertTrue(client._valid_battle_receipt(receipt))
             restarted = BattleState(map_name='01_karelia', receipt_state_path=path)
             replay = _latest_receipt(restarted, first.account_key)

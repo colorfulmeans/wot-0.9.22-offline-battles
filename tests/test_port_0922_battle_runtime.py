@@ -529,7 +529,7 @@ class _Descriptor(object):
                 _Vector(-1.0, -0.4, -1.0),
                 _Vector(1.0, 0.8, 1.0), loaded))
         self.radio = types.SimpleNamespace(distance=400.0)
-        self.physics = {'speedLimits': (14.0, 7.0)}
+        self.physics = {'speedLimits': (14.0, 7.0), 'trackCenterOffset': 1.5}
         self.type = types.SimpleNamespace(name=name, tags=('lightTank',))
         self.chassis = _Strict1513Component(
             itemTypeName='vehicleChassis',
@@ -1176,6 +1176,20 @@ class _AdaptiveMatrixProvider(object):
         self._target = value
 
 
+class _GunRotator(types.SimpleNamespace):
+    """Model the audited #1513 read-only property and in-place marker write."""
+
+    @property
+    def dispersionAngle(self):
+        return self._VehicleGunRotator__dispersionAngles[0]
+
+    def setShotPosition(self, vehicle_id, shot_position, shot_vector,
+                        dispersion_angle, forceValueRefresh=False):
+        if self.clientMode and not self.showServerMarker and not forceValueRefresh:
+            return
+        self._VehicleGunRotator__dispersionAngles[0] = dispersion_angle
+
+
 class _Avatar(object):
     def handleVehicleCollidedVehicle(
             self, veh_a, veh_b, hit_point, contact_time):
@@ -1226,15 +1240,17 @@ class _Avatar(object):
         self.visual_stops = []
         self.gun_locks = []
         self.isGunLocked = False
-        self.gunRotator = types.SimpleNamespace(
+        self.gunRotator = _GunRotator(
             turretYaw=0.0, gunPitch=0.0,
-            dispersionAngle=0.25,
+            clientMode=True, showServerMarker=False,
+            _VehicleGunRotator__dispersionAngles=[0.25, 0.01],
             turretRotationSpeed=0.5,
             _VehicleGunRotator__isStarted=False,
             _VehicleGunRotator__maxTurretRotationSpeed=None,
             _VehicleGunRotator__maxGunRotationSpeed=None,
             reset=mock.Mock(),
             lock=lambda locked: self.gun_locks.append(bool(locked)),
+            getAvatarOwnVehicleStabilisedMatrix=lambda: _Matrix(),
             getCurShotPosition=lambda: (
                 _Vector(0.0, 2.0, 0.0), _Vector(0.0, 0.0, 1.0)))
 
@@ -1347,6 +1363,8 @@ class _Avatar(object):
 
     def updateGunMarker(self, vehicle_id, shot_position, shot_vector,
                         dispersion_angle):
+        self.gunRotator.setShotPosition(
+            vehicle_id, shot_position, shot_vector, dispersion_angle)
         self.gun_marker_updates.append((
             vehicle_id, shot_position, shot_vector, dispersion_angle))
 
@@ -2202,7 +2220,7 @@ def _effective_params_snapshot(mass=25000.0, reload_factor=1.0,
             'terrainResist': [1.0, 1.0, 1.0],
             'specificFriction': 1.0, 'brakeDecel': 4.0,
             'trackCenter': 2.0, 'minPlaneNormalY': 0.2,
-            'nativePowerRatio': 1.0,
+            'nativePowerRatio': 1.0, 'rotationIsAroundCenter': True,
         },
         'spotting': {
             'commander_level': 100.0, 'recon_level': 0.0,
@@ -14054,7 +14072,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             0.90, battle_runtime_module.BOT_WATER_AVOID_DEPTH)
 
-    def test_visible_drowning_sensor_only_drives_native_warning_ui(self):
+    def test_visible_hull_drowning_only_drives_native_warning_ui(self):
         runtime = _runtime()
         runtime.bigworld.serverTime = lambda: 750.0
         battle = BattleRuntime(runtime)
@@ -14073,7 +14091,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'engine_id': 10, 'state': {'health': 500, 'alive': True},
                 'kind': 'player', 'network_id': 1, 'local': True}}
         battle._water_depth = mock.Mock(
-            side_effect=AssertionError('native water sensor was bypassed'))
+            side_effect=lambda point: 2.1 - point[1])
         battle._local_last_attacker = ('player', 9)
         self.assertTrue(battle._tick_drowning(0.3, 1.0))
         self.assertEqual((10, 4, 2, (750.0, 10.0)),
@@ -14089,9 +14107,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             battle._records['player:1']['state'])
         self.assertIsNone(getattr(battle._avatar, 'health_update', None))
         self.assertIsNone(battle._local_damage_report)
-        battle._water_depth.assert_not_called()
+        self.assertEqual(35, battle._water_depth.call_count)
 
-    def test_native_drowning_sensor_resets_before_a_second_countdown(self):
+    def test_hull_drowning_resets_before_a_second_countdown(self):
         runtime = _runtime()
         server_time = [750.0]
         runtime.bigworld.serverTime = lambda: server_time[0]
@@ -14106,37 +14124,33 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'player:1': {
                 'engine_id': 10, 'state': {'health': 500, 'alive': True},
                 'kind': 'player', 'network_id': 1, 'local': True}}
-        battle._water_depth = mock.Mock(return_value=0.55)
+        surface = [0.5]
+        battle._water_depth = mock.Mock(
+            side_effect=lambda point: surface[0] - point[1])
 
         battle._tick_drowning(0.3, 1.0)
-        entity.appearance.waterSensor = object()
-        entity.appearance.isInWater = True
-        entity.appearance.isUnderwater = True
-        battle._water_depth.side_effect = AssertionError(
-            'native water sensor was bypassed')
+        surface[0] = 2.1
         battle._tick_drowning(0.3, 1.3)
         self.assertEqual(0.3, battle._drown_time)
 
-        entity.appearance.isUnderwater = False
+        surface[0] = 1.5
         battle._tick_drowning(0.3, 1.6)
         self.assertEqual(0.0, battle._drown_time)
         self.assertIsNone(battle._drown_started)
 
         server_time[0] = 760.0
-        entity.appearance.isUnderwater = True
+        surface[0] = 2.1
         battle._tick_drowning(0.3, 1.9)
-        entity.appearance.isUnderwater = False
-        entity.appearance.isInWater = False
+        surface[0] = 0.5
         battle._tick_drowning(0.3, 2.2)
 
         self.assertEqual([
-            (10, 4, 1, (0.0, 0.0)),
             (10, 4, 2, (750.0, 10.0)),
             (10, 4, 1, (0.0, 0.0)),
             (10, 4, 2, (760.0, 10.0)),
             (10, 4, 0, (0.0, 0.0)),
         ], battle._avatar.misc_statuses)
-        self.assertEqual(1, battle._water_depth.call_count)
+        self.assertEqual(5, battle._water_depth.call_count)
 
     def test_hidden_worker_publishes_player_water_observation(self):
         runtime = _runtime()
@@ -14159,6 +14173,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'x': 2.0, 'y': 0.0, 'z': 3.0},
             'kind': 'player', 'network_id': 1, 'local': False}}
 
+        battle._water_depth = mock.Mock(
+            side_effect=lambda point: 2.1 - point[1])
         self.assertTrue(battle._publish_player_environment(0.3, 1.0))
 
         sender.assert_called_once_with([{
@@ -14221,6 +14237,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
     def test_visible_input_never_carries_a_local_damage_verdict(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
         battle.client = _Client()
         battle._server = types.SimpleNamespace(vehicle_id=10)
         runtime.bigworld.entities[10] = _Vehicle(
@@ -16372,8 +16389,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
+        descriptor = _Descriptor()
+        descriptor.chassis.rotationIsAroundCenter = True
         vehicle = RemoteVehicle(
-            1000, _Descriptor(), {
+            1000, descriptor, {
                 'publicInfo': {'team': 2, 'name': 'Bot'},
                 'health': 500, 'isCrewActive': True, 'gunAnglesPacked': 0},
             _Vector(), (0.0, 0.0, 0.0), runtime.math)
@@ -20199,7 +20218,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([[22, 37, None]], catalog_contact['token'])
         for contact in (tree_contact, catalog_contact):
             self.assertEqual(0.0, contact['speed'])
-            self.assertEqual((2.0, 3.0, 4.0), (
+            self.assertEqual(vehicle_physics.track_pivot_position(
+                    (2.0, 3.0, 4.0), 0.0, 0.2, 1.5), (
                 contact['end_x'], contact['end_y'], contact['end_z']))
             self.assertEqual(0.2, contact['end_yaw'])
         battle._destructibles.commit_local_prediction.assert_called_once()
@@ -22672,6 +22692,14 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._battle_live = False
         battle._avatar = runtime.bigworld.avatar
         battle._server = types.SimpleNamespace(vehicle_id=10)
+        battle.client = types.SimpleNamespace(player_id=1, authority_epoch=4)
+        battle._start_message = {'round_id': 7}
+        battle._last_snapshot = {
+            'round_id': 7, 'authority_epoch': 4,
+            'players': [{'id': 1, 'gun_marker': {
+                'input_seq': 8, 'origin': [0., 2., 0.],
+                'direction': [0., 0., 1.], 'shot_speed': 250.,
+                'dispersion_angle': .02}}]}
         rotator = battle._avatar.gunRotator
         rotator.showServerMarker = True
         rotator.getCurShotPosition = mock.Mock()
@@ -22681,10 +22709,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([], battle._avatar.gun_marker_updates)
 
         battle._battle_live = True
-        rotator.getCurShotPosition.return_value = (
-            _Vector(0.0, 2.0, 0.0), _Vector(0.0, 0.0, 1.0))
         self.assertTrue(battle._sync_local_server_marker())
-        rotator.getCurShotPosition.assert_called_once_with()
+        rotator.getCurShotPosition.assert_not_called()
         self.assertEqual(1, len(battle._avatar.gun_marker_updates))
 
     def test_sniper_transition_rejects_stale_steady_sources(self):
@@ -25242,7 +25268,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual((0.2, 10.0, -0.1), position)
         self.assertEqual(0.0, battle._local_slide_speed)
-        self.assertEqual((1.99, -0.995), battle._local_air_lateral)
+        self.assertEqual((2.0, -1.0), battle._local_air_lateral)
 
     def test_airborne_lateral_carry_cannot_cross_the_arena_edge(self):
         runtime = _runtime()
@@ -25260,7 +25286,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual((298.49, 10.0, 0.0), position)
         self.assertEqual(0.0, battle._local_slide_speed)
-        self.assertEqual((1.99, 0.0), battle._local_air_lateral)
+        self.assertEqual((0.0, 0.0), battle._local_air_lateral)
         self.assertEqual('arena', battle._local_motion_kinds)
 
     def test_cross_slope_slide_carries_off_a_cliff_with_ground_plane(self):
@@ -31202,7 +31228,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             0.75 * (0.57 + 0.0043 * 110.0),
             runtime.bigworld.avatar.targeting_updates[-1][3])
 
-    def test_ammo_tick_keeps_enabled_server_marker_on_the_client_angle(self):
+    def test_ammo_tick_keeps_server_marker_separate_from_client_angle(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle.state = 'running'
@@ -31212,19 +31238,30 @@ class BattleRuntimeContractTests(unittest.TestCase):
             10, _Descriptor(), _Vector(), (0, 0, 0), {'health': 500})
         runtime.bigworld.entities[10] = entity
         battle._server = types.SimpleNamespace(vehicle_id=10)
-        shot_position = _Vector(1.0, 2.0, 3.0)
-        shot_vector = _Vector(0.0, 0.0, 250.0)
-        runtime.bigworld.avatar.gunRotator = types.SimpleNamespace(
-            showServerMarker=True,
-            dispersionAngle=0.0375,
-            getCurShotPosition=mock.Mock(
-                return_value=(shot_position, shot_vector)))
+        battle.client = types.SimpleNamespace(player_id=1, authority_epoch=4)
+        battle._start_message = {'round_id': 7}
+        battle._last_snapshot = {
+            'round_id': 7, 'authority_epoch': 4,
+            'players': [{'id': 1, 'gun_marker': {
+                'input_seq': 8, 'origin': [1., 2., 3.],
+                'direction': [0., 0., 1.], 'shot_speed': 250.,
+                'dispersion_angle': .0375}}]}
+        runtime.bigworld.avatar.gunRotator = _GunRotator(
+            showServerMarker=True, clientMode=True,
+            _VehicleGunRotator__dispersionAngles=[0.25, 0.01],
+            getCurShotPosition=mock.Mock(side_effect=AssertionError(
+                'server marker must not sample the local ray')))
 
         battle._ammo_tick()
 
-        self.assertEqual([
-            (10, shot_position, shot_vector, 0.0375)
-        ], runtime.bigworld.avatar.gun_marker_updates)
+        updates = runtime.bigworld.avatar.gun_marker_updates
+        self.assertEqual(1, len(updates))
+        self.assertEqual((10, .0375), (updates[0][0], updates[0][3]))
+        self.assertEqual((1., 2., 3.), tuple(updates[0][1]))
+        self.assertEqual((0., 0., 250.), tuple(updates[0][2]))
+        self.assertEqual(0.25, battle._native_dispersion_angle())
+        self.assertEqual([0.25, 0.01],
+                         battle._avatar.gunRotator._VehicleGunRotator__dispersionAngles)
 
     def test_native_dispersion_uses_read_only_rotator_without_class_patch(self):
         runtime = _runtime()

@@ -339,7 +339,7 @@ def _effective_params_snapshot(mass=25000.0, base_moving=0.171,
             'terrainResist': [1.0, 1.0, 1.0],
             'specificFriction': 1.0, 'brakeDecel': 4.0,
             'trackCenter': 2.0, 'minPlaneNormalY': 0.2,
-            'nativePowerRatio': 1.0,
+            'nativePowerRatio': 1.0, 'rotationIsAroundCenter': True,
         },
         'spotting': {
             'commander_level': 100.0, 'recon_level': 0.0,
@@ -2390,7 +2390,7 @@ class BotRuntimeTests(unittest.TestCase):
             (10.0, 0.0, 20.0), math.pi / 2.0, 20.0))
 
     def test_bot_drowning_requires_ten_continuous_seconds_and_publishes_death(self):
-        depth = [2.0]
+        depth = [2.1]
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _critical_descriptor(),
             adapter_factory=lambda *unused: _Adapter(),
@@ -2399,7 +2399,7 @@ class BotRuntimeTests(unittest.TestCase):
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver,
             baked_graph=_graph(),
-            water_depth_probe=lambda unused_position: depth[0])
+            water_depth_probe=lambda point: depth[0] + state['y'] - point[1])
         runtime.battle_start(self.start)
         state = runtime.states[11]
         state.update({
@@ -2428,7 +2428,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertFalse(runtime._advance_bot_drowning(state, 0.3))
             self.assertEqual(0.0, state['_drown_time'])
             self.assertEqual(0.5, state['_water_depth'])
-            depth[0] = 2.0
+            depth[0] = 2.1
             for unused in range(33):
                 self.assertFalse(runtime._advance_bot_drowning(state, 0.3))
             self.assertTrue(state['alive'])
@@ -2471,7 +2471,7 @@ class BotRuntimeTests(unittest.TestCase):
 
     def test_drowning_accounts_for_the_whole_slow_callback_interval(self):
         runtime = self.module.BotRuntime(
-            1, water_depth_probe=lambda unused_position: 2.0)
+            1, water_depth_probe=lambda point: 2.1 - point[1])
         runtime._descriptors[11] = _critical_descriptor()
         state = {
             'id': 11, 'health': 640, 'alive': True,
@@ -2484,8 +2484,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1.25, state['_drown_time'])
         self.assertEqual(0.0, state['_drown_check'])
 
-    def test_bot_water_sensor_uses_turret_boundary_pose_and_recovery(self):
-        depth = [1.6]
+    def test_bot_water_uses_hull_top_pose_and_recovery(self):
+        surface = [2.0]
         descriptor = _critical_descriptor()
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: descriptor,
@@ -2494,7 +2494,7 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            water_depth_probe=lambda unused_position: depth[0])
+            water_depth_probe=lambda point: surface[0] - point[1])
         runtime.battle_start(self.start)
         state = runtime.states[11]
         state.update({
@@ -2502,26 +2502,58 @@ class BotRuntimeTests(unittest.TestCase):
             'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0,
         })
 
-        turret_offset, carrying_point = self.module._water_sensor_geometry(
-            descriptor)
-        self.assertEqual((0.0, 1.6, 0.0), turret_offset)
-        self.assertEqual((1.5, 3.5), carrying_point)
         self.assertFalse(runtime._advance_bot_drowning(state, 0.3))
         self.assertFalse(state['_drowning'])
 
-        depth[0] = 1.600001
+        surface[0] = 2.000001
         self.assertFalse(runtime._advance_bot_drowning(state, 0.3))
         self.assertTrue(state['_drowning'])
         self.assertEqual(0.3, state['_drown_time'])
-        depth[0] = 1.6
+        surface[0] = 2.0
         self.assertFalse(runtime._advance_bot_drowning(state, 0.3))
         self.assertFalse(state['_drowning'])
         self.assertEqual(0.0, state['_drown_time'])
 
+        # Pitch rotates the long hull's corners, not just its turret mount.
         state['pitch'] = math.pi * 0.5
-        depth[0] = 0.01
+        surface[0] = 0.01
+        self.assertFalse(runtime._advance_bot_drowning(state, 0.3))
+        self.assertFalse(state['_drowning'])
+        surface[0] = 3.50001
         self.assertFalse(runtime._advance_bot_drowning(state, 0.3))
         self.assertTrue(state['_drowning'])
+        self.assertAlmostEqual(surface[0], state['_water_depth'])
+
+    def test_bot_missing_hull_suspends_immersion_without_guessing_a_height(self):
+        probe = mock.Mock(return_value=3.0)
+        runtime = self.module.BotRuntime(1, water_depth_probe=probe)
+        descriptor = _critical_descriptor()
+        descriptor.hull.hitTester.bbox = None
+        runtime._descriptors[11] = descriptor
+        state = {
+            'id': 11, 'health': 640, 'alive': True,
+            'x': 0.0, 'y': 0.0, 'z': 0.0,
+            '_drown_time': 9.9, '_drowning': True,
+        }
+        self.assertFalse(runtime._advance_bot_drowning(state, 0.3))
+        self.assertEqual(9.9, state['_drown_time'])
+        self.assertTrue(state['_drowning'])
+        self.assertTrue(state['alive'])
+        probe.assert_not_called()
+
+    def test_bot_inverted_hull_below_origin_uses_the_same_water_rule(self):
+        descriptor = _critical_descriptor()
+        runtime = self.module.BotRuntime(
+            1, water_depth_probe=lambda point: -0.3 - point[1])
+        runtime._descriptors[11] = descriptor
+        state = {
+            'id': 11, 'health': 640, 'alive': True,
+            'x': 0.0, 'y': 0.0, 'z': 0.0,
+            'pitch': 0.0, 'roll': math.pi,
+        }
+        self.assertFalse(runtime._advance_bot_drowning(state, 0.3))
+        self.assertTrue(state['_drowning'])
+        self.assertAlmostEqual(-0.3, state['_water_depth'])
 
     def test_bot_overturn_matches_ignore_recovery_and_death_law(self):
         runtime = self.module.BotRuntime(1)
@@ -6153,6 +6185,9 @@ class BotRuntimeTests(unittest.TestCase):
             runtime._cached_traffic_stopping_distance(
                 source, command, params)
             self.assertEqual(2, len(calls))
+            source['speed'] *= -1.0
+            runtime._cached_traffic_stopping_distance(source, command, params)
+            self.assertEqual(3, len(calls))
         finally:
             self.module.BotRuntime._traffic_stopping_distance = staticmethod(
                 original)
@@ -7231,6 +7266,53 @@ class BotRuntimeTests(unittest.TestCase):
             self.module.prebaked_navigation.pose_is_safe = original_pose_safe
         return state['z'], state
 
+    def test_explicit_bot_brake_is_distinct_from_released_drive(self):
+        states = {}
+        for brake in (False, True):
+            runtime = self._drive_runtime(
+                lambda *unused: {'clear': True, 'collision': False, 'slope': 0.0})
+            command = dict(self._stationary_command(), brake=brake)
+            runtime.adapter.decide = lambda *unused: dict(command)
+            runtime.update(0.1, 1.1)
+            states[brake] = runtime.states[11]
+            # An explicit brake changes acceleration, not the body's current
+            # speed/position discontinuously. Neutral still keeps momentum.
+            self.assertGreater(states[brake]['speed'], 0.0)
+            self.assertGreater(states[brake]['z'], 0.0)
+        self.assertLess(states[True]['speed'], states[False]['speed'])
+        self.assertLess(states[True]['z'], states[False]['z'])
+
+    def test_runtime_stop_overrides_request_active_braking(self):
+        for stop_reason in ('physical_hold', 'artillery_reproof'):
+            with self.subTest(stop_reason=stop_reason):
+                runtime = self._drive_runtime(
+                    lambda *unused: {'clear': True, 'collision': False, 'slope': 0.0})
+                state = runtime.states[11]
+                if stop_reason == 'physical_hold':
+                    # No cached command remains after the previous physical
+                    # veto, and this catch-up slice cannot re-run planning.
+                    runtime._refresh_control_this_step = False
+                    runtime._publish_control_this_step = False
+                else:
+                    state['profile']['class_tag'] = 'SPG'
+                    command = dict(self._stationary_command(),
+                                   throttle=1.0, brake=False, fire_allowed=True)
+                    runtime.adapter.decide = lambda *unused: dict(command)
+                    runtime._active_artillery_intent = lambda *unused: None
+                    runtime._active_artillery_reproof = lambda *unused: {}
+                    runtime._refresh_control_this_step = True
+                    runtime._publish_control_this_step = True
+                original = self.module.vehicle_physics.longitudinal_step
+                with mock.patch.object(self.module.vehicle_physics,
+                                       'longitudinal_step', wraps=original) as step:
+                    runtime._update_once(0.1, 1.1)
+                motion = [call.args for call in step.call_args_list
+                          if call.args[5] == 0.1]
+                self.assertTrue(motion)
+                self.assertTrue(all(args[2] == 0.0 and args[8] is True
+                                    for args in motion))
+                self.assertLess(state['speed'], 8.0)
+
     def test_deferred_probe_keeps_the_proved_corridor(self):
         """A budget deferral is not evidence of a wall, so the cache stays."""
         probe = self._recast_budget_probe()
@@ -7322,33 +7404,78 @@ class BotRuntimeTests(unittest.TestCase):
         slice spends it and every catch-up slice of the same callback is then
         deferred. Withholding drive and freezing the pose is correct, but
         deleting ``state['speed']`` made the low-rate run rebuild its velocity
-        from zero on every callback. Measured over 2.0 s at 10 Hz vs 2 Hz:
-        16.0 m either way when the budget is not exhausted; with one token the
-        2 Hz run travelled 5.5 m and ended at 3.7 m/s before this change and
-        9.2 m ending at 5.4 m/s after it.
+        from zero on every callback. Verify continuity between actual physics
+        slices; how much speed remains also depends on release braking.
         """
         fast, unused_fast_state = self._drive_distance(
             20, 0.1, self._recast_budget_probe(1))
-        slow, slow_state = self._drive_distance(
-            4, 0.5, self._recast_budget_probe(1))
-        self.assertGreater(fast, 15.0)
-        self.assertGreater(slow, fast * 0.5)
-        self.assertGreater(abs(slow_state['speed']), 4.5)
+        motion = []
+        original = self.module.vehicle_physics.longitudinal_step
+        def integrate(*args, **kwargs):
+            speed = original(*args, **kwargs)
+            if args[5] > 0.05:
+                # Exclude the 30 Hz stopping-distance prediction; these are
+                # the real catch-up slices of the 2 Hz callback below.
+                motion.append((args[1], speed))
+            return speed
+        with mock.patch.object(self.module.vehicle_physics,
+                               'longitudinal_step', side_effect=integrate):
+            slow, slow_state = self._drive_distance(
+                4, 0.5, self._recast_budget_probe(1))
+        self.assertGreater(fast, slow)
+        self.assertGreater(slow, 0.0)
+        self.assertGreater(len(motion), 4)
+        for previous, current in zip(motion[:-1], motion[1:]):
+            self.assertAlmostEqual(previous[1], current[0])
+        self.assertAlmostEqual(motion[-1][1], slow_state['speed'])
 
-    def test_catchup_without_any_proved_corridor_still_stops(self):
+    def test_catchup_without_any_proved_corridor_freezes_pose(self):
         """Preserving momentum must not license travel through unknown space.
 
         With no recast tokens at all no corridor is ever proved, so the hull
-        must withhold drive and come to rest rather than coast on a corridor
-        the worker could not sample.
+        must withhold drive and freeze its pose. A missing proof does not
+        establish a collision or authorize replacing retained momentum with
+        an artificial brake force.
         """
         fast, unused_fast_state = self._drive_distance(
             20, 0.1, self._recast_budget_probe(4))
         stalled, stalled_state = self._drive_distance(
             4, 0.5, self._recast_budget_probe(0))
         self.assertGreater(fast, 15.0)
-        self.assertLess(stalled, fast * 0.35)
-        self.assertAlmostEqual(0.0, stalled_state['speed'], places=3)
+        self.assertEqual(0.0, stalled)
+        self.assertEqual(0.0, stalled_state['x'])
+        self.assertEqual(0, stalled_state['movement_dir'])
+        self.assertEqual(0.0, stalled_state['speed'])
+        # The long hold above has enough time to brake naturally. Its first
+        # short slice must still preserve momentum instead of deleting it.
+        short, short_state = self._drive_distance(
+            1, 0.1, self._recast_budget_probe(0))
+        self.assertEqual(0.0, short)
+        self.assertGreater(short_state['speed'], 0.0)
+        self.assertLess(short_state['speed'], 8.0)
+
+    def test_deferred_first_corridor_requires_exact_motion_result(self):
+        """A current hull sweep may authorize the first deferred slice."""
+        for result in ('clear', 'hard'):
+            with self.subTest(result=result):
+                runtime = self._drive_runtime(self._recast_budget_probe(0))
+                calls = []
+                runtime.motion_resolver = (
+                    lambda *args, **kwargs: calls.append(args) or result)
+                original_pose_safe = self.module.prebaked_navigation.pose_is_safe
+                self.module.prebaked_navigation.pose_is_safe = (
+                    lambda *unused, **unused_kwargs: True)
+                try:
+                    runtime.update(0.1, 1.1)
+                finally:
+                    self.module.prebaked_navigation.pose_is_safe = original_pose_safe
+                self.assertTrue(calls)
+                self.assertNotIn(11, runtime._motion_probe_cache)
+                state = runtime.states[11]
+                if result == 'clear':
+                    self.assertGreater(state['z'], 0.0)
+                else:
+                    self.assertEqual((0.0, 0.0), (state['x'], state['z']))
 
     def test_worker_one_hz_holds_one_drive_plan_through_bounded_slices(self):
         command = self._stationary_command()
@@ -7502,10 +7629,11 @@ class BotRuntimeTests(unittest.TestCase):
             'recovery_mode': 'drive', 'movement_intent': True,
         })
         direction_calls = []
+        adapter = _FixedAdapter(command)
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
-            adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
-            direction_probe=lambda *unused: direction_calls.append(1) or {
+            adapter_factory=lambda *unused, **kwargs: adapter,
+            direction_probe=lambda *args: direction_calls.append(tuple(args[0])) or {
                 'clear': True, 'collision': False, 'slope': 0.0},
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
@@ -7524,7 +7652,15 @@ class BotRuntimeTests(unittest.TestCase):
         finally:
             self.module.prebaked_navigation.pose_is_safe = original_pose_safe
 
-        self.assertEqual(3, len(direction_calls))
+        # The number of exhausted corridors depends on the actual integrated
+        # speed. The larger downhill envelope needs another proof here, not
+        # another planner decision or permission to exceed the last proof.
+        self.assertGreater(len(direction_calls), 1)
+        self.assertEqual(1, len(adapter.calls))
+        self.assertTrue(all(later[2] >= earlier[2]
+                            for earlier, later in zip(
+                                direction_calls[:-1], direction_calls[1:])))
+        self.assertGreater(direction_calls[-1][2], direction_calls[0][2])
         self.assertGreater(state['z'], 20.0)
         self.assertEqual(1, state['movement_dir'])
         self.assertGreater(state['speed'], 0.0)
@@ -7533,6 +7669,11 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(
             state['half_length'],
             runtime._motion_probe_cache[11]['probe_leading'])
+        proof = runtime._motion_probe_cache[11]
+        self.assertEqual(direction_calls[-1], proof['position'])
+        self.assertLessEqual(
+            state['z'] - proof['position'][2] + proof['probe_leading'],
+            proof['probe_distance'])
 
     def test_authority_publication_and_server_ack_remain_live_for_two_minutes(self):
         command = {
@@ -9107,6 +9248,7 @@ class BotRuntimeTests(unittest.TestCase):
     def test_limited_traverse_tank_turns_hull_before_advancing_or_firing(self):
         command = {
             'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
+            'brake': False,
             'shell_index': 0, 'fire_allowed': True,
             'target_id': self.module.HUMAN_TARGET_ID_BASE + 2,
             'fire_range': 500.0, 'combat_mode': 'engage',
@@ -9125,14 +9267,20 @@ class BotRuntimeTests(unittest.TestCase):
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph())
         runtime.battle_start(self.start)
-        runtime.states[11]['yaw'] = 0.0
+        runtime.states[11].update(yaw=0.0, speed=8.0, grounded_once=True)
 
-        state = bot_state_rows.bots(runtime.update(.04, 1.0, players=[
-            {'id': 2, 'team': 1, 'alive': True,
-             'x': 100.0, 'y': 0.5, 'z': 0.0,
-             'effective_params': _effective_params_snapshot()}
-        ])[0])[0]
+        original = self.module.vehicle_physics.longitudinal_step
+        with mock.patch.object(self.module.vehicle_physics,
+                               'longitudinal_step', wraps=original) as step:
+            state = bot_state_rows.bots(runtime.update(.04, 1.0, players=[
+                {'id': 2, 'team': 1, 'alive': True,
+                 'x': 100.0, 'y': 0.5, 'z': 0.0,
+                 'effective_params': _effective_params_snapshot()}
+            ])[0])[0]
 
+        motion = [call.args for call in step.call_args_list if call.args[5] == .04]
+        self.assertTrue(motion)
+        self.assertTrue(all(args[2] == 0.0 and args[8] is True for args in motion))
         self.assertEqual(0, state['movement_dir'])
         self.assertEqual(1, state['rotation_dir'])
         self.assertTrue(runtime.states[11]['hull_aiming'])
@@ -10614,6 +10762,56 @@ class BotRuntimeTests(unittest.TestCase):
                     expected_staleness, reproof['last_aim_staleness'])
                 self.assertNotIn('compensation_offset', reproof)
 
+    def test_spg_overflowing_workload_metadata_preserves_safe_reproof(self):
+        descriptor = _combat_descriptor(dispersion=0.03)
+        for field in ('proof_chords', 'proof_maximum_step'):
+            with self.subTest(field=field):
+                runtime = self.module.BotRuntime(1)
+                state = {
+                    'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0,
+                    'yaw': 0.0, 'fire_seq': 0,
+                }
+                target = {
+                    'kind': 'human', 'network_id': 2, 'alive': True,
+                    'position': (8.0, 0.0, 100.0),
+                    'yaw': math.pi * 0.5, 'speed': 8.0,
+                }
+                reproof = {
+                    'source': {'id': 11},
+                    'source_pose': (0.0, 0.0, 0.0, 0.0),
+                    'target_identity': ('human', 2),
+                    'shell_index': 0, 'fire_seq': 1,
+                    'physical': self.module._shot_ballistics(descriptor, 0),
+                    'proof_latency': 0.0, 'attempts': 0,
+                    'created': 1.0, 'deadline': 61.0,
+                    'absolute_deadline': 121.0,
+                    'proof_chords': 20, 'proof_maximum_step': 0.1,
+                }
+                intent = {
+                    'source': {'id': 11}, 'created': 1.0,
+                    'solution': {
+                        'arc': 'low', 'aim_position': (0.0, 1.0, 100.0),
+                    },
+                }
+                receipt = {
+                    'flight_time': 1.0, 'proof_chords': 10,
+                    'proof_maximum_step': 0.1,
+                }
+                receipt[field] = 10 ** 1000
+                runtime._artillery_reproofs[11] = reproof
+                runtime._artillery_intents[11] = intent
+
+                self.assertTrue(runtime._reject_stale_artillery_receipt(
+                    state, target, descriptor, 0, intent, receipt, 2.0))
+
+                self.assertNotIn(11, runtime._artillery_intents)
+                self.assertEqual(0, state['fire_seq'])
+                self.assertEqual(1, reproof['attempts'])
+                self.assertEqual(1.0, reproof['proof_latency'])
+                self.assertGreater(reproof['last_aim_staleness'], 1.5)
+                self.assertNotIn('proof_chords', reproof)
+                self.assertNotIn('proof_maximum_step', reproof)
+
     def test_moving_spg_reproofs_converge_at_20_and_24_fps(self):
         from gui.mods.offline_lan_0922.artillery_controller import (
             ArtilleryController)
@@ -10771,7 +10969,8 @@ class BotRuntimeTests(unittest.TestCase):
         # gravity 125..190 and maxDistance 10000. This FV3805/FV206 5.5-inch
         # shell takes about 5.66 seconds on the flat high arc used here. The
         # moving contact uses the catalogue's 79 km/h maximum plus the copied
-        # 1.05 downhill overspeed, about 23.04 m/s.
+        # configured downhill envelope; keep this stress case tied to the
+        # running physics rather than its former 1.05 multiplier.
         descriptor.gun.shots = ({
             'shell': {'effectsIndex': 0},
             'speed': 440.0, 'gravity': 146.0,
@@ -10834,7 +11033,8 @@ class BotRuntimeTests(unittest.TestCase):
         fired = {}
         reproofed = dict((state['id'], 0) for state in states)
         strategic_calls_at_first_reproof = {}
-        catalog_max_speed = direction * 79.0 / 3.6 * 1.05
+        catalog_max_speed = (direction * 79.0 / 3.6 *
+                             self.module.vehicle_physics.OVERSPEED_MAX_FACTOR)
         for frame in range(1, fps * 20 + 1):
             now = frame / float(fps)
             probe_calls = [0]
@@ -16378,19 +16578,28 @@ class BotRuntimeTests(unittest.TestCase):
                 state = runtime.states[11]
                 start_z = state['z']
                 positions = [start_z]
+                deferred = bool(probe_result and probe_result.get('deferred'))
 
                 for index in range(4):
                     runtime.update(.04, 1.00 + index * .04)
-                    self.assertEqual(1, state['movement_dir'])
+                    self.assertEqual(0 if deferred else 1, state['movement_dir'])
                     positions.append(state['z'])
 
-                self.assertGreater(abs(state['z'] - start_z), 0.0)
-                self.assertTrue(all(
-                    abs(current - previous) > 0.0
-                    for previous, current in zip(
-                        positions[:-1], positions[1:])))
-                self.assertGreater(state['speed'], 0.0)
+                if deferred:
+                    # A known budget deferral provides no corridor. Keep the
+                    # cached plan, but without an exact resolver it cannot
+                    # authorize even the first slice of horizontal motion.
+                    self.assertEqual([start_z] * len(positions), positions)
+                    self.assertEqual(0.0, state['speed'])
+                else:
+                    self.assertGreater(abs(state['z'] - start_z), 0.0)
+                    self.assertTrue(all(
+                        abs(current - previous) > 0.0
+                        for previous, current in zip(
+                            positions[:-1], positions[1:])))
+                    self.assertGreater(state['speed'], 0.0)
                 self.assertIn(11, runtime._decision_cache)
+                self.assertEqual(1.0, runtime._decision_cache[11][3]['throttle'])
                 self.assertNotIn(11, runtime._motion_probe_cache)
 
     def test_new_server_order_revision_invalidates_decision_cache(self):

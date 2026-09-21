@@ -166,6 +166,42 @@ class ParkedTrafficTests(unittest.TestCase):
         self.assertEqual((0., order['throttle'], False), (turn, throttle, aiming))
         self.assertEqual((3., 0., 0.), self.parked['position'])
 
+    def test_finite_yield_checks_remaining_centre_path_not_a_new_full_escape(self):
+        self.parked['position'] = (3., 0., 0.)
+        self.prime()
+        deadline = self.traffic._parked[29]['until']
+        self.parked['position'] = (3., 0., 4.)
+        samples = []
+
+        def clear_to_endpoint(unused_yaw, maximum_distance):
+            samples.append(maximum_distance)
+            return maximum_distance <= 3.5
+
+        # This is advisory centre-path geometry; the runtime below separately
+        # proves the full leading hull. A wall after this finite endpoint must
+        # not turn a previously admitted yield into a permanent stop.
+        order = self.tick(2., clear=clear_to_endpoint)
+        self.assertGreater(order['throttle'], 0.)
+        self.assertFalse(order['brake'])
+        self.assertAlmostEqual(3.45, samples[-1])
+        self.assertEqual(deadline, self.traffic._parked[29]['until'])
+        blocked = self.tick(2.1, clear=lambda yaw, distance: distance < 3.)
+        self.assertEqual(0., blocked['throttle'])
+        self.assertTrue(blocked['brake'])
+
+    def test_finite_yield_shortens_translation_but_preserves_full_vehicle_sweep(self):
+        self.parked['position'] = (3., 0., 0.)
+        self.prime()
+        self.parked['position'] = (3., 0., 4.)
+        # At the endpoint the yielding hull's front is at z=10.95. Both
+        # blockers have centres beyond it; only the second hull intrudes.
+        outside = body(31, 3., 14.5, speed=0.)
+        self.assertGreater(self.tick(2., extras=[outside])['throttle'], 0.)
+        inside = body(31, 3., 14., speed=0.)
+        order = self.tick(2.1, extras=[inside])
+        self.assertEqual(0., order['throttle'])
+        self.assertTrue(order['brake'])
+
     def test_physical_hold_and_removed_requester_release_the_override(self):
         self.prime()
         physical = dict(hold(self.parked), recovery_mode='physical_hold')
@@ -202,6 +238,73 @@ class RuntimeTrafficJamTests(unittest.TestCase):
     from test_port_0922_separation_progress import SeparationProgressTests as _fixture
     setUp = _fixture.setUp
     tearDown = _fixture.tearDown
+
+    def test_finite_yield_motion_keeps_leading_hull_and_receipt_containment(self):
+        from test_port_0922_separation_progress import _flat_graph, runtime_fixtures
+        for sign in (-1., 1.):
+            for wall in (3.7, 4.5):
+                with self.subTest(sign=sign, wall=wall):
+                    receipts = []
+                    probes = []
+
+                    def direction(position, yaw, speed, descriptor, maximum_distance):
+                        maximum_distance = (15. if maximum_distance is None
+                                            else maximum_distance)
+                        probes.append(maximum_distance)
+                        clear = sign * position[2] + maximum_distance < wall
+                        return dict(clear=clear, collision=not clear, slope=0.)
+
+                    def receipt(position, yaw, speed, descriptor, maximum_distance):
+                        maximum_distance = (15. if maximum_distance is None
+                                            else maximum_distance)
+                        if sign * position[2] + maximum_distance >= wall:
+                            return False
+                        value = dict(origin=position, yaw=yaw, direction=int(sign),
+                                     distance=maximum_distance, leading=3.5,
+                                     half_width=1.5)
+                        receipts.append(value)
+                        return value
+
+                    command = dict(throttle=.65*sign, brake=False, turn=0.,
+                        target_yaw=0., movement_intent=True, fire_allowed=False,
+                        recovery_mode='friendly_yield', combat_mode='route',
+                        move_position=(0., 0., 30.))
+                    adapter = runtime_fixtures._FixedAdapter(command)
+                    runtime = self.module.BotRuntime(1,
+                        descriptor_resolver=lambda unused: runtime_fixtures._combat_descriptor(),
+                        adapter_factory=lambda *args, **kwargs: adapter,
+                        direction_probe=direction, world_receipt_probe=receipt,
+                        ground_probe=lambda *unused: 0., physics_ground_probe=lambda *unused: 0.,
+                        spawn_resolver=lambda *unused: ((0., 0., 0.), 0.),
+                        baked_graph=_flat_graph())
+                    runtime.battle_start(dict(round_id=1, map='01_karelia',
+                        bot_authority_id=1, bots=[dict(id=25, team=1, slot=0,
+                            name='Fixture', vehicle='fake')]))
+                    # Isolate an already admitted finite manoeuvre from its
+                    # requester; retain the actual motion/proof integration.
+                    runtime._traffic_coordinator._parked[25] = dict(
+                        origin=(0., -5.*sign), distance=5.8, sign=sign,
+                        requester=17, until=4.)
+                    runtime._traffic_coordinator.adjust = (
+                        lambda bot_id, body, order, *unused: order)
+                    previous = 0.
+                    for frame in range(1, 31):
+                        runtime.update(1./30., frame/30.)
+                        state = runtime.states[25]
+                        travelled = sign*state['z']
+                        if travelled > previous + 1.e-8:
+                            self.assertTrue(receipts)
+                            proved = receipts[-1]
+                            self.assertLessEqual(travelled + 3.5,
+                                sign*proved['origin'][2] + proved['distance'])
+                        previous = travelled
+                    self.assertTrue(probes)
+                    self.assertGreaterEqual(min(probes), 3.9)
+                    if wall == 3.7:
+                        self.assertAlmostEqual(0., runtime.states[25]['z'])
+                    else:
+                        self.assertGreater(sign*runtime.states[25]['z'], .4)
+                        self.assertLess(sign*runtime.states[25]['z'] + 3.5, wall)
 
     def test_route_tank_and_parked_artillery_leave_the_spawn_queue(self):
         from test_port_0922_separation_progress import _flat_graph, runtime_fixtures

@@ -240,11 +240,32 @@ class EffectiveParamsContractTests(unittest.TestCase):
         self.assertTrue(player.critical['fire'])
         self.assertEqual(revision, player.equipment_revision)
         self.assertEqual(after_use, mounted.snapshot(player.equipment_clock))
-        for invalid in (-1, False, 65536):
+        for sequence, invalid in enumerate((-1, False, 65536), 3):
             self.assertIsNone(client.send_equipment_intent(
                 invalid, activation_code=65536))
-            forged = dict(messages[0], equipment_id=invalid, intent_seq=3)
-            self.assertFalse(state.submit_equipment_intent(player.player_id, forged))
+            forged = dict(messages[0], equipment_id=invalid, intent_seq=sequence)
+            # Handled is not accepted: reject the operation but preserve the
+            # ordered request frontier instead of poisoning subsequent input.
+            self.assertTrue(state.submit_equipment_intent(player.player_id, forged))
+            self.assertEqual({
+                'intent_seq': sequence, 'accepted': False,
+                'reason': 'invalid_activation_code'}, player.equipment_intent_result)
+            self.assertTrue(player.critical['fire'])
+            self.assertEqual(revision, player.equipment_revision)
+            self.assertEqual(after_use, mounted.snapshot(player.equipment_clock))
+            self.assertEqual({'251': 1}, state._statistics_row(
+                'player', player.player_id)['equipment_used'])
+        # A legitimate request after the rejected raw payloads must still
+        # extinguish once the existing cooldown expires, without a new bill.
+        from lan_battle_server import TICK_HZ
+        state.tick += 91 * TICK_HZ
+        following = dict(messages[0], intent_seq=6)
+        self.assertTrue(state.submit_equipment_intent(player.player_id, following))
+        self.assertTrue(player.equipment_intent_result['accepted'])
+        self.assertFalse(player.critical['fire'])
+        self.assertEqual(revision + 1, player.equipment_revision)
+        self.assertEqual({'251': 1}, state._statistics_row(
+            'player', player.player_id)['equipment_used'])
 
     def test_extinguisher_activation_rejects_invalid_codes_targets_and_modes(self):
         from gui.mods.offline_lan_0922 import equipment_mechanics

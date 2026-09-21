@@ -2,8 +2,8 @@
 """Engine-free short-range driver for offline battle bots.
 
 The strategic director supplies a waypoint.  Callers supply ``direction_clear``
-for the current collision/terrain query; this module chooses only throttle and
-steering, so it is safe to exercise outside the BigWorld client.
+for the current collision/terrain query; this module chooses throttle, braking
+and steering, so it is safe to exercise outside the BigWorld client.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
@@ -362,7 +362,7 @@ class LocalDriver(object):
 
 	@observed('driver.reverse_contacts')
 	def _reverse_blocked_by_vehicle(self, position, yaw, neighbours,
-			half_length, half_width):
+			half_length, half_width, maximum_distance=None):
 		"""Reject a blind reverse whose reachable hull sweep is occupied.
 
 		``direction_clear`` answers for terrain and static world geometry only.
@@ -370,7 +370,8 @@ class LocalDriver(object):
 		second of every other one, so an unchecked reverse recovery drives each
 		hull straight into the one behind it and the whole formation grinds.
 		"""
-		reverse_distance = recovery_probe_distance(half_length)
+		reverse_distance = (recovery_probe_distance(half_length)
+			if maximum_distance is None else max(0.0, float(maximum_distance)))
 		# Translating an OBB along its longitudinal axis sweeps one exact longer
 		# OBB. Sampling only the final pose misses a hull at the current or an
 		# intermediate reachable position.
@@ -583,7 +584,7 @@ class LocalDriver(object):
 			half_length=3.5, half_width=1.7,
 			movement_intent=True, stopping_distance=None,
 			stop_at_target=True, decision_horizon=0.0, pose_clear=None):
-		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
+		"""Return throttle, explicit brake, steering and recovery intent.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
 		inferred from a network entity id because those numbering schemes differ.
@@ -626,6 +627,7 @@ class LocalDriver(object):
 			state['braking_target'] = None
 			return {
 				'throttle': 0.0,
+				'brake': True,
 				'turn': 0.0,
 				'target_yaw': float(yaw),
 				'recovery_mode': 'arrived',
@@ -648,6 +650,7 @@ class LocalDriver(object):
 			state['braking_target'] = None
 			return {
 				'throttle': 0.0,
+				'brake': True,
 				'turn': 0.0,
 				'target_yaw': float(yaw),
 				'recovery_mode': 'arrived',
@@ -750,13 +753,14 @@ class LocalDriver(object):
 								self._reverse_blocked_by_vehicle(
 									position, float(yaw)+math.pi, neighbours,
 									own_half_length, own_half_width) is None):
-							return {'throttle': 0.72, 'turn': 0.0,
+							return {'throttle': 0.72, 'brake': False, 'turn': 0.0,
 								'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
 						# Neither rotation fits and the rear is denied. Hold the
 						# pose instead of grinding the corners, and publish the
 						# hull that owns the escape so the queue can clear it.
 						blocked = {
 							'throttle': 0.0,
+							'brake': True,
 							'turn': 0.0,
 							'target_yaw': float(yaw),
 							'recovery_mode': 'blocked',
@@ -766,6 +770,7 @@ class LocalDriver(object):
 						return blocked
 				return {
 					'throttle': 0.0,
+					'brake': True,
 					'turn': direction,
 					'target_yaw': recovery_yaw,
 					'recovery_mode': 'pivot_recovery',
@@ -792,6 +797,7 @@ class LocalDriver(object):
 					break
 			return {
 				'throttle': -0.72,
+				'brake': False,
 				'turn': recovery_turn,
 				'target_yaw': recovery_target,
 				'recovery_mode': 'reverse_turn',
@@ -826,6 +832,7 @@ class LocalDriver(object):
 			state['stuck_time'] = max(state['stuck_time'], threshold)
 			return {
 				'throttle': 0.0,
+				'brake': True,
 				'turn': 0.0,
 				'target_yaw': float(yaw),
 				'recovery_mode': 'blocked',
@@ -876,8 +883,8 @@ class LocalDriver(object):
 					brake_distance + reaction_distance):
 				state['braking_target'] = target_key
 			if state.get('braking_target') == target_key:
-				# Releasing the throttle uses the same copied coast law that
-				# produced ``stopping_distance``. If tuning or a slope leaves the
+				# Apply the same explicit brake used to calculate the supplied
+				# stopping distance. If tuning or a slope leaves the
 				# hull stopped short, release the latch and approach again.
 				if (abs(float(speed)) <= 0.35 and
 						target_distance > WAYPOINT_ARRIVAL_RADIUS + 0.5):
@@ -888,6 +895,9 @@ class LocalDriver(object):
 			state['braking_target'] = None
 		return {
 			'throttle': throttle,
+			# Zero throttle here requests a pivot or a terminal stop. Merely
+			# releasing the accelerator cannot satisfy either control intent.
+			'brake': throttle == 0.0,
 			'turn': turn,
 			'target_yaw': chosen_yaw,
 			'recovery_mode': 'avoid' if avoiding else 'drive',
