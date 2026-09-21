@@ -6365,6 +6365,16 @@ class BotRuntime(object):
                 navigator_state.get('path_key')) or ()
             index = max(0, int(navigator_state.get('index', 0)))
             navigation['path_near_target'] = path[max(0, index - 1):index + 3]
+            grid = getattr(self.navigator, 'grid', None)
+            if grid is not None and getattr(grid, 'prebaked', False):
+                cell = grid.cell_for(position)
+                navigation['occupied_cell'] = cell
+                navigation['occupied_cell_height'] = grid._baked_cell_height(cell)
+                navigation['nearest_baked_cell'] = grid._nearest_baked_cell(cell, 2)
+                navigation['native_review_cells'] = len(grid._native_review_cells)
+            pending_since = navigator_state.get('pending_since')
+            navigation['pending_ms'] = (int(max(0.0, now - pending_since) * 1000.0)
+                if pending_since is not None else 0)
             state['_motion_stall_pending']['navigation'] = navigation
         print('[BOT STALL] id=%s pos=(%.1f,%.1f) mode=%s recovery=%s '
               'traffic=%s intent=%s goal=%s strategic_goal=%s '

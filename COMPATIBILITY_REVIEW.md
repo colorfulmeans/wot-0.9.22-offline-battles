@@ -5651,3 +5651,48 @@ Regression geometry uses the shipped `31_airfield` small village house's boxes,
 with controlled placement, health and native query responses. It proves the
 Python approach/driver boundary, including forward commands at 60/15/5 Hz,
 not the user's exact unlogged position or native Windows #1513 gameplay.
+
+
+### September 21 Airfield follow-up: occupied-cell/native-review mismatch
+
+The 22:53:39 report is from the released 0.9.3 payload, build
+`colorfulmeans-35611837404-1`, on `31_airfield`. Its 412 BOT MOTION records
+contain 379 pending navigation states. In 363 of those pending samples, the
+actual occupied four-metre grid cell has no routing height in the shipped
+bake. Caernarvon, Object 244, E 25, Achilles and VK 28.01 remain almost
+stationary for about 85--89 seconds; SU-122-44 also settles into such a cell.
+Commands identify `nav_wait` with zero throttle and braking rather than a
+failed integrated hull sweep. This is a different, earlier gate than the
+cold-prop/roof approach repair above; that repair did not establish acceptance
+of these now-recorded positions.
+
+`_baked_segment_cells` allows the occupied start to join a supported cell in
+the existing two-cell neighbourhood. However, the native review of the same
+segment previously used unsnapped edge keys: the first edge had a missing
+height, was cached as blocked, and never called the native obstacle probe.
+After review, even an obstacle probe returning clear could not release any of
+the six recorded egress cases. A pending A* job then returned the current pose,
+which the order adapter deliberately interprets as a braked navigation wait.
+
+For that exact class of reviewed, missing-start connectors, validate the actual
+continuous position through the existing native same-layer/water-aware ground
+callback, reversible grade test and coarse obstacle sweep. Do not snap or
+teleport the vehicle, infer clearance from a missing cell, or alter the graph.
+The connector is bounded to the existing two-cell diagonal neighbourhood;
+longer shortcuts must first join using the existing local fallback rather than
+performing unbounded synchronous native sampling. Existing supported-edge
+caches and the ordinary full-hull motion/destruction gate remain unchanged.
+Fatal/shallow entered hazards, missing support, grade violations, exceptions,
+unknown probes and actual obstacles still refuse the exit. Live connector
+results are not cached across changing geometry.
+
+The new tests use six paired poses/goals and the shipped Airfield graph,
+including a genuinely pending search passed through `BotAdapter` and
+`LocalDriver` at simulated 60/15/5 Hz. The original navigation source fails the
+positive cases; the fix releases drive commands while the negative obstacle,
+wrong-layer, missing-support and hazard cases remain blocked. Native replies
+are controlled fixtures, not recorded C++ collision responses. This verifies
+the routing/command defect, not full replay of the Windows scene or a promise
+that every building stall is solved. Existing bounded stall reports now add
+the actual occupied cell, its routing height, nearest valid cell, review-cell
+count and pending age without any native query or new timer.

@@ -712,6 +712,61 @@ class TerrainGrid(object):
 		self._ground_cache[key] = height
 		return height
 
+	def _live_baked_egress_clear(self, start, end):
+		"""Prove a real exit from an eroded occupied cell, without snapping it.
+
+		Baked corridors may start at the nearest supported graph cell. Their
+		native edge review must not turn the missing height of the *occupied*
+		cell into a collision: that would reject every possible exit before
+		calling the native probe. Check the original continuous segment instead.
+		This is planning only; the driver and full hull sweep still own motion.
+		"""
+		if (not callable(self.ground_probe) or
+				not callable(self.obstacle_probe) or
+				self.segment_has_motion_hazard(
+					start, end, BAKED_FATAL_HAZARDS | BAKED_SHALLOW_WATER)):
+			combat_count('nav_live_egress_hazard_or_unavailable')
+			return False
+		distance = _distance_2d(start, end)
+		# A missing start is represented only by the existing two-cell snap.
+		# Join that local neighbourhood before considering a long shortcut,
+		# rather than doing hundreds of synchronous native support queries.
+		# The ordinary short pending/blocked fallback already stays inside it.
+		if distance > self.cell_size * 2.0 * SQRT_TWO:
+			combat_count('nav_live_egress_requires_local_join')
+			return False
+		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
+		previous = tuple(float(value) for value in start)
+		grade = min(self.max_grade_up, self.max_grade_down)
+		try:
+			for index in range(1, steps + 1):
+				fraction = float(index) / float(steps)
+				x = float(start[0]) + (float(end[0]) - float(start[0])) * fraction
+				z = float(start[2]) + (float(end[2]) - float(start[2])) * fraction
+				# Use the existing native, same-layer, water-aware support probe.
+				# _ground() deliberately reads only the bake in this grid.
+				y = self.ground_probe(x, z, previous[1])
+				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
+					combat_count('nav_live_egress_missing_support')
+					return False
+				y = float(y)
+				run = math.hypot(x - previous[0], z - previous[2])
+				if abs(y - previous[1]) > run * grade:
+					combat_count('nav_live_egress_grade')
+					return False
+				previous = (x, y, z)
+			# Sweep from the actual hull position, never the snapped cell centre.
+			# Do not cache a live exit as an immutable graph edge: doors and
+			# wrecks can change between requests.
+			if self.obstacle_probe(tuple(start), previous, 2.15):
+				combat_count('nav_live_egress_obstacle')
+				return False
+		except Exception:
+			combat_count('nav_live_egress_probe_failed')
+			return False
+		combat_count('nav_live_egress_clear')
+		return True
+
 	def segment_clear(self, start, end):
 		"""Check continuous support and drivable grade, not just both endpoints."""
 		# In a prebaked graph, rounding can map a raw point just beyond the
@@ -727,6 +782,15 @@ class TerrainGrid(object):
 			if not self._baked_corridor(start, end)[0]:
 				return False
 			edges = self._edge_keys_for_segment(start, end)
+			if (self._baked_cell_height(self.cell_for(start)) is None and
+					any(first in self._native_review_cells or
+						second in self._native_review_cells
+						for first, second in edges)):
+				# The bake proved a corridor from a nearby supported cell, but
+				# native review cannot use the occupied cell's missing height.
+				# Prove the physical connector; do not invent a solid edge or
+				# move the tank to the snapped position.
+				return self._live_baked_egress_clear(start, end)
 			if not edges and self.cell_for(start) in self._native_review_cells:
 				# A short escape can stay inside one four-metre cell. There is
 				# then no graph edge to recheck, but the contact already disproved
