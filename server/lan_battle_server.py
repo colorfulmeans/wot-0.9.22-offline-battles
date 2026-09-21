@@ -1640,6 +1640,8 @@ def _even_shares(total, parts):
     A spotting assist is divided between the observers lighting the target,
     and the statistic is a whole number of hit points, so the remainder goes
     to the first shares in the caller's stable order rather than being lost.
+    That remainder policy is deterministic offline accounting; the published
+    mechanics do not establish the retail 0.9.22 integer-rounding rule.
     """
     parts = int(parts)
     if parts <= 0:

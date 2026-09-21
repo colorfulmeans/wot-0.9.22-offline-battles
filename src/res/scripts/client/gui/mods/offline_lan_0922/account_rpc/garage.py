@@ -647,16 +647,22 @@ class GarageState(object):
         for slot, compact_descr in enumerate(values):
             if not compact_descr:
                 continue
-            try:
-                descriptor = self._vehicles_module().getItemByCompactDescr(
-                    compact_descr)
-            except Exception as error:
-                raise GarageError('equipment descriptor is unavailable: %s' % error)
-            kind = getattr(descriptor, 'equipmentType', EQUIPMENT_TYPE_REGULAR)
+            kind = self._equipment_type(compact_descr)
             expected = (EQUIPMENT_TYPE_BOOSTERS if slot == 3 else
                         EQUIPMENT_TYPE_REGULAR)
             if kind != expected:
-                raise GarageError('equipment does not fit this slot')
+                raise GarageError(
+                    'equipment does not fit this slot: item=%d kind=%s '
+                    'slot=%d expected=%s' % (
+                        compact_descr, kind, slot, expected))
+
+    def _equipment_type(self, compact_descr):
+        try:
+            descriptor = self._vehicles_module().getItemByCompactDescr(
+                compact_descr)
+        except Exception as error:
+            raise GarageError('equipment descriptor is unavailable: %s' % error)
+        return getattr(descriptor, 'equipmentType', EQUIPMENT_TYPE_REGULAR)
 
     def _consumables_to_buy(self, record, values):
         """Return what a consumable layout must buy, and the stock it read."""
@@ -1219,9 +1225,23 @@ class GarageState(object):
                 index = _int(slot_index)
                 if not 0 <= index < EQUIPMENT_PAYLOAD_SLOT_COUNT:
                     raise GarageError('a vehicle has four equipment slots')
+                # CMD 308 buys one item; its slot field must not place a
+                # directive in the regular-consumable array. The descriptor
+                # identifies the only directive slot in our flattened
+                # getConsumablesIntCDs representation, independently of the
+                # fitting UI's slot numbering.
+                if self._equipment_type(compact_descr) == EQUIPMENT_TYPE_BOOSTERS:
+                    index = EQUIPMENT_SLOT_COUNT
                 slots += [0] * (EQUIPMENT_PAYLOAD_SLOT_COUNT - len(slots))
+                saved_layout = list(record.get('eqsLayout') or slots)
+                saved_layout += slots[len(saved_layout):]
                 slots[index] = compact_descr
                 record = self.equip_equipments(vehicle_inventory_id, slots)
+                # Buying one item changes only that slot's resupply target.
+                # Other consumed supplies and their signed currency choices
+                # remain in the desired layout even when no longer mounted.
+                saved_layout[index] = compact_descr
+                record['eqsLayout'] = saved_layout
             else:
                 record = self.install_component(
                     vehicle_inventory_id, compact_descr, gun_compact_descr,

@@ -727,6 +727,21 @@ class TerrainGrid(object):
 			if not self._baked_corridor(start, end)[0]:
 				return False
 			edges = self._edge_keys_for_segment(start, end)
+			if (self._baked_index(self.cell_for(start)) is None and
+					any(first in self._native_review_cells or
+						second in self._native_review_cells
+						for first, second in edges)):
+				# The baked corridor snaps an eroded start cell to nearby support.
+				# Its native review must not turn the absent routing height into a
+				# wall without querying the real ground. Otherwise every exit can
+				# be rejected before the first live collision query is even made.
+				# Prove the actual occupied-to-exit segment, including the cells
+				# that the snapped baked corridor omits. Never invent a cell-centre
+				# height or globally mark the eroded cell as traversable.
+				if self.segment_has_motion_hazard(
+						start, end, BAKED_FATAL_HAZARDS | BAKED_SHALLOW_WATER):
+					return False
+				return self._live_join_clear(start, end)
 			if not edges and self.cell_for(start) in self._native_review_cells:
 				# A short escape can stay inside one four-metre cell. There is
 				# then no graph edge to recheck, but the contact already disproved
@@ -779,6 +794,54 @@ class TerrainGrid(object):
 		self._segment_cache[key] = bool(clear)
 		self._segment_cache[(end_key, start_key)] = bool(clear)
 		return clear
+
+	def _live_join_clear(self, start, end):
+		"""Prove an eroded-to-baked connector with the live navigation probes.
+
+		Missing baking support is not missing physical support. Conversely, a
+		nearby graph cell cannot prove the ground below this hull or a wall-free
+		escape. Use the same reversible grade limit as ordinary live navigation;
+		the supplied ground probe also rejects excessive water depth. Results
+		are not cached by grid cell, because sub-cell poses differ at wall edges.
+		"""
+		if not callable(self.ground_probe) or not callable(self.obstacle_probe):
+			return False
+		distance = _distance_2d(start, end)
+		# _baked_segment_cells can snap the occupied cell by at most two
+		# cells on either axis, plus its half-cell raw offset. Prove only
+		# that bounded connector here, never hundreds of metres of direct
+		# routing in one callback. A* can first return its nearby entry point
+		# and then follow the ordinary reviewed graph beyond it.
+		if distance > self.cell_size * 2.5 * SQRT_TWO:
+			return False
+		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
+		try:
+			start_y = self.ground_probe(
+				float(start[0]), float(start[2]), float(start[1]))
+			if start_y is None:
+				return False
+			if math.isnan(float(start_y)) or math.isinf(float(start_y)):
+				return False
+			previous = (float(start[0]), float(start_y), float(start[2]))
+			grounded_start = previous
+			for index in range(1, steps + 1):
+				fraction = float(index) / float(steps)
+				x = float(start[0]) + (float(end[0]) - float(start[0])) * fraction
+				z = float(start[2]) + (float(end[2]) - float(start[2])) * fraction
+				y = self.ground_probe(x, z, previous[1])
+				if y is None:
+					return False
+				y = float(y)
+				if math.isnan(y) or math.isinf(y):
+					return False
+				run = math.hypot(x - previous[0], z - previous[2])
+				if abs(y - previous[1]) > run * min(
+						self.max_grade_up, self.max_grade_down):
+					return False
+				previous = (x, y, z)
+			return not self.obstacle_probe(grounded_start, previous, 2.15)
+		except Exception:
+			return False
 
 	@staticmethod
 	def shortcut_preserves_climb_approach(path, start_index, end_index,
@@ -1277,11 +1340,13 @@ class _TerrainSearch(object):
 		self.done = False
 		self.result = None
 		self.last_frame = None
+		self.steps = 0
 
 	def step(self, budget):
 		if self.done:
 			return True
 		for _unused in range(max(1, int(budget))):
+			self.steps += 1
 			try:
 				value = next(self.generator)
 			except StopIteration:
@@ -1394,6 +1459,34 @@ class TerrainNavigator(object):
 				for state in self.bot_states.values()) + sum(
 				int(state.get('replans', 0))
 				for state in self.bot_direct_progress.values()),
+		}
+
+	def bot_search_diagnostics(self, bot_id, current, now):
+		"""Explain a wait without running more ground or collision probes."""
+		state = self.bot_states.get(int(bot_id), {})
+		request = state.get('request_key')
+		searches = []
+		for key, search in self.searches.items():
+			if key != request and self._path_owner(key[0]) != int(bot_id):
+				continue
+			searches.append({
+				'key': key,
+				'age_ms': int(max(0.0, float(now) -
+					self.search_times.get(key, float(now))) * 1000.0),
+				'steps': int(getattr(search, 'steps', 0)),
+				'last_step_age_ms': (int(max(0.0, float(now) -
+					search.last_frame) * 1000.0)
+					if search.last_frame is not None else None),
+			})
+		cell = self.grid.cell_for(current)
+		return {
+			'current_cell': cell,
+			'current_cell_height': self.grid._baked_cell_height(cell),
+			'pending_ms': (int(max(0.0, float(now) -
+				state['pending_since']) * 1000.0)
+				if state.get('pending_since') is not None else 0),
+			'searches': sorted(searches, key=lambda item: repr(item['key'])),
+			'native_review_cells': len(self.grid._native_review_cells),
 		}
 
 	@observed('nav.fallback')

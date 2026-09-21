@@ -6365,6 +6365,10 @@ class BotRuntime(object):
                 navigator_state.get('path_key')) or ()
             index = max(0, int(navigator_state.get('index', 0)))
             navigation['path_near_target'] = path[max(0, index - 1):index + 3]
+            search_diagnostics = getattr(
+                self.navigator, 'bot_search_diagnostics', None)
+            if callable(search_diagnostics):
+                navigation.update(search_diagnostics(state['id'], position, now))
             state['_motion_stall_pending']['navigation'] = navigation
         print('[BOT STALL] id=%s pos=(%.1f,%.1f) mode=%s recovery=%s '
               'traffic=%s intent=%s goal=%s strategic_goal=%s '
@@ -11437,6 +11441,13 @@ class BotRuntime(object):
         neighbours = list(neighbours or []) + self._player_neighbours(players)
         if refresh_control:
             self._publish_static_hulls(players)
+            # Pending routes belong to the authority frame, even when every
+            # current order reuses a decision or takes a short direct target.
+            # next_target() can call tick again; the frame serial makes it
+            # idempotent and the one begin_frame() owns all elapsed credit.
+            navigator_tick = getattr(self.navigator, 'tick', None)
+            if callable(navigator_tick):
+                navigator_tick(now)
         # Native terrain and visibility probes run on BigWorld's render thread.
         # Build the local-overlap view lazily, only when a staggered decision is
         # due. It steers apart hulls which already touch; it never predicts

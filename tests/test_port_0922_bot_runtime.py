@@ -119,6 +119,15 @@ def _load():
     module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module)
     return module
 
+class _StaticGridLifecycle(object):
+    """Motion-only graph fakes still receive frame-owned housekeeping."""
+    def prune_failed_edges(self, unused_now):
+        pass
+
+    def trim_caches(self):
+        pass
+
+
 class _Director(object):
     def __init__(self): self.registered = []
     def register_profile(self, *args): self.registered.append(args)
@@ -2612,7 +2621,7 @@ class BotRuntimeTests(unittest.TestCase):
         direction_calls = []
         receipt_calls = []
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
@@ -2721,7 +2730,7 @@ class BotRuntimeTests(unittest.TestCase):
                     'clear': False, 'collision': True, 'slope': 0.0}
             return {'clear': True, 'collision': False, 'slope': 0.0}
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
             cell_size = 4.0
 
@@ -2989,7 +2998,7 @@ class BotRuntimeTests(unittest.TestCase):
         }
         adapter = _FixedAdapter(command)
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
@@ -3069,7 +3078,7 @@ class BotRuntimeTests(unittest.TestCase):
         adapter = _FixedAdapter(command)
         receipt_calls = []
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
@@ -3119,7 +3128,7 @@ class BotRuntimeTests(unittest.TestCase):
         adapter = _FixedAdapter(command)
         calls = []
 
-        class NegativeGrid(object):
+        class NegativeGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
@@ -9010,7 +9019,7 @@ class BotRuntimeTests(unittest.TestCase):
                 }) or graph))(_graph()))
         runtime.battle_start(self.start)
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
