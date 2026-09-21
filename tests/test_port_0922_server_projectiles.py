@@ -1001,6 +1001,63 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertIsNone(BattleState._destructible_contact_result_token(
             token + [[7, 64, None]]))
 
+    def test_destructible_track_arc_keeps_precision_and_descriptor_limit(self):
+        physics = effective_params()['physics']
+        physics['rotationIsAroundCenter'] = False
+        start = (100.123456, 0.0, 200.765432)
+        yaw, end_yaw = .123456, .423456
+        end = vehicle_physics.track_pivot_position(
+            start, yaw, end_yaw, physics['trackCenter'])
+        raw = _player_destructible_contact(
+            x=start[0], y=start[1], z=start[2], yaw=yaw,
+            end_x=end[0], end_y=end[1], end_z=end[2], end_yaw=end_yaw,
+            speed=0.0, dt=.1)
+        wire = json.loads(json.dumps(raw))
+        accepted = BattleState._validated_player_destructible_contact(
+            wire, physics)
+        self.assertIsNotNone(accepted)
+        for name in ('x', 'y', 'z', 'yaw', 'end_x', 'end_y', 'end_z', 'end_yaw'):
+            self.assertEqual(raw[name], accepted[name])
+        self.assertIsNone(BattleState._validated_player_destructible_contact(raw))
+        self.assertIsNone(BattleState._validated_player_destructible_contact(
+            raw, dict(physics, rotationIsAroundCenter=True)))
+        self.assertIsNone(BattleState._validated_player_destructible_contact(
+            raw, dict(physics, trackCenter=.5)))
+        self.assertIsNone(BattleState._validated_player_destructible_contact(
+            dict(raw, end_x=end[0]+.01), physics))
+
+    def test_destructible_track_arc_reanchors_both_ends_to_admitted_pose(self):
+        state = _state(players=1)
+        player = state.players[1]
+        physics = player.effective_params['physics']
+        physics['rotationIsAroundCenter'] = False
+        start = (100.123456, 0.0, 200.765432)
+        yaw, end_yaw = .123456, .423456
+        end = vehicle_physics.track_pivot_position(
+            start, yaw, end_yaw, physics['trackCenter'])
+        raw = _player_destructible_contact(
+            x=start[0], y=start[1], z=start[2], yaw=yaw,
+            end_x=end[0], end_y=end[1], end_z=end[2], end_yaw=end_yaw,
+            speed=0.0, dt=.1)
+        # The accepted input is close, but deliberately not the render-frame
+        # start. Keep the established authority anchor without losing its arc.
+        self.assertTrue(_update_player_input(
+            state, 1, x=start[0]+.03, y=start[1], z=start[2]-.02,
+            yaw=yaw+.00012, destructible_contacts=[raw]))
+        self.assertEqual(0, player.destructible_contact_resolved_seq)
+        accepted = player.destructible_contacts[1]
+        sample = player.pose_history[-1]
+        before = tuple(accepted[name] for name in ('x', 'y', 'z'))
+        after = tuple(accepted[name] for name in ('end_x', 'end_y', 'end_z'))
+        self.assertEqual(tuple(round(sample[name], 4)
+                               for name in ('x', 'y', 'z')), before)
+        self.assertNotEqual(start, before)
+        self.assertAlmostEqual(end_yaw-yaw,
+                               accepted['end_yaw']-accepted['yaw'])
+        self.assertAlmostEqual(physics['trackCenter'],
+            vehicle_physics.track_pivot_from_poses(
+                physics, before, accepted['yaw'], after, accepted['end_yaw']))
+
     def test_worker_result_accepts_canonical_tree_contact(self):
         state = _state(players=1)
         player = state.players[1]

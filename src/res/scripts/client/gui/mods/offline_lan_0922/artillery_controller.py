@@ -418,6 +418,10 @@ class ArtilleryController(object):
             'flight_time': flight_time,
             'arc': 'exact_launch',
             'path': path,
+            # Internal workload evidence for the next moving-target lead.
+            # A re-led arc can require fewer chords than this completed one.
+            'proof_chords': len(path) - 1,
+            'proof_maximum_step': self.maximum_step,
         }
         terminal = path[-1] if path else origin
         ready, result = self.launch_queue.request(

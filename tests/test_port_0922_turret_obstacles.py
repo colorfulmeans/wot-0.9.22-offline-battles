@@ -6,6 +6,7 @@ import unittest
 from test_port_0922_turret_detachment import (
     _BigWorld, _Math, _POSE, _Vector, _Vehicle, _flat_ground)
 from gui.mods.offline_lan_0922 import shot_geometry
+from gui.mods.offline_lan_0922 import vehicle_physics
 from gui.mods.offline_lan_0922.entities import detached_turret
 from gui.mods.offline_lan_0922.entities import turret_obstacles
 
@@ -151,6 +152,56 @@ class TurretObstacleTests(unittest.TestCase):
         obstacles = self.obstacle(row(rest=(0, 1, 2.8)), fixed)
         self.assertFalse(obstacles.sweep_blocks(pose(yaw=-math.pi/4), pose(yaw=-math.pi/4), td, 4000))
         self.assertTrue(obstacles.sweep_blocks(pose(yaw=-math.pi/4), pose(yaw=math.pi/4), td, 4000))
+
+    def test_track_pivot_arc_hits_turret_outside_endpoint_chord(self):
+        td = descriptor()
+        td.chassis.rotationIsAroundCenter = False
+        td.physics = {'trackCenterOffset': 1.5}
+        td.chassis.hitTester = BoxTester((-.05, -.05, -.05), (.05, .05, .05))
+        td.hull.hitTester = td.chassis.hitTester
+        fixed = descriptor()
+        fixed.turret.hitTester = BoxTester((-.06, -.06, -.06), (.06, .06, .06))
+        fixed.turret.gunPosition = _Vector(0, 0, 0)
+        fixed.gun.hitTester = fixed.turret.hitTester
+        a, b = -math.pi / 3., math.pi / 3.
+        start = pose(yaw=a)
+        finish = vehicle_physics.track_pivot_position((0., 1., 0.), a, b, 1.5)
+        end = pose(*finish, yaw=b)
+        middle = vehicle_physics.track_pivot_position((0., 1., 0.), a, 0., 1.5)
+        obstacles = self.obstacle(row(rest=middle), fixed)
+        self.assertFalse(obstacles.sweep_blocks(start, start, td, 4000))
+        self.assertFalse(obstacles.sweep_blocks(end, end, td, 4000))
+        self.assertTrue(obstacles.sweep_blocks(start, end, td, 4000))
+        # The same endpoint chord does not meet the detached turret. The
+        # descriptor flag, not ordinary changing-yaw travel, admits the arc.
+        td.chassis.rotationIsAroundCenter = True
+        self.assertFalse(obstacles.sweep_blocks(start, end, td, 4000))
+        td.chassis.rotationIsAroundCenter = False
+        overhead = self.obstacle(row(rest=(middle[0], middle[1] + .5, middle[2])), fixed)
+        self.assertFalse(overhead.sweep_blocks(start, end, td, 4000))
+
+    def test_track_pivot_arc_preserves_separate_hydraulic_hull_origin(self):
+        td = descriptor()
+        td.chassis.rotationIsAroundCenter = False
+        td.physics = {'trackCenterOffset': 1.5}
+        td.chassis.hitTester = BoxTester((-.05, -.05, -.05), (.05, .05, .05))
+        td.hull.hitTester = td.chassis.hitTester
+        fixed = descriptor()
+        fixed.turret.hitTester = BoxTester((-.06, -.06, -.06), (.06, .06, .06))
+        fixed.turret.gunPosition = _Vector(0, 0, 0)
+        fixed.gun.hitTester = fixed.turret.hitTester
+        a, b = -math.pi / 3., math.pi / 3.
+        origin = (0., 1., 0.)
+        def split_at(yaw):
+            chassis = vehicle_physics.track_pivot_position(origin, a, yaw, 1.5)
+            body = shot_geometry.transform_vehicle_point((0., 1., 2.), chassis, yaw)
+            return dict(pose(*chassis, yaw=yaw), hull=pose(*body, yaw=yaw))
+        start, end, middle = split_at(a), split_at(b), split_at(0.)
+        body = middle['hull']
+        obstacles = self.obstacle(row(rest=(body['x'], body['y'], body['z'])), fixed)
+        self.assertFalse(obstacles.sweep_blocks(start, start, td, 4000))
+        self.assertFalse(obstacles.sweep_blocks(end, end, td, 4000))
+        self.assertTrue(obstacles.sweep_blocks(start, end, td, 4000))
 
     def test_pitch_and_roll_are_part_of_contact_volume(self):
         td = descriptor()

@@ -5357,7 +5357,7 @@ governed by the existing physics. Regression coverage includes all four
 vehicle types in both directions, reverse travel, a pivot, cancellation,
 failed enqueue, death and Bot behaviour.
 
-### Drowning evidence and unresolved warning threshold
+### Drowning evidence and vehicle-specific warning thresholds
 
 [Wargaming Wiki's Battle Mechanics](https://wiki.wargaming.net/en/Battle_Mechanics)
 describes the icon as a warning for water deep enough to enter the crew or
@@ -5372,27 +5372,27 @@ The pages were read in the browser because the text fetch exposed only their
 loading page. Forum searches and the Wiki discussion did not provide a
 verifiable 0.9.22 experiment establishing those missing values.
 
-The September 21 follow-up repairs the two identified repository defects:
+The user's subsequent September 21 retail-server experiment supplies the
+missing product rule: no warning below half the hull, CAUTION above half,
+and the existing ten-second DANGER countdown above the hull top. This is
+recorded gameplay evidence and an explicit implementation instruction, not
+a claim that a public article disclosed a private server constant.
 
-- `_native_drowning_level` no longer equates the appearance effect's
-  `isInWater` with CAUTION. The stock Avatar instead receives
-  `VEHICLE_DROWN_WARNING` from the server; the splash effect getter cannot
-  provide that warning threshold. Shallow splashes therefore no longer show
-  a false warning. This deliberately leaves the advance CAUTION warning
-  unavailable until its actual threshold is established.
-- The sensor-rebuild fallback probes the descriptor's turret-mount sensor
-  point transformed through current position, yaw, pitch and roll. It no
-  longer reads a vertical coordinate from the two-component X/Z
-  `topRightCarryingPoint`, clamps the underwater height to that false value,
-  or substitutes invented dimensions for missing geometry. The worker uses
-  the replicated current pose rather than a stale native spawn position.
+`water_geometry` now derives those two heights from the actual descriptor's
+`hull.hitTester.bbox` and `chassis.hullPosition`. It transforms all eight
+corners through the current yaw, pitch and roll, including the existing
+descriptor-owned hydraulic body pose, and samples the water above the
+resulting world-space hull bottom. The visible player, copied human
+worker pose and Bots share that geometry and classification. Neither a
+turret mount nor a universal metre threshold determines the vehicle's hull
+height. Missing or invalid hull geometry does not invent a threshold.
 
-The `0.5` in `assembleWaterSensor` is explicitly the minimum heavy-splash
-depth, not evidence for a caution threshold. No global metre value, hull-height
-fraction or substitute timer was introduced. The existing ten-second danger
-countdown and worker/server authority are unchanged. Tests cover native
-submersion, shallow splashes, sensor rebuilds on slopes, a long carrying
-footprint, missing dimensions and the worker's current replicated pose.
+The appearance effect's `isInWater` and `isUnderwater` flags no longer override
+these gameplay thresholds. The stock Avatar receives `VEHICLE_DROWN_WARNING`
+from the server; a splash effect is not the authority for that event. The
+`0.5` in `assembleWaterSensor` remains a minimum heavy-splash depth and was
+not used as evidence for the user's independently observed half-hull rule.
+The existing ten-second danger duration and worker/server authority remain.
 
 ### Requested sustained crushing states
 
@@ -5440,12 +5440,10 @@ Windows gameplay acceptance.
   placement and the descriptor's hydraulic pivot own the rendered and
   collision poses. Autorotation checks the gun's local target direction in
   the pitched/rolled hull, retaining stock autorotation/X-lock ownership.
-- Neutral coasting no longer applies an invented 65% share of active track
-  braking, slope-dependent relief of that share, or an extra neutral
-  overspeed brake. Descriptor rolling resistance and gravity remain. The
-  existing parked hold, active braking and overspeed envelope are retained;
-  exact retail gearbox drag, downhill speed calibration and handbrake drift
-  remain unproved.
+- The first candidate removed the existing neutral drivetrain brake. The
+  user's subsequent retail test confirmed that releasing the accelerator
+  does decelerate the vehicle. The follow-up below restores that behavior
+  while correcting the separately identified downhill speed ceiling.
 - Bot arrivals, tactical holds and traffic yields now request active braking
   explicitly rather than depending on released-throttle drag. Stopping
   distance integrates that same brake law with signed speed and slope;
@@ -5519,3 +5517,85 @@ it. Automatic substitutions cannot escape that window. Existing manual
 presets and explicitly selected human vehicles remain user-owned. The
 existing offline tier/class proportions are unchanged and are not claimed
 to implement the complete retail 3/5/7 matchmaker.
+
+### September 21 retail-observation corrections
+
+The subsequent user tests supersede the earlier neutral-drive assumption.
+Released throttle once again applies the existing offline drivetrain brake,
+including its slope unloading near the static hold limit. Its 0.65 grip share
+is retained calibration, not a newly established retail coefficient. Explicit
+braking remains stronger and airborne motion remains inertial.
+
+The former 1.05 downhill envelope and separate artificial overspeed build/drag
+are replaced by force-integrated gravity and a **user-authorized approximate
+1.35 envelope**. Engine acceleration remains limited by the installed
+descriptor's rated speed; gravity can carry a grounded vehicle to 1.35 times
+the current directional limit. Forward, reverse and the active Siege-mode
+descriptor use their own limits. Thus a configured 45 km/h limit admits
+60.75 km/h downhill; no T-34-85 vehicle limit is hard-coded. An official
+[T71 article](https://worldoftanks.com/en/news/general-news/tank-month-t71/)
+documents downhill travel above its rated speed, but predates the 9.14 physics
+revision and supplies no universal multiplier. Neither that article nor the
+user's single-vehicle experiment proves that 1.35 is the retail server law.
+
+The increased moving-target speed also exposed an SPG proof prediction error.
+A new lead can shorten the ballistic flight and require fewer collision-query
+segments than the preceding proof. The prediction now uses observed time per
+segment and the new arc's actual workload. The existing four-query shared
+frame budget, 1.5-metre stale-target limit, frozen launch trajectory and random
+dispersion are unchanged. Eight-SPG tests retain their original 20-second
+completion bound at 20, 24, 30 and 60 FPS.
+
+#### Descriptor-owned track pivot
+
+Single-track low-speed steering is not inferred from a vehicle-name list.
+The 0.9.22 chassis reader exposes `rotationIsAroundCenter`, consumed by the
+reviewed #1513 sniper autorotation contract. Public
+[0.7.0 source](https://github.com/StranikS-Scan/WorldOfTanks-Decompiled/blob/0.7.0/source/res/scripts/common/items/vehicles.py)
+already contains that field; this establishes that the distinction predates
+9.22, not its first release date. The later
+[9.14 SPACE-plus-turn manoeuvre](https://worldoftanks.eu/en/news/general-news/version-914-sounds-physics/)
+describes a separate moving handbrake turn and is not evidence that this flag
+was introduced in 9.14.
+
+For a chassis whose flag is false, the hull centre now follows the stationary
+inner track when the ordinary differential motion would reverse that track.
+The pivot width comes from `physics.trackCenterOffset`; a missing width does
+not fall back to a guessed hull width. Vehicles whose flag is true retain
+centre rotation. Track animation, local movement and Bot movement share this
+geometry. Airborne yaw cannot create the new ground-driven translation.
+Collision sweeps cover the curved root path, including trees, catalog/native
+obstacles, vehicles and detached turrets. This does not claim to complete the
+separate moving handbrake-drift simulation.
+
+#### Stock server-reticle selection and authoritative feedback
+
+The server reticle predates 9.22: official release notes list it in
+[6.4](https://worldoftanks.com/en/content/docs/release_notes/update-6-4-list-of-changes/)
+and add the settings control in
+[7.4](https://worldoftanks.com/en/content/docs/release_notes/update-74-release-notes/).
+The existing stock `useServerAim` setting and persistence are retained. The
+release client's single-marker selection is respected: enabled selects the
+server result, disabled selects the stock local client marker.
+
+The previous local shot-vector echo no longer masquerades as server feedback.
+An ordered input freezes the native stabilized pose, turret/gun angles and
+dispersion. The authority worker calculates shot geometry using the installed
+descriptor and the reviewed `shot_geometry` contract, then returns an
+input-sequenced result through the existing server snapshot. Trigger-time
+geometry uses the same frozen input; a later replica pose cannot redirect an
+already admitted shot. Native gun laying and dispersion remain input evidence,
+not an invented worker-side aiming model. The marker receives shot velocity
+(unit direction times the frozen loaded shell speed), as the native contract
+requires.
+
+Round, authority epoch, input sequence and bounded age checks reject stale
+feedback. Missing feedback does not generate a local substitute server marker.
+Old inputs without the new checkpoint remain compatible but cannot publish
+server markers. Switching the display setting does not change reload, ammo,
+launch barriers or idempotent projectile admission. This makes the display
+reflect the authority's accepted input; it does not reduce network latency.
+
+These changes still require native Windows #1513 acceptance for vehicle feel,
+hydraulic poses and reticle presentation. Pure-data regressions and packaging
+checks do not substitute for that gameplay test.

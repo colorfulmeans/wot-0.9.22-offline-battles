@@ -18,6 +18,7 @@ from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import siege_mechanics
+from gui.mods.offline_lan_0922 import server_aim
 from gui.mods.offline_lan_0922 import spotting
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
 
@@ -456,6 +457,8 @@ def _valid_player_gun_checkpoint_contract(player):
     """Require one checkpoint for every admitted modern player input."""
     if not isinstance(player, dict):
         return False
+    if not _valid_player_gun_aim_contract(player):
+        return False
     input_seq = _exact_int(player.get('input_seq'))
     has_seq = 'gun_checkpoint_seq' in player
     has_checkpoint = 'gun_checkpoint' in player
@@ -472,6 +475,27 @@ def _valid_player_gun_checkpoint_contract(player):
         checkpoint_seq == input_seq and
         _canonical_human_gun_checkpoint(
             player.get('gun_checkpoint')) is not None)
+
+
+def _valid_player_gun_aim_contract(player):
+    """An optional native checkpoint and worker result share input identity."""
+    input_seq = _exact_int(player.get('input_seq'))
+    has_seq = 'gun_aim_checkpoint_seq' in player
+    has_checkpoint = 'gun_aim_checkpoint' in player
+    if has_seq != has_checkpoint:
+        return False
+    if has_checkpoint:
+        sequence = _exact_int(player.get('gun_aim_checkpoint_seq'))
+        if (input_seq is None or input_seq <= 0 or sequence != input_seq or
+                server_aim.canonical_checkpoint(
+                    player.get('gun_aim_checkpoint')) is None):
+            return False
+    if 'gun_marker' in player:
+        sample = server_aim.canonical_sample(player.get('gun_marker'))
+        if (sample is None or not has_checkpoint or input_seq is None or
+                sample['input_seq'] > input_seq):
+            return False
+    return True
 
 
 def _valid_player_equipment_contract(state, required=False):
@@ -2140,7 +2164,8 @@ class LANClient(object):
                    destructible_contacts=None,
                    siege_enabled=None,
                    pitch=None, roll=None,
-                   gun_checkpoint=None, up_cosine=None):
+                   gun_checkpoint=None, up_cosine=None,
+                   gun_aim_checkpoint=None):
         if not self.ready or self.phase != 'battle':
             return False
         if self._input_seq_round != self.round_id:
@@ -2254,6 +2279,13 @@ class LANClient(object):
                     'shell_change_pending' not in message):
                 return False
             message['gun_checkpoint'] = parsed_checkpoint
+        if gun_aim_checkpoint is not None:
+            parsed_aim = server_aim.canonical_checkpoint(gun_aim_checkpoint)
+            if (parsed_aim is None or parsed_checkpoint is None or
+                    not timeline_enabled or
+                    not all(key in message for key in ('x', 'y', 'z'))):
+                return False
+            message['gun_aim_checkpoint'] = parsed_aim
         if tank_pushes is not None:
             message['tank_pushes'] = tank_pushes
         if turret_pushes is not None:

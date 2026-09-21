@@ -87,6 +87,8 @@ class VehicleBrakingTests(unittest.TestCase):
     def test_braking_distance_keeps_reverse_slope_direction(self):
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
         params = dict(vehicle_physics._DEFAULTS)
+        # Isolate grade direction; both runs start inside their own speed cap.
+        params['speedBwd'] = params['speedFwd']
         distance = BotRuntime._traffic_stopping_distance
         forward_downhill = distance(8., params, .15)
         reverse_uphill = distance(-8., params, .15)

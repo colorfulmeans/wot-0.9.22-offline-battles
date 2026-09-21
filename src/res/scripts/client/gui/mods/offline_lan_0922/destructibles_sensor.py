@@ -3199,7 +3199,7 @@ def _tree_trig_interval_1513(cosine_factor, sine_factor, start, end):
 	return min(result), max(result)
 
 
-def _tree_rotation_interval_bbox_1513(bbox, half_angle):
+def _tree_rotation_interval_bbox_1513(bbox, half_angle, pivot_offset=0.0):
 	"""Enclose the native hull over one bounded yaw interval."""
 	minimum, maximum = bbox[:2]
 	half_angle = abs(float(half_angle))
@@ -3208,10 +3208,10 @@ def _tree_rotation_interval_bbox_1513(bbox, half_angle):
 	for local_x in (float(minimum[0]), float(maximum[0])):
 		for local_z in (float(minimum[2]), float(maximum[2])):
 			low, high = _tree_trig_interval_1513(
-				local_x, local_z, -half_angle, half_angle)
-			x_values.extend((low, high))
+				local_x - pivot_offset, local_z, -half_angle, half_angle)
+			x_values.extend((low + pivot_offset, high + pivot_offset))
 			low, high = _tree_trig_interval_1513(
-				local_z, -local_x, -half_angle, half_angle)
+				local_z, pivot_offset - local_x, -half_angle, half_angle)
 			z_values.extend((low, high))
 	return (
 		(min(x_values), float(minimum[1]), min(z_values)),
@@ -3230,7 +3230,7 @@ def _finite_tree_motion_value_1513(value):
 
 
 def _tree_pose_sweep_boxes_1513(
-		start_pos, start_yaw, end_pos, end_yaw, bbox):
+		start_pos, start_yaw, end_pos, end_yaw, bbox, pivot_offset=0.0):
 	"""Build bounded zonotope slices for one previous-to-current hull sweep.
 
 	Each slice analytically encloses every intermediate hull orientation, then
@@ -3238,9 +3238,14 @@ def _tree_pose_sweep_boxes_1513(
 	continuous swept-hull cover; no finite set of contact rays is used.
 	"""
 	import math
-	values = tuple(_finite_tree_motion_value_1513(value) for value in (
-		start_pos.x, start_pos.y, start_pos.z, start_yaw,
-		end_pos.x, end_pos.y, end_pos.z, end_yaw))
+	try:
+		start_xyz = (start_pos.x, start_pos.y, start_pos.z)
+		end_xyz = (end_pos.x, end_pos.y, end_pos.z)
+	except AttributeError:
+		start_xyz = tuple(start_pos[index] for index in range(3))
+		end_xyz = tuple(end_pos[index] for index in range(3))
+	values = tuple(_finite_tree_motion_value_1513(value) for value in
+		start_xyz + (start_yaw,) + end_xyz + (end_yaw,))
 	if any(value is None for value in values):
 		return None
 	(sx, sy, sz, start_yaw, ex, ey, ez, end_yaw) = values
@@ -3279,7 +3284,12 @@ def _tree_pose_sweep_boxes_1513(
 		yaw1 = start_yaw + yaw_delta * t1
 		mid_yaw = (yaw0 + yaw1) * 0.5
 		interval_bbox = _tree_rotation_interval_bbox_1513(
-			(minimum, maximum, None), (yaw1 - yaw0) * 0.5)
+			(minimum, maximum, None), (yaw1 - yaw0) * 0.5, pivot_offset)
+		if pivot_offset:
+			from gui.mods.offline_lan_0922 import vehicle_physics
+			p0 = vehicle_physics.track_pivot_position(
+				(sx, sy, sz), start_yaw, mid_yaw, pivot_offset)
+			p1 = p0
 		interval_minimum, interval_maximum = interval_bbox[:2]
 		local_center_x = (
 			interval_minimum[0] + interval_maximum[0]) * 0.5
@@ -5863,7 +5873,7 @@ def prewarm_tree_registry(spaceID, pos, yaw, td=None, now=None,
 @observed('destructible.tree_motion')
 def _tree_motion_resolution_1513(
 		spaceID, start_pos, start_yaw, end_pos, end_yaw, speed, td, now,
-		dt, requested_chunks=None):
+		dt, requested_chunks=None, geometry_positions=None):
 	"""Return registry-complete tree candidates for one trusted pose sweep."""
 	speed = _finite_tree_motion_value_1513(speed)
 	dt = _finite_tree_motion_value_1513(dt)
@@ -5872,8 +5882,17 @@ def _tree_motion_resolution_1513(
 	bbox = _vehicle_hull_bbox(td)
 	if bbox is None:
 		return 'hard', {}, set(), {}, set()
+	from gui.mods.offline_lan_0922 import vehicle_physics
+	# Keep Python geometry doubles separate from float32 native query vectors.
+	if geometry_positions is None:
+		geometry_positions = ((start_pos.x, start_pos.y, start_pos.z),
+			(end_pos.x, end_pos.y, end_pos.z))
+	geometry_start, geometry_end = geometry_positions
+	pivot_offset = vehicle_physics.track_pivot_from_poses(
+		vehicle_physics.track_pivot_descriptor_params(td),
+		geometry_start, start_yaw, geometry_end, end_yaw)
 	sweep_boxes = _tree_pose_sweep_boxes_1513(
-		start_pos, start_yaw, end_pos, end_yaw, bbox)
+		geometry_start, start_yaw, geometry_end, end_yaw, bbox, pivot_offset)
 	if not sweep_boxes:
 		return 'hard', {}, set(), {}, set()
 	required_status, required_chunks = (
@@ -5943,12 +5962,13 @@ def _tree_motion_resolution_1513(
 
 def _tree_motion_proposal(
 		spaceID, start_pos, start_yaw, end_pos, end_yaw, speed, td, now,
-		dt=0.04):
+		dt=0.04, geometry_positions=None):
 	"""Return a mutation-free exact tree token for a continuous hull sweep."""
 	_diagnostic_flush_1513(now)
 	status, candidates, active, unused_chunk_status, isolated_hits = (
 		_tree_motion_resolution_1513(
-		spaceID, start_pos, start_yaw, end_pos, end_yaw, speed, td, now, dt)
+		spaceID, start_pos, start_yaw, end_pos, end_yaw, speed, td, now, dt,
+		geometry_positions=geometry_positions)
 	)
 	# A position-proven isolated identity is a terminal conflict for this exact
 	# contact even when an unrelated intersected chunk is still streaming.

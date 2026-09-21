@@ -80,10 +80,12 @@ COH_DECAY_BOUND = 0.5
 SLOPE_COH_DECAY = 0.25
 SLOPE_COH_DECAY_Y = 0.72
 # ---- offline-model constants (no exact native transition curve recoverable) ----
-# Released drive input uses descriptor rolling resistance and slope gravity.
-# The former extra 65% track brake had no client-derived coefficient and made
-# neutral almost as strong as an explicit brake. Native engine-drag/gearbox
-# details remain unrepresented; do not replace them with another brake share.
+# User retail observation confirms that releasing drive applies drivetrain
+# braking. Restore the existing offline calibration, not a claimed native
+# coefficient: the exact W-release curve still lives in unavailable C++ code.
+# This partial track-grip share fades near the static perch limit so a steep
+# descent remains gravity-driven. Explicit track locking retains full grip.
+COAST_BRAKE_SHARE = 0.65
 # Steering adds track-differential drag to the rolling resistance.
 STEER_RESIST_MULT = 1.6
 # Engine force F = P / max(|v|, ENGINE_MIN_V), capped by track cohesion.
@@ -179,16 +181,10 @@ SLIDE_HOLD_TAN = 0.50   # 26.6 deg static perch; a powered hull can briefly clim
 # not climb - lower than the static hold so it does not hang mid-slope; it bleeds
 # down to the foot at a controlled speed. Lower = slides faster/further.
 SLIDE_KINETIC = 0.45
-# Gravity overspeed: a steep descent / fall may carry the hull up to this
-# multiple of its spec top speed, temporarily; OVERSPEED_DAMP (m/s^2) bleeds
-# the surplus back to spec once the ground flattens.
-OVERSPEED_MAX_FACTOR = 1.05   # gravity overspeed on a descent caps at 105% of spec
-OVERSPEED_DAMP = 2.0
-# Descent overspeed BUILDS UP gradually (m/s of surplus per sec, scaled by sin(grade))
-# instead of snapping to the cap - the longer/steeper the descent, the more speed.
-# ISOLATED to the overspeed clamp (>spec, descending only): does NOT touch the climb
-# limit, slide-back, momentum-kill or flat driving. Higher = builds faster.
-OVERSPEED_BUILD = 0.20
+# User-authorized approximation from a reported 45 km/h tank reaching slightly
+# above 60 km/h downhill. This is not a recovered universal retail constant.
+# Gravity builds the surplus; this envelope only bounds its final speed.
+OVERSPEED_MAX_FACTOR = 1.35
 
 
 # ---- Live tuning: config.json "physics_tuning" can override these WITHOUT a
@@ -205,13 +201,12 @@ _TUNABLE = {
 	'traverse_accel_time': 'ANG_ACCELERATION_TIME',
 	'traverse_speed_cost': 'SPEED_AFFECT_ROT_DECREASE',
 	'steer_resist_mult':   'STEER_RESIST_MULT',
+	'coast_brake_share':   'COAST_BRAKE_SHARE',
 	'slide_max':           'SLIDE_MAX',
 	'slide_drag':          'SLIDE_DRAG',
 	'slide_hold_tan':      'SLIDE_HOLD_TAN',
 	'slide_kinetic':       'SLIDE_KINETIC',
 	'overspeed_max_factor': 'OVERSPEED_MAX_FACTOR',
-	'overspeed_damp':      'OVERSPEED_DAMP',
-	'overspeed_build':     'OVERSPEED_BUILD',
 	'slope_coh_decay':     'SLOPE_COH_DECAY',
 	'slope_coh_decay_y':   'SLOPE_COH_DECAY_Y',
 	'coh_decay_bound':     'COH_DECAY_BOUND',
@@ -363,6 +358,7 @@ _DEFAULTS = {
 	'specificFriction': 0.6867,
 	'brakeDecel': COHESION * GRAVITY,
 	'trackCenter': 1.5,
+	'rotationIsAroundCenter': True,
 	'minPlaneNormalY': math.cos(math.radians(25.0)),
 	'nativePowerRatio': 1.0,
 }
@@ -491,6 +487,14 @@ def derive_params(td, factors=None):
 	try:
 		ch = getattr(td, 'chassis', None)
 		if ch is not None:
+			p['rotationIsAroundCenter'] = bool(
+				ch.get('rotationIsAroundCenter', True) if isinstance(ch, dict)
+				else getattr(ch, 'rotationIsAroundCenter', True))
+			if not p['rotationIsAroundCenter']:
+				pivot = track_pivot_descriptor_params(td)
+				if pivot is None:
+					raise RuntimeError('#1513 track pivot geometry is unavailable')
+				p['trackCenter'] = pivot['trackCenter']
 			raw_value = (ch.get('rotationSpeed') if isinstance(ch, dict)
 			             else getattr(ch, 'rotationSpeed', None))
 			if raw_value is None:
@@ -2136,14 +2140,16 @@ def brake_force(p, active, terrainIdx=0, slope_pitch=0.0):
 	(cos theta) while cohesion decays on steep ground. So a hull braking on a
 	slope past the grip limit CANNOT hold and slides - the same ~50 deg limit
 	as the lateral fall-line slip, kept consistent on purpose.
-	active=True: opposite-throttle / hold lock-up. active=False: rolling drag;
-	released drive input must not apply an implicit share of the track brake.'''
+	active=True: opposite-throttle / hold lock-up. active=False: the established
+	flat-ground drivetrain coast drag; longitudinal_step relieves that drag only
+	near the static perch tangent, where gravity owns the descent.'''
 	ny = math.cos(slope_pitch)
 	grip_decel = slope_cohesion(ny) * GRAVITY * (ny if ny > 0.1 else 0.1)
 	brake = p['brakeDecel'] if p['brakeDecel'] < grip_decel else grip_decel
 	if active:
 		return p['mass'] * brake
-	return rolling_resist_force(p, terrainIdx, False)
+	return (rolling_resist_force(p, terrainIdx, False) +
+		p['mass'] * COAST_BRAKE_SHARE * brake)
 
 
 def contact_push_decel(p, rolling, terrainIdx=0, normal_y=1.0):
@@ -2227,6 +2233,13 @@ def _grip_decel(p, slope_pitch):
 	return slope_cohesion(ny) * GRAVITY * (ny if ny > 0.1 else 0.1)
 
 
+def _cap_grounded_speed(p, speed):
+	'''Apply the configured directional downhill envelope after forces.'''
+	limit = p['speedFwd'] if speed >= 0.0 else p['speedBwd']
+	maximum = limit * OVERSPEED_MAX_FACTOR
+	return max(-maximum, min(maximum, speed))
+
+
 @observed('physics.longitudinal')
 def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
                       airborne=False, terrainIdx=0, handbrake=False):
@@ -2249,12 +2262,16 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 		# other brake here, so a cliff still wins - it is a parking brake, not glue.
 		_hb_grip = _grip_decel(p, slope_pitch)
 		if abs(v) < 0.05:
-			return 0.0 if abs(grav_a) <= _hb_grip else v + (grav_a - (_hb_grip if grav_a > 0.0 else -_hb_grip)) * dt
+			if abs(grav_a) <= _hb_grip:
+				return 0.0
+			_hb_nv = v + (grav_a -
+				(_hb_grip if grav_a > 0.0 else -_hb_grip)) * dt
+			return _cap_grounded_speed(p, _hb_nv)
 		_hb_a = grav_a - (_hb_grip if v > 0.0 else -_hb_grip)
 		_hb_nv = v + _hb_a * dt
 		if (v > 0.0) != (_hb_nv > 0.0):
 			return 0.0            # braked through zero: stop, do not crawl backwards
-		return _hb_nv
+		return _cap_grounded_speed(p, _hb_nv)
 	grip = _grip_decel(p, slope_pitch)            # max track hold, m/s^2
 	rr = rolling_resist_force(p, terrainIdx, steering) / p['mass']
 
@@ -2307,9 +2324,17 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 				return 0.0                        # tracks hold - no creep on ordinary hills
 			accel = grav_a - (_hold if grav_a > 0.0 else -_hold)   # slides off a too-steep parked slope
 		else:
-			# Coasting tracks retain rolling drag, including steering drag,
-			# but no active brake. Gravity remains independent of drive input.
-			accel = grav_a - (rr if v > 0.0 else -rr)
+			# Restore the established released-drive braking calibration.
+			# Its grip share fades only near the static perch limit; a steep
+			# downhill remains free to gain speed under gravity. Neither this
+			# drag nor its relief depends on crossing the powered speed limit.
+			motion_sign = 1.0 if v > 0.0 else -1.0
+			downhill_tangent = max(0.0, math.tan(slope_pitch) * motion_sign)
+			fade_start = 0.8 * SLIDE_HOLD_TAN
+			fade = min(1.0, max(0.0, (downhill_tangent - fade_start) /
+			                    (SLIDE_HOLD_TAN - fade_start)))
+			resist = rr + COAST_BRAKE_SHARE * (1.0 - fade) * grip
+			accel = grav_a - (resist if v > 0.0 else -resist)
 
 	# TRACK-SLIP DRAG: rolling UP a grade steeper than the tracks can pull, they
 	# slip and momentum bleeds far faster than gravity alone would take it.
@@ -2332,45 +2357,19 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 	if throttle == 0 and abs(grav_a) <= grip and v != 0.0 and (v > 0.0) != (nv > 0.0):
 		nv = 0.0
 
-	# Speed limit with GRAVITY OVERSPEED: the engine can never push past the
-	# spec limit, but gravity (steep descent / a fall's downhill momentum) may
-	# carry the hull FASTER, temporarily, up to OVERSPEED_MAX_FACTOR x the limit.
-	# Above the limit the engine stops contributing and an overspeed drag bleeds
-	# the excess back to spec on flatter ground - the WoT 'downhill overspeed'
-	# feel. Airborne already returned early, so a fall keeps its momentum and
-	# this bleed only re-engages once the hull is back on the ground.
-	_dir = 1.0 if nv >= 0.0 else -1.0
-	_lim = p['speedFwd'] if nv >= 0.0 else p['speedBwd']
-	if abs(nv) > _lim:
-		if throttle == 0.0:
-			# Crossing the powered speed limit must not engage a neutral
-			# brake either. Keep the force-integrated coast result within the
-			# existing overspeed envelope; its retail calibration is separate.
-			return _dir * min(abs(nv), _lim * OVERSPEED_MAX_FACTOR)
-		# The overspeed drag ALWAYS bleeds the surplus back toward spec (rolling +
-		# OVERSPEED_DAMP), so leaving a descent onto flat/uphill ground eases down
-		# instead of a 1-tick snap to the limit. Gravity down THIS way is what lets
-		# the surplus PERSIST up to the cap; without it the accel step adds no new
-		# surplus, so the bleed just decays what is there, smoothly.
-		_cap = _lim * (OVERSPEED_MAX_FACTOR - 1.0)
-		# Build the surplus from the PREVIOUS speed at a slope-scaled rate so a descent
-		# gains speed gradually toward the cap (not a 1-tick jump); bleed it off once the
-		# ground stops helping.
-		_prev_ex = abs(v) - _lim
-		if _prev_ex < 0.0:
-			_prev_ex = 0.0
-		# Retain the existing powered overspeed approximation separately from
-		# neutral rolling. Opposite throttle does not sustain a downhill surplus.
-		if throttle * _dir > 0.0 and (grav_a * _dir) > 0.05:
-			_excess = _prev_ex + OVERSPEED_BUILD * math.sin(abs(slope_pitch)) * dt
-		else:
-			_excess = _prev_ex - (rr + OVERSPEED_DAMP) * dt
-		if _excess < 0.0:
-			_excess = 0.0
-		if _excess > _cap:
-			_excess = _cap
-		nv = _dir * (_lim + _excess)
-	return nv
+	# The descriptor speed limit governs powered acceleration, not gravity or
+	# momentum. Limit only the engine's contribution after integrating all other
+	# forces. This keeps ordinary flat-road drive at its installed limit without
+	# deleting downhill acceleration or snapping an overspeed hull back to it.
+	# No native high-speed drag curve is available; the user-authorized cap
+	# below is an offline approximation, not a recovered retail terminal law.
+	if throttle != 0.0 and _ef * throttle > 0.0:
+		drive_sign = 1.0 if throttle > 0.0 else -1.0
+		drive_limit = p['speedFwd'] if throttle > 0.0 else p['speedBwd']
+		passive_speed = v + (accel - _ef) * dt
+		powered_room = max(0.0, drive_limit - drive_sign * passive_speed)
+		nv = passive_speed + drive_sign * min(abs(_ef) * dt, powered_room)
+	return _cap_grounded_speed(p, nv)
 
 
 @observed('physics.traverse')
@@ -2404,10 +2403,105 @@ def _traverse_step(p, omega, steer_dir, v, dt, terrainIdx=0, drive_intent=0.0):
 	return omega
 
 
-def track_scroll(p, v, omega):
+def track_pivot_descriptor_params(td):
+	'''Read only the pinned chassis pivot flag and descriptor half track gauge.
+
+	A partial geometry adapter has no evidence for a track-centred arc. Never
+	invent the pivot width from its hull box or unrelated engine defaults.
+	'''
+	try:
+		chassis = td.get('chassis') if isinstance(td, dict) else td.chassis
+		physics = td.get('physics') if isinstance(td, dict) else td.physics
+		around = (chassis.get('rotationIsAroundCenter')
+			if isinstance(chassis, dict) else chassis.rotationIsAroundCenter)
+		if not isinstance(around, bool):
+			return None
+		gauge = abs(float(physics['trackCenterOffset']))
+		if not 0.0 < gauge <= 100.0:
+			return None
+		return {'rotationIsAroundCenter': around, 'trackCenter': gauge}
+	except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+		return None
+
+
+def track_pivot_offset(p, v, omega, airborne=False, drive_intent=0.0):
+	'''Signed turn-axis offset required when a chassis cannot counter-rotate.
+
+	The reader's trackCenterOffset is the actual half track gauge. Below the
+	inner-belt reversal speed, hold that belt and move the hull centre around
+	it; existing road travel supplies the remaining part of the turning arc.
+	Airborne yaw is inertial and cannot move the centre around a track.
+	'''
+	if (airborne or p.get('rotationIsAroundCenter', True) or
+			abs(float(omega)) <= 1.0e-9):
+		return 0.0
+	radius = max(0.0, float(p['trackCenter']) - abs(float(v) / float(omega)))
+	direction = -1.0 if (float(v) < -1.0e-9 or
+		(abs(float(v)) <= 1.0e-9 and drive_intent < 0.0)) else 1.0
+	return radius * direction * (1.0 if omega > 0.0 else -1.0)
+
+
+def track_pivot_position(position, yaw, end_yaw, offset):
+	'''Preserve the chosen stationary track's world point over the exact arc.'''
+	return (float(position[0]) + float(offset) * (math.cos(yaw) - math.cos(end_yaw)),
+		float(position[1]),
+		float(position[2]) + float(offset) * (math.sin(end_yaw) - math.sin(yaw)))
+
+
+def track_pivot_from_poses(p, start, start_yaw, end, end_yaw):
+	'''Recover a descriptor-owned track arc from its exact endpoint poses.
+
+	Geometry and contact receipt consumers reconstruct the same trajectory
+	without a second wire representation. Other translating/rotating motions
+	keep their existing linear centre path.
+	'''
+	if p is None or p.get('rotationIsAroundCenter', True):
+		return 0.0
+	x = math.cos(start_yaw) - math.cos(end_yaw)
+	z = math.sin(end_yaw) - math.sin(start_yaw)
+	norm = x*x + z*z
+	if norm <= 1.0e-18:
+		return 0.0
+	offset = ((end[0]-start[0])*x + (end[2]-start[2])*z) / norm
+	if abs(offset) > p['trackCenter'] + 1.0e-7:
+		return 0.0
+	if (abs(end[0]-start[0]-offset*x) > 1.0e-7 or
+			abs(end[2]-start[2]-offset*z) > 1.0e-7 or
+			abs(end[1]-start[1]) > 1.0e-7):
+		return 0.0
+	return offset
+
+
+def track_pivot_sweep_bounds(position, yaw, end_yaw, offset, half_width, half_length):
+	'''Exact world X/Z bounds for a chassis rectangle over its track arc.'''
+	delta = (end_yaw-yaw+math.pi) % (2.0*math.pi)-math.pi
+	lo, hi = sorted((yaw, yaw+delta))
+	pivot_x = position[0] + offset*math.cos(yaw)
+	pivot_z = position[2] - offset*math.sin(yaw)
+	xs, zs = [], []
+	for x in (-half_width, half_width):
+		for z in (-half_length, half_length):
+			for cosine, sine, origin, values in (
+					(x-offset, z, pivot_x, xs),
+					(z, offset-x, pivot_z, zs)):
+				angles = [lo, hi]
+				stationary = math.atan2(sine, cosine)
+				first = int(math.ceil((lo-stationary)/math.pi))
+				last = int(math.floor((hi-stationary)/math.pi))
+				angles.extend(stationary+index*math.pi
+					for index in range(first, last+1))
+				values.extend(origin+cosine*math.cos(angle)+sine*math.sin(angle)
+					for angle in angles)
+	return min(xs), min(zs), max(xs), max(zs)
+
+
+def track_scroll(p, v, omega, airborne=False, drive_intent=0.0):
 	'''Left/right belt speeds, clamped strictly below maxMovement.
 	Positive hull yaw turns toward local +X: the left side advances and the
 	right side retreats. Use the actual yaw rate for forward/reverse travel.'''
+	# The same geometric centre advance drives both the body and its belts.
+	# Never display a stationary belt while leaving the hull centre fixed.
+	v += track_pivot_offset(p, v, omega, airborne, drive_intent) * omega
 	tls = v + omega * p['trackCenter']
 	trs = v - omega * p['trackCenter']
 	cap = p['speedFwd'] * SCROLL_CAP
