@@ -481,9 +481,9 @@ class TerrainGrid(object):
 	def set_static_hulls(self, hulls):
 		"""Publish the destroyed hulls that now occupy baked navigation cells.
 
-		A wreck is exact new static geometry, not traffic: it never moves
-		again, so no plan through it can succeed and no amount of waiting
-		clears it. Marking the graph edges it occupies routes later searches
+		A wreck is persistent geometry, not ordinary moving traffic. Its
+		published pose can change when another hull pushes it. Marking the
+		graph edges it currently occupies routes later searches
 		around it, refuses the direct shortcut, and drops the cached paths that
 		used to run through it. Only the cells the hull box really overlaps are
 		marked, so a wide road keeps every column the wreck does not occupy.
@@ -726,8 +726,17 @@ class TerrainGrid(object):
 		if self.prebaked:
 			if not self._baked_corridor(start, end)[0]:
 				return False
-			return all(self._native_edge_clear(*edge)
-				for edge in self._edge_keys_for_segment(start, end))
+			edges = self._edge_keys_for_segment(start, end)
+			if not edges and self.cell_for(start) in self._native_review_cells:
+				# A short escape can stay inside one four-metre cell. There is
+				# then no graph edge to recheck, but the contact already disproved
+				# its baked free-space assumption. Prove this actual sub-cell ray
+				# instead of treating an empty edge list as a clear wall crossing.
+				try:
+					return not self.obstacle_probe(start, end, 2.15)
+				except Exception:
+					return False
+			return all(self._native_edge_clear(*edge) for edge in edges)
 		start_key = self._point_key(start)
 		end_key = self._point_key(end)
 		key = (start_key, end_key)
@@ -1009,11 +1018,14 @@ class TerrainGrid(object):
 		offsets = (0.0, side * 0.45, -side * 0.45,
 		           side * 0.85, -side * 0.85,
 		           side * 1.30, -side * 1.30,
-		           side * 1.75, -side * 1.75)
+		           side * 1.75, -side * 1.75,
+		           side * 2.35, -side * 2.35, math.pi)
 		distances = (self.cell_size * 0.78, self.cell_size * 0.52)
 		best = None
 		for distance in distances:
 			for offset in offsets:
+				if abs(offset) > 1.75 and best is not None and not best[0]:
+					continue
 				if abs(offset) < max(0.0, float(minimum_offset)):
 					continue
 				yaw = desired_yaw + offset
@@ -1033,10 +1045,14 @@ class TerrainGrid(object):
 				cell = self.cell_for(candidate)
 				score = (_distance_2d(candidate, goal) + abs(offset) * 3.5 +
 					         self._penalty(cell, avoid_points, False) * 2.0)
-				value = (score, abs(offset), candidate)
-				if best is None or value[:2] < best[:2]:
+				# Airfield report poses have no forward/side exit but do have a
+				# proved rear edge. A pending planner deliberately suppresses the
+				# driver's recovery, so omitting that edge means an endless hold.
+				# Use it only when the complete original forward fan is exhausted.
+				value = (abs(offset) > 1.75, score, abs(offset), candidate)
+				if best is None or value[:3] < best[:3]:
 					best = value
-		return best[2] if best is not None else None
+		return best[3] if best is not None else None
 
 	def plan(self, start, goal, avoid_points=None, max_expansions=1600, now=0.0,
 			prefer_clearance=True, edge_penalties=None,
@@ -1720,6 +1736,18 @@ class TerrainNavigator(object):
 		state.pop('hard_contact_episode', None)
 		return changed
 
+	def report_blocked_plan(self, current, target):
+		"""Review static geometry rejected before a hull can attempt motion.
+
+		A driver's forward fan may reject every native corridor and issue zero
+		throttle. No realised contact will follow, so the old contact-only hook
+		never invalidated the baked path. Review the actual static geometry,
+		without attributing a lookahead hit to the hull's first route edge.
+		"""
+		if target is None:
+			return False
+		return self.grid.review_native_corridor(current, target)
+
 	def report_hard_contact(self, bot_id, current, target,
 			realised_yaw, now):
 		"""Report a physical blocker against stable navigation intent.
@@ -2385,7 +2413,14 @@ class TerrainNavigator(object):
 		active_key = state.get('path_key')
 		if active_key is not None and active_key != key:
 			active_path = self.paths.get(active_key)
+			retired_by_hull = bool(active_path and
+				self.path_hull_revisions.get(active_key) !=
+				self.grid.static_hull_revision and
+				self.grid.path_crosses_static_hull(active_path))
 			if (active_path and
+					not retired_by_hull and
+					not self.grid.path_has_edge_penalty(active_path,
+						self._active_planning_edge_penalties(bot_id, now)) and
 					not self.grid.path_has_penalty(active_path, now)):
 				# A join/recovery/continuation path starts at this hull's real
 				# position. Follow it to completion instead of replacing it with

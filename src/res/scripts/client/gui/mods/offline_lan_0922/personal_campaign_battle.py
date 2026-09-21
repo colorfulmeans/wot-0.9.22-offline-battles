@@ -8,6 +8,8 @@ must never silently turn a harder mission into an easier one.
 
 from __future__ import division
 
+import base64
+
 from gui.mods.offline_lan_0922 import mission_events
 
 _CLASSES = frozenset(('lightTank', 'heavyTank', 'mediumTank', 'AT-SPG', 'SPG'))
@@ -119,6 +121,26 @@ class _Facts(object):
             self.descriptions[name] = description
         return self.descriptions[name]
 
+    def installed_devices(self):
+        """Read the loadout frozen at battle start, never today's garage."""
+        encoded = self.receipt.get('vehicle_compact_descr')
+        if not encoded or self.vehicles_module is None:
+            return None
+        try:
+            descriptor = self.vehicles_module.VehicleDescr(
+                compactDescr=base64.b64decode(encoded))
+            if descriptor.type.name != self.receipt.get('vehicle'):
+                return None
+            names = set(device.name for device in descriptor.optionalDevices
+                        if device is not None)
+        except (AttributeError, TypeError, ValueError, KeyError):
+            return None
+        # The #1513 improved optics is the bond version of coated optics.
+        # A directive is not an installed device and must not satisfy this.
+        if 'deluxCoatedOptics' in names:
+            names.add('coatedOptics')
+        return names
+
     def result(self, key, row=None):
         source = self.receipt if row is None else row
         if key in _STAT_KEYS:
@@ -133,7 +155,7 @@ class _Facts(object):
         if row is not None:
             return None
         if key in ('innerModuleDestrCount', 'innerModuleCritCount',
-                   'killsAssistedRadio'):
+                   'killsAssistedRadio', 'spottedBeforeWeBecameSpotted'):
             if 'interactions' not in source:
                 return None
             count = 0
@@ -153,6 +175,12 @@ class _Facts(object):
                     history = _mission_history(interaction)
                     if history is None:
                         return None
+                    if key == 'spottedBeforeWeBecameSpotted':
+                        if interaction.get('mission_events_version', 1) < 3:
+                            return None
+                        count += int(any(event[0] == 'spot' and event[2]
+                                         for event in history))
+                        continue
                     counter = (mission_events.internal_critical_count
                                if key == 'innerModuleCritCount' else
                                mission_events.internal_destroyed_count)
@@ -249,10 +277,13 @@ def _vehicle_events(name, node, facts):
     if name in ('vehicleDamage', 'vehicleStun'):
         allowed = allowed | set(('eventCount',))
     if name == 'vehicleKills':
-        allowed = allowed | set(('distance', 'rammingInfo'))
+        allowed = allowed | set(('rammingInfo',))
     if name in ('vehicleDamage', 'vehicleKills'):
         allowed = allowed | set(('limittedTime', 'enemyImmobilized',
-                                 'attackReason', 'lvlDiff'))
+                                 'attackReason', 'lvlDiff', 'distance',
+                                 'whileInvisible'))
+    if name == 'vehicleDamage':
+        allowed = allowed | set(('fireStarted',))
     unexpected = _names(node) - allowed
     if unexpected:
         return _unknown(name + ' modifier: ' + ','.join(sorted(unexpected)))
@@ -263,6 +294,13 @@ def _vehicle_events(name, node, facts):
     if (event_count is not None and
             (_names(event_count) or event_count.get('value', ''))):
         return _unknown(name + ' eventCount modifier')
+    invisible = _child(node, 'whileInvisible')
+    fire_started = _child(node, 'fireStarted')
+    for flag_name, flag in (('whileInvisible', invisible), ('fireStarted', fire_started)):
+        if flag is not None and (_names(flag) or flag.get('value', '')):
+            return _unknown(name + ' ' + flag_name + ' modifier')
+    if fire_started is not None and event_count is None:
+        return _unknown(name + ' fireStarted requires eventCount')
     diversity = _child(node, 'classesDiversity')
     ram_info = _child(node, 'rammingInfo')
     ram_flags = set(_value(node, 'rammingInfo').split())
@@ -286,7 +324,7 @@ def _vehicle_events(name, node, facts):
     ram_history = bool(ram_flags or
                        name == 'vehicleDamage' and attack_reason == 2)
     filtered_history = bool(_names(node) & set((
-        'limittedTime', 'enemyImmobilized', 'distance'))) or ram_history
+        'limittedTime', 'enemyImmobilized', 'whileInvisible', 'fireStarted'))) or ram_history
     try:
         time_limit = (int(_value(node, 'limittedTime')) * 1000
                       if _child(node, 'limittedTime') is not None else None)
@@ -296,8 +334,13 @@ def _vehicle_events(name, node, facts):
             raise ValueError('negative event deadline')
     except (TypeError, ValueError):
         return _unknown(name + ' limittedTime or distance boundary')
-    if ram_history and distance_limit is not None:
-        return _unknown('interaction: ram distance')
+    if distance_limit is not None:
+        filtered_history = True
+    if ram_history and (distance_limit is not None or invisible is not None or fire_started is not None):
+        return _unknown('interaction: ram distance or visibility')
+    if fire_started is not None and (_names(node) & set((
+            'limittedTime', 'enemyImmobilized', 'whileInvisible', 'attackReason', 'distance'))):
+        return _unknown('interaction: fireStarted filter')
     immobilized = _child(node, 'enemyImmobilized')
     if immobilized is not None and (_names(immobilized) or immobilized.get('value', '')):
         return _unknown(name + ' enemyImmobilized modifier')
@@ -313,7 +356,7 @@ def _vehicle_events(name, node, facts):
         if value is None:
             return _unknown('interaction: ' + field +
                             (' (eventCount)' if event_count is not None else ''))
-        if value <= 0:
+        if value <= 0 and fire_started is None:
             continue
         row = facts.rows.get((event.get('target_kind'), event.get('target_id')))
         if row is None:
@@ -337,15 +380,19 @@ def _vehicle_events(name, node, facts):
             tags = set()
         if filtered_history:
             history = _mission_history(event)
-            if (history is None or ram_history and
-                    event.get('mission_events_version', 1) < 2):
+            version = event.get('mission_events_version', 1)
+            if (history is None or ram_history and version < 2 or
+                    (invisible is not None or fire_started is not None or
+                     name == 'vehicleDamage' and distance_limit is not None) and version < 3):
                 return _unknown('interaction: complete mission event history (' +
                                 ','.join(sorted(_names(node) & set((
                                     'limittedTime', 'enemyImmobilized', 'distance',
-                                    'attackReason', 'rammingInfo')))) + ')')
+                                    'attackReason', 'rammingInfo',
+                                    'whileInvisible', 'fireStarted')))) + ')')
             value = 0
             for occurrence in history:
                 if occurrence[0] != ('ram' if ram_history else
+                                    'fire' if fire_started is not None else
                                     'damage' if name == 'vehicleDamage' else 'kill'):
                     continue
                 if time_limit is not None and occurrence[1] > time_limit:
@@ -360,10 +407,19 @@ def _vehicle_events(name, node, facts):
                     if ('dealtMoreDamage' in ram_flags and
                             occurrence[2] <= occurrence[3]):
                         continue
+                if invisible is not None and not occurrence[5]:
+                    continue
                 if distance_limit is not None:
                     distance = occurrence[4]
                     if distance is None:
-                        return _unknown('interaction: kill distance')
+                        return _unknown('interaction: event distance')
+                    # HT5's zero is the observer's view range, not zero metres.
+                    if distance_limit == 0:
+                        if (name != 'vehicleDamage' or len(occurrence) < 7 or
+                                occurrence[6] is None):
+                            return _unknown('interaction: view range at damage')
+                        if distance > occurrence[6]:
+                            continue
                     # Signed XML ranges use an inclusive lower bound and an
                     # exclusive negative upper bound (-101 covers 100 m).
                     if (distance_limit < 0 and distance >= -distance_limit or
@@ -477,17 +533,43 @@ def _condition(name, node, facts):
     return _unknown('condition: ' + name)
 
 
+def _prebattle(name, node, facts):
+    if name in ('preBattle', 'vehicle', 'and', 'or'):
+        items = [(key, item) for key, item in node.get('children', ())
+                 if key not in _DECORATION]
+        if name == 'preBattle' and any(key != 'vehicle' for key, unused in items):
+            return _unknown('preBattle restriction')
+        if not items:
+            return _unknown('empty preBattle condition')
+        return _combine((_prebattle(key, item, facts) for key, item in items),
+                        disjunction=name == 'or')
+    if name == 'installedModules':
+        if _names(node) - (_DECORATION | set(('optionalDevice',))):
+            return _unknown('installedModules restriction')
+        devices = _children(node, 'optionalDevice')
+        if not devices or any(_names(device) or not device.get('value')
+                              for device in devices):
+            return _unknown('installedModules optionalDevice')
+        mounted = facts.installed_devices()
+        if mounted is None:
+            return _unknown('battle-start mounted devices')
+        return _known(all(device['value'] in mounted for device in devices))
+    return _unknown('preBattle condition: ' + name)
+
+
 def _postbattle(definition, facts):
     if _value(definition, 'enabled', 'true').lower() == 'false':
         return _known(False)
     conditions = _child(definition, 'conditions')
     if conditions is None:
         return _unknown('mission conditions')
-    # The regular main/add definitions have postBattle only. Never omit a
-    # newly encountered preBattle/common restriction from an installed file.
-    if _names(conditions) != set(('postBattle',)):
+    groups = _names(conditions)
+    if 'postBattle' not in groups or groups - set(('preBattle', 'postBattle')):
         return _unknown('mission condition groups')
-    return _condition('postBattle', _child(conditions, 'postBattle'), facts)
+    checks = [_condition('postBattle', _child(conditions, 'postBattle'), facts)]
+    if 'preBattle' in groups:
+        checks.append(_prebattle('preBattle', _child(conditions, 'preBattle'), facts))
+    return _combine(checks)
 
 
 def _eligible(metadata, completed, facts):

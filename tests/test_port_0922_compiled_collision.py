@@ -6,7 +6,7 @@ import unittest
 from unittest import mock
 
 from test_port_0922_destructibles import (
-    ROOT, _Vector as V, destructibles_sensor as sensor)
+    ROOT, _Vector as V, _ItemMatrix, destructibles_sensor as sensor)
 from gui.mods.offline_lan_0922 import vehicle_physics
 
 
@@ -475,6 +475,77 @@ class NativeFenceFollowupTests(unittest.TestCase):
                         (wall, (material, 0, key[2], key[3]))])[0])
                 self.broken.clear()
                 self.assertIs(point, cast([(point, key)])[0])
+
+    def test_westfield_remapped_stone_fence_bevels_clear_only_in_broken_bounds(self):
+        rows = json.loads((ROOT / 'tests/fixtures/westfield_114133_contacts.json').read_text())
+        self.assertEqual(11, len(rows))
+        resolved = 0
+        for row in rows:
+            with self.subTest(time=row['log_time']):
+                self.install_report(row, '23_westfeld')
+                a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+                direction = b - a
+                direction.normalise()
+                b = b + direction.scale(.01)
+                key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
+                keep = sensor.horizontal_collision_filter(a, b)
+                def cast(surfaces):
+                    native = CompiledCollisionTests.native(surfaces)
+                    def query(*args):
+                        hit = native(*args)
+                        return None if hit is None else (hit[0], V(row['normal']))
+                    return sensor.collide_motion_segment(1, a, b, keep, query)
+                self.assertIs(point, cast([(point, key)])[0])
+                # The coherent visible log completes this chunk's live
+                # remapping at 11:40:37, before all eleven contacts.
+                sensor._destructible_catalog['layout_generations'][32639] = 1
+                if not any(box['contains_hit'] for owner in
+                        row['native_contact_evidence']['nearby_owners']
+                        for box in owner['boxes']):
+                    self.assertIs(point, cast([(point, key)])[0])
+                    continue
+                self.assertIsNone(cast([(point, key)]))
+                resolved += 1
+                wall = point + direction.scale(.001)
+                for material in (88, 111):
+                    self.assertIs(wall, cast([(point, key),
+                        (wall, (material, 0, key[2], key[3]))])[0])
+                # A mismatched chunk is never spatially reattributed.
+                self.assertIs(point, cast([(point,
+                    (key[0], key[1], key[2], key[3] + 1))])[0])
+                self.broken.clear()
+                self.assertIs(point, cast([(point, key)])[0])
+        self.assertEqual(10, resolved)
+
+    def test_unresolved_original_surface_diagnostic_records_live_slot_read_only(self):
+        row = json.loads((ROOT / 'tests/fixtures/westfield_114133_contacts.json').read_text())[2]
+        self.install_report(row, '23_westfeld')
+        catalog = sensor._destructible_catalog
+        catalog['layout_generations'][32639] = 1
+        manager = types.SimpleNamespace(getSpaceID=lambda: 1,
+            _DestructiblesManager__loadedChunkIDs={32639: 112})
+        matrix_query = mock.Mock(return_value=_ItemMatrix(V(3, 4, 5)))
+        native = types.SimpleNamespace(
+            wg_getChunkMatrix=lambda *unused: _ItemMatrix(V(100, 0, 200)),
+            wg_getDestructibleMatrix=matrix_query,
+            wg_getDestructibleEffectCategory=lambda *unused: -1)
+        isolate = mock.Mock(side_effect=AssertionError('diagnostic mutated identity'))
+        with mock.patch.dict('sys.modules', {
+                'BigWorld': native,
+                'AreaDestructibles': types.SimpleNamespace(g_destructiblesManager=manager),
+                'Math': types.SimpleNamespace(Vector3=V, Matrix=lambda value: value)}), \
+                mock.patch.object(sensor, '_isolate_destructible_1513', isolate):
+            result = sensor._native_contact_slot_evidence_1513(1, (73, 0, 8, 32639))
+            self.assertTrue(result['excluded'])
+            self.assertEqual(1, result['layout_generation'])
+            self.assertEqual(-1, result['native_category'])
+            self.assertEqual((103000, 4000, 205000), result['native_signature'][:3])
+            matrix_query.reset_mock()
+            manager._DestructiblesManager__loadedChunkIDs = None
+            result = sensor._native_contact_slot_evidence_1513(1, (73, 0, 8, 32639))
+            self.assertNotIn('native_signature', result)
+            matrix_query.assert_not_called()
+            isolate.assert_not_called()
 
     def test_prague_broken_door_uses_live_component_bounds_not_stale_material(self):
         rows = json.loads((ROOT / 'tests/fixtures/prague_173230_contacts.json').read_text())

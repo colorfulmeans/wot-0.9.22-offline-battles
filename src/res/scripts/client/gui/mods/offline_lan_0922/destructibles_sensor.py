@@ -4360,10 +4360,14 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 			if envelope is not None and _point_in_world_box(point, envelope):
 				continue
 		if any(identity[0] == wire[0] and
-				_original_side_face_1513(normal, box) and
 				_point_in_world_box(point, box)
 				for identity, instance, unused_interval in owners
 				for box in instance['boxes']):
+			# The exact 3-D box already bounds this original face. Westfield's
+			# broken stone fence keeps bevel/top faces with nonzero local-up
+			# normals as well as vertical sides after a live layout repair.
+			# Parallel-side proof is only needed for projection beyond a box,
+			# never for a witness contained by the real component volume.
 			aliases.add(surface)
 	if not aliases:
 		return None
@@ -7343,6 +7347,64 @@ def static_contact_evidence(spaceID, segment_start, hit_pt, surf_normal):
 	return result
 
 
+def _native_contact_slot_evidence_1513(space_id, surface):
+	"""Inspect a diagnostic key without registering, isolating or destroying it."""
+	if (len(surface) != 4 or
+			not all(type(value) in _INTEGER_TYPES for value in surface) or
+			not 71 <= surface[0] <= 86 or surface[1] != 0):
+		return None
+	identity = (surface[3], surface[2])
+	catalog = _destructible_catalog or {}
+	instance = (globals().get('g_offh_destr_instances', {}).get(identity) or
+		catalog.get('baked_instances', {}).get(identity) or
+		catalog.get('tree_instances', {}).get(identity))
+	result = {
+		'layout_generation': _layout_generation_1513(identity[0]),
+		'layout_pending': _layout_repair_pending_1513(identity[0]),
+		'excluded': identity in catalog.get('excluded_instances', ()),
+		'isolated': _destructible_isolated_1513(*identity),
+		'quarantined': (identity[0] in globals().get(
+			'g_offh_destr_isolated_chunks', ()) or identity in globals().get(
+			'g_offh_destr_isolated_slots', ())),
+		'catalog_filename': None if instance is None else
+			instance.get('descriptor_filename', instance.get('filename')),
+		'catalog_signature': None if instance is None else
+			instance.get('signature'),
+	}
+	proved = globals().get('g_offh_destr_proved_layouts', {}).get(
+		(int(space_id), identity[0]))
+	result['proved_filename'] = None if proved is None else proved[1].get(identity[1])
+	if result['quarantined']:
+		return result
+	try:
+		import AreaDestructibles
+		import BigWorld
+		import Math
+		manager = getattr(AreaDestructibles, 'g_destructiblesManager', None)
+		if manager is None or manager.getSpaceID() != space_id:
+			return result
+		# The normal count validator can quarantine malformed runtime state.
+		# Diagnostics only observe it and must never trigger that transition.
+		loaded = getattr(manager, '_DestructiblesManager__loadedChunkIDs', {})
+		count = loaded.get(identity[0]) if isinstance(loaded, dict) else None
+		result['native_count'] = count
+		if type(count) not in _INTEGER_TYPES or not 0 <= identity[1] < count:
+			return result
+		# A returned native surface can name a mode-excluded authored slot
+		# after layout compaction. The live count bounds these read-only
+		# queries; exclusion still forbids any gameplay destruction by this ID.
+		chunk = BigWorld.wg_getChunkMatrix(space_id, identity[0])
+		matrix = Math.Matrix(BigWorld.wg_getDestructibleMatrix(
+			space_id, identity[0], identity[1]))
+		result['native_signature'] = _locator_signature(
+			matrix, chunk.translation, Math, catalog.get('quantization', 1000))
+		result['native_category'] = BigWorld.wg_getDestructibleEffectCategory(
+			space_id, identity[0], identity[1], -1)
+	except Exception as error:
+		result['query_error'] = str(error)[:160]
+	return result
+
+
 def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 	"""Resolve a stalled ray's actual surfaces without changing destruction.
 
@@ -7377,6 +7439,9 @@ def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 				VEHICLE_SKIP_FLAGS, only_surface)
 			witness = {'key': key, 'hit': None}
 			if hit is not None:
+				slot = _native_contact_slot_evidence_1513(spaceID, key)
+				if slot is not None:
+					witness['slot'] = slot
 				witness.update(hit=(hit[0].x, hit[0].y, hit[0].z),
 					normal=(hit[1].x, hit[1].y, hit[1].z),
 					contact_distance=(hit[0] - hit_pt).length)

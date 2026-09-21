@@ -153,7 +153,8 @@ RESULT_INTERACTION_LIMITS = {
     'kills_assisted_radio': (0, 1),
 }
 BOT_TIER_MODES = frozenset((
-    'random', 'same', 'minus1_0', '0_plus1', 'minus1_plus1'))
+    'random', 'same', 'minus1_0', '0_plus1', 'minus1_plus1',
+    '0_plus2', 'minus2_0'))
 BOT_SKILL_MODES = frozenset(bot_gunnery.SKILL_MODES)
 SENDER_JOIN_TIMEOUT = 0.1
 SEND_STALL_TIMEOUT = 5.0
@@ -1336,6 +1337,9 @@ def _valid_battle_receipt(message):
             message['watched_battle_to_end'], bool)):
         return False
     if message.get('battle_mode', 'regular') not in ('regular', 'training'):
+        return False
+    if ('vehicle_compact_descr' in message and
+            _canonical_vehicle_compact_descr(message['vehicle_compact_descr']) is None):
         return False
     stats = message.get('stats')
     rewards = message.get('rewards')
@@ -3410,11 +3414,13 @@ class LANClient(object):
         self._team_chat_seq = sequence
         return sequence
 
-    def send_bot_observation(self, contacts, affordances=None, radio_links=None):
+    def send_bot_observation(self, contacts, affordances=None, radio_links=None,
+                             player_vision_ranges=None):
         if not self.is_bot_authority():
             return False
         return self._send({'type': 'bot_observation',
                            'round_id': self.round_id,
+                           'player_vision_ranges': list(player_vision_ranges or ())[:30],
                            'contacts': list(contacts or ())[:64],
                            'affordances': list(affordances or ())[:16],
                            'radio_links': list(radio_links or ())[:30]})

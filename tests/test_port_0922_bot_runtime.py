@@ -7322,33 +7322,58 @@ class BotRuntimeTests(unittest.TestCase):
         slice spends it and every catch-up slice of the same callback is then
         deferred. Withholding drive and freezing the pose is correct, but
         deleting ``state['speed']`` made the low-rate run rebuild its velocity
-        from zero on every callback. Measured over 2.0 s at 10 Hz vs 2 Hz:
-        16.0 m either way when the budget is not exhausted; with one token the
-        2 Hz run travelled 5.5 m and ended at 3.7 m/s before this change and
-        9.2 m ending at 5.4 m/s after it.
+        from zero on every callback. More frequent callbacks still get more
+        fresh proof and travel farther, but catch-up retains most momentum.
         """
         fast, unused_fast_state = self._drive_distance(
             20, 0.1, self._recast_budget_probe(1))
         slow, slow_state = self._drive_distance(
             4, 0.5, self._recast_budget_probe(1))
-        self.assertGreater(fast, 15.0)
+        self.assertGreater(fast, slow)
         self.assertGreater(slow, fast * 0.5)
         self.assertGreater(abs(slow_state['speed']), 4.5)
 
-    def test_catchup_without_any_proved_corridor_still_stops(self):
+    def test_catchup_without_any_proved_corridor_freezes_pose(self):
         """Preserving momentum must not license travel through unknown space.
 
         With no recast tokens at all no corridor is ever proved, so the hull
-        must withhold drive and come to rest rather than coast on a corridor
-        the worker could not sample.
+        must withhold drive and freeze its pose. A missing proof does not
+        establish a collision or authorize replacing retained momentum with
+        an artificial brake force.
         """
         fast, unused_fast_state = self._drive_distance(
             20, 0.1, self._recast_budget_probe(4))
         stalled, stalled_state = self._drive_distance(
             4, 0.5, self._recast_budget_probe(0))
         self.assertGreater(fast, 15.0)
-        self.assertLess(stalled, fast * 0.35)
-        self.assertAlmostEqual(0.0, stalled_state['speed'], places=3)
+        self.assertEqual(0.0, stalled)
+        self.assertEqual(0.0, stalled_state['x'])
+        self.assertEqual(0, stalled_state['movement_dir'])
+        self.assertGreater(stalled_state['speed'], 0.0)
+        self.assertLess(stalled_state['speed'], 8.0)
+
+    def test_deferred_first_corridor_requires_exact_motion_result(self):
+        """A current hull sweep may authorize the first deferred slice."""
+        for result in ('clear', 'hard'):
+            with self.subTest(result=result):
+                runtime = self._drive_runtime(self._recast_budget_probe(0))
+                calls = []
+                runtime.motion_resolver = (
+                    lambda *args, **kwargs: calls.append(args) or result)
+                original_pose_safe = self.module.prebaked_navigation.pose_is_safe
+                self.module.prebaked_navigation.pose_is_safe = (
+                    lambda *unused, **unused_kwargs: True)
+                try:
+                    runtime.update(0.1, 1.1)
+                finally:
+                    self.module.prebaked_navigation.pose_is_safe = original_pose_safe
+                self.assertTrue(calls)
+                self.assertNotIn(11, runtime._motion_probe_cache)
+                state = runtime.states[11]
+                if result == 'clear':
+                    self.assertGreater(state['z'], 0.0)
+                else:
+                    self.assertEqual((0.0, 0.0), (state['x'], state['z']))
 
     def test_worker_one_hz_holds_one_drive_plan_through_bounded_slices(self):
         command = self._stationary_command()

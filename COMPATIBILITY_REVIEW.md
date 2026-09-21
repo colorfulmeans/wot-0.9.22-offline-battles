@@ -31,8 +31,9 @@ levels for a nonnegative minimum `lvlDiff`. The shared `stayedAlive` and
 `dealtMoreDamage` modifiers require the same killing collision; surviving an
 earlier ram or dying later in battle cannot substitute for its outcome.
 Likewise, a later shell kill cannot erase already earned ramming damage.
-The generic modifiers also serve other installed missions using those fields;
-unrecorded filters such as `fireStarted` remain explicitly unsupported.
+The generic modifiers also serve other installed missions using those fields.
+The September 21 follow-up below adds recorded `fireStarted` evidence;
+other unrecorded filters remain explicitly unsupported.
 
 Version 2 of the existing bounded mission history adds
 `[ram, elapsed_ms, damage_dealt, damage_received, killed, survived, immobilized]`.
@@ -5371,22 +5372,27 @@ The pages were read in the browser because the text fetch exposed only their
 loading page. Forum searches and the Wiki discussion did not provide a
 verifiable 0.9.22 experiment establishing those missing values.
 
-Two repository defects are identified but not repaired in this candidate:
+The September 21 follow-up repairs the two identified repository defects:
 
-- `_native_drowning_level` equates the appearance effect's `isInWater` with
-  CAUTION. The stock Avatar instead receives `VEHICLE_DROWN_WARNING` from the
-  server; the effect getter is not that server warning contract.
-- `_drowning_sensor_thresholds` treats `topRightCarryingPoint` as a vertical
-  coordinate. The available reference reader/fixtures use a two-component
-  X/Z carrying footprint. It also clamps the danger height above that mistaken
-  caution value, and omits pitch/roll. The Bot danger fallback already uses
-  the transformed turret-mount point. The reference is RU #788; it does not
-  replace an exact CN #1513 warning-threshold capture.
+- `_native_drowning_level` no longer equates the appearance effect's
+  `isInWater` with CAUTION. The stock Avatar instead receives
+  `VEHICLE_DROWN_WARNING` from the server; the splash effect getter cannot
+  provide that warning threshold. Shallow splashes therefore no longer show
+  a false warning. This deliberately leaves the advance CAUTION warning
+  unavailable until its actual threshold is established.
+- The sensor-rebuild fallback probes the descriptor's turret-mount sensor
+  point transformed through current position, yaw, pitch and roll. It no
+  longer reads a vertical coordinate from the two-component X/Z
+  `topRightCarryingPoint`, clamps the underwater height to that false value,
+  or substitutes invented dimensions for missing geometry. The worker uses
+  the replicated current pose rather than a stale native spawn position.
 
 The `0.5` in `assembleWaterSensor` is explicitly the minimum heavy-splash
 depth, not evidence for a caution threshold. No global metre value, hull-height
 fraction or substitute timer was introduced. The existing ten-second danger
-countdown remains unchanged pending a verified warning-depth rule.
+countdown and worker/server authority are unchanged. Tests cover native
+submersion, shallow splashes, sensor rebuilds on slopes, a long carrying
+footprint, missing dimensions and the worker's current replicated pose.
 
 ### Requested sustained crushing states
 
@@ -5417,3 +5423,93 @@ as HP per second, would not recover the missing retail law. The exact pressure
 damage rate, mass/armour dependence and any initial grace period still need
 0.9.22 source or controlled replay/video evidence before this can be claimed
 as an official-mechanics repair. No new crushing coefficient is enabled here.
+
+### September 21 post-0.9.2 report follow-up
+
+The eight submitted report archives contain four distinct 0.9.2 sessions
+and an older 0.9.1 session; repeated archives from the same session are
+cumulative evidence, not independent reproductions. The following repairs
+are based on source contracts and report replay. None constitutes native
+Windows gameplay acceptance.
+
+- Unsupported hulls no longer obtain track-powered yaw from A/D. Existing
+  angular momentum is retained, while rebasing forward/lateral components
+  preserves the world-space flight trajectory.
+- Local Siege presentation no longer freezes an unsynchronized native
+  body/ground world translation as a permanent local offset. Copied chassis
+  placement and the descriptor's hydraulic pivot own the rendered and
+  collision poses. Autorotation checks the gun's local target direction in
+  the pitched/rolled hull, retaining stock autorotation/X-lock ownership.
+- Neutral coasting no longer applies an invented 65% share of active track
+  braking, slope-dependent relief of that share, or an extra neutral
+  overspeed brake. Descriptor rolling resistance and gravity remain. The
+  existing parked hold, active braking and overspeed envelope are retained;
+  exact retail gearbox drag, downhill speed calibration and handbrake drift
+  remain unproved.
+- Airfield's recorded trapped pose has no exit in the original forward
+  fallback fan. A rear exit is now considered after the entire forward fan
+  fails, using the same terrain, hazard and collision checks. A driver's
+  static-probe refusal also reviews the affected baked corridor even when
+  zero throttle prevents an actual movement contact. Failed probes and
+  traffic holds are not evidence for marking solid terrain.
+- Newly published wrecks invalidate private join/recovery paths as well as
+  shared paths. A Bot that has reached a route's final segment can resume
+  advancing to the real capture objective after contact ends without first
+  returning to the penultimate waypoint. No speculative aggression or map
+  coordinate changes are included.
+- The Westfield 11:41 report contains eleven retained contact witnesses.
+  Ten lie inside exact, already-broken component boxes in a proved remapped
+  chunk. Their bevel/top normals no longer disqualify that ownership proof.
+  The remaining face lies outside all recorded component boxes and remains
+  blocking. No inflated box or nearest-owner guess makes it passable; bounded
+  diagnostics now include its live slot signature/category and mapping state.
+- Wreck pushing has no accumulated-distance cap. Pure worker-path tests
+  continue pushing through successive intervals beyond ten metres and query
+  new obstacles from the current wreck position. New bounded diagnostics
+  distinguish track hold, a world blocker, missing support, a support step
+  and actual movement. They do not change unverified friction coefficients.
+- Hydraulic diagnostics retain bounded takeoff/landing transition samples
+  with preceding and current support/motion evidence, alongside worst-frame
+  samples. The submitted aggregate windows omit the actual airborne frames,
+  so they do not yet distinguish all downhill stutter from real steps.
+
+The official [9.14 physics description](https://worldoftanks.eu/en/news/general-news/version-914-sounds-physics/)
+distinguishes released drive input from SPACE braking and describes
+SPACE-plus-turn single-track manoeuvres. It supplies no numerical coast
+coefficient or pressure-damage law. Those limits must not be described as
+restored official physics merely because the pure-data regressions pass.
+
+The personal-mission follow-up adds the missing evidence used by LT-6,
+LT-9, MT-12, HT-5 and TD-4 across all four operations. Reference expressions
+are labelled as 0.9.22 RU #788, not a replacement for the installed #1513
+mission resources. LT-6's prebattle optional-device check reads the compact
+vehicle descriptor frozen when the battle starts, including normal optics,
+bond optics and binoculars. A later garage edit cannot change that check.
+LT-9 records detection before the observer has ever been spotted, with both
+teams' simultaneous visibility transitions considered before counting.
+MT-12 records each admitted fire ignition once. TD-4 records invisibility at
+the relevant damage/kill event, using enemy visibility rather than the
+sixth-sense display delay. HT-5's `distance=0` means damage inside the current
+vehicle view range, not unlimited range: worker observations donate the same
+effective radius already used for visibility, including crew/equipment
+state. The newest admitted radius and actual distance are frozen in the
+mission event. The visibility sampling boundary (up to one normal 0.4-second
+observation interval around a loadout-state change) remains a native
+acceptance limitation.
+
+Version 3 extends the existing bounded event history and preserves legacy
+v1/v2 receipt reads without inventing missing event-time evidence. Tests
+exercise reference conditions for every operation, event boundaries,
+re-ignition after extinguishing, loadout freezing, server restart and client
+receipt persistence. Mission thresholds and rewards still come from the
+installed client; this change does not edit them.
+
+The official [9.18 matchmaking article](https://worldoftanks.eu/en/news/general-news/matchmaking-918/)
+allows three-tier battles in which the player is at the top, middle or bottom.
+Waiting-room options now include `0/+1/+2` and `-2/-1/0`. Random selection
+admits a wider candidate pool but chooses only one contiguous one-, two- or
+three-tier window, considering all configured human tiers before selecting
+it. Automatic substitutions cannot escape that window. Existing manual
+presets and explicitly selected human vehicles remain user-owned. The
+existing offline tier/class proportions are unchanged and are not claimed
+to implement the complete retail 3/5/7 matchmaker.

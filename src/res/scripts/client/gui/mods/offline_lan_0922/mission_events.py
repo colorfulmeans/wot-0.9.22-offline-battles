@@ -5,6 +5,8 @@ pre-hit immobilized state; kills carry reason, pre-hit immobilization and
 distance; critical events carry the newly changed native critical mask.
 Version 2 adds ram rows containing applied damage in both directions, victim
 death, attacker survival and pre-hit immobilization from the same collision.
+Version 3 freezes hit distance and view radius, visibility at damage/kill, ignition transitions
+and whether a detection preceded the observer's first detection by the enemy.
 The cap is per actor, across targets, keeping receipts below the wire budget.
 An incomplete history stays explicitly unknown to the mission evaluator.
 """
@@ -16,7 +18,7 @@ except NameError:
     INTEGER_TYPES = (int,)
 
 MAX_EVENTS = 1024
-VERSION = 2
+VERSION = 3
 _HISTORY_FIELDS = frozenset(('mission_events', 'mission_events_complete'))
 FIELDS = _HISTORY_FIELDS | frozenset(('mission_events_version',))
 
@@ -49,6 +51,14 @@ def _integer(value, minimum, maximum):
     return (type(value) in INTEGER_TYPES and minimum <= value <= maximum)
 
 
+def _distance(value):
+    return (value is None or
+            not isinstance(value, bool) and
+            isinstance(value, INTEGER_TYPES + (float,)) and
+            0 <= value <= 100000 and not math.isnan(value) and
+            not math.isinf(value))
+
+
 def valid(row):
     if not FIELDS.intersection(row):
         return True
@@ -67,22 +77,25 @@ def valid(row):
         previous_time = event[1]
         kind = event[0]
         if kind == 'damage':
-            if (len(event) != 4 or not _integer(event[2], 1, 65535) or
+            if (len(event) != (7 if version >= 3 else 4) or
+                    not _integer(event[2], 1, 65535) or
                     not isinstance(event[3], bool)):
                 return False
         elif kind == 'kill':
-            if (len(event) != 5 or not _integer(event[2], 0, 10) or
+            if (len(event) != (6 if version >= 3 else 5) or
+                    not _integer(event[2], 0, 10) or
                     not isinstance(event[3], bool)):
                 return False
-            distance = event[4]
-            if distance is not None and (
-                    isinstance(distance, bool) or
-                    not isinstance(distance, INTEGER_TYPES + (float,)) or
-                    not 0 <= distance <= 100000 or
-                    math.isnan(distance) or math.isinf(distance)):
+            if not _distance(event[4]):
                 return False
         elif kind == 'critical':
             if len(event) != 3 or not _integer(event[2], 1, 4294967295):
+                return False
+        elif kind == 'fire':
+            if version < 3 or len(event) != 3 or not _integer(event[2], 1, 1):
+                return False
+        elif kind == 'spot':
+            if version < 3 or len(event) != 3 or not isinstance(event[2], bool):
                 return False
         elif kind == 'ram':
             if (version < 2 or len(event) != 7 or
@@ -92,4 +105,9 @@ def valid(row):
                 return False
         else:
             return False
+        if version >= 3 and kind in ('damage', 'kill'):
+            if not _distance(event[4]) or not isinstance(event[5], bool):
+                return False
+            if kind == 'damage' and not _distance(event[6]):
+                return False
     return True

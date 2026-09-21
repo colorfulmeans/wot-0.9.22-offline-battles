@@ -107,6 +107,8 @@ PLAYER_DROWNING_SECONDS = 10.0
 PLAYER_OVERTURN_IGNORE_SECONDS = 0.10
 PLAYER_OVERTURN_DEATH_SECONDS = 30.0
 PLAYER_ENVIRONMENT_STALE_TICKS = int(round(TICK_HZ))
+# Mission evidence tolerates a missed 2.5 Hz observation, then becomes unknown.
+MISSION_VIEW_RANGE_STALE_TICKS = int(round(TICK_HZ))
 PLAYER_LANDING_MAX_IMPACT_SPEED = 200.0
 PLAYER_LANDING_HISTORY = 64
 BOT_FIRE_DURATION_SECONDS = 10.0
@@ -1166,6 +1168,8 @@ def _persisted_result_receipt(value):
             ("watched_battle_to_end" in value and not isinstance(
                 value["watched_battle_to_end"], bool))):
         raise ValueError("invalid persisted battle receipt leave state")
+    if "vehicle_compact_descr" in value:
+        _validated_vehicle_compact_descr(value["vehicle_compact_descr"])
     stats = value.get("stats")
     rewards = value.get("rewards")
     stat_names = RECEIPT_STAT_NAMES
@@ -2711,6 +2715,8 @@ class BattleState:
             self.player_environment_seq = -1
             self.player_environment_authority_epoch = -1
             self.player_drowning_seconds = {}
+            self.player_mission_view_ranges = {}
+            self.player_mission_view_ranges_tick = -1
         if old != self.bot_authority_id:
             self.authority_epoch += 1
             self.bot_pending_projectile_launches.clear()
@@ -3274,6 +3280,7 @@ class BattleState:
                     participant['team_killer'] = bool(player.team_killer)
                 self.state_revision += 1
             self.player_spotted.pop(player_id, None)
+            self.player_mission_view_ranges.pop(player_id, None)
             self.player_environment.pop(player_id, None)
             self.player_drowning_seconds.pop(player_id, None)
             self.player_overturn_state.pop(player_id, None)
@@ -3826,6 +3833,7 @@ class BattleState:
                 "account_key": participant.account_key,
                 "name": participant.name,
                 "vehicle": participant.vehicle,
+                "vehicle_compact_descr": participant.vehicle_compact_descr,
                 "vehicle_tier": tier,
                 "team": int(participant.team),
                 "alive": bool(participant.alive),
@@ -5056,6 +5064,25 @@ class BattleState:
             radio_actors.update({
                 ("bot", identity): (int(bot["team"]), bool(bot["alive"]))
                 for identity, bot in known_bots.items()})
+            mission_ranges = None
+            if "player_vision_ranges" in message:
+                raw_ranges = message["player_vision_ranges"]
+                if not isinstance(raw_ranges, list) or len(raw_ranges) > 30:
+                    return False
+                mission_ranges = {}
+                try:
+                    for row in raw_ranges:
+                        if not isinstance(row, dict):
+                            return False
+                        identity = _exact_int(row.get("id"), 1, PROJECTILE_MAX_ID)
+                        radius = _bounded_float(row.get("radius"), 0.0, 100000.0)
+                        if identity in mission_ranges:
+                            return False
+                        # A disconnected observer is an ordinary in-flight race.
+                        if identity in known_players:
+                            mission_ranges[identity] = radius
+                except (TypeError, ValueError):
+                    return False
             radio_links = None
             if "radio_links" in message:
                 raw_links = message["radio_links"]
@@ -5274,6 +5301,8 @@ class BattleState:
                 message.get("affordances"), known_bots, known_targets, now)
             self._replace_bot_spotted(direct_bot_spots)
             self._replace_player_spotted(direct_player_spots)
+            self.player_mission_view_ranges = mission_ranges or {}
+            self.player_mission_view_ranges_tick = self.tick
             self._replace_team_lit(team_lit, now=now)
             self._commit_detections()
             if accepted_visibility or radio_links is not None:
@@ -10546,6 +10575,8 @@ class BattleState:
                         self._statistics_row(
                             "player", player_id)["equipment_used"]),
                 }
+                if participant.get("vehicle_compact_descr"):
+                    receipt["vehicle_compact_descr"] = participant["vehicle_compact_descr"]
                 receipt_id = receipt["receipt_id"]
                 # One account may finish another arena before an earlier ACK
                 # reaches the server. Keep both idempotent receipts; delivery
@@ -12562,6 +12593,8 @@ class BattleState:
         # team -> the enemies that team can currently see, so a vehicle that
         # goes dark and reappears is a new detection for whoever finds it.
         self.team_visible_targets = {1: set(), 2: set()}
+        self.player_mission_view_ranges = {}
+        self.player_mission_view_ranges_tick = -1
         # team -> enemy -> server monotonic deadline for the worker's spot
         # lease. A target stays detected for as long as its lease holds, so
         # neither a blocked line of sight nor a budgeted-out visibility probe
@@ -12635,6 +12668,7 @@ class BattleState:
         observers.extend(
             (("player", int(player_id)), spotted)
             for player_id, spotted in self.player_spotted.items())
+        visible_by_team = {}
         for team in (1, 2):
             visible = {}
             for reporter, spotted in observers:
@@ -12646,8 +12680,12 @@ class BattleState:
                     if not target_team or target_team == team:
                         continue
                     visible.setdefault(target, []).append(reporter)
+            visible_by_team[team] = visible
+        for visible in visible_by_team.values():
+            self.ever_spotted_targets.update(visible)
+        for team in (1, 2):
+            visible = visible_by_team[team]
             for target in sorted(set(visible) - self.team_visible_targets[team]):
-                self.ever_spotted_targets.add(target)
                 self._statistics_row(*target)['not_spotted'] = 0
                 for reporter in sorted(visible[target]):
                     interaction = self._statistics_interaction(
@@ -12655,6 +12693,9 @@ class BattleState:
                     if interaction["spotted"]:
                         continue
                     interaction["spotted"] = 1
+                    self._record_mission_event(
+                        reporter, target, "spot",
+                        reporter not in self.ever_spotted_targets)
                     row = self._statistics_row(*reporter)
                     row["spotted"] = int(row.get("spotted", 0)) + 1
                     self._publish_detection(reporter, target)
@@ -12796,7 +12837,8 @@ class BattleState:
                 mission_distance = math.sqrt(sum((a - b) ** 2
                     for a, b in zip(*positions)))
         self._record_mission_event(attacker, victim, "kill",
-                                   int(death_reason), immobilized, mission_distance)
+                                   int(death_reason), immobilized, mission_distance,
+                                   self._mission_invisible(attacker))
         self.kill_records.append({
             "actor_kind": attacker[0], "actor_id": attacker[1],
             "victim_kind": victim[0], "victim_id": victim[1],
@@ -12974,6 +13016,27 @@ class BattleState:
         elapsed = max(0, int(round((self.tick / TICK_HZ - PREBATTLE_SECONDS) * 1000)))
         interaction["mission_events"].append([kind, elapsed] + list(values))
 
+    def _mission_invisible(self, actor):
+        """Use the enemy team's current visibility lease, not sixth sense delay."""
+        enemy = 3 - self._vehicle_team(*actor)
+        return (actor not in self.team_visible_targets.get(enemy, ()) and
+                actor not in self.team_lit_targets.get(enemy, ()) and
+                not self._direct_spotters(actor))
+
+    def _mission_view_range(self, actor):
+        age = self.tick - self.player_mission_view_ranges_tick
+        if (actor[0] != "player" or self.player_mission_view_ranges_tick < 0 or
+                not 0 <= age <= MISSION_VIEW_RANGE_STALE_TICKS):
+            return None
+        return self.player_mission_view_ranges.get(actor[1])
+
+    def _mission_distance(self, actor, target):
+        positions = [self._vehicle_position(identity, alive_only=False)
+                     for identity in (actor, target)]
+        if all(position is not None for position in positions):
+            return math.sqrt(sum((a - b) ** 2 for a, b in zip(*positions)))
+        return None
+
     def _record_ram_mission_events(self, first, second, damage_first,
                                    damage_second, critical_first,
                                    critical_second):
@@ -13112,6 +13175,12 @@ class BattleState:
         """Attribute admitted critical transitions, including fire and zero HP hits."""
         if attacker is None or attacker == target:
             return
+        enemy = self._vehicle_team(*attacker) != self._vehicle_team(*target)
+        if (enemy and not (previous or {}).get("fire", False) and
+                (current or {}).get("fire", False)):
+            # Starting a fire is one event even when the igniting shell has
+            # no hull damage; later burn ticks and repeated state are not.
+            self._record_mission_event(attacker, target, "fire", 1)
         mask = _crits_mask(previous, current)
         if not mask:
             return
@@ -13214,7 +13283,11 @@ class BattleState:
             attacker, target, "damage", damage)
         self._increment_interaction(attacker, target, "damage_events")
         immobilized = bool(_destroyed_tracks(target_critical))
-        self._record_mission_event(attacker, target, "damage", damage, immobilized)
+        self._record_mission_event(
+            attacker, target, "damage", damage, immobilized,
+            self._mission_distance(attacker, target),
+            self._mission_invisible(attacker),
+            self._mission_view_range(attacker))
         state = self._vehicle_stun_state(target)
         if state is not None and not state['alive']:
             self._statistics_interaction(attacker, target)["_terminal_immobilized"] = immobilized

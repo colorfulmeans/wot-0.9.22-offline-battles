@@ -80,15 +80,10 @@ COH_DECAY_BOUND = 0.5
 SLOPE_COH_DECAY = 0.25
 SLOPE_COH_DECAY_Y = 0.72
 # ---- offline-model constants (no exact native transition curve recoverable) ----
-# Exact #1513 exposes per-vehicle mass, speed and terrain resistance plus the
-# common WGVehiclePhysics brake/damping configuration, but the W-release curve
-# itself lives in native code.  Use a conservative share of the recovered track
-# grip: 0.65 shortens a Type 62 flat-road 60 km/h stop by about 15% versus the
-# former 0.55 calibration without pretending that neutral coast is a full track
-# lock.  A real downhill grade progressively unloads this drag.  Above the
-# static perch tangent only rolling resistance remains, so gravity can carry a
-# tank down a steep continuous slope without making flat roads frictionless.
-COAST_BRAKE_SHARE = 0.65
+# Released drive input uses descriptor rolling resistance and slope gravity.
+# The former extra 65% track brake had no client-derived coefficient and made
+# neutral almost as strong as an explicit brake. Native engine-drag/gearbox
+# details remain unrepresented; do not replace them with another brake share.
 # Steering adds track-differential drag to the rolling resistance.
 STEER_RESIST_MULT = 1.6
 # Engine force F = P / max(|v|, ENGINE_MIN_V), capped by track cohesion.
@@ -209,7 +204,6 @@ _TUNABLE = {
 	'bkwd_power_fraction': 'BKWD_POWER_FRACTION',
 	'traverse_accel_time': 'ANG_ACCELERATION_TIME',
 	'traverse_speed_cost': 'SPEED_AFFECT_ROT_DECREASE',
-	'coast_brake_share':   'COAST_BRAKE_SHARE',
 	'steer_resist_mult':   'STEER_RESIST_MULT',
 	'slide_max':           'SLIDE_MAX',
 	'slide_drag':          'SLIDE_DRAG',
@@ -2142,16 +2136,14 @@ def brake_force(p, active, terrainIdx=0, slope_pitch=0.0):
 	(cos theta) while cohesion decays on steep ground. So a hull braking on a
 	slope past the grip limit CANNOT hold and slides - the same ~50 deg limit
 	as the lateral fall-line slip, kept consistent on purpose.
-	active=True: opposite-throttle / hold lock-up. active=False: the established
-	flat-ground drivetrain coast drag; longitudinal_step relieves that drag only
-	near the static perch tangent, where gravity owns the descent.'''
+	active=True: opposite-throttle / hold lock-up. active=False: rolling drag;
+	released drive input must not apply an implicit share of the track brake.'''
 	ny = math.cos(slope_pitch)
 	grip_decel = slope_cohesion(ny) * GRAVITY * (ny if ny > 0.1 else 0.1)
 	brake = p['brakeDecel'] if p['brakeDecel'] < grip_decel else grip_decel
 	if active:
 		return p['mass'] * brake
-	return (rolling_resist_force(p, terrainIdx, False) +
-		p['mass'] * COAST_BRAKE_SHARE * brake)
+	return rolling_resist_force(p, terrainIdx, False)
 
 
 def contact_push_decel(p, rolling, terrainIdx=0, normal_y=1.0):
@@ -2315,19 +2307,9 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 				return 0.0                        # tracks hold - no creep on ordinary hills
 			accel = grav_a - (_hold if grav_a > 0.0 else -_hold)   # slides off a too-steep parked slope
 		else:
-			# The 2.3-reviewed coast law: rolling + partial grip brake oppose
-			# the motion; gravity still acts. The old relief started unloading
-			# at zero slope and glided ~27 m on a 7-degree field descent; the
-			# share now fades only near the static perch limit, so a slope the
-			# parked hold cannot keep slides while every parkable slope brakes
-			# like the flat.
-			motion_sign = 1.0 if v > 0.0 else -1.0
-			downhill_tangent = max(0.0, math.tan(slope_pitch) * motion_sign)
-			fade_start = 0.8 * SLIDE_HOLD_TAN
-			fade = min(1.0, max(0.0, (downhill_tangent - fade_start) /
-			                    (SLIDE_HOLD_TAN - fade_start)))
-			resist = rr + COAST_BRAKE_SHARE * (1.0 - fade) * grip
-			accel = grav_a - (resist if v > 0.0 else -resist)
+			# Coasting tracks retain rolling drag, including steering drag,
+			# but no active brake. Gravity remains independent of drive input.
+			accel = grav_a - (rr if v > 0.0 else -rr)
 
 	# TRACK-SLIP DRAG: rolling UP a grade steeper than the tracks can pull, they
 	# slip and momentum bleeds far faster than gravity alone would take it.
@@ -2360,6 +2342,11 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 	_dir = 1.0 if nv >= 0.0 else -1.0
 	_lim = p['speedFwd'] if nv >= 0.0 else p['speedBwd']
 	if abs(nv) > _lim:
+		if throttle == 0.0:
+			# Crossing the powered speed limit must not engage a neutral
+			# brake either. Keep the force-integrated coast result within the
+			# existing overspeed envelope; its retail calibration is separate.
+			return _dir * min(abs(nv), _lim * OVERSPEED_MAX_FACTOR)
 		# The overspeed drag ALWAYS bleeds the surplus back toward spec (rolling +
 		# OVERSPEED_DAMP), so leaving a descent onto flat/uphill ground eases down
 		# instead of a 1-tick snap to the limit. Gravity down THIS way is what lets
@@ -2372,9 +2359,8 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 		_prev_ex = abs(v) - _lim
 		if _prev_ex < 0.0:
 			_prev_ex = 0.0
-		# Gravity holds the surplus only while the throttle still drives the
-		# motion. A released throttle brakes, so the surplus bleeds; the field
-		# run stayed pinned at the limit down the whole descent without this.
+		# Retain the existing powered overspeed approximation separately from
+		# neutral rolling. Opposite throttle does not sustain a downhill surplus.
 		if throttle * _dir > 0.0 and (grav_a * _dir) > 0.05:
 			_excess = _prev_ex + OVERSPEED_BUILD * math.sin(abs(slope_pitch)) * dt
 		else:
@@ -2484,6 +2470,16 @@ def suspension_slope_slide_speed(cur, slope_tan, dt):
 	elif cur > SLIDE_MAX:
 		cur = SLIDE_MAX
 	return cur
+
+
+def rebase_airborne_velocity(speed, lateral, old_yaw, new_yaw):
+	'''Keep world X/Z momentum when an unsupported body rotates inertially.'''
+	velocity_x = math.sin(old_yaw) * speed + float(lateral[0])
+	velocity_z = math.cos(old_yaw) * speed + float(lateral[1])
+	sine, cosine = math.sin(new_yaw), math.cos(new_yaw)
+	forward = velocity_x * sine + velocity_z * cosine
+	return forward, (velocity_x - sine * forward,
+		velocity_z - cosine * forward)
 
 
 def ground_follow_gap(speed, slope_pitch, dt):

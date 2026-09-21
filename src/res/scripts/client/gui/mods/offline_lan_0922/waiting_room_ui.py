@@ -84,6 +84,8 @@ BOT_TIER_OPTIONS = (
     ('random', 'Random'), ('same', 'Same tier'),
     ('minus1_0', 'Tier -1 / 0'), ('0_plus1', 'Tier 0 / +1'),
     ('minus1_plus1', 'Tier -1 / +1'),
+    ('0_plus2', 'Tier 0 / +1 / +2'),
+    ('minus2_0', 'Tier -2 / -1 / 0'),
 )
 _BOT_SKILL_CONTROLS = ('skill_previous', 'skill', 'skill_next')
 # The values and their order are bot_gunnery.SKILL_MODES, easiest first, bound

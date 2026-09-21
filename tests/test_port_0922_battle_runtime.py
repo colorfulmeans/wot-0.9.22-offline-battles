@@ -14106,7 +14106,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'player:1': {
                 'engine_id': 10, 'state': {'health': 500, 'alive': True},
                 'kind': 'player', 'network_id': 1, 'local': True}}
-        battle._water_depth = mock.Mock(return_value=0.55)
+        # The fallback now probes at the underwater point, not the origin.
+        battle._water_depth = mock.Mock(return_value=-0.05)
 
         battle._tick_drowning(0.3, 1.0)
         entity.appearance.waterSensor = object()
@@ -14130,9 +14131,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._tick_drowning(0.3, 2.2)
 
         self.assertEqual([
-            (10, 4, 1, (0.0, 0.0)),
             (10, 4, 2, (750.0, 10.0)),
-            (10, 4, 1, (0.0, 0.0)),
+            (10, 4, 0, (0.0, 0.0)),
             (10, 4, 2, (760.0, 10.0)),
             (10, 4, 0, (0.0, 0.0)),
         ], battle._avatar.misc_statuses)
@@ -25242,7 +25242,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual((0.2, 10.0, -0.1), position)
         self.assertEqual(0.0, battle._local_slide_speed)
-        self.assertEqual((1.99, -0.995), battle._local_air_lateral)
+        self.assertEqual((2.0, -1.0), battle._local_air_lateral)
 
     def test_airborne_lateral_carry_cannot_cross_the_arena_edge(self):
         runtime = _runtime()
@@ -25260,7 +25260,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual((298.49, 10.0, 0.0), position)
         self.assertEqual(0.0, battle._local_slide_speed)
-        self.assertEqual((1.99, 0.0), battle._local_air_lateral)
+        self.assertEqual((0.0, 0.0), battle._local_air_lateral)
         self.assertEqual('arena', battle._local_motion_kinds)
 
     def test_cross_slope_slide_carries_off_a_cliff_with_ground_plane(self):

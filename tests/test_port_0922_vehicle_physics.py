@@ -1171,38 +1171,64 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
             self.params, speed, 0.0, False,
             math.radians(slope_degrees), dt)
 
-    def _flat_stop(self, frame_rate):
-        speed = self.params['speedFwd']
-        dt = 1.0 / frame_rate
-        distance = 0.0
-        elapsed = 0.0
-        while speed > 0.0 and elapsed < 5.0:
-            speed = self._coast(speed, 0.0, dt)
-            # BattleRuntime integrates the post-step speed into the pose.
-            distance += speed * dt
-            elapsed += dt
-        return elapsed, distance
+    def test_release_does_not_apply_the_service_brake(self):
+        # This is a control-state regression, not a claimed retail stop time.
+        # The old implicit 65% brake stopped this descriptor in 1.5 seconds.
+        for direction in (-1.0, 1.0):
+            for brake_decel in (0.2, 5.0, 20.0):
+                with self.subTest(direction=direction, brake=brake_decel):
+                    params = dict(self.params, brakeDecel=brake_decel)
+                    speeds = []
+                    for dt in (1.0 / 24.0, 1.0 / 60.0):
+                        speed = direction * 2.5
+                        for unused in range(int(round(1.5 / dt))):
+                            speed = vehicle_physics.longitudinal_step(
+                                params, speed, 0.0, False, 0.0, dt)
+                        speeds.append(speed)
+                    self.assertGreater(abs(speeds[0]), 1.5)
+                    self.assertAlmostEqual(speeds[0], speeds[1], places=10)
+                    self.assertEqual(direction, math.copysign(1.0, speeds[0]))
 
-    def test_type62_flat_release_stops_in_the_conservative_calibrated_window(self):
-        results = [self._flat_stop(rate) for rate in (24, 30, 60, 120)]
+    def test_coasting_depends_on_terrain_in_both_directions(self):
+        for direction in (-1.0, 1.0):
+            speeds = [abs(vehicle_physics.longitudinal_step(
+                self.params, direction * 2.5, 0.0, False, 0.0, 0.1,
+                terrainIdx=terrain)) for terrain in range(3)]
+            self.assertGreater(speeds[0], speeds[1])
+            self.assertGreater(speeds[1], speeds[2])
+            self.assertGreater(speeds[2], 0.0)
 
-        for elapsed, distance in results:
-            self.assertGreaterEqual(elapsed, 1.50)
-            self.assertLessEqual(elapsed, 1.60)
-            self.assertGreaterEqual(distance, 12.5)
-            self.assertLessEqual(distance, 12.9)
-        self.assertLess(
-            max(row[1] for row in results) -
-            min(row[1] for row in results),
-            0.30)
+    def test_rolling_descent_gains_speed_and_climb_loses_speed(self):
+        # Gravity acts on a moving tank even on a slope where parked tracks
+        # can hold it. Releasing W must not engage a brake to cancel gravity.
+        forward_down = self._coast(2.5, 15.0, 0.1)
+        forward_up = self._coast(2.5, -15.0, 0.1)
+        self.assertGreater(forward_down, 2.5)
+        self.assertLess(forward_up, self._coast(2.5, 0.0, 0.1))
+        self.assertAlmostEqual(-forward_down, self._coast(-2.5, -15.0, 0.1))
+        self.assertAlmostEqual(-forward_up, self._coast(-2.5, 15.0, 0.1))
 
-    def test_parkable_descent_brakes_and_a_steeper_one_slides(self):
-        # The 2.3-reviewed coast law: every slope the parked hold can keep
-        # brakes like the flat; past the perch limit gravity owns the descent.
-        self.assertLess(self._coast(5.0, 15.0, 0.1), 5.0)
-        self.assertGreater(self._coast(5.0, 15.0, 0.1),
-                           self._coast(5.0, 0.0, 0.1))
-        self.assertGreater(self._coast(5.0, 28.0, 0.1), 5.0)
+    def test_rolling_to_rest_does_not_reverse_or_creep(self):
+        for direction in (-1.0, 1.0):
+            speed = direction * 0.05
+            for unused in range(10):
+                speed = self._coast(speed, 0.0, 0.1)
+                self.assertGreaterEqual(speed * direction, 0.0)
+            self.assertEqual(0.0, speed)
+
+    def test_explicit_braking_and_opposite_input_still_stop_the_vehicle(self):
+        for direction in (-1.0, 1.0):
+            for brake_kind in ('handbrake', 'opposite'):
+                speed = direction * 5.0
+                for unused in range(120):
+                    speed = vehicle_physics.longitudinal_step(
+                        self.params, speed,
+                        -direction if brake_kind == 'opposite' else 0.0,
+                        False, 0.0, 1.0 / 60.0,
+                        handbrake=brake_kind == 'handbrake')
+                    if speed * direction <= 0.0:
+                        break
+                self.assertLessEqual(speed * direction, 0.0)
 
     def test_static_hold_and_handbrake_are_unchanged(self):
         self.assertEqual(0.0, self._coast(0.0, 25.0, 0.1))
@@ -1226,15 +1252,16 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
         self.assertGreater(results[0], 7.0)
         self.assertLess(max(results) - min(results), 1e-9)
 
-    def test_released_throttle_bleeds_the_gravity_overspeed(self):
-        speed = self.params['speedFwd'] * 1.04
-        elapsed = 0.0
-        while speed > 0.0 and elapsed < 6.0:
-            speed = self._coast(speed, 4.0, 1.0 / 30.0)
-            elapsed += 1.0 / 30.0
-
-        self.assertEqual(0.0, speed)
-        self.assertLess(elapsed, 2.5)
+    def test_releasing_throttle_does_not_add_an_overspeed_brake(self):
+        limit = self.params['speedFwd']
+        # Crossing the drivetrain speed limit does not change a neutral
+        # tank's drag. The gravity overspeed cap itself is unchanged.
+        low_speed = limit - 0.2
+        high_speed = limit + 0.2
+        low_next = self._coast(low_speed, 0.0, 0.1)
+        high_next = self._coast(high_speed, 0.0, 0.1)
+        self.assertAlmostEqual(low_speed - low_next, high_speed - high_next)
+        self.assertGreater(self._coast(high_speed, 4.0, 0.1), high_speed)
 
     def test_a_driven_descent_keeps_the_gravity_overspeed(self):
         speed = self.params['speedFwd']

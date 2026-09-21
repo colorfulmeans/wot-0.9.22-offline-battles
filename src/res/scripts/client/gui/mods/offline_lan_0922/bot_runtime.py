@@ -2472,7 +2472,7 @@ class BotRuntime(object):
                 corridor_half_width)
         except Exception:
             return {'clear': False, 'collision': True,
-                    'water': False, 'slope': 0.0}
+                    'water': False, 'slope': 0.0, 'probe_failed': True}
         finally:
             self._probe_finished(4, probe_started)
         return result
@@ -5512,6 +5512,9 @@ class BotRuntime(object):
                 self._renew_observer_spot(source, target, now, duration, target_key)
             if alive:
                 self._human_direct_targets[source['id']] = direct_targets
+                if isinstance(visibility_tick, dict):
+                    visibility_tick.setdefault('player_vision_ranges', []).append({
+                        'id': source['id'], 'radius': resolve_source_view_range()})
         return True
 
     @timed('bot.targets')
@@ -7905,6 +7908,28 @@ class BotRuntime(object):
         own['_radio_ground_goal'] = (key, result)
         return result
 
+    def _report_blocked_planner(self, position, command, samples):
+        """Let a conclusive static planner veto retire an obsolete route.
+
+        A zero-throttle driver has no later realised contact to report. Keep
+        live traffic, unavailable probes, and intentional holds out of this
+        hook; native review proves the specific graph edges before rerouting.
+        """
+        if (command.get('recovery_mode') != 'blocked' or
+                not command.get('movement_intent', False)):
+            return False
+        report = getattr(self.navigator, 'report_blocked_plan', None)
+        if not callable(report):
+            return False
+        for sample in samples.values():
+            if (isinstance(sample, dict) and
+                    sample.get('collision', False) and
+                    not sample.get('clear', False) and
+                    not sample.get('deferred', False) and
+                    not sample.get('probe_failed', False)):
+                return report(position, command.get('move_position'))
+        return False
+
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
         mode = strategic.get('combat_mode', 'route')
@@ -8362,6 +8387,39 @@ class BotRuntime(object):
             normal_y=(math.cos(_number(state.get('pitch'))) *
                       math.cos(_number(state.get('roll')))))
 
+    def _note_wreck_push(self, state, result, step, before, prior_push,
+                         reason, ground=None):
+        """Record a bounded terminal reason for a real wreck push attempt."""
+        try:
+            delta = result['delta_velocity']
+            correction = result['correction']
+            if not any(abs(float(value)) > 1.0e-6 for value in
+                       tuple(prior_push) + tuple(delta) + tuple(correction)):
+                return
+            elapsed = state.get('_wreck_push_log_elapsed', 2.0) + max(0.0, step)
+            state['_wreck_push_log_elapsed'] = elapsed
+            if elapsed < 2.0:
+                return
+            state['_wreck_push_log_elapsed'] = 0.0
+            payload = {
+                'round': self.round_id,
+                'map': self._navigation_map_name,
+                'id': int(state['id']), 'reason': reason,
+                'before': before, 'after': _position(state),
+                'mass': state.get('mass'), 'yaw': state.get('yaw'),
+                'pitch': state.get('pitch'), 'roll': state.get('roll'),
+                'dt': step, 'ground': ground,
+                'prior_push': prior_push, 'delta_velocity': delta,
+                'correction': correction,
+                'remaining_push': (state.get('push_x', 0.0),
+                                   state.get('push_z', 0.0)),
+            }
+            sys.stdout.write('[Offline LAN 0.9.22] WRECK PUSH %s\n' %
+                             json.dumps(payload, sort_keys=True))
+        except Exception:
+            # Diagnostic output never owns the contact or state transition.
+            pass
+
     def _apply_wreck_contact_response(self, state, result, step):
         """Shove one destroyed hull and keep it standing on the ground.
 
@@ -8373,6 +8431,8 @@ class BotRuntime(object):
         support is undone rather than left hanging: the last pose a dead hull
         was seen at is always a legal one.
         """
+        before = _position(state)
+        prior_push = (state.get('push_x', 0.0), state.get('push_z', 0.0))
         if self._wreck_tracks_absorb(state, result, step):
             # Static friction: the pusher could not break the tracks loose.
             # Baumgarte separation is not a force and would otherwise walk
@@ -8380,11 +8440,16 @@ class BotRuntime(object):
             # mass, so the pusher owns the whole overlap this tick instead.
             state['push_x'] = 0.0
             state['push_z'] = 0.0
+            self._note_wreck_push(state, result, step, before, prior_push,
+                                  'track_hold')
             return False
-        before = _position(state)
         self._apply_tank_contact_response(state, result, step)
         if (abs(state['x'] - before[0]) <= 1.0e-6 and
                 abs(state['z'] - before[2]) <= 1.0e-6):
+            # The common horizontal gate checks world geometry and landed
+            # turrets. Do not claim which one blocked without its witness.
+            self._note_wreck_push(state, result, step, before, prior_push,
+                                  'horizontal_block')
             return False
         try:
             ground = self._ground_probe_at(
@@ -8398,6 +8463,8 @@ class BotRuntime(object):
             state['x'], state['y'], state['z'] = before
             state['push_x'] = 0.0
             state['push_z'] = 0.0
+            self._note_wreck_push(state, result, step, before, prior_push,
+                                  'missing_support')
             return False
         rise = float(ground) - _number(state.get('y'))
         if not -WRECK_SUPPORT_DROP <= rise <= WRECK_SUPPORT_RISE:
@@ -8406,6 +8473,8 @@ class BotRuntime(object):
             state['x'], state['y'], state['z'] = before
             state['push_x'] = 0.0
             state['push_z'] = 0.0
+            self._note_wreck_push(state, result, step, before, prior_push,
+                                  'support_step', ground)
             return False
         candidate = (state['x'], float(ground), state['z'])
         if not self._turret_pose_is_clear(
@@ -8415,8 +8484,12 @@ class BotRuntime(object):
             state['x'], state['y'], state['z'] = before
             state['push_x'] = 0.0
             state['push_z'] = 0.0
+            self._note_wreck_push(state, result, step, before, prior_push,
+                                  'turret_settle', ground)
             return False
         state['y'] = float(ground)
+        self._note_wreck_push(state, result, step, before, prior_push,
+                              'moved', ground)
         return True
 
     def _resolve_human_ram_receipts(self, players, now):
@@ -8998,7 +9071,7 @@ class BotRuntime(object):
         Without it the terrain graph keeps returning the lane the wreck now
         occupies, so every following search, direct shortcut and cached path
         still drives into it. The navigator recomputes only when this set
-        actually changes, which is once per death.
+        actually changes, including when a wreck is pushed into another lane.
         """
         grid = getattr(self.navigator, 'grid', None)
         publish = getattr(grid, 'set_static_hulls', None)
@@ -11641,6 +11714,8 @@ class BotRuntime(object):
                         self._combat_diagnostics, 'bot.planner_driver',
                         self.adapter.decide,
                         decision_state, sample_clear)
+                self._report_blocked_planner(
+                    position, command, planner_probe_samples)
                 command = timed_call(
                     self._combat_diagnostics, 'bot.traffic',
                     self._traffic_coordinator.adjust,
@@ -12153,11 +12228,12 @@ class BotRuntime(object):
                         # it makes the remaining catch-up slices hold without
                         # repeating the same deferred native probe.
                         self._motion_probe_cache.pop(state['id'], None)
-                        if cached_motion_probe is not None:
-                            # Preserve the established no-cache behaviour: an
-                            # exact resolver may still admit this first slice.
-                            # Only the stale proof introduced by this change
-                            # must not grant motion in its unrelated corridor.
+                        if (cached_motion_probe is not None or
+                                not callable(self.motion_resolver)):
+                            # With no prior proof, only an exact resolver can
+                            # admit this first slice. Missing that resolver is
+                            # not permission to cross an unsampled corridor.
+                            # A stale proof must also hold its unrelated pose.
                             throttle = 0.0
                             turn = 0.0
                             pose_frozen = True
@@ -12169,8 +12245,8 @@ class BotRuntime(object):
                         self._motion_probe_cache.pop(state['id'], None)
                 # A deferred sample only means the shared soft-static recast
                 # budget was exhausted this callback. It proves neither a wall
-                # nor a new clear corridor, so only an old clear proof which
-                # still geometrically contains the requested motion may remain.
+                # nor a new clear corridor. Movement needs an old clear proof
+                # containing this motion or the exact first-slice hull sweep.
             else:
                 motion_probe = cached_motion_probe['result']
             probe_deferred = bool(
@@ -12990,6 +13066,7 @@ class BotRuntime(object):
             self._next_observation = now + OBSERVATION_SECONDS
             outgoing.append({
                 'type': 'bot_observation',
+                'player_vision_ranges': visibility_tick.get('player_vision_ranges', []),
                 'contacts': self._pack_observations(
                     observation_entries, now),
                 'radio_links': [
