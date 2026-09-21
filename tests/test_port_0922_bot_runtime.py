@@ -3128,7 +3128,7 @@ class BotRuntimeTests(unittest.TestCase):
         adapter = _FixedAdapter(command)
         calls = []
 
-        class NegativeGrid(object):
+        class NegativeGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
