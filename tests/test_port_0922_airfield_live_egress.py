@@ -10,6 +10,7 @@ import json
 import math
 from pathlib import Path
 import unittest
+from unittest import mock
 
 from test_port_0922_navigation import TerrainNavigator
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
@@ -29,6 +30,24 @@ REPORT_POSES = (
      (-329.00539956960966, -6.35, -5.767693003237659)),
     (30, (-268.17565537759526, 0.12851428985595703, -137.74413645531496),
      (-229.33997664229352, -8.17, -204.18776869422527)),
+)
+
+
+REPORT_INTERIOR_POSES = (
+    (13, (333.48155970190066, -0.18044281005859375, -181.18057068156588),
+     (381.1492874992733, -0.18, -56.78732187481833)),
+    (7, (371.5066969477162, 0.04060792922973633, -85.16535296397963),
+     (358.0, 0.0, -6.0)),
+    (22, (-325.87354366764026, 0.040576934814453125, -188.03674104422024),
+     (-334.0, 0.0, -6.0)),
+    (20, (-344.1419829025407, 0.04848194122314453, -131.54451149537354),
+     (-322.0, 0.0, -54.0)),
+    (15, (342.51185060529275, 0.15948486328125, -172.26662212844806),
+     (30.5329, -0.7783, -130.5846)),
+    (3, (360.28312055654845, -0.17999887466430664, -57.22265840657857),
+     (374.0, 0.0, 50.0)),
+    (9, (356.40981791976725, -0.17999839782714844, -55.10530460609067),
+     (358.0, 0.0, -6.0)),
 )
 
 
@@ -115,6 +134,113 @@ class AirfieldLiveEgressTests(unittest.TestCase):
                     self.assertGreater(order['throttle'], 0.0)
                     self.assertFalse(order['brake'])
                     self.assertEqual(current, state['position'])
+
+    def test_adjacent_missing_cell_does_not_require_a_snapped_graph_link(self):
+        # This is a generated pose after 0.37 m of integrated movement from
+        # report Bot 30, not an additional captured Windows position. The
+        # nearest-cell corridor changes, but the actual native ray stays clear.
+        bot, unused_current, goal = REPORT_POSES[-1]
+        current = (-267.85435219250706, 0.12851428985595703,
+                   -137.93039933299315)
+        yaw = math.atan2(goal[0] - current[0], goal[2] - current[2]) - 1.75
+        target = (current[0] + math.sin(yaw) * 3.12, current[1],
+                  current[2] + math.cos(yaw) * 3.12)
+        nav, samples, rays = self.scene(current, goal)
+        self.assertIsNone(nav.grid._baked_cell_height(nav.grid.cell_for(current)))
+        self.assertEqual((False, 0), nav.grid._baked_corridor(current, target))
+        self.assertTrue(nav.grid.dry_segment_clear(current, target, 1.0))
+        self.assertTrue(samples)
+        self.assertEqual(current, rays[-1][0])
+        # The earlier bypass must still require each native safety condition.
+        nav.grid.obstacle_probe = lambda *args: True
+        self.assertFalse(nav.grid.dry_segment_clear(current, target, 1.0))
+        nav.grid.obstacle_probe = lambda *args: False
+        for height in (None, float('nan'), 20.0, -20.0):
+            nav.grid.ground_probe = lambda *args: height
+            self.assertFalse(nav.grid.dry_segment_clear(current, target, 1.0))
+
+    def test_integrated_motion_continues_beyond_the_first_missing_cell(self):
+        from test_port_0922_bot_runtime import _combat_descriptor
+        from effective_params_fixture import bot_default_crew_factors
+        from gui.mods.offline_lan_0922 import loadout
+        # Exercise the real integrator, not just a positive drive command at
+        # a fixed pose. Native probes are flat/clear; the generic descriptor
+        # is deliberately not presented as these vehicles' retail physics.
+        with mock.patch.object(loadout, 'attribute_factors',
+                               bot_default_crew_factors), redirect_stdout(io.StringIO()):
+            for bot, current, goal in REPORT_POSES + REPORT_INTERIOR_POSES:
+                for fps in (5, 15):
+                    with self.subTest(bot=bot, fps=fps):
+                        runtime = BotRuntime(1,
+                            descriptor_resolver=lambda *args: _combat_descriptor(),
+                            direction_probe=lambda *args: dict(
+                                clear=True, collision=False, slope=0.0),
+                            spawn_resolver=lambda *args: (current, math.atan2(
+                                goal[0] - current[0], goal[2] - current[2])),
+                            ground_probe=lambda *args: current[1],
+                            physics_ground_probe=lambda *args: current[1],
+                            obstacle_probe=lambda *args: False,
+                            baked_graph=self.graph,
+                            visibility_probe=lambda *args: False,
+                            firing_lane_probe=lambda *args: False)
+                        runtime.battle_start({
+                            'map': '31_airfield', 'round_id': fps,
+                            'bot_authority_id': 1,
+                            'bots': [{'id': bot, 'team': 1 if bot < 16 else 2,
+                                      'slot': 0, 'vehicle': 'fixture', 'name': 'Probe',
+                                      'profile': {
+                                          'class_tag': 'mediumTank',
+                                          'dominant_role': 'support',
+                                          'roles': {'support': 1.0}, 'shells': [],
+                                          'vehicle_name': 'fixture',
+                                          'desired_range': 200, 'fire_range': 500}}]})
+                        nav = runtime.navigator
+                        nav.grid.review_native_corridor(current, goal)
+                        nav.search_credit = 0.0
+                        # A* remains pending for the whole test. Local egress
+                        # must not depend on it happening to complete first.
+                        nav._accrue_search_credit = lambda elapsed: None
+                        def navigation_target(bot_id, position, target, order, state):
+                            return nav.next_target(bot_id, position, target,
+                                ('join', bot_id, nav.grid.cell_for(position)), state['now'])
+                        runtime.adapter.navigation_target = navigation_target
+                        duration = 20 if bot == 30 else 6
+                        for frame in range(fps * duration):
+                            runtime._server_orders = {bot: {
+                                'move_position': goal, 'fire_allowed': False,
+                                'fire_range': 400, 'combat_mode': 'route', 'shell_index': 0}}
+                            runtime.update(1.0 / fps, float(frame) / fps)
+                        state = runtime.states[bot]
+                        displacement = math.hypot(state['x'] - current[0],
+                                                  state['z'] - current[2])
+                        self.assertTrue(state['alive'])
+                        self.assertGreater(displacement, 5.0 if bot == 30 else 1.5)
+
+    def test_interior_report_poses_join_the_existing_nearest_cell(self):
+        for bot, current, goal in REPORT_INTERIOR_POSES:
+            with self.subTest(bot=bot):
+                nav, samples, rays = self.scene(current, goal)
+                cell = nav.grid._nearest_baked_cell(nav.grid.cell_for(current), 2)
+                expected = nav.grid.point_for(cell, nav.grid._baked_cell_height(cell))
+                target = nav._pending_target(bot, current, goal, 1.0,
+                                             {'pending_since': 0.0})
+                self.assertEqual(expected, target)
+                self.assertLessEqual(len(samples), 7)
+                self.assertEqual(1, len(rays))
+                self.assertEqual(current, rays[0][0])
+                # One known node is a candidate, not permission to skip a wall,
+                # a failed edge, native ground proof or the caller's side gate.
+                nav.grid.obstacle_probe = lambda *args: True
+                self.assertIsNone(nav.grid.safe_local_target(current, goal, 2.0))
+                nav.grid.obstacle_probe = lambda *args: False
+                penalties = {edge: 1.0 for edge in
+                             nav.grid._edge_keys_for_segment(current, target)}
+                self.assertIsNone(nav.grid.safe_local_target(current, goal, 2.0,
+                                                             edge_penalties=penalties))
+                self.assertIsNone(nav.grid.safe_local_target(current, goal, 2.0,
+                                                             minimum_offset=math.pi))
+                nav.grid.ground_probe = lambda *args: None
+                self.assertIsNone(nav.grid.safe_local_target(current, goal, 2.0))
 
     def test_native_connector_work_is_bounded_before_a_long_route(self):
         bot, current, goal = REPORT_POSES[0]

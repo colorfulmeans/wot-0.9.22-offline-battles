@@ -779,18 +779,18 @@ class TerrainGrid(object):
 		if distance < 0.25:
 			return True
 		if self.prebaked:
-			if not self._baked_corridor(start, end)[0]:
-				return False
 			edges = self._edge_keys_for_segment(start, end)
 			if (self._baked_cell_height(self.cell_for(start)) is None and
 					any(first in self._native_review_cells or
 						second in self._native_review_cells
 						for first, second in edges)):
-				# The bake proved a corridor from a nearby supported cell, but
-				# native review cannot use the occupied cell's missing height.
-				# Prove the physical connector; do not invent a solid edge or
-				# move the tank to the snapped position.
+				# Neither the snapped bake corridor nor a raw edge with a missing
+				# height proves the actual short connector. Recheck it before
+				# either coarse-grid verdict can veto motion. A small physical
+				# move can change the snapped corridor without adding a wall.
 				return self._live_baked_egress_clear(start, end)
+			if not self._baked_corridor(start, end)[0]:
+				return False
 			if not edges and self.cell_for(start) in self._native_review_cells:
 				# A short escape can stay inside one four-metre cell. There is
 				# then no graph edge to recheck, but the contact already disproved
@@ -1116,6 +1116,25 @@ class TerrainGrid(object):
 				value = (abs(offset) > 1.75, score, abs(offset), candidate)
 				if best is None or value[:3] < best[:3]:
 					best = value
+		if (best is None and self.prebaked and
+				self._baked_cell_height(self.cell_for(current)) is None):
+			# A centre deep inside one eroded footprint can have no supported
+			# endpoint in the original short fan. The graph already chooses this
+			# nearby cell as its logical start; make that connector an explicit
+			# native-proven drive, not an implicit snap or an endless wait.
+			cell = self._nearest_baked_cell(self.cell_for(current), 2)
+			if cell is not None and cell in self._native_review_cells:
+				candidate = self.point_for(cell, self._baked_cell_height(cell))
+				yaw = math.atan2(candidate[0] - float(current[0]),
+				                 candidate[2] - float(current[2]))
+				offset = abs(math.atan2(math.sin(yaw - desired_yaw),
+				                        math.cos(yaw - desired_yaw)))
+				if (offset >= max(0.0, float(minimum_offset)) and
+						self.dry_segment_clear(current, candidate, now) and
+						not (edge_penalties and any(edge in edge_penalties
+							for edge in self._edge_keys_for_segment(
+								current, candidate)))):
+					return candidate
 		return best[3] if best is not None else None
 
 	def plan(self, start, goal, avoid_points=None, max_expansions=1600, now=0.0,

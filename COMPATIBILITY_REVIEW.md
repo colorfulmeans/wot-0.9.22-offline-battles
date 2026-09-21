@@ -5696,3 +5696,33 @@ the routing/command defect, not full replay of the Windows scene or a promise
 that every building stall is solved. Existing bounded stall reports now add
 the actual occupied cell, its routing height, nearest valid cell, review-cell
 count and pending age without any native query or new timer.
+
+
+The continuous-motion regression also exposed a second veto within this same
+missing-start case: `_baked_corridor` was still required to pass before the
+live connector could be checked. After only 0.37--0.52 metres of movement from
+the Bot 30 fixture, nearest-cell snapping selected a disconnected graph link
+and froze the tank again, even with unchanged clear native geometry. Evaluate
+the bounded reviewed missing-start connector before either coarse-grid verdict.
+All native support, grade, water, hazard and obstacle checks remain mandatory.
+Supported-start corridors retain their original bake and edge validation.
+
+The final tests include that downstream generated position with hard-wall and
+invalid-support negative cases, and continuous `BotRuntime` integration from all
+six recorded positions at simulated 5/15 Hz. Searches remain pending throughout;
+the original six poses move beyond the hold radius and Bot 30 is exercised for
+20 seconds to catch repeated first-metre stalls. The generic vehicle descriptor
+and flat/clear native replies are controlled test inputs, not a native scene
+replay or a measurement of the reported vehicles' acceleration or FPS.
+
+
+Checking every missing-cell pending sample, rather than only the longest
+stationary examples, found seven more paired report poses with no routing
+height at any endpoint of the existing 2.08/3.12-metre local fan. When that
+entire fan fails, a reviewed missing-start pose may explicitly drive to the
+same nearest supported cell that the bake already uses as its logical start.
+This is one additional candidate within the existing two-cell search, subject
+to the same bounded continuous native proof, hazards, failed-edge and requested
+side/angle restrictions. It does not change the map or move the pose directly.
+All thirteen representative recorded positions are covered by continuous
+integration tests. Missing support and blocked connectors still park safely.
