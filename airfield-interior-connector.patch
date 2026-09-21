@@ -1,0 +1,121 @@
+diff --git a/COMPATIBILITY_REVIEW.md b/COMPATIBILITY_REVIEW.md
+index a74a84e..bd69c2f 100644
+--- a/COMPATIBILITY_REVIEW.md
++++ b/COMPATIBILITY_REVIEW.md
+@@ -5714,3 +5714,15 @@ the original six poses move beyond the hold radius and Bot 30 is exercised for
+ 20 seconds to catch repeated first-metre stalls. The generic vehicle descriptor
+ and flat/clear native replies are controlled test inputs, not a native scene
+ replay or a measurement of the reported vehicles' acceleration or FPS.
++
++
++Checking every missing-cell pending sample, rather than only the longest
++stationary examples, found seven more paired report poses with no routing
++height at any endpoint of the existing 2.08/3.12-metre local fan. When that
++entire fan fails, a reviewed missing-start pose may explicitly drive to the
++same nearest supported cell that the bake already uses as its logical start.
++This is one additional candidate within the existing two-cell search, subject
++to the same bounded continuous native proof, hazards, failed-edge and requested
++side/angle restrictions. It does not change the map or move the pose directly.
++All thirteen representative recorded positions are covered by continuous
++integration tests. Missing support and blocked connectors still park safely.
+diff --git a/src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py b/src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py
+index dd337da..2d17f22 100644
+--- a/src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py
++++ b/src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py
+@@ -1116,6 +1116,25 @@ class TerrainGrid(object):
+ 				value = (abs(offset) > 1.75, score, abs(offset), candidate)
+ 				if best is None or value[:3] < best[:3]:
+ 					best = value
++		if (best is None and self.prebaked and
++				self._baked_cell_height(self.cell_for(current)) is None):
++			# A centre deep inside one eroded footprint can have no supported
++			# endpoint in the original short fan. The graph already chooses this
++			# nearby cell as its logical start; make that connector an explicit
++			# native-proven drive, not an implicit snap or an endless wait.
++			cell = self._nearest_baked_cell(self.cell_for(current), 2)
++			if cell is not None and cell in self._native_review_cells:
++				candidate = self.point_for(cell, self._baked_cell_height(cell))
++				yaw = math.atan2(candidate[0] - float(current[0]),
++				                 candidate[2] - float(current[2]))
++				offset = abs(math.atan2(math.sin(yaw - desired_yaw),
++				                        math.cos(yaw - desired_yaw)))
++				if (offset >= max(0.0, float(minimum_offset)) and
++						self.dry_segment_clear(current, candidate, now) and
++						not (edge_penalties and any(edge in edge_penalties
++							for edge in self._edge_keys_for_segment(
++								current, candidate)))):
++					return candidate
+ 		return best[3] if best is not None else None
+ 
+ 	def plan(self, start, goal, avoid_points=None, max_expansions=1600, now=0.0,
+diff --git a/tests/test_port_0922_airfield_live_egress.py b/tests/test_port_0922_airfield_live_egress.py
+index 31e3779..49372bc 100644
+--- a/tests/test_port_0922_airfield_live_egress.py
++++ b/tests/test_port_0922_airfield_live_egress.py
+@@ -33,6 +33,24 @@ REPORT_POSES = (
+ )
+ 
+ 
++REPORT_INTERIOR_POSES = (
++    (13, (333.48155970190066, -0.18044281005859375, -181.18057068156588),
++     (381.1492874992733, -0.18, -56.78732187481833)),
++    (7, (371.5066969477162, 0.04060792922973633, -85.16535296397963),
++     (358.0, 0.0, -6.0)),
++    (22, (-325.87354366764026, 0.040576934814453125, -188.03674104422024),
++     (-334.0, 0.0, -6.0)),
++    (20, (-344.1419829025407, 0.04848194122314453, -131.54451149537354),
++     (-322.0, 0.0, -54.0)),
++    (15, (342.51185060529275, 0.15948486328125, -172.26662212844806),
++     (30.5329, -0.7783, -130.5846)),
++    (3, (360.28312055654845, -0.17999887466430664, -57.22265840657857),
++     (374.0, 0.0, 50.0)),
++    (9, (356.40981791976725, -0.17999839782714844, -55.10530460609067),
++     (358.0, 0.0, -6.0)),
++)
++
++
+ class AirfieldLiveEgressTests(unittest.TestCase):
+     def setUp(self):
+         self.graph = json.loads((ROOT / 'navgraphs/31_airfield.json').read_text())
+@@ -150,7 +168,7 @@ class AirfieldLiveEgressTests(unittest.TestCase):
+         # is deliberately not presented as these vehicles' retail physics.
+         with mock.patch.object(loadout, 'attribute_factors',
+                                bot_default_crew_factors), redirect_stdout(io.StringIO()):
+-            for bot, current, goal in REPORT_POSES:
++            for bot, current, goal in REPORT_POSES + REPORT_INTERIOR_POSES:
+                 for fps in (5, 15):
+                     with self.subTest(bot=bot, fps=fps):
+                         runtime = BotRuntime(1,
+@@ -198,6 +216,32 @@ class AirfieldLiveEgressTests(unittest.TestCase):
+                         self.assertTrue(state['alive'])
+                         self.assertGreater(displacement, 5.0 if bot == 30 else 1.5)
+ 
++    def test_interior_report_poses_join_the_existing_nearest_cell(self):
++        for bot, current, goal in REPORT_INTERIOR_POSES:
++            with self.subTest(bot=bot):
++                nav, samples, rays = self.scene(current, goal)
++                cell = nav.grid._nearest_baked_cell(nav.grid.cell_for(current), 2)
++                expected = nav.grid.point_for(cell, nav.grid._baked_cell_height(cell))
++                target = nav._pending_target(bot, current, goal, 1.0,
++                                             {'pending_since': 0.0})
++                self.assertEqual(expected, target)
++                self.assertLessEqual(len(samples), 7)
++                self.assertEqual(1, len(rays))
++                self.assertEqual(current, rays[0][0])
++                # One known node is a candidate, not permission to skip a wall,
++                # a failed edge, native ground proof or the caller's side gate.
++                nav.grid.obstacle_probe = lambda *args: True
++                self.assertIsNone(nav.grid.safe_local_target(current, goal, 2.0))
++                nav.grid.obstacle_probe = lambda *args: False
++                penalties = {edge: 1.0 for edge in
++                             nav.grid._edge_keys_for_segment(current, target)}
++                self.assertIsNone(nav.grid.safe_local_target(current, goal, 2.0,
++                                                             edge_penalties=penalties))
++                self.assertIsNone(nav.grid.safe_local_target(current, goal, 2.0,
++                                                             minimum_offset=math.pi))
++                nav.grid.ground_probe = lambda *args: None
++                self.assertIsNone(nav.grid.safe_local_target(current, goal, 2.0))
++
+     def test_native_connector_work_is_bounded_before_a_long_route(self):
+         bot, current, goal = REPORT_POSES[0]
+         nav, samples, rays = self.scene(current, goal)

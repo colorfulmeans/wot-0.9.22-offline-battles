@@ -1,4 +1,4 @@
-name: Validate continuous Airfield egress
+name: Validate all reported Airfield egress cases
 on:
   push:
     branches: [maintenance/airfield-225339-continuity]
@@ -19,46 +19,49 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
-      - name: Apply the exact continuous-motion correction
+      - name: Apply exact continuity and interior connector corrections
         run: |
           python - <<'PY'
           import hashlib, pathlib, subprocess
-          patch = pathlib.Path('transport/airfield-continuity.patch').read_bytes()
-          assert hashlib.sha256(patch).hexdigest() == 'f3113c09f45d6ff86cb5835cb7da76ca14b0d840a32a47052fe6498daf635e40'
-          subprocess.run(['git','apply','--check','../transport/airfield-continuity.patch'],cwd='work',check=True)
-          subprocess.run(['git','apply','../transport/airfield-continuity.patch'],cwd='work',check=True)
+          patches = [('airfield-continuity.patch','f3113c09f45d6ff86cb5835cb7da76ca14b0d840a32a47052fe6498daf635e40'),('airfield-interior-connector.patch','29f9fb7d15f57d33146563cf2ef1d0accb47ca1727febed907b75ca9600b43d4')]
+          for name, digest in patches:
+              patch = pathlib.Path('transport', name).read_bytes()
+              assert hashlib.sha256(patch).hexdigest() == digest, name
+              subprocess.run(['git','apply','--check','../transport/'+name],cwd='work',check=True)
+              subprocess.run(['git','apply','../transport/'+name],cwd='work',check=True)
           PY
-      - name: Run complete affected navigation and Bot regressions
+      - name: Run all final egress and related navigation regressions
         working-directory: work
         env:
           PYTHONPATH: tests
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           set -o pipefail
-          python -m unittest test_port_0922_airfield_live_egress test_port_0922_navigation test_port_0922_ai test_port_0922_bot_runtime test_port_0922_bot_navigation_reports test_port_0922_contact_navigation_regressions test_port_0922_bot_destructible_approach test_port_0922_navigation_clearance test_port_0922_traffic test_port_0922_traffic_jam -v 2>&1 | tee ../validation.log
+          python -m unittest test_port_0922_airfield_live_egress test_port_0922_navigation test_port_0922_ai test_port_0922_bot_navigation_reports test_port_0922_contact_navigation_regressions test_port_0922_bot_destructible_approach test_port_0922_navigation_clearance test_port_0922_traffic test_port_0922_traffic_jam -v 2>&1 | tee ../validation.log
       - name: Compile all client modules with CPython 2.7.18
         working-directory: work
         run: |
           docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; paths=sorted(os.path.join(d,n) for d,_,ns in os.walk('src/res/scripts/client') for n in ns if n.endswith('.py')); [compile(open(p,'rb').read(),p,'exec') for p in paths]; print('Compiled %d Python 2.7 client modules' % len(paths))"
-      - name: Stage only the validated production commit
+      - name: Stage only the final validated production commit
         working-directory: work
         run: |
           set -euo pipefail
           git config user.name colorfulmeans
           git config user.email colorfulmeans@proton.me
-          branch=maintenance/airfield-225339-continuity-result
+          branch=maintenance/airfield-225339-complete
           test -z "$(git ls-remote --heads origin refs/heads/$branch)"
           git add COMPATIBILITY_REVIEW.md src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py tests/test_port_0922_airfield_live_egress.py
           git diff --cached --check
           test "$(git diff --cached --name-only | wc -l)" -eq 3
-          git commit -m "Keep native-proven Airfield egress continuous across snapped grid changes"
+          git commit -m "Complete continuous native-proven egress for the Airfield report"
           git push origin "HEAD:refs/heads/$branch"
           git rev-parse HEAD > ../repair-commit.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: airfield-continuity-validation
+          name: airfield-complete-egress-validation
           path: |
             validation.log
             repair-commit.txt
             transport/airfield-continuity.patch
+            transport/airfield-interior-connector.patch
           retention-days: 7
