@@ -1176,6 +1176,20 @@ class _AdaptiveMatrixProvider(object):
         self._target = value
 
 
+class _GunRotator(types.SimpleNamespace):
+    """Model the audited #1513 read-only property and in-place marker write."""
+
+    @property
+    def dispersionAngle(self):
+        return self._VehicleGunRotator__dispersionAngles[0]
+
+    def setShotPosition(self, vehicle_id, shot_position, shot_vector,
+                        dispersion_angle, forceValueRefresh=False):
+        if self.clientMode and not self.showServerMarker and not forceValueRefresh:
+            return
+        self._VehicleGunRotator__dispersionAngles[0] = dispersion_angle
+
+
 class _Avatar(object):
     def handleVehicleCollidedVehicle(
             self, veh_a, veh_b, hit_point, contact_time):
@@ -1226,9 +1240,10 @@ class _Avatar(object):
         self.visual_stops = []
         self.gun_locks = []
         self.isGunLocked = False
-        self.gunRotator = types.SimpleNamespace(
+        self.gunRotator = _GunRotator(
             turretYaw=0.0, gunPitch=0.0,
-            dispersionAngle=0.25,
+            clientMode=True, showServerMarker=False,
+            _VehicleGunRotator__dispersionAngles=[0.25, 0.01],
             turretRotationSpeed=0.5,
             _VehicleGunRotator__isStarted=False,
             _VehicleGunRotator__maxTurretRotationSpeed=None,
@@ -1348,6 +1363,8 @@ class _Avatar(object):
 
     def updateGunMarker(self, vehicle_id, shot_position, shot_vector,
                         dispersion_angle):
+        self.gunRotator.setShotPosition(
+            vehicle_id, shot_position, shot_vector, dispersion_angle)
         self.gun_marker_updates.append((
             vehicle_id, shot_position, shot_vector, dispersion_angle))
 
@@ -31229,9 +31246,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'input_seq': 8, 'origin': [1., 2., 3.],
                 'direction': [0., 0., 1.], 'shot_speed': 250.,
                 'dispersion_angle': .0375}}]}
-        runtime.bigworld.avatar.gunRotator = types.SimpleNamespace(
-            showServerMarker=True,
-            dispersionAngle=0.25,
+        runtime.bigworld.avatar.gunRotator = _GunRotator(
+            showServerMarker=True, clientMode=True,
+            _VehicleGunRotator__dispersionAngles=[0.25, 0.01],
             getCurShotPosition=mock.Mock(side_effect=AssertionError(
                 'server marker must not sample the local ray')))
 
@@ -31242,6 +31259,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual((10, .0375), (updates[0][0], updates[0][3]))
         self.assertEqual((1., 2., 3.), tuple(updates[0][1]))
         self.assertEqual((0., 0., 250.), tuple(updates[0][2]))
+        self.assertEqual(0.25, battle._native_dispersion_angle())
+        self.assertEqual([0.25, 0.01],
+                         battle._avatar.gunRotator._VehicleGunRotator__dispersionAngles)
 
     def test_native_dispersion_uses_read_only_rotator_without_class_patch(self):
         runtime = _runtime()
