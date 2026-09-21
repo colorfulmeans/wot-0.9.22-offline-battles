@@ -8060,16 +8060,16 @@ class BotRuntime(object):
     @staticmethod
     def _traffic_stopping_distance(
             speed, physics_params, slope_pitch=0.0, steering=False):
-        """Integrate the copied coast law to the first stationary pose.
+        """Integrate the requested active brake to the first stationary pose.
 
         Traffic is evaluated before this authority tick's longitudinal step,
         so there is no separate reaction-distance term.  Advancing with the
         same nominal 30 Hz semi-implicit step used by copied physics gives the
-        actual forward travel remaining after throttle is released.  A grade
-        which cannot reduce forward speed has no finite stopping distance.
+        actual travel remaining after an explicit Bot brake command. A grade
+        which cannot reduce travel speed has no finite stopping distance.
         """
-        current = abs(_number(speed))
-        if current <= TRAFFIC_DIRECTION_SPEED_EPSILON:
+        current = _number(speed)
+        if abs(current) <= TRAFFIC_DIRECTION_SPEED_EPSILON:
             return 0.0
         step = PUBLICATION_SECONDS
         distance = 0.0
@@ -8079,23 +8079,23 @@ class BotRuntime(object):
         for unused_step in range(4096):
             following = vehicle_physics.longitudinal_step(
                 physics_params, current, 0.0, bool(steering),
-                float(slope_pitch), step, False, 0, False)
+                float(slope_pitch), step, False, 0, True)
             if math.isnan(following) or math.isinf(following):
                 return float('inf')
-            if following <= TRAFFIC_DIRECTION_SPEED_EPSILON:
-                return distance + max(0.0, following) * step
-            if following >= current:
+            if abs(following) <= TRAFFIC_DIRECTION_SPEED_EPSILON:
+                return distance + abs(following) * step
+            if abs(following) >= abs(current):
                 return float('inf')
-            distance += following * step
+            distance += abs(following) * step
             current = following
         return float('inf')
 
     @observed('bot.stopping_distance')
     def _cached_traffic_stopping_distance(
             self, source, command, physics_params):
-        """Memoize the exact coast integral for unchanged physical inputs."""
+        """Memoize the active brake integral for unchanged physical inputs."""
         bot_id = int(_number(source.get('id')))
-        speed = abs(_number(source.get('speed')))
+        speed = _number(source.get('speed'))
         slope_pitch = _number(source.get('last_drive_pitch'))
         steering = abs(_number(command.get('turn'))) > 0.01
         key = (id(physics_params), speed, slope_pitch, steering)
@@ -8415,7 +8415,7 @@ class BotRuntime(object):
                                    state.get('push_z', 0.0)),
             }
             sys.stdout.write('[Offline LAN 0.9.22] WRECK PUSH %s\n' %
-                             json.dumps(payload, sort_keys=True))
+                             json.dumps(payload))
         except Exception:
             # Diagnostic output never owns the contact or state transition.
             pass
@@ -11627,6 +11627,7 @@ class BotRuntime(object):
                     'fire_allowed': False,
                     'shell_index': int(state.get('shell_index', 0)),
                     'throttle': 0.0, 'turn': 0.0,
+                    'brake': True,
                     'target_yaw': state['yaw'],
                     'recovery_mode': 'physical_hold',
                     'movement_intent': False,
@@ -11878,6 +11879,7 @@ class BotRuntime(object):
                 if pending_reproof is not None:
                     command['throttle'] = 0.0
                     command['turn'] = 0.0
+                    command['brake'] = True
                     command['movement_intent'] = False
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_prepare')
@@ -11933,6 +11935,10 @@ class BotRuntime(object):
                 target is not None and
                 command.get('combat_mode') != 'base_defense')
             state['hull_aiming'] = bool(hull_aiming)
+            if hull_aiming:
+                # Limited-traverse aiming deliberately stops translation so
+                # the hull can lay the gun. Releasing drive alone coasts.
+                command['brake'] = True
             safety_body = {
                 'id': state['id'], 'position': position, 'yaw': state['yaw'],
                 'shape': state.get('collision_shape'),
@@ -11951,6 +11957,9 @@ class BotRuntime(object):
                 self._neighbours_for(state, neighbours), now,
                 current_stopping_distance, step)
             throttle, turn = safety['throttle'], safety['turn']
+            active_brake = bool(siege_braking or safety.get('brake', False))
+            if active_brake:
+                throttle = 0.0
             state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
             vehicle_obstacles = state.get('traffic_obstacles', {})
             for peer_id, until in list(vehicle_obstacles.items()):
@@ -12460,13 +12469,14 @@ class BotRuntime(object):
                     vehicle_physics.longitudinal_step(
                         params, previous_speed, throttle,
                         steer_dir != 0, slope_pitch, step,
-                        bool(state.get('airborne', False)), 0, siege_braking))
+                        bool(state.get('airborne', False)), 0, active_brake))
                 state['last_drive_pitch'] = slope_pitch
                 trace = state.get('_motion_stall_pending')
                 if trace is not None:
                     trace.update({
                         'dt': step, 'drive_speed': speed,
                         'drive_pitch': slope_pitch, 'throttle': throttle,
+                        'brake': active_brake,
                         'baked_veto': committed_corridor is False,
                         'path_clear': bool(path_clear),
                         'frozen': bool(pose_frozen),

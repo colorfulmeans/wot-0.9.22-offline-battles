@@ -297,6 +297,7 @@ class TrafficCoordinator(object):
                      neighbours, length, width) is None)
         result = dict(command)
         result.update(throttle=0.65 * lease['sign'] if clear else 0.0,
+                      brake=not clear,
                       turn=0.0, target_yaw=body['yaw'], movement_intent=True,
                       recovery_mode='friendly_yield', traffic_mode='friendly_yield',
                       fire_allowed=False)
@@ -304,7 +305,7 @@ class TrafficCoordinator(object):
 
     def safe_controls(self, body, command, neighbours, now, stopping_distance,
                       step=1.0 / 30.0):
-        """Release drive into occupied hulls after planning and gun aiming.
+        """Brake before occupied hulls after planning and gun aiming.
 
         This guard is independent of friendly leases and tactical modes. In
         particular a player does not have to publish a cooperative Bot order.
@@ -336,11 +337,11 @@ class TrafficCoordinator(object):
             candidates.append(peer)
         blocker = None
         if candidates and (abs(throttle) > 0.01 or abs(speed) > 0.01):
-            coast = max(0.0, stopping_distance())
+            brake_distance = max(0.0, stopping_distance())
             # One integration slice of reaction plus a small standstill gap.
-            # The coast integral is based on this vehicle's real parameters.
-            distance = min(80.0, coast) + abs(speed) * step + 0.12
-            horizon = min(1.0, max(step, 2.0 * min(coast, 80.0) /
+            # The brake integral is based on this vehicle's real parameters.
+            distance = min(80.0, brake_distance) + abs(speed) * step + 0.12
+            horizon = min(1.0, max(step, 2.0 * min(brake_distance, 80.0) /
                                     max(abs(speed), 0.1)))
             swept = dict(body, velocity=(axis[0] * distance, 0.0,
                                          axis[1] * distance))
@@ -364,7 +365,7 @@ class TrafficCoordinator(object):
                     blocker = peer['id']
                     break
         if blocker is not None and speed * throttle >= -0.01:
-            result.update(throttle=0.0, traffic_mode='vehicle_brake')
+            result.update(throttle=0.0, brake=True, traffic_mode='vehicle_brake')
             result['forward_blocked_by' if sign > 0.0 else
                    'reverse_blocked_by'] = blocker
         if abs(turn) > 0.01 and peers:
@@ -494,7 +495,8 @@ class TrafficCoordinator(object):
                 self._pairs[pair] = lease
             if lease['mode'] == 'yield':
                 if bot_id != lease['winner'] and now < lease['until']:
-                    result.update(throttle=0.0, turn=0.0, traffic_mode='yield')
+                    result.update(throttle=0.0, turn=0.0, brake=True,
+                                  traffic_mode='yield')
                     self._held[bot_id] = now
                 continue
             if result.get('traffic_mode') == 'yield':
@@ -518,6 +520,7 @@ class TrafficCoordinator(object):
                             body['position'], body['yaw'], neighbours, length, width) is None
                     if clear:
                         result.update(throttle=-0.72 if bot_id == retreating else 0.72,
+                                      brake=False,
                                       turn=0.0, target_yaw=body['yaw'], traffic_mode='head_on_retreat')
                 continue
             target = lease['targets'][bot_id]
@@ -533,6 +536,7 @@ class TrafficCoordinator(object):
                 # yield lease. Its deadline above permits checked backing;
                 # the second deadline returns ordinary route/recovery control.
                 result.update(throttle=0.0, turn=0.0, target_yaw=body['yaw'],
+                              brake=True,
                               traffic_mode='head_on_blocked')
                 self._held[bot_id] = now
                 continue

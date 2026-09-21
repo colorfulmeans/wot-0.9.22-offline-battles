@@ -6153,6 +6153,9 @@ class BotRuntimeTests(unittest.TestCase):
             runtime._cached_traffic_stopping_distance(
                 source, command, params)
             self.assertEqual(2, len(calls))
+            source['speed'] *= -1.0
+            runtime._cached_traffic_stopping_distance(source, command, params)
+            self.assertEqual(3, len(calls))
         finally:
             self.module.BotRuntime._traffic_stopping_distance = staticmethod(
                 original)
@@ -7230,6 +7233,53 @@ class BotRuntimeTests(unittest.TestCase):
             self.module.DECISION_SECONDS = original_decision_seconds
             self.module.prebaked_navigation.pose_is_safe = original_pose_safe
         return state['z'], state
+
+    def test_explicit_bot_brake_is_distinct_from_released_drive(self):
+        states = {}
+        for brake in (False, True):
+            runtime = self._drive_runtime(
+                lambda *unused: {'clear': True, 'collision': False, 'slope': 0.0})
+            command = dict(self._stationary_command(), brake=brake)
+            runtime.adapter.decide = lambda *unused: dict(command)
+            runtime.update(0.1, 1.1)
+            states[brake] = runtime.states[11]
+            # An explicit brake changes acceleration, not the body's current
+            # speed/position discontinuously. Neutral still keeps momentum.
+            self.assertGreater(states[brake]['speed'], 0.0)
+            self.assertGreater(states[brake]['z'], 0.0)
+        self.assertLess(states[True]['speed'], states[False]['speed'])
+        self.assertLess(states[True]['z'], states[False]['z'])
+
+    def test_runtime_stop_overrides_request_active_braking(self):
+        for stop_reason in ('physical_hold', 'artillery_reproof'):
+            with self.subTest(stop_reason=stop_reason):
+                runtime = self._drive_runtime(
+                    lambda *unused: {'clear': True, 'collision': False, 'slope': 0.0})
+                state = runtime.states[11]
+                if stop_reason == 'physical_hold':
+                    # No cached command remains after the previous physical
+                    # veto, and this catch-up slice cannot re-run planning.
+                    runtime._refresh_control_this_step = False
+                    runtime._publish_control_this_step = False
+                else:
+                    state['profile']['class_tag'] = 'SPG'
+                    command = dict(self._stationary_command(),
+                                   throttle=1.0, brake=False, fire_allowed=True)
+                    runtime.adapter.decide = lambda *unused: dict(command)
+                    runtime._active_artillery_intent = lambda *unused: None
+                    runtime._active_artillery_reproof = lambda *unused: {}
+                    runtime._refresh_control_this_step = True
+                    runtime._publish_control_this_step = True
+                original = self.module.vehicle_physics.longitudinal_step
+                with mock.patch.object(self.module.vehicle_physics,
+                                       'longitudinal_step', wraps=original) as step:
+                    runtime._update_once(0.1, 1.1)
+                motion = [call.args for call in step.call_args_list
+                          if call.args[5] == 0.1]
+                self.assertTrue(motion)
+                self.assertTrue(all(args[2] == 0.0 and args[8] is True
+                                    for args in motion))
+                self.assertLess(state['speed'], 8.0)
 
     def test_deferred_probe_keeps_the_proved_corridor(self):
         """A budget deferral is not evidence of a wall, so the cache stays."""
@@ -9132,6 +9182,7 @@ class BotRuntimeTests(unittest.TestCase):
     def test_limited_traverse_tank_turns_hull_before_advancing_or_firing(self):
         command = {
             'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
+            'brake': False,
             'shell_index': 0, 'fire_allowed': True,
             'target_id': self.module.HUMAN_TARGET_ID_BASE + 2,
             'fire_range': 500.0, 'combat_mode': 'engage',
@@ -9150,14 +9201,20 @@ class BotRuntimeTests(unittest.TestCase):
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph())
         runtime.battle_start(self.start)
-        runtime.states[11]['yaw'] = 0.0
+        runtime.states[11].update(yaw=0.0, speed=8.0, grounded_once=True)
 
-        state = bot_state_rows.bots(runtime.update(.04, 1.0, players=[
-            {'id': 2, 'team': 1, 'alive': True,
-             'x': 100.0, 'y': 0.5, 'z': 0.0,
-             'effective_params': _effective_params_snapshot()}
-        ])[0])[0]
+        original = self.module.vehicle_physics.longitudinal_step
+        with mock.patch.object(self.module.vehicle_physics,
+                               'longitudinal_step', wraps=original) as step:
+            state = bot_state_rows.bots(runtime.update(.04, 1.0, players=[
+                {'id': 2, 'team': 1, 'alive': True,
+                 'x': 100.0, 'y': 0.5, 'z': 0.0,
+                 'effective_params': _effective_params_snapshot()}
+            ])[0])[0]
 
+        motion = [call.args for call in step.call_args_list if call.args[5] == .04]
+        self.assertTrue(motion)
+        self.assertTrue(all(args[2] == 0.0 and args[8] is True for args in motion))
         self.assertEqual(0, state['movement_dir'])
         self.assertEqual(1, state['rotation_dir'])
         self.assertTrue(runtime.states[11]['hull_aiming'])
@@ -16403,19 +16460,28 @@ class BotRuntimeTests(unittest.TestCase):
                 state = runtime.states[11]
                 start_z = state['z']
                 positions = [start_z]
+                deferred = bool(probe_result and probe_result.get('deferred'))
 
                 for index in range(4):
                     runtime.update(.04, 1.00 + index * .04)
-                    self.assertEqual(1, state['movement_dir'])
+                    self.assertEqual(0 if deferred else 1, state['movement_dir'])
                     positions.append(state['z'])
 
-                self.assertGreater(abs(state['z'] - start_z), 0.0)
-                self.assertTrue(all(
-                    abs(current - previous) > 0.0
-                    for previous, current in zip(
-                        positions[:-1], positions[1:])))
-                self.assertGreater(state['speed'], 0.0)
+                if deferred:
+                    # A known budget deferral provides no corridor. Keep the
+                    # cached plan, but without an exact resolver it cannot
+                    # authorize even the first slice of horizontal motion.
+                    self.assertEqual([start_z] * len(positions), positions)
+                    self.assertEqual(0.0, state['speed'])
+                else:
+                    self.assertGreater(abs(state['z'] - start_z), 0.0)
+                    self.assertTrue(all(
+                        abs(current - previous) > 0.0
+                        for previous, current in zip(
+                            positions[:-1], positions[1:])))
+                    self.assertGreater(state['speed'], 0.0)
                 self.assertIn(11, runtime._decision_cache)
+                self.assertEqual(1.0, runtime._decision_cache[11][3]['throttle'])
                 self.assertNotIn(11, runtime._motion_probe_cache)
 
     def test_new_server_order_revision_invalidates_decision_cache(self):

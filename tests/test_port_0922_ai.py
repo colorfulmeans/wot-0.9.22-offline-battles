@@ -501,6 +501,7 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual((20.0, 0.0, 40.0), order['face_position'])
         self.assertFalse(order['movement_intent'])
         self.assertEqual(0.0, order['throttle'])
+        self.assertTrue(order['brake'])
         self.assertGreater(order['turn'], 0.0)
         self.assertAlmostEqual(math.atan2(20.0, 40.0), order['target_yaw'])
 
@@ -528,6 +529,7 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual((0.0, 0.0, 0.0), order['move_position'])
         self.assertEqual('nav_wait', order['recovery_mode'])
         self.assertEqual(0.0, order['throttle'])
+        self.assertTrue(order['brake'])
         self.assertLess(order['turn'], 0.0)
         self.assertEqual(0.0, order['target_yaw'])
 
@@ -2247,9 +2249,11 @@ class BotAiPortTests(unittest.TestCase):
             target, (), lambda unused_yaw: True)
 
         self.assertEqual(1.0, first['throttle'])
+        self.assertFalse(first['brake'])
         self.assertAlmostEqual(first['target_yaw'], second['target_yaw'])
         self.assertEqual('drive', second['recovery_mode'])
         self.assertEqual(0.0, second['throttle'])
+        self.assertTrue(second['brake'])
 
     def test_failed_yaw_cache_uses_circular_buckets(self):
         driver = LocalDriver()
@@ -2387,7 +2391,7 @@ class BotAiPortTests(unittest.TestCase):
             self.assertNotIn(order['recovery_mode'],
                              ('reverse_turn', 'pivot_recovery'))
 
-    def test_terminal_target_coasts_inside_copied_stopping_distance(self):
+    def test_terminal_target_brakes_inside_copied_stopping_distance(self):
         driver = LocalDriver()
         terminal = driver.drive(
             71, 0, (0.0, 0.0, 0.0), 0.0, 14.0, 0.15,
@@ -2401,7 +2405,9 @@ class BotAiPortTests(unittest.TestCase):
             decision_horizon=0.15)
 
         self.assertEqual(0.0, terminal['throttle'])
+        self.assertTrue(terminal['brake'])
         self.assertEqual(1.0, corridor['throttle'])
+        self.assertFalse(corridor['brake'])
 
     def test_prohorovka_west_ridge_corner_keeps_forward_progress(self):
         driver = LocalDriver()
@@ -2880,8 +2886,10 @@ class BotAiPortTests(unittest.TestCase):
             (20.0, 0.0, 20.0), (), lambda unused_yaw: True)
 
         self.assertEqual(0.0, uphill['throttle'])
+        self.assertTrue(uphill['brake'])
         self.assertGreater(abs(uphill['turn']), 0.9)
         self.assertEqual(1.0, flat['throttle'])
+        self.assertFalse(flat['brake'])
 
 
 if __name__ == '__main__':

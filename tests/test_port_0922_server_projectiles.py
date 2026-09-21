@@ -3840,14 +3840,18 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertEqual(1, outgoing['piercings'])
         self.assertEqual(100, outgoing['damage'])
         self.assertEqual(100, incoming['damage_received'])
-        self.assertEqual([['damage', 0, 100, False]], outgoing['mission_events'])
+        self.assertEqual(
+            [['damage', 0, 100, False, 10.0, True, None]],
+            outgoing['mission_events'])
 
         event_count = len(state.pending_events)
         self.assertTrue(state.resolve_projectile(SIMULATION_WORKER_AUTHORITY_ID, dict(message)))
         self.assertEqual(900, state.players[2].health)
         self.assertEqual(event_count, len(state.pending_events))
         self.assertEqual(100, outgoing['damage'])
-        self.assertEqual([['damage', 0, 100, False]], outgoing['mission_events'])
+        self.assertEqual(
+            [['damage', 0, 100, False, 10.0, True, None]],
+            outgoing['mission_events'])
         self.assertFalse(state.resolve_projectile(
             SIMULATION_WORKER_AUTHORITY_ID,
             dict(message, checked_distance=11.0)))

@@ -1,4 +1,4 @@
-"""Bots release blocked drive without weakening the physical push solver."""
+"""Bots request brakes without weakening the physical push solver."""
 import math
 import unittest
 
@@ -24,6 +24,7 @@ class VehicleBrakingTests(unittest.TestCase):
                     stopped = self.safe(
                         own, [peer], dict(command(), combat_mode=mode), now=now)
                     self.assertEqual(0., stopped['throttle'])
+                    self.assertTrue(stopped['brake'])
                 self.assertEqual(1., self.safe(own, [])['throttle'])
 
     def test_leader_parallel_side_contact_and_reverse_escape_keep_progress(self):
@@ -74,13 +75,24 @@ class VehicleBrakingTests(unittest.TestCase):
             order = self.safe(own, [peer], coast=coast, now=frame / 30.)
             brakes += order['throttle'] == 0.
             speed = vehicle_physics.longitudinal_step(
-                params, speed, order['throttle'], False, 0., 1. / 30.)
+                params, speed, order['throttle'], False, 0., 1. / 30.,
+                handbrake=order.get('brake', False))
             z += speed / 30.
             own.update(position=(0., 0., z), velocity=(0., 0., speed))
             self.assertLess(z, 18.)
         self.assertGreater(z, 15.)
         self.assertGreater(brakes, 200)
         self.assertLess(speed, .05)
+
+    def test_braking_distance_keeps_reverse_slope_direction(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        params = dict(vehicle_physics._DEFAULTS)
+        distance = BotRuntime._traffic_stopping_distance
+        forward_downhill = distance(8., params, .15)
+        reverse_uphill = distance(-8., params, .15)
+        self.assertGreater(forward_downhill, reverse_uphill)
+        self.assertAlmostEqual(forward_downhill, distance(-8., params, -.15))
+        self.assertAlmostEqual(reverse_uphill, distance(8., params, -.15))
 
     def test_stopped_follower_can_request_parked_clearance_before_contact(self):
         from test_port_0922_traffic_jam import hold
@@ -89,9 +101,11 @@ class VehicleBrakingTests(unittest.TestCase):
         for now in (0., 1., 2.):
             raw = self.traffic.adjust(25, own, command(), [peer], now, clear)
             self.safe(own, [peer], raw, now=now)
-            result = self.traffic.adjust(29, peer, hold(peer), [own], now, clear)
+            result = self.traffic.adjust(
+                29, peer, dict(hold(peer), brake=True), [own], now, clear)
         self.assertEqual('friendly_yield', result['traffic_mode'])
         self.assertGreater(result['throttle'], 0.)
+        self.assertFalse(result['brake'])
 
 
 class RuntimeVehicleBrakingTests(unittest.TestCase):

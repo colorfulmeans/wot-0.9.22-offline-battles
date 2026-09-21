@@ -5446,6 +5446,12 @@ Windows gameplay acceptance.
   existing parked hold, active braking and overspeed envelope are retained;
   exact retail gearbox drag, downhill speed calibration and handbrake drift
   remain unproved.
+- Bot arrivals, tactical holds and traffic yields now request active braking
+  explicitly rather than depending on released-throttle drag. Stopping
+  distance integrates that same brake law with signed speed and slope;
+  checked forward/reverse escape commands clear any inherited brake request.
+  Close-target and crowded-departure regressions retain their original
+  stopping-distance and recovery-duration limits.
 - Airfield's recorded trapped pose has no exit in the original forward
   fallback fan. A rear exit is now considered after the entire forward fan
   fails, using the same terrain, hazard and collision checks. A driver's

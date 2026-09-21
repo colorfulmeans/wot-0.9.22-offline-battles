@@ -213,11 +213,14 @@ class MT11ReceiptTests(unittest.TestCase):
     def test_ram_history_shares_existing_actor_budget_and_never_infers_missing_event(self):
         state, first, second = self.state()
         row = state._statistics_interaction(('player', 1), ('player', 2))
-        row['mission_events'] = [['damage', 60000, 1, False]] * mission_events.MAX_EVENTS
+        row['mission_events'] = [
+            ['damage', 60000, 1, False, 100.0, True, None]
+        ] * mission_events.MAX_EVENTS
         state._apply_human_ram_damage(first, second,
             {'damage_to_self': 1, 'damage_to_other': 1}, (1, 2), 1000000)
         self.assertEqual(mission_events.MAX_EVENTS, len(row['mission_events']))
         self.assertFalse(row['mission_events_complete'])
+        self.assertTrue(mission_events.valid(row))
 
     def test_ram_version_and_fields_are_validated_by_every_receipt_reader(self):
         state, first, second = self.state()
@@ -226,7 +229,7 @@ class MT11ReceiptTests(unittest.TestCase):
         self.assertTrue(state._finish_battle(1, 'elimination'))
         receipt = _latest_receipt(state, first.account_key)
         row = receipt['interactions'][0]
-        self.assertEqual(2, row['mission_events_version'])
+        self.assertEqual(3, row['mission_events_version'])
         for field, value in ((2, 0), (2, True), (3, -1), (4, 1), (5, None), (6, 'yes')):
             bad = copy.deepcopy(receipt)
             ram = next(e for e in bad['interactions'][0]['mission_events'] if e[0] == 'ram')
@@ -236,15 +239,38 @@ class MT11ReceiptTests(unittest.TestCase):
                 server._persisted_result_receipt(bad)
             with self.assertRaises(ValueError):
                 postbattle_store._receipt(bad)
-        for version in (0, 3, True, '2'):
+        for version in (0, mission_events.VERSION + 1, True, '2'):
             bad = copy.deepcopy(receipt)
             bad['interactions'][0]['mission_events_version'] = version
             self.assertFalse(client._valid_battle_receipt(bad))
-        legacy = copy.deepcopy(row)
-        legacy.pop('mission_events_version')
-        self.assertFalse(mission_events.valid(legacy))
-        legacy['mission_events'] = [e for e in legacy['mission_events'] if e[0] != 'ram']
-        self.assertTrue(mission_events.valid(legacy))
+        # Old durable receipts retain their original short event rows. A
+        # version change alone must not bless a malformed v3 payload.
+        short_v3 = copy.deepcopy(receipt)
+        event = next(e for e in short_v3['interactions'][0]['mission_events']
+                     if e[0] == 'damage')
+        del event[4:]
+        self.assertFalse(client._valid_battle_receipt(short_v3))
+        for version in (1, 2):
+            with self.subTest(legacy_version=version):
+                legacy = copy.deepcopy(receipt)
+                for interaction in legacy['interactions']:
+                    interaction['mission_events_version'] = version
+                    interaction['mission_events'] = [
+                        e[:4] if e[0] == 'damage' else
+                        e[:5] if e[0] == 'kill' else e
+                        for e in interaction['mission_events']]
+                    if version == 1:
+                        # v1 had no ram rows and may omit its version field.
+                        if any(e[0] == 'ram' for e in interaction['mission_events']):
+                            self.assertFalse(mission_events.valid(interaction))
+                        interaction.pop('mission_events_version')
+                        interaction['mission_events'] = [
+                            e for e in interaction['mission_events'] if e[0] != 'ram']
+                    self.assertTrue(mission_events.valid(interaction))
+                self.assertTrue(client._valid_battle_receipt(legacy))
+                self.assertEqual(legacy, server._persisted_result_receipt(legacy))
+                restored = postbattle_store._receipt(legacy)
+                self.assertEqual(legacy['interactions'], restored['interactions'])
 
 
 if __name__ == '__main__':
