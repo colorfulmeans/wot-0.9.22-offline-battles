@@ -11,6 +11,18 @@ BigWorld nor battle runtime code, so the server and desktop tests can use it.
 import math
 
 
+# The exact activation-target vocabulary shared by both wire endpoints.
+# Crew extra names retain their native numbered identity; UI labels are not
+# accepted here. Keep unrelated critical-damage compatibility aliases local.
+ACTIVATION_DEVICE_NAMES = frozenset((
+    'engineHealth', 'ammoBayHealth', 'fuelTankHealth', 'radioHealth',
+    'leftTrackHealth', 'rightTrackHealth', 'gunHealth',
+    'turretRotatorHealth', 'surveyingDeviceHealth'))
+ACTIVATION_CREW_NAMES = frozenset((
+    'commander', 'driver', 'gunner1', 'gunner2', 'loader1',
+    'loader2', 'radioman1', 'radioman2'))
+
+
 DEFAULT_BOT_CONSUMABLE_NAMES = (
     'autoExtinguishers', 'largeMedkit', 'largeRepairkit')
 
@@ -342,6 +354,20 @@ def _projection(value):
     if isinstance(value, dict) and isinstance(value.get('equipment'), dict):
         return value['equipment']
     return value
+
+
+def consumed_in_battle(value, activated=False):
+    """Whether this supported regular item contributes one settlement charge.
+
+    Food and fuel apply for the entire battle without an activation request.
+    Repair/medical kits and extinguishers cost one item only when used, even
+    if their battle charge is reusable. The governor is a permanent switch,
+    not a consumable. Unknown passive kinds must not acquire an invented bill.
+    This policy does not change remaining uses, cooldown or passive effects.
+    """
+    kind = str(_value(_projection(value), 'kind', '') or '')
+    return (kind in ('stimulator', 'fuel') or
+            bool(activated and kind in ('repairkit', 'medkit', 'extinguisher')))
 
 
 def _remaining_uses(value):
