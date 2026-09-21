@@ -1,0 +1,155 @@
+diff --git a/COMPATIBILITY_REVIEW.md b/COMPATIBILITY_REVIEW.md
+index 5e8d686..a74a84e 100644
+--- a/COMPATIBILITY_REVIEW.md
++++ b/COMPATIBILITY_REVIEW.md
+@@ -5696,3 +5696,21 @@ the routing/command defect, not full replay of the Windows scene or a promise
+ that every building stall is solved. Existing bounded stall reports now add
+ the actual occupied cell, its routing height, nearest valid cell, review-cell
+ count and pending age without any native query or new timer.
++
++
++The continuous-motion regression also exposed a second veto within this same
++missing-start case: `_baked_corridor` was still required to pass before the
++live connector could be checked. After only 0.37--0.52 metres of movement from
++the Bot 30 fixture, nearest-cell snapping selected a disconnected graph link
++and froze the tank again, even with unchanged clear native geometry. Evaluate
++the bounded reviewed missing-start connector before either coarse-grid verdict.
++All native support, grade, water, hazard and obstacle checks remain mandatory.
++Supported-start corridors retain their original bake and edge validation.
++
++The final tests include that downstream generated position with hard-wall and
++invalid-support negative cases, and continuous `BotRuntime` integration from all
++six recorded positions at simulated 5/15 Hz. Searches remain pending throughout;
++the original six poses move beyond the hold radius and Bot 30 is exercised for
++20 seconds to catch repeated first-metre stalls. The generic vehicle descriptor
++and flat/clear native replies are controlled test inputs, not a native scene
++replay or a measurement of the reported vehicles' acceleration or FPS.
+diff --git a/src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py b/src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py
+index cd1141b..dd337da 100644
+--- a/src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py
++++ b/src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py
+@@ -779,18 +779,18 @@ class TerrainGrid(object):
+ 		if distance < 0.25:
+ 			return True
+ 		if self.prebaked:
+-			if not self._baked_corridor(start, end)[0]:
+-				return False
+ 			edges = self._edge_keys_for_segment(start, end)
+ 			if (self._baked_cell_height(self.cell_for(start)) is None and
+ 					any(first in self._native_review_cells or
+ 						second in self._native_review_cells
+ 						for first, second in edges)):
+-				# The bake proved a corridor from a nearby supported cell, but
+-				# native review cannot use the occupied cell's missing height.
+-				# Prove the physical connector; do not invent a solid edge or
+-				# move the tank to the snapped position.
++				# Neither the snapped bake corridor nor a raw edge with a missing
++				# height proves the actual short connector. Recheck it before
++				# either coarse-grid verdict can veto motion. A small physical
++				# move can change the snapped corridor without adding a wall.
+ 				return self._live_baked_egress_clear(start, end)
++			if not self._baked_corridor(start, end)[0]:
++				return False
+ 			if not edges and self.cell_for(start) in self._native_review_cells:
+ 				# A short escape can stay inside one four-metre cell. There is
+ 				# then no graph edge to recheck, but the contact already disproved
+diff --git a/tests/test_port_0922_airfield_live_egress.py b/tests/test_port_0922_airfield_live_egress.py
+index 5e858bf..31e3779 100644
+--- a/tests/test_port_0922_airfield_live_egress.py
++++ b/tests/test_port_0922_airfield_live_egress.py
+@@ -10,6 +10,7 @@ import json
+ import math
+ from pathlib import Path
+ import unittest
++from unittest import mock
+ 
+ from test_port_0922_navigation import TerrainNavigator
+ from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+@@ -116,6 +117,87 @@ class AirfieldLiveEgressTests(unittest.TestCase):
+                     self.assertFalse(order['brake'])
+                     self.assertEqual(current, state['position'])
+ 
++    def test_adjacent_missing_cell_does_not_require_a_snapped_graph_link(self):
++        # This is a generated pose after 0.37 m of integrated movement from
++        # report Bot 30, not an additional captured Windows position. The
++        # nearest-cell corridor changes, but the actual native ray stays clear.
++        bot, unused_current, goal = REPORT_POSES[-1]
++        current = (-267.85435219250706, 0.12851428985595703,
++                   -137.93039933299315)
++        yaw = math.atan2(goal[0] - current[0], goal[2] - current[2]) - 1.75
++        target = (current[0] + math.sin(yaw) * 3.12, current[1],
++                  current[2] + math.cos(yaw) * 3.12)
++        nav, samples, rays = self.scene(current, goal)
++        self.assertIsNone(nav.grid._baked_cell_height(nav.grid.cell_for(current)))
++        self.assertEqual((False, 0), nav.grid._baked_corridor(current, target))
++        self.assertTrue(nav.grid.dry_segment_clear(current, target, 1.0))
++        self.assertTrue(samples)
++        self.assertEqual(current, rays[-1][0])
++        # The earlier bypass must still require each native safety condition.
++        nav.grid.obstacle_probe = lambda *args: True
++        self.assertFalse(nav.grid.dry_segment_clear(current, target, 1.0))
++        nav.grid.obstacle_probe = lambda *args: False
++        for height in (None, float('nan'), 20.0, -20.0):
++            nav.grid.ground_probe = lambda *args: height
++            self.assertFalse(nav.grid.dry_segment_clear(current, target, 1.0))
++
++    def test_integrated_motion_continues_beyond_the_first_missing_cell(self):
++        from test_port_0922_bot_runtime import _combat_descriptor
++        from effective_params_fixture import bot_default_crew_factors
++        from gui.mods.offline_lan_0922 import loadout
++        # Exercise the real integrator, not just a positive drive command at
++        # a fixed pose. Native probes are flat/clear; the generic descriptor
++        # is deliberately not presented as these vehicles' retail physics.
++        with mock.patch.object(loadout, 'attribute_factors',
++                               bot_default_crew_factors), redirect_stdout(io.StringIO()):
++            for bot, current, goal in REPORT_POSES:
++                for fps in (5, 15):
++                    with self.subTest(bot=bot, fps=fps):
++                        runtime = BotRuntime(1,
++                            descriptor_resolver=lambda *args: _combat_descriptor(),
++                            direction_probe=lambda *args: dict(
++                                clear=True, collision=False, slope=0.0),
++                            spawn_resolver=lambda *args: (current, math.atan2(
++                                goal[0] - current[0], goal[2] - current[2])),
++                            ground_probe=lambda *args: current[1],
++                            physics_ground_probe=lambda *args: current[1],
++                            obstacle_probe=lambda *args: False,
++                            baked_graph=self.graph,
++                            visibility_probe=lambda *args: False,
++                            firing_lane_probe=lambda *args: False)
++                        runtime.battle_start({
++                            'map': '31_airfield', 'round_id': fps,
++                            'bot_authority_id': 1,
++                            'bots': [{'id': bot, 'team': 1 if bot < 16 else 2,
++                                      'slot': 0, 'vehicle': 'fixture', 'name': 'Probe',
++                                      'profile': {
++                                          'class_tag': 'mediumTank',
++                                          'dominant_role': 'support',
++                                          'roles': {'support': 1.0}, 'shells': [],
++                                          'vehicle_name': 'fixture',
++                                          'desired_range': 200, 'fire_range': 500}}]})
++                        nav = runtime.navigator
++                        nav.grid.review_native_corridor(current, goal)
++                        nav.search_credit = 0.0
++                        # A* remains pending for the whole test. Local egress
++                        # must not depend on it happening to complete first.
++                        nav._accrue_search_credit = lambda elapsed: None
++                        def navigation_target(bot_id, position, target, order, state):
++                            return nav.next_target(bot_id, position, target,
++                                ('join', bot_id, nav.grid.cell_for(position)), state['now'])
++                        runtime.adapter.navigation_target = navigation_target
++                        duration = 20 if bot == 30 else 6
++                        for frame in range(fps * duration):
++                            runtime._server_orders = {bot: {
++                                'move_position': goal, 'fire_allowed': False,
++                                'fire_range': 400, 'combat_mode': 'route', 'shell_index': 0}}
++                            runtime.update(1.0 / fps, float(frame) / fps)
++                        state = runtime.states[bot]
++                        displacement = math.hypot(state['x'] - current[0],
++                                                  state['z'] - current[2])
++                        self.assertTrue(state['alive'])
++                        self.assertGreater(displacement, 5.0 if bot == 30 else 1.5)
++
+     def test_native_connector_work_is_bounded_before_a_long_route(self):
+         bot, current, goal = REPORT_POSES[0]
+         nav, samples, rays = self.scene(current, goal)
