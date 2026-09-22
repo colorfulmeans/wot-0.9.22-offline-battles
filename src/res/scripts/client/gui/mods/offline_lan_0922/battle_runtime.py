@@ -5437,9 +5437,20 @@ class BattleRuntime(object):
         ground_filter = self._ground_filter(x, z)
         for unused_layer in range(3):
             try:
+                ground_start = self._vector((x, probe_top, z))
+                ground_end = self._vector((x, probe_bottom, z))
                 hit = self._collide_down(
-                    self._vector((x, probe_top, z)),
-                    self._vector((x, probe_bottom, z)), ground_filter)
+                    ground_start, ground_end, ground_filter)
+                support_probe = getattr(
+                    self._destructibles, 'planning_support_below_soft_roof', None)
+                if hit is not None and callable(support_probe):
+                    hit = support_probe(
+                        self._avatar.spaceID, ground_start, ground_end,
+                        hit, float(hint_y) + 4.5, 0.0, None,
+                        recast_budget=self._soft_static_recast_budget,
+                        ignore_destructibles=True)
+                    if hit == 'deferred':
+                        return None
                 if hit is None:
                     return None
                 height = float(hit[0].y)
@@ -5590,28 +5601,7 @@ class BattleRuntime(object):
         # needs it to distinguish climbing from descending; taking ``abs``
         # here made every clear descent behave like an uphill pull.
         maximum_slope = 0.0
-        signed_speed = float(speed or 0.0)
-        planned_impact_speed = abs(signed_speed)
         deferred = False
-        planning_params = None
-        planning_cap = None
-        planning_reverse = signed_speed < 0.0
-        if descriptor is not None:
-            try:
-                planning_params = vehicle_physics.derive_params(descriptor)
-                if native_capability is not None:
-                    if (self._navigation_crush_proof(native_capability) is None or
-                            float(_field(descriptor, 'physics')['weight']) !=
-                            float(native_capability[1])):
-                        raise ValueError('direction capability does not match vehicle')
-                    planning_cap = abs(float(native_capability[2]))
-                    planning_reverse = float(native_capability[2]) < 0.0
-                else:
-                    planning_cap = abs(self._destructible_drive_speed_cap(
-                        descriptor, planning_params, signed_speed))
-            except (AttributeError, KeyError, TypeError, ValueError):
-                raise RuntimeError(
-                    'bot destructible planning speed is unavailable')
         for height, distance in (
                 (0.7, near_distance), (1.5, far_distance)):
             nx = x + sine * distance
@@ -5632,18 +5622,17 @@ class BattleRuntime(object):
                         ground_start, ground_end, self._ground_filter(nx, nz))
                     support_probe = getattr(
                         self._destructibles, 'planning_support_below_soft_roof', None)
-                    if (ground is not None and planning_params is not None and
-                            float(ground[0].y) > previous_y + run * 0.48 and
+                    if (ground is not None and descriptor is not None and
                             callable(support_probe)):
-                        # A far endpoint can lie on a crushable house roof.
-                        # Recheck only an exact original soft material, not a
-                        # terrain height or arbitrary overhead structure.
+                        # Planning uses terrain below confirmed destructibles,
+                        # including low roofs; propulsion does not classify a
+                        # building as terrain. Physical support remains separate.
                         ground = support_probe(
                             self._avatar.spaceID, ground_start, ground_end,
                             ground, previous_y + run * 0.48,
-                            planned_impact_speed, descriptor,
-                            kinetic_speed=planning_cap,
-                            recast_budget=self._soft_static_recast_budget)
+                            0.0, descriptor,
+                            recast_budget=self._soft_static_recast_budget,
+                            ignore_destructibles=True)
                         if ground == 'deferred':
                             return {'clear': False, 'collision': False,
                                     'water': False, 'slope': 0.0, 'deferred': True}
@@ -5684,59 +5673,15 @@ class BattleRuntime(object):
                 except Exception:
                     collision = True
                 if collision is not None:
-                    ray_impact_speed = planned_impact_speed
-                    if planning_params is not None:
-                        try:
-                            hull_bbox = self._destructibles._vehicle_hull_bbox(
-                                descriptor)
-                            minimum, maximum = hull_bbox[:2]
-                            reversing = planning_reverse
-                            hull_reach = max(
-                                0.0,
-                                (-float(minimum[2]) if reversing else
-                                 float(maximum[2])))
-                            hit_distance = max(
-                                0.0,
-                                (collision[0] - ray_start).length - hull_reach)
-                            # Use the current copied traction law to estimate
-                            # only the speed reachable before this far hit. The
-                            # actual hull contact still owns the retail gate.
-                            drive_sign = -1.0 if reversing else 1.0
-                            acceleration = abs(
-                                vehicle_physics.engine_force(
-                                    planning_params,
-                                    drive_sign * max(
-                                        planned_impact_speed, 0.1),
-                                    drive_sign, 0.0)) / max(
-                                        planning_params['mass'], 1.0)
-                            speed_limit = float(planning_params[
-                                'speedBwd' if reversing else 'speedFwd'])
-                            ray_impact_speed = min(
-                                speed_limit,
-                                math.sqrt(planned_impact_speed ** 2 +
-                                          2.0 * acceleration * hit_distance))
-                        except (AttributeError, KeyError, TypeError,
-                                ValueError, ZeroDivisionError, RuntimeError):
-                            return {'clear': False, 'collision': True,
-                                    'water': False, 'slope': slope}
                     if descriptor is not None and self._destructibles is not None:
-                        kinetic_speed = None
-                        if planning_params is not None:
-                            kinetic_speed = planning_cap
                         soft_status = (
                             self._destructibles._catalog_soft_static_path(
                                 self._avatar.spaceID, ray_start, ray_end,
-                                collision, ray_impact_speed, descriptor,
+                                collision, 0.0, descriptor,
                                 recast_budget=
                                 self._soft_static_recast_budget,
-                                allow_kinetic_first=True,
-                                kinetic_speed=kinetic_speed))
+                                ignore_destructibles=True))
                         if soft_status is True:
-                            continue
-                        if soft_status == 'kinetic':
-                            # Planning may approach a contact that this vehicle can
-                            # crush at its directional speed cap. The commit-side
-                            # native ray and exact hull contact still own destruction.
                             continue
                         if soft_status == 'deferred':
                             # Budget exhaustion is not evidence of a wall. Keep
@@ -5830,41 +5775,15 @@ class BattleRuntime(object):
             'direction': (-1 if signed_speed < 0.0 else 1),
         }
 
-    def _navigation_crush_proof(self, capability):
-        """Use one consumer's immutable stock mass and directional drive cap."""
-        try:
-            token, mass, speed = capability
-            mass, speed = float(mass), float(speed)
-            if (token != ('stock1513', mass, speed) or mass <= 0.0 or
-                    speed == 0.0 or any(math.isnan(value) or math.isinf(value)
-                                        for value in (mass, speed))):
-                return None
-        except (TypeError, ValueError, OverflowError):
-            return None
-        # The reviewed stock law reads only td.physics.weight. Copy that exact
-        # numeric input so an asynchronous search never retains a live mutable
-        # vehicle descriptor, or borrows another vehicle's kinetic permission.
-        descriptor = {'physics': {'weight': mass}}
-
-        def crushable(mat_info, item_scale):
-            try:
-                return self._destructibles._stock_crushable_1513(
-                    mat_info, speed, descriptor, item_scale)
-            except (AttributeError, KeyError, TypeError, ValueError,
-                    OverflowError, RuntimeError):
-                return False
-        return crushable
-
     def _navigation_obstacle(self, start, end, half_width,
                              native_capability=None, trace=None):
-        """Probe one consumer's geometry without changing destructible state."""
+        """Exclude confirmed destructibles from planning, retaining hard geometry."""
         dx = float(end[0]) - float(start[0])
         dz = float(end[2]) - float(start[2])
         length = math.sqrt(dx * dx + dz * dz)
         if length < 0.1:
             return False
         lateral_x, lateral_z = dz / length, -dx / length
-        planning_crushable = self._navigation_crush_proof(native_capability)
         saw_soft = False
         if trace is not None:
             trace.update(capability=native_capability,
@@ -5900,15 +5819,10 @@ class BattleRuntime(object):
                         trace.update(
                             ray_start=_xyz(ray_start), ray_end=_xyz(ray_end),
                             hit=_xyz(hit[0]), normal=_xyz(hit[1]))
-                    if planning_crushable is None:
-                        if trace is not None:
-                            trace.update(classification='unknown',
-                                         reason='capability_unavailable')
-                        return True
                     status = self._destructibles._catalog_soft_static_path(
                         self._avatar.spaceID, ray_start, ray_end, hit,
                         0.0, None, recast_budget=self._soft_static_recast_budget,
-                        planning_crushable=planning_crushable, trace=trace)
+                        ignore_destructibles=True, trace=trace)
                     if status == 'deferred':
                         # The graph cannot cache this edge yet. Do not repeat
                         # the remaining native lanes against an empty budget;

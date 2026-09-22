@@ -1,4 +1,4 @@
-"""Consumer kinetic inputs survive lifecycle and reach planning boundaries."""
+"""Shared static routes ignore soft objects; contact keeps real kinetic inputs."""
 import copy
 import math
 import unittest
@@ -30,6 +30,24 @@ class NavigationCapabilityProviderTests(unittest.TestCase):
 
     def begin(self):
         return self.runtime.battle_start(self.start)
+
+    def test_planning_policy_is_shared_across_skills_gears_and_vehicle_modes(self):
+        self.begin()
+        policy = self.runtime.navigation_planning_capability()
+        self.assertEqual((('ignore_destructibles', 1), None, None), policy)
+        for rating in (0.0, 0.34, 0.67, 1.0):
+            self.runtime._bot_ratings[11] = rating
+            for bot_id in (11, 12, 999):
+                for direction in (-1.0, 1.0):
+                    with self.subTest(rating=rating, bot=bot_id,
+                                      direction=direction):
+                        self.assertIs(policy,
+                                      self.runtime.navigation_planning_capability(
+                                          bot_id, direction))
+        self.runtime._install_bot_descriptor(11, self.runtime.states[11], 2)
+        self.assertIs(policy, self.runtime.navigation_planning_capability(11))
+        self.assertEqual(self.capability(10000.0, -10.0),
+                         self.runtime.navigation_crush_capability(11, -1.0))
 
     def test_manifest_publishes_directional_caps_and_reuses_immutable_values(self):
         self.assertIsNone(self.runtime.navigation_crush_capability(11))
@@ -189,7 +207,7 @@ class NavigationCapabilityDirectionABITests(unittest.TestCase):
             direction, math.pi, 5.6, drive_direction=-1.0))
         self.assertEqual([(math.pi, 5.6, -1.0)], calls)
 
-    def test_runtime_candidate_intent_and_cache_separate_same_yaw_both_gears(self):
+    def test_runtime_candidate_intent_uses_same_static_policy_for_both_gears(self):
         calls, verdicts = [], []
 
         class CandidateAdapter(bot_fixture._FixedAdapter):
@@ -204,7 +222,7 @@ class NavigationCapabilityDirectionABITests(unittest.TestCase):
         def direction(position, yaw, speed, descriptor, maximum_distance,
                       corridor_half_width, native_capability):
             calls.append((yaw, maximum_distance, native_capability))
-            clear = native_capability is not None and native_capability[2] > 0.0
+            clear = native_capability == (('ignore_destructibles', 1), None, None)
             return {'clear': clear, 'collision': not clear, 'slope': 0.0}
 
         descriptor = bot_fixture._combat_descriptor()
@@ -224,12 +242,12 @@ class NavigationCapabilityDirectionABITests(unittest.TestCase):
         # Exercise the native fallback and its real per-decision sample cache.
         runtime._planner_corridor_clear = lambda *unused, **kwargs: None
         runtime.update(0.1, 1.0)
-        self.assertEqual([(True, False, True)], verdicts)
+        self.assertEqual([(True, True, True)], verdicts)
         candidate_calls = [entry for entry in calls
                            if entry[0] == 0.0 and entry[1] == 5.6]
         self.assertEqual(2, len(candidate_calls))
-        self.assertEqual([20.0, -10.0],
-                         [entry[2][2] for entry in candidate_calls])
+        self.assertTrue(all(entry[2] is runtime.navigation_planning_capability()
+                            for entry in candidate_calls))
 
 
 class NavigationCapabilityGateTests(unittest.TestCase):
@@ -275,7 +293,7 @@ class NavigationCapabilityGateTests(unittest.TestCase):
             (0.0, 0.0, 0.0), (0.0, 0.0, 20.0))
 
     def assert_consumer_reached_native(self, bot_id, direction=1.0):
-        expected = self.runtime.navigation_crush_capability(bot_id, direction)
+        expected = self.runtime.navigation_planning_capability(bot_id, direction)
         self.assertTrue(self.native_calls)
         self.assertTrue(all(call[3] is expected for call in self.native_calls),
                         self.native_calls)
@@ -284,7 +302,7 @@ class NavigationCapabilityGateTests(unittest.TestCase):
         self.runtime.navigator.grid.invalidate_native_review()
         self.native_calls[:] = []
 
-    def test_offset_lane_goal_proves_the_consuming_bots_capability(self):
+    def test_offset_lane_goal_uses_shared_static_policy(self):
         for bot_id in (11, 12):
             with self.subTest(bot_id=bot_id):
                 self.reset_receipts()
@@ -294,7 +312,7 @@ class NavigationCapabilityGateTests(unittest.TestCase):
                 self.assertEqual((-4.0, 0.0, 8.0), result)
                 self.assert_consumer_reached_native(bot_id)
 
-    def test_direct_navigation_target_carries_capability_into_its_receipt(self):
+    def test_direct_navigation_target_shares_receipt_identity_between_vehicles(self):
         goal = (0.0, 0.0, 8.0)
         for bot_id in (11, 12):
             with self.subTest(bot_id=bot_id):
@@ -306,9 +324,9 @@ class NavigationCapabilityGateTests(unittest.TestCase):
                 self.assert_consumer_reached_native(bot_id)
         progress = self.runtime.navigator.bot_direct_progress
         self.assertEqual({11, 12}, set(progress))
-        self.assertNotEqual(progress[11]['path_key'], progress[12]['path_key'])
+        self.assertEqual(progress[11]['path_key'], progress[12]['path_key'])
 
-    def test_local_route_lane_offset_keeps_the_selected_consumers_capability(self):
+    def test_local_route_lane_offset_uses_shared_static_policy(self):
         route = {'id': 'forest', 'waypoints': (
             (0.0, 0.0, False), (0.0, 40.0, False))}
         strategic = {'route_id': 'forest', 'route_index': 1, 'route_join': False,
@@ -317,8 +335,7 @@ class NavigationCapabilityGateTests(unittest.TestCase):
             self.runtime.states[bot_id].update(x=x, route=route)
             self.runtime._server_orders[bot_id] = dict(strategic)
         # The authored two-Bot layout gives one centre and one offset lane.
-        # Exercise the lighter Bot's nonzero lane, whose proof must not inherit
-        # the first Bot's greater kinetic inputs.
+        # The lighter Bot's nonzero lane uses the same static-world policy.
         self.reset_receipts()
         x = self.runtime.states[12]['x']
         selected = (x, 0.0, 8.0)
@@ -330,7 +347,7 @@ class NavigationCapabilityGateTests(unittest.TestCase):
 
     def test_same_map_new_round_reproves_identical_capability_against_new_world(self):
         navigator = self.runtime.navigator
-        capability = self.runtime.navigation_crush_capability(11)
+        capability = self.runtime.navigation_planning_capability(11)
         start, goal = (0.0, 0.0, 0.0), (0.0, 0.0, 24.0)
         for frame in range(10):
             navigator.begin_frame(0.1)
@@ -350,7 +367,7 @@ class NavigationCapabilityGateTests(unittest.TestCase):
         self.runtime.battle_start(dict(self.fixture.start, round_id=6))
         self.assertIs(navigator, self.runtime.navigator)
         self.assertEqual(capability,
-                         self.runtime.navigation_crush_capability(11))
+                         self.runtime.navigation_planning_capability(11))
         self.assertFalse(navigator.paths)
         self.assertFalse(navigator.bot_states)
         self.assertFalse(navigator.searches)
@@ -358,22 +375,35 @@ class NavigationCapabilityGateTests(unittest.TestCase):
         navigator.grid.review_native_corridor(start, goal)
         self.assertFalse(navigator.grid.segment_clear(
             start, (0.0, 0.0, 8.0),
-            self.runtime.navigation_crush_capability(11)))
+            self.runtime.navigation_planning_capability(11)))
         self.assert_consumer_reached_native(11)
 
-    def test_corridor_probe_keeps_forward_and_reverse_receipts_separate(self):
+    def test_corridor_probe_uses_shared_policy_in_forward_and_reverse(self):
         for bot_id, yaw, direction in ((11, 0.0, 1.0),
                                       (11, math.pi, -1.0), (12, 0.0, 1.0)):
             with self.subTest(bot_id=bot_id, yaw=yaw, direction=direction):
                 self.reset_receipts()
-                capability = self.runtime.navigation_crush_capability(
+                capability = self.runtime.navigation_planning_capability(
                     bot_id, direction)
                 self.assertTrue(self.runtime._planner_corridor_clear(
                     (0.0, 0.0, 0.0), yaw, 0.0,
                     native_capability=capability))
                 self.assert_consumer_reached_native(bot_id, direction)
 
-    def test_queued_cover_callback_binds_its_source_capability(self):
+    def test_same_segment_reuses_native_proof_across_vehicle_and_gear_changes(self):
+        self.reset_receipts()
+        grid = self.runtime.navigator.grid
+        start, goal = (0.0, 0.0, 0.0), (0.0, 0.0, 8.0)
+        first_policy = self.runtime.navigation_planning_capability(11)
+        self.assertTrue(grid.segment_clear(start, goal, first_policy))
+        self.assert_consumer_reached_native(11)
+        calls = tuple(self.native_calls)
+        for bot_id, direction in ((12, 1.0), (11, -1.0), (12, -1.0)):
+            policy = self.runtime.navigation_planning_capability(bot_id, direction)
+            self.assertTrue(grid.segment_clear(start, goal, policy))
+            self.assertEqual(calls, tuple(self.native_calls))
+
+    def test_queued_cover_callback_uses_shared_static_policy(self):
         calls = []
 
         def cover(source, target, route, allies, segment_clear):
@@ -410,6 +440,6 @@ class NavigationCapabilityGateTests(unittest.TestCase):
         for bot_id, clear, native_calls in calls[:2]:
             self.assertTrue(clear)
             self.assertTrue(native_calls)
-            expected = self.runtime.navigation_crush_capability(bot_id)
+            expected = self.runtime.navigation_planning_capability(bot_id)
             self.assertTrue(all(call[3] is expected for call in native_calls),
                             native_calls)

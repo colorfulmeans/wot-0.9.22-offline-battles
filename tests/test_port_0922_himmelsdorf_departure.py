@@ -308,6 +308,7 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 monitor = _EpisodeMonitor()
                 monitor.started['recovery'] = {}
                 monitor.maximum['recovery'] = {}
+                recovery_episodes = {}
                 now = [0.0]
                 macro_goals = {}
                 peak_group = {
@@ -338,6 +339,16 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                     monitor.record(
                         'parked', bot_id,
                         far_macro_goal and mode == 'arrived', now[0])
+                    episode = runtime.adapter.driver.states[bot_id]['recovery_count']
+                    if recovery_episodes.get(bot_id) != episode:
+                        # Consecutive checked attempts can both report
+                        # ``blocked`` while a queue clears. The old mode-only
+                        # monitor merged two distinct one-second leases into
+                        # one 2.2-second episode. Keep the two-second bound on
+                        # each actual episode; the departure and original-hull
+                        # occupancy assertions below still reject a stuck Bot.
+                        monitor.record('recovery', bot_id, False, now[0])
+                        recovery_episodes[bot_id] = episode
                     monitor.record(
                         'recovery', bot_id,
                         mode in ('blocked', 'pivot_recovery', 'reverse_turn'),

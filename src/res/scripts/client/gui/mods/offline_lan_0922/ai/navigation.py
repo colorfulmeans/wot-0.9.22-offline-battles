@@ -828,14 +828,12 @@ class TerrainGrid(object):
 			return True
 		if self.prebaked:
 			edges = self._edge_keys_for_segment(start, end)
-			if (self._baked_cell_height(self.cell_for(start)) is None and
-					any(first in self._native_review_cells or
-						second in self._native_review_cells
-						for first, second in edges)):
+			if self._baked_cell_height(self.cell_for(start)) is None:
 				# Neither the snapped bake corridor nor a raw edge with a missing
 				# height proves the actual short connector. Recheck it before
-				# either coarse-grid verdict can veto motion. A small physical
-				# move can change the snapped corridor without adding a wall.
+				# either coarse-grid verdict can grant or veto motion. Terrain
+				# drift need not produce a hard contact first, so this proof must
+				# not depend on another Bot having requested native review.
 				return self._live_baked_egress_clear(start, end, native_capability)
 			if not self._baked_corridor(start, end)[0]:
 				return False
@@ -1188,7 +1186,7 @@ class TerrainGrid(object):
 			# nearby cell as its logical start; make that connector an explicit
 			# native-proven drive, not an implicit snap or an endless wait.
 			cell = self._nearest_baked_cell(self.cell_for(current), 2)
-			if cell is not None and cell in self._native_review_cells:
+			if cell is not None:
 				candidate = self.point_for(cell, self._baked_cell_height(cell))
 				yaw = math.atan2(candidate[0] - float(current[0]),
 				                 candidate[2] - float(current[2]))
@@ -2248,6 +2246,43 @@ class TerrainNavigator(object):
 		state['blocked_step_tracker'] = None
 		state.pop('hard_contact_episode', None)
 		return changed
+
+	def request_replan(self, bot_id, current, now):
+		"""Restart this Bot's route after a realised local escape.
+
+		The driver has already proved and completed the bounded manoeuvre.
+		Retire its old joins and followers, retaining physical edge evidence
+		and every shared route or search another Bot may still consume.
+		"""
+		bot_id = int(bot_id)
+		current = tuple(current)
+		now = float(now)
+		self._cancel_bot_searches(bot_id)
+		for key in list(self.paths):
+			if self._path_owner(key[0]) == bot_id:
+				self.paths.pop(key, None)
+				self.path_times.pop(key, None)
+				self.path_hull_revisions.pop(key, None)
+				self.path_native_refusals.pop(key, None)
+		self.bot_direct_progress.pop(bot_id, None)
+		self.fallback_modes.pop(bot_id, None)
+		state = self.bot_states.get(bot_id)
+		if state is None:
+			return False
+		self._clear_pending_prefix(state)
+		self._clear_temporary_progress(state)
+		for name in ('last_target', 'local_fallback_target',
+				'local_fallback_intent', 'controlled_shallow_target',
+				'macro_escape_target', 'macro_escape_until', 'pending_since'):
+			state.pop(name, None)
+		state.update(path_key=None, index=0, last_position=current,
+			progress_time=now, recovery=0, recovery_until=0.0,
+			recovery_start=current, replan_active=True,
+			macro_replan_active=False, target_is_terminal=False,
+			navigation_status='pending',
+			replan_generation=int(state.get('replan_generation', 0)) + 1)
+		self._reset_macro_progress(state, current, None, now)
+		return True
 
 	def report_blocked_plan(self, current, target):
 		"""Review static geometry rejected before a hull can attempt motion.

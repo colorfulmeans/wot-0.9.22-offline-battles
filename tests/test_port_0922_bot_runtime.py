@@ -2664,7 +2664,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             segment_has_motion_hazard = segment_has_baked_hazard
 
-            def segment_clear(self, unused_start, unused_end):
+            def segment_clear(self, unused_start, unused_end, native_capability=None):
                 return True
 
         def direction(position, yaw, speed, unused_descriptor):
@@ -2775,7 +2775,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             segment_has_motion_hazard = segment_has_baked_hazard
 
-            def segment_clear(self, unused_start, unused_end):
+            def segment_clear(self, unused_start, unused_end, native_capability=None):
                 return True
 
         graph = _graph()
@@ -3041,7 +3041,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             segment_has_motion_hazard = segment_has_baked_hazard
 
-            def segment_clear(self, start, end):
+            def segment_clear(self, start, end, native_capability=None):
                 graph_calls.append((start, end))
                 return True
 
@@ -9221,7 +9221,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             segment_has_motion_hazard = segment_has_baked_hazard
 
-            def segment_clear(self, unused_start, unused_end):
+            def segment_clear(self, unused_start, unused_end, native_capability=None):
                 return True
 
         runtime.navigator.grid = StaticGrid()
@@ -17739,7 +17739,7 @@ class BotRuntimeTests(unittest.TestCase):
                 return False
 
             @staticmethod
-            def dry_segment_clear(*unused):
+            def dry_segment_clear(*unused, **unused_keywords):
                 return True
 
         class Navigator(object):
@@ -18106,7 +18106,7 @@ class BotRuntimeTests(unittest.TestCase):
                 return False
 
             @staticmethod
-            def dry_segment_clear(*unused):
+            def dry_segment_clear(*unused, **unused_keywords):
                 return True
 
         runtime = self.module.BotRuntime(1)
@@ -18193,7 +18193,8 @@ class BotRuntimeTests(unittest.TestCase):
                     self.mode == 'fatal' and end[0] < -8.0 and
                     mask & module.BAKED_FATAL_HAZARDS)
 
-            def dry_segment_clear(self, unused_start, end, unused_now):
+            def dry_segment_clear(self, unused_start, end, unused_now,
+                                  native_capability=None):
                 return not (self.mode == 'segment' and end[0] < -8.0)
 
         route = {
@@ -18263,7 +18264,7 @@ class BotRuntimeTests(unittest.TestCase):
                 return False
 
             @staticmethod
-            def dry_segment_clear(*unused):
+            def dry_segment_clear(*unused, **unused_keywords):
                 return True
 
         class Navigator(object):
@@ -18529,7 +18530,8 @@ class BotRuntimeTests(unittest.TestCase):
             def point_has_baked_hazard(*unused):
                 return False
 
-            def dry_segment_clear(self, unused_start, end, unused_now):
+            def dry_segment_clear(self, unused_start, end, unused_now,
+                                  native_capability=None):
                 return end[0] >= self.block_before_x
 
         grid = Grid()
@@ -18630,7 +18632,7 @@ class BotRuntimeTests(unittest.TestCase):
                 return False
 
             @staticmethod
-            def dry_segment_clear(*unused):
+            def dry_segment_clear(*unused, **unused_keywords):
                 return True
 
         checked = []
@@ -18768,7 +18770,8 @@ class BotRuntimeTests(unittest.TestCase):
         class Grid(object):
             allow_direct = False
 
-            def dry_segment_clear(self, start, goal, now):
+            def dry_segment_clear(self, start, goal, now,
+                                  native_capability=None):
                 calls.append(('direct', start, goal, now))
                 return self.allow_direct
 

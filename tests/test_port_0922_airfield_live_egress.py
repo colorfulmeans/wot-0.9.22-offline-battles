@@ -67,6 +67,56 @@ class AirfieldLiveEgressTests(unittest.TestCase):
         nav.grid.review_native_corridor(current, goal)
         return nav, samples, rays
 
+    def test_spic_eroded_slope_exit_requires_live_proof_without_contact_review(self):
+        # Report 154804: SP I C rests in hazard-2 cell (67, 70), with no
+        # baked height. Native terrain here is a controlled continuous plane
+        # through the recorded pose and the adjacent western graph node.
+        current = (-230.92294168762407, -4.964513778686523,
+                   -219.6344910028294)
+        goal = (-166.0, 0.0, -234.0)
+        west = (-234.0, -4.419, -218.0)
+        grade_x = (west[1] - current[1]) / (west[0] - current[0])
+        nav, samples, rays = self.scene(
+            current, goal, ground=lambda x, z, hint:
+            current[1] + grade_x * (x - current[0]))
+        nav.grid._native_review_cells.clear()
+        self.assertEqual((67, 70), nav.grid.cell_for(current))
+        self.assertIsNone(nav.grid._baked_cell_height((67, 70)))
+        self.assertTrue(nav.grid.point_has_baked_hazard(current, 2))
+        self.assertTrue(nav.grid.dry_segment_clear(current, west, 1.0))
+        self.assertTrue(samples)
+        self.assertEqual(current, rays[-1][0])
+        target = nav._pending_target(
+            29, current, goal, 1.0, {'pending_since': 0.0})
+        self.assertNotEqual(current, target)
+        self.assertIsNotNone(nav.grid._baked_cell_height(nav.grid.cell_for(target)))
+        self.assertFalse(nav.grid._native_review_cells)
+
+        # The same unreviewed connector must never inherit a snapped clear
+        # graph edge when its actual terrain or wall proof is unavailable.
+        nav.grid.obstacle_probe = lambda *unused: True
+        self.assertFalse(nav.grid.dry_segment_clear(current, west, 2.0))
+        nav.grid.obstacle_probe = lambda *unused: False
+        for invalid in (None, float('nan'), current[1] + 5.0):
+            nav.grid.ground_probe = lambda x, z, hint: (
+                current[1] if (x, z) == (current[0], current[2]) else invalid)
+            self.assertFalse(nav.grid.dry_segment_clear(current, west, 2.0))
+
+    def test_interior_connector_does_not_require_prior_hard_contact(self):
+        # A supported endpoint can be outside the short local fan. The
+        # explicit nearest-node candidate must be offered before any contact.
+        bot, current, goal = REPORT_INTERIOR_POSES[0]
+        nav, samples, rays = self.scene(current, goal)
+        nav.grid._native_review_cells.clear()
+        nearest = nav.grid._nearest_baked_cell(nav.grid.cell_for(current), 2)
+        expected = nav.grid.point_for(nearest, nav.grid._baked_cell_height(nearest))
+        target = nav._pending_target(bot, current, goal, 1.0,
+                                     {'pending_since': 0.0})
+        self.assertEqual(expected, target)
+        self.assertTrue(samples)
+        self.assertEqual(1, len(rays))
+        self.assertFalse(nav.grid._native_review_cells)
+
     def test_failed_airfield_route_keeps_its_short_exit_until_arrival(self):
         # 104150: this reproduces SU-122-44's exact first local target with
         # the shipped graph. Native replies are a stated flat/clear fixture.

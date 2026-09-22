@@ -396,7 +396,20 @@ class TrafficCoordinator(object):
         observation = self._orders.get(body['id'])
         if observation is not None:
             order = dict(observation[1])
-            order.pop('forward_blocked_by', None)
+            # A boxed-in driver's checked forward escape can be occupied even
+            # while its safe command holds both tracks. Retain that request
+            # while the named hull still blocks it; otherwise only the rear
+            # member of a crowded queue is ever asked to make room.
+            requested = order.get('forward_blocked_by')
+            requested_peer = next((peer for peer in peers
+                                   if peer['id'] == requested), None)
+            length, width = _dimensions(body)
+            if (command.get('recovery_mode') != 'blocked' or
+                    requested_peer is None or
+                    self._escape_probe._reverse_blocked_by_vehicle(
+                        body['position'], body['yaw'] + math.pi,
+                        [requested_peer], length, width) != requested):
+                order.pop('forward_blocked_by', None)
             if blocker is not None and sign > 0.0:
                 order['forward_blocked_by'] = blocker
             self._orders[body['id']] = (now, order)

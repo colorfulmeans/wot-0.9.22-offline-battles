@@ -1,4 +1,4 @@
-"""Consumer-specific navigation must honor stock soft objects without destruction."""
+"""All bot route planners ignore proved destructibles without destroying them."""
 import copy
 import math
 import sys
@@ -34,13 +34,13 @@ class NavigationSoftObstacleTests(unittest.TestCase):
                 (0, 0, 0), 0, 0, scene.descriptor, 4.0,
                 native_capability=capability)['clear'])
 
-    def test_forward_planning_does_not_inherit_its_reverse_speed_limit(self):
+    def test_forward_and_reverse_planning_share_destructible_clearance(self):
         with self.fixture.scene(registered=True, health=120.0) as scene:
             forward = self.capability(scene, 20.0)
             reverse = self.capability(scene, -10.0)
             self.assertFalse(self.blocked(scene, forward))
-            self.assertTrue(self.blocked(scene, reverse))
-            for capability, expected in ((forward, True), (reverse, False)):
+            self.assertFalse(self.blocked(scene, reverse))
+            for capability, expected in ((forward, True), (reverse, True)):
                 # The world ray is identical; the hull's requested gear differs.
                 result = scene.battle._direction_probe(
                     (0, 0, 0), 0, 0, scene.descriptor, 4.0,
@@ -56,12 +56,12 @@ class NavigationSoftObstacleTests(unittest.TestCase):
                 (0, 0, 0), 0, 0, scene.descriptor, 4.0,
                 native_capability=capability)['clear'])
 
-    def test_turning_toward_soft_house_keeps_forward_cap_but_reverse_does_not(self):
+    def test_turning_and_reversing_do_not_treat_soft_house_as_hard_wall(self):
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 
         # The house is behind the hull but ahead of the requested route. A
-        # forward route first pivots toward it; a reverse recovery instead
-        # reaches the same surface in the weaker reverse gear.
+        # forward route first pivots toward it; a reverse recovery sees the
+        # same route geometry even though physical crushing uses its gear.
         with self.fixture.scene(registered=True, health=120.0) as scene:
             samples = []
 
@@ -97,11 +97,11 @@ class NavigationSoftObstacleTests(unittest.TestCase):
                 11, 0, (0, 0, 0), math.pi, 0.0, 0.1,
                 (0, 0, 20), (), clear, stop_at_target=False)
             self.assertLess(samples[0][1], 0.0)
-            self.assertFalse(samples[0][2]['clear'])
-            self.assertEqual(0.0, command['throttle'])
-            self.assertEqual('pivot_recovery', command['recovery_mode'])
+            self.assertTrue(samples[0][2]['clear'])
+            self.assertLess(command['throttle'], 0.0)
+            self.assertEqual('reverse_turn', command['recovery_mode'])
 
-    def test_heavy_and_light_native_edges_have_separate_proof_caches(self):
+    def test_heavy_and_light_native_edges_have_identical_clearance(self):
         with self.fixture.scene(registered=True, health=150.0) as scene:
             nav = TerrainNavigator(lambda *unused: 0.0,
                 scene.battle._navigation_obstacle,
@@ -112,25 +112,50 @@ class NavigationSoftObstacleTests(unittest.TestCase):
             light = self.capability(scene, 10.0, 12110.0)
             scene.battle._soft_static_recast_budget[:] = [100]
             self.assertTrue(nav.grid.segment_clear(start, goal, heavy))
-            self.assertFalse(nav.grid.segment_clear(start, goal, light))
+            self.assertTrue(nav.grid.segment_clear(start, goal, light))
             calls = len(scene.rays)
             self.assertTrue(nav.grid.segment_clear(start, goal, heavy))
             self.assertEqual(calls, len(scene.rays))
 
-    def test_missing_or_invalid_capability_keeps_contact_hard(self):
+    def test_route_clearance_does_not_require_a_vehicle_capability(self):
         with self.fixture.scene(registered=True) as scene:
             for capability in (None, (), (('invalid',), 10000.0, 10.0),
                                (('stock1513', 0.0, 10.0), 0.0, 10.0)):
-                self.assertTrue(self.blocked(scene, capability))
+                self.assertFalse(self.blocked(scene, capability))
 
     def test_unknown_surface_and_backing_wall_remain_hard(self):
-        for kwargs in ({'unknown': True}, {'backing_z': 3.0},
-                       {'health': 1000000.0}):
+        for kwargs in ({'unknown': True}, {'backing_z': 3.0}):
             with self.subTest(kwargs=kwargs):
                 with self.fixture.scene(registered=True, **kwargs) as scene:
                     self.assertTrue(self.blocked(scene, self.capability(scene)))
 
-    def test_ambiguous_catalog_contact_is_not_exempted(self):
+    def test_soft_prop_recast_preserves_already_felled_tree_filter(self):
+        for accepted, replacement, backing in (
+                (True, False, None), (False, False, None),
+                (True, True, None), (True, False, 3.0)):
+            with self.subTest(accepted=accepted, replacement=replacement,
+                              backing=backing):
+                with self.fixture.scene(registered=True, backing_z=backing) as scene:
+                    sensor.g_offh_tree_state = {
+                        'native_committed': {(77, 1)} if accepted else set()}
+                    original = scene.bigworld.wg_collideSegment
+
+                    def with_tree(space, start, end, flags, keep=None):
+                        if abs(end.z - start.z) > 1e-8:
+                            fraction = (1.0 - start.z) / (end.z - start.z)
+                            if (0 <= fraction <= 1 and (keep is None or
+                                    keep(87 if replacement else 71, 0, 1, 77))):
+                                return (start + (end - start).scale(fraction),
+                                        approach_fixture._Vector(0, 0, -1))
+                        return original(space, start, end, flags, keep)
+
+                    with mock.patch.object(scene.bigworld, 'wg_collideSegment',
+                                           side_effect=with_tree):
+                        self.assertEqual(not accepted or replacement or
+                                         backing is not None,
+                                         self.blocked(scene, trace={}))
+
+    def test_unproved_catalog_contact_is_not_exempted(self):
         with self.fixture.scene(registered=True) as scene:
             with mock.patch.object(sensor, '_planning_catalog_candidate_1513',
                                    return_value=None):
@@ -160,14 +185,14 @@ class NavigationSoftObstacleTests(unittest.TestCase):
         with self.fixture.scene(registered=True, health=120.0) as scene:
             capability = self.capability(scene)
             before = len(scene.rays)
-            self.assertTrue(self.blocked(scene, capability))
+            self.assertFalse(self.blocked(scene, capability))
             ordinary_queries = len(scene.rays) - before
             before = len(scene.rays)
             trace = {}
-            self.assertTrue(self.blocked(scene, capability, trace))
+            self.assertFalse(self.blocked(scene, capability, trace))
             self.assertEqual(ordinary_queries, len(scene.rays) - before)
-            self.assertEqual('hard', trace['classification'])
-            self.assertEqual('stock_kinetic_reject', trace['reason'])
+            self.assertEqual('soft', trace['classification'])
+            self.assertEqual('proved_original_materials_only', trace['reason'])
             self.assertEqual(capability, trace['capability'])
             self.assertEqual((22, 0, 73), trace['objects'][0]['identity'])
             self.assertIn('bldaf_001_vhouse1.model', trace['objects'][0]['model'].lower())
@@ -219,8 +244,8 @@ class NavigationSoftObstacleTests(unittest.TestCase):
                 self.assertEqual(0, state['macro_progress_replans'])
             self.assertEqual(goal, target(27.1, 24))
             self.assertIs(path, nav.paths[key])
-            # A changed, now-uncrushable material is conclusive geometry, not
-            # another consumer's capability. It still retires this scope's path.
+            # Kinetic health is a physical contact detail and does not alter
+            # the shared static road geometry or retire its cached path.
             cache = sys.modules['AreaDestructibles'].g_cache
             original = cache.getDescByFilename
             def hardened(name):
@@ -229,5 +254,5 @@ class NavigationSoftObstacleTests(unittest.TestCase):
                 return value
             with mock.patch.object(cache, 'getDescByFilename', side_effect=hardened):
                 nav.grid.invalidate_native_review()
-                self.assertNotEqual(goal, target(27.2, 24))
-                self.assertIsNot(path, nav.paths.get(key))
+                self.assertEqual(goal, target(27.2, 24))
+                self.assertIs(path, nav.paths.get(key))

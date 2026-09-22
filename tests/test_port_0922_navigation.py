@@ -16,7 +16,7 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 
 class ClimbApproachNavigationTests(unittest.TestCase):
     @staticmethod
-    def _fjord_route():
+    def _fjord_route(native_capability=None):
         graph = json.loads((PORT_ROOT / 'navgraphs' / '33_fjord.json').read_text())
         navigator = TerrainNavigator(lambda *unused: None, baked_graph=graph)
         grid = navigator.grid
@@ -31,7 +31,8 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         pivot = next(index for index, point in enumerate(path)
                      if point[0] == 366.0 and point[2] == 14.0)
         key = ('route', 1, 'north_ridge', 1)
-        cache_key = navigator._cache_key(key, goal)
+        cache_key = navigator._cache_key(
+            navigator._native_path_key(key, native_capability), goal)
         navigator.paths[cache_key] = path
         navigator.path_times[cache_key] = 0.0
         return graph, navigator, path, pivot, key
@@ -185,7 +186,8 @@ class ClimbApproachNavigationTests(unittest.TestCase):
     def test_fjord_reached_climb_setup_advances_without_target_reversal(self):
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
 
-        graph, navigator, path, pivot, unused_key = self._fjord_route()
+        graph, navigator, path, pivot, unused_key = self._fjord_route(
+            BotRuntime.navigation_planning_capability())
         runtime = BotRuntime(1)
         runtime.navigator = navigator
         runtime.baked_graph = graph

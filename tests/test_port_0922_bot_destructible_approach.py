@@ -139,10 +139,31 @@ class BotDestructibleApproachTests(unittest.TestCase):
             self.assertTrue(result['clear'], result)
             self.assertEqual(0.0, result['slope'])
 
-    def test_uncrushable_house_does_not_become_ground_or_clear_space(self):
+    def test_confirmed_house_is_ignored_without_consulting_drive_capability(self):
         with self.scene(registered=True, health=1000000.0) as f:
-            result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertFalse(result['clear'], result)
+            physics = runtime_fixture.battle_runtime_module.vehicle_physics
+            with mock.patch.object(physics, 'derive_params',
+                                   side_effect=AssertionError('no planning physics')), \
+                    mock.patch.object(sensor, '_stock_crushable_1513',
+                                      side_effect=AssertionError('no planning crush law')):
+                result = f.battle._direction_probe(
+                    (0, 0, 0), 0, 0, f.descriptor, 4.0)
+                self.assertTrue(result['clear'], result)
+                self.assertEqual(0.0, result['slope'])
+
+    def test_planning_clearance_cannot_authorize_an_uncrushable_motion_receipt(self):
+        with self.scene(registered=True, health=1000000.0) as f:
+            self.assertTrue(f.battle._direction_probe(
+                (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
+            self.assertFalse(f.battle._direction_world_receipt(
+                (0, 0, 0), 0, 0, f.descriptor, 4.0))
+
+    def test_navigation_support_filters_soft_roof_but_physical_support_keeps_it(self):
+        with self.scene(registered=True, health=1000000.0) as f:
+            top = f.battle._ground_y(0.0, 4.0, 0.0)
+            self.assertGreater(top, 0.0)
+            self.assertEqual(0.0, f.battle._navigation_ground(0.0, 4.0, 0.0))
+            self.assertEqual(top, f.battle._ground_y(0.0, 4.0, 0.0))
 
     def test_real_backing_wall_survives_soft_house_filtering(self):
         with self.scene(registered=True, backing_z=3.0) as f:
@@ -236,14 +257,12 @@ class BotDestructibleApproachTests(unittest.TestCase):
                 kinetic_speed=20.0, recast_budget=[24]))
             self.assertEqual(before, len(f.rays))
 
-    def test_reverse_approach_uses_the_installed_reverse_not_forward_limit(self):
-        # The structure can be approached at the forward limit but not at the
-        # lower reverse limit. Geometry must not bypass that existing gate.
+    def test_reverse_and_forward_planning_ignore_the_same_confirmed_structure(self):
         with self.scene(health=30.0, speed_cap=10.0) as f:
             forward = f.battle._direction_probe((0, 0, 0), 0, 0.0, f.descriptor, 4.0)
             reverse = f.battle._direction_probe((0, 0, 0), 0, -0.01, f.descriptor, 4.0)
             self.assertTrue(forward['clear'], forward)
-            self.assertFalse(reverse['clear'], reverse)
+            self.assertTrue(reverse['clear'], reverse)
 
     def test_real_driver_requests_forward_motion_before_contact_at_low_fps(self):
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver

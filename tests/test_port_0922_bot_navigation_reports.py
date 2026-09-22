@@ -94,8 +94,16 @@ class AirfieldPendingEscapeTests(unittest.TestCase):
         unused_bot, current, goal = self.REVIEWED_EDGE_POSES[2]
         ground, obstacle = mock.Mock(return_value=0.0), mock.Mock(return_value=False)
         nav = TerrainNavigator(ground, obstacle, baked_graph=graph)
-        selected = nav.grid.safe_local_target(current, goal, 1.0)
-        cell = nav.grid.cell_for(selected)
+        # Select this precise connector rather than whichever fan candidate
+        # ranks first: the regression is the hazard omitted by start snapping.
+        cell = nav.grid._nearest_baked_cell(nav.grid.cell_for(current), 2)
+        selected = nav.grid.point_for(cell, nav.grid._baked_cell_height(cell))
+        self.assertNotEqual(nav.grid.cell_for(current), cell)
+        self.assertTrue(nav.grid.segment_clear(current, selected))
+        self.assertTrue(ground.called)
+        self.assertTrue(obstacle.called)
+        ground.reset_mock()
+        obstacle.reset_mock()
         # The short escape ends in the cell used as the snapped start, so
         # baked hazards exclude it as "already occupied". The raw hull is
         # still outside that cell and must not enter new water or a cliff.
@@ -127,11 +135,18 @@ class AirfieldPendingEscapeTests(unittest.TestCase):
         )
         for current, goal in poses:
             with self.subTest(current=current):
-                nav = TerrainNavigator(lambda *unused: None, baked_graph=graph)
+                # A missing baked start now always requires live support and
+                # collision proof, including before any contact review. These
+                # flat/clear replies are controlled, not captured native BSP.
+                ground = mock.Mock(return_value=current[1])
+                obstacle = mock.Mock(return_value=False)
+                nav = TerrainNavigator(ground, obstacle, baked_graph=graph)
                 state = {'pending_since': 0.0}
                 target = nav._pending_target(2, current, goal, 1.0, state)
                 self.assertNotEqual(current, target)
                 self.assertTrue(nav.grid.dry_segment_clear(current, target, 1.0))
+                self.assertTrue(ground.called)
+                self.assertTrue(obstacle.called)
                 bearing = math.atan2(goal[0] - current[0], goal[2] - current[2])
                 exit_bearing = math.atan2(target[0] - current[0], target[2] - current[2])
                 offset = (exit_bearing - bearing + math.pi) % (2 * math.pi) - math.pi

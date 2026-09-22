@@ -72,6 +72,9 @@ class NavigationRetryMotionTests(unittest.TestCase):
         failed_positions = []
         previous_failures = 0
         search_credit = 0.0
+        reverse_distance = 0.0
+        navigation_reverse_distance = 0.0
+        navigation_replans = 0
         for frame in range(fps * 120):
             dt = 1.0 / fps
             elapsed = frame * dt
@@ -80,17 +83,43 @@ class NavigationRetryMotionTests(unittest.TestCase):
                      'yaw': yaw, 'speed': speed, 'dt': dt, 'now': elapsed,
                      'half_length': length, 'half_width': width,
                      'turn_speed_limit': params['rotSpd'], 'decision_horizon': dt}
+            # Match the runtime's obstruction-evidence gate. A slow but healthy
+            # search alone cannot request a physical escape. This analytic
+            # fixture has no contact grind impulse; erased baked cells still
+            # require the same safe-support gate as the production runtime.
+            nav_state = nav.bot_states.get(bot, {})
+            state['navigation_recovery_allowed'] = bool(
+                nav_state.get('hard_contact_episode') or
+                nav_state.get('blocked_step_tracker') or
+                nav.grid._baked_cell_height(nav.grid.cell_for(position)) is None)
 
             def direction_clear(angle, maximum_distance=None):
                 distance = (state.get('navigation_probe_distance', 15.0)
                             if maximum_distance is None else maximum_distance)
                 end = (position[0] + math.sin(angle) * distance, 0.0,
                        position[2] + math.cos(angle) * distance)
-                return not scene.blocked(position, end, width)
+                if not scene.blocked(position, position, width):
+                    return not scene.blocked(position, end, width)
+                # Near the open wall endpoint a legal hull can occupy a corner
+                # of the square inflated broadphase: Panther II at approximately
+                # (-6.42, -11.47) was one such pose. A ray starting there reports
+                # every heading blocked, including travel away from the wall.
+                # Resolve that ambiguous start with the complete physical OBB
+                # sweep; never simply ignore a hit that starts at the origin.
+                return not any(adapter.driver._obb_overlap(
+                    ((position[0] + end[0]) * 0.5, 0.0,
+                     (position[2] + end[2]) * 0.5),
+                    angle, length + distance * 0.5, width,
+                    ((x0 + x1) * 0.5, 0.0, (z0 + z1) * 0.5),
+                    0.0, (z1 - z0) * 0.5, (x1 - x0) * 0.5)
+                    for x0, z0, x1, z1 in scene.walls)
 
             command = adapter.decide_with_order(
                 state, {'combat_mode': 'route', 'move_position': goal},
                 direction_clear)
+            if command.pop('navigation_replan', False):
+                nav.request_replan(bot, position, elapsed)
+                navigation_replans += 1
             # The same 15 credits/second keeps genuine pending phases visible
             # without also starving A* merely because controls run at 5 Hz.
             search_credit += dt * 15.0
@@ -124,10 +153,25 @@ class NavigationRetryMotionTests(unittest.TestCase):
                 following = (position[0] + math.sin(yaw) * speed * step, 0.0,
                              position[2] + math.cos(yaw) * speed * step)
                 if not occupied(following, yaw):
+                    travelled = math.hypot(following[0] - position[0],
+                                           following[2] - position[2])
+                    if speed < 0.0:
+                        reverse_distance += travelled
+                        if command.get('navigation_recovery'):
+                            navigation_reverse_distance += travelled
+                    if travelled > 0.000001:
+                        nav.clear_blocked_contact(bot)
                     position = following
                 else:
+                    attempted_yaw = yaw + (math.pi if speed < 0.0 else 0.0)
+                    # The production final-motion veto feeds both consumers:
+                    # driver's finite failed-heading memory and navigator's
+                    # stable realised edge. Reporting only the intended target
+                    # lets recovery repeat a physically disproved manoeuvre.
+                    adapter.driver.remember_failure(bot, attempted_yaw, 5.0)
+                    nav.report_hard_contact(
+                        bot, position, command['move_position'], attempted_yaw, elapsed)
                     speed = 0.0
-                    nav.report_blocked_step(bot, position, command['move_position'], elapsed)
                 self.assertFalse(occupied(position, yaw))
                 remaining -= step
             # The U opens at z=-10. A whole hull must leave that mouth before
@@ -137,7 +181,10 @@ class NavigationRetryMotionTests(unittest.TestCase):
                 break
         return dict(position=position, goal=goal, elapsed=elapsed,
                     failed=nav.search_failed, starts=starts, exited=exited,
-                    failed_positions=failed_positions, name=name)
+                    failed_positions=failed_positions, name=name,
+                    reverse_distance=reverse_distance,
+                    navigation_reverse_distance=navigation_reverse_distance,
+                    navigation_replans=navigation_replans)
 
     def test_report_vehicles_leave_real_dead_end_after_failed_private_retries(self):
         for mobility in REPORT_MOBILITY:

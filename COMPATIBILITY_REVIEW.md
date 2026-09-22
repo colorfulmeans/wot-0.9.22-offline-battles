@@ -6059,3 +6059,61 @@ actual Airfield A* graph and reported E25 mobility inputs. The old pending
 follower keeps the consumed point; the repaired follower proceeds up the next
 dry leg with actual copied-physics motion. These controlled regressions do
 not establish full-fleet native gameplay or frame-pacing acceptance.
+
+### September 22 Airfield: destructible-free planning and bounded wait recovery
+
+Reports `20260922-153100-624e3253cb0c` and
+`20260922-154804-361a82ba99c6` use build `colorfulmeans-35697098489-1`.
+SU-122-44 id 27 waits at spawn while native rays report ambiguous prop
+identity. The logged clay-stove hits overlap clay-fence boxes in the shipped
+Airfield catalog. SP I C id 29 waits in cell (67, 70), whose baked height is
+absent and hazard is the dry terrain-edge bit. Its stationary yaw converges
+to the distant strategic goal, approximately 160 degrees away from its
+recorded first detour waypoint. The initial powered turn into that position
+is not captured; the logs do prove the later wait/facing conflict.
+
+Following the requested route policy, confirmed original destructible skins
+no longer determine permanent route obstruction using vehicle mass, speed,
+crew or gear. Planning registers exact catalog identities, permits overlapping
+members, and recasts the complete segment with only their original materials
+filtered. Unknown surfaces, indestructible backing walls and solid replacement
+geometry remain visible. Per-vehicle physical crushing, contact admission and
+final motion receipts remain separate. Planning also samples terrain beneath
+confirmed destructible roofs. A single immutable planning-policy key lets all
+vehicles reuse the same static edge proofs without changing the actual hull
+width or the live vehicle collision checks.
+
+A pending route no longer rotates the hull toward a distant face target.
+When local physical blockage or an unsupported baked start establishes a
+reason to recover, a four-second staggered wait may attempt a bounded straight
+backout. The complete rear corridor and nearby vehicles must pass their
+checks. Completion or a blocked rear requests one local replan; cached
+commands cannot repeatedly restart it. Ordinary queued A* work alone does not
+claim a collision. Physical failed-edge evidence survives replanning, while
+other vehicles retain their shared routes and searches.
+
+A missing baked start now always needs a live support, grade and obstacle
+proof before joining a nearby safe cell, regardless of whether a previous
+hard contact requested native review. Neither a coarse snap nor a missing
+height alone grants that motion. These are general planner/driver changes,
+not Airfield coordinate exceptions or difficulty changes.
+
+Tests use the recorded prop geometry and SP I C position together with
+controlled native probe responses. They cover overlapping originals, backing
+walls, replacement geometry, deferred budgets, shared route policy, wait
+heading, rear traffic, bounded recovery and per-vehicle replan ownership.
+Windows native gameplay remains the acceptance boundary for the reported
+initial collision and complete spawn departure.
+
+The crowded-departure regression also exposed two recovery state problems.
+A short navigation wait must preserve the driver's accumulated progress and
+held avoidance/recovery state rather than repeatedly restarting them. A hull
+boxed in by vehicles ahead and behind must publish both proved blockers;
+otherwise the finite friendly-reposition system can request movement only
+from a rear vehicle whose own rear is occupied. The same existing bounded,
+collision-checked reposition mechanism handles the added forward request.
+The departure monitor now separates ordinary recovery episodes by their
+existing recovery count. Consecutive blocked commands can straddle two
+independent manoeuvres; combining them incorrectly reports one oversized
+lease. The two-second per-episode bound and the independent sixty-second
+whole-roster departure and original-slot occupancy assertions remain.

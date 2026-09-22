@@ -14,6 +14,9 @@ import math
 
 WAYPOINT_ARRIVAL_RADIUS = 1.5
 TRAFFIC_WAIT_LEASE_SECONDS = 1.5
+# A pending search is not a physical collision. Only runtime-confirmed local
+# blockage may admit the separate, bounded navigation-wait recovery below.
+NAVIGATION_WAIT_RECOVERY_SECONDS = 4.0
 # First avoidance branch of the steering fan.
 FIRST_CANDIDATE_OFFSET = 0.42
 # Fifteen-degree circular buckets centre both the +/-pi seam and cardinal yaws.
@@ -211,6 +214,84 @@ class LocalDriver(object):
 			state['recovery_time'] = 0.0
 			state['recovery_side'] = 0.0
 		return True
+
+	def end_navigation_wait(self, bot_id):
+		state = self.states.get(bot_id)
+		if state is not None:
+			state.pop('navigation_wait', None)
+
+	def wait_for_navigation(self, bot_id, team_slot, position, yaw, speed, dt,
+			neighbours, direction_clear, half_length=3.5, half_width=1.7,
+			recovery_allowed=False):
+		"""Hold a pending path, or back out once after proved local blockage.
+
+		The caller owns evidence that the current support/last physical movement
+		is unsafe; elapsed search time alone must not manufacture that evidence.
+		Recovery only translates backwards through a checked complete hull sweep.
+		Its deadline and distance never renew while the same path wait continues.
+		"""
+		state = self._state(bot_id, team_slot, position)
+		step = max(0.0, float(dt))
+		state['last_step'] = step
+		state['clock'] += step
+		self._prune_failures(state)
+		# A short pending search pauses ordinary driving; it does not erase
+		# accumulated movement, a committed avoidance side or a recovery lease.
+		# Repeated path waits otherwise reset a wedged hull before it can finish
+		# backing out. Only this independent wait episode earns elapsed time.
+		wait = state.get('navigation_wait')
+		if wait is None:
+			wait = {'age': 0.0, 'active': False, 'completed': False}
+			state['navigation_wait'] = wait
+		wait['age'] += step
+		result = {
+			'throttle': 0.0, 'brake': True, 'turn': 0.0,
+			'target_yaw': float(yaw), 'recovery_mode': 'nav_wait',
+		}
+		if wait['completed']:
+			return result
+		phase = state['recovery_timing_phase']
+		if not wait['active']:
+			if (not recovery_allowed or
+					wait['age'] < NAVIGATION_WAIT_RECOVERY_SECONDS + phase * 0.42 or
+					abs(float(speed)) > 0.35):
+				return result
+			wait.update(active=True, elapsed=0.0, origin=tuple(position))
+			# This separately proved backout now owns recovery. Ordinary driving
+			# resumes from its realised endpoint when the new path is available.
+			state['recovery_time'] = 0.0
+			state['recovery_side'] = 0.0
+			state['stuck_time'] = 0.0
+			state['steering_yaw'] = None
+			state['heading_progress_yaw'] = None
+			state['braking_target'] = None
+			state['alignment_target'] = None
+		else:
+			wait['elapsed'] += step
+		length = max(0.5, float(half_length))
+		width = max(0.3, float(half_width))
+		distance = recovery_probe_distance(length)
+		travelled = _distance(position, wait['origin'])
+		finished = (wait['elapsed'] >= self.recovery_seconds + phase * 0.28 or
+			travelled >= distance)
+		reverse_yaw = float(yaw) + math.pi
+		remaining = max(0.0, distance - travelled)
+		if not finished:
+			finished = (
+				self._failure_penalty(state, reverse_yaw) > 0.0 or
+				not self._clear(direction_clear, reverse_yaw, remaining,
+					drive_direction=-1.0) or
+				self._reverse_blocked_by_vehicle(position, yaw, neighbours,
+					length, width, remaining) is not None)
+		if finished:
+			wait['completed'] = True
+			# Invalidate only this bot's local path/search after the manoeuvre (or
+			# an unsafe rear). Keep failed-edge evidence and emit exactly once.
+			result['navigation_replan'] = True
+			return result
+		result.update(throttle=-0.72, brake=False, recovery_mode='reverse_turn',
+			navigation_recovery=True)
+		return result
 
 	def _state(self, bot_id, team_slot, position):
 		team_slot = _team_slot(team_slot)
@@ -775,13 +856,15 @@ class LocalDriver(object):
 						# closes the rear. Use the same bounded recovery drive
 						# forwards only if terrain and the complete hull sweep
 						# are clear; rotation must not create space for free.
+						forward_blocker = None
 						if (self._failure_penalty(state, float(yaw)) <= 0.0 and
-								self._clear(direction_clear, float(yaw), escape_distance) and
-								self._reverse_blocked_by_vehicle(
-									position, float(yaw)+math.pi, neighbours,
-									own_half_length, own_half_width) is None):
-							return {'throttle': 0.72, 'brake': False, 'turn': 0.0,
-								'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
+								self._clear(direction_clear, float(yaw), escape_distance)):
+							forward_blocker = self._reverse_blocked_by_vehicle(
+								position, float(yaw)+math.pi, neighbours,
+								own_half_length, own_half_width)
+							if forward_blocker is None:
+								return {'throttle': 0.72, 'brake': False, 'turn': 0.0,
+									'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
 						# Neither rotation fits and the rear is denied. Hold the
 						# pose instead of grinding the corners, and publish the
 						# hull that owns the escape so the queue can clear it.
@@ -794,6 +877,8 @@ class LocalDriver(object):
 						}
 						if reverse_blocker is not None:
 							blocked['reverse_blocked_by'] = reverse_blocker
+						if forward_blocker is not None:
+							blocked['forward_blocked_by'] = forward_blocker
 						return blocked
 				return {
 					'throttle': 0.0,

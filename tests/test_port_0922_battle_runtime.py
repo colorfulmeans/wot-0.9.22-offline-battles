@@ -13231,7 +13231,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertNotIn('world_receipt', result)
         battle._direction_world_receipt.assert_not_called()
 
-    def test_direction_probe_uses_asymmetric_hull_lead_and_directional_cap(self):
+    def test_direction_probe_classifies_props_without_vehicle_energy_estimates(self):
         from gui.mods.offline_lan_0922 import destructibles_sensor
 
         runtime = _runtime()
@@ -13251,13 +13251,11 @@ class BattleRuntimeContractTests(unittest.TestCase):
         def soft_path(unused_space_id, start, unused_end,
                       unused_collision, impact_speed, unused_descriptor,
                       recast_budget=None, allow_kinetic_first=False,
-                      kinetic_speed=None):
-            # The typed receipt owns a separate exact 3x3 sweep beginning
-            # behind the hull. Keep this assertion scoped to the legacy far
-            # planning rays whose reachable-impact calculation it verifies.
+                      kinetic_speed=None, ignore_destructibles=False):
             if abs(float(start.z)) < 0.001:
                 captures.append(float(impact_speed))
-                contracts.append((allow_kinetic_first, kinetic_speed))
+                contracts.append((ignore_destructibles, allow_kinetic_first,
+                                  kinetic_speed))
             return True
 
         runtime.bigworld.wg_collideSegment = collide
@@ -13273,12 +13271,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 side_effect=soft_path), \
                 mock.patch(
                     'gui.mods.offline_lan_0922.battle_runtime.'
-                    'vehicle_physics.derive_params', return_value=params), \
+                    'vehicle_physics.derive_params',
+                    side_effect=AssertionError('planning does not need drive physics')), \
                 mock.patch(
                     'gui.mods.offline_lan_0922.battle_runtime.'
                     'vehicle_physics.engine_force',
-                    side_effect=lambda unused_params, unused_speed, throttle,
-                    unused_pitch: 2000.0 * throttle):
+                    side_effect=AssertionError('planning does not estimate impact speed')):
             self.assertTrue(battle._direction_probe(
                 (0.0, 0.0, 0.0), 0.0, 1.0, descriptor)['clear'])
             forward = tuple(captures)
@@ -13292,16 +13290,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertTrue(forward)
         self.assertTrue(reverse)
-        self.assertTrue(all(abs(value - math.sqrt(5.0)) < 0.0001
-                            for value in forward))
-        self.assertTrue(all(abs(value - math.sqrt(17.0)) < 0.0001
-                            for value in reverse))
-        self.assertTrue(all(value <= 20.0 for value in forward))
-        self.assertTrue(all(value <= 10.0 for value in reverse))
-        self.assertTrue(all(enabled and limit == 20.0
-                            for enabled, limit in forward_contracts))
-        self.assertTrue(all(enabled and limit == 10.0
-                            for enabled, limit in reverse_contracts))
+        self.assertTrue(all(value == 0.0 for value in forward + reverse))
+        self.assertTrue(all(contract == (True, False, None)
+                            for contract in forward_contracts + reverse_contracts))
 
     def test_direction_probe_propagates_soft_budget_defer_but_keeps_wall_hard(self):
         from gui.mods.offline_lan_0922 import destructibles_sensor

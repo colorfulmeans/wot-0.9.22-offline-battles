@@ -49,6 +49,10 @@ except NameError:
     _STRING_TYPES = (str,)
 
 
+# Static planning ignores confirmed destructibles for every vehicle and gear.
+# Physical contacts still use the mounted vehicle's stock crushing inputs.
+NAVIGATION_STATIC_POLICY = (('ignore_destructibles', 1), None, None)
+
 OBSERVATION_SECONDS = 0.40
 # The logical runtime keeps its mature 30 Hz default for engine-free callers.
 # Production hidden workers explicitly select the lower-cost 10 Hz control and
@@ -2609,7 +2613,7 @@ class BotRuntime(object):
             self._update_slope_pose(state, allow_ungrounded=True)
             direction = self._probe_direction(
                 position, yaw, 0.0, descriptor,
-                native_capability=self.navigation_crush_capability(state['id']))
+                native_capability=self.navigation_planning_capability(state['id']))
             if (not isinstance(direction, dict) or
                     not self._probe_is_clear(direction) or
                     direction.get('deferred', False) or
@@ -2765,6 +2769,27 @@ class BotRuntime(object):
         return values[1 if float(direction) < 0.0 else 0] if values else None
 
     @staticmethod
+    def navigation_planning_capability(bot_id=None, direction=1.0):
+        """One geometry policy for all routes, independent of crew or gear."""
+        return NAVIGATION_STATIC_POLICY
+
+    def _navigation_recovery_allowed(self, bot_id, position):
+        """Allow a pending-path backout only with local obstruction evidence."""
+        navigator = self.navigator
+        grid = getattr(navigator, 'grid', None)
+        if getattr(grid, 'prebaked', False):
+            try:
+                if (grid._inside(float(position[0]), float(position[2])) and
+                        grid._baked_cell_height(grid.cell_for(position)) is None):
+                    return True
+            except (AttributeError, TypeError, ValueError):
+                pass
+        nav_state = getattr(navigator, 'bot_states', {}).get(int(bot_id), {})
+        return bool(nav_state.get('hard_contact_episode') or
+                    nav_state.get('blocked_step_tracker') or
+                    self._hard_contact_grinds.get(int(bot_id), 0) > 0)
+
+    @staticmethod
     def _capability_probe(probe, native_capability):
         """Bind one immutable consumer to an existing synchronous grid probe."""
         if native_capability is None or not callable(probe):
@@ -2776,9 +2801,9 @@ class BotRuntime(object):
     def _refresh_navigation_crush_profiles(self, bot_id=None):
         """Snapshot changed consumers without clearing anyone else's routes.
 
-        A* owns the numeric tuple captured when it starts. A later descriptor
-        or mode change selects a new capability scope for this Bot; it cannot
-        mutate an in-flight proof or turn a teammate's soft contact into stone.
+        Retain the numeric contact snapshots for diagnostics and legacy
+        consumers. Static route planning uses NAVIGATION_STATIC_POLICY instead;
+        changes in propulsion must not retire or split its geometry proofs.
         """
         cache = self._navigation_crush_capabilities
         if not self._navigation_crush_profiles_ready:
@@ -7831,7 +7856,7 @@ class BotRuntime(object):
         point_hazard = getattr(grid, 'point_has_baked_hazard', None)
         dry_segment = getattr(grid, 'dry_segment_clear', None)
         dry_segment = self._capability_probe(
-            dry_segment, self.navigation_crush_capability(bot_state['id']))
+            dry_segment, self.navigation_planning_capability(bot_state['id']))
         if not all(callable(value) for value in (
                 ground, segment_hazard, point_hazard, dry_segment)):
             return None
@@ -8001,7 +8026,7 @@ class BotRuntime(object):
         point_hazard = getattr(grid, 'point_has_baked_hazard', None)
         dry_segment = getattr(grid, 'dry_segment_clear', None)
         dry_segment = self._capability_probe(
-            dry_segment, self.navigation_crush_capability(bot_id))
+            dry_segment, self.navigation_planning_capability(bot_id))
         bot_edges_penalized = getattr(
             self.navigator, 'bot_segment_penalized', None)
         if not all(callable(value) for value in (
@@ -8114,7 +8139,7 @@ class BotRuntime(object):
             state['navigation_stop_at_target'] = stop_at_goal
             return goal
         grid = getattr(self.navigator, 'grid', None)
-        native_capability = self.navigation_crush_capability(bot_id)
+        native_capability = self.navigation_planning_capability(bot_id)
         if strategic.get('move_area_bounds') is not None:
             grounded = self._radio_ground_goal(bot_id, position, goal, strategic, grid)
             if grounded is None:
@@ -11752,7 +11777,7 @@ class BotRuntime(object):
                         position, sample_yaw, state.get('speed', 0.0),
                         self._descriptors.get(state['id']),
                         maximum_distance,
-                        native_capability=self.navigation_crush_capability(
+                        native_capability=self.navigation_planning_capability(
                             state['id'], drive_direction))
                 return planner_probe_samples[key]
 
@@ -11789,6 +11814,7 @@ class BotRuntime(object):
 
             def sample_clear(sample_yaw, maximum_distance=None,
                              drive_direction=1.0):
+                bounded_manoeuvre = maximum_distance is not None
                 # A vehicle brake must also reach local steering. Otherwise
                 # the planner repeatedly sees a clear world ray through the
                 # same live hull and renews its original drive heading. Keep
@@ -11826,7 +11852,7 @@ class BotRuntime(object):
                 advisory = self._planner_corridor_clear(
                     position, sample_yaw, state.get('speed', 0.0),
                     maximum_distance=maximum_distance,
-                    native_capability=self.navigation_crush_capability(
+                    native_capability=self.navigation_planning_capability(
                         state['id'], drive_direction),
                     wet_escape=(baked_shallow_escape or
                                 state.get('_water_depth', -1.0) >
@@ -11834,8 +11860,12 @@ class BotRuntime(object):
                     allow_shallow=(callable(controlled_shallow) and
                                    controlled_shallow(
                                        state['id'], position, sample_yaw)))
-                if advisory is not None:
-                    return bool(advisory)
+                if advisory is False:
+                    return False
+                if advisory is True and not bounded_manoeuvre:
+                    return True
+                # A bounded backout must prove its whole requested distance;
+                # the advisory graph checks only the next coarse route edge.
                 sample = planner_sample_direction(
                     sample_yaw, maximum_distance, drive_direction)
                 # Exhausting the soft-static recast budget is not a wall. Keep
@@ -11844,7 +11874,9 @@ class BotRuntime(object):
                 if (sample is None or
                         (isinstance(sample, dict) and
                          sample.get('deferred', False))):
-                    return True
+                    # Ordinary travel may retain intent until the physical
+                    # gate, but a new bounded escape needs a completed proof.
+                    return not bounded_manoeuvre
                 return self._probe_is_clear(sample)
 
             if decision_cache_valid and not decision_due:
@@ -11934,6 +11966,8 @@ class BotRuntime(object):
                     'stopping_distance': stopping_distance,
                     'turn_speed_limit': turn_speed_limit,
                     'decision_horizon': decision_horizon,
+                    'navigation_recovery_allowed': self._navigation_recovery_allowed(
+                        state['id'], position),
                 }
                 reposition_order, reposition_expired = \
                     self._friendly_reposition_order(state, targets, now)
@@ -11963,6 +11997,12 @@ class BotRuntime(object):
                         self._combat_diagnostics, 'bot.planner_driver',
                         self.adapter.decide,
                         decision_state, sample_clear)
+                # Consume the one-shot request before caching the command. A
+                # reused control slice must not repeatedly restart this search.
+                if command.pop('navigation_replan', False):
+                    replan = getattr(self.navigator, 'request_replan', None)
+                    if callable(replan):
+                        replan(state['id'], position, now)
                 self._report_blocked_planner(
                     position, command, planner_probe_samples)
                 command = timed_call(
@@ -12399,7 +12439,7 @@ class BotRuntime(object):
                 motion_probe = self._probe_direction(
                     position, travel_yaw, state.get('speed', 0.0), descriptor,
                     maximum_probe_distance,
-                    native_capability=self.navigation_crush_capability(
+                    native_capability=self.navigation_planning_capability(
                         state['id'], travel_sign))
                 # Planner alternatives keep the mature six horizontal rays.
                 # Only the finally selected, translating, non-turning travel
@@ -13158,7 +13198,7 @@ class BotRuntime(object):
                             source, target, route, allies,
                             (self._capability_probe(
                                 self.navigator.grid.segment_clear,
-                                self.navigation_crush_capability(bot_id))
+                                self.navigation_planning_capability(bot_id))
                              if self.navigator is not None else None))
                                       if current else ())
                     finally:

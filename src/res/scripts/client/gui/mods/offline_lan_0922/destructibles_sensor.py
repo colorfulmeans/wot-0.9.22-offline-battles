@@ -3794,7 +3794,7 @@ def _synthetic_mat_info(candidate, math_module):
 
 def _catalog_candidate_on_ray_1513(
 		contact_pt, segment_start, segment_end, prefer_destroyed=False,
-		excluded_keys=()):
+		excluded_keys=(), allow_overlaps=False):
 	"""Resolve one exact registered OBB on the current native ray.
 
 	Point containment deliberately has a 7.5 cm tolerance for compiled BSP
@@ -3840,6 +3840,11 @@ def _catalog_candidate_on_ray_1513(
 			entry = (candidate, entry_distance, exit_distance)
 			if not any(value[0] == candidate for value in candidates):
 				candidates.append(entry)
+	if allow_overlaps:
+		# Planning can filter all proved original identities and requery the
+		# ENTIRE segment.  It need not guess which overlapping OBB owns the
+		# nearest native hit.  Physical contact retains the unique-hit rule.
+		return tuple(value[0] for value in candidates) or None
 	if len(candidates) == 1:
 		return candidates[0][0]
 	if len(candidates) > 1 and prefer_destroyed:
@@ -3886,7 +3891,7 @@ def _catalog_retains_collision_1513(candidate):
 
 def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
 		segment_end, recast_budget=None, prefer_destroyed=False,
-		excluded_keys=()):
+		excluded_keys=(), allow_overlaps=False):
 	"""Name a far-probe hit without waiting for a moving hull's registry scan.
 
 	A stationary Bot can see a prop before proximity scanning registers it.
@@ -3895,13 +3900,17 @@ def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
 	recast budget, so a cold chunk cannot create an unbounded planning spike.
 	"""
 	candidate = _catalog_candidate_on_ray_1513(
-		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys)
-	if candidate is not None:
+		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys,
+		allow_overlaps=allow_overlaps)
+	if candidate is not None and not allow_overlaps:
 		return candidate
 	catalog = _destructible_catalog or {}
 	baked_instances = catalog.get('baked_instances', {})
 	if not baked_instances:
-		return None
+		return candidate
+	# In planning mode an already registered OBB is only part of the overlap
+	# set.  A retained building base can surround a cold fragile's actual hit;
+	# hydrate the other matching items before concluding that the ray is hard.
 	margin = _CATALOG_POINT_EPSILON
 	identities = set()
 	for key in _baked_bin_keys_for_bounds_1513(
@@ -3937,7 +3946,84 @@ def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
 	if pending:
 		return 'deferred'
 	return _catalog_candidate_on_ray_1513(
-		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys)
+		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys,
+		allow_overlaps=allow_overlaps)
+
+
+def _planning_clear_destructible_surfaces_1513(spaceID, segment_start,
+		segment_end, collision, recast_budget=None, trace=None,
+		query_name='native.destructible.ray'):
+	"""Remove proved original prop skins from a read-only planning query.
+
+	Route geometry is shared by all bots: mass, crew, speed and gear do not
+	decide whether an original destructible is a permanent road obstruction.
+	Overlapping catalog boxes name a SET of exact, live-validated items, not
+	the closest hit. Filtering that set and recasting the full segment keeps
+	unknown geometry, backing walls and destroyed replacement materials solid.
+	The later physical hull sweep still owns actual crushing and its energy.
+	"""
+	import BigWorld
+	current_hit = collision
+	excluded_keys = set()
+	# Recasts must retain the accepted/broken ledger used by the first native
+	# query.  Otherwise filtering a live prop can resurrect an already felled
+	# tree's delayed skin as an unknown hard wall (also in ground columns).
+	accepted_filter = prepare_horizontal_collision_filter(segment_start, segment_end)
+	if trace is not None:
+		trace['objects'] = []
+	def finish(result, classification, reason):
+		if trace is not None:
+			trace['classification'] = classification
+			trace['reason'] = reason
+			if current_hit is not None:
+				try:
+					trace['hit'] = tuple(float(getattr(current_hit[0], axis))
+						for axis in ('x', 'y', 'z'))
+					trace['normal'] = tuple(float(getattr(current_hit[1], axis))
+						for axis in ('x', 'y', 'z'))
+				except (AttributeError, IndexError, TypeError, ValueError):
+					pass
+		return result
+	for unused in range(_SOFT_STATIC_MAX_SKIPS):
+		if current_hit is None:
+			return finish(None, 'soft', 'proved_original_materials_only')
+		candidates = _planning_catalog_candidate_1513(
+			spaceID, current_hit[0], segment_start, segment_end, recast_budget,
+			excluded_keys=excluded_keys, allow_overlaps=True)
+		if candidates == 'deferred':
+			return finish('deferred', 'deferred', 'identity_proof_deferred')
+		if not candidates:
+			return finish(current_hit, 'unknown',
+				'unidentified_backing_surface' if excluded_keys else
+				'contact_identity_unproved')
+		previous_count = len(excluded_keys)
+		for candidate in candidates:
+			if trace is not None and len(trace['objects']) < 16:
+				trace['objects'].append({
+					'identity': tuple(candidate[:3]), 'model': candidate[3],
+					'kind': candidate[4], 'scale': candidate[5]})
+			# Some buildings only lose their roof/walls; their permanent
+			# replacement base must remain a route obstruction.
+			if (candidate[4] not in ('fragile', 'structure', 'falling') or
+					_catalog_retains_collision_1513(candidate)):
+				continue
+			excluded_keys.add(candidate[:3])
+		if len(excluded_keys) == previous_count:
+			return finish(current_hit, 'hard', 'retained_destructible_collision')
+		if recast_budget is not None:
+			if not recast_budget or int(recast_budget[0]) <= 0:
+				return finish('deferred', 'deferred', 'recast_budget')
+			recast_budget[0] = int(recast_budget[0]) - 1
+		original_filter = _soft_static_original_filter_1513(excluded_keys)
+		def keep_surface(*surface):
+			return ((accepted_filter is None or accepted_filter(*surface)) and
+				original_filter(*surface))
+		current_hit = observed_ray(
+			query_name, BigWorld.wg_collideSegment,
+			spaceID, segment_start, segment_end, VEHICLE_SKIP_FLAGS, keep_surface)
+	if current_hit is None:
+		return finish(None, 'soft', 'proved_original_materials_only')
+	return finish(current_hit, 'unknown', 'surface_layer_limit')
 
 
 def _soft_static_original_filter_1513(excluded_keys):
@@ -3954,7 +4040,8 @@ def _soft_static_original_filter_1513(excluded_keys):
 
 
 def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
-		collision, maximum_y, vel, td, kinetic_speed=None, recast_budget=None):
+		collision, maximum_y, vel, td, kinetic_speed=None, recast_budget=None,
+		ignore_destructibles=False):
 	"""Recheck an unreachable crushable roof without changing physical support.
 
 	Only the approach probe uses this: a roof above its existing climb envelope
@@ -3962,8 +4049,16 @@ def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
 	filter each exact crushable original material, then test the real ground
 	below. Reachable decks, unproved roofs and non-crushable geometry retain
 	the original result; the later hull contact still owns destruction.
+	With ``ignore_destructibles`` the planner instead removes every confirmed
+	original prop roof, including low roofs, to sample the true terrain below.
 	"""
-	if _destructible_catalog is None or td is None:
+	if _destructible_catalog is None:
+		return collision
+	if ignore_destructibles:
+		return _planning_clear_destructible_surfaces_1513(
+			spaceID, segment_start, segment_end, collision, recast_budget,
+			query_name='native.destructible.planning_ground')
+	if td is None:
 		return collision
 	import BigWorld
 	import Math
@@ -4005,7 +4100,8 @@ def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
 def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 		collision, vel, td, recast_budget=None,
 		require_pending_first=False, allow_kinetic_first=False,
-		kinetic_speed=None, planning_crushable=None, trace=None):
+		kinetic_speed=None, planning_crushable=None, trace=None,
+		ignore_destructibles=False):
 	"""Classify a far static ray without destroying anything.
 
 	A bot direction probe may look 15--20 metres ahead.  It may regard a
@@ -4017,6 +4113,10 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	native recast budget instead returns ``'deferred'`` so the caller can avoid
 	caching a false hard wall.
 	"""
+	if ignore_destructibles and not require_pending_first:
+		remaining = _planning_clear_destructible_surfaces_1513(
+			spaceID, segment_start, segment_end, collision, recast_budget, trace)
+		return 'deferred' if remaining == 'deferred' else remaining is None
 	# A planning consumer can supply frozen stock kinetic inputs. Identity and
 	# recast evidence still belong to this exact native ray, not to a model-wide
 	# exemption. Diagnostics only copy values already obtained by these queries.

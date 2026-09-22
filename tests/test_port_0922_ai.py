@@ -534,8 +534,10 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual('nav_wait', order['recovery_mode'])
         self.assertEqual(0.0, order['throttle'])
         self.assertTrue(order['brake'])
-        self.assertLess(order['turn'], 0.0)
-        self.assertEqual(0.0, order['target_yaw'])
+        # A pending route has no proved heading yet. Keep its physical pose;
+        # deliberate arrived/combat facing is exercised by the preceding test.
+        self.assertEqual(0.0, order['turn'])
+        self.assertEqual(0.25, order['target_yaw'])
 
     def test_local_director_does_not_jiggle_without_confirmed_cover(self):
         descriptor = {
