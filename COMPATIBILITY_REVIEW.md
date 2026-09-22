@@ -5783,3 +5783,49 @@ catalog-box contact from a native surface and do not alter destruction state.
 The focused fixtures establish Python lifecycle, accounting and collision
 filtering behavior. Native #1513 entry into battle, bridge/wreck driving,
 obstacle outlines, spotting and frame pacing still require Windows gameplay.
+
+### September 22 Airfield follow-up: moving fallback targets
+
+Report `20260922-104150-b9961a81ef4a` runs the delivered candidate
+`colorfulmeans-35678689450-1`, not the earlier release. Its first round is
+Airfield; the later Himmelsdorf round reuses Bot IDs and must be analyzed
+separately. The reported pair is Object 244 (18) and SU-122-44 (27).
+
+The shipped Airfield graph and the SU's recorded start reproduce its exact
+first fallback endpoint, `(-287.264106, -0.18, -188.348202)`, under a stated
+flat, clear native-query fixture. After a failed search the endpoint was
+reselected on every decision: moving the hull 0.2 m also moved the endpoint
+0.2 m, keeping the short target 2.08 m away and allowing its direction to
+change at cell boundaries. Pending searches already retained a usable target;
+the failed-search branch did not. Local fallback endpoints now belong to the
+route and recovery intent that selected them and remain fixed until arrival
+or invalidation. Current geometry, hazards and Bot-specific edge penalties
+still constrain reuse. A new strategic intent, normal path or recovery must
+not inherit an unrelated fallback.
+
+The 10:34:23 Object 244 sample has no physical contact pair, but replaying the
+two recorded hull boxes through the production traffic guard rejects its
+requested positive rotation. The old stall record printed the planner's
+`traffic=none`, hiding this later `vehicle_brake` verdict. Diagnostics now
+retain the already computed controls before and after the traffic guard,
+the final motion controls and the actual traffic mode. Recording this adds
+no native queries and retains the existing per-hull cadence.
+
+Moving in a small circle previously reset the stationary log after each
+0.5 m displacement, so a long loop could leave almost no motion evidence.
+An additional movement-intent diagnostic samples at most once per 15 seconds
+while the hull remains within a 12 m local region. Straight departure resets
+that region, tactical holds do not arm it, and stationary reports retain their
+existing three-second cadence. This observer does not change driving.
+
+The report also records a live-worker window at 8.30 FPS. Sampled navigation
+fallback work is only part of its cost; physical motion queries dominate the
+slow frames. This change is not a demonstrated frame-rate repair. Positive
+native answers can precede chunk streaming, so failed-search retries retain
+their existing geometry revalidation. The report-position fixtures establish
+target ownership and traffic attribution. A continuous two-Bot fixture with
+real A* can leave the area after delayed planning; forcing A* to fail forever
+still exposes local minima in the short fallback. Thus this repairs the
+reproduced moving-target defect, not every cause of circling. Only a new
+exact-client Windows playtest can establish that both vehicles leave the
+native scene reliably.

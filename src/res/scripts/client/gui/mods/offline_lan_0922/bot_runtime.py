@@ -57,6 +57,10 @@ OBSERVATION_SECONDS = 0.40
 # while burst edges below retain their exact due timestamps.
 PUBLICATION_SECONDS = 1.0 / 30.0
 WORKER_CONTROL_SECONDS = 0.10
+# A moving hull can circle inside the same nearby-vehicle pocket while
+# repeatedly resetting the stationary diagnostic's half-metre timer.
+MOTION_DIAGNOSTIC_RADIUS = 12.0
+LOCAL_ROAMING_DIAGNOSTIC_SECONDS = 15.0
 # Tree and column proximity enumeration is useful only for a translating hull.
 # Preserve the former low-speed classification while keeping this native body
 # sensor on the worker's existing control cadence.
@@ -6316,35 +6320,61 @@ class BotRuntime(object):
         return True
 
     def _log_motion_stall(self, state, command, throttle, turn,
-                          path_clear, motion_probe, now, pose_frozen=False):
+                          path_clear, motion_probe, now, pose_frozen=False,
+                          traffic_input=None, traffic_output=None):
         """Record stationary authority decisions without requiring debug mode.
 
         Include intentional holds: a mistaken arrival or navigation wait is
         exactly what this diagnostic must distinguish from physical blockage.
-        Emit at most once per three seconds per hull; movement resets the timer.
+        Stationary records retain their three-second cadence. Continued local
+        movement with route intent gets one record per fifteen seconds while
+        confined to the same twelve-metre nearby-vehicle pocket.
         """
         position = _position(state)
         previous = state.get('_motion_stall_log')
         moved = (previous is not None and
                  (position[0] - previous[0][0]) ** 2 +
                  (position[2] - previous[0][2]) ** 2 >= 0.25)
-        if previous is None or moved:
+        roaming = state.get('_motion_roaming_log')
+        if not command.get('movement_intent', False):
+            state.pop('_motion_roaming_log', None)
+            roaming = None
+        elif (roaming is None or
+              (position[0] - roaming[0][0]) ** 2 +
+              (position[2] - roaming[0][2]) ** 2 >
+              MOTION_DIAGNOSTIC_RADIUS ** 2):
+            roaming = (position, now, now)
+            state['_motion_roaming_log'] = roaming
+        local_roaming = bool(
+            moved and roaming is not None and
+            now - roaming[2] >= LOCAL_ROAMING_DIAGNOSTIC_SECONDS)
+        if previous is None or (moved and not local_roaming):
             state['_motion_stall_log'] = (position, now)
             return
-        if now - previous[1] < 3.0:
+        if not local_roaming and now - previous[1] < 3.0:
             return
-        state['_motion_stall_log'] = (previous[0], now)
+        state['_motion_stall_log'] = (
+            position if local_roaming else previous[0], now)
+        if roaming is not None:
+            # An ordinary stationary record already covers this interval;
+            # never emit an additional roaming record for that same wait.
+            state['_motion_roaming_log'] = (roaming[0], roaming[1], now)
         cached = self._decision_cache.get(state['id'])
         planner_age = now - cached[2] if cached is not None else -1.0
         probe = motion_probe if isinstance(motion_probe, dict) else {}
         strategic = self._server_orders.get(state['id']) or {}
+        traffic = traffic_output if isinstance(traffic_output, dict) else command
         # Finish this rare diagnostic after every authority gate has run.
         # The control verdict alone cannot explain a later pose rollback.
         state['_motion_stall_pending'] = {
             'id': int(state['id']), 'vehicle': state.get('vehicle'),
             'native_motion': bool(self.native_motion),
             'start': position, 'speed_before': state.get('speed', 0.0),
-            'requested_throttle': throttle, 'turn': turn,
+            'requested_throttle': command.get('throttle', throttle),
+            'requested_turn': command.get('turn', turn), 'turn': turn,
+            'traffic_mode': traffic.get('traffic_mode', 'none'),
+            'motion_diagnostic': ('local_roaming' if local_roaming
+                                  else 'stationary'),
             'yaw': state.get('yaw'), 'pitch': state.get('pitch'),
             'roll': state.get('roll'), 'shape': state.get('collision_shape'),
             'siege_state': state.get('siege_state'),
@@ -6354,6 +6384,27 @@ class BotRuntime(object):
             'hydraulic_pitch': state.get('suspension_pitch'),
             'gun_pitch': state.get('gun_pitch'),
         }
+        if local_roaming:
+            state['_motion_stall_pending']['local_roaming'] = {
+                'anchor': roaming[0],
+                'net_distance': math.hypot(position[0] - roaming[0][0],
+                                           position[2] - roaming[0][2]),
+                'elapsed': now - roaming[1],
+                'reason': 'movement_reset_stationary_timer',
+            }
+        if isinstance(traffic_input, dict) and isinstance(traffic_output, dict):
+            # Capture the already computed safety verdict. Re-running any
+            # proximity query here would add work and observe another scene.
+            state['_motion_stall_pending']['controls'] = {
+                'planner': [command.get('throttle'), command.get('turn')],
+                'before_traffic': [traffic_input.get('throttle'),
+                                   traffic_input.get('turn')],
+                'after_traffic': [traffic_output.get('throttle'),
+                                  traffic_output.get('turn')],
+                'motion': [throttle, turn],
+                'forward_blocked_by': traffic_output.get('forward_blocked_by'),
+                'reverse_blocked_by': traffic_output.get('reverse_blocked_by'),
+            }
         navigator_state = getattr(self.navigator, 'bot_states', {}).get(
             int(state['id']))
         if isinstance(navigator_state, dict):
@@ -6371,14 +6422,15 @@ class BotRuntime(object):
                 navigation.update(search_diagnostics(state['id'], position, now))
             state['_motion_stall_pending']['navigation'] = navigation
         print('[BOT STALL] id=%s pos=(%.1f,%.1f) mode=%s recovery=%s '
-              'traffic=%s intent=%s goal=%s strategic_goal=%s '
+              'traffic=%s motion=%s intent=%s goal=%s strategic_goal=%s '
               'yaw=%.3f target_yaw=%s speed=%.2f throttle=%.2f turn=%.2f '
               'y=%.3f water=%.2f path_clear=%s collision=%s '
               'slope=%s probe_water=%s deferred=%s frozen=%s '
               'hull_aim=%s grind=%s planner_age=%.2f' % (
                   state['id'], position[0], position[2],
                   command.get('combat_mode'), command.get('recovery_mode'),
-                  command.get('traffic_mode', 'none'),
+                  traffic.get('traffic_mode', 'none'),
+                  'local_roaming' if local_roaming else 'stationary',
                   command.get('movement_intent'), command.get('move_position'),
                   strategic.get('move_position'), state.get('yaw', 0.0),
                   command.get('target_yaw'), state.get('speed', 0.0),
@@ -6401,7 +6453,8 @@ class BotRuntime(object):
                 continue
             other_position = _position(other)
             if ((other_position[0] - position[0]) ** 2 +
-                    (other_position[2] - position[2]) ** 2 > 144.0):
+                    (other_position[2] - position[2]) ** 2 >
+                    MOTION_DIAGNOSTIC_RADIUS ** 2):
                 continue
             nearby.append({
                 'id': int(other['id']), 'position': other_position,
@@ -12020,8 +12073,9 @@ class BotRuntime(object):
                     state, dict(command, turn=turn),
                     self._physics_params_for(state['id']) or
                     vehicle_physics._DEFAULTS)
+            traffic_input = dict(command, throttle=throttle, turn=turn)
             safety = self._traffic_coordinator.safe_controls(
-                safety_body, dict(command, throttle=throttle, turn=turn),
+                safety_body, traffic_input,
                 self._neighbours_for(state, neighbours), now,
                 current_stopping_distance, step)
             throttle, turn = safety['throttle'], safety['turn']
@@ -12427,7 +12481,7 @@ class BotRuntime(object):
             self._log_direction_flip(state, path_clear, motion_probe, now)
             self._log_motion_stall(
                 state, command, throttle, turn, path_clear, motion_probe, now,
-                pose_frozen)
+                pose_frozen, traffic_input, safety)
             if diagnostic is not None:
                 diagnostic.phase('bot.integrate')
             if not self.native_motion:

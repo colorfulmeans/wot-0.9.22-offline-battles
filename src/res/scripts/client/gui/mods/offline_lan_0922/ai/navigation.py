@@ -1516,6 +1516,36 @@ class TerrainNavigator(object):
 			'native_review_cells': len(self.grid._native_review_cells),
 		}
 
+	@staticmethod
+	def _local_fallback_intent(goal, state):
+		return (state.get('request_key'),
+		        int(state.get('replan_generation', 0)), tuple(goal))
+
+	def _retained_local_fallback(self, bot_id, current, goal, now, state):
+		"""Keep one proved short waypoint until reached or physically retired.
+
+		A failed A* result can remain cached across many driver decisions. Moving
+		the local endpoint with the hull on every one makes its two-metre escape
+		an endlessly moving target and changes steering at coarse-cell borders.
+		Reuse only the endpoint selected for this exact route/recovery intent;
+		a later normal path or macro escape owns its own ``last_target``.
+		"""
+		target = state.get('local_fallback_target')
+		if (target is not None and state.get('last_target') == target and
+				state.get('local_fallback_intent') ==
+				self._local_fallback_intent(goal, state) and
+				_distance_2d(current, target) > WAYPOINT_ARRIVAL_RADIUS and
+				not self._bot_edges_penalized(bot_id, current, target, now) and
+				self.grid.dry_segment_clear(current, target, now)):
+			return tuple(target)
+		state.pop('local_fallback_target', None)
+		state.pop('local_fallback_intent', None)
+		return None
+
+	def _remember_local_fallback(self, target, goal, state):
+		state['local_fallback_target'] = tuple(target)
+		state['local_fallback_intent'] = self._local_fallback_intent(goal, state)
+
 	@observed('nav.fallback')
 	def _fallback_target(self, bot_id, current, goal, now, avoid_points, state,
 			allow_safe_local=True):
@@ -1538,10 +1568,15 @@ class TerrainNavigator(object):
 				not self.grid.segment_clear(current, ford)):
 			state.pop('controlled_shallow_target', None)
 		if allow_safe_local:
-			fallback = self.grid.safe_local_target(
-				current, goal, now, avoid_points,
-				1.0 if (int(bot_id) % 2) else -1.0,
-				self._active_planning_edge_penalties(bot_id, now))
+			fallback = self._retained_local_fallback(
+				bot_id, current, goal, now, state)
+			if fallback is None:
+				fallback = self.grid.safe_local_target(
+					current, goal, now, avoid_points,
+					1.0 if (int(bot_id) % 2) else -1.0,
+					self._active_planning_edge_penalties(bot_id, now))
+				if fallback is not None:
+					self._remember_local_fallback(fallback, goal, state)
 			if fallback is not None:
 				state['last_target'] = tuple(fallback)
 				state['navigation_status'] = 'safe'
@@ -1606,6 +1641,7 @@ class TerrainNavigator(object):
 				1.0 if (int(bot_id) % 2) else -1.0,
 				self._active_planning_edge_penalties(bot_id, now))
 			if fallback is not None:
+				self._remember_local_fallback(fallback, goal, state)
 				state['last_target'] = tuple(fallback)
 				state['navigation_status'] = 'pending'
 				state['target_is_terminal'] = False
@@ -2414,6 +2450,8 @@ class TerrainNavigator(object):
 		request_transition = bool(had_request and request_changed)
 		allow_pending_last_target = True
 		if request_changed:
+			state.pop('local_fallback_target', None)
+			state.pop('local_fallback_intent', None)
 			combat_count('nav_request_changed' if had_request else
 			             'nav_request_first')
 			# A new route segment or combat target is not evidence that the previous

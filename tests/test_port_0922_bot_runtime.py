@@ -16674,6 +16674,160 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertIn('frozen=True', output.getvalue())
             self.assertIn('strategic_goal=(0.0, 0.0, 200.0)', output.getvalue())
 
+    def test_stall_diagnostic_keeps_airfield_vehicle_rotation_veto(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        # Object 244 / SU-122-44 at 10:34:23 in report b9961a81ef4a.
+        # The hulls are separated by 1.5 cm: no ram contact exists, but the
+        # requested positive turn would sweep the 244 into the SU.
+        position = (-289.4300268241864, -0.18000030517578125,
+                    -189.00718499809682)
+        shape = (1.4762719869613647, 3.2330679893493652,
+                 -0.0002899999963119626, 1.5830169916152954)
+        body = dict(id=11, position=position, yaw=2.267477282876282,
+                    shape=shape, velocity=(0.0, 0.0, 0.0))
+        peer = dict(id=27, position=(-287.86618096624073,
+                    -0.1799999475479126, -193.8230738600544),
+                    yaw=1.3779411960823191, alive=True,
+                    shape=(1.5697760581970215, 2.8677990436553955,
+                           0.003000000026077032, 2.170010983943939),
+                    velocity=(0.0, 0.0, 0.0))
+        order = {'throttle': 0.0, 'turn': 1.0, 'brake': True,
+                 'recovery_mode': 'drive', 'combat_mode': 'route',
+                 'movement_intent': True}
+        safety = self.runtime._traffic_coordinator.safe_controls(
+            body, order, [peer], 3.0, lambda: 0.0, 0.100006103515625)
+        self.assertEqual(0.0, safety['turn'])
+        self.assertEqual('vehicle_brake', safety['traffic_mode'])
+        state.update(x=position[0], y=position[1], z=position[2])
+        state['_motion_stall_log'] = (position, 0.0)
+        output = io.StringIO()
+        with redirect_stdout(output), mock.patch.object(
+                self.module.tank_collision, 'rotation_fraction',
+                side_effect=AssertionError('diagnostics must not re-probe')):
+            self.runtime._log_motion_stall(
+                state, order, 0.0, 0.0, True, {}, 3.0,
+                traffic_input=order, traffic_output=safety)
+            self.runtime._finish_motion_stall(state, False, False, position)
+        self.assertIn('traffic=vehicle_brake', output.getvalue())
+        row = json.loads(output.getvalue().split('[BOT MOTION] ', 1)[1])
+        self.assertEqual('vehicle_brake', row['traffic_mode'])
+        self.assertEqual(1.0, row['requested_turn'])
+        self.assertEqual([0.0, 1.0], row['controls']['before_traffic'])
+        self.assertEqual([0.0, 0.0], row['controls']['after_traffic'])
+        self.assertEqual([0.0, 0.0], row['controls']['motion'])
+        self.assertEqual([], row['contact_pairs'])
+        self.assertNotIn('traffic_mode', order)
+
+    def test_update_passes_control_stages_to_bounded_motion_diagnostic(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        state['_motion_stall_log'] = (
+            (state['x'], state['y'], state['z']), 0.0)
+        original_decide = self.runtime.adapter.decide
+
+        def decide(*args):
+            command = original_decide(*args)
+            command.update(turn=-0.4, fire_allowed=False)
+            return command
+
+        self.runtime.adapter.decide = decide
+
+        def brake(body, command, neighbours, now, distance, step):
+            return dict(command, throttle=0.0, turn=0.0, brake=True,
+                        traffic_mode='vehicle_brake', forward_blocked_by=27)
+
+        output = io.StringIO()
+        with redirect_stdout(output), mock.patch.object(
+                self.runtime._traffic_coordinator, 'safe_controls',
+                side_effect=brake):
+            self.runtime.update(0.04, 3.0)
+            self.runtime.update(0.04, 3.04)
+        self.assertEqual(1, output.getvalue().count('[BOT STALL]'))
+        line = next(line for line in output.getvalue().splitlines()
+                    if line.startswith('[BOT MOTION] '))
+        row = json.loads(line.split('[BOT MOTION] ', 1)[1])
+        self.assertEqual(1.0, row['requested_throttle'])
+        self.assertEqual([1.0, -0.4], row['controls']['planner'])
+        self.assertEqual([1.0, -0.4], row['controls']['before_traffic'])
+        self.assertEqual([0.0, 0.0], row['controls']['after_traffic'])
+        self.assertEqual([0.0, 0.0], row['controls']['motion'])
+        self.assertEqual(27, row['controls']['forward_blocked_by'])
+
+    def test_local_roaming_diagnostic_survives_half_metre_timer_resets(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        order = dict(throttle=1.0, turn=1.0, movement_intent=True,
+                     recovery_mode='drive', combat_mode='route')
+        output = io.StringIO()
+        with redirect_stdout(output), mock.patch.object(
+                self.runtime, '_probe_direction',
+                side_effect=AssertionError('diagnostics must not probe')):
+            for second in range(31):
+                # Every sampled chord is 0.90 m, so the old stationary-only
+                # timer reset indefinitely despite this route making circles.
+                state.update(x=3.0 * math.cos(second * 0.3),
+                             z=3.0 * math.sin(second * 0.3))
+                self.runtime._log_motion_stall(
+                    state, order, 1.0, 1.0, True, {}, float(second))
+                if '_motion_stall_pending' in state:
+                    self.runtime._finish_motion_stall(
+                        state, False, False, (state['x'], state['y'], state['z']))
+        rows = [json.loads(line.split('[BOT MOTION] ', 1)[1])
+                for line in output.getvalue().splitlines()
+                if line.startswith('[BOT MOTION] ')]
+        self.assertEqual(2, len(rows))
+        self.assertEqual([15.0, 30.0],
+                         [row['local_roaming']['elapsed'] for row in rows])
+        for row in rows:
+            self.assertEqual('local_roaming', row['motion_diagnostic'])
+            self.assertEqual([3.0, state['y'], 0.0], row['local_roaming']['anchor'])
+            self.assertLessEqual(row['local_roaming']['net_distance'], 6.0)
+            self.assertEqual('movement_reset_stationary_timer',
+                             row['local_roaming']['reason'])
+
+    def test_local_roaming_resets_when_leaving_pocket_or_route_intent(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        for scenario in ('straight', 'no_intent'):
+            with self.subTest(scenario=scenario):
+                state.pop('_motion_stall_log', None)
+                state.pop('_motion_roaming_log', None)
+                order = dict(throttle=1.0, turn=0.0,
+                             movement_intent=scenario != 'no_intent')
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    for second in range(46):
+                        if scenario == 'straight':
+                            state.update(x=float(second), z=0.0)
+                        else:
+                            state.update(x=3.0 * math.cos(second * 0.3),
+                                         z=3.0 * math.sin(second * 0.3))
+                        self.runtime._log_motion_stall(
+                            state, order, 1.0, 0.0, True, {}, float(second))
+                self.assertNotIn('[BOT STALL]', output.getvalue())
+                if scenario == 'straight':
+                    self.assertGreater(state['_motion_roaming_log'][0][0], 30.0)
+                else:
+                    self.assertNotIn('_motion_roaming_log', state)
+
+    def test_stationary_diagnostics_keep_three_seconds_without_roaming_duplicates(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        order = dict(throttle=1.0, turn=0.0, movement_intent=True)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            for second in range(31):
+                self.runtime._log_motion_stall(
+                    state, order, 0.0, 0.0, True, {}, float(second))
+        self.assertEqual(10, output.getvalue().count('[BOT STALL]'))
+        self.assertNotIn('motion=local_roaming', output.getvalue())
+
     def test_unavailable_motion_probe_holds_last_drive_command(self):
         command = {
             'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,

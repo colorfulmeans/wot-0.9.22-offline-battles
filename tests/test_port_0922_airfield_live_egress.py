@@ -67,6 +67,174 @@ class AirfieldLiveEgressTests(unittest.TestCase):
         nav.grid.review_native_corridor(current, goal)
         return nav, samples, rays
 
+    def test_failed_airfield_route_keeps_its_short_exit_until_arrival(self):
+        # 104150: this reproduces SU-122-44's exact first local target with
+        # the shipped graph. Native replies are a stated flat/clear fixture.
+        current = (-286.0, -0.18, -190.0)
+        goal = (-324.01079913921933, -6.35, -5.535386006475318)
+        nav, unused_samples, unused_rays = self.scene(current, goal)
+        state = {}
+        first = nav._fallback_target(27, current, goal, 0.0, None, state)
+        self.assertAlmostEqual(-287.2641060073615, first[0])
+        self.assertAlmostEqual(-188.34820219089846, first[2])
+        distance = math.hypot(first[0] - current[0], first[2] - current[2])
+        self.assertAlmostEqual(2.08, distance)
+        choose = mock.Mock(wraps=nav.grid.safe_local_target)
+        nav.grid.safe_local_target = choose
+        for progress in (0.1, 0.2, 0.4):
+            position = (current[0] + (first[0] - current[0]) * progress / distance,
+                        current[1],
+                        current[2] + (first[2] - current[2]) * progress / distance)
+            selected = nav._fallback_target(27, position, goal, progress,
+                                            None, state)
+            self.assertEqual(first, selected)
+        choose.assert_not_called()
+        next_target = nav._fallback_target(27, first, goal, 1.0, None, state)
+        self.assertNotEqual(first, next_target)
+        self.assertEqual(1, choose.call_count)
+
+    def test_pending_exit_survives_the_search_failure_transition(self):
+        current = (-286.0, -0.18, -190.0)
+        goal = (-324.01079913921933, -6.35, -5.535386006475318)
+        nav, unused_samples, unused_rays = self.scene(current, goal)
+        state = {'pending_since': 0.0}
+        first = nav._pending_target(27, current, goal, 1.0, state)
+        position = (current[0] - 0.05, current[1], current[2] + 0.1)
+        self.assertEqual(first, nav._fallback_target(
+            27, position, goal, 1.1, None, state))
+        self.assertEqual('safe', state['navigation_status'])
+        self.assertEqual(first, nav._pending_target(
+            27, position, goal, 1.2, state))
+        self.assertEqual(first, nav._fallback_target(
+            27, position, goal, 1.3, None, state))
+
+    def test_retained_exit_rechecks_geometry_and_current_intent(self):
+        from gui.mods.offline_lan_0922.ai.navigation import BAKED_SHALLOW_WATER
+        for changed in ('wall', 'goal', 'request', 'replan', 'owner',
+                        'shallow', 'global_penalty', 'bot_penalty',
+                        'macro_penalty'):
+            with self.subTest(changed=changed):
+                bot, current, goal = REPORT_POSES[0]
+                nav, unused_samples, unused_rays = self.scene(current, goal)
+                state = {'request_key': ('route', bot, 1)}
+                first = nav._fallback_target(bot, current, goal, 0.0, None, state)
+                edges = nav.grid._edge_keys_for_segment(current, first)
+                self.assertTrue(edges)
+                if changed == 'wall':
+                    nav.grid.obstacle_probe = lambda *unused: True
+                    nav.grid.invalidate_native_review()
+                elif changed == 'goal':
+                    goal = (current[0], current[1], current[2] - 40.0)
+                elif changed == 'request':
+                    state['request_key'] = ('route', bot, 2)
+                elif changed == 'replan':
+                    state['replan_generation'] = 1
+                elif changed == 'owner':
+                    state['last_target'] = goal
+                elif changed == 'shallow':
+                    hazards = list(nav.grid._baked_hazards)
+                    index = nav.grid._baked_flat_index(nav.grid.cell_for(first))
+                    hazards[index] |= BAKED_SHALLOW_WATER
+                    nav.grid._baked_hazards = hazards
+                    nav.grid._baked_corridor_cache.clear()
+                    nav.grid._baked_corridor_order.clear()
+                else:
+                    penalties = dict((edge, (10.0, 100.0)) for edge in edges)
+                    if changed == 'global_penalty':
+                        nav.grid._failed_edges.update(penalties)
+                    elif changed == 'bot_penalty':
+                        nav.bot_failed_edges[bot] = penalties
+                    else:
+                        nav.bot_macro_edges[bot] = penalties
+                choose = mock.Mock(wraps=nav.grid.safe_local_target)
+                nav.grid.safe_local_target = choose
+                selected = nav._fallback_target(bot, current, goal, 0.1, None, state)
+                choose.assert_called_once()
+                if changed == 'wall':
+                    self.assertNotEqual(first, selected)
+                    self.assertEqual('blocked', state['navigation_status'])
+
+    def test_airfield_pair_resumes_real_paths_after_pending_failed_switches(self):
+        from test_port_0922_bot_runtime import _combat_descriptor
+        from effective_params_fixture import bot_default_crew_factors
+        from gui.mods.offline_lan_0922 import loadout
+        # 104150 report positions/yaws, the shipped graph and real Driver,
+        # traffic and copied physics. Ground, model sweeps and the vehicle
+        # descriptors are explicit fixtures, not retail scene acceptance.
+        poses = {
+            27: ((-286.0, -0.18, -190.0), 0.4407653849388573),
+            18: ((-297.176389346006, -0.18, -193.61054246942632),
+                 0.7222540553091804),
+        }
+        goals = {
+            27: (-324.01079913921933, -6.35, -5.535386006475318),
+            18: (-313.08065044950047, -0.18, -134.89442719099992),
+        }
+        with mock.patch.object(loadout, 'attribute_factors',
+                               bot_default_crew_factors), redirect_stdout(io.StringIO()):
+            runtime = BotRuntime(1,
+                descriptor_resolver=lambda *args: _combat_descriptor(),
+                direction_probe=lambda *args: dict(
+                    clear=True, collision=False, slope=0.0),
+                spawn_resolver=lambda team, slot: poses[(18, 27)[slot]],
+                ground_probe=lambda *args: -0.18,
+                physics_ground_probe=lambda *args: -0.18,
+                obstacle_probe=lambda *args: False,
+                baked_graph=self.graph,
+                visibility_probe=lambda *args: False,
+                firing_lane_probe=lambda *args: False)
+            runtime.battle_start({
+                'map': '31_airfield', 'round_id': 1, 'bot_authority_id': 1,
+                'bots': [dict(id=bot, team=2, slot=slot,
+                              vehicle='fixture', name='Probe')
+                         for slot, bot in enumerate((18, 27))]})
+            nav = runtime.navigator
+            real_path = nav._path
+            def delayed_path(key, start, goal, now, avoid):
+                result = real_path(key, start, goal, now, avoid)
+                # A genuine A* result eventually takes over. Reproduce the
+                # report's 28.1-second wait, with synthetic pending/failure
+                # alternation to exercise retention across both lifecycles.
+                if now < 28.1:
+                    return result[0], (() if int(now // 4) % 2 else None)
+                return result
+            nav._path = delayed_path
+            def navigation_target(bot, position, goal, order, state):
+                return nav.next_target(bot, position, goal,
+                    ('route_join', bot, 'report'), state['now'])
+            runtime.adapter.navigation_target = navigation_target
+            visited = dict((bot, set()) for bot in poses)
+            routed = set()
+            for bot in poses:
+                nav.grid.review_native_corridor(poses[bot][0], goals[bot])
+            for frame in range(600):
+                runtime._server_orders = dict((bot, dict(
+                    move_position=goal, fire_allowed=False, fire_range=400,
+                    combat_mode='route', shell_index=0))
+                    for bot, goal in goals.items())
+                runtime.update(0.1, frame * 0.1)
+                for bot in poses:
+                    state = runtime.states[bot]
+                    visited[bot].add(nav.grid.cell_for(
+                        (state['x'], state['y'], state['z'])))
+                    route = nav.bot_states.get(bot, {})
+                    if (frame * 0.1 >= 28.1 and
+                            nav.paths.get(route.get('path_key')) and
+                            route.get('navigation_status') == 'safe' and
+                            bot not in nav.fallback_modes):
+                        routed.add(bot)
+            self.assertEqual(set(poses), routed)
+            for bot, (start, unused_yaw) in poses.items():
+                state = runtime.states[bot]
+                net = math.hypot(state['x'] - start[0], state['z'] - start[2])
+                initial_error = math.hypot(start[0] - goals[bot][0],
+                                          start[2] - goals[bot][2])
+                final_error = math.hypot(state['x'] - goals[bot][0],
+                                        state['z'] - goals[bot][2])
+                self.assertGreater(net, nav.grid.cell_size * 8)
+                self.assertLess(final_error, initial_error * 0.6)
+                self.assertGreater(len(visited[bot]), 8)
+
     def test_occupied_ground_must_exist_before_sampling_the_exit(self):
         bot, current, goal = REPORT_POSES[0]
         nav, unused_samples, unused_rays = self.scene(current, goal)
