@@ -248,7 +248,7 @@ class MT11ReceiptTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 postbattle_store._receipt(bad)
         # Old durable receipts retain their original short event rows. A
-        # version change alone must not bless a malformed v3/v4 payload.
+        # version change alone must not bless a malformed v3/v4/v5 payload.
         for version in (3, mission_events.VERSION):
             short = copy.deepcopy(receipt)
             short['interactions'][0]['mission_events_version'] = version
@@ -256,7 +256,7 @@ class MT11ReceiptTests(unittest.TestCase):
                          if e[0] == 'damage')
             del event[4:]
             self.assertFalse(client._valid_battle_receipt(short))
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4):
             with self.subTest(legacy_version=version):
                 legacy = copy.deepcopy(receipt)
                 for interaction in legacy['interactions']:
@@ -265,6 +265,10 @@ class MT11ReceiptTests(unittest.TestCase):
                         interaction['mission_events'] = [
                             e[:4] if e[0] == 'damage' else
                             e[:5] if e[0] == 'kill' else e
+                            for e in interaction['mission_events']]
+                    else:
+                        interaction['mission_events'] = [
+                            e[:6] if e[0] == 'kill' else e
                             for e in interaction['mission_events']]
                     if version == 1:
                         # v1 had no ram rows and may omit its version field.

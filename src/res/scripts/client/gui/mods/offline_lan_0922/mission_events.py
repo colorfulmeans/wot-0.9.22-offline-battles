@@ -9,6 +9,8 @@ Version 3 freezes hit distance and view radius, visibility at damage/kill, ignit
 and whether a detection preceded the observer's first detection by the enemy.
 Version 4 adds each allocated radio-assist share and the observer's visibility
 at that instant. Total assistance and end-of-battle visibility cannot replace it.
+Version 5 freezes the attacker's full-health state at a kill, after both halves
+of a ram or all effects of the same shell have settled. None means unavailable.
 The cap is per actor, across targets, keeping receipts below the wire budget.
 An incomplete history stays explicitly unknown to the mission evaluator.
 """
@@ -20,7 +22,7 @@ except NameError:
     INTEGER_TYPES = (int,)
 
 MAX_EVENTS = 1024
-VERSION = 4
+VERSION = 5
 _HISTORY_FIELDS = frozenset(('mission_events', 'mission_events_complete'))
 FIELDS = _HISTORY_FIELDS | frozenset(('mission_events_version',))
 
@@ -84,11 +86,13 @@ def valid(row):
                     not isinstance(event[3], bool)):
                 return False
         elif kind == 'kill':
-            if (len(event) != (6 if version >= 3 else 5) or
+            if (len(event) != (7 if version >= 5 else 6 if version >= 3 else 5) or
                     not _integer(event[2], 0, 10) or
                     not isinstance(event[3], bool)):
                 return False
             if not _distance(event[4]):
+                return False
+            if version >= 5 and event[6] is not None and not isinstance(event[6], bool):
                 return False
         elif kind == 'critical':
             if len(event) != 3 or not _integer(event[2], 1, 4294967295):

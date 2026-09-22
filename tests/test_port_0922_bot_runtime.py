@@ -5004,8 +5004,11 @@ class BotRuntimeTests(unittest.TestCase):
         self.runtime._physics_ground_probe = probe
 
         self.assertFalse(self.runtime._update_vertical_motion(state, 0.04))
+        self.assertFalse(self.runtime._update_vertical_motion(state, 0.04))
 
-        self.assertAlmostEqual(10.0, state['y'], places=6)
+        # Opposite banks differ by 5 cm. The chassis centre rests at their
+        # midpoint, after the bounded physical descent from its initial pose.
+        self.assertAlmostEqual(9.975, state['y'], places=6)
         self.assertFalse(state['airborne'])
 
     def test_bot_support_uses_wide_chassis_not_narrower_hull(self):

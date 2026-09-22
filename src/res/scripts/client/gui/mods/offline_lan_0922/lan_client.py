@@ -1379,11 +1379,17 @@ def _valid_battle_receipt(message):
     reward_names = ('credits', 'xp', 'free_xp', 'repair_cost', 'ammo_cost')
     if not isinstance(stats, dict) or not isinstance(rewards, dict):
         return False
-    # Statistics added after a receipt was recorded default to zero, exactly
-    # as the durable store treats them.
+    # Missing optional statistics are valid legacy wire data. Evidence-bearing
+    # mission fields remain absent when the durable store normalizes them.
     if any(_exact_int(stats.get(name, 0)) is None or
            _exact_int(stats.get(name, 0)) < 0 for name in stat_names):
         return False
+    if 'max_piercing_series' in stats:
+        series = stats['max_piercing_series']
+        if (type(series) not in integer_types or series > min(
+                _exact_int(stats.get('shots', 0)),
+                _exact_int(stats.get('piercings', 0)))):
+            return False
     if any(_exact_int(rewards.get(name)) is None or
            _exact_int(rewards.get(name)) < 0 for name in reward_names):
         return False
@@ -1460,6 +1466,12 @@ def _valid_battle_receipt(message):
                _exact_int(row_stats.get(stat_name, 0)) < 0
                for stat_name in stat_names):
             return False
+        if 'max_piercing_series' in row_stats:
+            series = row_stats['max_piercing_series']
+            if (type(series) not in integer_types or series > min(
+                    _exact_int(row_stats.get('shots', 0)),
+                    _exact_int(row_stats.get('piercings', 0)))):
+                return False
         # Receipts recorded before offline achievements shipped omit the list.
         achievements = row.get('achievements', [])
         if (not isinstance(achievements, list) or

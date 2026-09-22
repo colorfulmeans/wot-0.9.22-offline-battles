@@ -43,7 +43,8 @@ import math
 # the single wire contract shared by the server, the client receiver and the
 # exact-client result packer.
 RECEIPT_STAT_NAMES = (
-    "shots", "direct_hits", "piercings", "damage", "damage_received",
+    "shots", "direct_hits", "piercings", "max_piercing_series",
+    "damage", "damage_received",
     "damage_blocked", "assist_track", "assist_radio", "assist_stun",
     "damaged", "kills", "spotted", "capture_points", "dropped_capture_points",
     "hits_received", "potential_damage_received", "crits_received",

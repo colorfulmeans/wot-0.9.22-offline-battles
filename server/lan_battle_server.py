@@ -1179,20 +1179,23 @@ def _persisted_result_receipt(value):
     reward_names = ("credits", "xp", "free_xp", "repair_cost", "ammo_cost", "crystal")
     if not isinstance(stats, dict) or not isinstance(rewards, dict):
         raise ValueError("invalid persisted battle receipt summary")
-    # A receipt persisted before a statistic existed keeps its zero default;
-    # the durable store applies the same rule.
+    # Totals default to zero; optional mission evidence must stay absent in
+    # receipts recorded before the server could observe it.
     rewards.setdefault("crystal", 0)
     booster = value.get("battle_booster", 0)
     if isinstance(booster, bool) or not isinstance(booster, int) or not 0 <= booster <= 2 ** 31 - 1:
         raise ValueError("invalid persisted battle directive")
     for name in stat_names:
-        if name != "internal_crits_at_end":
+        if name not in ("internal_crits_at_end", "max_piercing_series"):
             stats.setdefault(name, 0)
     for mapping, names in ((stats, stat_names), (rewards, reward_names)):
         if any(isinstance(mapping.get(name, 0), bool) or
                not isinstance(mapping.get(name, 0), int) or
                mapping.get(name, 0) < 0 for name in names):
             raise ValueError("invalid persisted battle receipt statistic")
+    if stats.get("max_piercing_series", 0) > min(
+            stats.get("shots", 0), stats.get("piercings", 0)):
+        raise ValueError("invalid persisted battle receipt piercing series")
     if rewards["repair_cost"] or rewards["ammo_cost"]:
         raise ValueError("offline service costs must be zero")
     friendly_fire.facts(value.get("friendly_fire"))
@@ -1239,12 +1242,16 @@ def _persisted_result_receipt(value):
                 not isinstance(row.get("stats"), dict)):
             raise ValueError("invalid persisted public result row")
         for name in stat_names:
-            if name != "internal_crits_at_end":
+            if name not in ("internal_crits_at_end", "max_piercing_series"):
                 row["stats"].setdefault(name, 0)
         if any(isinstance(row["stats"].get(name, 0), bool) or
                not isinstance(row["stats"].get(name, 0), int) or
                row["stats"].get(name, 0) < 0 for name in stat_names):
             raise ValueError("invalid persisted public result statistic")
+        if row["stats"].get("max_piercing_series", 0) > min(
+                row["stats"].get("shots", 0),
+                row["stats"].get("piercings", 0)):
+            raise ValueError("invalid persisted public result piercing series")
         killer_kind = row.get("killer_kind", "")
         killer_id = row.get("killer_id", 0)
         if (killer_kind not in ("", "player", "bot") or
@@ -2339,6 +2346,7 @@ class BattleState:
         self.human_ram_retired_probe_pairs = OrderedDict()
         self.human_ram_probe_fingerprints = OrderedDict()
         self.vehicle_statistics = {}
+        self._piercing_series_runs = {}
         self.vehicle_end_ticks = {}
         self.vehicle_interactions = {}
         self._reset_achievement_tracking()
@@ -3542,6 +3550,7 @@ class BattleState:
         self.human_ram_retired_probe_pairs = OrderedDict()
         self.human_ram_probe_fingerprints = OrderedDict()
         self.vehicle_statistics = {}
+        self._piercing_series_runs = {}
         self.vehicle_end_ticks = {}
         self.vehicle_interactions = {}
         self._reset_achievement_tracking()
@@ -8503,6 +8512,7 @@ class BattleState:
                     launch_time_us)
             statistics = self._statistics_row(shooter_kind, shooter_id)
             statistics["shots_fired"] += 1
+            record["piercing_series_index"] = statistics["shots_fired"]
             # Charge the shell frozen into this launch, independent of later
             # loaded or queued selections reported by the visible client.
             fired_index = str(shell_index)
@@ -9068,6 +9078,9 @@ class BattleState:
                 "direct": dict(message["direct"]),
             })
             self.pending_events.append(ricochet_event)
+            # The original shot bounced. A continuing shell cannot undo that
+            # interruption if it later penetrates another vehicle.
+            self._record_projectile_piercing(record, False)
             self._apply_projectile_effect(record, direct)
             self.projectile_revision += 1
             return True
@@ -9346,6 +9359,8 @@ class BattleState:
                 row["sniper_damage_dealt"] += applied
             if proposal["shot_result"] == 2:
                 row["shots_penetrated"] += 1
+                if was_alive:
+                    record["piercing_series_qualified"] = True
                 self._increment_interaction(
                     shooter, victim, "piercings")
             elif blocked_damage:
@@ -9393,7 +9408,8 @@ class BattleState:
                 proposal["target_team"], target_kind, target_id,
                 attacker_team=int(record["team"]),
                 projectile_id=record["projectile_id"],
-                distance=_shot_distance(record, proposal))
+                distance=_shot_distance(record, proposal),
+                mission_batch=record.get("_mission_kill_events"))
             self._clear_vehicle_stun(victim)
         elif proposal["stun_end_server_time_ms"]:
             self._record_projectile_stun(record, proposal)
@@ -9620,6 +9636,7 @@ class BattleState:
             self.projectile_revision += 1
             self.pending_events.append(impact_event)
             effects = ([direct] if direct is not None else []) + splash
+            record["_mission_kill_events"] = []
             for proposal in effects:
                 try:
                     self._apply_projectile_effect(record, proposal)
@@ -9630,6 +9647,9 @@ class BattleState:
                         "PROJECTILE EFFECT failed id=%s target=%s:%s error=%s: %s" %
                         (projectile_id, proposal["target_kind"],
                          proposal["target_id"], type(error).__name__, error))
+            self._finalize_projectile_mission_health(record)
+            self._record_projectile_piercing(
+                record, bool(record.get("piercing_series_qualified")))
             self._maybe_finish_battle()
             return True
 
@@ -9651,6 +9671,7 @@ class BattleState:
                 expired.append((projectile_id, record))
         for projectile_id, record in expired:
             self.projectiles.pop(projectile_id, None)
+            self._record_projectile_piercing(record, False)
             self.projectile_tombstones[projectile_id] = {
                 "projectile_id": projectile_id,
                 "outcome": "expired",
@@ -9699,6 +9720,7 @@ class BattleState:
             "shot_seq": record["shot_seq"],
         })
         self.projectiles.pop(projectile_id, None)
+        self._record_projectile_piercing(record, False)
         self.projectile_tombstones[projectile_id] = {
             "projectile_id": projectile_id,
             "outcome": "expired",
@@ -9709,6 +9731,44 @@ class BattleState:
         }
         self.projectile_revision += 1
         return True
+
+    def _record_projectile_piercing(self, record, penetrated):
+        """Count consecutive penetrating shots in launch order, never arrival order.
+
+        Only successful ordinals occupy intervals. A miss or an unresolved
+        round leaves a gap that cannot earn credit, while a delayed success
+        can join its two already verified neighbours. Keep only intervals
+        which an in-flight shot or the next launch can still extend.
+        """
+        index = record.get("piercing_series_index")
+        if index is None or record.get("piercing_series_recorded"):
+            return
+        record["piercing_series_recorded"] = True
+        identity = (record["shooter_kind"], record["shooter_id"])
+        statistics = self._statistics_row(*identity)
+        runs = self._piercing_series_runs.get(identity, [])
+        if penetrated:
+            merged = []
+            for start, end in sorted(runs + [(index, index)]):
+                if merged and start <= merged[-1][1] + 1:
+                    merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                else:
+                    merged.append((start, end))
+            runs = merged
+            statistics["max_piercing_series"] = max(
+                int(statistics.get("max_piercing_series", 0)),
+                max(end - start + 1 for start, end in runs))
+        pending = [other["piercing_series_index"]
+                   for other in self.projectiles.values()
+                   if (other["shooter_kind"], other["shooter_id"]) == identity
+                   and "piercing_series_index" in other
+                   and not other.get("piercing_series_recorded")]
+        frontier = min(pending) if pending else statistics["shots_fired"] + 1
+        retained = [(start, end) for start, end in runs if end >= frontier - 1]
+        if retained:
+            self._piercing_series_runs[identity] = retained
+        else:
+            self._piercing_series_runs.pop(identity, None)
 
     def _prune_orphaned_bot_launch_edges(self):
         if not self.bot_pending_projectile_launches:
@@ -10098,6 +10158,7 @@ class BattleState:
             "shots": max(0, int(row.get("shots_fired", 0))),
             "direct_hits": max(0, int(row.get("shots_hit", 0))),
             "piercings": max(0, int(row.get("shots_penetrated", 0))),
+            "max_piercing_series": max(0, int(row.get("max_piercing_series", 0))),
             "damage": max(0, int(row.get("damage_dealt", 0))),
             "damage_received": max(0, int(row.get("damage_received", 0))),
             "damage_blocked": max(0, int(row.get("damage_blocked", 0))),
@@ -12974,7 +13035,7 @@ class BattleState:
 
     def _record_kill(self, attacker, victim, death_reason,
                      projectile_id=None, distance=None,
-                     last_shell_fire=False):
+                     last_shell_fire=False, mission_batch=None):
         """Freeze one enemy kill with the facts #1513 medals ask about."""
         attacker = (str(attacker[0]), int(attacker[1]))
         victim = (str(victim[0]), int(victim[1]))
@@ -12998,9 +13059,12 @@ class BattleState:
             if all(position is not None for position in positions):
                 mission_distance = math.sqrt(sum((a - b) ** 2
                     for a, b in zip(*positions)))
-        self._record_mission_event(attacker, victim, "kill",
+        mission_event = self._record_mission_event(attacker, victim, "kill",
                                    int(death_reason), immobilized, mission_distance,
-                                   self._mission_invisible(attacker))
+                                   self._mission_invisible(attacker),
+                                   self._mission_full_health(attacker))
+        if mission_batch is not None and mission_event is not None:
+            mission_batch.append(mission_event)
         self.kill_records.append({
             "actor_kind": attacker[0], "actor_id": attacker[1],
             "victim_kind": victim[0], "victim_id": victim[1],
@@ -13070,6 +13134,7 @@ class BattleState:
                 "actor_kind": key[0], "actor_id": key[1],
                 "team": self._vehicle_team(*key),
                 "shots_fired": 0, "shots_hit": 0, "shots_penetrated": 0,
+                "max_piercing_series": 0,
                 "damage_dealt": 0, "damage_received": 0,
                 "damage_blocked": 0, "damage_assisted_track": 0,
                 "damage_assisted_radio": 0, "damage_assisted_stun": 0,
@@ -13175,7 +13240,33 @@ class BattleState:
             interaction["mission_events_complete"] = False
             return
         elapsed = max(0, int(round((self.tick / TICK_HZ - PREBATTLE_SECONDS) * 1000)))
-        interaction["mission_events"].append([kind, elapsed] + list(values))
+        event = [kind, elapsed] + list(values)
+        interaction["mission_events"].append(event)
+        return event
+
+    def _mission_full_health(self, actor):
+        """Read canonical hull HP at the kill, never end-of-battle damage totals."""
+        if actor[0] == "player":
+            state = self.players.get(actor[1])
+            if state is None:
+                return None
+            participant = self._frozen_player_participant(actor[1])
+            maximum = (participant["max_health"] if participant is not None
+                       else state.max_health)
+            return bool(state.alive and state.health == maximum)
+        state = self.bot_states.get(actor[1])
+        if state is None or "health" not in state or "max_health" not in state:
+            return None
+        return bool(state.get("alive") and state["health"] == state["max_health"])
+
+    def _finalize_projectile_mission_health(self, record):
+        """An HE self-splash belongs to the same instant as its enemy kill."""
+        events = record.pop("_mission_kill_events", ())
+        if events:
+            full_health = self._mission_full_health(
+                (record["shooter_kind"], record["shooter_id"]))
+            for event in events:
+                event[6] = full_health
 
     def _mission_invisible(self, actor):
         """Use the enemy team's current visibility lease, not sixth sense delay."""
@@ -13502,7 +13593,7 @@ class BattleState:
     def _record_frag(self, attacker_kind, attacker_id, victim_team,
                      victim_kind, victim_id, attacker_team=None,
                      projectile_id=None, distance=None,
-                     last_shell_fire=False):
+                     last_shell_fire=False, mission_batch=None):
         """Apply the shared +1 enemy / -1 ally frag and team-killer law."""
         if (attacker_kind == victim_kind and
                 int(attacker_id) == int(victim_id)):
@@ -13578,7 +13669,7 @@ class BattleState:
                 minimum, min(maximum, int(reason)))
             self._record_kill(
                 attacker, victim, int(reason), projectile_id, distance,
-                last_shell_fire=last_shell_fire)
+                last_shell_fire=last_shell_fire, mission_batch=mission_batch)
         self.pending_events.append({
             "kind": "vehicle_statistics",
             "actor_kind": attacker_kind,

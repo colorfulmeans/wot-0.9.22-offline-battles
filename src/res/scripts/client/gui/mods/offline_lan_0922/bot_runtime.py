@@ -6344,8 +6344,19 @@ class BotRuntime(object):
                     position[0] + offset[0], position[2] + offset[1],
                     position[1])
                 for offset in pair))
-        return tank_collision.straddled_support(
-            position[1], follow_gap, axis_samples)
+        support = None
+        for pair in axis_samples:
+            if tank_collision.straddled_support(
+                    position[1], follow_gap, (pair,)) is None:
+                continue
+            # These offsets are symmetric about the chassis origin. Their
+            # midpoint supports the centre; choosing the higher endpoint
+            # instead would hold a descending tank above an ordinary slope.
+            # A side query can stop a descent, but cannot lift the body.
+            candidate = min(position[1], (float(pair[0]) + float(pair[1])) * 0.5)
+            if support is None or candidate > support:
+                support = candidate
+        return support
 
     def _terrain_support(self, state, follow_gap=None):
         """Probe centre first, then the 0.8.2 edge fallback when unsupported."""
@@ -6372,17 +6383,27 @@ class BotRuntime(object):
                     position[0], position[2], yaw, plane)
                 if plane is not None:
                     return max(samples + [centre]), plane['center_y']
+            # Check shallow descents before a sequence of small centre drops
+            # lowers the hull between its still-supported tracks. Accumulate
+            # sub-centimetre drops from the last check: a per-tick threshold
+            # would miss the same trench at a higher render cadence.
+            reference_y = max(position[1], _number(state.get(
+                '_legacy_straddle_reference_y'), position[1]))
+            state['_legacy_straddle_reference_y'] = reference_y
             # Speed and a forward corridor grade can enlarge follow_gap
-            # beyond an entire trench. Check the tracks before accepting that
-            # drop; the dynamic envelope alone proves no surface continuity.
+            # beyond an entire trench; they prove no surface continuity.
             support_gap = (None if follow_gap is None else min(
                 float(follow_gap), vehicle_physics.GROUND_FOLLOW_MIN))
             if (support_gap is not None and
-                    position[1] - centre > support_gap):
+                    reference_y - centre > min(support_gap, 0.01)):
                 bridged = self._straddled_terrain_support(
                     state, position, support_gap)
-                if bridged is not None and bridged > centre:
+                if bridged is not None and bridged > centre + 1.0e-6:
+                    # Keep checking the same bank while crossing the gap;
+                    # restarting the tolerance after each supported frame
+                    # would allow a staircase of small downward slips.
                     return bridged, bridged
+                state['_legacy_straddle_reference_y'] = position[1]
             # The vertical law below always selects centre while it exists;
             # front/back could not affect the realised pose on this branch.
             return centre, centre

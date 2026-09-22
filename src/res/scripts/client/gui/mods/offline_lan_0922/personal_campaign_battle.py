@@ -19,6 +19,7 @@ _RELATIONS = frozenset(('greaterOrEqual', 'greater', 'equal', 'less',
 _STAT_KEYS = {
     'damageDealt': 'damage', 'damageReceived': 'damage_received',
     'damageBlockedByArmor': 'damage_blocked', 'damaged': 'damaged',
+    'inBattleMaxPiercingSeries': 'max_piercing_series',
     'kills': 'kills', 'spotted': 'spotted',
     'damageAssistedRadio': 'assist_radio',
     'damageAssistedTrack': 'assist_track',
@@ -322,7 +323,7 @@ def _vehicle_events(name, node, facts):
     if name in ('vehicleDamage', 'vehicleStun'):
         allowed = allowed | set(('eventCount',))
     if name == 'vehicleKills':
-        allowed = allowed | set(('rammingInfo',))
+        allowed = allowed | set(('rammingInfo', 'whileFullHealth'))
     if name in ('vehicleDamage', 'vehicleKills'):
         allowed = allowed | set(('limittedTime', 'enemyImmobilized',
                                  'attackReason', 'lvlDiff', 'distance',
@@ -341,7 +342,9 @@ def _vehicle_events(name, node, facts):
         return _unknown(name + ' eventCount modifier')
     invisible = _child(node, 'whileInvisible')
     fire_started = _child(node, 'fireStarted')
-    for flag_name, flag in (('whileInvisible', invisible), ('fireStarted', fire_started)):
+    full_health = _child(node, 'whileFullHealth')
+    for flag_name, flag in (('whileInvisible', invisible), ('fireStarted', fire_started),
+                            ('whileFullHealth', full_health)):
         if flag is not None and (_names(flag) or flag.get('value', '')):
             return _unknown(name + ' ' + flag_name + ' modifier')
     if fire_started is not None and event_count is None:
@@ -369,7 +372,8 @@ def _vehicle_events(name, node, facts):
     ram_history = bool(ram_flags or
                        name == 'vehicleDamage' and attack_reason == 2)
     filtered_history = bool(_names(node) & set((
-        'limittedTime', 'enemyImmobilized', 'whileInvisible', 'fireStarted'))) or ram_history
+        'limittedTime', 'enemyImmobilized', 'whileInvisible', 'fireStarted',
+        'whileFullHealth'))) or ram_history
     try:
         time_limit = (int(_value(node, 'limittedTime')) * 1000
                       if _child(node, 'limittedTime') is not None else None)
@@ -381,8 +385,9 @@ def _vehicle_events(name, node, facts):
         return _unknown(name + ' limittedTime or distance boundary')
     if distance_limit is not None:
         filtered_history = True
-    if ram_history and (distance_limit is not None or invisible is not None or fire_started is not None):
-        return _unknown('interaction: ram distance or visibility')
+    if ram_history and (distance_limit is not None or invisible is not None or
+                        fire_started is not None or full_health is not None):
+        return _unknown('interaction: ram distance, visibility or full health')
     if fire_started is not None and (_names(node) & set((
             'limittedTime', 'enemyImmobilized', 'whileInvisible', 'attackReason', 'distance'))):
         return _unknown('interaction: fireStarted filter')
@@ -427,13 +432,14 @@ def _vehicle_events(name, node, facts):
             history = _mission_history(event)
             version = event.get('mission_events_version', 1)
             if (history is None or ram_history and version < 2 or
+                    full_health is not None and version < 5 or
                     (invisible is not None or fire_started is not None or
                      name == 'vehicleDamage' and distance_limit is not None) and version < 3):
                 return _unknown('interaction: complete mission event history (' +
                                 ','.join(sorted(_names(node) & set((
                                     'limittedTime', 'enemyImmobilized', 'distance',
                                     'attackReason', 'rammingInfo',
-                                    'whileInvisible', 'fireStarted')))) + ')')
+                                    'whileInvisible', 'fireStarted', 'whileFullHealth')))) + ')')
             value = 0
             for occurrence in history:
                 if occurrence[0] != ('ram' if ram_history else
@@ -454,6 +460,11 @@ def _vehicle_events(name, node, facts):
                         continue
                 if invisible is not None and not occurrence[5]:
                     continue
+                if full_health is not None:
+                    if occurrence[6] is None:
+                        return _unknown('interaction: full health at kill')
+                    if not occurrence[6]:
+                        continue
                 if distance_limit is not None:
                     distance = occurrence[4]
                     if distance is None:

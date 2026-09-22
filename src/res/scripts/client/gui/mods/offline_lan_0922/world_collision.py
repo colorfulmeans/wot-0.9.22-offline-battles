@@ -250,6 +250,34 @@ def _vehicle_motion_extents(descriptor):
 	return max(abs(left), abs(right)), back, front
 
 
+def _translation_departing_contact(pos, yaw, bounds, pose_y, dx, dz):
+	"""Release only an existing wall plane whose penetration is decreasing.
+
+	The hit must be inside the original occupied hull, with its centre on the
+	outside of the exposed face. Each later native surface is still recast;
+	a new wall, an inward step, or a backface cannot borrow this exception.
+	"""
+	import math
+	left, right, back, front = bounds
+	sine, cosine = math.sin(yaw), math.cos(yaw)
+
+	def departing(collision):
+		point, normal = collision[:2]
+		if abs(normal.y) > 0.2 or abs(pose_y[1]) < 0.1:
+			return False
+		if dx * normal.x + dz * normal.z <= 1.0e-8:
+			return False
+		px, py, pz = point.x - pos.x, point.y - pos.y, point.z - pos.z
+		if px * normal.x + py * normal.y + pz * normal.z >= -1.0e-8:
+			return False
+		x, z = px * cosine - pz * sine, px * sine + pz * cosine
+		y = (py - x * pose_y[0] - z * pose_y[2]) / pose_y[1]
+		return (left - 0.001 <= x <= right + 0.001 and
+			-back - 0.001 <= z <= front + 0.001 and
+			0.6 - 0.001 <= y <= 1.6 + 0.001)
+	return departing
+
+
 def _hull_pose_y(pitch, roll):
 	"""Return local right/up/forward contributions to world height."""
 	import math
@@ -684,11 +712,20 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		cos_y = math.cos(yaw)
 		sin_y = math.sin(yaw)
 		pose_y = _hull_pose_y(pitch, roll)
+		travel_yaw = (float(motion_yaw) if motion_yaw is not None else
+			float(yaw) + (math.pi if vel < 0.0 else 0.0))
+		travel_x = math.sin(travel_yaw) * _ahead
+		travel_z = math.cos(travel_yaw) * _ahead
+		if departing_contact is None and _ahead > 0.0:
+			departing_contact = _translation_departing_contact(
+				pos, yaw, (left, right, hl_back, hl_front), pose_y,
+				travel_x, travel_z)
 		ground_plane = (
 			float(pos.x), float(pos.y) + 1.6 * pose_y[1], float(pos.z),
 			cos_y * pose_y[0] + sin_y * pose_y[2],
 			-sin_y * pose_y[0] + cos_y * pose_y[2])
 		lane_segments = []
+		perimeter_lanes = set()
 		if motion_yaw is None:
 			# Preserve the lane order, using both actual body edges separately.
 			back_margin = -0.5 if vel > 0.0 else 0.5
@@ -756,6 +793,23 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 				lane_segments.append((
 					x1, z1, x2, z2, target_len,
 					x1, z1, motion_sin, motion_cos, 1.0, target_len))
+			# Corner trajectories alone leave the middle of a long side open.
+			# A house corner can enter that side during a glancing slide without
+			# meeting a corner ray or the centre line. Inspect the destination
+			# perimeter too, using the same terrain/upper-wall rules below.
+			if _ahead > 0.0:
+				corners = [(pos.x + cos_y * x + sin_y * z + travel_x,
+					pos.z - sin_y * x + cos_y * z + travel_z)
+					for x, z in ((left, -hl_back), (right, -hl_back),
+						(right, hl_front), (left, hl_front))]
+				for index, (x1, z1) in enumerate(corners):
+					x2, z2 = corners[(index + 1) % len(corners)]
+					length = math.hypot(x2 - x1, z2 - z1)
+					if length > 1.0e-9:
+						perimeter_lanes.add(len(lane_segments))
+						lane_segments.append((x1, z1, x2, z2, length,
+							x1, z1, (x2 - x1) / length,
+							(z2 - z1) / length, 1.0, length))
 		minimum_x = min(min(lane[0], lane[2]) for lane in lane_segments)
 		maximum_x = max(max(lane[0], lane[2]) for lane in lane_segments)
 		minimum_z = min(min(lane[1], lane[3]) for lane in lane_segments)
@@ -767,11 +821,21 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		_crush_state = [False]
 		_kinetic_contact = False
 
-		for (x1, z1, x2, z2, target_len,
+		for lane_index, lane in enumerate(lane_segments):
+			(x1, z1, x2, z2, target_len,
 				profile_x, profile_z, profile_sin, profile_cos,
-				profile_direction, profile_look) in lane_segments:
+				profile_direction, profile_look) = lane
 			start_dx, start_dz = x1 - pos.x, z1 - pos.z
 			end_dx, end_dz = x2 - pos.x, z2 - pos.z
+			lane_ground_plane = ground_plane
+			if lane_index in perimeter_lanes:
+				# This lane belongs to the translated body, with unchanged
+				# attitude; do not extrapolate its height beyond the old body.
+				start_dx, start_dz = start_dx - travel_x, start_dz - travel_z
+				end_dx, end_dz = end_dx - travel_x, end_dz - travel_z
+				lane_ground_plane = (ground_plane[0] + travel_x,
+					ground_plane[1], ground_plane[2] + travel_z,
+					ground_plane[3], ground_plane[4])
 			local_start = (
 				start_dx * cos_y - start_dz * sin_y,
 				start_dx * sin_y + start_dz * cos_y)
@@ -799,10 +863,13 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 				sin_y * local_end[1])
 			footprint_z = (pos.z - sin_y * local_end[0] +
 				cos_y * local_end[1])
+			if lane_index in perimeter_lanes:
+				footprint_x += travel_x
+				footprint_z += travel_z
 			_ground_ahead = (
 				_lane_ground_ahead(spaceID, Math, pos,
 					x1, z1, footprint_x, footprint_z,
-					x2, z2, target_len, ground_plane, _sweep_filter,
+						x2, z2, target_len, lane_ground_plane, _sweep_filter,
 					descending=descending_lane,
 					support_start_y=(pos.y + local_start[0] * pose_y[0] +
 						local_start[1] * pose_y[2]))
@@ -830,7 +897,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 					_heights = ()
 					_segment = 0.0
 					_gradient_limit = _MAX_DESCENDING_GRADIENT
-					_profile_plane = ground_plane
+					_profile_plane = lane_ground_plane
 					if _drivable_surface(col_bot, _gradient_limit):
 						# The native hit anchors a newly entered ramp even before the
 						# body has pitched to match it. Keep the same 1.6 m occupied

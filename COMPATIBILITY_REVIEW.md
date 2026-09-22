@@ -6117,3 +6117,75 @@ existing recovery count. Consecutive blocked commands can straddle two
 independent manoeuvres; combining them incorrectly reports one oversized
 lease. The two-second per-episode bound and the independent sixty-second
 whole-roster departure and original-slot occupancy assertions remain.
+
+### September 22 mission and terrain follow-up
+
+Reports `20260922-154331-fce52b57beab` and
+`20260922-160746-63a9c9a7de48` identify builds
+`colorfulmeans-35520243588-1` (0.9.2) and
+`colorfulmeans-35611837404-1` (0.9.3), respectively. The latter records HT12's
+unsupported `compareWithMaxHealth` condition. LT12's hidden assistance and
+loadout evidence, and the maximum-health comparisons needed by HT12 and TD8,
+are already implemented in `3e4f3052`. The new audit checks the actual #1513
+definitions for all four operations instead of treating the old report as a
+failure of every later change.
+
+TD7 and TD9 do expose missing current conditions. TD7's `whileFullHealth`
+requires hull HP at the kill, not remaining HP at battle end or a damage
+total. Mission-event version 5 freezes that state for each enemy kill. Both
+halves of a ram and all effects of one shell settle before the health fact is
+finalized, so self-splash and reciprocal ram damage cannot depend on target
+iteration order. Fire kills use health when the victim dies. Old or incomplete
+event histories do not acquire guessed full-health evidence.
+
+TD9's `inBattleMaxPiercingSeries` requires consecutive admitted shots. The
+server assigns per-shooter ordinals at launch and merges only verified
+penetration intervals. Delayed impacts cannot turn arrival order into a false
+series; misses, bounces and expired projectiles leave gaps. Direct penetration
+of a living enemy qualifies, while splash, friendly hits and wrecks do not.
+The maximum is transported with the existing durable battle receipt; missing
+legacy evidence remains missing.
+
+The Live Oaks report also identifies a player movement problem independent
+of Bot difficulty. From 16:07:01 through 16:07:28 the WT E 100 remains around
+`(-396.713, 1.898, 356.690)`, with forward and reverse attempts stopped by
+different faces of building item 102 in chunk 31618, material 111. Ground is
+flat and the reported support veto is false. The existing diagonal slide
+path sweeps four corner trajectories and a centre lane; a building corner
+can enter the middle of a long hull side without crossing those rays.
+Destination perimeter lanes close that reproducible gap, using translated
+body pose and the existing terrain, upper-wall and destructible rules.
+
+An already intersecting near-vertical wall may release only when the actual
+translation reduces penetration, the hull centre remains on the wall's
+outside, and the returned point lies in the original occupied body. Recasting
+continues through every later surface. This does not grant inward motion,
+an exit through the far side of a building, or permission to ignore a second
+wall. The extra perimeter queries are limited to nonzero cross-heading
+translations. They do not turn the sparse native-ray model into a complete
+continuous volume sweep for arbitrary thin features.
+
+The ordinary Bot support path has a separate gradual-descent defect. A
+controlled 3-metre-wide chassis crossing a 1.4-metre-wide, 1-metre-deep V
+trench can descend about 0.143 metres each step. Every step stays below the
+old 0.8-metre support-check trigger, so seven steps sink the centre almost a
+metre while both track supports remain at the bank height. This reproduces
+the defect on the pre-change HEAD; it is not a reconstruction of every native
+triangle in the Stalingrad screenshot.
+
+Paired support is now checked after one centimetre of accumulated centre
+descent. Accumulation prevents smaller high-frame-rate steps bypassing the
+same check. The existing admissible support-height range still excludes a
+nearby roof and a one-sided cliff. Symmetric endpoints support the centre at
+their mean height rather than the higher endpoint; the result can arrest a
+drop but cannot lift a tank to a different surface. Level ground retains one
+column query, and a triggered descent uses at most five. The change does not
+enable the full spring solver for every Bot or teleport a deeply sunk hull.
+
+Focused regressions cover actual mission definitions and durable settlement,
+shot order and interrupted series, wall corners and outward-only release,
+and longitudinal/lateral shallow trenches at 15, 24 and 60 Hz. The native
+Live Oaks vehicle is already wedged against two faces: this prevention and
+conservative release fix does not prove that exact saved pose can leave.
+Windows gameplay still has to establish that new entries into these reported
+locations remain clear and that the full fleet's native frame rate is usable.
