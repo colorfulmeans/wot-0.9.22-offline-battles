@@ -11816,6 +11816,23 @@ class BotRuntime(object):
                 # Whether this hull may rotate where it stands is a question
                 # about a swept rectangle. Check live hulls before the
                 # shipped graph the navigator already owns.
+                blocked_rotations = state.get('_blocked_rotations', {})
+                sample_delta = _angle_delta(sample_yaw, state['yaw'])
+                for side, failed in list(blocked_rotations.items()):
+                    origin, old_yaw, rejected_delta, until = failed
+                    if (now >= until or
+                            _distance(position, origin) > 0.08 or
+                            abs(position[1] - origin[1]) > 0.08 or
+                            abs(_angle_delta(state['yaw'], old_yaw)) > 0.02):
+                        del blocked_rotations[side]
+                    elif (sample_delta * side > 0.0 and
+                            abs(sample_delta) >= abs(rejected_delta)):
+                        # The native commit already rejected this beginning
+                        # of the same angular sweep. Do not select it again
+                        # inside a backing manoeuvre just because baking is
+                        # clear. Straight rear travel needs its own proof and
+                        # can move the chassis away before turning is retried.
+                        return False
                 if tank_collision.rotation_fraction(
                         position, state['yaw'], sample_yaw,
                         state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
@@ -12242,7 +12259,9 @@ class BotRuntime(object):
                 state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
                 target is not None and
-                command.get('combat_mode') != 'base_defense')
+                command.get('combat_mode') != 'base_defense',
+                combat_mode=command.get('combat_mode', 'route'),
+                movement_intent=command.get('movement_intent', True))
             state['hull_aiming'] = bool(hull_aiming)
             if hull_aiming:
                 # Limited-traverse aiming deliberately stops translation so
@@ -12722,13 +12741,16 @@ class BotRuntime(object):
                     position, old_hull_yaw, candidate_hull_yaw, pivot_offset)
                 yaw_changed = abs(_angle_delta(
                     candidate_hull_yaw, old_hull_yaw)) > 1.0e-8
-                rotation_blocked = (
-                    not self._baked_pose_progress_clear(
+                rotation_block_reason = None
+                if not self._baked_pose_progress_clear(
                         state, position, old_hull_yaw,
-                        candidate_position, candidate_hull_yaw) or
-                    (yaw_changed and not self._turret_pose_is_clear(
+                        candidate_position, candidate_hull_yaw):
+                    rotation_block_reason = 'arena_boundary'
+                elif (yaw_changed and not self._turret_pose_is_clear(
                         state, position, old_hull_yaw,
-                        candidate_position, candidate_hull_yaw)))
+                        candidate_position, candidate_hull_yaw)):
+                    rotation_block_reason = 'detached_turret'
+                rotation_blocked = rotation_block_reason is not None
                 if (not rotation_blocked and yaw_changed and
                         not state.get('airborne', False) and
                         self.rotation_resolver is not None):
@@ -12753,7 +12775,17 @@ class BotRuntime(object):
                         finally:
                             self._probe_finished(4, probe_started)
                     rotation_blocked = not bool(rotation_clear)
+                    if rotation_blocked:
+                        rotation_block_reason = 'native_world'
+                rotation_drive_held = False
                 if rotation_blocked:
+                    rejected_delta = _angle_delta(
+                        candidate_hull_yaw, old_hull_yaw)
+                    if abs(rejected_delta) > 1.0e-8:
+                        side = 1 if rejected_delta > 0.0 else -1
+                        state.setdefault('_blocked_rotations', {})[side] = (
+                            tuple(position), old_hull_yaw, rejected_delta,
+                            now + 2.0)
                     # Turning is a pose change even without translation. Keep
                     # the prior legal OBB until the hull first moves far enough
                     # inward to rotate without crossing a red line, turret or
@@ -12762,6 +12794,19 @@ class BotRuntime(object):
                     candidate_hull_yaw = old_hull_yaw
                     candidate_position = position
                     state['rotation_dir'] = 0
+                    if abs(turn) > 0.01 and abs(throttle) > 0.01:
+                        # A drive-and-turn command owns both components. If
+                        # its turn cannot happen, accelerating along the old
+                        # hull yaw can leave the selected road and enter the
+                        # hillside. Brake this failed manoeuvre and let the
+                        # driver's normal no-progress timer choose a new one.
+                        # A separately selected straight reverse/forward exit
+                        # still uses the unchanged native translation sweep.
+                        throttle = 0.0
+                        active_brake = True
+                        state['movement_dir'] = 0
+                        rotation_drive_held = True
+                        self._decision_cache.pop(state['id'], None)
                 self._turn_speeds[state['id']] = turn_speed
                 if pivot_offset and not rotation_blocked:
                     track_pivot_yaws[state['id']] = old_hull_yaw
@@ -12828,6 +12873,10 @@ class BotRuntime(object):
                         'dt': step, 'drive_speed': speed,
                         'drive_pitch': slope_pitch, 'throttle': throttle,
                         'brake': active_brake,
+                        'rotation_blocked': bool(rotation_blocked),
+                        'rotation_block_reason': rotation_block_reason,
+                        'rotation_drive_held': rotation_drive_held,
+                        'actual_turn_speed': turn_speed,
                         'baked_veto': committed_corridor is False,
                         'path_clear': bool(path_clear),
                         'frozen': bool(pose_frozen),

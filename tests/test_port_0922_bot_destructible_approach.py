@@ -177,51 +177,67 @@ class BotDestructibleApproachTests(unittest.TestCase):
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
             self.assertFalse(result['clear'], result)
 
-    def test_budget_exhaustion_defers_without_registering_a_false_wall(self):
+    def test_exhausted_contact_budget_does_not_stop_planning_through_a_cold_prop(self):
         with self.scene() as f:
             f.battle._soft_static_recast_budget[:] = [0]
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertTrue(result.get('deferred'), result)
+            self.assertTrue(result['clear'], result)
+            self.assertFalse(result.get('deferred'), result)
             self.assertFalse(result['collision'], result)
             f.bigworld.wg_getDestructibleMatrix.assert_not_called()
+            self.assertEqual([0], f.battle._soft_static_recast_budget)
             f.battle._soft_static_recast_budget[:] = [24]
             self.assertTrue(f.battle._direction_probe(
                 (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
-            matrix_calls = f.bigworld.wg_getDestructibleMatrix.call_count
-            f.battle._soft_static_recast_budget[:] = [24]
-            self.assertTrue(f.battle._direction_probe(
-                (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
-            self.assertEqual(matrix_calls, f.bigworld.wg_getDestructibleMatrix.call_count)
+            f.bigworld.wg_getDestructibleMatrix.assert_not_called()
+            self.assertEqual([24], f.battle._soft_static_recast_budget)
 
-    def test_registration_and_recasts_share_the_same_frame_budget(self):
+    def test_planning_does_not_spend_the_physical_contact_registration_budget(self):
         with self.scene() as f:
             f.battle._soft_static_recast_budget[:] = [1]
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertTrue(result.get('deferred'), result)
+            self.assertTrue(result['clear'], result)
+            self.assertFalse(result.get('deferred'), result)
             self.assertFalse(result['collision'], result)
-            self.assertEqual([0], f.battle._soft_static_recast_budget)
-            self.assertIn((22, 0), sensor.g_offh_destr_instances)
-            f.battle._soft_static_recast_budget[:] = [24]
-            self.assertTrue(f.battle._direction_probe(
-                (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
+            self.assertEqual([1], f.battle._soft_static_recast_budget)
+            self.assertNotIn((22, 0), getattr(sensor, 'g_offh_destr_instances', {}))
+            f.bigworld.wg_getDestructibleMatrix.assert_not_called()
 
-    def test_missing_live_manager_defers_until_streamed_not_until_bot_moves(self):
+    def test_planning_does_not_wait_for_a_matching_live_manager(self):
         with self.scene() as f:
             manager = sys.modules['AreaDestructibles'].g_destructiblesManager
             manager.space_id = 99
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertTrue(result.get('deferred'), result)
+            self.assertTrue(result['clear'], result)
+            self.assertFalse(result.get('deferred'), result)
             self.assertNotIn((22, 0), getattr(sensor, 'g_offh_destr_instances', {}))
             manager.space_id = 1
             self.assertTrue(f.battle._direction_probe(
                 (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
+            f.bigworld.wg_getDestructibleMatrix.assert_not_called()
 
-    def test_baked_bounds_cannot_override_a_different_native_placement(self):
+    def test_native_original_surface_plans_clear_despite_a_stale_catalog_placement(self):
         with self.scene() as f:
             f.bigworld.wg_getDestructibleMatrix.return_value = _ItemMatrix(_Vector(80, 0, 5))
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertFalse(result['clear'], result)
+            self.assertTrue(result['clear'], result)
+            f.bigworld.wg_getDestructibleMatrix.assert_not_called()
             self.assertNotIn((22, 0), getattr(sensor, 'g_offh_destr_instances', {}))
+            # The physical receipt still needs its own exact identity proof.
+            self.assertFalse(f.battle._direction_world_receipt(
+                (0, 0, 0), 0, 0, f.descriptor, 4.0))
+
+    def test_navigation_and_approach_ignore_native_props_without_any_catalog(self):
+        with self.scene() as f:
+            with mock.patch.object(sensor, '_destructible_catalog', None), \
+                    mock.patch.object(sensor, '_stream_baked_shot_instance_1513',
+                                      side_effect=AssertionError('planning hydrated catalog')):
+                f.battle._soft_static_recast_budget[:] = [0]
+                self.assertEqual(0.0, f.battle._navigation_ground(0.0, 4.0, 0.0))
+                result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
+                self.assertTrue(result['clear'], result)
+                self.assertEqual(0.0, result['slope'])
+                self.assertEqual([0], f.battle._soft_static_recast_budget)
 
     def test_approach_still_requires_real_support_and_acceptable_grade(self):
         for support_y in (None, -4.0, 2.0):

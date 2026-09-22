@@ -58,7 +58,7 @@ from gui.mods.offline_lan_0922.siege_hud import PersistentSiegeHints
 from gui.mods.offline_lan_0922.spawn_planner import SpawnPlanner
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.worker_diagnostics import (
-    WorkerCombatDiagnostics, timed, call as timed_call)
+    WorkerCombatDiagnostics, timed, call as timed_call, observed_ray)
 from gui.mods.offline_lan_0922 import (
     ballistics, combat_rules, critical_damage, descriptor_donation,
     destructibles_compat, device_damage, effective_params,
@@ -5430,27 +5430,33 @@ class BattleRuntime(object):
             start_y = next_y
         return None
 
+    def _navigation_collision_filter(self, start, end):
+        """Prepare planning geometry independently of physical crush permission."""
+        prepare = getattr(self._destructibles,
+                          'prepare_navigation_collision_filter', None)
+        return prepare(start, end) if callable(prepare) else None
+
+    def _collide_navigation(self, start, end, trace=None):
+        """Query native route geometry without a physical broken-skin recast."""
+        collision_filter = self._navigation_collision_filter(start, end)
+        if trace is not None:
+            collision_filter = world_collision._trace_collision_filter(
+                collision_filter, trace)
+        args = (self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS)
+        if collision_filter is not None:
+            args += (collision_filter,)
+        return observed_ray('native.navigation.ray',
+                            self._runtime.bigworld.wg_collideSegment, *args)
+
     def _navigation_ground(self, x, z, hint_y=0.0):
         """Copy the 0.8.2 same-layer graph probe, including ford depth."""
         probe_top = float(hint_y) + 8.0
         probe_bottom = float(hint_y) - 18.0
-        ground_filter = self._ground_filter(x, z)
         for unused_layer in range(3):
             try:
                 ground_start = self._vector((x, probe_top, z))
                 ground_end = self._vector((x, probe_bottom, z))
-                hit = self._collide_down(
-                    ground_start, ground_end, ground_filter)
-                support_probe = getattr(
-                    self._destructibles, 'planning_support_below_soft_roof', None)
-                if hit is not None and callable(support_probe):
-                    hit = support_probe(
-                        self._avatar.spaceID, ground_start, ground_end,
-                        hit, float(hint_y) + 4.5, 0.0, None,
-                        recast_budget=self._soft_static_recast_budget,
-                        ignore_destructibles=True)
-                    if hit == 'deferred':
-                        return None
+                hit = self._collide_navigation(ground_start, ground_end)
                 if hit is None:
                     return None
                 height = float(hit[0].y)
@@ -5601,7 +5607,6 @@ class BattleRuntime(object):
         # needs it to distinguish climbing from descending; taking ``abs``
         # here made every clear descent behave like an uphill pull.
         maximum_slope = 0.0
-        deferred = False
         for height, distance in (
                 (0.7, near_distance), (1.5, far_distance)):
             nx = x + sine * distance
@@ -5618,24 +5623,9 @@ class BattleRuntime(object):
                 try:
                     ground_start = self._vector((nx, previous_y + probe_up, nz))
                     ground_end = self._vector((nx, previous_y - probe_down, nz))
-                    ground = self._collide_down(
-                        ground_start, ground_end, self._ground_filter(nx, nz))
-                    support_probe = getattr(
-                        self._destructibles, 'planning_support_below_soft_roof', None)
-                    if (ground is not None and descriptor is not None and
-                            callable(support_probe)):
-                        # Planning uses terrain below confirmed destructibles,
-                        # including low roofs; propulsion does not classify a
-                        # building as terrain. Physical support remains separate.
-                        ground = support_probe(
-                            self._avatar.spaceID, ground_start, ground_end,
-                            ground, previous_y + run * 0.48,
-                            0.0, descriptor,
-                            recast_budget=self._soft_static_recast_budget,
-                            ignore_destructibles=True)
-                        if ground == 'deferred':
-                            return {'clear': False, 'collision': False,
-                                    'water': False, 'slope': 0.0, 'deferred': True}
+                    ground = (self._collide_navigation(ground_start, ground_end)
+                              if descriptor is not None else self._collide_down(
+                                  ground_start, ground_end, self._ground_filter(nx, nz)))
                 except Exception:
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': 99.0}
@@ -5667,36 +5657,21 @@ class BattleRuntime(object):
                     nx + lateral_x * offset, next_y + height,
                     nz + lateral_z * offset))
                 try:
-                    collision = self._runtime.bigworld.wg_collideSegment(
-                        self._avatar.spaceID, ray_start, ray_end,
-                        VEHICLE_SKIP_FLAGS)
+                    collision = (
+                        self._collide_navigation(ray_start, ray_end)
+                        if descriptor is not None else
+                        self._runtime.bigworld.wg_collideSegment(
+                            self._avatar.spaceID, ray_start, ray_end,
+                            VEHICLE_SKIP_FLAGS))
                 except Exception:
                     collision = True
                 if collision is not None:
-                    if descriptor is not None and self._destructibles is not None:
-                        soft_status = (
-                            self._destructibles._catalog_soft_static_path(
-                                self._avatar.spaceID, ray_start, ray_end,
-                                collision, 0.0, descriptor,
-                                recast_budget=
-                                self._soft_static_recast_budget,
-                                ignore_destructibles=True))
-                        if soft_status is True:
-                            continue
-                        if soft_status == 'deferred':
-                            # Budget exhaustion is not evidence of a wall. Keep
-                            # checking the remaining lanes so any directly
-                            # proved backing wall can still win this sample.
-                            deferred = True
-                            continue
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': slope}
             previous_y = next_y
             previous_distance = distance
         result = {'clear': True, 'collision': False,
                   'water': False, 'slope': maximum_slope}
-        if deferred:
-            result['deferred'] = True
         return result
 
     def _direction_world_receipt(self, position, travel_yaw, signed_speed,
@@ -5777,14 +5752,13 @@ class BattleRuntime(object):
 
     def _navigation_obstacle(self, start, end, half_width,
                              native_capability=None, trace=None):
-        """Exclude confirmed destructibles from planning, retaining hard geometry."""
+        """Ignore original destructible materials; retain native hard geometry."""
         dx = float(end[0]) - float(start[0])
         dz = float(end[2]) - float(start[2])
         length = math.sqrt(dx * dx + dz * dz)
         if length < 0.1:
             return False
         lateral_x, lateral_z = dz / length, -dx / length
-        saw_soft = False
         if trace is not None:
             trace.update(capability=native_capability,
                          segment=(tuple(start), tuple(end)),
@@ -5799,42 +5773,18 @@ class BattleRuntime(object):
                     float(end[0]) + lateral_x * offset,
                     float(end[1]) + height,
                     float(end[2]) + lateral_z * offset))
-                prepare = getattr(self._destructibles,
-                                  'prepare_horizontal_collision_filter', None)
-                collide = getattr(self._destructibles,
-                                  'collide_motion_segment', None)
-                native = self._runtime.bigworld.wg_collideSegment
-                if callable(prepare) and callable(collide):
-                    collision_filter = prepare(ray_start, ray_end)
-                    if trace is not None:
-                        collision_filter = world_collision._trace_collision_filter(
-                            collision_filter, trace)
-                    hit = collide(self._avatar.spaceID, ray_start, ray_end,
-                                  collision_filter, native)
-                else:
-                    hit = native(self._avatar.spaceID, ray_start, ray_end,
-                                 VEHICLE_SKIP_FLAGS)
+                # The initial traversal removes every original soft surface;
+                # no catalog registration or physical recast can postpone it.
+                hit = self._collide_navigation(ray_start, ray_end, trace)
                 if hit is not None:
                     if trace is not None:
                         trace.update(
                             ray_start=_xyz(ray_start), ray_end=_xyz(ray_end),
                             hit=_xyz(hit[0]), normal=_xyz(hit[1]))
-                    status = self._destructibles._catalog_soft_static_path(
-                        self._avatar.spaceID, ray_start, ray_end, hit,
-                        0.0, None, recast_budget=self._soft_static_recast_budget,
-                        ignore_destructibles=True, trace=trace)
-                    if status == 'deferred':
-                        # The graph cannot cache this edge yet. Do not repeat
-                        # the remaining native lanes against an empty budget;
-                        # a later frame resumes the same complete proof.
-                        return 'deferred'
-                    elif status not in (True, 'kinetic'):
-                        return True
-                    saw_soft = True
+                        trace.update(classification='hard', reason='native_hard_geometry')
+                    return True
         if trace is not None:
-            trace.update(classification='soft' if saw_soft else 'clear',
-                         reason=('proved_original_materials_only' if saw_soft else
-                                 'native_corridor_clear'))
+            trace.update(classification='clear', reason='native_corridor_clear')
         return False
 
     def _water_depth(self, point):

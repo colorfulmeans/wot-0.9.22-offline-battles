@@ -1,4 +1,4 @@
-"""All bot route planners ignore proved destructibles without destroying them."""
+"""Bot route probes skip native original destructibles without hydrating them."""
 import copy
 import math
 import sys
@@ -151,35 +151,38 @@ class NavigationSoftObstacleTests(unittest.TestCase):
 
                     with mock.patch.object(scene.bigworld, 'wg_collideSegment',
                                            side_effect=with_tree):
-                        self.assertEqual(not accepted or replacement or
-                                         backing is not None,
+                        self.assertEqual(replacement or backing is not None,
                                          self.blocked(scene, trace={}))
 
-    def test_unproved_catalog_contact_is_not_exempted(self):
+    def test_native_original_surface_does_not_require_catalog_identity_proof(self):
         with self.fixture.scene(registered=True) as scene:
             with mock.patch.object(sensor, '_planning_catalog_candidate_1513',
-                                   return_value=None):
-                self.assertTrue(self.blocked(scene, self.capability(scene)))
+                                   side_effect=AssertionError('planning used catalog proof')):
+                self.assertFalse(self.blocked(scene, self.capability(scene)))
 
-    def test_recast_budget_defers_then_retries_without_destruction(self):
+    def test_empty_contact_recast_budget_does_not_defer_native_navigation(self):
         with self.fixture.scene(registered=True) as scene:
             capability = self.capability(scene)
             scene.battle._soft_static_recast_budget = [0]
             before = len(scene.rays)
-            self.assertEqual('deferred', self.blocked(scene, capability))
-            self.assertEqual(1, len(scene.rays) - before)
+            self.assertFalse(self.blocked(scene, capability))
+            # Three corridor lanes at two heights need no per-object recasts.
+            self.assertEqual(6, len(scene.rays) - before)
+            self.assertEqual([0], scene.battle._soft_static_recast_budget)
             scene.battle._soft_static_recast_budget[0] = 24
             self.assertFalse(self.blocked(scene, capability))
+            self.assertEqual([24], scene.battle._soft_static_recast_budget)
 
-    def test_cold_candidate_registration_shares_existing_budget(self):
+    def test_cold_catalog_is_not_registered_by_route_queries(self):
         with self.fixture.scene() as scene:
             capability = self.capability(scene)
             scene.battle._soft_static_recast_budget = [0]
-            self.assertEqual('deferred', self.blocked(scene, capability))
+            self.assertFalse(self.blocked(scene, capability))
             self.assertNotIn((22, 0), getattr(sensor, 'g_offh_destr_instances', {}))
             scene.battle._soft_static_recast_budget[0] = 24
             self.assertFalse(self.blocked(scene, capability))
-            self.assertIn((22, 0), sensor.g_offh_destr_instances)
+            self.assertNotIn((22, 0), getattr(sensor, 'g_offh_destr_instances', {}))
+            scene.bigworld.wg_getDestructibleMatrix.assert_not_called()
 
     def test_trace_reuses_actual_ray_and_material_proof_without_more_queries(self):
         with self.fixture.scene(registered=True, health=120.0) as scene:
@@ -191,23 +194,62 @@ class NavigationSoftObstacleTests(unittest.TestCase):
             trace = {}
             self.assertFalse(self.blocked(scene, capability, trace))
             self.assertEqual(ordinary_queries, len(scene.rays) - before)
-            self.assertEqual('soft', trace['classification'])
-            self.assertEqual('proved_original_materials_only', trace['reason'])
+            self.assertEqual('clear', trace['classification'])
+            self.assertEqual('native_corridor_clear', trace['reason'])
             self.assertEqual(capability, trace['capability'])
-            self.assertEqual((22, 0, 73), trace['objects'][0]['identity'])
-            self.assertIn('bldaf_001_vhouse1.model', trace['objects'][0]['model'].lower())
-            self.assertIn('hit', trace)
-            self.assertIn('ray_start', trace)
-            self.assertLessEqual(len(trace['objects']), 4)
+            self.assertNotIn('objects', trace)
+            self.assertNotIn('hit', trace)
+            self.assertIn((73, 0, 0, 22, False),
+                          [tuple(row) for row in trace['native_surface_candidates']])
             self.assertLessEqual(len(trace.get('native_surface_candidates', ())), 16)
             scene.battle._soft_static_recast_budget[:] = [0]
             trace = {}
-            self.assertEqual('deferred', self.blocked(
-                scene, self.capability(scene, 20.0), trace))
-            self.assertEqual('deferred', trace['classification'])
-            self.assertEqual('recast_budget', trace['reason'])
+            self.assertFalse(self.blocked(scene, self.capability(scene, 20.0), trace))
+            self.assertEqual('clear', trace['classification'])
+            self.assertEqual('native_corridor_clear', trace['reason'])
 
-    def test_cached_path_survives_deferred_recheck_and_resumes_same_object(self):
+    def test_hard_trace_names_the_retained_native_hit_without_catalog_objects(self):
+        with self.fixture.scene(unknown=True) as scene:
+            trace = {}
+            self.assertTrue(self.blocked(scene, trace=trace))
+            self.assertEqual('hard', trace['classification'])
+            self.assertEqual('native_hard_geometry', trace['reason'])
+            self.assertIn('hit', trace)
+            self.assertIn('ray_start', trace)
+            self.assertNotIn('objects', trace)
+            self.assertIn((5, 0, 0, 22, True),
+                          [tuple(row) for row in trace['native_surface_candidates']])
+
+    def test_m46_report_chain_is_filtered_on_the_first_corridor_query_at_every_lane(self):
+        # Report 175318's M46 ray crosses ClayFence1/1/7. Repeat the controlled
+        # callback layers to prove query work is independent of prop count.
+        surfaces = [(73, 0, item, 31612) for item in (45, 43, 44)] * 12
+        for hard in (None, (107, 8, 57880, 1759484), (87, 0, 45, 31612)):
+            with self.subTest(hard=hard), self.fixture.scene() as scene:
+                def native(space, start, end, flags, keep=None):
+                    self.assertTrue(callable(keep))
+                    for surface in surfaces:
+                        if keep(*surface):
+                            return start + (end - start).scale(.1), approach_fixture._Vector(0, 0, -1)
+                    if hard is not None and keep(*hard):
+                        return start + (end - start).scale(.5), approach_fixture._Vector(0, 0, -1)
+                    return None
+
+                scene.battle._soft_static_recast_budget[:] = [0]
+                trace = {}
+                with mock.patch.object(sensor, '_destructible_catalog', None), \
+                        mock.patch.object(scene.bigworld, 'wg_collideSegment',
+                                          side_effect=native) as query:
+                    blocked = scene.battle._navigation_obstacle(
+                        (-330., -.18, -214.), (-326., -.18, -210.), 2.15, trace=trace)
+                self.assertEqual(hard is not None, blocked)
+                self.assertEqual(1 if hard is not None else 6, query.call_count)
+                self.assertEqual([0], scene.battle._soft_static_recast_budget)
+                self.assertLessEqual(len(trace['native_surface_candidates']), 16)
+                self.assertNotIn('objects', trace)
+                scene.bigworld.wg_getDestructibleMatrix.assert_not_called()
+
+    def test_cached_path_remains_usable_after_contact_budget_exhaustion(self):
         with self.fixture.scene(registered=True) as scene:
             capability = self.capability(scene)
             nav = TerrainNavigator(lambda *unused: 0.0,
@@ -234,15 +276,17 @@ class NavigationSoftObstacleTests(unittest.TestCase):
             original_index = state['index']
             original_target = state['last_target']
             nav.grid.invalidate_native_review()
-            for now in (13.0, 14.0, 27.0):
-                self.assertEqual(start, target(now, 0))
+            # Recheck while the admitted command is still current. Holding the
+            # same pose for many seconds would legitimately trigger recovery.
+            for now in (0.2, 0.3, 0.4):
+                self.assertEqual(goal, target(now, 0))
                 self.assertIs(path, nav.paths[key])
                 self.assertFalse(nav.searches)
-                self.assertEqual('pending', state['navigation_status'])
+                self.assertEqual('safe', state['navigation_status'])
                 self.assertEqual(original_index, state['index'])
                 self.assertEqual(original_target, state['last_target'])
                 self.assertEqual(0, state['macro_progress_replans'])
-            self.assertEqual(goal, target(27.1, 24))
+            self.assertEqual(goal, target(0.5, 24))
             self.assertIs(path, nav.paths[key])
             # Kinetic health is a physical contact detail and does not alter
             # the shared static road geometry or retire its cached path.
@@ -254,5 +298,5 @@ class NavigationSoftObstacleTests(unittest.TestCase):
                 return value
             with mock.patch.object(cache, 'getDescByFilename', side_effect=hardened):
                 nav.grid.invalidate_native_review()
-                self.assertEqual(goal, target(27.2, 24))
+                self.assertEqual(goal, target(0.6, 24))
                 self.assertIs(path, nav.paths.get(key))

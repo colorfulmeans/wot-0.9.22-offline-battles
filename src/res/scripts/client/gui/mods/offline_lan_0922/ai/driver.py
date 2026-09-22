@@ -107,10 +107,18 @@ def gun_yaw_limits(descriptor):
 
 
 def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
-		turn, throttle, recovery_mode, has_target=True):
+		turn, throttle, recovery_mode, has_target=True,
+		combat_mode=None, movement_intent=False):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn',
-			'pivot_recovery', 'forward_escape', 'contact_escape', 'friendly_yield'):
+			'pivot_recovery', 'forward_escape', 'contact_escape', 'friendly_yield',
+			'nav_wait', 'physical_hold'):
+		return float(turn), float(throttle), False
+	if movement_intent and combat_mode != 'engage':
+		# A target can remain visible while a TD retreats or follows a route.
+		# Laying its fixed gun must not stop that move or reverse its safe turn.
+		# Explicit engagement still owns its mature stop-and-aim behaviour;
+		# a tactical firing hold may aim once the planner has ended movement.
 		return float(turn), float(throttle), False
 	limited = not (float(minimum_yaw) <= -math.pi + 0.1 and
 	               float(maximum_yaw) >= math.pi - 0.1)

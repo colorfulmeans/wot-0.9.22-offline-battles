@@ -3950,80 +3950,58 @@ def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
 		allow_overlaps=allow_overlaps)
 
 
+def prepare_navigation_collision_filter(start, end):
+	"""Ignore original destructible materials in the FIRST planning query.
+
+	The pinned #1513 callback supplies (material, flags, item, chunk). Its
+	71--85 materials belong to original destructibles; 86 is an exclusive
+	sentinel and 87--100 are damaged replacements. This contract is sufficient
+	for route planning:
+	no catalog lookup, streamed identity, kinetic test or per-object recast
+	is needed. Native traversal keeps searching the entire segment for real
+	terrain, hard scenery and replacement geometry, even inside a prop.
+
+	Physical hull/suspension/destruction queries retain their existing exact
+	identity and kinetic rules. This callback cannot authorize crushing.
+	"""
+	def keep_surface(*surface):
+		if (len(surface) != 4 or
+				not all(type(value) in _INTEGER_TYPES for value in surface)):
+			return True
+		if _DESTRUCTIBLE_MAT_KIND_MIN_1513 <= surface[0] < _STRUCTURE_MAT_KIND_MAX_1513:
+			return False
+		return True
+	return keep_surface
+
+
 def _planning_clear_destructible_surfaces_1513(spaceID, segment_start,
 		segment_end, collision, recast_budget=None, trace=None,
 		query_name='native.destructible.ray'):
-	"""Remove proved original prop skins from a read-only planning query.
+	"""Compatibility requery for a caller which already took an unfiltered ray.
 
-	Route geometry is shared by all bots: mass, crew, speed and gear do not
-	decide whether an original destructible is a permanent road obstruction.
-	Overlapping catalog boxes name a SET of exact, live-validated items, not
-	the closest hit. Filtering that set and recasting the full segment keeps
-	unknown geometry, backing walls and destroyed replacement materials solid.
-	The later physical hull sweep still owns actual crushing and its energy.
+	Runtime navigation installs the planning filter on its first native ray.
+	Other read-only callers get one full-segment query, independent of the
+	number of props and of the physical recast budget. Never identify the
+	nearest hit from callback ordering or skip a geometric interval.
 	"""
 	import BigWorld
-	current_hit = collision
-	excluded_keys = set()
-	# Recasts must retain the accepted/broken ledger used by the first native
-	# query.  Otherwise filtering a live prop can resurrect an already felled
-	# tree's delayed skin as an unknown hard wall (also in ground columns).
-	accepted_filter = prepare_horizontal_collision_filter(segment_start, segment_end)
+	remaining = None
+	if collision is not None:
+		remaining = observed_ray(query_name, BigWorld.wg_collideSegment,
+			spaceID, segment_start, segment_end, VEHICLE_SKIP_FLAGS,
+			prepare_navigation_collision_filter(segment_start, segment_end))
 	if trace is not None:
-		trace['objects'] = []
-	def finish(result, classification, reason):
-		if trace is not None:
-			trace['classification'] = classification
-			trace['reason'] = reason
-			if current_hit is not None:
-				try:
-					trace['hit'] = tuple(float(getattr(current_hit[0], axis))
-						for axis in ('x', 'y', 'z'))
-					trace['normal'] = tuple(float(getattr(current_hit[1], axis))
-						for axis in ('x', 'y', 'z'))
-				except (AttributeError, IndexError, TypeError, ValueError):
-					pass
-		return result
-	for unused in range(_SOFT_STATIC_MAX_SKIPS):
-		if current_hit is None:
-			return finish(None, 'soft', 'proved_original_materials_only')
-		candidates = _planning_catalog_candidate_1513(
-			spaceID, current_hit[0], segment_start, segment_end, recast_budget,
-			excluded_keys=excluded_keys, allow_overlaps=True)
-		if candidates == 'deferred':
-			return finish('deferred', 'deferred', 'identity_proof_deferred')
-		if not candidates:
-			return finish(current_hit, 'unknown',
-				'unidentified_backing_surface' if excluded_keys else
-				'contact_identity_unproved')
-		previous_count = len(excluded_keys)
-		for candidate in candidates:
-			if trace is not None and len(trace['objects']) < 16:
-				trace['objects'].append({
-					'identity': tuple(candidate[:3]), 'model': candidate[3],
-					'kind': candidate[4], 'scale': candidate[5]})
-			# Some buildings only lose their roof/walls; their permanent
-			# replacement base must remain a route obstruction.
-			if (candidate[4] not in ('fragile', 'structure', 'falling') or
-					_catalog_retains_collision_1513(candidate)):
-				continue
-			excluded_keys.add(candidate[:3])
-		if len(excluded_keys) == previous_count:
-			return finish(current_hit, 'hard', 'retained_destructible_collision')
-		if recast_budget is not None:
-			if not recast_budget or int(recast_budget[0]) <= 0:
-				return finish('deferred', 'deferred', 'recast_budget')
-			recast_budget[0] = int(recast_budget[0]) - 1
-		original_filter = _soft_static_original_filter_1513(excluded_keys)
-		def keep_surface(*surface):
-			return ((accepted_filter is None or accepted_filter(*surface)) and
-				original_filter(*surface))
-		current_hit = observed_ray(
-			query_name, BigWorld.wg_collideSegment,
-			spaceID, segment_start, segment_end, VEHICLE_SKIP_FLAGS, keep_surface)
-	if current_hit is None:
-		return finish(None, 'soft', 'proved_original_materials_only')
-	return finish(current_hit, 'unknown', 'surface_layer_limit')
+		trace.update(classification='clear' if remaining is None else 'hard',
+			reason='native_corridor_clear' if remaining is None else 'native_hard_geometry')
+		if remaining is not None:
+			try:
+				trace['hit'] = tuple(float(getattr(remaining[0], axis))
+					for axis in ('x', 'y', 'z'))
+				trace['normal'] = tuple(float(getattr(remaining[1], axis))
+					for axis in ('x', 'y', 'z'))
+			except (AttributeError, IndexError, TypeError, ValueError):
+				pass
+	return remaining
 
 
 def _soft_static_original_filter_1513(excluded_keys):
@@ -4049,16 +4027,14 @@ def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
 	filter each exact crushable original material, then test the real ground
 	below. Reachable decks, unproved roofs and non-crushable geometry retain
 	the original result; the later hull contact still owns destruction.
-	With ``ignore_destructibles`` the planner instead removes every confirmed
-	original prop roof, including low roofs, to sample the true terrain below.
+	With ``ignore_destructibles`` the planner removes original destructible
+	materials, including low roofs, without requiring a catalog or identity.
 	"""
-	if _destructible_catalog is None:
-		return collision
 	if ignore_destructibles:
 		return _planning_clear_destructible_surfaces_1513(
 			spaceID, segment_start, segment_end, collision, recast_budget,
 			query_name='native.destructible.planning_ground')
-	if td is None:
+	if _destructible_catalog is None or td is None:
 		return collision
 	import BigWorld
 	import Math
@@ -4116,7 +4092,7 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	if ignore_destructibles and not require_pending_first:
 		remaining = _planning_clear_destructible_surfaces_1513(
 			spaceID, segment_start, segment_end, collision, recast_budget, trace)
-		return 'deferred' if remaining == 'deferred' else remaining is None
+		return remaining is None
 	# A planning consumer can supply frozen stock kinetic inputs. Identity and
 	# recast evidence still belong to this exact native ray, not to a model-wide
 	# exemption. Diagnostics only copy values already obtained by these queries.

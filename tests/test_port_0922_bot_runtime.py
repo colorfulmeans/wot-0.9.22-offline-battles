@@ -9488,6 +9488,46 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(runtime.states[11]['hull_aiming'])
         self.assertEqual(0, state['fire_seq'])
 
+    def test_reported_retreat_turn_survives_visible_limited_gun_target(self):
+        for yaw, mode in ((-.7429965, 'withdraw'),
+                          (-1.1123639, 'low_health_retreat'),
+                          (-.3324339, 'low_health_retreat')):
+            with self.subTest(yaw=yaw, mode=mode):
+                # The report's planner wanted turn=+1 and throttle=0, while
+                # the visible target lay left of the SU-122-44's narrow arc.
+                command = {
+                    'target_yaw': 1.0, 'throttle': 0.0, 'turn': 1.0,
+                    'brake': True, 'shell_index': 0, 'fire_allowed': True,
+                    'target_id': self.module.HUMAN_TARGET_ID_BASE + 2,
+                    'fire_range': 500.0, 'combat_mode': mode,
+                    'aim_position': (-100.0, 0.5, 0.0),
+                    'face_position': (-100.0, 0.5, 0.0),
+                    'move_position': (100.0, 0.0, 0.0),
+                    'recovery_mode': 'drive', 'movement_intent': True,
+                }
+                runtime = self.module.BotRuntime(
+                    1, descriptor_resolver=lambda unused: _combat_descriptor(
+                        turret_yaw_limits=(-0.1, 0.1)),
+                    adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+                    direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+                    visibility_probe=lambda *unused: True,
+                    ground_probe=lambda *unused: 0.0,
+                    physics_ground_probe=lambda *unused: 0.0,
+                    spawn_resolver=_spawn_resolver, baked_graph=_graph())
+                runtime.battle_start(self.start)
+                runtime.states[11].update(yaw=yaw, speed=0.0, grounded_once=True)
+
+                state = bot_state_rows.bots(runtime.update(.04, 1.0, players=[
+                    {'id': 2, 'team': 1, 'alive': True,
+                     'x': -100.0, 'y': 0.5, 'z': 0.0,
+                     'effective_params': _effective_params_snapshot()}
+                ])[0])[0]
+
+                self.assertEqual(1, state['rotation_dir'])
+                self.assertGreater(runtime.states[11]['yaw'], yaw)
+                self.assertFalse(runtime.states[11]['hull_aiming'])
+                self.assertEqual(0, state['fire_seq'])
+
     def test_no_target_gun_keeps_safe_bearing_and_rests_horizontally(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
