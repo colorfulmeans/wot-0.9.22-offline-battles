@@ -132,7 +132,7 @@ class BotAdapter(object):
             heading = yaw + (math.pi if sign < 0.0 else 0.0)
             if not self.driver._clear(
                     direction_clear, heading,
-                    recovery_probe_distance(half_length)):
+                    recovery_probe_distance(half_length), drive_direction=sign):
                 continue
             # ``_reverse_blocked_by_vehicle`` owns the exact longitudinal OBB
             # sweep. Supplying the opposite hull heading makes its reverse

@@ -437,6 +437,33 @@ def descriptor_contact_params(td):
 		'terrainResist': tuple(physics.get('terrainResistance', _DEFAULTS['terrainResist']))}
 
 
+def destructible_drive_speed_cap(descriptor, physics, speed,
+		travel_descriptor=None):
+	'''Read the existing powered-contact cap without changing actual motion.
+
+	The mounted travel gear remains available to push an exact soft contact in
+	Siege mode. Planning and contact use this same directional eligibility;
+	neither the other direction nor another vehicle supplies a lower limit.
+	'''
+	reverse = float(speed) < 0.0
+	try:
+		value = float(physics['speedBwd' if reverse else 'speedFwd'])
+		if travel_descriptor is None:
+			travel_descriptor = _value(descriptor, 'defaultVehicleDescr')
+		if travel_descriptor is not None and value > 0.0:
+			travel = float(_value(travel_descriptor, 'physics')[
+				'speedLimits'][1 if reverse else 0])
+			if math.isnan(travel) or math.isinf(travel) or travel < 0.0:
+				raise ValueError('invalid travel limit')
+			value = max(value, travel)
+	except (AttributeError, KeyError, IndexError, TypeError,
+			ValueError, OverflowError):
+		raise RuntimeError('destructible drive speed cap is unavailable')
+	if math.isnan(value) or math.isinf(value) or value < 0.0:
+		raise RuntimeError('destructible drive speed cap is invalid')
+	return -value if reverse else value
+
+
 @observed('physics.derive_params')
 def derive_params(td, factors=None):
 	'''Real per-vehicle parameter set from a VehicleDescr. Every consumer

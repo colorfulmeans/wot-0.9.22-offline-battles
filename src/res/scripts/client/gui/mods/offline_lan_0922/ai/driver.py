@@ -309,13 +309,30 @@ class LocalDriver(object):
 			return neighbour.get('position') or neighbour.get('pos')
 		return neighbour
 
-	def _clear(self, direction_clear, yaw, maximum_distance=None):
+	def _clear(self, direction_clear, yaw, maximum_distance=None,
+			drive_direction=1.0):
 		"""Ask one probe about a heading, optionally over a bounded distance.
 
 		A recovery manoeuvre travels a hull length, not the fifteen to twenty
 		metre travel horizon the ordinary drive candidates are ranked over.
 		Probes that predate the bounded form keep the unbounded answer.
 		"""
+		# A candidate behind the current hull may be a forward route after a
+		# pivot. Only an explicit backing command may use reverse-drive limits.
+		# Inspect Python callbacks before calling; a TypeError in their body
+		# must not execute a native query twice under a guessed legacy arity.
+		target = getattr(direction_clear, 'im_func',
+			getattr(direction_clear, '__func__', direction_clear))
+		code = getattr(target, 'func_code', getattr(target, '__code__', None))
+		if code is not None:
+			bound = getattr(direction_clear, 'im_self',
+				getattr(direction_clear, '__self__', None))
+			argument_count = code.co_argcount - (1 if bound is not None else 0)
+			if argument_count >= 3:
+				try:
+					return bool(direction_clear(yaw, maximum_distance, drive_direction))
+				except Exception:
+					return False
 		if maximum_distance is not None and self._probe_takes_distance:
 			try:
 				return bool(direction_clear(yaw, maximum_distance))
@@ -735,8 +752,13 @@ class LocalDriver(object):
 			# map and leaves an in-place turn as the only recovery in exactly
 			# the places where a hull cannot turn.
 			escape_distance = recovery_probe_distance(own_half_length)
-			reverse_clear = self._clear(
-				direction_clear, float(yaw) + math.pi, escape_distance)
+			# The full motion sweep can disprove a corridor that these sparse
+			# planning rays still admit. Recovery must consume that same finite
+			# failure memory as the forward fan before repeating the manoeuvre.
+			reverse_clear = (
+				self._failure_penalty(state, float(yaw) + math.pi) <= 0.0 and
+				self._clear(direction_clear, float(yaw) + math.pi,
+					escape_distance, drive_direction=-1.0))
 			reverse_blocker = None
 			if reverse_clear:
 				reverse_blocker = self._reverse_blocked_by_vehicle(
@@ -753,7 +775,8 @@ class LocalDriver(object):
 						# closes the rear. Use the same bounded recovery drive
 						# forwards only if terrain and the complete hull sweep
 						# are clear; rotation must not create space for free.
-						if (self._clear(direction_clear, float(yaw), escape_distance) and
+						if (self._failure_penalty(state, float(yaw)) <= 0.0 and
+								self._clear(direction_clear, float(yaw), escape_distance) and
 								self._reverse_blocked_by_vehicle(
 									position, float(yaw)+math.pi, neighbours,
 									own_half_length, own_half_width) is None):
@@ -791,11 +814,13 @@ class LocalDriver(object):
 			for fraction in RECOVERY_SWEEP_FRACTIONS:
 				if ((pose_clear is not None and not pose_clear(
 						float(yaw) + direction * RECOVERY_YAW_OFFSET * fraction)) or
+						self._failure_penalty(state, float(yaw) + math.pi +
+						direction * RECOVERY_YAW_OFFSET * fraction) > 0.0 or
 						not self._clear(
 						direction_clear,
 						float(yaw) + math.pi +
 						direction * RECOVERY_YAW_OFFSET * fraction,
-						escape_distance)):
+						escape_distance, drive_direction=-1.0)):
 					recovery_turn = 0.0
 					recovery_target = float(yaw)
 					break

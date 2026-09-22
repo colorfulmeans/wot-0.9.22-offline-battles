@@ -4005,7 +4005,7 @@ def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
 def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 		collision, vel, td, recast_budget=None,
 		require_pending_first=False, allow_kinetic_first=False,
-		kinetic_speed=None, planning_crushable=None):
+		kinetic_speed=None, planning_crushable=None, trace=None):
 	"""Classify a far static ray without destroying anything.
 
 	A bot direction probe may look 15--20 metres ahead.  It may regard a
@@ -4017,22 +4017,37 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	native recast budget instead returns ``'deferred'`` so the caller can avoid
 	caching a false hard wall.
 	"""
-	# A shared graph can supply the intersection of its vehicles' exact stock
-	# kinetic gates. It still shares this one identity proof and native recast;
-	# the callback never authorizes destruction or skips a backing surface.
+	# A planning consumer can supply frozen stock kinetic inputs. Identity and
+	# recast evidence still belong to this exact native ray, not to a model-wide
+	# exemption. Diagnostics only copy values already obtained by these queries.
+	def finish(result, classification, reason, hit=None):
+		if trace is not None:
+			trace['classification'] = classification
+			trace['reason'] = reason
+			if hit is not None:
+				try:
+					trace['hit'] = tuple(float(getattr(hit[0], axis))
+						for axis in ('x', 'y', 'z'))
+					trace['normal'] = tuple(float(getattr(hit[1], axis))
+						for axis in ('x', 'y', 'z'))
+				except (AttributeError, IndexError, TypeError, ValueError):
+					pass
+		return result
+	if trace is not None:
+		trace['objects'] = []
 	if (_destructible_catalog is None or collision is None or
 			(td is None and not callable(planning_crushable))):
-		return False
+		return finish(False, 'unknown', 'catalog_or_capability_unavailable', collision)
 	import BigWorld
 	import Math
 	try:
 		direction = segment_end - segment_start
 		remaining = direction.length
 		if remaining <= 1.0e-6:
-			return False
+			return finish(False, 'unknown', 'invalid_segment', collision)
 		direction.normalise()
 	except (AttributeError, TypeError, ValueError):
-		return False
+		return finish(False, 'unknown', 'invalid_segment', collision)
 
 	current_start = segment_start
 	current_hit = collision
@@ -4044,15 +4059,23 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 		try:
 			hit_point = current_hit[0]
 		except (TypeError, IndexError):
-			return 'pending_hard' if pending_contact else False
+			return finish('pending_hard' if pending_contact else False,
+				'unknown', 'invalid_native_hit')
 		candidate = _planning_catalog_candidate_1513(
 			spaceID, hit_point, current_start, segment_end, recast_budget,
 			prefer_destroyed=(require_pending_first and candidate_index == 0),
 			excluded_keys=excluded_keys)
 		if candidate == 'deferred':
-			return 'pending_hard' if pending_contact else 'deferred'
+			return finish('pending_hard' if pending_contact else 'deferred',
+				'deferred', 'identity_proof_deferred', current_hit)
 		if candidate is None:
-			return 'pending_hard' if pending_contact else False
+			return finish('pending_hard' if pending_contact else False,
+				'unknown', ('unidentified_backing_surface' if excluded_keys else
+				'contact_identity_unproved'), current_hit)
+		if trace is not None:
+			trace['objects'].append({
+				'identity': tuple(candidate[:3]), 'model': candidate[3],
+				'kind': candidate[4], 'scale': candidate[5]})
 		# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True as soon as the
 		# chunk controller reports the item broken, whatever the vehicle speed and
 		# whatever the hide callback still draws.  A broken skin therefore never
@@ -4083,7 +4106,7 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 				kinetic_contact = True
 				current_crushable = True
 			else:
-				return False
+				return finish(False, 'hard', 'stock_kinetic_reject', current_hit)
 		elif (allow_kinetic_first and
 				kinetic_speed is not None and not current_crushable and
 				_stock_crushable_1513(
@@ -4091,7 +4114,8 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			kinetic_contact = True
 			current_crushable = True
 		if not current_crushable:
-			return 'pending_hard' if pending_contact else False
+			return finish('pending_hard' if pending_contact else False,
+				'hard', 'stock_kinetic_reject', current_hit)
 		# A box is identity evidence, not proof that its interior is empty.
 		# Exact native keys are unique across the space, so one filtered query
 		# can inspect BOTH the interior and the rest of the original segment.
@@ -4099,15 +4123,18 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 		excluded_keys.add(candidate[:3])
 		if recast_budget is not None:
 			if not recast_budget or int(recast_budget[0]) <= 0:
-				return 'pending_hard' if pending_contact else 'deferred'
+				return finish('pending_hard' if pending_contact else 'deferred',
+					'deferred', 'recast_budget', current_hit)
 			recast_budget[0] = int(recast_budget[0]) - 1
 		current_hit = observed_ray(
 			'native.destructible.ray', BigWorld.wg_collideSegment,
 			spaceID, current_start, segment_end, VEHICLE_SKIP_FLAGS,
 			_soft_static_original_filter_1513(excluded_keys))
 		if current_hit is None:
-			return 'kinetic' if kinetic_contact else True
-	return 'pending_hard' if pending_contact else False
+			return finish('kinetic' if kinetic_contact else True,
+				'soft', 'proved_original_materials_only')
+	return finish('pending_hard' if pending_contact else False,
+		'unknown', 'surface_layer_limit', current_hit)
 
 
 def _motion_travel_reach(vel, dt):

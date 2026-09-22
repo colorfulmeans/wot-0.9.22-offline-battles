@@ -17744,7 +17744,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         class Navigator(object):
             @staticmethod
-            def observe_direct_target(*unused):
+            def observe_direct_target(*unused, **unused_keywords):
                 return None
 
             grid = Grid()
@@ -17752,7 +17752,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             def next_target(self, bot_id, position, goal, path_key, now,
                             anchor, avoid, lookahead_distance=None,
-                            movement_intent=True):
+                            movement_intent=True, native_capability=None):
                 calls.append((bot_id, goal, path_key, anchor))
                 # The navigation result is deliberately unrelated to the
                 # macro goal. A post-A* translation would change this tuple.
@@ -18268,7 +18268,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         class Navigator(object):
             @staticmethod
-            def observe_direct_target(*unused):
+            def observe_direct_target(*unused, **unused_keywords):
                 return None
 
             def __init__(self):
@@ -18277,7 +18277,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             def next_target(self, bot_id, position, goal, path_key, now,
                             anchor, avoid, lookahead_distance=None,
-                            movement_intent=True):
+                            movement_intent=True, native_capability=None):
                 calls.append((goal, path_key))
                 self.bot_states[bot_id] = {
                     'navigation_status': 'blocked',
@@ -18774,7 +18774,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         class Navigator(object):
             @staticmethod
-            def observe_direct_target(*unused):
+            def observe_direct_target(*unused, **unused_keywords):
                 return None
 
             def __init__(self):
@@ -18784,7 +18784,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             def next_target(self, bot_id, position, goal, path_key, now,
                             anchor, avoid, lookahead_distance=None,
-                            movement_intent=True):
+                            movement_intent=True, native_capability=None):
                 calls.append(('planned', bot_id, path_key))
                 if self.grid.allow_direct and not self.penalized:
                     return tuple(goal)
@@ -18853,12 +18853,12 @@ class BotRuntimeTests(unittest.TestCase):
 
         class Navigator(object):
             @staticmethod
-            def observe_direct_target(*unused):
+            def observe_direct_target(*unused, **unused_keywords):
                 return None
 
             def next_target(self, bot_id, position, goal, path_key, now,
                             anchor, avoid, lookahead_distance=None,
-                            movement_intent=True):
+                            movement_intent=True, native_capability=None):
                 calls.append(path_key)
                 return goal
 

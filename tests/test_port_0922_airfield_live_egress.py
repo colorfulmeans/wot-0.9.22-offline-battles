@@ -190,8 +190,8 @@ class AirfieldLiveEgressTests(unittest.TestCase):
                          for slot, bot in enumerate((18, 27))]})
             nav = runtime.navigator
             real_path = nav._path
-            def delayed_path(key, start, goal, now, avoid):
-                result = real_path(key, start, goal, now, avoid)
+            def delayed_path(key, start, goal, now, avoid, native_capability=None):
+                result = real_path(key, start, goal, now, avoid, native_capability)
                 # A genuine A* result eventually takes over. Reproduce the
                 # report's 28.1-second wait, with synthetic pending/failure
                 # alternation to exercise retention across both lifecycles.

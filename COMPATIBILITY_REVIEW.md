@@ -5963,3 +5963,99 @@ with about eight in the preceding report. Different rosters and scenes prevent
 treating that as a controlled benchmark. It does not support a global budget
 starvation explanation: completed searches increase and the pending count
 falls. The remaining native driving and frame-pacing boundary is unchanged.
+
+### September 22 Airfield follow-up: reached slope points and obstacle ownership
+
+Report `20260922-133334-f5eb61b94d18` identifies the installed and bundled
+`colorfulmeans-35688896773-1` payload. It contains one Airfield round and
+854 stall-triggered motion samples. Twenty-five samples record successful
+crushing and twelve record hard contact; none records a support rollback,
+pose rollback or baked motion veto. These samples do not measure the fleet's
+overall stop rate. Multiple vehicles travel hundreds of metres, while several
+others remain local or return after initially leaving.
+
+E25 (25) repeatedly receives a point it has already reached. At the recorded
+position `(-142.690, -13.463, -125.663)`, its next issued point
+`(-142, -13.353, -126)` is only 0.768 metres away. The following baked edge is
+dry and climbs at a grade of about 0.171. The pending-prefix follower still
+applied an unreached-corner alignment check to this consumed point. The
+complete-path follower already handles that arrival correctly. Using its
+adjacent-edge arrival rule for pending prefixes allows the next checked leg;
+unfinished searches must still not grant a shallow-water ford or skip an
+unreached climbing turn.
+
+Panther II (7) and M36 (9) have a separate pattern: repeated failed searches
+and the temporary-loop hold, with the held target equal to the hull position.
+Their requested target and the E25 target remain connected to the recorded
+positions in the actual baked graph, including its existing shoreline
+hazards. Real A* on that graph finds paths within the normal expansion limit
+when no additional native obstruction is injected. A disconnected baked
+island is therefore not the explanation; live obstacle classification matters.
+
+The shared stock-crushability intersection can turn a vehicle's own soft
+obstacle into a navigation wall. Controlled real-callback fixtures reproduce
+both a forward-capable vehicle rejected by its lower reverse cap and a heavier
+vehicle rejected after a lighter vehicle joins the room. The fixture material
+health and speed values are explicit controls, not measurements of an object
+in this report. The report alone does not identify each failed native edge.
+
+Native planning now receives the consuming vehicle's immutable mass and
+directional powered-contact cap. The existing mounted travel-mode cap is
+shared with the local direction probe and final contact gate; actual impact,
+health, scale and destruction still use the existing stock laws. Native edge,
+segment and route receipts carry that capability, while baked topology and
+ground samples remain shared. Resumable A* captures its capability rather than
+reading a mutable current-vehicle field. A lighter teammate cannot invalidate
+the heavier vehicle's permission, and a heavier teammate cannot grant a light
+vehicle permission it lacks. Unidentified surfaces and solid geometry behind
+a crushable object still block travel; deferred proof remains deferred.
+
+The existing room-wide search credits, native recast budget and bounded
+receipt caches still limit work. Distinct kinetic capabilities can require
+additional cold proofs, so these bounds do not establish unchanged native
+search latency or frame rate with a full room. Capability changes also retire
+the affected vehicle's old private work when its new request takes the direct
+path; a new round invalidates the previous world's native receipts even when
+the map and vehicle capabilities are unchanged.
+
+The existing stalled-motion diagnostics retain the last native refusal from
+the actual search query, including its edge, capability, available catalog
+identity/model and classification reason. Recording this evidence performs no
+additional native collision queries. It is needed to distinguish a stock
+kinetic rejection, unidentified backing geometry and unfinished proof in a
+subsequent native report.
+
+Tiger (17) and Lorraine (6) also repeat a recovery direction that final motion
+has rejected as hard. The realised-motion feedback records the failed yaw,
+but the driver's recovery branches can select it again after a longer probe
+reports clear. This is a mismatch between final contact evidence and recovery
+selection; the report does not identify every hard native surface as terrain.
+
+Recovery now consults the existing finite failed-heading memory before
+straight reverse, forward escape and swept angled reverse. A translation
+failure does not itself forbid an in-place pivot, and all existing hull,
+terrain and vehicle checks still apply. A fixed analytic alley reproduces the
+low-surface planner/final-sweep disagreement through the real world-collision,
+runtime feedback, adapter, driver and copied-physics loop. At five and ten
+control frames per second, the old driver stays at its initial position for
+45 seconds and repeats 75 and 146 hard contacts. The repaired driver receives
+one initial hard contact, leaves through the open front and reaches the goal.
+A closed front, expired failure memory and failed angled recovery also have
+regressions. This analytic scene proves the feedback contract, not the exact
+native BSP of the reported Airfield slope.
+
+Final review also reproduced a directional planning mismatch: a normal route
+candidate behind the current hull used the reverse kinetic cap even though
+the driver first pivots and then drives forward. Local probes now receive
+explicit drive intent. Forward candidates retain the forward cap at every
+heading; straight/angled recovery and contact escapes request their actual
+drive direction. Per-decision probe receipts include that direction. The
+real stock-material callback regression accepts the forward route through a
+crushable house and still rejects backing through it when reverse capability
+is insufficient. Three-argument probe failures execute only once.
+
+The reached-waypoint regression uses both recorded E25 stopping poses, the
+actual Airfield A* graph and reported E25 mobility inputs. The old pending
+follower keeps the consumed point; the repaired follower proceeds up the next
+dry leg with actual copied-physics motion. These controlled regressions do
+not establish full-fleet native gameplay or frame-pacing acceptance.

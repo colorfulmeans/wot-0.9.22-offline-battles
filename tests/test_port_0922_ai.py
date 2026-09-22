@@ -1708,11 +1708,13 @@ class BotAiPortTests(unittest.TestCase):
         yaw = [0.0]
         planned = navigator._path
 
-        def shore_search(path_key, start, target, now, avoid_points):
+        def shore_search(path_key, start, target, now, avoid_points,
+                         native_capability=None):
             # A search near the shore fails after A* has selected the ford.
             if position[0] >= 17.0:
                 return (('shore-search-failed',), ())
-            return planned(path_key, start, target, now, avoid_points)
+            return planned(path_key, start, target, now, avoid_points,
+                           native_capability)
 
         def direction_clear(sample_yaw):
             # Same one-cell corridor rule as the runtime planner gate.

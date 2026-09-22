@@ -1845,11 +1845,11 @@ class BotRuntime(object):
     def _adapt_direction_probe(probe):
         """Adapt injected legacy test probes once, never after side effects.
 
-        The pinned production callback has six arguments. Catching TypeError
+        The pinned production callback has seven arguments. Catching TypeError
         around every invocation used to mistake an exception from inside that
         callback for an old arity and execute it again, which is unsafe for a
         native collision seam. Python functions expose an exact code object;
-        opaque/native callables must honor the current six-argument contract.
+        opaque/native callables must honor the current seven-argument contract.
         """
         target = getattr(
             probe, 'im_func', getattr(probe, '__func__', probe))
@@ -1862,25 +1862,33 @@ class BotRuntime(object):
         if bound_self is not None:
             argument_count -= 1
         has_varargs = bool(code.co_flags & 0x04)
-        if has_varargs or argument_count >= 6:
+        if has_varargs or argument_count >= 7:
             return probe
+        if argument_count == 6:
+            return lambda position, yaw, speed, descriptor, maximum_distance, \
+                    corridor_half_width, unused_capability: probe(
+                        position, yaw, speed, descriptor, maximum_distance,
+                        corridor_half_width)
         if argument_count == 5:
             return lambda position, yaw, speed, descriptor, maximum_distance, \
-                    unused_corridor_half_width: probe(
+                    unused_corridor_half_width, unused_capability: probe(
                         position, yaw, speed, descriptor, maximum_distance)
         if argument_count == 4:
             return lambda position, yaw, speed, descriptor, \
-                    unused_maximum_distance, unused_corridor_half_width: probe(
+                    unused_maximum_distance, unused_corridor_half_width, \
+                    unused_capability: probe(
                         position, yaw, speed, descriptor)
         if argument_count == 3:
             return lambda position, yaw, speed, unused_descriptor, \
-                    unused_maximum_distance, unused_corridor_half_width: probe(
+                    unused_maximum_distance, unused_corridor_half_width, \
+                    unused_capability: probe(
                         position, yaw, speed)
         if argument_count == 2:
             return lambda position, yaw, unused_speed, unused_descriptor, \
-                    unused_maximum_distance, unused_corridor_half_width: probe(
+                    unused_maximum_distance, unused_corridor_half_width, \
+                    unused_capability: probe(
                         position, yaw)
-        raise ValueError('direction probe must accept 2, 3, 4, 5 or 6 arguments')
+        raise ValueError('direction probe must accept 2 through 7 arguments')
 
     @staticmethod
     def _adapt_world_receipt_probe(probe):
@@ -2098,8 +2106,7 @@ class BotRuntime(object):
         self._descriptor_pairs = {}
         self._descriptors = {}
         self._navigation_crush_profiles_ready = False
-        self._navigation_crush_profile_signature = None
-        self._navigation_crush_profile_cache = None
+        self._navigation_crush_capabilities = {}
         self._gun_yaw_limits = {}
         self._gun_states = {}
         self._ammo_states = {}
@@ -2423,14 +2430,15 @@ class BotRuntime(object):
                 corridor_half_width))
 
     def _probe_direction(self, position, yaw, speed=0.0, descriptor=None,
-                         maximum_distance=None, corridor_half_width=None):
+                         maximum_distance=None, corridor_half_width=None,
+                         native_capability=None):
         """Return one canonical direction sample for planning and physics."""
         self._probe_totals[4] += 1
         probe_started = self._probe_started()
         try:
             result = self.direction_probe(
                 position, yaw, speed, descriptor, maximum_distance,
-                corridor_half_width)
+                corridor_half_width, native_capability)
         except Exception:
             return {'clear': False, 'collision': True,
                     'water': False, 'slope': 0.0, 'probe_failed': True}
@@ -2600,7 +2608,8 @@ class BotRuntime(object):
             # velocity or integration state is advanced here.
             self._update_slope_pose(state, allow_ungrounded=True)
             direction = self._probe_direction(
-                position, yaw, 0.0, descriptor)
+                position, yaw, 0.0, descriptor,
+                native_capability=self.navigation_crush_capability(state['id']))
             if (not isinstance(direction, dict) or
                     not self._probe_is_clear(direction) or
                     direction.get('deferred', False) or
@@ -2750,62 +2759,70 @@ class BotRuntime(object):
         self._suspension_params[bot_id] = params
         return params
 
-    def navigation_crush_profiles(self):
-        """Return the common graph's complete, frozen stock kinetic inputs."""
-        return self._navigation_crush_profile_cache
+    def navigation_crush_capability(self, bot_id, direction=1.0):
+        """Return this consumer's immutable, directional stock kinetic inputs."""
+        values = self._navigation_crush_capabilities.get(int(bot_id))
+        return values[1 if float(direction) < 0.0 else 0] if values else None
 
-    def _refresh_navigation_crush_profiles(self):
-        """Publish both modes together at manifest or descriptor boundaries.
+    @staticmethod
+    def _capability_probe(probe, native_capability):
+        """Bind one immutable consumer to an existing synchronous grid probe."""
+        if native_capability is None or not callable(probe):
+            return probe
+        def scoped(*args):
+            return probe(*args, **{'native_capability': native_capability})
+        return scoped
 
-        A shared undirected graph must not inherit one heavy/fast Bot's
-        clearance. Every distinct mass and directional speed cap participates;
-        the slowest mode may deliberately keep an obstacle solid for everyone.
-        These are planning caps, not a claim that impact speed is already met.
+    def _refresh_navigation_crush_profiles(self, bot_id=None):
+        """Snapshot changed consumers without clearing anyone else's routes.
+
+        A* owns the numeric tuple captured when it starts. A later descriptor
+        or mode change selects a new capability scope for this Bot; it cannot
+        mutate an in-flight proof or turn a teammate's soft contact into stone.
         """
-        profiles = None
-        signature = (self.round_id, None)
-        pairs = self._descriptor_pairs
-        if (self._navigation_crush_profiles_ready and pairs and
-                set(pairs) == set(self.states)):
-            try:
-                entries = []
-                unique = {}
-                for bot_id, pair in sorted(pairs.items()):
-                    if len(pair) != 2 or pair[0] is None:
-                        raise ValueError('incomplete Bot descriptor pair')
-                    if (pair[1] is None and
-                            (siege_mechanics.params(pair[0]) is not None or
-                             _value(pair[0], 'hasSiegeMode', False))):
-                        raise ValueError('missing Bot Siege descriptor')
-                    for descriptor in pair:
-                        if descriptor is None:
-                            continue
-                        # Do not use derive_params defaults as proof for a
-                        # descriptor whose exact kinetic fields are absent.
-                        physics = _value(descriptor, 'physics')
-                        mass = float(physics['weight'])
-                        forward = abs(float(physics['speedLimits'][0]))
-                        backward = abs(float(physics['speedLimits'][1]))
-                        if any(value <= 0.0 or math.isnan(value) or
-                               math.isinf(value) for value in
-                               (mass, forward, backward)):
-                            raise ValueError('invalid Bot kinetic inputs')
-                        cap = min(forward, backward)
-                        entries.append((bot_id, id(descriptor), mass,
-                                        forward, backward))
-                        unique.setdefault((mass, cap), (descriptor, cap))
-                profiles = tuple(unique[key] for key in sorted(unique))
-                signature = (self.round_id, tuple(entries))
-            except (AttributeError, IndexError, KeyError, TypeError,
-                    ValueError, OverflowError):
-                profiles = None
-        if signature == self._navigation_crush_profile_signature:
+        cache = self._navigation_crush_capabilities
+        if not self._navigation_crush_profiles_ready:
+            cache.clear()
             return
-        self._navigation_crush_profile_signature = signature
-        self._navigation_crush_profile_cache = profiles
-        invalidate = getattr(self.navigator, 'invalidate_native_planning', None)
-        if callable(invalidate):
-            invalidate()
+        identities = (tuple(self.states) if bot_id is None else (int(bot_id),))
+        if bot_id is None:
+            for previous in list(cache):
+                if previous not in self.states:
+                    cache.pop(previous, None)
+        for identity in identities:
+            try:
+                pair = self._descriptor_pairs.get(identity)
+                descriptor = self._descriptors.get(identity)
+                if (identity not in self.states or pair is None or
+                        len(pair) != 2 or pair[0] is None or descriptor is None):
+                    raise ValueError('incomplete Bot descriptor pair')
+                if (pair[1] is None and
+                        (siege_mechanics.params(pair[0]) is not None or
+                         _value(pair[0], 'hasSiegeMode', False))):
+                    raise ValueError('missing Bot Siege descriptor')
+                physics = _value(descriptor, 'physics')
+                mass = float(physics['weight'])
+                forward = float(physics['speedLimits'][0])
+                backward = float(physics['speedLimits'][1])
+                if any(value <= 0.0 or math.isnan(value) or math.isinf(value)
+                       for value in (mass, forward, backward)):
+                    raise ValueError('invalid Bot kinetic inputs')
+                drive = {'speedFwd': forward, 'speedBwd': backward}
+                travel = pair[0] if pair[1] is not None else None
+                values = []
+                for direction in (1.0, -1.0):
+                    cap = vehicle_physics.destructible_drive_speed_cap(
+                        descriptor, drive, direction, travel)
+                    token = ('stock1513', mass, cap)
+                    values.append((token, mass, cap))
+                values = tuple(values)
+            except (AttributeError, IndexError, KeyError, TypeError,
+                    ValueError, OverflowError, RuntimeError):
+                values = None
+            if values is None:
+                cache.pop(identity, None)
+            elif values != cache.get(identity):
+                cache[identity] = values
 
     def _install_bot_descriptor(self, bot_id, state, siege_state):
         """Install one bot's active immutable mode descriptor."""
@@ -2816,9 +2833,9 @@ class BotRuntime(object):
         descriptor = siege_mechanics.active_descriptor(pair, siege_state)
         previous = self._descriptors.get(bot_id)
         self._descriptors[bot_id] = descriptor
+        self._refresh_navigation_crush_profiles(bot_id)
         if previous is descriptor:
             return False
-        self._refresh_navigation_crush_profiles()
         if state is not None:
             state.pop(_GUN_PITCH_LIMIT_CACHE, None)
         self._physics_params[bot_id] = _bot_physics_params(
@@ -3253,6 +3270,12 @@ class BotRuntime(object):
         self._bot_skill_pins = self._lineup_skill_pins(message)
         round_id = message.get('round_id')
         if round_id != self.round_id:
+            # A repeated map still has a new destruction/world lifecycle.
+            # Consumer changes are scoped by capability, but no native proof
+            # or completed path from the previous battle survives this edge.
+            invalidate = getattr(self.navigator, 'invalidate_native_planning', None)
+            if callable(invalidate):
+                invalidate()
             self.round_id = round_id
             self.states = {}
             self._accumulator = 0.0
@@ -6570,7 +6593,8 @@ class BotRuntime(object):
     @observed('bot.corridor_hazards')
     def _planner_corridor_clear(self, position, yaw, speed,
                                 wet_escape=False, allow_shallow=False,
-                                hazard_only=False, maximum_distance=None):
+                                hazard_only=False, maximum_distance=None,
+                                native_capability=None):
         """Rank one candidate through the validated baked static corridor.
 
         ``True`` admits a planner candidate and ``False`` rejects a known fatal
@@ -6620,7 +6644,9 @@ class BotRuntime(object):
                 return False
             if hazard_only:
                 return True
-            if grid.segment_clear(position, end):
+            segment_clear = self._capability_probe(
+                grid.segment_clear, native_capability)
+            if segment_clear(position, end):
                 return True
             # A coarse baked corridor can reject a valid short turn on uneven
             # terrain. Let the native candidate probe decide that ambiguous
@@ -7804,6 +7830,8 @@ class BotRuntime(object):
         segment_hazard = getattr(grid, 'segment_has_baked_hazard', None)
         point_hazard = getattr(grid, 'point_has_baked_hazard', None)
         dry_segment = getattr(grid, 'dry_segment_clear', None)
+        dry_segment = self._capability_probe(
+            dry_segment, self.navigation_crush_capability(bot_state['id']))
         if not all(callable(value) for value in (
                 ground, segment_hazard, point_hazard, dry_segment)):
             return None
@@ -7972,6 +8000,8 @@ class BotRuntime(object):
         segment_hazard = getattr(grid, 'segment_has_baked_hazard', None)
         point_hazard = getattr(grid, 'point_has_baked_hazard', None)
         dry_segment = getattr(grid, 'dry_segment_clear', None)
+        dry_segment = self._capability_probe(
+            dry_segment, self.navigation_crush_capability(bot_id))
         bot_edges_penalized = getattr(
             self.navigator, 'bot_segment_penalized', None)
         if not all(callable(value) for value in (
@@ -8084,6 +8114,7 @@ class BotRuntime(object):
             state['navigation_stop_at_target'] = stop_at_goal
             return goal
         grid = getattr(self.navigator, 'grid', None)
+        native_capability = self.navigation_crush_capability(bot_id)
         if strategic.get('move_area_bounds') is not None:
             grounded = self._radio_ground_goal(bot_id, position, goal, strategic, grid)
             if grounded is None:
@@ -8137,6 +8168,7 @@ class BotRuntime(object):
             abs(state.get('speed', 0.0)) *
             BAKED_MOTION_LOOKAHEAD_SECONDS)
         direct = getattr(grid, 'dry_segment_clear', None)
+        direct = self._capability_probe(direct, native_capability)
         direct_close = _distance(position, goal) <= 15.0
         bot_edges_penalized = getattr(
             self.navigator, 'bot_segment_penalized', None)
@@ -8164,13 +8196,15 @@ class BotRuntime(object):
             and int(bot_id) not in self._artillery_reproofs)
         if direct_target:
             escape = self.navigator.observe_direct_target(
-                bot_id, position, goal, path_key, now, movement_intent)
+                bot_id, position, goal, path_key, now, movement_intent,
+                native_capability=native_capability)
             target = tuple(escape or goal)
         else:
             target = self.navigator.next_target(
                 bot_id, position, goal, path_key, now,
                 anchor, avoid, lookahead_distance,
-                movement_intent=movement_intent)
+                movement_intent=movement_intent,
+                native_capability=native_capability)
         terminal = getattr(self.navigator, 'target_is_terminal', None)
         state['navigation_stop_at_target'] = bool(
             stop_at_goal and
@@ -11702,7 +11736,8 @@ class BotRuntime(object):
             raw_command = None
             planner_probe_samples = {}
 
-            def planner_sample_direction(sample_yaw, maximum_distance=None):
+            def planner_sample_direction(sample_yaw, maximum_distance=None,
+                                         drive_direction=1.0):
                 # Invalid or unavailable baked data retains the mature native
                 # planner path.  These advisory samples never enter the motion
                 # cache and never authorize the finally selected direction.
@@ -11710,12 +11745,15 @@ class BotRuntime(object):
                               (2.0 * math.pi) - math.pi)
                 key = (round(normalised, 4),
                        None if maximum_distance is None
-                       else round(float(maximum_distance), 2))
+                       else round(float(maximum_distance), 2),
+                       -1.0 if drive_direction < 0.0 else 1.0)
                 if key not in planner_probe_samples:
                     planner_probe_samples[key] = self._probe_direction(
                         position, sample_yaw, state.get('speed', 0.0),
                         self._descriptors.get(state['id']),
-                        maximum_distance)
+                        maximum_distance,
+                        native_capability=self.navigation_crush_capability(
+                            state['id'], drive_direction))
                 return planner_probe_samples[key]
 
             grid = getattr(self.navigator, 'grid', None)
@@ -11749,7 +11787,8 @@ class BotRuntime(object):
                 except Exception:
                     return True
 
-            def sample_clear(sample_yaw, maximum_distance=None):
+            def sample_clear(sample_yaw, maximum_distance=None,
+                             drive_direction=1.0):
                 # A vehicle brake must also reach local steering. Otherwise
                 # the planner repeatedly sees a clear world ray through the
                 # same live hull and renews its original drive heading. Keep
@@ -11787,6 +11826,8 @@ class BotRuntime(object):
                 advisory = self._planner_corridor_clear(
                     position, sample_yaw, state.get('speed', 0.0),
                     maximum_distance=maximum_distance,
+                    native_capability=self.navigation_crush_capability(
+                        state['id'], drive_direction),
                     wet_escape=(baked_shallow_escape or
                                 state.get('_water_depth', -1.0) >
                                 BOT_WATER_AVOID_DEPTH),
@@ -11796,7 +11837,7 @@ class BotRuntime(object):
                 if advisory is not None:
                     return bool(advisory)
                 sample = planner_sample_direction(
-                    sample_yaw, maximum_distance)
+                    sample_yaw, maximum_distance, drive_direction)
                 # Exhausting the soft-static recast budget is not a wall. Keep
                 # the previous drive intent; commit-side world collision still
                 # stops the hull if this corridor reaches real hard geometry.
@@ -12357,7 +12398,9 @@ class BotRuntime(object):
                 # reused or acquired.
                 motion_probe = self._probe_direction(
                     position, travel_yaw, state.get('speed', 0.0), descriptor,
-                    maximum_probe_distance)
+                    maximum_probe_distance,
+                    native_capability=self.navigation_crush_capability(
+                        state['id'], travel_sign))
                 # Planner alternatives keep the mature six horizontal rays.
                 # Only the finally selected, translating, non-turning travel
                 # sample pays for the exact 3x3 receipt used by commit-side
@@ -13113,7 +13156,9 @@ class BotRuntime(object):
                     try:
                         candidates = (self.cover_probe(
                             source, target, route, allies,
-                            (self.navigator.grid.segment_clear
+                            (self._capability_probe(
+                                self.navigator.grid.segment_clear,
+                                self.navigation_crush_capability(bot_id))
                              if self.navigator is not None else None))
                                       if current else ())
                     finally:

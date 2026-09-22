@@ -4796,23 +4796,8 @@ class BattleRuntime(object):
         belong to the active descriptor. Ordinary vehicles retain their
         effective cap, and an unavailable drive limit is never fabricated.
         """
-        reverse = float(speed) < 0.0
-        try:
-            value = float(physics['speedBwd' if reverse else 'speedFwd'])
-            if travel_descriptor is None:
-                travel_descriptor = _field(descriptor, 'defaultVehicleDescr')
-            if travel_descriptor is not None and value > 0.0:
-                travel = float(_field(travel_descriptor, 'physics')[
-                    'speedLimits'][1 if reverse else 0])
-                if math.isnan(travel) or math.isinf(travel) or travel < 0.0:
-                    raise ValueError('invalid travel limit')
-                value = max(value, travel)
-        except (AttributeError, KeyError, IndexError, TypeError,
-                ValueError, OverflowError):
-            raise RuntimeError('destructible drive speed cap is unavailable')
-        if math.isnan(value) or math.isinf(value) or value < 0.0:
-            raise RuntimeError('destructible drive speed cap is invalid')
-        return -value if reverse else value
+        return vehicle_physics.destructible_drive_speed_cap(
+            descriptor, physics, speed, travel_descriptor)
 
     def _bot_destructible_travel_descriptor(self, bot_id):
         pair = getattr(self._bots, '_descriptor_pairs', {}).get(int(bot_id))
@@ -5554,7 +5539,7 @@ class BattleRuntime(object):
 
     def _direction_probe(self, position, yaw, speed=0.0,
                          descriptor=None, maximum_distance=None,
-                         corridor_half_width=None):
+                         corridor_half_width=None, native_capability=None):
         """Probe the admitted chassis corridor at two heights and distances."""
         if corridor_half_width is None:
             # Passive contact callers have no active-drive descriptor. They
@@ -5609,9 +5594,21 @@ class BattleRuntime(object):
         planned_impact_speed = abs(signed_speed)
         deferred = False
         planning_params = None
+        planning_cap = None
+        planning_reverse = signed_speed < 0.0
         if descriptor is not None:
             try:
                 planning_params = vehicle_physics.derive_params(descriptor)
+                if native_capability is not None:
+                    if (self._navigation_crush_proof(native_capability) is None or
+                            float(_field(descriptor, 'physics')['weight']) !=
+                            float(native_capability[1])):
+                        raise ValueError('direction capability does not match vehicle')
+                    planning_cap = abs(float(native_capability[2]))
+                    planning_reverse = float(native_capability[2]) < 0.0
+                else:
+                    planning_cap = abs(self._destructible_drive_speed_cap(
+                        descriptor, planning_params, signed_speed))
             except (AttributeError, KeyError, TypeError, ValueError):
                 raise RuntimeError(
                     'bot destructible planning speed is unavailable')
@@ -5645,8 +5642,7 @@ class BattleRuntime(object):
                             self._avatar.spaceID, ground_start, ground_end,
                             ground, previous_y + run * 0.48,
                             planned_impact_speed, descriptor,
-                            kinetic_speed=float(planning_params[
-                                'speedBwd' if signed_speed < 0.0 else 'speedFwd']),
+                            kinetic_speed=planning_cap,
                             recast_budget=self._soft_static_recast_budget)
                         if ground == 'deferred':
                             return {'clear': False, 'collision': False,
@@ -5694,7 +5690,7 @@ class BattleRuntime(object):
                             hull_bbox = self._destructibles._vehicle_hull_bbox(
                                 descriptor)
                             minimum, maximum = hull_bbox[:2]
-                            reversing = signed_speed < 0.0
+                            reversing = planning_reverse
                             hull_reach = max(
                                 0.0,
                                 (-float(minimum[2]) if reversing else
@@ -5726,9 +5722,7 @@ class BattleRuntime(object):
                     if descriptor is not None and self._destructibles is not None:
                         kinetic_speed = None
                         if planning_params is not None:
-                            kinetic_speed = float(planning_params[
-                                'speedBwd' if signed_speed < 0.0 else
-                                'speedFwd'])
+                            kinetic_speed = planning_cap
                         soft_status = (
                             self._destructibles._catalog_soft_static_path(
                                 self._avatar.spaceID, ray_start, ray_end,
@@ -5836,32 +5830,46 @@ class BattleRuntime(object):
             'direction': (-1 if signed_speed < 0.0 else 1),
         }
 
-    def _navigation_crush_proof(self):
-        """Read the complete immutable roster's common planning capability."""
-        provider = getattr(self._bots, 'navigation_crush_profiles', None)
-        profiles = provider() if callable(provider) else None
-        if not profiles:
+    def _navigation_crush_proof(self, capability):
+        """Use one consumer's immutable stock mass and directional drive cap."""
+        try:
+            token, mass, speed = capability
+            mass, speed = float(mass), float(speed)
+            if (token != ('stock1513', mass, speed) or mass <= 0.0 or
+                    speed == 0.0 or any(math.isnan(value) or math.isinf(value)
+                                        for value in (mass, speed))):
+                return None
+        except (TypeError, ValueError, OverflowError):
             return None
+        # The reviewed stock law reads only td.physics.weight. Copy that exact
+        # numeric input so an asynchronous search never retains a live mutable
+        # vehicle descriptor, or borrows another vehicle's kinetic permission.
+        descriptor = {'physics': {'weight': mass}}
 
         def crushable(mat_info, item_scale):
             try:
-                return all(self._destructibles._stock_crushable_1513(
+                return self._destructibles._stock_crushable_1513(
                     mat_info, speed, descriptor, item_scale)
-                    for descriptor, speed in profiles)
             except (AttributeError, KeyError, TypeError, ValueError,
                     OverflowError, RuntimeError):
                 return False
         return crushable
 
-    def _navigation_obstacle(self, start, end, half_width):
-        """Probe shared geometry, retaining unresolved work as deferred."""
+    def _navigation_obstacle(self, start, end, half_width,
+                             native_capability=None, trace=None):
+        """Probe one consumer's geometry without changing destructible state."""
         dx = float(end[0]) - float(start[0])
         dz = float(end[2]) - float(start[2])
         length = math.sqrt(dx * dx + dz * dz)
         if length < 0.1:
             return False
         lateral_x, lateral_z = dz / length, -dx / length
-        planning_crushable = self._navigation_crush_proof()
+        planning_crushable = self._navigation_crush_proof(native_capability)
+        saw_soft = False
+        if trace is not None:
+            trace.update(capability=native_capability,
+                         segment=(tuple(start), tuple(end)),
+                         half_width=float(half_width))
         for offset in (-float(half_width), 0.0, float(half_width)):
             for height in (0.9, 1.6):
                 ray_start = self._vector((
@@ -5878,18 +5886,29 @@ class BattleRuntime(object):
                                   'collide_motion_segment', None)
                 native = self._runtime.bigworld.wg_collideSegment
                 if callable(prepare) and callable(collide):
+                    collision_filter = prepare(ray_start, ray_end)
+                    if trace is not None:
+                        collision_filter = world_collision._trace_collision_filter(
+                            collision_filter, trace)
                     hit = collide(self._avatar.spaceID, ray_start, ray_end,
-                                  prepare(ray_start, ray_end), native)
+                                  collision_filter, native)
                 else:
                     hit = native(self._avatar.spaceID, ray_start, ray_end,
                                  VEHICLE_SKIP_FLAGS)
                 if hit is not None:
+                    if trace is not None:
+                        trace.update(
+                            ray_start=_xyz(ray_start), ray_end=_xyz(ray_end),
+                            hit=_xyz(hit[0]), normal=_xyz(hit[1]))
                     if planning_crushable is None:
+                        if trace is not None:
+                            trace.update(classification='unknown',
+                                         reason='capability_unavailable')
                         return True
                     status = self._destructibles._catalog_soft_static_path(
                         self._avatar.spaceID, ray_start, ray_end, hit,
                         0.0, None, recast_budget=self._soft_static_recast_budget,
-                        planning_crushable=planning_crushable)
+                        planning_crushable=planning_crushable, trace=trace)
                     if status == 'deferred':
                         # The graph cannot cache this edge yet. Do not repeat
                         # the remaining native lanes against an empty budget;
@@ -5897,6 +5916,11 @@ class BattleRuntime(object):
                         return 'deferred'
                     elif status not in (True, 'kinetic'):
                         return True
+                    saw_soft = True
+        if trace is not None:
+            trace.update(classification='soft' if saw_soft else 'clear',
+                         reason=('proved_original_materials_only' if saw_soft else
+                                 'native_corridor_clear'))
         return False
 
     def _water_depth(self, point):
