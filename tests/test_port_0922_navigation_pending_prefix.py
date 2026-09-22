@@ -184,8 +184,12 @@ class PendingPrefixTests(unittest.TestCase):
                 else:
                     state['path_key'] = ('failed', tick)
                 self.nav._observe_macro_progress(27, state, current, self.goal, tick * 0.5)
-            self.assertTrue(replan.called)
-            self.assertEqual(self.goal, replan.call_args.args[3])
+            # A local loop must not cancel a healthy search and replace it
+            # with another four-second escape. Keep its deadline, stop only
+            # repeated temporary legs and admit its next new-area prefix.
+            self.assertFalse(replan.called)
+            self.assertTrue(state['temporary_stalled'])
+            self.assertEqual(1, state['macro_progress_replans'])
 
     def test_arrived_fallback_continues_from_its_fixed_endpoint(self):
         nav = TerrainNavigator(lambda *unused: 0.0, lambda *unused: False,

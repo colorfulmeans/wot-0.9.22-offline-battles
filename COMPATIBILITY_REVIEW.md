@@ -5893,3 +5893,73 @@ poll/overflow path. These establish local control and lifecycle behavior.
 The report's 8.35 FPS window is still dominated by physical motion queries;
 this change does not establish a frame-rate repair or native Airfield gameplay
 acceptance. Exact #1513 Windows driving remains the acceptance boundary.
+
+### September 22 Airfield follow-up: remaining local turn loops
+
+Report `20260922-122105-7421ade854f4` runs `colorfulmeans-35685281060-1`.
+The user confirms more Bots now leave spawn, while a few keep turning locally.
+The report supports both observations: T71 and Achilles travel hundreds of
+metres, while Panther II (7), M36 (9) and SU-122-44 (27) repeatedly receive
+nearby changing targets. Of the 152 motion diagnostics, 138 are world-clear
+and 12 record successful crushing; no support/pose rollback or baked veto is
+recorded. These are stall-triggered samples, not a representative estimate of
+the proportion of all vehicles that stop.
+
+The history does not support reverting the entire AI to 0.9.0. The Airfield
+bake and its reader are unchanged since that release. `d3fbfa5d` added native
+review of contact regions, and `d6038e00` extended the triggers for that review.
+Those changes make pending and failed searches more consequential.
+`17ce88f6` made a requested stop apply the copied brake, while `40d1b5ef`
+introduced traversal-aware near-target alignment and consumption of pending
+A* prefixes. Isolating the driver against 32 fixed-target samples from the
+new report makes the current driver reach all 32; older drivers do worse in
+the same controlled physics fixture. This does not reconstruct old native
+gameplay; it supports preserving the effective alignment repair while fixing
+the navigation targets.
+
+Two navigation ownership errors are independently reproducible. A private
+route-join retry still used the old spawn anchor after its vehicle had moved.
+Consuming the retry's early prefix therefore sent the vehicle back toward
+spawn: a hull at z=20 targeting z=100 received z=4 after two search steps from
+the old z=0 anchor. Private jobs now start from the actual vehicle position
+when created or retried; existing usable paths are still reused. Shared route
+geometry retains its authored anchor, but its unfinished exploration is not a
+vehicle movement command. A private exploration tree that has not reached a
+moving hull must likewise not pull it back to the tree's trailing endpoint.
+
+The second error treated each new pending prefix as a new progress episode.
+Ordinary failed-search retries could occur before the existing twelve-second
+no-progress interval, repeatedly renewing it without actual departure. A
+closed-room fixture remained stationary for sixty seconds through seven
+failed attempts with no macro recovery. Temporary prefix/fallback progress
+now belongs to the strategic request and measures actual entry into new
+navigation cells. Repeated exploration of the already visited local area
+cannot renew the interval or keep issuing a local turn loop; a newly proved
+exit or a completed path can immediately resume travel. Healthy A* work is
+retained rather than canceled by another short escape lease.
+
+A separate real-callback fixture proves that deferred native review retired
+an otherwise complete cached route and queued a new search. Normal destruction
+events and failed-search retries can invalidate native receipts, so this is
+not limited to manually clearing a cache. Unknown review now retains the
+route object and holds its current index/target without creating another job;
+fresh proof resumes that route, while a definite stock-physics rejection
+still retires it. This does not authorize motion through an unproved edge.
+The report lacks per-event deferred-review evidence, so this independent
+defect is not asserted to explain every recorded turn loop.
+
+The closed-loop regression uses the report's three vehicle mobility samples,
+the real adapter/driver and copied physics at five and fifteen control frames
+per second. A fixed U-shaped wall blocks both planning probes and integrated
+hull motion. Three genuinely bounded A* failures precede ordinary search
+capacity; the wall never opens or changes. All six runs with the preceding
+navigation fail to reach the goal within 120 seconds; the repaired navigation
+leaves the mouth and reaches the goal in all six, without crossing the wall.
+The wall and unreported speed limits are controlled fixtures, not a recreation
+of every native Airfield contact.
+
+The new report's two steady windows are about fourteen worker FPS, compared
+with about eight in the preceding report. Different rosters and scenes prevent
+treating that as a controlled benchmark. It does not support a global budget
+starvation explanation: completed searches increase and the pending count
+falls. The remaining native driving and frame-pacing boundary is unchanged.

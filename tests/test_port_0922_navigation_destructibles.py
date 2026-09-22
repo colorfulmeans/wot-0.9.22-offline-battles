@@ -6,6 +6,7 @@ from unittest import mock
 
 import test_port_0922_bot_destructible_approach as approach_fixture
 import test_port_0922_bot_runtime as bot_fixture
+from test_port_0922_navigation import TerrainNavigator
 from gui.mods.offline_lan_0922 import destructibles_sensor as sensor
 
 
@@ -88,6 +89,56 @@ class NavigationSoftObstacleTests(unittest.TestCase):
             scene.battle._soft_static_recast_budget[0] = 24
             self.assertFalse(self.blocked(scene))
             self.assertIn((22, 0), sensor.g_offh_destr_instances)
+
+    def test_cached_path_survives_deferred_recheck_and_resumes_same_object(self):
+        with self.fixture.scene(registered=True) as scene:
+            self.profiles(scene, ((scene.descriptor, 10.0),))
+            nav = TerrainNavigator(lambda *unused: 0.0,
+                scene.battle._navigation_obstacle,
+                baked_graph=bot_fixture._flat_open_graph())
+            start, goal = (0.0, 0.0, 0.0), (0.0, 0.0, 20.0)
+            request = ('route_join', 27, 'soft_scene')
+            nav.grid.review_native_corridor(start, goal)
+
+            def target(now, budget):
+                scene.battle._soft_static_recast_budget[:] = [budget]
+                nav.begin_frame(0.1)
+                try:
+                    return nav.next_target(27, start, goal, request, now)
+                finally:
+                    nav.end_frame()
+
+            self.assertEqual(goal, target(0.0, 24))
+            self.assertEqual(goal, target(0.1, 24))
+            key = nav._cache_key(request, goal)
+            path = nav.paths[key]
+            state = nav.bot_states[27]
+            original_index = state['index']
+            original_target = state['last_target']
+            nav.grid.invalidate_native_review()
+            # Include a first unknown frame after the macro deadline, then
+            # repeated exhausted frames. No fake collision result is used.
+            for now in (13.0, 14.0, 27.0):
+                self.assertEqual(start, target(now, 0))
+                self.assertIs(path, nav.paths[key])
+                self.assertFalse(nav.searches)
+                self.assertEqual('pending', state['navigation_status'])
+                self.assertEqual(original_index, state['index'])
+                self.assertEqual(original_target, state['last_target'])
+                self.assertEqual(0, state['macro_progress_replans'])
+                self.assertFalse(state['replan_active'])
+            self.assertEqual(goal, target(27.1, 24))
+            self.assertIs(path, nav.paths[key])
+            self.assertFalse(nav.searches)
+
+            # A definite stock-physics rejection still retires the old path;
+            # only the temporary absence of a receipt preserves it.
+            light = copy.deepcopy(scene.descriptor)
+            light.physics['weight'] = 100.0
+            self.profiles(scene, ((light, 10.0),))
+            nav.grid.invalidate_native_review()
+            self.assertNotEqual(goal, target(27.2, 24))
+            self.assertIsNot(path, nav.paths.get(key))
 
 
 class NavigationCrushRosterTests(unittest.TestCase):
