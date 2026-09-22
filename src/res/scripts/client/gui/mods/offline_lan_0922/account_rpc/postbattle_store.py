@@ -150,6 +150,17 @@ def _receipt(value):
             value['watched_battle_to_end'], bool)):
         raise ValueError('battle receipt watched state is invalid')
     mounted = value.get('vehicle_compact_descr')
+    battle_max_health = value.get('max_health')
+    if ('max_health' in value and
+            (type(battle_max_health) not in integer_types or
+             not 1 <= battle_max_health <= 100000)):
+        raise ValueError('battle receipt maximum health is invalid')
+    outfits = value.get('vehicle_outfits')
+    if 'vehicle_outfits' in value:
+        from gui.mods.offline_lan_0922.lan_client import _canonical_wire_outfits
+        if (not isinstance(outfits, dict) or
+                _canonical_wire_outfits(outfits) is None):
+            raise ValueError('battle receipt outfits are invalid')
     if 'vehicle_compact_descr' in value:
         try:
             decoded = base64.b64decode(mounted.encode('ascii'))
@@ -397,6 +408,10 @@ def _receipt(value):
     }
     if mounted is not None:
         result['vehicle_compact_descr'] = mounted
+    if battle_max_health is not None:
+        result['max_health'] = battle_max_health
+    if outfits is not None:
+        result['vehicle_outfits'] = copy.deepcopy(outfits)
     return result
 
 

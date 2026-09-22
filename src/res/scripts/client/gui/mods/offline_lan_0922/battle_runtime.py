@@ -1953,6 +1953,9 @@ class BattleRuntime(object):
         self._local_downhill = (0.0, 0.0, 0.0)
         self._local_slope_tangent = 0.0
         self._local_ground_plane = None
+        # Hydraulic diagnostics read the preceding support before the first
+        # drive step samples terrain. No support exists in a fresh round.
+        self._local_legacy_support_sample = None
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
@@ -2295,6 +2298,7 @@ class BattleRuntime(object):
         self._local_downhill = (0.0, 0.0, 0.0)
         self._local_slope_tangent = 0.0
         self._local_ground_plane = None
+        self._local_legacy_support_sample = None
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
@@ -3648,7 +3652,10 @@ class BattleRuntime(object):
                 artillery_launch_cancel=self._bot_artillery_cancel,
                 spawn_resolver=self._formation_pose,
                 ground_probe=self._navigation_ground,
-                physics_ground_probe=self._ground_y,
+                # Use the player's near-body support layer for Bot height
+                # and attitude. The wider placement query can acquire an
+                # overhead bridge and turn every clear step into a rollback.
+                physics_ground_probe=self._support_column,
                 obstacle_probe=self._navigation_obstacle,
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
@@ -23381,16 +23388,24 @@ class BattleRuntime(object):
             target_position[1] + spotting.TARGET_CHECK_HEIGHT,
             target_position[2]))
         broken_filter = self._sight_collision_filter()
-        if broken_filter is None:
+        collide_sight = getattr(self._destructibles, 'collide_sight_segment', None)
+        if callable(collide_sight):
+            hit = collide_sight(self._avatar.spaceID, start, end,
+                broken_filter, self._runtime.bigworld.wg_collideSegment)
+        elif broken_filter is None:
             hit = self._runtime.bigworld.wg_collideSegment(
                 self._avatar.spaceID, start, end, 128)
         else:
             hit = self._runtime.bigworld.wg_collideSegment(
                 self._avatar.spaceID, start, end, 128, broken_filter)
-        return bool(
+        clear = bool(
             hit is None or
             (hit[0] - start).length + spotting.SIGHT_END_TOLERANCE >=
             (end - start).length)
+        report = getattr(self._destructibles, 'report_sight_contact', None)
+        if not clear and callable(report):
+            report(self._avatar.spaceID, start, end, hit)
+        return clear
 
     @staticmethod
     def _spot_entity_pose(position, entity=None, state=None):
@@ -23418,18 +23433,26 @@ class BattleRuntime(object):
             phase=int(max(0, self._turret_server_time_ms()) / 2000))
         ends = spotting.vehicle_check_points(target_descriptor, target)
         broken_filter = self._sight_collision_filter()
+        collide_sight = getattr(self._destructibles, 'collide_sight_segment', None)
+        report = getattr(self._destructibles, 'report_sight_contact', None)
         best_cover = None
         for start_point in starts:
             start = self._vector(start_point)
             for end_point in ends:
                 end = self._vector(end_point)
-                args = (self._avatar.spaceID, start, end, 128)
-                if broken_filter is not None:
-                    args += (broken_filter,)
-                hit = self._runtime.bigworld.wg_collideSegment(*args)
+                if callable(collide_sight):
+                    hit = collide_sight(self._avatar.spaceID, start, end,
+                        broken_filter, self._runtime.bigworld.wg_collideSegment)
+                else:
+                    args = (self._avatar.spaceID, start, end, 128)
+                    if broken_filter is not None:
+                        args += (broken_filter,)
+                    hit = self._runtime.bigworld.wg_collideSegment(*args)
                 if (hit is not None and
                         (hit[0] - start).length + spotting.SIGHT_END_TOLERANCE <
                         (end - start).length):
+                    if callable(report):
+                        report(self._avatar.spaceID, start, end, hit)
                     continue
                 cover = self._foliage_camouflage_bonus(
                     source_position, target_position, fired_recently,
@@ -28262,6 +28285,7 @@ class BattleRuntime(object):
         self._local_downhill = (0.0, 0.0, 0.0)
         self._local_slope_tangent = 0.0
         self._local_ground_plane = None
+        self._local_legacy_support_sample = None
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []

@@ -1365,6 +1365,14 @@ def _valid_battle_receipt(message):
     if ('vehicle_compact_descr' in message and
             _canonical_vehicle_compact_descr(message['vehicle_compact_descr']) is None):
         return False
+    if ('max_health' in message and
+            (type(message['max_health']) not in integer_types or
+             not 1 <= message['max_health'] <= 100000)):
+        return False
+    if ('vehicle_outfits' in message and
+            (not isinstance(message['vehicle_outfits'], dict) or
+             _canonical_wire_outfits(message['vehicle_outfits']) is None)):
+        return False
     stats = message.get('stats')
     rewards = message.get('rewards')
     stat_names = RECEIPT_STAT_NAMES

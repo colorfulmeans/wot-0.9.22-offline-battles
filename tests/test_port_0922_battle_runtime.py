@@ -28164,6 +28164,32 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([(reject,)] * 3, filters)
         self.assertEqual(2, prepare.call_count)
 
+    def test_every_spotting_entry_uses_the_bounded_original_skin_adapter(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        # A raw static query still reports a destroyed original face. Only
+        # the shared destructible adapter can prove and release that skin.
+        runtime.bigworld.wg_collideSegment = mock.Mock(
+            side_effect=AssertionError('bypassed broken-original sight adapter'))
+        keep = lambda *unused: True
+        recast = mock.Mock(return_value=None)
+        report = mock.Mock()
+        battle._destructibles = types.SimpleNamespace(
+            sight_collision_filter=lambda: keep,
+            collide_sight_segment=recast, report_sight_contact=report)
+
+        self.assertTrue(battle._spot_segment_clear(
+            (0.0, 0.0, 0.0), (100.0, 0.0, 0.0)))
+        self.assertTrue(battle._bot_visibility(
+            {'position': (0.0, 0.0, 0.0)},
+            {'position': (100.0, 0.0, 0.0)})['line_of_sight'])
+        self.assertEqual(2, recast.call_count)
+        for args in recast.call_args_list:
+            self.assertIs(keep, args.args[3])
+            self.assertIs(runtime.bigworld.wg_collideSegment, args.args[4])
+        report.assert_not_called()
+
     def test_spotting_uses_descriptor_camouflage_and_shot_factor(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)

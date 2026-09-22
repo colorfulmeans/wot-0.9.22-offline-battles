@@ -712,6 +712,68 @@ class TerrainGrid(object):
 		self._ground_cache[key] = height
 		return height
 
+	def _live_baked_egress_clear(self, start, end):
+		"""Prove a real exit from an eroded occupied cell, without snapping it.
+
+		Baked corridors may start at the nearest supported graph cell. Their
+		native edge review must not turn the missing height of the *occupied*
+		cell into a collision: that would reject every possible exit before
+		calling the native probe. Check the original continuous segment instead.
+		This is planning only; the driver and full hull sweep still own motion.
+		"""
+		if (not callable(self.ground_probe) or
+				not callable(self.obstacle_probe) or
+				self.segment_has_motion_hazard(
+					start, end, BAKED_FATAL_HAZARDS | BAKED_SHALLOW_WATER)):
+			combat_count('nav_live_egress_hazard_or_unavailable')
+			return False
+		distance = _distance_2d(start, end)
+		# A missing start uses the two-cell snap plus its raw half-cell offset.
+		# Join that local neighbourhood before considering a long shortcut,
+		# rather than doing hundreds of synchronous native support queries.
+		# The ordinary short pending/blocked fallback already stays inside it.
+		if distance > self.cell_size * 2.5 * SQRT_TWO:
+			combat_count('nav_live_egress_requires_local_join')
+			return False
+		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
+		grade = min(self.max_grade_up, self.max_grade_down)
+		try:
+			start_y = self.ground_probe(
+				float(start[0]), float(start[2]), float(start[1]))
+			if (start_y is None or math.isnan(float(start_y)) or
+					math.isinf(float(start_y))):
+				combat_count('nav_live_egress_missing_support')
+				return False
+			previous = (float(start[0]), float(start_y), float(start[2]))
+			grounded_start = previous
+			for index in range(1, steps + 1):
+				fraction = float(index) / float(steps)
+				x = float(start[0]) + (float(end[0]) - float(start[0])) * fraction
+				z = float(start[2]) + (float(end[2]) - float(start[2])) * fraction
+				# Use the existing native, same-layer, water-aware support probe.
+				# _ground() deliberately reads only the bake in this grid.
+				y = self.ground_probe(x, z, previous[1])
+				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
+					combat_count('nav_live_egress_missing_support')
+					return False
+				y = float(y)
+				run = math.hypot(x - previous[0], z - previous[2])
+				if abs(y - previous[1]) > run * grade:
+					combat_count('nav_live_egress_grade')
+					return False
+				previous = (x, y, z)
+			# Sweep from the actual hull position, never the snapped cell centre.
+			# Do not cache a live exit as an immutable graph edge: doors and
+			# wrecks can change between requests.
+			if self.obstacle_probe(grounded_start, previous, 2.15):
+				combat_count('nav_live_egress_obstacle')
+				return False
+		except Exception:
+			combat_count('nav_live_egress_probe_failed')
+			return False
+		combat_count('nav_live_egress_clear')
+		return True
+
 	def segment_clear(self, start, end):
 		"""Check continuous support and drivable grade, not just both endpoints."""
 		# In a prebaked graph, rounding can map a raw point just beyond the
@@ -724,24 +786,18 @@ class TerrainGrid(object):
 		if distance < 0.25:
 			return True
 		if self.prebaked:
-			if not self._baked_corridor(start, end)[0]:
-				return False
 			edges = self._edge_keys_for_segment(start, end)
-			if (self._baked_index(self.cell_for(start)) is None and
+			if (self._baked_cell_height(self.cell_for(start)) is None and
 					any(first in self._native_review_cells or
 						second in self._native_review_cells
 						for first, second in edges)):
-				# The baked corridor snaps an eroded start cell to nearby support.
-				# Its native review must not turn the absent routing height into a
-				# wall without querying the real ground. Otherwise every exit can
-				# be rejected before the first live collision query is even made.
-				# Prove the actual occupied-to-exit segment, including the cells
-				# that the snapped baked corridor omits. Never invent a cell-centre
-				# height or globally mark the eroded cell as traversable.
-				if self.segment_has_motion_hazard(
-						start, end, BAKED_FATAL_HAZARDS | BAKED_SHALLOW_WATER):
-					return False
-				return self._live_join_clear(start, end)
+				# Neither the snapped bake corridor nor a raw edge with a missing
+				# height proves the actual short connector. Recheck it before
+				# either coarse-grid verdict can veto motion. A small physical
+				# move can change the snapped corridor without adding a wall.
+				return self._live_baked_egress_clear(start, end)
+			if not self._baked_corridor(start, end)[0]:
+				return False
 			if not edges and self.cell_for(start) in self._native_review_cells:
 				# A short escape can stay inside one four-metre cell. There is
 				# then no graph edge to recheck, but the contact already disproved
@@ -794,54 +850,6 @@ class TerrainGrid(object):
 		self._segment_cache[key] = bool(clear)
 		self._segment_cache[(end_key, start_key)] = bool(clear)
 		return clear
-
-	def _live_join_clear(self, start, end):
-		"""Prove an eroded-to-baked connector with the live navigation probes.
-
-		Missing baking support is not missing physical support. Conversely, a
-		nearby graph cell cannot prove the ground below this hull or a wall-free
-		escape. Use the same reversible grade limit as ordinary live navigation;
-		the supplied ground probe also rejects excessive water depth. Results
-		are not cached by grid cell, because sub-cell poses differ at wall edges.
-		"""
-		if not callable(self.ground_probe) or not callable(self.obstacle_probe):
-			return False
-		distance = _distance_2d(start, end)
-		# _baked_segment_cells can snap the occupied cell by at most two
-		# cells on either axis, plus its half-cell raw offset. Prove only
-		# that bounded connector here, never hundreds of metres of direct
-		# routing in one callback. A* can first return its nearby entry point
-		# and then follow the ordinary reviewed graph beyond it.
-		if distance > self.cell_size * 2.5 * SQRT_TWO:
-			return False
-		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
-		try:
-			start_y = self.ground_probe(
-				float(start[0]), float(start[2]), float(start[1]))
-			if start_y is None:
-				return False
-			if math.isnan(float(start_y)) or math.isinf(float(start_y)):
-				return False
-			previous = (float(start[0]), float(start_y), float(start[2]))
-			grounded_start = previous
-			for index in range(1, steps + 1):
-				fraction = float(index) / float(steps)
-				x = float(start[0]) + (float(end[0]) - float(start[0])) * fraction
-				z = float(start[2]) + (float(end[2]) - float(start[2])) * fraction
-				y = self.ground_probe(x, z, previous[1])
-				if y is None:
-					return False
-				y = float(y)
-				if math.isnan(y) or math.isinf(y):
-					return False
-				run = math.hypot(x - previous[0], z - previous[2])
-				if abs(y - previous[1]) > run * min(
-						self.max_grade_up, self.max_grade_down):
-					return False
-				previous = (x, y, z)
-			return not self.obstacle_probe(grounded_start, previous, 2.15)
-		except Exception:
-			return False
 
 	@staticmethod
 	def shortcut_preserves_climb_approach(path, start_index, end_index,
@@ -1115,6 +1123,25 @@ class TerrainGrid(object):
 				value = (abs(offset) > 1.75, score, abs(offset), candidate)
 				if best is None or value[:3] < best[:3]:
 					best = value
+		if (best is None and self.prebaked and
+				self._baked_cell_height(self.cell_for(current)) is None):
+			# A centre deep inside one eroded footprint can have no supported
+			# endpoint in the original short fan. The graph already chooses this
+			# nearby cell as its logical start; make that connector an explicit
+			# native-proven drive, not an implicit snap or an endless wait.
+			cell = self._nearest_baked_cell(self.cell_for(current), 2)
+			if cell is not None and cell in self._native_review_cells:
+				candidate = self.point_for(cell, self._baked_cell_height(cell))
+				yaw = math.atan2(candidate[0] - float(current[0]),
+				                 candidate[2] - float(current[2]))
+				offset = abs(math.atan2(math.sin(yaw - desired_yaw),
+				                        math.cos(yaw - desired_yaw)))
+				if (offset >= max(0.0, float(minimum_offset)) and
+						self.dry_segment_clear(current, candidate, now) and
+						not (edge_penalties and any(edge in edge_penalties
+							for edge in self._edge_keys_for_segment(
+								current, candidate)))):
+					return candidate
 		return best[3] if best is not None else None
 
 	def plan(self, start, goal, avoid_points=None, max_expansions=1600, now=0.0,

@@ -6668,6 +6668,34 @@ class BotRuntime(object):
         if callable(remember):
             remember(bot_id, attempted_yaw, 5.0)
 
+    def _settled_navigation_feedback(self, state, start, attempted_yaw, now,
+                                     motion, support_blocked, pose_blocked,
+                                     contact_displaced=False,
+                                     drive_support_blocked=False):
+        """Report the final physical verdict, after all pose owners settle."""
+        physical_support = state.pop('_navigation_support_blocked', False)
+        if not motion:
+            return
+        bot_id = int(state['id'])
+        if physical_support or pose_blocked or drive_support_blocked:
+            # A teammate can push an otherwise legal drive onto a boundary.
+            # That final veto does not disprove the original intended edge.
+            if contact_displaced and not drive_support_blocked:
+                return
+            target = motion.get('target')
+            report = getattr(self.navigator, 'report_blocked_corridor', None)
+            if (callable(report) and target is not None and
+                    motion.get('intent', False)):
+                report(bot_id, start, target, attempted_yaw, now)
+        elif (not support_blocked and motion.get('world_clear', False) and
+                (abs(state['x'] - start[0]) > 0.000001 or
+                 abs(state['z'] - start[2]) > 0.000001)):
+            # A zero-distance clear sweep or a held/deferred frame does not
+            # end a contact episode. Only committed horizontal progress does.
+            clear = getattr(self.navigator, 'clear_blocked_contact', None)
+            if callable(clear):
+                clear(bot_id)
+
     def _apply_bot_fall_damage(self, state, impact_speed):
         """Apply the shared landing law to one hidden-worker Bot."""
         maximum = max(1, int(
@@ -6959,6 +6987,8 @@ class BotRuntime(object):
             grounded_before and no_sampled_support and
             self._hidden_suspension_support_is_raised(state))
         if invalid_pose or raised_support or hidden_raised_support:
+            if raised_support or hidden_raised_support:
+                state['_navigation_support_blocked'] = True
             self._restore_bot_suspension_state(
                 state, suspension_snapshot)
             if tick_pose is not None:
@@ -7066,6 +7096,7 @@ class BotRuntime(object):
         if not self._turret_motion_probe(
                 before, self._turret_state_pose(state),
                 self._descriptors.get(int(state['id']))):
+            state['_navigation_support_blocked'] = True
             self._restore_bot_suspension_state(state, snapshot)
             state['x'], state['y'], state['z'] = (
                 before['x'], before['y'], before['z'])
@@ -7169,6 +7200,7 @@ class BotRuntime(object):
                 state['airborne'] = False
                 state['grounded_once'] = True
             elif support_rise_obstacle and not support_rise_continuous:
+                state['_navigation_support_blocked'] = True
                 # The centre ray hit a wagon deck, roof, or large prop only
                 # after this tick's horizontal integration put the hull partly
                 # inside it. Restore only this tick's pose and let LocalDriver
@@ -11472,6 +11504,7 @@ class BotRuntime(object):
         track_pivot_yaws = {}
         tick_safe = {}
         attempted_yaws = {}
+        navigation_motion = {}
         siege_locked_poses = {}
         integrated = set()
         for state in self.states.values():
@@ -11481,6 +11514,7 @@ class BotRuntime(object):
             if not state['alive']:
                 self._cancel_active_burst(state)
                 continue
+            state.pop('_navigation_support_blocked', None)
             self._note_source_stillness(state, now)
             # Every live bot consumes the same banked authority step. Planner
             # and slope detail may still vary by distance, but skipping one
@@ -12051,6 +12085,11 @@ class BotRuntime(object):
             attempted_yaws[state['id']] = travel_yaw
             maximum_probe_distance = None
             move_position = command.get('move_position')
+            navigation_motion[state['id']] = {
+                'target': move_position,
+                'intent': command.get('movement_intent', True),
+                'world_clear': False,
+            }
             navigation_grid = getattr(self.navigator, 'grid', None)
             if getattr(navigation_grid, 'prebaked', False):
                 baked_cell_size = _number(
@@ -12694,10 +12733,9 @@ class BotRuntime(object):
                     self._hard_contact_grinds[state['id']] = 1
                 if (resolved_motion and
                         motion_status in ('clear', 'crushed')):
-                    clear_contact = getattr(
-                        self.navigator, 'clear_blocked_contact', None)
-                    if callable(clear_contact):
-                        clear_contact(state['id'])
+                    # A horizontal sweep alone cannot prove progress: the
+                    # support and final-pose guards may still reject this step.
+                    navigation_motion[state['id']]['world_clear'] = True
                 if resolved_motion and callable(self.motion_report):
                     self.motion_report(
                         state['id'], motion_status, contact_v0, speed)
@@ -12963,6 +13001,7 @@ class BotRuntime(object):
         ordered_states = self._ordered_states()
         slope_candidates = []
         support_blocked_by_id = {}
+        drive_support_failures = {}
         settled_poses = {}
         ballistic_ticks = {}
         for state in ordered_states:
@@ -12982,6 +13021,8 @@ class BotRuntime(object):
                     self._turn_speeds[state['id']] = 0.0
                     state['rotation_dir'] = 0
                 support_blocked_by_id[state['id']] = bool(support_blocked)
+                drive_support_failures[state['id']] = bool(
+                    state.get('_navigation_support_blocked', False))
                 ballistic_ticks[state['id']] = bool(
                     was_airborne or state.get('airborne', False))
                 settled_poses[state['id']] = _position(state)
@@ -13055,6 +13096,12 @@ class BotRuntime(object):
                 state['yaw'] = track_pivot_yaws[bot_id]
                 self._turn_speeds[bot_id] = 0.0
                 state['rotation_dir'] = 0
+            self._settled_navigation_feedback(
+                state, tick_poses[bot_id], attempted_yaw, now,
+                navigation_motion.get(bot_id),
+                support_blocked_by_id.get(bot_id, False), pose_rollback,
+                contact_displaced=moved_after_settle,
+                drive_support_blocked=drive_support_failures.get(bot_id, False))
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),
                 pose_rollback, settled)

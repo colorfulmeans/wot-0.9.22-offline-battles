@@ -77,14 +77,14 @@ def _combine(results, disjunction=False):
     return _known(any(values) if disjunction else all(values))
 
 
-def _compare(node, actual):
+def _compare(node, actual, scale=1):
     relations = _names(node) & _RELATIONS
     if not relations:
         return _unknown('missing comparison')
     checks = []
     for name in relations:
         try:
-            required = float(_value(node, name))
+            required = float(_value(node, name)) * scale
         except (TypeError, ValueError):
             return _unknown('invalid comparison: ' + name)
         checks.append({
@@ -141,6 +141,33 @@ class _Facts(object):
             names.add('coatedOptics')
         return names
 
+    def corresponded_camouflage(self):
+        """Read the active hull camouflage from this battle's frozen outfits."""
+        outfits = self.receipt.get('vehicle_outfits')
+        if not isinstance(outfits, dict):
+            return None
+        try:
+            import ArenaType
+            from items.components.c11n_constants import SeasonType
+            from gui.shared.gui_items import GUI_ITEM_TYPE
+            from gui.shared.gui_items.customization.outfit import Outfit
+            from gui.mods.offline_lan_0922.ai import maps as tactical_maps
+            wanted = tactical_maps.normalize_map_name(self.receipt.get('map'))
+            arena = next((arena for arena in ArenaType.g_cache.values()
+                          if tactical_maps.normalize_map_name(
+                              getattr(arena, 'geometryName', None)) == wanted
+                          and getattr(arena, 'gameplayName', None) == 'ctf'), None)
+            if arena is None:
+                return None
+            season = SeasonType.fromArenaKind(arena.vehicleCamouflageKind)
+            encoded = outfits.get(str(season))
+            if not encoded:
+                return False
+            outfit = Outfit(base64.b64decode(encoded))
+            return bool(outfit.hull.slotFor(GUI_ITEM_TYPE.CAMOUFLAGE).getItem())
+        except (ImportError, AttributeError, TypeError, ValueError, KeyError):
+            return None
+
     def result(self, key, row=None):
         source = self.receipt if row is None else row
         if key in _STAT_KEYS:
@@ -155,7 +182,8 @@ class _Facts(object):
         if row is not None:
             return None
         if key in ('innerModuleDestrCount', 'innerModuleCritCount',
-                   'killsAssistedRadio', 'spottedBeforeWeBecameSpotted'):
+                   'killsAssistedRadio', 'spottedBeforeWeBecameSpotted',
+                   'damageAssistedRadioWhileInvisible'):
             if 'interactions' not in source:
                 return None
             count = 0
@@ -175,6 +203,12 @@ class _Facts(object):
                     history = _mission_history(interaction)
                     if history is None:
                         return None
+                    if key == 'damageAssistedRadioWhileInvisible':
+                        if interaction.get('mission_events_version', 1) < 4:
+                            return None
+                        count += sum(event[2] for event in history
+                                     if event[0] == 'assist_radio' and event[3])
+                        continue
                     if key == 'spottedBeforeWeBecameSpotted':
                         if interaction.get('mission_events_version', 1) < 3:
                             return None
@@ -230,10 +264,21 @@ class _Facts(object):
 
 def _results(node, facts):
     allowed = (_DECORATION | _RELATIONS |
-               set(('key', 'plus', 'max', 'total')))
+               set(('key', 'plus', 'max', 'total', 'compareWithMaxHealth')))
     unexpected = _names(node) - allowed
     if unexpected:
         return _unknown('results modifier: ' + ','.join(sorted(unexpected)))
+    scale = 1
+    health = _child(node, 'compareWithMaxHealth')
+    if health is not None:
+        if (_names(health) - _DECORATION or health.get('value', '') or
+                _names(node) & set(('max', 'total'))):
+            return _unknown('results compareWithMaxHealth modifier')
+        scale = facts.receipt.get('max_health')
+        if (isinstance(scale, bool) or
+                not isinstance(scale, mission_events.INTEGER_TYPES) or
+                not 1 <= scale <= 100000):
+            return _unknown('battle-start maximum health')
     plus = _child(node, 'plus')
     if plus is not None:
         if _names(plus) != set(('key',)):
@@ -267,7 +312,7 @@ def _results(node, facts):
     elif _child(node, 'total') is not None:
         return _unknown('total without rank')
     if _names(node) & _RELATIONS:
-        checks.append(_compare(node, amount))
+        checks.append(_compare(node, amount, scale))
     return _combine(checks) if checks else _unknown('result comparison')
 
 
@@ -543,6 +588,12 @@ def _prebattle(name, node, facts):
             return _unknown('empty preBattle condition')
         return _combine((_prebattle(key, item, facts) for key, item in items),
                         disjunction=name == 'or')
+    if name == 'correspondedCamouflage':
+        if _names(node) - _DECORATION or node.get('value', ''):
+            return _unknown('correspondedCamouflage modifier')
+        matched = facts.corresponded_camouflage()
+        return (_unknown('battle-start seasonal camouflage') if matched is None
+                else _known(matched))
     if name == 'installedModules':
         if _names(node) - (_DECORATION | set(('optionalDevice',))):
             return _unknown('installedModules restriction')

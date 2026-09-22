@@ -5726,3 +5726,60 @@ unverified boundaries are shared initial-discovery counts, assistance during
 retained visibility without direct observation, and simultaneous tracking and
 spotting assistance. The existing implementation must not be described as a
 complete reconstruction of the 0.9.22 proprietary reward rules.
+
+### September 22 report follow-up: hydraulics, navigation, missions and sight
+
+The five supplied September 21/22 reports identify the released 0.9.3 payload,
+`colorfulmeans-35611837404-1`. They do not contain the post-release Airfield and
+directive repairs described above. This candidate includes those repairs and
+the continuous, native-proven occupied-cell egress from the parallel Airfield
+follow-up; it does not change the release version.
+
+The `040924` traceback reaches `_drive_local_step` before the first hydraulic
+ground sample. `_local_legacy_support_sample` now belongs to the constructor,
+start and stop lifecycle. The first frame has no prior support; a new round
+cannot reuse the previous map's support. Regressions set the descriptor's real
+`isPitchHullAimingAvailable` guard and exercise all four retained Swedish TD
+descriptors in both travel and siege modes.
+
+The Highway report repeatedly rolls T71 back at a hull height near -11.103 m
+while the sampled centre support is near -5.151 m. The Bot physical callback
+was using the broad placement column, which could select the overhead bridge.
+It now uses the existing near-body support column shared with player physics.
+This changes support-layer selection, not allowed climbing grades or collision
+clearance. Physical support and final-pose rejection must also reach the
+navigator: a clear horizontal sweep cannot clear a blocked-contact episode
+before the full pose has been accepted. Missing baked occupied cells retain
+bounded native support, slope, hazard and collision proof before joining an
+existing graph cell; no vehicle is snapped or teleported onto a route.
+
+The LT-12 report explicitly rejects `damageAssistedRadioWhileInvisible`; the
+HT-12 report rejects `compareWithMaxHealth`. Radio-assistance evidence now
+freezes each awarded share and whether the observer is visible to the enemy
+at that event. The mission evaluator uses this history for LT-12 and the
+frozen battle-start maximum health for HT-12. It does not substitute total
+assistance or remaining HP. LT-12's first-campaign secondary condition also
+requires matching seasonal camouflage as well as a camouflage net; fitting
+evidence is taken from the battle loadout. Historical receipts missing the
+necessary evidence remain unknown rather than retroactively inventing it.
+
+Some accepted destructible removals leave their original compiled BSP skin
+under a different item slot from the repaired live WGDE instance. Movement
+already had bounded ownership checks for this case; spotting previously used
+only the destruction ledger callback. Sight rays now use the same proved
+original-skin recast, retaining their existing 0x80 skip mask. Movement keeps
+0x50. Intact surfaces, unidentified geometry and replacement/backing walls
+remain blockers. This does not assert that every small prop is transparent or
+that shell collision and spotting have identical rules.
+
+The apparent obstacle-width report is not resolved by globally shrinking
+collision geometry. Catalog contacts use compiled collision bounds, not a
+triangle-level narrow phase; the supplied evidence does not identify a safe
+per-model correction. Rate-limited `CATALOG CONTACT` and `SIGHT CONTACT`
+records now include the actual hull sweep or sight ray, object identity and
+bounds, and native surface evidence where available. They distinguish a
+catalog-box contact from a native surface and do not alter destruction state.
+
+The focused fixtures establish Python lifecycle, accounting and collision
+filtering behavior. Native #1513 entry into battle, bridge/wreck driving,
+obstacle outlines, spotting and frame pacing still require Windows gameplay.

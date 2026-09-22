@@ -4129,6 +4129,125 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(
             nav_state['hard_contact_episode']['uses_navigation_target'])
 
+    def test_final_support_rollback_replans_after_clear_horizontal_sweeps(self):
+        """A prop deck rejected after integration must not reset its evidence."""
+        target = (0.0, 0.0, 40.0)
+        command = {
+            'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': False, 'target_id': None,
+            'fire_range': 0.0, 'combat_mode': 'route',
+            'aim_position': target, 'face_position': target,
+            'move_position': target, 'recovery_mode': 'drive',
+            'movement_intent': True,
+        }
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+            direction_probe=lambda *unused: {
+                'clear': True, 'collision': False, 'water': False,
+                'slope': 0.0},
+            motion_resolver=lambda *unused, **kwargs: 'clear',
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda x, z, hint: 1.4 if z > 0.0 else 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_flat_open_graph())
+        runtime.battle_start(self.start)
+        runtime.navigator.bot_states[11] = {}
+        state = runtime.states[11]
+        state.update(x=0.0, y=0.0, z=0.0, yaw=0.0, speed=0.0,
+                     grounded_once=True)
+        clear_contact = mock.Mock(wraps=runtime.navigator.clear_blocked_contact)
+        runtime.navigator.clear_blocked_contact = clear_contact
+        for index in range(12):
+            runtime.update(.1, 1.0 + index * .1)
+        self.assertEqual((0.0, 0.0, 0.0),
+                         (state['x'], state['y'], state['z']))
+        self.assertEqual(1, runtime.navigator.bot_states[11]['blocked_step_replans'])
+        clear_contact.assert_not_called()
+        # A genuinely opened route then accepts progress and ends the episode.
+        runtime._physics_ground_probe = lambda *unused: 0.0
+        runtime.update(.1, 2.3)
+        self.assertGreater(state['z'], 0.0)
+        clear_contact.assert_called_once_with(11)
+
+    def test_contact_shove_boundary_rollback_does_not_poison_the_drive_edge(self):
+        target = (0.0, 0.0, 40.0)
+        command = {
+            'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': False, 'target_id': None,
+            'fire_range': 0.0, 'combat_mode': 'route',
+            'aim_position': target, 'face_position': target,
+            'move_position': target, 'recovery_mode': 'drive',
+            'movement_intent': True,
+        }
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            motion_resolver=lambda *unused, **kwargs: 'clear',
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_flat_open_graph())
+        runtime.battle_start(self.start)
+        runtime.navigator.bot_states[11] = {}
+        state = runtime.states[11]
+        state.update(x=0.0, y=0.0, z=0.0, yaw=0.0, speed=0.0,
+                     grounded_once=True)
+        forward_progress = []
+        def contact_correction(*unused):
+            # The real pose guard must reject this post-drive separation.
+            forward_progress.append(state['z'])
+            state['x'] = 65.0
+            return []
+        runtime._resolve_tank_contacts = contact_correction
+        report = mock.Mock(wraps=runtime.navigator.report_blocked_corridor)
+        runtime.navigator.report_blocked_corridor = report
+        for index in range(12):
+            runtime.update(.1, 1.0 + index * .1)
+        self.assertTrue(all(value > 0.0 for value in forward_progress))
+        self.assertEqual((0.0, 0.0, 0.0),
+                         (state['x'], state['y'], state['z']))
+        report.assert_not_called()
+        self.assertFalse(runtime.navigator.bot_failed_edges)
+
+    def test_settlement_hold_or_solver_failure_does_not_claim_a_physical_edge(self):
+        report = mock.Mock()
+        clear = mock.Mock()
+        runtime = self.module.BotRuntime(1)
+        runtime.navigator = types.SimpleNamespace(
+            report_blocked_corridor=report, clear_blocked_contact=clear)
+        state = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0}
+        motion = {'target': (0.0, 0.0, 40.0), 'intent': True,
+                  'world_clear': True}
+        # No physical-support marker: retired/invalid solver state is local,
+        # and a zero-distance sweep is neither a failure nor progress.
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.0, motion, True, False)
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.1, motion, False, False)
+        report.assert_not_called()
+        clear.assert_not_called()
+        # A post-contact shove can hit the boundary while the route is clear.
+        state['_navigation_support_blocked'] = True
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.15, motion, True, True,
+            contact_displaced=True)
+        report.assert_not_called()
+        clear.assert_not_called()
+        state['_navigation_support_blocked'] = True
+        motion['intent'] = False
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.2, motion, True, False)
+        report.assert_not_called()
+        self.assertNotIn('_navigation_support_blocked', state)
+        # A drive-stage rejection remains true if a later teammate shove
+        # separately alters the settled pose.
+        motion['intent'] = True
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.3, motion, True, False,
+            contact_displaced=True, drive_support_blocked=True)
+        report.assert_called_once_with(
+            11, (0.0, 0.0, 0.0), motion['target'], 0.0, 1.3)
+
     def test_ensk_slope_veto_replans_despite_reported_hull_yaw_wag(self):
         """The 180228 non-contact slope grind keeps one semantic edge."""
         target = (200.0, 0.0, 0.0)

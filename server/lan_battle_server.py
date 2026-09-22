@@ -1165,6 +1165,12 @@ def _persisted_result_receipt(value):
         raise ValueError("invalid persisted battle receipt leave state")
     if "vehicle_compact_descr" in value:
         _validated_vehicle_compact_descr(value["vehicle_compact_descr"])
+    if "vehicle_outfits" in value:
+        if not isinstance(value["vehicle_outfits"], dict):
+            raise ValueError("invalid persisted battle outfits")
+        _validated_outfits(value["vehicle_outfits"])
+    if "max_health" in value:
+        _exact_int(value["max_health"], 1, 100000)
     stats = value.get("stats")
     rewards = value.get("rewards")
     stat_names = RECEIPT_STAT_NAMES
@@ -3845,6 +3851,7 @@ class BattleState:
                 "name": participant.name,
                 "vehicle": participant.vehicle,
                 "vehicle_compact_descr": participant.vehicle_compact_descr,
+                "vehicle_outfits": copy.deepcopy(participant.outfits),
                 "vehicle_tier": tier,
                 "team": int(participant.team),
                 "alive": bool(participant.alive),
@@ -10537,6 +10544,8 @@ class BattleState:
                     "team": int(player.team),
                     "alive": bool(player.alive),
                     "health": int(player.health),
+                    "max_health": int(player.max_health),
+                    "vehicle_outfits": copy.deepcopy(player.outfits),
                     "death_reason": int(player.death_reason),
                     "death_attacker_kind": str(
                         player.death_attacker_kind or ""),
@@ -10654,6 +10663,11 @@ class BattleState:
                 }
                 if participant.get("vehicle_compact_descr"):
                     receipt["vehicle_compact_descr"] = participant["vehicle_compact_descr"]
+                # Preserve the battle's actual configured durability and
+                # active seasonal outfits, even after a garage edit/disconnect.
+                for field in ("max_health", "vehicle_outfits"):
+                    if field in participant:
+                        receipt[field] = copy.deepcopy(participant[field])
                 receipt_id = receipt["receipt_id"]
                 # One account may finish another arena before an earlier ACK
                 # reaches the server. Keep both idempotent receipts; delivery
@@ -13464,6 +13478,10 @@ class BattleState:
                 "damage_assisted_%s" % category] += amount
             self._increment_interaction(
                 assister, target, "assist_%s" % category, amount)
+            if category == "radio":
+                self._record_mission_event(
+                    assister, target, "assist_radio", amount,
+                    self._mission_invisible(assister))
             self.pending_events.append({
                 "kind": "assist",
                 "category": category,

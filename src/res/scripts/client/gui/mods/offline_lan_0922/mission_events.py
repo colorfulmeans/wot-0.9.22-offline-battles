@@ -7,6 +7,8 @@ Version 2 adds ram rows containing applied damage in both directions, victim
 death, attacker survival and pre-hit immobilization from the same collision.
 Version 3 freezes hit distance and view radius, visibility at damage/kill, ignition transitions
 and whether a detection preceded the observer's first detection by the enemy.
+Version 4 adds each allocated radio-assist share and the observer's visibility
+at that instant. Total assistance and end-of-battle visibility cannot replace it.
 The cap is per actor, across targets, keeping receipts below the wire budget.
 An incomplete history stays explicitly unknown to the mission evaluator.
 """
@@ -18,7 +20,7 @@ except NameError:
     INTEGER_TYPES = (int,)
 
 MAX_EVENTS = 1024
-VERSION = 3
+VERSION = 4
 _HISTORY_FIELDS = frozenset(('mission_events', 'mission_events_complete'))
 FIELDS = _HISTORY_FIELDS | frozenset(('mission_events_version',))
 
@@ -96,6 +98,11 @@ def valid(row):
                 return False
         elif kind == 'spot':
             if version < 3 or len(event) != 3 or not isinstance(event[2], bool):
+                return False
+        elif kind == 'assist_radio':
+            if (version < 4 or len(event) != 4 or
+                    not _integer(event[2], 1, 100000) or
+                    not isinstance(event[3], bool)):
                 return False
         elif kind == 'ram':
             if (version < 2 or len(event) != 7 or

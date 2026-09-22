@@ -5,7 +5,8 @@ The three sensor bodies below are dedented copies from ``offline_battle.py``.
 Only their former closure dependencies are supplied at module scope.
 """
 
-from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
+from gui.mods.offline_lan_0922.collision_flags import (
+	VEHICLE_SKIP_FLAGS, SIGHT_SKIP_FLAGS)
 
 from gui.mods.offline_lan_0922.worker_diagnostics import (
     observed, observed_call, observed_ray,
@@ -1612,6 +1613,7 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_isolation_logs',
 			'g_offh_destr_isolation_log_capped',
 			'g_offh_destr_diagnostics', 'g_offh_destr_diag_last_static',
+			'g_offh_destr_contact_diagnostic_times',
 			'g_offh_destr_spatial_revision',
 			'g_offh_destr_spatial_global_generation',
 			'g_offh_destr_spatial_cell_generations',
@@ -4618,7 +4620,8 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 
 
 def collide_motion_segment(space_id, start, end, collision_filter,
-		native_collide, ray_label='native.motion.ray', evidence=None):
+		native_collide, ray_label='native.motion.ray', evidence=None,
+		skip_flags=VEHICLE_SKIP_FLAGS):
 	"""Recast compiled original skins inside their accepted object/module.
 
 	#1513 can return a merged, PROJECTILENOCOLLIDE BSP with anonymous item
@@ -4632,7 +4635,7 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 	geometry inside the original module's box. All intervals share one budget.
 	"""
 	if collision_filter is None or _destructible_catalog is None:
-		args = (space_id, start, end, VEHICLE_SKIP_FLAGS)
+		args = (space_id, start, end, skip_flags)
 		if collision_filter is not None:
 			args += (collision_filter,)
 		return observed_ray(ray_label, native_collide, *args)
@@ -4641,7 +4644,7 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 		excluded_aliases = frozenset(surface[:2] for surface in excluded)
 		if collision_filter is None:
 			return (observed_ray(ray_label, native_collide,
-				space_id, a, b, VEHICLE_SKIP_FLAGS), candidates)
+				space_id, a, b, skip_flags), candidates)
 		def keep(*hit):
 			accepted = collision_filter(*hit)
 			alias = _anonymous_original_surface_1513(hit)
@@ -4651,7 +4654,7 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 				candidates.add(tuple(hit))
 			return accepted
 		hit = observed_ray(ray_label, native_collide,
-			space_id, a, b, VEHICLE_SKIP_FLAGS, keep)
+			space_id, a, b, skip_flags, keep)
 		if evidence is not None:
 			evidence.setdefault('queries', []).append({
 				'start': (a.x, a.y, a.z), 'end': (b.x, b.y, b.z),
@@ -4695,6 +4698,19 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 		globals()['g_offh_destr_ground_skips'] = globals().get(
 			'g_offh_destr_ground_skips', 0) + 1
 	return None
+
+
+def collide_sight_segment(space_id, start, end, collision_filter,
+		native_collide):
+	"""Release only proved broken original skins on a static spotting ray.
+
+	The live WGDE slot can differ from the original BSP slot after chunk
+	layout repair. A plain ledger callback therefore leaves some destroyed
+	fences opaque. Reuse bounded ownership proof while retaining the sight
+	mask and every intact, replacement, or unidentified surface.
+	"""
+	return collide_motion_segment(space_id, start, end, collision_filter,
+		native_collide, 'native.sight.ray', skip_flags=SIGHT_SKIP_FLAGS)
 
 
 def sight_collision_filter():
@@ -5038,6 +5054,22 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		'kinetic' if kinetic else
 		'crushed' if crushed else
 		'approach' if approach else 'clear')
+	if blocked and _contact_diagnostic_due_1513('CATALOG CONTACT', now):
+		try:
+			owners = []
+			for identity in sorted(grouped)[:8]:
+				instance = instances.get(identity, {})
+				owners.append({'identity': identity,
+					'filename': instance.get('filename'),
+					'kind': instance.get('kind'),
+					'boxes': instance.get('boxes', ())})
+			_write_contact_diagnostic_1513('CATALOG CONTACT', {
+				'space': spaceID, 'vehicle_sweep': vehicle_box,
+				'owners': owners, 'owners_omitted': max(0, len(grouped) - 8),
+				'unidentified': bool(unidentified), 'status': status,
+				'geometry': 'compiled collision bounds; not triangle surfaces'})
+		except Exception:
+			pass
 	return _catalog_motion_result(
 		status, exact_token, accepted_now,
 		used_kinetic_speed, return_status, return_detail, contact_kinds,
@@ -7537,7 +7569,8 @@ def _native_contact_slot_evidence_1513(space_id, surface):
 	return result
 
 
-def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
+def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt,
+		skip_flags=VEHICLE_SKIP_FLAGS):
 	"""Resolve a stalled ray's actual surfaces without changing destruction.
 
 	The ordinary callback log is a set of traversal candidates, NOT a nearest
@@ -7547,12 +7580,17 @@ def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 	"""
 	import BigWorld
 	import Math
-	evidence = {'surface_columns': 'material,flags,item,chunk'}
-	keep = horizontal_collision_filter(segment_start, segment_end)
+	evidence = {'surface_columns': 'material,flags,item,chunk',
+		'skip_flags': skip_flags}
+	ray_label = ('native.sight.diagnostic' if skip_flags == SIGHT_SKIP_FLAGS
+		else 'native.motion.diagnostic')
+	keep = (sight_collision_filter() if skip_flags == SIGHT_SKIP_FLAGS else
+		horizontal_collision_filter(segment_start, segment_end))
 	if keep is None:
 		keep = lambda *unused: True
 	result = collide_motion_segment(spaceID, segment_start, segment_end, keep,
-		BigWorld.wg_collideSegment, 'native.motion.diagnostic', evidence=evidence)
+		BigWorld.wg_collideSegment, ray_label, evidence=evidence,
+		skip_flags=skip_flags)
 	evidence['replay_clear'] = result is None
 	if result is not None:
 		evidence['replay_contact_distance'] = (result[0] - hit_pt).length
@@ -7566,9 +7604,9 @@ def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 				alias = _anonymous_original_surface_1513(key)
 				return (tuple(surface) == key if alias is None else
 					_anonymous_original_surface_1513(surface) == alias)
-			hit = observed_ray('native.motion.diagnostic',
+			hit = observed_ray(ray_label,
 				BigWorld.wg_collideSegment, spaceID, a, b,
-				VEHICLE_SKIP_FLAGS, only_surface)
+				skip_flags, only_surface)
 			witness = {'key': key, 'hit': None}
 			if hit is not None:
 				slot = _native_contact_slot_evidence_1513(spaceID, key)
@@ -7611,6 +7649,61 @@ def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 			'isolated': _destructible_isolated_1513(*identity)})
 	evidence['nearby_owners'] = owners
 	return evidence
+
+
+def _contact_diagnostic_due_1513(category, now=None):
+	"""Capture ordinary reports without enabling per-object debug logging.
+
+	These two contact records are needed with the default debug_logging=False.
+	One timestamp per fixed category bounds native replay work across all
+	vehicles and sight rays in this process, including when debug is enabled.
+	"""
+	if now is None:
+		now = _diagnostic_time_1513()
+	now = float(now)
+	times = globals().setdefault('g_offh_destr_contact_diagnostic_times', {})
+	previous = times.get(category)
+	if previous is not None and previous <= now < previous + 5.0:
+		return False
+	times[category] = now
+	return True
+
+
+def _write_contact_diagnostic_1513(category, payload):
+	try:
+		import json
+		import sys
+		writer = _diagnostic_writer or sys.stdout.write
+		writer('[Offline LAN 0.9.22] %s %s\n' % (
+			category, json.dumps(payload)))
+	except Exception:
+		pass
+
+
+def report_sight_contact(spaceID, start, end, hit):
+	"""Record the actual blocked ray; never decide spotting from diagnostics."""
+	if not _contact_diagnostic_due_1513('SIGHT CONTACT'):
+		return
+	try:
+		payload = {
+			'space': spaceID, 'ray_start': (start.x, start.y, start.z),
+			'ray_end': (end.x, end.y, end.z),
+			'hit': (hit[0].x, hit[0].y, hit[0].z),
+			'normal': (hit[1].x, hit[1].y, hit[1].z),
+		}
+		try:
+			payload['native_contact_evidence'] = native_contact_evidence(
+				spaceID, start, end, hit[0], skip_flags=SIGHT_SKIP_FLAGS)
+		except Exception as error:
+			payload['native_contact_error'] = str(error)[:160]
+		try:
+			payload['material_probes'] = static_contact_evidence(
+				spaceID, start, hit[0], hit[1])
+		except Exception as error:
+			payload['material_probe_error'] = str(error)[:160]
+		_write_contact_diagnostic_1513('SIGHT CONTACT', payload)
+	except Exception as error:
+		_write_contact_diagnostic_1513('SIGHT CONTACT', {'error': str(error)[:160]})
 
 
 def _try_destroy_solid_hit(spaceID, segment_start, hit_pt, surf_normal,
