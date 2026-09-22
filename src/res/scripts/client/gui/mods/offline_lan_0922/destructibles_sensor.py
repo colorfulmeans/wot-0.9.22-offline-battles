@@ -4005,7 +4005,7 @@ def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
 def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 		collision, vel, td, recast_budget=None,
 		require_pending_first=False, allow_kinetic_first=False,
-		kinetic_speed=None):
+		kinetic_speed=None, planning_crushable=None):
 	"""Classify a far static ray without destroying anything.
 
 	A bot direction probe may look 15--20 metres ahead.  It may regard a
@@ -4017,7 +4017,11 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	native recast budget instead returns ``'deferred'`` so the caller can avoid
 	caching a false hard wall.
 	"""
-	if (_destructible_catalog is None or collision is None or td is None):
+	# A shared graph can supply the intersection of its vehicles' exact stock
+	# kinetic gates. It still shares this one identity proof and native recast;
+	# the callback never authorizes destruction or skips a backing surface.
+	if (_destructible_catalog is None or collision is None or
+			(td is None and not callable(planning_crushable))):
 		return False
 	import BigWorld
 	import Math
@@ -4057,8 +4061,12 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			authority.is_destroyed(candidate[0], candidate[1], candidate[2]))
 		mat_info = _synthetic_mat_info(candidate + ((
 			float(hit_point.x), float(hit_point.y), float(hit_point.z)),), Math)
-		current_crushable = broken or _stock_crushable_1513(
-			mat_info, vel, td, candidate[5])
+		if callable(planning_crushable):
+			current_crushable = broken or planning_crushable(
+				mat_info, candidate[5])
+		else:
+			current_crushable = broken or _stock_crushable_1513(
+				mat_info, vel, td, candidate[5])
 		if require_pending_first and candidate_index == 0:
 			if broken:
 				pending_contact = True

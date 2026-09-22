@@ -5836,14 +5836,32 @@ class BattleRuntime(object):
             'direction': (-1 if signed_speed < 0.0 else 1),
         }
 
+    def _navigation_crush_proof(self):
+        """Read the complete immutable roster's common planning capability."""
+        provider = getattr(self._bots, 'navigation_crush_profiles', None)
+        profiles = provider() if callable(provider) else None
+        if not profiles:
+            return None
+
+        def crushable(mat_info, item_scale):
+            try:
+                return all(self._destructibles._stock_crushable_1513(
+                    mat_info, speed, descriptor, item_scale)
+                    for descriptor, speed in profiles)
+            except (AttributeError, KeyError, TypeError, ValueError,
+                    OverflowError, RuntimeError):
+                return False
+        return crushable
+
     def _navigation_obstacle(self, start, end, half_width):
-        """Exact 0.8.2 coarse graph sweep through the #1513 collision API."""
+        """Probe shared geometry, retaining unresolved work as deferred."""
         dx = float(end[0]) - float(start[0])
         dz = float(end[2]) - float(start[2])
         length = math.sqrt(dx * dx + dz * dz)
         if length < 0.1:
             return False
         lateral_x, lateral_z = dz / length, -dx / length
+        planning_crushable = self._navigation_crush_proof()
         for offset in (-float(half_width), 0.0, float(half_width)):
             for height in (0.9, 1.6):
                 ray_start = self._vector((
@@ -5866,7 +5884,19 @@ class BattleRuntime(object):
                     hit = native(self._avatar.spaceID, ray_start, ray_end,
                                  VEHICLE_SKIP_FLAGS)
                 if hit is not None:
-                    return True
+                    if planning_crushable is None:
+                        return True
+                    status = self._destructibles._catalog_soft_static_path(
+                        self._avatar.spaceID, ray_start, ray_end, hit,
+                        0.0, None, recast_budget=self._soft_static_recast_budget,
+                        planning_crushable=planning_crushable)
+                    if status == 'deferred':
+                        # The graph cannot cache this edge yet. Do not repeat
+                        # the remaining native lanes against an empty budget;
+                        # a later frame resumes the same complete proof.
+                        return 'deferred'
+                    elif status not in (True, 'kinetic'):
+                        return True
         return False
 
     def _water_depth(self, point):

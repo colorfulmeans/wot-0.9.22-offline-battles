@@ -5829,3 +5829,67 @@ still exposes local minima in the short fallback. Thus this repairs the
 reproduced moving-target defect, not every cause of circling. Only a new
 exact-client Windows playtest can establish that both vehicles leave the
 native scene reliably.
+
+### September 22 Airfield follow-up: circling at spawn
+
+Report `20260922-113632-50a443198d84` runs the next delivered candidate,
+`colorfulmeans-35681498572-1`. All three rounds are Airfield; Bot IDs repeat
+between them. Of 68 local-motion observations, 67 have no traffic restriction,
+all have clear or crushed world motion, and none records a support/pose
+rollback or contact pair. The new evidence therefore cannot be explained only
+by mutual vehicle avoidance. Local-motion observations establish slow local
+progress, not necessarily a closed circle.
+
+Two Object 730 samples retain the same nearby target while driving and
+turning continuously. Their recorded movement, speed and timestep reproduce
+26 degrees/second hull traverse. The target's arrival disk lies inside the
+current turning circle, so full throttle can orbit it. LocalDriver now uses
+the installed traverse limit, including stun, to recognize this geometry and
+brake through alignment until the forward ray intersects the arrival disk.
+No vehicle coefficients change. Hold, reverse, recovery, a changed target or
+unavailable physics clear the alignment state. Ordinary steering probes are
+bounded by the selected waypoint plus the leading hull and decision travel;
+explicit recovery probes and remembered live-vehicle blockers retain their
+own checks. The realised motion gate remains authoritative.
+
+A recovery search used to survive the two-metre displacement that ended its
+recovery, then consume search credit alongside the replacement route search.
+That private job now retires with its recovery. A pending A* search also
+exposes already admitted dry parent edges as a stable prefix, allowing a
+validated detour before the complete route is available. The prefix belongs
+to its search and request, checks the unsnapped current position and penalties,
+and is retired on cancellation, completion or invalidation. Reaching another
+temporary greedy waypoint no longer continually resets strategic no-progress
+detection. An arrived short fallback point anchors the next leg, rather than
+re-centering every leg on a hull still inside the same eroded cell; the actual
+hull-to-new-target connector must pass the complete safety checks. Search
+limits and native-query budgets are unchanged.
+
+Shared native navigation previously rejected intact crushable props while
+the driving probe admitted them using the stock kinetic gate. A shared edge
+now requires the stock proof for every distinct physical profile in the
+complete roster, including both siege modes and both directional speed caps.
+It reuses one unique live-object identity check and an exact material-filtered
+recast, retaining unknown objects and backing walls. This is a conservative
+common planning capability: a slow or incomplete profile can keep the edge
+blocked for everyone, and actual motion still owns impact and destruction.
+Roster or descriptor changes invalidate dependent navigation proofs. A spent
+recast budget defers the search edge until the next frame without caching a
+false wall or repeatedly probing that same edge in one frame.
+
+The LAN poll also discarded a sparse `bot_orders` section when a later lean
+snapshot arrived in the same batch. The server had already marked the section
+sent, so the worker could keep an old reached waypoint until a later resend.
+Coalescing now carries the newest complete order section into the latest
+physical snapshot within the same round, authority and map. Explicit empty
+orders, revision ordering, event boundaries and bounded overflow are covered.
+The report has no complete order-delivery trace; this independently reproduced
+loss is not asserted to be the only cause of its delayed target updates.
+
+Regression coverage includes recorded-pose driving, slow and fast traverse,
+left/right targets, track-centred pivots, real blocked corridors requiring an
+initial detour, deferred geometry, retained backing walls and the actual LAN
+poll/overflow path. These establish local control and lifecycle behavior.
+The report's 8.35 FPS window is still dominated by physical motion queries;
+this change does not establish a frame-rate repair or native Airfield gameplay
+acceptance. Exact #1513 Windows driving remains the acceptance boundary.

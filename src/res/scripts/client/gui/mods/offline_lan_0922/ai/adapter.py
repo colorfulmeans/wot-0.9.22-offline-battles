@@ -197,6 +197,7 @@ class BotAdapter(object):
     @observed('driver.order')
     def _drive_order(self, bot_id, state, position, strategic,
                      direction_clear):
+        state.pop('navigation_probe_distance', None)
         aim_position = strategic.get('aim_position')
         move_position = strategic.get('move_position')
         face_position = strategic.get('face_position')
@@ -241,6 +242,25 @@ class BotAdapter(object):
         requested_dz = float(move_position[2]) - float(position[2])
         target_dx = float(target[0]) - float(position[0])
         target_dz = float(target[2]) - float(position[2])
+        if movement_intent and not contact_escape:
+            try:
+                leading = float(state.get('half_length', 3.5))
+                horizon = float(state.get('decision_horizon', 0.0))
+                speed = float(state.get('speed', 0.0))
+                finite = all(not math.isnan(value) and not math.isinf(value)
+                             for value in (leading, horizon, speed))
+                reach = abs(speed) * max(0.0, horizon)
+                remaining = math.hypot(target_dx, target_dz) - WAYPOINT_ARRIVAL_RADIUS
+                distance = leading + max(remaining, reach)
+                if (finite and remaining > 0.0 and leading > 0.0 and
+                        not math.isnan(distance) and not math.isinf(distance)):
+                    # The runtime applies this only to ordinary driver probes,
+                    # after checking remembered vehicle blockers. Explicit short
+                    # recovery probes retain their own range and traffic rules.
+                    # Include the leading hull and this decision's real travel.
+                    state['navigation_probe_distance'] = distance
+            except (TypeError, ValueError, OverflowError):
+                pass
         navigation_wait = bool(
             movement_intent and
             requested_dx * requested_dx + requested_dz * requested_dz > 225.0 and
@@ -272,7 +292,8 @@ class BotAdapter(object):
                 stopping_distance=state.get('stopping_distance'),
                 stop_at_target=stop_at_target,
                 decision_horizon=float(state.get('decision_horizon', 0.0)),
-                pose_clear=state.get('pose_clear'))
+                pose_clear=state.get('pose_clear'),
+                turn_speed_limit=state.get('turn_speed_limit'))
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
         # their stable 12-30 degree hull angle while the turret keeps tracking

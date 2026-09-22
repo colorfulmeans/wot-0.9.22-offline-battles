@@ -1979,6 +1979,37 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(motion_calls)
         self.assertTrue(all(params is installed for params in motion_calls))
 
+    def test_driver_turn_limit_matches_installed_and_stunned_traverse(self):
+        self.runtime.battle_start(self.start)
+        installed = self.runtime._physics_params[11]
+        state = self.runtime.states[11]
+        self.runtime._observe_bot_stun(state, {
+            'stun_end_server_time_ms': 10000,
+            'stun_factors': {'traverse': 0.6}}, 0)
+        original = self.module.vehicle_physics.traverse_step
+        motion_limits = []
+
+        def traverse(params, *args, **kwargs):
+            motion_limits.append(params['rotSpd'])
+            return original(params, *args, **kwargs)
+
+        self.module.vehicle_physics.traverse_step = traverse
+        try:
+            self.runtime.update(0.04, 1.0)
+            decision = self.adapters[0].calls[-1][0]
+            self.assertAlmostEqual(installed['rotSpd'] * 0.6,
+                                   decision['turn_speed_limit'])
+            self.assertTrue(motion_limits)
+            self.assertTrue(all(abs(limit - decision['turn_speed_limit']) <
+                                1.0e-9 for limit in motion_limits))
+            state['stun_end_server_time_ms'] = 0
+            self.runtime._decision_cache.clear()
+            self.runtime.update(0.04, 1.5)
+            self.assertEqual(installed['rotSpd'],
+                             self.adapters[0].calls[-1][0]['turn_speed_limit'])
+        finally:
+            self.module.vehicle_physics.traverse_step = original
+
     def test_probe_totals_count_only_real_query_seams_and_are_pull_only(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
@@ -3257,6 +3288,46 @@ class BotRuntimeTests(unittest.TestCase):
             runtime._motion_probe_cache[11]['maximum_distance'])
         self.assertEqual(-1, state['movement_dir'])
         self.assertLess(state['z'], before_z)
+
+    def test_selected_waypoint_bounds_default_probe_but_not_recovery(self):
+        command = self._stationary_command()
+        requested = []
+        verdicts = []
+
+        class WaypointAdapter(_FixedAdapter):
+            def decide(self, state, clear):
+                state['navigation_probe_distance'] = 5.0
+                verdicts.append((clear(state['yaw']),
+                                 clear(state['yaw'], 12.0)))
+                return dict(self.command)
+
+        def wall(position, yaw, speed, descriptor, maximum_distance=None):
+            requested.append(maximum_distance)
+            blocked = maximum_distance is None or maximum_distance >= 8.0
+            return {'clear': not blocked, 'collision': blocked,
+                    'water': False, 'slope': 0.0}
+
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: WaypointAdapter(command),
+            direction_probe=wall, ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        runtime._planner_corridor_clear = lambda *args, **kwargs: None
+        runtime.update(0.04, 1.0)
+        self.assertEqual([(True, False)], verdicts)
+        self.assertEqual([5.0, 12.0], requested[:2])
+
+        # An ordinary bounded probe must still see the previously confirmed
+        # live blocker. Explicit recovery probes retain their separate sweep.
+        runtime.states[11]['traffic_obstacles'] = {99: 10.0}
+        runtime._decision_cache.clear()
+        with mock.patch.object(
+                runtime._traffic_coordinator._escape_probe,
+                '_reverse_blocked_by_vehicle', return_value=99):
+            runtime.update(0.04, 1.5)
+        self.assertEqual((False, False), verdicts[-1])
 
     def test_deferred_final_world_receipt_uses_generic_and_retries(self):
         command = {

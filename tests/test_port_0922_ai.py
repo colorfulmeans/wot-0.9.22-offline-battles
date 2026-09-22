@@ -61,6 +61,10 @@ class _PendingSearch(object):
         self.done = False
         self.last_frame = None
         self.steps = 0
+        self.progress = {}
+
+    def proved_prefix(self, grid):
+        return ()
 
     def step(self, count):
         self.steps += int(count)

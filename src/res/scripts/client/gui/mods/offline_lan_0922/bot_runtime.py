@@ -2097,6 +2097,9 @@ class BotRuntime(object):
         self._pending_manifest_authority_id = None
         self._descriptor_pairs = {}
         self._descriptors = {}
+        self._navigation_crush_profiles_ready = False
+        self._navigation_crush_profile_signature = None
+        self._navigation_crush_profile_cache = None
         self._gun_yaw_limits = {}
         self._gun_states = {}
         self._ammo_states = {}
@@ -2747,6 +2750,63 @@ class BotRuntime(object):
         self._suspension_params[bot_id] = params
         return params
 
+    def navigation_crush_profiles(self):
+        """Return the common graph's complete, frozen stock kinetic inputs."""
+        return self._navigation_crush_profile_cache
+
+    def _refresh_navigation_crush_profiles(self):
+        """Publish both modes together at manifest or descriptor boundaries.
+
+        A shared undirected graph must not inherit one heavy/fast Bot's
+        clearance. Every distinct mass and directional speed cap participates;
+        the slowest mode may deliberately keep an obstacle solid for everyone.
+        These are planning caps, not a claim that impact speed is already met.
+        """
+        profiles = None
+        signature = (self.round_id, None)
+        pairs = self._descriptor_pairs
+        if (self._navigation_crush_profiles_ready and pairs and
+                set(pairs) == set(self.states)):
+            try:
+                entries = []
+                unique = {}
+                for bot_id, pair in sorted(pairs.items()):
+                    if len(pair) != 2 or pair[0] is None:
+                        raise ValueError('incomplete Bot descriptor pair')
+                    if (pair[1] is None and
+                            (siege_mechanics.params(pair[0]) is not None or
+                             _value(pair[0], 'hasSiegeMode', False))):
+                        raise ValueError('missing Bot Siege descriptor')
+                    for descriptor in pair:
+                        if descriptor is None:
+                            continue
+                        # Do not use derive_params defaults as proof for a
+                        # descriptor whose exact kinetic fields are absent.
+                        physics = _value(descriptor, 'physics')
+                        mass = float(physics['weight'])
+                        forward = abs(float(physics['speedLimits'][0]))
+                        backward = abs(float(physics['speedLimits'][1]))
+                        if any(value <= 0.0 or math.isnan(value) or
+                               math.isinf(value) for value in
+                               (mass, forward, backward)):
+                            raise ValueError('invalid Bot kinetic inputs')
+                        cap = min(forward, backward)
+                        entries.append((bot_id, id(descriptor), mass,
+                                        forward, backward))
+                        unique.setdefault((mass, cap), (descriptor, cap))
+                profiles = tuple(unique[key] for key in sorted(unique))
+                signature = (self.round_id, tuple(entries))
+            except (AttributeError, IndexError, KeyError, TypeError,
+                    ValueError, OverflowError):
+                profiles = None
+        if signature == self._navigation_crush_profile_signature:
+            return
+        self._navigation_crush_profile_signature = signature
+        self._navigation_crush_profile_cache = profiles
+        invalidate = getattr(self.navigator, 'invalidate_native_planning', None)
+        if callable(invalidate):
+            invalidate()
+
     def _install_bot_descriptor(self, bot_id, state, siege_state):
         """Install one bot's active immutable mode descriptor."""
         bot_id = int(bot_id)
@@ -2758,6 +2818,7 @@ class BotRuntime(object):
         self._descriptors[bot_id] = descriptor
         if previous is descriptor:
             return False
+        self._refresh_navigation_crush_profiles()
         if state is not None:
             state.pop(_GUN_PITCH_LIMIT_CACHE, None)
         self._physics_params[bot_id] = _bot_physics_params(
@@ -3203,6 +3264,8 @@ class BotRuntime(object):
             self._pending_manifest_authority_id = None
             self._descriptor_pairs = {}
             self._descriptors = {}
+            self._navigation_crush_profiles_ready = False
+            self._refresh_navigation_crush_profiles()
             self._gun_yaw_limits = {}
             self._gun_states = {}
             self._ammo_states = {}
@@ -3396,6 +3459,9 @@ class BotRuntime(object):
                                              round_id or 0)
             if self.navigator is not None:
                 self.adapter.navigation_target = self._navigation_target
+        # No native edge may be reused from a partially installed roster.
+        self._navigation_crush_profiles_ready = False
+        self._refresh_navigation_crush_profiles()
         for raw, bot_id, vehicle_name, descriptor_pair in resolved_manifest:
             raw_siege_state = raw.get(
                 'siege_state', siege_mechanics.DISABLED)
@@ -3597,6 +3663,8 @@ class BotRuntime(object):
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)
+        self._navigation_crush_profiles_ready = True
+        self._refresh_navigation_crush_profiles()
         bots = [self._manifest_entry(state)
                 for state in self._ordered_states()]
         player_collision_profiles = (
@@ -11630,6 +11698,7 @@ class BotRuntime(object):
                         'decision_cache_missing' if decision_cache is None else
                         'decision_order_changed')
             decision_deadline = None
+            decision_state = None
             raw_command = None
             planner_probe_samples = {}
 
@@ -11708,6 +11777,13 @@ class BotRuntime(object):
                 # twenty metre travel horizon rejects every gateway, alley and
                 # bridge underpass on the map, which leaves an in-place turn
                 # as the only recovery in exactly the places no hull can turn.
+                if maximum_distance is None and decision_state is not None:
+                    # The adapter knows the selected navigation point only
+                    # after planning. Bound ordinary steering to that point's
+                    # full leading-hull sweep; preserve the live-vehicle check
+                    # above and every explicit recovery probe's own distance.
+                    maximum_distance = decision_state.get(
+                        'navigation_probe_distance')
                 advisory = self._planner_corridor_clear(
                     position, sample_yaw, state.get('speed', 0.0),
                     maximum_distance=maximum_distance,
@@ -11774,6 +11850,15 @@ class BotRuntime(object):
                     server_order.get('combat_mode', 'route')
                     if isinstance(server_order, dict) else None)
                 physics_params = self._physics_params_for(state['id'])
+                # Match the copied traverse integrator's installed chassis
+                # rate (terrainIdx=0), including the current stun. Steering
+                # needs this physical limit to avoid orbiting short waypoints.
+                turn_speed_limit = (
+                    physics_params.get('rotSpd')
+                    if physics_params is not None else None)
+                if turn_speed_limit is not None:
+                    turn_speed_limit *= stun_mechanics.factor(
+                        state, 'traverse')
                 if (physics_params is not None and
                         abs(state['speed']) > 0.35 and
                         expected_mode not in ('route', 'advance')):
@@ -11806,6 +11891,7 @@ class BotRuntime(object):
                     'half_length': state.get('half_length', 3.5),
                     'half_width': state.get('half_width', 1.7),
                     'stopping_distance': stopping_distance,
+                    'turn_speed_limit': turn_speed_limit,
                     'decision_horizon': decision_horizon,
                 }
                 reposition_order, reposition_expired = \

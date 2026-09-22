@@ -583,7 +583,8 @@ class LocalDriver(object):
 			neighbours, direction_clear, velocity=None,
 			half_length=3.5, half_width=1.7,
 			movement_intent=True, stopping_distance=None,
-			stop_at_target=True, decision_horizon=0.0, pose_clear=None):
+			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
+			turn_speed_limit=None):
 		"""Return throttle, explicit brake, steering and recovery intent.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -625,6 +626,7 @@ class LocalDriver(object):
 			state['steering_yaw'] = None
 			state['heading_progress_yaw'] = None
 			state['braking_target'] = None
+			state['alignment_target'] = None
 			return {
 				'throttle': 0.0,
 				'brake': True,
@@ -648,6 +650,7 @@ class LocalDriver(object):
 			state['last_position'] = (
 				float(position[0]), float(position[2]))
 			state['braking_target'] = None
+			state['alignment_target'] = None
 			return {
 				'throttle': 0.0,
 				'brake': True,
@@ -714,6 +717,7 @@ class LocalDriver(object):
 					own_half_length, own_half_width)
 
 		if state['recovery_time'] > 0.0:
+			state['alignment_target'] = None
 			# Keep one side for the whole episode. Geometry separates an asymmetric
 			# local jam; team-local slot parity breaks an exact tie without coupling
 			# steering to the timing phase. Never reverse blindly: at a cliff or
@@ -893,6 +897,37 @@ class LocalDriver(object):
 					throttle = 0.0
 		elif not stop_at_target:
 			state['braking_target'] = None
+
+		# A short waypoint can lie wholly inside the hull's minimum turning
+		# circle. Full drive then circles a reachable point without ever entering
+		# its arrival radius; translation keeps the ordinary stuck timer clear.
+		# Use the caller's actual traverse limit, never a guessed vehicle rate.
+		# Braking for alignment is separate from stopping at a route endpoint.
+		alignment_target = (float(target[0]), float(target[2]))
+		if (avoiding or state.get('alignment_target') != alignment_target):
+			state['alignment_target'] = None
+		if not avoiding:
+			forward = target_distance * math.cos(_angle_delta(desired_yaw, yaw))
+			side = target_distance * abs(math.sin(_angle_delta(desired_yaw, yaw)))
+			try:
+				traverse_limit = float(turn_speed_limit)
+			except (TypeError, ValueError, OverflowError):
+				traverse_limit = 0.0
+			if (traverse_limit <= 0.0 or math.isinf(traverse_limit) or
+					math.isnan(traverse_limit) or speed < 0.0):
+				state['alignment_target'] = None
+			elif speed > 0.0:
+				radius = float(speed) / traverse_limit
+				if math.hypot(forward, side - radius) + WAYPOINT_ARRIVAL_RADIUS < radius:
+					state['alignment_target'] = alignment_target
+			if state.get('alignment_target') == alignment_target:
+				# Keep the brake through the pivot, rather than accelerating again
+				# as soon as the smaller speed makes the circle test pass. Release
+				# when the forward ray intersects the existing arrival disk.
+				if forward > 0.0 and side <= WAYPOINT_ARRIVAL_RADIUS:
+					state['alignment_target'] = None
+				else:
+					throttle = 0.0
 		return {
 			'throttle': throttle,
 			# Zero throttle here requests a pivot or a terminal stop. Merely
