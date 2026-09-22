@@ -692,7 +692,7 @@ class LanProtocolTests(unittest.TestCase):
                     for row in state._vehicle_statistics_payload())
         self.assertEqual({
             'actor_kind', 'actor_id', 'team', 'shots_fired', 'shots_hit',
-            'shots_penetrated', 'damage_dealt', 'damage_received',
+            'shots_penetrated', 'max_piercing_series', 'damage_dealt', 'damage_received',
             'damage_blocked', 'damage_assisted_track',
             'damage_assisted_radio', 'damage_assisted_stun',
             'kills', 'spotted',
@@ -722,6 +722,7 @@ class LanProtocolTests(unittest.TestCase):
         self.assertEqual(240, rows[1]['damage_assisted_radio'])
         self.assertEqual(240, rows[3]['damage_dealt'])
         self.assertEqual(240, rows[2]['damage_received'])
+        self.assertEqual(0, rows[1]['max_piercing_series'])
         self.assertEqual(1, rows[3]['critical_hits'])
         self.assertEqual(1, rows[3]['team_crits'])
         self.assertEqual(list(rows.values()), json.loads(json.dumps(list(rows.values()))))

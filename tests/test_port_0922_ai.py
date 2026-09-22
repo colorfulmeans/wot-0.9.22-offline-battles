@@ -61,6 +61,10 @@ class _PendingSearch(object):
         self.done = False
         self.last_frame = None
         self.steps = 0
+        self.progress = {}
+
+    def proved_prefix(self, grid):
+        return ()
 
     def step(self, count):
         self.steps += int(count)
@@ -530,8 +534,10 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual('nav_wait', order['recovery_mode'])
         self.assertEqual(0.0, order['throttle'])
         self.assertTrue(order['brake'])
-        self.assertLess(order['turn'], 0.0)
-        self.assertEqual(0.0, order['target_yaw'])
+        # A pending route has no proved heading yet. Keep its physical pose;
+        # deliberate arrived/combat facing is exercised by the preceding test.
+        self.assertEqual(0.0, order['turn'])
+        self.assertEqual(0.25, order['target_yaw'])
 
     def test_local_director_does_not_jiggle_without_confirmed_cover(self):
         descriptor = {
@@ -1704,11 +1710,13 @@ class BotAiPortTests(unittest.TestCase):
         yaw = [0.0]
         planned = navigator._path
 
-        def shore_search(path_key, start, target, now, avoid_points):
+        def shore_search(path_key, start, target, now, avoid_points,
+                         native_capability=None):
             # A search near the shore fails after A* has selected the ford.
             if position[0] >= 17.0:
                 return (('shore-search-failed',), ())
-            return planned(path_key, start, target, now, avoid_points)
+            return planned(path_key, start, target, now, avoid_points,
+                           native_capability)
 
         def direction_clear(sample_yaw):
             # Same one-cell corridor rule as the runtime planner gate.

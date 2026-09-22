@@ -118,6 +118,18 @@ def _wire_utf8(value):
     return str(value)
 
 
+def _piercing_series_stat(raw_stats, stats):
+    """Retain verified series evidence without inventing it for old receipts."""
+    if 'max_piercing_series' not in raw_stats:
+        stats.pop('max_piercing_series', None)
+        return
+    value = raw_stats['max_piercing_series']
+    if (type(value) not in integer_types or value < 0 or
+            value > min(stats.get('shots', 0), stats.get('piercings', 0))):
+        raise ValueError('battle receipt piercing series is invalid')
+    stats['max_piercing_series'] = value
+
+
 def _receipt(value):
     """Return one bounded canonical receipt or raise ValueError."""
     if not isinstance(value, dict):
@@ -150,6 +162,17 @@ def _receipt(value):
             value['watched_battle_to_end'], bool)):
         raise ValueError('battle receipt watched state is invalid')
     mounted = value.get('vehicle_compact_descr')
+    battle_max_health = value.get('max_health')
+    if ('max_health' in value and
+            (type(battle_max_health) not in integer_types or
+             not 1 <= battle_max_health <= 100000)):
+        raise ValueError('battle receipt maximum health is invalid')
+    outfits = value.get('vehicle_outfits')
+    if 'vehicle_outfits' in value:
+        from gui.mods.offline_lan_0922.lan_client import _canonical_wire_outfits
+        if (not isinstance(outfits, dict) or
+                _canonical_wire_outfits(outfits) is None):
+            raise ValueError('battle receipt outfits are invalid')
     if 'vehicle_compact_descr' in value:
         try:
             decoded = base64.b64decode(mounted.encode('ascii'))
@@ -164,6 +187,7 @@ def _receipt(value):
         raise ValueError('battle receipt summary is invalid')
     stats = dict((name, max(0, _int(raw_stats.get(name))))
                  for name in RECEIPT_STAT_NAMES)
+    _piercing_series_stat(raw_stats, stats)
     if 'internal_crits_at_end' not in raw_stats:
         # Old receipts cannot prove the zero-valued TD2 honor condition.
         stats.pop('internal_crits_at_end', None)
@@ -264,6 +288,7 @@ def _receipt(value):
             raise ValueError('battle receipt public row is invalid')
         row_stats = dict((name, max(0, _int(raw_row_stats.get(name))))
                          for name in stats)
+        _piercing_series_stat(raw_row_stats, row_stats)
         # Receipts stored before offline achievements shipped have no list.
         raw_achievements = raw.get('achievements', [])
         if (not isinstance(raw_achievements, (list, tuple)) or
@@ -397,6 +422,10 @@ def _receipt(value):
     }
     if mounted is not None:
         result['vehicle_compact_descr'] = mounted
+    if battle_max_health is not None:
+        result['max_health'] = battle_max_health
+    if outfits is not None:
+        result['vehicle_outfits'] = copy.deepcopy(outfits)
     return result
 
 

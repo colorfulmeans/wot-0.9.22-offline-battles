@@ -5651,3 +5651,541 @@ Regression geometry uses the shipped `31_airfield` small village house's boxes,
 with controlled placement, health and native query responses. It proves the
 Python approach/driver boundary, including forward commands at 60/15/5 Hz,
 not the user's exact unlogged position or native Windows #1513 gameplay.
+
+### Post-0.9.3 Airfield navigation and directive purchases
+
+The `20260921-225339-7e2477662ca8` and
+`20260921-234319-c7cf068c7df3` reports both identify semantic version 0.9.3,
+build `colorfulmeans-35611837404-1`. The published ZIP's navigation source
+matches the current release tree after Windows newline normalization; this
+follow-up is not based on an assumed older installation.
+
+In the Airfield report, 379 of 412 motion samples have pending navigation and
+403 have clear world-motion checks. Six recorded stationary positions lie in
+cells without a baked height. The baked corridor can snap its start to a
+nearby supported cell, but its native-review gate previously checked the
+original unsupported cell and rejected the candidate before consulting live
+ground and collision evidence. Report-position regressions reproduce this
+failure even with a clear native corridor.
+
+Reviewed boundary joins now check the actual world-space start and proposed
+endpoint through the existing live support, slope and obstacle probes.
+Missing support, real walls and excessive slopes remain vetoes. No map
+coordinates or physical collision laws are changed. The regression's live
+query responses are controlled fixtures; they do not establish that every
+native obstacle at those positions is passable.
+
+A separate deterministic lifecycle regression shows that queued searches can
+stop progressing while every Bot reuses a cached/direct movement decision.
+The authority control refresh now advances the existing navigation queue once
+per frame. The original elapsed-time credit and same-frame idempotence remain
+in force; this does not increase its search budget. The report itself records
+ongoing search work, so this independent defect is not claimed as the sole
+cause of its stationary vehicles. Bounded motion diagnostics now include the
+actual grid cell, available baked height, pending age and search progress.
+
+The second report identifies CMD 308 and `BattleBooster<intCD:27131>` rejected
+by the ordinary-equipment slot validator. The six-field command width is
+already audited above, but the report does not retain the slot field's value.
+The repair therefore uses the installed descriptor's `equipmentType` to select
+the unique directive slot in the existing four-slot representation. Ordinary
+consumables retain their requested slot and all requests retain slot bounds
+and descriptor validation. It does not claim a newly audited GUI-local index.
+
+Buying and mounting one item also previously replaced the entire desired
+consumable layout with the currently loaded items. That erased unrelated
+consumed items' resupply targets and signed currency choices. Only the chosen
+slot's desired layout now changes. Transaction, inventory publication and
+save/restart regressions cover direct purchases, existing stock, replacement,
+unmounting, insufficient bonds and invalid requests; failed transactions
+retain the original balances, stock, fitting and layout.
+
+### Shared spotting: verified behavior and historical limits
+
+The official [Spotting and Concealment support article](https://wargaming.net/support/en/products/wot/article/10222/)
+confirms that allied position sharing requires radio contact. It does not
+specify assistance attribution at shell launch versus impact. Search-index
+excerpts of the Wargaming-hosted [Battle Mechanics Wiki](https://wiki.wargaming.net/en/Battle_Mechanics)
+describe splitting spotting XP between spotters when the shooter cannot spot
+the target itself; its full article was blocked by a verification page during
+this review. That excerpt is not evidence for the exact historical HP or
+integer-rounding algorithm.
+
+Existing server regressions confirm that 240 damage is shared as 120/120
+between two direct spotters, a single spotter receives the entire assistance,
+and a shooter spotting its own target grants no radio assistance to others.
+For 241 damage, the current stable-order 121/120 split is an offline accounting
+choice, not a recovered official rounding contract. Existing in-flight shell
+and assisted-kill behavior remains unchanged.
+
+No spotting behavior is changed by this follow-up. A proposed per-shooter
+radio filter was not retained because a newer observation after the shooter's
+death removed its radio relationships before an in-flight shell hit; public
+sources did not resolve the correct historical attribution time. Other
+unverified boundaries are shared initial-discovery counts, assistance during
+retained visibility without direct observation, and simultaneous tracking and
+spotting assistance. The existing implementation must not be described as a
+complete reconstruction of the 0.9.22 proprietary reward rules.
+
+### September 22 report follow-up: hydraulics, navigation, missions and sight
+
+The five supplied September 21/22 reports identify the released 0.9.3 payload,
+`colorfulmeans-35611837404-1`. They do not contain the post-release Airfield and
+directive repairs described above. This candidate includes those repairs and
+the continuous, native-proven occupied-cell egress from the parallel Airfield
+follow-up; it does not change the release version.
+
+The `040924` traceback reaches `_drive_local_step` before the first hydraulic
+ground sample. `_local_legacy_support_sample` now belongs to the constructor,
+start and stop lifecycle. The first frame has no prior support; a new round
+cannot reuse the previous map's support. Regressions set the descriptor's real
+`isPitchHullAimingAvailable` guard and exercise all four retained Swedish TD
+descriptors in both travel and siege modes.
+
+The Highway report repeatedly rolls T71 back at a hull height near -11.103 m
+while the sampled centre support is near -5.151 m. The Bot physical callback
+was using the broad placement column, which could select the overhead bridge.
+It now uses the existing near-body support column shared with player physics.
+This changes support-layer selection, not allowed climbing grades or collision
+clearance. Physical support and final-pose rejection must also reach the
+navigator: a clear horizontal sweep cannot clear a blocked-contact episode
+before the full pose has been accepted. Missing baked occupied cells retain
+bounded native support, slope, hazard and collision proof before joining an
+existing graph cell; no vehicle is snapped or teleported onto a route.
+
+The LT-12 report explicitly rejects `damageAssistedRadioWhileInvisible`; the
+HT-12 report rejects `compareWithMaxHealth`. Radio-assistance evidence now
+freezes each awarded share and whether the observer is visible to the enemy
+at that event. The mission evaluator uses this history for LT-12 and the
+frozen battle-start maximum health for HT-12. It does not substitute total
+assistance or remaining HP. LT-12's first-campaign secondary condition also
+requires matching seasonal camouflage as well as a camouflage net; fitting
+evidence is taken from the battle loadout. Historical receipts missing the
+necessary evidence remain unknown rather than retroactively inventing it.
+
+Some accepted destructible removals leave their original compiled BSP skin
+under a different item slot from the repaired live WGDE instance. Movement
+already had bounded ownership checks for this case; spotting previously used
+only the destruction ledger callback. Sight rays now use the same proved
+original-skin recast, retaining their existing 0x80 skip mask. Movement keeps
+0x50. Intact surfaces, unidentified geometry and replacement/backing walls
+remain blockers. This does not assert that every small prop is transparent or
+that shell collision and spotting have identical rules.
+
+The apparent obstacle-width report is not resolved by globally shrinking
+collision geometry. Catalog contacts use compiled collision bounds, not a
+triangle-level narrow phase; the supplied evidence does not identify a safe
+per-model correction. Rate-limited `CATALOG CONTACT` and `SIGHT CONTACT`
+records now include the actual hull sweep or sight ray, object identity and
+bounds, and native surface evidence where available. They distinguish a
+catalog-box contact from a native surface and do not alter destruction state.
+
+The focused fixtures establish Python lifecycle, accounting and collision
+filtering behavior. Native #1513 entry into battle, bridge/wreck driving,
+obstacle outlines, spotting and frame pacing still require Windows gameplay.
+
+### September 22 Airfield follow-up: moving fallback targets
+
+Report `20260922-104150-b9961a81ef4a` runs the delivered candidate
+`colorfulmeans-35678689450-1`, not the earlier release. Its first round is
+Airfield; the later Himmelsdorf round reuses Bot IDs and must be analyzed
+separately. The reported pair is Object 244 (18) and SU-122-44 (27).
+
+The shipped Airfield graph and the SU's recorded start reproduce its exact
+first fallback endpoint, `(-287.264106, -0.18, -188.348202)`, under a stated
+flat, clear native-query fixture. After a failed search the endpoint was
+reselected on every decision: moving the hull 0.2 m also moved the endpoint
+0.2 m, keeping the short target 2.08 m away and allowing its direction to
+change at cell boundaries. Pending searches already retained a usable target;
+the failed-search branch did not. Local fallback endpoints now belong to the
+route and recovery intent that selected them and remain fixed until arrival
+or invalidation. Current geometry, hazards and Bot-specific edge penalties
+still constrain reuse. A new strategic intent, normal path or recovery must
+not inherit an unrelated fallback.
+
+The 10:34:23 Object 244 sample has no physical contact pair, but replaying the
+two recorded hull boxes through the production traffic guard rejects its
+requested positive rotation. The old stall record printed the planner's
+`traffic=none`, hiding this later `vehicle_brake` verdict. Diagnostics now
+retain the already computed controls before and after the traffic guard,
+the final motion controls and the actual traffic mode. Recording this adds
+no native queries and retains the existing per-hull cadence.
+
+Moving in a small circle previously reset the stationary log after each
+0.5 m displacement, so a long loop could leave almost no motion evidence.
+An additional movement-intent diagnostic samples at most once per 15 seconds
+while the hull remains within a 12 m local region. Straight departure resets
+that region, tactical holds do not arm it, and stationary reports retain their
+existing three-second cadence. This observer does not change driving.
+
+The report also records a live-worker window at 8.30 FPS. Sampled navigation
+fallback work is only part of its cost; physical motion queries dominate the
+slow frames. This change is not a demonstrated frame-rate repair. Positive
+native answers can precede chunk streaming, so failed-search retries retain
+their existing geometry revalidation. The report-position fixtures establish
+target ownership and traffic attribution. A continuous two-Bot fixture with
+real A* can leave the area after delayed planning; forcing A* to fail forever
+still exposes local minima in the short fallback. Thus this repairs the
+reproduced moving-target defect, not every cause of circling. Only a new
+exact-client Windows playtest can establish that both vehicles leave the
+native scene reliably.
+
+### September 22 Airfield follow-up: circling at spawn
+
+Report `20260922-113632-50a443198d84` runs the next delivered candidate,
+`colorfulmeans-35681498572-1`. All three rounds are Airfield; Bot IDs repeat
+between them. Of 68 local-motion observations, 67 have no traffic restriction,
+all have clear or crushed world motion, and none records a support/pose
+rollback or contact pair. The new evidence therefore cannot be explained only
+by mutual vehicle avoidance. Local-motion observations establish slow local
+progress, not necessarily a closed circle.
+
+Two Object 730 samples retain the same nearby target while driving and
+turning continuously. Their recorded movement, speed and timestep reproduce
+26 degrees/second hull traverse. The target's arrival disk lies inside the
+current turning circle, so full throttle can orbit it. LocalDriver now uses
+the installed traverse limit, including stun, to recognize this geometry and
+brake through alignment until the forward ray intersects the arrival disk.
+No vehicle coefficients change. Hold, reverse, recovery, a changed target or
+unavailable physics clear the alignment state. Ordinary steering probes are
+bounded by the selected waypoint plus the leading hull and decision travel;
+explicit recovery probes and remembered live-vehicle blockers retain their
+own checks. The realised motion gate remains authoritative.
+
+A recovery search used to survive the two-metre displacement that ended its
+recovery, then consume search credit alongside the replacement route search.
+That private job now retires with its recovery. A pending A* search also
+exposes already admitted dry parent edges as a stable prefix, allowing a
+validated detour before the complete route is available. The prefix belongs
+to its search and request, checks the unsnapped current position and penalties,
+and is retired on cancellation, completion or invalidation. Reaching another
+temporary greedy waypoint no longer continually resets strategic no-progress
+detection. An arrived short fallback point anchors the next leg, rather than
+re-centering every leg on a hull still inside the same eroded cell; the actual
+hull-to-new-target connector must pass the complete safety checks. Search
+limits and native-query budgets are unchanged.
+
+Shared native navigation previously rejected intact crushable props while
+the driving probe admitted them using the stock kinetic gate. A shared edge
+now requires the stock proof for every distinct physical profile in the
+complete roster, including both siege modes and both directional speed caps.
+It reuses one unique live-object identity check and an exact material-filtered
+recast, retaining unknown objects and backing walls. This is a conservative
+common planning capability: a slow or incomplete profile can keep the edge
+blocked for everyone, and actual motion still owns impact and destruction.
+Roster or descriptor changes invalidate dependent navigation proofs. A spent
+recast budget defers the search edge until the next frame without caching a
+false wall or repeatedly probing that same edge in one frame.
+
+The LAN poll also discarded a sparse `bot_orders` section when a later lean
+snapshot arrived in the same batch. The server had already marked the section
+sent, so the worker could keep an old reached waypoint until a later resend.
+Coalescing now carries the newest complete order section into the latest
+physical snapshot within the same round, authority and map. Explicit empty
+orders, revision ordering, event boundaries and bounded overflow are covered.
+The report has no complete order-delivery trace; this independently reproduced
+loss is not asserted to be the only cause of its delayed target updates.
+
+Regression coverage includes recorded-pose driving, slow and fast traverse,
+left/right targets, track-centred pivots, real blocked corridors requiring an
+initial detour, deferred geometry, retained backing walls and the actual LAN
+poll/overflow path. These establish local control and lifecycle behavior.
+The report's 8.35 FPS window is still dominated by physical motion queries;
+this change does not establish a frame-rate repair or native Airfield gameplay
+acceptance. Exact #1513 Windows driving remains the acceptance boundary.
+
+### September 22 Airfield follow-up: remaining local turn loops
+
+Report `20260922-122105-7421ade854f4` runs `colorfulmeans-35685281060-1`.
+The user confirms more Bots now leave spawn, while a few keep turning locally.
+The report supports both observations: T71 and Achilles travel hundreds of
+metres, while Panther II (7), M36 (9) and SU-122-44 (27) repeatedly receive
+nearby changing targets. Of the 152 motion diagnostics, 138 are world-clear
+and 12 record successful crushing; no support/pose rollback or baked veto is
+recorded. These are stall-triggered samples, not a representative estimate of
+the proportion of all vehicles that stop.
+
+The history does not support reverting the entire AI to 0.9.0. The Airfield
+bake and its reader are unchanged since that release. `d3fbfa5d` added native
+review of contact regions, and `d6038e00` extended the triggers for that review.
+Those changes make pending and failed searches more consequential.
+`17ce88f6` made a requested stop apply the copied brake, while `40d1b5ef`
+introduced traversal-aware near-target alignment and consumption of pending
+A* prefixes. Isolating the driver against 32 fixed-target samples from the
+new report makes the current driver reach all 32; older drivers do worse in
+the same controlled physics fixture. This does not reconstruct old native
+gameplay; it supports preserving the effective alignment repair while fixing
+the navigation targets.
+
+Two navigation ownership errors are independently reproducible. A private
+route-join retry still used the old spawn anchor after its vehicle had moved.
+Consuming the retry's early prefix therefore sent the vehicle back toward
+spawn: a hull at z=20 targeting z=100 received z=4 after two search steps from
+the old z=0 anchor. Private jobs now start from the actual vehicle position
+when created or retried; existing usable paths are still reused. Shared route
+geometry retains its authored anchor, but its unfinished exploration is not a
+vehicle movement command. A private exploration tree that has not reached a
+moving hull must likewise not pull it back to the tree's trailing endpoint.
+
+The second error treated each new pending prefix as a new progress episode.
+Ordinary failed-search retries could occur before the existing twelve-second
+no-progress interval, repeatedly renewing it without actual departure. A
+closed-room fixture remained stationary for sixty seconds through seven
+failed attempts with no macro recovery. Temporary prefix/fallback progress
+now belongs to the strategic request and measures actual entry into new
+navigation cells. Repeated exploration of the already visited local area
+cannot renew the interval or keep issuing a local turn loop; a newly proved
+exit or a completed path can immediately resume travel. Healthy A* work is
+retained rather than canceled by another short escape lease.
+
+A separate real-callback fixture proves that deferred native review retired
+an otherwise complete cached route and queued a new search. Normal destruction
+events and failed-search retries can invalidate native receipts, so this is
+not limited to manually clearing a cache. Unknown review now retains the
+route object and holds its current index/target without creating another job;
+fresh proof resumes that route, while a definite stock-physics rejection
+still retires it. This does not authorize motion through an unproved edge.
+The report lacks per-event deferred-review evidence, so this independent
+defect is not asserted to explain every recorded turn loop.
+
+The closed-loop regression uses the report's three vehicle mobility samples,
+the real adapter/driver and copied physics at five and fifteen control frames
+per second. A fixed U-shaped wall blocks both planning probes and integrated
+hull motion. Three genuinely bounded A* failures precede ordinary search
+capacity; the wall never opens or changes. All six runs with the preceding
+navigation fail to reach the goal within 120 seconds; the repaired navigation
+leaves the mouth and reaches the goal in all six, without crossing the wall.
+The wall and unreported speed limits are controlled fixtures, not a recreation
+of every native Airfield contact.
+
+The new report's two steady windows are about fourteen worker FPS, compared
+with about eight in the preceding report. Different rosters and scenes prevent
+treating that as a controlled benchmark. It does not support a global budget
+starvation explanation: completed searches increase and the pending count
+falls. The remaining native driving and frame-pacing boundary is unchanged.
+
+### September 22 Airfield follow-up: reached slope points and obstacle ownership
+
+Report `20260922-133334-f5eb61b94d18` identifies the installed and bundled
+`colorfulmeans-35688896773-1` payload. It contains one Airfield round and
+854 stall-triggered motion samples. Twenty-five samples record successful
+crushing and twelve record hard contact; none records a support rollback,
+pose rollback or baked motion veto. These samples do not measure the fleet's
+overall stop rate. Multiple vehicles travel hundreds of metres, while several
+others remain local or return after initially leaving.
+
+E25 (25) repeatedly receives a point it has already reached. At the recorded
+position `(-142.690, -13.463, -125.663)`, its next issued point
+`(-142, -13.353, -126)` is only 0.768 metres away. The following baked edge is
+dry and climbs at a grade of about 0.171. The pending-prefix follower still
+applied an unreached-corner alignment check to this consumed point. The
+complete-path follower already handles that arrival correctly. Using its
+adjacent-edge arrival rule for pending prefixes allows the next checked leg;
+unfinished searches must still not grant a shallow-water ford or skip an
+unreached climbing turn.
+
+Panther II (7) and M36 (9) have a separate pattern: repeated failed searches
+and the temporary-loop hold, with the held target equal to the hull position.
+Their requested target and the E25 target remain connected to the recorded
+positions in the actual baked graph, including its existing shoreline
+hazards. Real A* on that graph finds paths within the normal expansion limit
+when no additional native obstruction is injected. A disconnected baked
+island is therefore not the explanation; live obstacle classification matters.
+
+The shared stock-crushability intersection can turn a vehicle's own soft
+obstacle into a navigation wall. Controlled real-callback fixtures reproduce
+both a forward-capable vehicle rejected by its lower reverse cap and a heavier
+vehicle rejected after a lighter vehicle joins the room. The fixture material
+health and speed values are explicit controls, not measurements of an object
+in this report. The report alone does not identify each failed native edge.
+
+Native planning now receives the consuming vehicle's immutable mass and
+directional powered-contact cap. The existing mounted travel-mode cap is
+shared with the local direction probe and final contact gate; actual impact,
+health, scale and destruction still use the existing stock laws. Native edge,
+segment and route receipts carry that capability, while baked topology and
+ground samples remain shared. Resumable A* captures its capability rather than
+reading a mutable current-vehicle field. A lighter teammate cannot invalidate
+the heavier vehicle's permission, and a heavier teammate cannot grant a light
+vehicle permission it lacks. Unidentified surfaces and solid geometry behind
+a crushable object still block travel; deferred proof remains deferred.
+
+The existing room-wide search credits, native recast budget and bounded
+receipt caches still limit work. Distinct kinetic capabilities can require
+additional cold proofs, so these bounds do not establish unchanged native
+search latency or frame rate with a full room. Capability changes also retire
+the affected vehicle's old private work when its new request takes the direct
+path; a new round invalidates the previous world's native receipts even when
+the map and vehicle capabilities are unchanged.
+
+The existing stalled-motion diagnostics retain the last native refusal from
+the actual search query, including its edge, capability, available catalog
+identity/model and classification reason. Recording this evidence performs no
+additional native collision queries. It is needed to distinguish a stock
+kinetic rejection, unidentified backing geometry and unfinished proof in a
+subsequent native report.
+
+Tiger (17) and Lorraine (6) also repeat a recovery direction that final motion
+has rejected as hard. The realised-motion feedback records the failed yaw,
+but the driver's recovery branches can select it again after a longer probe
+reports clear. This is a mismatch between final contact evidence and recovery
+selection; the report does not identify every hard native surface as terrain.
+
+Recovery now consults the existing finite failed-heading memory before
+straight reverse, forward escape and swept angled reverse. A translation
+failure does not itself forbid an in-place pivot, and all existing hull,
+terrain and vehicle checks still apply. A fixed analytic alley reproduces the
+low-surface planner/final-sweep disagreement through the real world-collision,
+runtime feedback, adapter, driver and copied-physics loop. At five and ten
+control frames per second, the old driver stays at its initial position for
+45 seconds and repeats 75 and 146 hard contacts. The repaired driver receives
+one initial hard contact, leaves through the open front and reaches the goal.
+A closed front, expired failure memory and failed angled recovery also have
+regressions. This analytic scene proves the feedback contract, not the exact
+native BSP of the reported Airfield slope.
+
+Final review also reproduced a directional planning mismatch: a normal route
+candidate behind the current hull used the reverse kinetic cap even though
+the driver first pivots and then drives forward. Local probes now receive
+explicit drive intent. Forward candidates retain the forward cap at every
+heading; straight/angled recovery and contact escapes request their actual
+drive direction. Per-decision probe receipts include that direction. The
+real stock-material callback regression accepts the forward route through a
+crushable house and still rejects backing through it when reverse capability
+is insufficient. Three-argument probe failures execute only once.
+
+The reached-waypoint regression uses both recorded E25 stopping poses, the
+actual Airfield A* graph and reported E25 mobility inputs. The old pending
+follower keeps the consumed point; the repaired follower proceeds up the next
+dry leg with actual copied-physics motion. These controlled regressions do
+not establish full-fleet native gameplay or frame-pacing acceptance.
+
+### September 22 Airfield: destructible-free planning and bounded wait recovery
+
+Reports `20260922-153100-624e3253cb0c` and
+`20260922-154804-361a82ba99c6` use build `colorfulmeans-35697098489-1`.
+SU-122-44 id 27 waits at spawn while native rays report ambiguous prop
+identity. The logged clay-stove hits overlap clay-fence boxes in the shipped
+Airfield catalog. SP I C id 29 waits in cell (67, 70), whose baked height is
+absent and hazard is the dry terrain-edge bit. Its stationary yaw converges
+to the distant strategic goal, approximately 160 degrees away from its
+recorded first detour waypoint. The initial powered turn into that position
+is not captured; the logs do prove the later wait/facing conflict.
+
+Following the requested route policy, confirmed original destructible skins
+no longer determine permanent route obstruction using vehicle mass, speed,
+crew or gear. Planning registers exact catalog identities, permits overlapping
+members, and recasts the complete segment with only their original materials
+filtered. Unknown surfaces, indestructible backing walls and solid replacement
+geometry remain visible. Per-vehicle physical crushing, contact admission and
+final motion receipts remain separate. Planning also samples terrain beneath
+confirmed destructible roofs. A single immutable planning-policy key lets all
+vehicles reuse the same static edge proofs without changing the actual hull
+width or the live vehicle collision checks.
+
+A pending route no longer rotates the hull toward a distant face target.
+When local physical blockage or an unsupported baked start establishes a
+reason to recover, a four-second staggered wait may attempt a bounded straight
+backout. The complete rear corridor and nearby vehicles must pass their
+checks. Completion or a blocked rear requests one local replan; cached
+commands cannot repeatedly restart it. Ordinary queued A* work alone does not
+claim a collision. Physical failed-edge evidence survives replanning, while
+other vehicles retain their shared routes and searches.
+
+A missing baked start now always needs a live support, grade and obstacle
+proof before joining a nearby safe cell, regardless of whether a previous
+hard contact requested native review. Neither a coarse snap nor a missing
+height alone grants that motion. These are general planner/driver changes,
+not Airfield coordinate exceptions or difficulty changes.
+
+Tests use the recorded prop geometry and SP I C position together with
+controlled native probe responses. They cover overlapping originals, backing
+walls, replacement geometry, deferred budgets, shared route policy, wait
+heading, rear traffic, bounded recovery and per-vehicle replan ownership.
+Windows native gameplay remains the acceptance boundary for the reported
+initial collision and complete spawn departure.
+
+The crowded-departure regression also exposed two recovery state problems.
+A short navigation wait must preserve the driver's accumulated progress and
+held avoidance/recovery state rather than repeatedly restarting them. A hull
+boxed in by vehicles ahead and behind must publish both proved blockers;
+otherwise the finite friendly-reposition system can request movement only
+from a rear vehicle whose own rear is occupied. The same existing bounded,
+collision-checked reposition mechanism handles the added forward request.
+The departure monitor now separates ordinary recovery episodes by their
+existing recovery count. Consecutive blocked commands can straddle two
+independent manoeuvres; combining them incorrectly reports one oversized
+lease. The two-second per-episode bound and the independent sixty-second
+whole-roster departure and original-slot occupancy assertions remain.
+
+### September 22 mission and terrain follow-up
+
+Reports `20260922-154331-fce52b57beab` and
+`20260922-160746-63a9c9a7de48` identify builds
+`colorfulmeans-35520243588-1` (0.9.2) and
+`colorfulmeans-35611837404-1` (0.9.3), respectively. The latter records HT12's
+unsupported `compareWithMaxHealth` condition. LT12's hidden assistance and
+loadout evidence, and the maximum-health comparisons needed by HT12 and TD8,
+are already implemented in `3e4f3052`. The new audit checks the actual #1513
+definitions for all four operations instead of treating the old report as a
+failure of every later change.
+
+TD7 and TD9 do expose missing current conditions. TD7's `whileFullHealth`
+requires hull HP at the kill, not remaining HP at battle end or a damage
+total. Mission-event version 5 freezes that state for each enemy kill. Both
+halves of a ram and all effects of one shell settle before the health fact is
+finalized, so self-splash and reciprocal ram damage cannot depend on target
+iteration order. Fire kills use health when the victim dies. Old or incomplete
+event histories do not acquire guessed full-health evidence.
+
+TD9's `inBattleMaxPiercingSeries` requires consecutive admitted shots. The
+server assigns per-shooter ordinals at launch and merges only verified
+penetration intervals. Delayed impacts cannot turn arrival order into a false
+series; misses, bounces and expired projectiles leave gaps. Direct penetration
+of a living enemy qualifies, while splash, friendly hits and wrecks do not.
+The maximum is transported with the existing durable battle receipt; missing
+legacy evidence remains missing.
+
+The Live Oaks report also identifies a player movement problem independent
+of Bot difficulty. From 16:07:01 through 16:07:28 the WT E 100 remains around
+`(-396.713, 1.898, 356.690)`, with forward and reverse attempts stopped by
+different faces of building item 102 in chunk 31618, material 111. Ground is
+flat and the reported support veto is false. The existing diagonal slide
+path sweeps four corner trajectories and a centre lane; a building corner
+can enter the middle of a long hull side without crossing those rays.
+Destination perimeter lanes close that reproducible gap, using translated
+body pose and the existing terrain, upper-wall and destructible rules.
+
+An already intersecting near-vertical wall may release only when the actual
+translation reduces penetration, the hull centre remains on the wall's
+outside, and the returned point lies in the original occupied body. Recasting
+continues through every later surface. This does not grant inward motion,
+an exit through the far side of a building, or permission to ignore a second
+wall. The extra perimeter queries are limited to nonzero cross-heading
+translations. They do not turn the sparse native-ray model into a complete
+continuous volume sweep for arbitrary thin features.
+
+The ordinary Bot support path has a separate gradual-descent defect. A
+controlled 3-metre-wide chassis crossing a 1.4-metre-wide, 1-metre-deep V
+trench can descend about 0.143 metres each step. Every step stays below the
+old 0.8-metre support-check trigger, so seven steps sink the centre almost a
+metre while both track supports remain at the bank height. This reproduces
+the defect on the pre-change HEAD; it is not a reconstruction of every native
+triangle in the Stalingrad screenshot.
+
+Paired support is now checked after one centimetre of accumulated centre
+descent. Accumulation prevents smaller high-frame-rate steps bypassing the
+same check. The existing admissible support-height range still excludes a
+nearby roof and a one-sided cliff. Symmetric endpoints support the centre at
+their mean height rather than the higher endpoint; the result can arrest a
+drop but cannot lift a tank to a different surface. Level ground retains one
+column query, and a triggered descent uses at most five. The change does not
+enable the full spring solver for every Bot or teleport a deeply sunk hull.
+
+Focused regressions cover actual mission definitions and durable settlement,
+shot order and interrupted series, wall corners and outward-only release,
+and longitudinal/lateral shallow trenches at 15, 24 and 60 Hz. The native
+Live Oaks vehicle is already wedged against two faces: this prevention and
+conservative release fix does not prove that exact saved pose can leave.
+Windows gameplay still has to establish that new entries into these reported
+locations remain clear and that the full fleet's native frame rate is usable.

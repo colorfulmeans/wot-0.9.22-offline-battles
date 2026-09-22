@@ -58,7 +58,7 @@ from gui.mods.offline_lan_0922.siege_hud import PersistentSiegeHints
 from gui.mods.offline_lan_0922.spawn_planner import SpawnPlanner
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.worker_diagnostics import (
-    WorkerCombatDiagnostics, timed, call as timed_call)
+    WorkerCombatDiagnostics, timed, call as timed_call, observed_ray)
 from gui.mods.offline_lan_0922 import (
     ballistics, combat_rules, critical_damage, descriptor_donation,
     destructibles_compat, device_damage, effective_params,
@@ -1953,6 +1953,9 @@ class BattleRuntime(object):
         self._local_downhill = (0.0, 0.0, 0.0)
         self._local_slope_tangent = 0.0
         self._local_ground_plane = None
+        # Hydraulic diagnostics read the preceding support before the first
+        # drive step samples terrain. No support exists in a fresh round.
+        self._local_legacy_support_sample = None
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
@@ -2295,6 +2298,7 @@ class BattleRuntime(object):
         self._local_downhill = (0.0, 0.0, 0.0)
         self._local_slope_tangent = 0.0
         self._local_ground_plane = None
+        self._local_legacy_support_sample = None
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
@@ -3648,7 +3652,10 @@ class BattleRuntime(object):
                 artillery_launch_cancel=self._bot_artillery_cancel,
                 spawn_resolver=self._formation_pose,
                 ground_probe=self._navigation_ground,
-                physics_ground_probe=self._ground_y,
+                # Use the player's near-body support layer for Bot height
+                # and attitude. The wider placement query can acquire an
+                # overhead bridge and turn every clear step into a rollback.
+                physics_ground_probe=self._support_column,
                 obstacle_probe=self._navigation_obstacle,
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
@@ -4789,23 +4796,8 @@ class BattleRuntime(object):
         belong to the active descriptor. Ordinary vehicles retain their
         effective cap, and an unavailable drive limit is never fabricated.
         """
-        reverse = float(speed) < 0.0
-        try:
-            value = float(physics['speedBwd' if reverse else 'speedFwd'])
-            if travel_descriptor is None:
-                travel_descriptor = _field(descriptor, 'defaultVehicleDescr')
-            if travel_descriptor is not None and value > 0.0:
-                travel = float(_field(travel_descriptor, 'physics')[
-                    'speedLimits'][1 if reverse else 0])
-                if math.isnan(travel) or math.isinf(travel) or travel < 0.0:
-                    raise ValueError('invalid travel limit')
-                value = max(value, travel)
-        except (AttributeError, KeyError, IndexError, TypeError,
-                ValueError, OverflowError):
-            raise RuntimeError('destructible drive speed cap is unavailable')
-        if math.isnan(value) or math.isinf(value) or value < 0.0:
-            raise RuntimeError('destructible drive speed cap is invalid')
-        return -value if reverse else value
+        return vehicle_physics.destructible_drive_speed_cap(
+            descriptor, physics, speed, travel_descriptor)
 
     def _bot_destructible_travel_descriptor(self, bot_id):
         pair = getattr(self._bots, '_descriptor_pairs', {}).get(int(bot_id))
@@ -5438,16 +5430,33 @@ class BattleRuntime(object):
             start_y = next_y
         return None
 
+    def _navigation_collision_filter(self, start, end):
+        """Prepare planning geometry independently of physical crush permission."""
+        prepare = getattr(self._destructibles,
+                          'prepare_navigation_collision_filter', None)
+        return prepare(start, end) if callable(prepare) else None
+
+    def _collide_navigation(self, start, end, trace=None):
+        """Query native route geometry without a physical broken-skin recast."""
+        collision_filter = self._navigation_collision_filter(start, end)
+        if trace is not None:
+            collision_filter = world_collision._trace_collision_filter(
+                collision_filter, trace)
+        args = (self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS)
+        if collision_filter is not None:
+            args += (collision_filter,)
+        return observed_ray('native.navigation.ray',
+                            self._runtime.bigworld.wg_collideSegment, *args)
+
     def _navigation_ground(self, x, z, hint_y=0.0):
         """Copy the 0.8.2 same-layer graph probe, including ford depth."""
         probe_top = float(hint_y) + 8.0
         probe_bottom = float(hint_y) - 18.0
-        ground_filter = self._ground_filter(x, z)
         for unused_layer in range(3):
             try:
-                hit = self._collide_down(
-                    self._vector((x, probe_top, z)),
-                    self._vector((x, probe_bottom, z)), ground_filter)
+                ground_start = self._vector((x, probe_top, z))
+                ground_end = self._vector((x, probe_bottom, z))
+                hit = self._collide_navigation(ground_start, ground_end)
                 if hit is None:
                     return None
                 height = float(hit[0].y)
@@ -5547,7 +5556,7 @@ class BattleRuntime(object):
 
     def _direction_probe(self, position, yaw, speed=0.0,
                          descriptor=None, maximum_distance=None,
-                         corridor_half_width=None):
+                         corridor_half_width=None, native_capability=None):
         """Probe the admitted chassis corridor at two heights and distances."""
         if corridor_half_width is None:
             # Passive contact callers have no active-drive descriptor. They
@@ -5598,16 +5607,6 @@ class BattleRuntime(object):
         # needs it to distinguish climbing from descending; taking ``abs``
         # here made every clear descent behave like an uphill pull.
         maximum_slope = 0.0
-        signed_speed = float(speed or 0.0)
-        planned_impact_speed = abs(signed_speed)
-        deferred = False
-        planning_params = None
-        if descriptor is not None:
-            try:
-                planning_params = vehicle_physics.derive_params(descriptor)
-            except (AttributeError, KeyError, TypeError, ValueError):
-                raise RuntimeError(
-                    'bot destructible planning speed is unavailable')
         for height, distance in (
                 (0.7, near_distance), (1.5, far_distance)):
             nx = x + sine * distance
@@ -5624,26 +5623,9 @@ class BattleRuntime(object):
                 try:
                     ground_start = self._vector((nx, previous_y + probe_up, nz))
                     ground_end = self._vector((nx, previous_y - probe_down, nz))
-                    ground = self._collide_down(
-                        ground_start, ground_end, self._ground_filter(nx, nz))
-                    support_probe = getattr(
-                        self._destructibles, 'planning_support_below_soft_roof', None)
-                    if (ground is not None and planning_params is not None and
-                            float(ground[0].y) > previous_y + run * 0.48 and
-                            callable(support_probe)):
-                        # A far endpoint can lie on a crushable house roof.
-                        # Recheck only an exact original soft material, not a
-                        # terrain height or arbitrary overhead structure.
-                        ground = support_probe(
-                            self._avatar.spaceID, ground_start, ground_end,
-                            ground, previous_y + run * 0.48,
-                            planned_impact_speed, descriptor,
-                            kinetic_speed=float(planning_params[
-                                'speedBwd' if signed_speed < 0.0 else 'speedFwd']),
-                            recast_budget=self._soft_static_recast_budget)
-                        if ground == 'deferred':
-                            return {'clear': False, 'collision': False,
-                                    'water': False, 'slope': 0.0, 'deferred': True}
+                    ground = (self._collide_navigation(ground_start, ground_end)
+                              if descriptor is not None else self._collide_down(
+                                  ground_start, ground_end, self._ground_filter(nx, nz)))
                 except Exception:
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': 99.0}
@@ -5675,82 +5657,21 @@ class BattleRuntime(object):
                     nx + lateral_x * offset, next_y + height,
                     nz + lateral_z * offset))
                 try:
-                    collision = self._runtime.bigworld.wg_collideSegment(
-                        self._avatar.spaceID, ray_start, ray_end,
-                        VEHICLE_SKIP_FLAGS)
+                    collision = (
+                        self._collide_navigation(ray_start, ray_end)
+                        if descriptor is not None else
+                        self._runtime.bigworld.wg_collideSegment(
+                            self._avatar.spaceID, ray_start, ray_end,
+                            VEHICLE_SKIP_FLAGS))
                 except Exception:
                     collision = True
                 if collision is not None:
-                    ray_impact_speed = planned_impact_speed
-                    if planning_params is not None:
-                        try:
-                            hull_bbox = self._destructibles._vehicle_hull_bbox(
-                                descriptor)
-                            minimum, maximum = hull_bbox[:2]
-                            reversing = signed_speed < 0.0
-                            hull_reach = max(
-                                0.0,
-                                (-float(minimum[2]) if reversing else
-                                 float(maximum[2])))
-                            hit_distance = max(
-                                0.0,
-                                (collision[0] - ray_start).length - hull_reach)
-                            # Use the current copied traction law to estimate
-                            # only the speed reachable before this far hit. The
-                            # actual hull contact still owns the retail gate.
-                            drive_sign = -1.0 if reversing else 1.0
-                            acceleration = abs(
-                                vehicle_physics.engine_force(
-                                    planning_params,
-                                    drive_sign * max(
-                                        planned_impact_speed, 0.1),
-                                    drive_sign, 0.0)) / max(
-                                        planning_params['mass'], 1.0)
-                            speed_limit = float(planning_params[
-                                'speedBwd' if reversing else 'speedFwd'])
-                            ray_impact_speed = min(
-                                speed_limit,
-                                math.sqrt(planned_impact_speed ** 2 +
-                                          2.0 * acceleration * hit_distance))
-                        except (AttributeError, KeyError, TypeError,
-                                ValueError, ZeroDivisionError, RuntimeError):
-                            return {'clear': False, 'collision': True,
-                                    'water': False, 'slope': slope}
-                    if descriptor is not None and self._destructibles is not None:
-                        kinetic_speed = None
-                        if planning_params is not None:
-                            kinetic_speed = float(planning_params[
-                                'speedBwd' if signed_speed < 0.0 else
-                                'speedFwd'])
-                        soft_status = (
-                            self._destructibles._catalog_soft_static_path(
-                                self._avatar.spaceID, ray_start, ray_end,
-                                collision, ray_impact_speed, descriptor,
-                                recast_budget=
-                                self._soft_static_recast_budget,
-                                allow_kinetic_first=True,
-                                kinetic_speed=kinetic_speed))
-                        if soft_status is True:
-                            continue
-                        if soft_status == 'kinetic':
-                            # Planning may approach a contact that this vehicle can
-                            # crush at its directional speed cap. The commit-side
-                            # native ray and exact hull contact still own destruction.
-                            continue
-                        if soft_status == 'deferred':
-                            # Budget exhaustion is not evidence of a wall. Keep
-                            # checking the remaining lanes so any directly
-                            # proved backing wall can still win this sample.
-                            deferred = True
-                            continue
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': slope}
             previous_y = next_y
             previous_distance = distance
         result = {'clear': True, 'collision': False,
                   'water': False, 'slope': maximum_slope}
-        if deferred:
-            result['deferred'] = True
         return result
 
     def _direction_world_receipt(self, position, travel_yaw, signed_speed,
@@ -5829,14 +5750,19 @@ class BattleRuntime(object):
             'direction': (-1 if signed_speed < 0.0 else 1),
         }
 
-    def _navigation_obstacle(self, start, end, half_width):
-        """Exact 0.8.2 coarse graph sweep through the #1513 collision API."""
+    def _navigation_obstacle(self, start, end, half_width,
+                             native_capability=None, trace=None):
+        """Ignore original destructible materials; retain native hard geometry."""
         dx = float(end[0]) - float(start[0])
         dz = float(end[2]) - float(start[2])
         length = math.sqrt(dx * dx + dz * dz)
         if length < 0.1:
             return False
         lateral_x, lateral_z = dz / length, -dx / length
+        if trace is not None:
+            trace.update(capability=native_capability,
+                         segment=(tuple(start), tuple(end)),
+                         half_width=float(half_width))
         for offset in (-float(half_width), 0.0, float(half_width)):
             for height in (0.9, 1.6):
                 ray_start = self._vector((
@@ -5847,19 +5773,18 @@ class BattleRuntime(object):
                     float(end[0]) + lateral_x * offset,
                     float(end[1]) + height,
                     float(end[2]) + lateral_z * offset))
-                prepare = getattr(self._destructibles,
-                                  'prepare_horizontal_collision_filter', None)
-                collide = getattr(self._destructibles,
-                                  'collide_motion_segment', None)
-                native = self._runtime.bigworld.wg_collideSegment
-                if callable(prepare) and callable(collide):
-                    hit = collide(self._avatar.spaceID, ray_start, ray_end,
-                                  prepare(ray_start, ray_end), native)
-                else:
-                    hit = native(self._avatar.spaceID, ray_start, ray_end,
-                                 VEHICLE_SKIP_FLAGS)
+                # The initial traversal removes every original soft surface;
+                # no catalog registration or physical recast can postpone it.
+                hit = self._collide_navigation(ray_start, ray_end, trace)
                 if hit is not None:
+                    if trace is not None:
+                        trace.update(
+                            ray_start=_xyz(ray_start), ray_end=_xyz(ray_end),
+                            hit=_xyz(hit[0]), normal=_xyz(hit[1]))
+                        trace.update(classification='hard', reason='native_hard_geometry')
                     return True
+        if trace is not None:
+            trace.update(classification='clear', reason='native_corridor_clear')
         return False
 
     def _water_depth(self, point):
@@ -23381,16 +23306,24 @@ class BattleRuntime(object):
             target_position[1] + spotting.TARGET_CHECK_HEIGHT,
             target_position[2]))
         broken_filter = self._sight_collision_filter()
-        if broken_filter is None:
+        collide_sight = getattr(self._destructibles, 'collide_sight_segment', None)
+        if callable(collide_sight):
+            hit = collide_sight(self._avatar.spaceID, start, end,
+                broken_filter, self._runtime.bigworld.wg_collideSegment)
+        elif broken_filter is None:
             hit = self._runtime.bigworld.wg_collideSegment(
                 self._avatar.spaceID, start, end, 128)
         else:
             hit = self._runtime.bigworld.wg_collideSegment(
                 self._avatar.spaceID, start, end, 128, broken_filter)
-        return bool(
+        clear = bool(
             hit is None or
             (hit[0] - start).length + spotting.SIGHT_END_TOLERANCE >=
             (end - start).length)
+        report = getattr(self._destructibles, 'report_sight_contact', None)
+        if not clear and callable(report):
+            report(self._avatar.spaceID, start, end, hit)
+        return clear
 
     @staticmethod
     def _spot_entity_pose(position, entity=None, state=None):
@@ -23418,18 +23351,26 @@ class BattleRuntime(object):
             phase=int(max(0, self._turret_server_time_ms()) / 2000))
         ends = spotting.vehicle_check_points(target_descriptor, target)
         broken_filter = self._sight_collision_filter()
+        collide_sight = getattr(self._destructibles, 'collide_sight_segment', None)
+        report = getattr(self._destructibles, 'report_sight_contact', None)
         best_cover = None
         for start_point in starts:
             start = self._vector(start_point)
             for end_point in ends:
                 end = self._vector(end_point)
-                args = (self._avatar.spaceID, start, end, 128)
-                if broken_filter is not None:
-                    args += (broken_filter,)
-                hit = self._runtime.bigworld.wg_collideSegment(*args)
+                if callable(collide_sight):
+                    hit = collide_sight(self._avatar.spaceID, start, end,
+                        broken_filter, self._runtime.bigworld.wg_collideSegment)
+                else:
+                    args = (self._avatar.spaceID, start, end, 128)
+                    if broken_filter is not None:
+                        args += (broken_filter,)
+                    hit = self._runtime.bigworld.wg_collideSegment(*args)
                 if (hit is not None and
                         (hit[0] - start).length + spotting.SIGHT_END_TOLERANCE <
                         (end - start).length):
+                    if callable(report):
+                        report(self._avatar.spaceID, start, end, hit)
                     continue
                 cover = self._foliage_camouflage_bonus(
                     source_position, target_position, fired_recently,
@@ -28262,6 +28203,7 @@ class BattleRuntime(object):
         self._local_downhill = (0.0, 0.0, 0.0)
         self._local_slope_tangent = 0.0
         self._local_ground_plane = None
+        self._local_legacy_support_sample = None
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []

@@ -1986,7 +1986,9 @@ class _BigWorld(object):
     def clearAllSpaces(self):
         self.clearEntitiesAndSpaces()
 
-    def wg_collideSegment(self, space_id, start, end, mask):
+    def wg_collideSegment(self, space_id, start, end, mask, keep=None):
+        if keep is not None and not keep(107, 8, 0, 0):
+            return None
         if start.y > end.y and abs(start.x - end.x) < 0.001 and abs(start.z - end.z) < 0.001:
             return (_Vector(start.x, 0.0, start.z),)
         return None
@@ -13231,7 +13233,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertNotIn('world_receipt', result)
         battle._direction_world_receipt.assert_not_called()
 
-    def test_direction_probe_uses_asymmetric_hull_lead_and_directional_cap(self):
+    def test_direction_probe_classifies_props_without_vehicle_energy_estimates(self):
         from gui.mods.offline_lan_0922 import destructibles_sensor
 
         runtime = _runtime()
@@ -13241,101 +13243,71 @@ class BattleRuntimeContractTests(unittest.TestCase):
             _Vector(1.7, 1.4, 5.0), None)
         captures = []
 
-        def collide(unused_space_id, start, end, unused_mask):
+        def collide(unused_space_id, start, end, unused_mask, keep=None):
+            self.assertTrue(callable(keep))
             if abs(start.y - end.y) > 0.1:
+                self.assertTrue(keep(107, 8, 0, 0))
                 return (_Vector(end.x, 0.0, end.z),)
-            direction = end - start
-            direction.normalise()
-            return (start + direction.scale(6.0),)
-
-        def soft_path(unused_space_id, start, unused_end,
-                      unused_collision, impact_speed, unused_descriptor,
-                      recast_budget=None, allow_kinetic_first=False,
-                      kinetic_speed=None):
-            # The typed receipt owns a separate exact 3x3 sweep beginning
-            # behind the hull. Keep this assertion scoped to the legacy far
-            # planning rays whose reachable-impact calculation it verifies.
-            if abs(float(start.z)) < 0.001:
-                captures.append(float(impact_speed))
-                contracts.append((allow_kinetic_first, kinetic_speed))
-            return True
+            admitted = keep(73, 0, 45, 31612)
+            captures.append(admitted)
+            return (_Vector(start.x, start.y, start.z + 4.0),) if admitted else None
 
         runtime.bigworld.wg_collideSegment = collide
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         battle._destructibles = destructibles_sensor
-        params = {
-            'mass': 1000.0, 'speedFwd': 20.0, 'speedBwd': 10.0}
-        contracts = []
-
+        battle._soft_static_recast_budget = [0]
         with mock.patch.object(
                 destructibles_sensor, '_catalog_soft_static_path',
-                side_effect=soft_path), \
+                side_effect=AssertionError('planning does not recast per prop')), \
                 mock.patch(
                     'gui.mods.offline_lan_0922.battle_runtime.'
-                    'vehicle_physics.derive_params', return_value=params), \
+                    'vehicle_physics.derive_params',
+                    side_effect=AssertionError('planning does not need drive physics')), \
                 mock.patch(
                     'gui.mods.offline_lan_0922.battle_runtime.'
                     'vehicle_physics.engine_force',
-                    side_effect=lambda unused_params, unused_speed, throttle,
-                    unused_pitch: 2000.0 * throttle):
-            self.assertTrue(battle._direction_probe(
-                (0.0, 0.0, 0.0), 0.0, 1.0, descriptor)['clear'])
-            forward = tuple(captures)
-            forward_contracts = tuple(contracts)
-            del captures[:]
-            del contracts[:]
-            self.assertTrue(battle._direction_probe(
-                (0.0, 0.0, 0.0), 0.0, -1.0, descriptor)['clear'])
-            reverse = tuple(captures)
-            reverse_contracts = tuple(contracts)
+                    side_effect=AssertionError('planning does not estimate impact speed')):
+            for speed in (1.0, -1.0):
+                captures[:] = []
+                self.assertTrue(battle._direction_probe(
+                    (0.0, 0.0, 0.0), 0.0, speed, descriptor)['clear'])
+                self.assertEqual([False] * 6, captures)
+                self.assertEqual([0], battle._soft_static_recast_budget)
 
-        self.assertTrue(forward)
-        self.assertTrue(reverse)
-        self.assertTrue(all(abs(value - math.sqrt(5.0)) < 0.0001
-                            for value in forward))
-        self.assertTrue(all(abs(value - math.sqrt(17.0)) < 0.0001
-                            for value in reverse))
-        self.assertTrue(all(value <= 20.0 for value in forward))
-        self.assertTrue(all(value <= 10.0 for value in reverse))
-        self.assertTrue(all(enabled and limit == 20.0
-                            for enabled, limit in forward_contracts))
-        self.assertTrue(all(enabled and limit == 10.0
-                            for enabled, limit in reverse_contracts))
-
-    def test_direction_probe_propagates_soft_budget_defer_but_keeps_wall_hard(self):
+    def test_direction_probe_filters_soft_without_budget_but_keeps_wall_hard(self):
         from gui.mods.offline_lan_0922 import destructibles_sensor
 
         runtime = _runtime()
         descriptor = _Descriptor()
+        hard = [False]
 
-        def collide(unused_space_id, start, end, unused_mask):
+        def collide(unused_space_id, start, end, unused_mask, keep=None):
             if abs(start.y - end.y) > 0.1:
                 return (_Vector(end.x, 0.0, end.z),)
-            return (_Vector(start.x, start.y, start.z + 4.0),)
+            self.assertFalse(keep(73, 0, 45, 31612))
+            if hard[0] and keep(107, 8, 45, 31612):
+                return (_Vector(start.x, start.y, start.z + 4.0),)
+            return None
 
         runtime.bigworld.wg_collideSegment = collide
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         battle._destructibles = destructibles_sensor
-
+        battle._soft_static_recast_budget = [0]
         with mock.patch.object(
                 destructibles_sensor, '_catalog_soft_static_path',
-                return_value='deferred'):
+                side_effect=AssertionError('no soft budget lookup')):
             result = battle._direction_probe(
                 (0.0, 0.0, 0.0), 0.0, 4.0, descriptor)
-        self.assertTrue(result['clear'])
-        self.assertFalse(result['collision'])
-        self.assertTrue(result['deferred'])
-
-        statuses = iter(('deferred', False))
-        with mock.patch.object(
-                destructibles_sensor, '_catalog_soft_static_path',
-                side_effect=lambda *unused, **unused_kwargs: next(statuses)):
+            self.assertTrue(result['clear'])
+            self.assertFalse(result['collision'])
+            self.assertNotIn('deferred', result)
+            hard[0] = True
             result = battle._direction_probe(
                 (0.0, 0.0, 0.0), 0.0, 4.0, descriptor)
-        self.assertFalse(result['clear'])
-        self.assertTrue(result['collision'])
+            self.assertFalse(result['clear'])
+            self.assertTrue(result['collision'])
 
     def test_direction_probe_fails_closed_without_hull_bbox_abi(self):
         from gui.mods.offline_lan_0922 import destructibles_sensor
@@ -20808,6 +20780,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                     battle._avatar = runtime.bigworld.avatar
                     skin_filter = lambda *unused: True
                     battle._ground_filter = lambda x, z: skin_filter
+                    battle._navigation_collision_filter = lambda start, end: skin_filter
                     battle._water_depth = lambda position: 0.0
                     calls = []
 
@@ -28163,6 +28136,32 @@ class BattleRuntimeContractTests(unittest.TestCase):
         # ray, so it is prepared once per interval.
         self.assertEqual([(reject,)] * 3, filters)
         self.assertEqual(2, prepare.call_count)
+
+    def test_every_spotting_entry_uses_the_bounded_original_skin_adapter(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        # A raw static query still reports a destroyed original face. Only
+        # the shared destructible adapter can prove and release that skin.
+        runtime.bigworld.wg_collideSegment = mock.Mock(
+            side_effect=AssertionError('bypassed broken-original sight adapter'))
+        keep = lambda *unused: True
+        recast = mock.Mock(return_value=None)
+        report = mock.Mock()
+        battle._destructibles = types.SimpleNamespace(
+            sight_collision_filter=lambda: keep,
+            collide_sight_segment=recast, report_sight_contact=report)
+
+        self.assertTrue(battle._spot_segment_clear(
+            (0.0, 0.0, 0.0), (100.0, 0.0, 0.0)))
+        self.assertTrue(battle._bot_visibility(
+            {'position': (0.0, 0.0, 0.0)},
+            {'position': (100.0, 0.0, 0.0)})['line_of_sight'])
+        self.assertEqual(2, recast.call_count)
+        for args in recast.call_args_list:
+            self.assertIs(keep, args.args[3])
+            self.assertIs(runtime.bigworld.wg_collideSegment, args.args[4])
+        report.assert_not_called()
 
     def test_spotting_uses_descriptor_camouflage_and_shot_factor(self):
         runtime = _runtime()

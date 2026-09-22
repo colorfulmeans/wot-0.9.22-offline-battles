@@ -132,7 +132,7 @@ class BotAdapter(object):
             heading = yaw + (math.pi if sign < 0.0 else 0.0)
             if not self.driver._clear(
                     direction_clear, heading,
-                    recovery_probe_distance(half_length)):
+                    recovery_probe_distance(half_length), drive_direction=sign):
                 continue
             # ``_reverse_blocked_by_vehicle`` owns the exact longitudinal OBB
             # sweep. Supplying the opposite hull heading makes its reverse
@@ -197,6 +197,7 @@ class BotAdapter(object):
     @observed('driver.order')
     def _drive_order(self, bot_id, state, position, strategic,
                      direction_clear):
+        state.pop('navigation_probe_distance', None)
         aim_position = strategic.get('aim_position')
         move_position = strategic.get('move_position')
         face_position = strategic.get('face_position')
@@ -241,24 +242,43 @@ class BotAdapter(object):
         requested_dz = float(move_position[2]) - float(position[2])
         target_dx = float(target[0]) - float(position[0])
         target_dz = float(target[2]) - float(position[2])
+        if movement_intent and not contact_escape:
+            try:
+                leading = float(state.get('half_length', 3.5))
+                horizon = float(state.get('decision_horizon', 0.0))
+                speed = float(state.get('speed', 0.0))
+                finite = all(not math.isnan(value) and not math.isinf(value)
+                             for value in (leading, horizon, speed))
+                reach = abs(speed) * max(0.0, horizon)
+                remaining = math.hypot(target_dx, target_dz) - WAYPOINT_ARRIVAL_RADIUS
+                distance = leading + max(remaining, reach)
+                if (finite and remaining > 0.0 and leading > 0.0 and
+                        not math.isnan(distance) and not math.isinf(distance)):
+                    # The runtime applies this only to ordinary driver probes,
+                    # after checking remembered vehicle blockers. Explicit short
+                    # recovery probes retain their own range and traffic rules.
+                    # Include the leading hull and this decision's real travel.
+                    state['navigation_probe_distance'] = distance
+            except (TypeError, ValueError, OverflowError):
+                pass
         navigation_wait = bool(
             movement_intent and
             requested_dx * requested_dx + requested_dz * requested_dz > 225.0 and
             target_dx * target_dx + target_dz * target_dz <=
             WAYPOINT_ARRIVAL_RADIUS * WAYPOINT_ARRIVAL_RADIUS)
+        if not navigation_wait or contact_plan is not None:
+            self.driver.end_navigation_wait(bot_id)
         if contact_plan is not None:
             local = contact_plan[1]
         elif navigation_wait:
-            # TerrainNavigator returned the current pose because a resumable A*
-            # job is still pending. This is a planner wait, not route arrival and
-            # not physical evidence that should advance LocalDriver recovery.
-            local = {
-                'throttle': 0.0,
-                'brake': True,
-                'turn': 0.0,
-                'target_yaw': float(state.get('yaw', 0.0)),
-                'recovery_mode': 'nav_wait',
-            }
+            local = self.driver.wait_for_navigation(
+                bot_id, int(state['slot']), position,
+                float(state.get('yaw', 0.0)),
+                float(state.get('speed', 0.0)), float(state.get('dt', 0.0)),
+                state.get('neighbours', ()), direction_clear,
+                half_length=float(state.get('half_length', 3.5)),
+                half_width=float(state.get('half_width', 1.7)),
+                recovery_allowed=bool(state.get('navigation_recovery_allowed')))
         else:
             local = self.driver.drive(
                 bot_id, int(state['slot']), position,
@@ -272,7 +292,8 @@ class BotAdapter(object):
                 stopping_distance=state.get('stopping_distance'),
                 stop_at_target=stop_at_target,
                 decision_horizon=float(state.get('decision_horizon', 0.0)),
-                pose_clear=state.get('pose_clear'))
+                pose_clear=state.get('pose_clear'),
+                turn_speed_limit=state.get('turn_speed_limit'))
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
         # their stable 12-30 degree hull angle while the turret keeps tracking
@@ -284,7 +305,7 @@ class BotAdapter(object):
         turn = float(local['turn'])
         dx = float(face_position[0]) - float(position[0])
         dz = float(face_position[2]) - float(position[2])
-        if (recovery_mode in ('arrived', 'nav_wait') and
+        if (recovery_mode == 'arrived' and
                 dx * dx + dz * dz > 0.01):
             target_yaw = math.atan2(dx, dz)
             difference = target_yaw - float(state.get('yaw', 0.0))
@@ -310,8 +331,12 @@ class BotAdapter(object):
             'recovery_mode': recovery_mode,
             'movement_intent': movement_intent,
         }
-        if local.get('reverse_blocked_by') is not None:
-            result['reverse_blocked_by'] = local['reverse_blocked_by']
+        for key in ('reverse_blocked_by', 'forward_blocked_by'):
+            if local.get(key) is not None:
+                result[key] = local[key]
+        for key in ('navigation_recovery', 'navigation_replan'):
+            if local.get(key):
+                result[key] = True
         if strategic.get('hull_angle_degrees') is not None:
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))

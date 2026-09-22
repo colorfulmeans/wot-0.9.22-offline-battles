@@ -1365,17 +1365,31 @@ def _valid_battle_receipt(message):
     if ('vehicle_compact_descr' in message and
             _canonical_vehicle_compact_descr(message['vehicle_compact_descr']) is None):
         return False
+    if ('max_health' in message and
+            (type(message['max_health']) not in integer_types or
+             not 1 <= message['max_health'] <= 100000)):
+        return False
+    if ('vehicle_outfits' in message and
+            (not isinstance(message['vehicle_outfits'], dict) or
+             _canonical_wire_outfits(message['vehicle_outfits']) is None)):
+        return False
     stats = message.get('stats')
     rewards = message.get('rewards')
     stat_names = RECEIPT_STAT_NAMES
     reward_names = ('credits', 'xp', 'free_xp', 'repair_cost', 'ammo_cost')
     if not isinstance(stats, dict) or not isinstance(rewards, dict):
         return False
-    # Statistics added after a receipt was recorded default to zero, exactly
-    # as the durable store treats them.
+    # Missing optional statistics are valid legacy wire data. Evidence-bearing
+    # mission fields remain absent when the durable store normalizes them.
     if any(_exact_int(stats.get(name, 0)) is None or
            _exact_int(stats.get(name, 0)) < 0 for name in stat_names):
         return False
+    if 'max_piercing_series' in stats:
+        series = stats['max_piercing_series']
+        if (type(series) not in integer_types or series > min(
+                _exact_int(stats.get('shots', 0)),
+                _exact_int(stats.get('piercings', 0)))):
+            return False
     if any(_exact_int(rewards.get(name)) is None or
            _exact_int(rewards.get(name)) < 0 for name in reward_names):
         return False
@@ -1452,6 +1466,12 @@ def _valid_battle_receipt(message):
                _exact_int(row_stats.get(stat_name, 0)) < 0
                for stat_name in stat_names):
             return False
+        if 'max_piercing_series' in row_stats:
+            series = row_stats['max_piercing_series']
+            if (type(series) not in integer_types or series > min(
+                    _exact_int(row_stats.get('shots', 0)),
+                    _exact_int(row_stats.get('piercings', 0)))):
+                return False
         # Receipts recorded before offline achievements shipped omit the list.
         achievements = row.get('achievements', [])
         if (not isinstance(achievements, list) or
@@ -3649,12 +3669,39 @@ class LANClient(object):
             return None
         lineage = (
             message.get('round_id'), message.get('authority_epoch'),
-            message.get('bot_authority_id'))
+            message.get('bot_authority_id'), message.get('map'))
         try:
             hash(lineage)
         except TypeError:
             return None
         return lineage
+
+    @staticmethod
+    def _snapshot_order_revision(message):
+        if (not isinstance(message, dict) or
+                _strict_mapping_list(message.get('bot_orders'), 30) is None):
+            return None
+        revision = _exact_int(message.get('bot_order_revision'))
+        return revision if revision is not None and revision >= 0 else None
+
+    def _merge_snapshot_orders(self, previous, message):
+        """Carry a sparse order section without retaining an old motion frame."""
+        lineage = self._snapshot_lineage(previous)
+        if lineage is None or lineage != self._snapshot_lineage(message):
+            return message
+        previous_revision = self._snapshot_order_revision(previous)
+        if previous_revision is None:
+            return message
+        revision = self._snapshot_order_revision(message)
+        if 'bot_orders' in message and (
+                revision is None or revision >= previous_revision):
+            # An explicit empty list clears orders too. Leave malformed new
+            # sections intact for the normal payload validator to contain.
+            return message
+        merged = dict(message)
+        merged['bot_orders'] = previous['bot_orders']
+        merged['bot_order_revision'] = previous_revision
+        return merged
 
     def _queue_message(self, message, generation=None):
         if not isinstance(message, dict):
@@ -3665,16 +3712,35 @@ class LANClient(object):
                      self._stopping or not self.running)):
                 return
             if len(self._pending) >= MAX_PENDING_MESSAGES:
+                # Move only the sparse orders through consecutive snapshots.
+                # A lifecycle/event message ends this run; it must observe the
+                # preceding state before later orders can replace it.
+                incoming_lineage = self._snapshot_lineage(message)
+                if incoming_lineage is not None:
+                    for value in reversed(self._pending):
+                        if self._snapshot_lineage(value) != incoming_lineage:
+                            break
+                        message = self._merge_snapshot_orders(value, message)
                 latest_manifests = {}
                 latest_turrets = {}
+                latest_orders = {}
+                snapshot_run = 0
                 for index, value in enumerate(self._pending):
                     lineage = self._snapshot_lineage(value)
+                    if lineage is None:
+                        snapshot_run += 1
                     if (lineage is not None and
                             'bot_manifest' in value):
                         latest_manifests[lineage] = index
                     if lineage is not None and value.get('detached_turrets'):
                         latest_turrets[lineage] = index
-                incoming_lineage = self._snapshot_lineage(message)
+                    revision = self._snapshot_order_revision(value)
+                    if lineage is not None and revision is not None:
+                        order_key = (snapshot_run, lineage)
+                        previous_order = latest_orders.get(order_key)
+                        if (previous_order is None or
+                                revision >= previous_order[0]):
+                            latest_orders[order_key] = (revision, index)
                 if (incoming_lineage is not None and
                         'bot_manifest' in message):
                     # The incoming full snapshot supersedes an older barrier
@@ -3685,8 +3751,17 @@ class LANClient(object):
                         self._pending[turret_index].get('detached_turrets') ==
                         message.get('detached_turrets')):
                     latest_turrets.pop(incoming_lineage, None)
+                incoming_revision = self._snapshot_order_revision(message)
+                incoming_order_key = (snapshot_run, incoming_lineage)
+                previous_order = latest_orders.get(incoming_order_key)
+                if (incoming_revision is not None and
+                        previous_order is not None and
+                        incoming_revision >= previous_order[0]):
+                    latest_orders.pop(incoming_order_key, None)
                 protected_snapshots = set(latest_manifests.values())
                 protected_snapshots.update(latest_turrets.values())
+                protected_snapshots.update(
+                    value[1] for value in latest_orders.values())
                 snapshot_index = next((
                     index for index, value in enumerate(self._pending)
                     if (index not in protected_snapshots and
@@ -4028,7 +4103,11 @@ class LANClient(object):
                     latest_snapshot = None
                     if not self.running:
                         break
-                latest_snapshot = message
+                # The server omits orders after their socket write succeeds.
+                # A later lean frame therefore supersedes motion, but cannot
+                # supersede an order section still waiting for this poll.
+                latest_snapshot = self._merge_snapshot_orders(
+                    latest_snapshot, message)
             elif (message.get('type') == 'events' and
                   latest_snapshot is not None and
                   message.get('round_id') ==
