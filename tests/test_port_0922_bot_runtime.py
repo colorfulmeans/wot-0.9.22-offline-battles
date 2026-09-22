@@ -19197,13 +19197,18 @@ class BotRuntimeTests(unittest.TestCase):
             for order in defenders))
 
     def test_json_route_anchor_is_normalized_before_terrain_navigation(self):
+        # Keep the live hull inside the graph and outside the near-goal
+        # shortcut so this exercises the real navigator boundary. The tiny
+        # default graph's spawn at z=100 is outside its z=0-only corridor;
+        # using the old anchor as a private start used to hide that fixture.
+        live_start = (-24.0, 0.0, 0.0)
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
             ground_probe=lambda unused_x, unused_z, unused_hint: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             obstacle_probe=lambda *unused: False,
-            spawn_resolver=_spawn_resolver,
-            baked_graph=_graph(),
+            spawn_resolver=lambda unused_team, unused_slot: (live_start, 0.0),
+            baked_graph=_flat_open_graph(),
             direction_probe=lambda *unused: {
                 'clear': True, 'slope': 0.0})
         runtime.battle_start(self.start)
@@ -19226,12 +19231,17 @@ class BotRuntimeTests(unittest.TestCase):
             'bots': [],
         })
 
-        outgoing = runtime.update(0.04, 1.0)
+        with mock.patch.object(runtime.navigator, 'next_target',
+                               wraps=runtime.navigator.next_target) as navigate:
+            outgoing = runtime.update(0.04, 1.0)
 
         self.assertEqual('bot_state', outgoing[0]['type'])
+        navigate.assert_called_once()
+        self.assertEqual(live_start, navigate.call_args.args[1])
+        self.assertEqual((0.0, 0.0, 0.0), navigate.call_args.args[5])
+        self.assertTrue(runtime.navigator.paths)
         path = list(runtime.navigator.paths.values())[0]
-        self.assertEqual((0.0, 0.0, 0.0),
-                         path[0])
+        self.assertEqual(live_start, path[0])
         order = runtime._server_orders[11]
         self.assertEqual((6.0, 1.0, 0.0), order['aim_position'])
         self.assertEqual((7.0, 0.0, 0.0), order['face_position'])
