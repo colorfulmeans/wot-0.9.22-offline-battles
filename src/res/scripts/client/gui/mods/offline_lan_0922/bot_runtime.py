@@ -12,7 +12,6 @@ import random
 import sys
 
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
-from gui.mods.offline_lan_0922.ai.traffic import TrafficCoordinator
 from gui.mods.offline_lan_0922.ai import maps as tactical_maps
 from gui.mods.offline_lan_0922.ai import driver as ai_driver
 from gui.mods.offline_lan_0922.ai import planner as ai_planner
@@ -2044,7 +2043,6 @@ class BotRuntime(object):
         # Contact time is accumulated per physical slice and drained at the
         # end of the render callback. A callback can contain no slice at high
         # FPS or several bounded catch-up slices at low FPS.
-        self._contact_lease_elapsed = {}
         self._injected_baked_graph = baked_graph
         self.baked_graph = None
         self._navigation_map_name = None
@@ -2202,7 +2200,6 @@ class BotRuntime(object):
         self._decision_cache = {}
         self._motion_probe_cache = {}
         self._traffic_stopping_cache = {}
-        self._traffic_coordinator = TrafficCoordinator()
         self._slope_pose_cursor = 0
         self._flip_diary = {}
         self.debug_logging = False
@@ -2804,7 +2801,6 @@ class BotRuntime(object):
         self._spotting_profiles.pop(('bot', bot_id), None)
         self._motion_probe_cache.pop(bot_id, None)
         self._traffic_stopping_cache.pop(bot_id, None)
-        self._traffic_coordinator.forget(bot_id)
         self._cancel_artillery_intent(bot_id)
         if state is not None:
             # A Siege descriptor changes spring geometry, not whether this
@@ -3256,7 +3252,6 @@ class BotRuntime(object):
             self._ram_seq = 0
             self._human_ram_receipt_seq = {}
             self._human_ram_report_cache = {}
-            self._contact_lease_elapsed = {}
             self.adapter = None
             self.finished = False
             self._visibility_cache = {}
@@ -3289,7 +3284,6 @@ class BotRuntime(object):
             self._decision_cache = {}
             self._motion_probe_cache = {}
             self._traffic_stopping_cache = {}
-            self._traffic_coordinator = TrafficCoordinator()
             self._slope_pose_cursor = 0
             self._world_receipt_waiting = []
             self._world_receipt_frame = None
@@ -3343,7 +3337,6 @@ class BotRuntime(object):
             self._decision_cache = {}
             self._motion_probe_cache = {}
             self._traffic_stopping_cache = {}
-            self._traffic_coordinator = TrafficCoordinator()
             self._world_receipt_waiting = []
             self._world_receipt_frame = None
             self._prewarm_receipt_cursor = 0
@@ -4236,7 +4229,6 @@ class BotRuntime(object):
             self.finished = True
             self._clear_artillery_intents()
             self._friendly_repositions = {}
-            self._contact_lease_elapsed = {}
         server_tick = message.get('server_tick')
         if server_tick is not None:
             try:
@@ -7793,11 +7785,8 @@ class BotRuntime(object):
         # Short, clear routes still need the navigator's progress monitor:
         # local motion alone cannot distinguish travel from oscillation.
         throttle_override = strategic.get('throttle_override')
-        driver = getattr(self.adapter, 'driver', None)
-        driver_state = getattr(driver, 'states', {}).get(int(bot_id), {})
         movement_intent = bool(
             (throttle_override is None or float(throttle_override) > 0.0)
-            and not driver_state.get('traffic_waiting', False)
             and int(bot_id) not in self._artillery_intents
             and int(bot_id) not in self._artillery_reproofs)
         if direct_target:
@@ -8522,49 +8511,9 @@ class BotRuntime(object):
                 # One unresolved transaction per player preserves ledger
                 # order even when transport retries or snapshots coalesce.
                 break
-        if owns_contacted_bot_ids and step is not None:
-            for bot_id in sorted(contacted_bot_ids):
-                self._record_traffic_wait_contact(bot_id, step)
         return reports
 
-    def _record_traffic_wait_contact(self, bot_id, elapsed):
-        """Accumulate one Bot's actual contact-response slice."""
-        elapsed = max(0.0, _number(elapsed))
-        if elapsed <= 0.0:
-            return
-        bot_id = int(bot_id)
-        self._contact_lease_elapsed[bot_id] = (
-            self._contact_lease_elapsed.get(bot_id, 0.0) + elapsed)
 
-    def _apply_traffic_wait_lease(self):
-        """Suppress the stuck timer while another hull owns the blockage.
-
-        LocalDriver's stuck detector measures translation. A tank held in place
-        by the simultaneous contact solver is not translating, but it is also
-        not wedged against terrain, and its recovery is a blind reverse into
-        whatever is behind it. ``wait_for_traffic`` grants a bounded
-        right-of-way lease for exactly this case; it lost its only producer
-        when the predictive headway controller was removed from the call path,
-        while the stuck timer it protected stayed. A genuine deadlock is still
-        detected, because the lease expires after
-        ``TRAFFIC_WAIT_LEASE_SECONDS`` of physical contact time. Charge each
-        Bot only for slices in which it actually received a contact response:
-        high-FPS callbacks may consume no slice, while a late callback can
-        contain several bounded slices with different contact results.
-        """
-        contacted = self._contact_lease_elapsed
-        self._contact_lease_elapsed = {}
-        if not contacted:
-            return
-        driver = getattr(self.adapter, 'driver', None)
-        wait = getattr(driver, 'wait_for_traffic', None)
-        if not callable(wait):
-            return
-        for bot_id in sorted(contacted):
-            try:
-                wait(bot_id, contacted[bot_id])
-            except Exception:
-                continue
 
     @timed('bot.vehicle_contacts')
     def _resolve_tank_contacts(self, players, now, step):
@@ -8766,8 +8715,6 @@ class BotRuntime(object):
             self._apply_tank_contact_response(state, result, step)
             reports.extend(self._ram_reports(
                 state, result['ram_events']))
-        for bot_id in sorted(contacted_bot_ids):
-            self._record_traffic_wait_contact(bot_id, step)
         self._ram_contacts = frozenset(current_ram_contacts)
         return reports
 
@@ -10903,7 +10850,6 @@ class BotRuntime(object):
         self._equipment_wire_exposed_in_update.clear()
         # Contact leases never cross render callbacks or round teardown. Any
         # entry below is produced by a physical slice in this update only.
-        self._contact_lease_elapsed = {}
         if (not self.is_authority() or self.adapter is None or
                 self.finished):
             return []
@@ -10971,9 +10917,6 @@ class BotRuntime(object):
                             frame_step, step_now, players, neighbours,
                             refresh_control, publish_step))
                         refresh_control = False
-                # Deliver once per render callback, after every bounded
-                # physical slice has contributed only its own contact time.
-                self._apply_traffic_wait_lease()
                 self._scan_moving_destructible_bodies()
             finally:
                 if visibility_frame_open:
@@ -11383,11 +11326,6 @@ class BotRuntime(object):
                         self._combat_diagnostics, 'bot.planner_driver',
                         self.adapter.decide,
                         decision_state, sample_clear)
-                command = timed_call(
-                    self._combat_diagnostics, 'bot.traffic',
-                    self._traffic_coordinator.adjust,
-                    state['id'], traffic_bodies[state['id']], command,
-                    decision_state['neighbours'], now, sample_clear)
                 if reposition_expired:
                     # Resume the ordinary strategic movement on this frame,
                     # but do not immediately recreate the expired override by
@@ -11402,9 +11340,8 @@ class BotRuntime(object):
                     DECISION_TIER_FACTOR[self._detail_tier(state)],
                     3, decision_cache is None)
                 raw_command = dict(command)
-            # Keep this decision until the next scheduled refresh. Friendly
-            # following uses contact physics; crossing yields have a fixed
-            # deadline and never renew LocalDriver's stuck timer.
+            # Keep the original driver decision until its scheduled refresh.
+            # No traffic coordinator changes it; physical contacts remain active.
             command['throttle'] = max(
                 -1.0, min(1.0, command.get('throttle', 0.0)))
             if decision_due:
