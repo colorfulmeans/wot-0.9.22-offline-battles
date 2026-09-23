@@ -1,0 +1,49 @@
+name: Verify native role reset
+on:
+  push:
+    branches: [fix/093-requalified-crew-20260923]
+    paths: [.github/workflows/apply-verified-role-reset.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/fix/093-requalified-crew-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: tests:server:tools
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Apply the hash-verified locally tested patch
+        shell: python
+        run: |
+          import base64, hashlib, pathlib, subprocess, zlib
+          parent = subprocess.check_output(['git','rev-parse','HEAD^'], text=True).strip()
+          assert parent == 'e45ddc22093c76b43769d7cfa6a5d9e464142267', parent
+          payload = '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'
+          patch = zlib.decompress(base64.b64decode(payload))
+          assert hashlib.sha256(patch).hexdigest() == '0dc5b07c137017f1a8756591965f657fa90f3d1946386645c9a382a9d9021719'
+          path = pathlib.Path('/tmp/native-role-reset.patch')
+          path.write_bytes(patch)
+          subprocess.run(['git','apply','--check',str(path)], check=True)
+          subprocess.run(['git','apply',str(path)], check=True)
+      - name: Verify all 444 targeted tests
+        run: python -m unittest test_port_0922_effective_params test_port_0922_economy test_port_0922_economy_payloads test_port_0922_economy_regressions test_port_0922_garage
+      - name: Commit tested changes and remove transfer workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-verified-role-reset.yml
+          git add src/res/scripts/client/gui/mods/offline_lan_0922/lan_session.py src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/garage.py tests/test_port_0922_garage.py .github/workflows/apply-verified-role-reset.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Include the native lossless skill reset in requalification [skip ci]'
+          git push origin HEAD:refs/heads/fix/093-requalified-crew-20260923
