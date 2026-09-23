@@ -3657,6 +3657,9 @@ class BattleRuntime(object):
                 # overhead bridge and turn every clear step into a rollback.
                 physics_ground_probe=self._support_column,
                 obstacle_probe=self._navigation_obstacle,
+                navigation_structure_provider=(
+                    self._destructibles.navigation_structure_regions
+                    if self._destructibles is not None else None),
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
                 cover_probe=self._sample_bot_cover,
@@ -5448,6 +5451,16 @@ class BattleRuntime(object):
         return observed_ray('native.navigation.ray',
                             self._runtime.bigworld.wg_collideSegment, *args)
 
+    @staticmethod
+    def _record_navigation_hit(trace, start, end, hit):
+        """An incomplete diagnostic must never change a collision verdict."""
+        trace.update(ray_start=_xyz(start), ray_end=_xyz(end))
+        for index, name in ((0, 'hit'), (1, 'normal')):
+            try:
+                trace[name] = _xyz(hit[index])
+            except (AttributeError, IndexError, TypeError, ValueError):
+                pass
+
     def _navigation_ground(self, x, z, hint_y=0.0):
         """Copy the 0.8.2 same-layer graph probe, including ford depth."""
         probe_top = float(hint_y) + 8.0
@@ -5620,10 +5633,11 @@ class BattleRuntime(object):
             if run > 0.0:
                 probe_up = max(4.5, run * 0.52)
                 probe_down = max(5.0, run * 0.45)
+                ground_trace = {}
                 try:
                     ground_start = self._vector((nx, previous_y + probe_up, nz))
                     ground_end = self._vector((nx, previous_y - probe_down, nz))
-                    ground = (self._collide_navigation(ground_start, ground_end)
+                    ground = (self._collide_navigation(ground_start, ground_end, ground_trace)
                               if descriptor is not None else self._collide_down(
                                   ground_start, ground_end, self._ground_filter(nx, nz)))
                 except Exception:
@@ -5647,8 +5661,12 @@ class BattleRuntime(object):
                 if abs(slope) > abs(maximum_slope):
                     maximum_slope = slope
                 if delta > run * 0.48 or delta < -run * 0.38:
+                    self._record_navigation_hit(
+                        ground_trace, ground_start, ground_end, ground)
+                    ground_trace['previous_y'] = previous_y
                     return {'clear': False, 'collision': False,
-                            'water': False, 'slope': slope}
+                            'water': False, 'slope': slope,
+                            'reason': 'planning_grade', 'native_trace': ground_trace}
             for offset in (-corridor_half_width, 0.0, corridor_half_width):
                 ray_start = self._vector((
                     x + lateral_x * offset, y + height,
@@ -5656,18 +5674,24 @@ class BattleRuntime(object):
                 ray_end = self._vector((
                     nx + lateral_x * offset, next_y + height,
                     nz + lateral_z * offset))
+                collision_trace = {}
                 try:
                     collision = (
-                        self._collide_navigation(ray_start, ray_end)
+                        self._collide_navigation(ray_start, ray_end, collision_trace)
                         if descriptor is not None else
                         self._runtime.bigworld.wg_collideSegment(
                             self._avatar.spaceID, ray_start, ray_end,
                             VEHICLE_SKIP_FLAGS))
                 except Exception:
-                    collision = True
-                if collision is not None:
                     return {'clear': False, 'collision': True,
-                            'water': False, 'slope': slope}
+                            'water': False, 'slope': slope,
+                            'reason': 'planning_probe_failed', 'probe_failed': True}
+                if collision is not None:
+                    self._record_navigation_hit(
+                        collision_trace, ray_start, ray_end, collision)
+                    return {'clear': False, 'collision': True,
+                            'water': False, 'slope': slope,
+                            'reason': 'planning_collision', 'native_trace': collision_trace}
             previous_y = next_y
             previous_distance = distance
         result = {'clear': True, 'collision': False,
@@ -19382,7 +19406,8 @@ class BattleRuntime(object):
 
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
-            pitch=None, roll=None, record_local=True, pivot_offset=0.0):
+            pitch=None, roll=None, record_local=True, pivot_offset=0.0,
+            contact_trace=None):
         """Recast every rotating body slice against the live native BSP.
 
         The catalog owns each destructible's original shape.  Once a structure
@@ -19429,10 +19454,13 @@ class BattleRuntime(object):
         if not 1 <= steps <= DESTRUCTIBLE_POSE_MAX_SWEEP_STEPS:
             raise RuntimeError(
                 'native world rotation sweep exceeds its bound')
-        sweep_bbox = (_destructible_posed_bbox(bbox, pitch, roll)
-                      if pivot_offset else bbox)
-        sweep_pitch = 0.0 if pivot_offset else pitch
-        sweep_roll = 0.0 if pivot_offset else roll
+        # Unlike the catalog box test, native lanes read only bbox X/Z and
+        # pose their fixed 0.6/1.1/1.6 m heights themselves. Baking Y into the
+        # box and zeroing pitch/roll discards that pose entirely, putting a
+        # raised track's collision rays through the slope below its body.
+        sweep_bbox = bbox
+        sweep_pitch = pitch
+        sweep_roll = roll
         previous_contacts = []
         previous_checked = [False]
 
@@ -19482,6 +19510,10 @@ class BattleRuntime(object):
                 if isinstance(world_status, bool):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status != 'clear':
+                    if contact_trace is not None:
+                        contact_trace.update(trace)
+                        contact_trace.update(pivot_offset=pivot_offset,
+                            start_yaw=start_yaw, end_yaw=end_yaw)
                     if record_local:
                         self._local_world_collision_trace = trace
                         self._local_motion_kinds = 'world'
@@ -19705,6 +19737,7 @@ class BattleRuntime(object):
         end_position = vehicle_physics.track_pivot_position(
             position, start_yaw, end_yaw, pivot_offset)
         bot_state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
+        bot_state.pop('_rotation_contact_trace', None)
         pitch = _number(bot_state.get(
             'terrain_pitch', bot_state.get('pitch')))
         roll = _number(bot_state.get('roll'))
@@ -19753,12 +19786,14 @@ class BattleRuntime(object):
                 detail.get('kinds', '-'))
         if status not in ('clear', 'crushed', 'approach'):
             return False
+        contact_trace = {}
         clear = self._native_world_rotation_is_clear(
             position, start_yaw, end_yaw, descriptor,
             pitch=pitch, roll=roll, record_local=False,
-            pivot_offset=pivot_offset)
+            pivot_offset=pivot_offset, contact_trace=contact_trace)
         if not clear:
             self._bot_motion_kinds[int(bot_id)] = 'world'
+            bot_state['_rotation_contact_trace'] = contact_trace
         return clear
 
     def _resolve_bot_motion(self, bot_id, position, yaw, speed,

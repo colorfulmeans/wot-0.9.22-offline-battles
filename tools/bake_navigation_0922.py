@@ -949,14 +949,17 @@ NAVIGATION_ORIGINAL_MATERIAL_END = 86
 def _compiled_collision_materials(bsmo, collider, model_id):
     """Resolve BSP material IDs through this BSMO model's inclusive table span.
 
-    The same primitive can have different remaps in different models.  Never
-    cache a classified mesh by primitive filename, nor infer a material from
-    the type of the whole model.  An incomplete map aborts the offline bake;
-    it must not silently create either holes or extra walls in an artifact.
+    A compiled model may select only one component of a shared BSP. The
+    inclusive span is that component's material selection, not a promise
+    to remap every triangle in the resource. Keep selections per model;
+    never populate absent entries with default flags or another component.
+    Two UINT32_MAX endpoints explicitly declare an empty selection.
     """
     records = bsmo['bsp_material_kinds']
     first = int(collider['bsp_material_kind_begin'])
     last = int(collider['bsp_material_kind_end'])
+    if first == last == 0xffffffff:
+        return {}
     if first < 0 or first > last or last >= len(records):
         raise UnsafeBakeInputError('BSMO model %d has an invalid material range' % model_id)
     result = {}
@@ -1002,7 +1005,8 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
             self.collision_stats = dict(
                 placed_colliders=0, invisible_instances=0, noncolliding_instances=0,
                 original_surfaces_excluded=0, nonvehicle_surfaces_excluded=0,
-                hard_surfaces_retained=0, mixed_instances=0)
+                hard_surfaces_retained=0, mixed_instances=0,
+                unselected_component_surfaces=0, empty_collision_resources=0)
     obstacles = CompiledObstacles()
     mesh_cache = {}
     material_cache = {}
@@ -1033,9 +1037,30 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
         if name not in mesh_cache:
             try:
                 sections = legacy._primitive_sections(vfs.read(name))
-                mesh_cache[name] = _bsp_triangles_0922(sections['bsp2'], legacy, with_materials=True)
+                mesh_cache[name] = (_bsp_triangles_0922(
+                    sections['bsp2'], legacy, with_materials=True)
+                    if 'bsp2' in sections else None)
             except (KeyError, ValueError, struct.error, zipfile.BadZipFile) as error:
                 raise UnsafeBakeInputError('%s: no valid authored collision: %s' % (name, error))
+        mesh = mesh_cache[name]
+        if mesh is None:
+            # Real #1513 visual-only assets can name a primitive archive but
+            # declare no collision material span. Do not invent a collider
+            # from render vertices; a nonempty declaration still must fail.
+            if materials:
+                raise UnsafeBakeInputError('%s: no valid authored collision: missing bsp2' % name)
+            obstacles.collision_stats['noncolliding_instances'] += 1
+            obstacles.collision_stats['empty_collision_resources'] += 1
+            continue
+        if not materials:
+            raise UnsafeBakeInputError('%s model %d: BSP exists without a material selection' %
+                                       (name, model_id))
+        authored_ids = set(material_id for unused_triangle, material_id in mesh)
+        finite_mesh = any(all(math.isfinite(value) for point in triangle for value in point)
+                          for triangle, unused_material in mesh)
+        if finite_mesh and not set(materials).issubset(authored_ids):
+            raise UnsafeBakeInputError('%s model %d: compiled selection references absent BSP IDs %r' %
+                                       (name, model_id, sorted(set(materials) - authored_ids)))
         obstacles.model_library.cache[name] = True
         obstacles.collision_stats['placed_colliders'] += 1
         hard = []
@@ -1047,8 +1072,10 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
                 obstacles.invalid_triangles += 1
                 continue
             if material_id not in materials:
-                raise UnsafeBakeInputError('%s model %d: BSP material %d has no compiled mapping' %
-                                           (name, model_id, material_id))
+                # It belongs to a different intact/replacement component
+                # sharing this resource, not to this placed compiled model.
+                obstacles.collision_stats['unselected_component_surfaces'] += 1
+                continue
             flags = materials[material_id]
             material_kind = flags >> 8
             if flags & NAVIGATION_VEHICLE_SKIP_FLAGS:
@@ -2221,6 +2248,42 @@ def spawn_clearance_failures(formations, obstacles, vehicle_envelope,
     return failures
 
 
+def _pack_spawn_candidates(nodes, yaw, half_width, half_length, required):
+    """Choose a complete set before publication; no battle-time relocation.
+
+    Nodes have already passed terrain, hard and soft scenery checks. Search
+    only the finite original formation envelope, preserving both spacing
+    and the maximum chassis OBB. Reconsider an earlier choice rather than
+    relaxing collision checks when a greedy slot assignment traps a later one.
+    """
+    conflicts = []
+    for first in nodes:
+        mask = 0
+        pose = (first[1], first[2], first[3], yaw)
+        for index, second in enumerate(nodes):
+            if (math.hypot(first[1] - second[1], first[3] - second[3]) <
+                    SPAWN_MINIMUM_SPACING or spawn_obbs_overlap(
+                        pose, (second[1], second[2], second[3], yaw),
+                        half_width, half_length)):
+                mask |= 1 << index
+        conflicts.append(mask)
+
+    def choose(available, selected):
+        need = int(required) - len(selected)
+        if need == 0:
+            return selected
+        while available.bit_count() >= need:
+            bit = available & -available
+            index = bit.bit_length() - 1
+            available &= ~bit
+            result = choose(available & ~conflicts[index], selected + [index])
+            if result is not None:
+                return result
+        return None
+
+    return choose((1 << len(nodes)) - 1, [])
+
+
 def bake_spawn_formations(graph, anchors, map_name, obstacles,
                           vehicle_envelope, legacy):
     """Emit two complete formations or reject the entire map bake.
@@ -2267,61 +2330,49 @@ def bake_spawn_formations(graph, anchors, map_name, obstacles,
             raise UnsafeBakeInputError(
                 '%s: CTF spawn anchors overlap' % map_name)
         yaw = math.atan2(delta_x, delta_z)
+        # Nominal line positions are preferences, not occupied-world facts.
+        # Pack the entire team inside their existing 32m projection envelope.
+        # Slot numbers do not force a tank into an obstructed template point.
+        desired = tuple(
+            (float(anchor_x) + math.sin(yaw) * row_depth +
+             math.cos(yaw) * float(column) * SPAWN_LATERAL_SPACING,
+             float(anchor_z) + math.cos(yaw) * row_depth -
+             math.sin(yaw) * float(column) * SPAWN_LATERAL_SPACING)
+            for row_depth in SPAWN_ROW_DEPTHS for column in SPAWN_COLUMNS)
+        candidates = []
+        for candidate in nodes:
+            distance_sq, template = min(
+                ((candidate[1] - point[0]) ** 2 +
+                 (candidate[3] - point[1]) ** 2, index)
+                for index, point in enumerate(desired))
+            if distance_sq > SPAWN_MAXIMUM_PROJECTION ** 2:
+                continue
+            pose = (candidate[1], candidate[2], candidate[3], yaw)
+            if spawn_pose_blocked(obstacles, pose, half_width, half_length, legacy):
+                continue
+            candidates.append((distance_sq, template, candidate))
+        candidates.sort(key=lambda entry: (entry[0], entry[1], entry[2][0]))
+        picked = _pack_spawn_candidates(
+            [entry[2] for entry in candidates], yaw, half_width, half_length,
+            SPAWN_SLOTS_PER_TEAM)
+        if picked is None:
+            raise UnsafeBakeInputError(
+                '%s: team %d has no complete collision-free %d-slot packing '
+                'inside the existing %.1f m template projection envelope' %
+                (map_name, team, SPAWN_SLOTS_PER_TEAM, SPAWN_MAXIMUM_PROJECTION))
+        # Restore nominal front/side ordering for stable slot identities.
+        picked.sort(key=lambda index: (candidates[index][1],
+                                      candidates[index][0], candidates[index][2][0]))
         selected = []
-        for row_depth in SPAWN_ROW_DEPTHS:
-            for column in SPAWN_COLUMNS:
-                if len(selected) >= SPAWN_SLOTS_PER_TEAM:
-                    break
-                lateral = float(column) * SPAWN_LATERAL_SPACING
-                desired_x = (float(anchor_x) + math.sin(yaw) * row_depth +
-                             math.cos(yaw) * lateral)
-                desired_z = (float(anchor_z) + math.cos(yaw) * row_depth -
-                             math.sin(yaw) * lateral)
-                candidates = sorted(
-                    nodes,
-                    key=lambda value: (
-                        (value[1] - desired_x) ** 2 +
-                        (value[3] - desired_z) ** 2,
-                        -bin(int(links[value[0]])).count('1'), value[0]))
-                chosen = None
-                chosen_projection = None
-                for candidate in candidates:
-                    projection = math.hypot(
-                        candidate[1] - desired_x,
-                        candidate[3] - desired_z)
-                    if projection > SPAWN_MAXIMUM_PROJECTION:
-                        break
-                    if any(math.hypot(
-                            candidate[1] - other[1],
-                            candidate[3] - other[3]) < SPAWN_MINIMUM_SPACING
-                           for other in selected):
-                        continue
-                    pose = (candidate[1], candidate[2], candidate[3], yaw)
-                    if spawn_pose_blocked(
-                            obstacles, pose, half_width, half_length, legacy):
-                        continue
-                    if any(spawn_obbs_overlap(
-                            pose, (other[1], other[2], other[3], yaw),
-                            half_width, half_length) for other in selected):
-                        continue
-                    chosen = candidate
-                    chosen_projection = projection
-                    break
-                if chosen is None:
-                    raise UnsafeBakeInputError(
-                        '%s: team %d slot %d has no validated spawn node '
-                        'within %.1f m' %
-                        (map_name, team, len(selected),
-                         SPAWN_MAXIMUM_PROJECTION))
-                selected.append(chosen)
-                all_selected.append((team, len(selected) - 1, chosen))
-                projections.append(chosen_projection)
-                formations[str(team)].append([
-                    round(chosen[1], 4), round(chosen[2], 4),
-                    round(chosen[3], 4), round(yaw, 6),
-                ])
-            if len(selected) >= SPAWN_SLOTS_PER_TEAM:
-                break
+        for index in picked:
+            distance_sq, unused_template, chosen = candidates[index]
+            selected.append(chosen)
+            all_selected.append((team, len(selected) - 1, chosen))
+            projections.append(math.sqrt(distance_sq))
+            formations[str(team)].append([
+                round(chosen[1], 4), round(chosen[2], 4),
+                round(chosen[3], 4), round(yaw, 6),
+            ])
         if len(selected) != SPAWN_SLOTS_PER_TEAM:
             raise UnsafeBakeInputError(
                 '%s: team %d formation has only %d validated slots' %
@@ -2354,6 +2405,8 @@ def bake_spawn_formations(graph, anchors, map_name, obstacles,
             (map_name, clearance_failures))
     return formations, {
         'spawn_slots_per_team': SPAWN_SLOTS_PER_TEAM,
+        'spawn_layout_method': 'offline-joint-clearance-packing',
+        'spawn_projection_reference': 'nearest nominal formation position',
         'spawn_minimum_spacing_metres': round(minimum_spacing, 3),
         'spawn_minimum_team_separation_metres': round(
             minimum_team_separation, 3),

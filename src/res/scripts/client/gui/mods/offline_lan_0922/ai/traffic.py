@@ -203,12 +203,15 @@ class TrafficCoordinator(object):
         route_order = (command.get('combat_mode') in ('route', 'advance') and
                        command.get('recovery_mode') in
                        ('drive', 'avoid', 'blocked', 'reverse_turn',
-                        'pivot_recovery', 'forward_escape'))
+                        'pivot_recovery', 'forward_escape', 'nav_wait'))
         # A route tank can itself be the neighbour occupying a proved reverse
         # escape. The driver already waited through its stuck threshold and
         # checked both pivots/forward travel before naming this blocker. Honour
         # that explicit request even when the blocker is also trying to drive.
         # Mere proximity between two route orders must not steal either route.
+        # A tank waiting at a proved navigation prefix can occupy the same
+        # corridor. Only the explicit request below admits its finite straight
+        # clearance; pending navigation alone does not authorize movement.
         requests = set(peer_id for peer_id in peers
                        if peer_id in self._orders and
                        now - self._orders[peer_id][0] <= ORDER_FRESH_SECONDS and

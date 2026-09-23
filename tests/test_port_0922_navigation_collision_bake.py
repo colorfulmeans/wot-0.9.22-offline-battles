@@ -151,6 +151,73 @@ class CollisionBakeTest(unittest.TestCase):
         with self.assertRaisesRegex(baker.UnsafeBakeInputError, 'authored collision'):
             self.obstacles(vfs=vfs)
 
+    def test_component_selects_subset_of_shared_bsp_not_other_modules(self):
+        # Actual Airfield buildings share one BSP between base and modules.
+        # Selecting the soft upper module must not resurrect the hard base
+        # at a second transform, nor treat all omitted entries as hard walls.
+        base = tuple((x + 20., y, z) for x, y, z in WALL[0])
+        field = self.obstacles(records=[(base, 0), (WALL[0], 1)],
+                               data=compiled([[(1, 0x4900)]]))
+        self.assertEqual(1, field.collision_stats['original_surfaces_excluded'])
+        self.assertEqual(1, field.collision_stats['unselected_component_surfaces'])
+        self.assertFalse(field.cells)
+
+    def test_hard_sibling_is_retained_with_its_own_component_selection(self):
+        field = self.obstacles(records=[(WALL[0], 0), (WALL[1], 1)],
+                               data=compiled([[(0, 0x6f83)], [(1, 0x4900)]]))
+        self.assertEqual(1, field.collision_stats['hard_surfaces_retained'])
+        self.assertEqual(1, field.collision_stats['original_surfaces_excluded'])
+        self.assertEqual(2, field.collision_stats['unselected_component_surfaces'])
+        self.assertTrue(field.cells)
+
+    def test_inactive_replacement_in_shared_bsp_is_not_spawned_by_baker(self):
+        data = compiled([[(0, 0x4900)], [(1, 0x5700)]], masks=[1, 0])
+        field = self.obstacles(records=[(WALL[0], 0), (WALL[1], 1)], data=data)
+        self.assertFalse(field.cells)
+        self.assertEqual(1, field.collision_stats['invisible_instances'])
+        self.assertEqual(1, field.collision_stats['unselected_component_surfaces'])
+
+    def test_declared_empty_named_primitive_has_no_render_fallback(self):
+        data = compiled([[(7, 0)]])
+        data.sections['BSMO']._data['models_colliders'][0].update(
+            bsp_material_kind_begin=0xffffffff, bsp_material_kind_end=0xffffffff)
+        vfs = VFS([])
+        vfs.files['objects/wall.primitives_processed'] = primitives(bytes(100), 'vertices')
+        field = self.obstacles(data=data, vfs=vfs)
+        self.assertFalse(field.cells)
+        self.assertEqual(1, field.collision_stats['empty_collision_resources'])
+
+    def test_empty_declaration_with_real_bsp_is_not_silently_discarded(self):
+        data = compiled([[(7, 0)]])
+        data.sections['BSMO']._data['models_colliders'][0].update(
+            bsp_material_kind_begin=0xffffffff, bsp_material_kind_end=0xffffffff)
+        with self.assertRaisesRegex(baker.UnsafeBakeInputError, 'without a material selection'):
+            self.obstacles(data=data)
+
+    def test_half_empty_material_span_is_invalid(self):
+        for first, last in ((0xffffffff, 0), (0, 0xffffffff)):
+            data = compiled([[(7, 0)]])
+            data.sections['BSMO']._data['models_colliders'][0].update(
+                bsp_material_kind_begin=first, bsp_material_kind_end=last)
+            with self.assertRaisesRegex(baker.UnsafeBakeInputError, 'invalid material range'):
+                self.obstacles(data=data)
+
+    def test_selected_id_absent_from_the_shared_bsp_is_invalid(self):
+        with self.assertRaisesRegex(baker.UnsafeBakeInputError, 'absent BSP IDs'):
+            self.obstacles(records=[(WALL[0], 1), (WALL[1], 2)],
+                           data=compiled([[(3, 0x4900)]]))
+
+    def test_offline_spawn_pack_reconsiders_greedy_choice_without_moving_bounds(self):
+        # Middle-first greedy accepts one; a complete packing needs the ends.
+        nodes = [(0, 0., 0., 0.), (1, -8., 0., 0.), (2, 8., 0., 0.)]
+        self.assertEqual([1, 2], baker._pack_spawn_candidates(nodes, 0., 2., 5., 2))
+        self.assertIsNone(baker._pack_spawn_candidates(nodes, 0., 2., 5., 3))
+
+    def test_offline_spawn_pack_retains_long_chassis_overlap_check(self):
+        nodes = [(0, 0., 0., 0.), (1, 0., 0., 10.6)]
+        self.assertIsNone(baker._pack_spawn_candidates(nodes, 0., 2.24, 5.47, 2))
+        self.assertEqual([0, 1], baker._pack_spawn_candidates(nodes, 0., 2.24, 5., 2))
+
     def test_malformed_inputs_abort(self):
         base = compiled([[(7, 0)]])
         cases = []
@@ -242,6 +309,10 @@ class CollisionBakeTest(unittest.TestCase):
     def test_batch_refuses_old_graph_even_with_valid_schema(self):
         import bake_all_navigation_0922 as batch
         old = json.loads((ROOT / 'navgraphs/31_airfield.json').read_text())
+        # The checked-in map may already be rebuilt. Explicitly construct a
+        # schema-valid legacy policy rather than assuming that asset stays old.
+        old['bake'].pop('navigation_collision_policy', None)
+        old['bake'].pop('original_destructible_surfaces_excluded', None)
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(batch.baker, 'bake_map_graph', return_value=old):
             with self.assertRaisesRegex(ValueError, 'fresh compiled-surface'):

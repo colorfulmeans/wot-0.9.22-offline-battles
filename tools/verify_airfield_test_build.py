@@ -60,7 +60,7 @@ def bytecode():
                 pyc = archive.read(member)
                 assert pyc[:4] == b'\x03\xf3\r\n', member
                 actual = marshal.loads(pyc[8:])
-                expected = compile(data, actual.co_filename, 'exec')
+                expected = compile(data, actual.co_filename, 'exec', 0, True)
                 assert normalized_code(actual) == normalized_code(expected), member
                 verified.append({'module': member, 'source_sha256_lf': expected_hash, 'pyc_sha256': sha(pyc)})
             for name in archive.namelist():
