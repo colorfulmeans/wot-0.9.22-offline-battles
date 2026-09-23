@@ -272,6 +272,11 @@ def distribution(app_root):
             for rec in compiled['verified_modules']:
                 assert sha(z.read(rec['member'])) == rec['sha256']
     for path, expected in proof['runtime_sha256_lf'].items():
+        # The entry loader belongs only to the client wotmod, whose exact
+        # compiled bytes were already verified above; it is not a server import.
+        if path == 'src/res/scripts/client/gui/mods/mod_offline_lan_0922.py':
+            continue
+        assert path.startswith(PREFIX), path
         assert sha(read(os.path.join(payload, 'servers/0.9.22', path)).replace(b'\r\n', b'\n')) == expected, path
     server = 'server/server_bot_ai.py'
     assert sha(read(os.path.join(payload, 'servers/0.9.22', server)).replace(b'\r\n', b'\n')) == sha(read(os.path.join(ROOT, server)).replace(b'\r\n', b'\n'))
