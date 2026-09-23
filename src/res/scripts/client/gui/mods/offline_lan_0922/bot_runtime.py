@@ -1962,8 +1962,7 @@ class BotRuntime(object):
                  destructible_body_scan=None, control_seconds=None,
                  incoming_lane_probe=None, combat_diagnostics=None,
                  turret_motion_probe=None, turret_hulls_provider=None,
-                 rotation_resolver=None, water_hull_pose=None,
-                 navigation_structure_provider=None):
+                 rotation_resolver=None, water_hull_pose=None):
         self.local_player_id = local_player_id
         self._combat_diagnostics = combat_diagnostics
         self.descriptor_resolver = descriptor_resolver or (lambda unused: {})
@@ -2033,7 +2032,6 @@ class BotRuntime(object):
             suspension_ground_probe
             if callable(suspension_ground_probe) else None)
         self._obstacle_probe = obstacle_probe
-        self._navigation_structure_provider = navigation_structure_provider
         self._navigation_bounds = bounds
         # The exact #1513 arena rectangle. It is the same red border the local
         # player's own chassis contact uses, and it overrides the wider baked
@@ -2370,9 +2368,7 @@ class BotRuntime(object):
         try:
             navigator = TerrainNavigator(
                 self._ground_probe, self._obstacle_probe,
-                self._navigation_bounds, 18.0, baked_graph=graph,
-                destructible_regions=(self._navigation_structure_provider()
-                    if callable(self._navigation_structure_provider) else ()))
+                self._navigation_bounds, 18.0, baked_graph=graph)
         except (TypeError, ValueError, KeyError) as error:
             raise ValueError(
                 'required navigation graph cannot be installed for %s: %s' %
@@ -6551,8 +6547,6 @@ class BotRuntime(object):
         progress = getattr(search, 'progress', {})
         refusal = (progress.get('native_refusal') if source == 'pending_prefix'
                    else getattr(self.navigator, 'path_native_refusals', {}).get(key))
-        structure_diagnostics = getattr(getattr(self.navigator, 'grid', None),
-                                        'structure_graph_diagnostics', None)
         return {
             'source': source, 'fallback_mode': fallback,
             'path_key': self._decision_copy(key),
@@ -6564,8 +6558,6 @@ class BotRuntime(object):
             'near_target': tuple(_point(point) for point in path[index:index + 3]),
             'last_target': self._decision_copy(navigator_state.get('last_target')),
             'last_native_refusal': self._decision_copy(refusal),
-            'structure_graph': (structure_diagnostics()
-                                if callable(structure_diagnostics) else None),
         }
 
     def _record_navigation_decision(self, state, command, strategic, samples, now,
@@ -8326,28 +8318,6 @@ class BotRuntime(object):
         own['_radio_ground_goal'] = (key, result)
         return result
 
-    def _report_blocked_planner(self, position, command, samples):
-        """Let a conclusive static planner veto retire an obsolete route.
-
-        A zero-throttle driver has no later realised contact to report. Keep
-        live traffic, unavailable probes, and intentional holds out of this
-        hook; native review proves the specific graph edges before rerouting.
-        """
-        if (command.get('recovery_mode') != 'blocked' or
-                not command.get('movement_intent', False)):
-            return False
-        report = getattr(self.navigator, 'report_blocked_plan', None)
-        if not callable(report):
-            return False
-        for sample in samples.values():
-            if (isinstance(sample, dict) and
-                    sample.get('collision', False) and
-                    not sample.get('clear', False) and
-                    not sample.get('deferred', False) and
-                    not sample.get('probe_failed', False)):
-                return report(position, command.get('move_position'))
-        return False
-
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
         mode = strategic.get('combat_mode', 'route')
@@ -8404,11 +8374,6 @@ class BotRuntime(object):
         # teammate repeatedly change the selected waypoint and produced visible
         # drive/stop cycles, especially for slow heavy tanks.
         avoid = None
-        review = getattr(grid, 'review_native_corridor', None)
-        if callable(review):
-            # Plan around the actual local world before the first contact.
-            # This changes route selection, not the authority motion brake.
-            review(position, goal)
         cell_size = max(1.0, _number(getattr(grid, 'cell_size', 1.0), 1.0))
         lookahead_distance = max(
             cell_size * 2.0,
@@ -12280,8 +12245,6 @@ class BotRuntime(object):
                     replan = getattr(self.navigator, 'request_replan', None)
                     if callable(replan):
                         replan(state['id'], position, now)
-                self._report_blocked_planner(
-                    position, command, planner_probe_samples)
                 self._record_navigation_decision(
                     state, command,
                     (reposition_order if reposition_order is not None and

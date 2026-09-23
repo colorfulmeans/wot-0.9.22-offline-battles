@@ -3657,9 +3657,6 @@ class BattleRuntime(object):
                 # overhead bridge and turn every clear step into a rollback.
                 physics_ground_probe=self._support_column,
                 obstacle_probe=self._navigation_obstacle,
-                navigation_structure_provider=(
-                    self._destructibles.navigation_structure_regions
-                    if self._destructibles is not None else None),
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
                 cover_probe=self._sample_bot_cover,
@@ -10372,10 +10369,6 @@ class BattleRuntime(object):
         if kind == 'tree':
             foliage_changed = self._activate_fallen_tree_foliage(
                 chunk_id, item_index)
-        grid = getattr(getattr(self._bots, 'navigator', None), 'grid', None)
-        invalidate = getattr(grid, 'invalidate_native_review', None)
-        if callable(invalidate):
-            invalidate()
         if already_destroyed:
             return foliage_changed
         if kind != 'tree' and callable(note_destroyed):
