@@ -2540,6 +2540,76 @@ class CrewShopTests(unittest.TestCase):
         self.assertEqual(2, descriptor.vehicleTypeID)
         self.assertEqual(10000 - 600, state.snapshot()['wallet']['gold'])
 
+    def test_role_change_resets_learned_skills_without_xp_loss_or_extra_fee(self):
+        state = self._skilled()
+        before = copy.deepcopy(state.snapshot()['wallet'])
+        calls = []
+        native_drop = _TankmanDescriptor.dropSkills
+
+        def drop(descriptor, fraction, throw):
+            calls.append((fraction, throw))
+            native_drop(descriptor, fraction, throw)
+
+        with mock.patch.object(_TankmanDescriptor, 'dropSkills', drop):
+            state.change_tankman_role(201, 3, 50002)
+
+        serialized = state.snapshot()['barracksTankmen'][201]
+        descriptor = _TankmanDescriptor(serialized)
+        self.assertEqual([(1.0, False)], calls)
+        self.assertEqual([], descriptor.skills)
+        self.assertEqual(1000, descriptor.totalXP())
+        self.assertEqual(('driver', 2),
+                         (descriptor.role, descriptor.vehicleTypeID))
+        expected_wallet = dict(before, gold=before['gold'] - 600,
+                               crystal=before.get('crystal', 0))
+        self.assertEqual(expected_wallet, state.snapshot()['wallet'])
+        # The stored descriptor stays valid before choosing any new skill.
+        self.assertEqual(serialized, descriptor.makeCompactDescr())
+
+    def test_radio_to_gunner_role_change_clears_the_old_specialty(self):
+        state = self._state(barracks={
+            201: b'tman:201!radioman|radioman_finder#123456'})
+        state._vehicles.getVehicleType = lambda cd: types.SimpleNamespace(
+            id=(0, 2), crewRoles=(('commander',), ('gunner',)))
+
+        state.change_tankman_role(201, 4, 50002)
+
+        descriptor = _TankmanDescriptor(
+            state.snapshot()['barracksTankmen'][201])
+        self.assertEqual('gunner', descriptor.role)
+        self.assertEqual([], descriptor.skills)
+        self.assertEqual(123456, descriptor.totalXP())
+        self.assertEqual(9400, state.snapshot()['wallet']['gold'])
+
+    def test_role_change_does_not_clear_native_free_skills_manually(self):
+        state = self._skilled()
+        calls = []
+
+        def drop(descriptor, fraction, throw):
+            calls.append((fraction, throw))
+            # Model the original method retaining the zero-skill prefix.
+            descriptor.skills = ['brotherhood']
+
+        with mock.patch.object(_TankmanDescriptor, 'dropSkills', drop):
+            state.change_tankman_role(201, 3, 50002)
+
+        descriptor = _TankmanDescriptor(
+            state.snapshot()['barracksTankmen'][201])
+        self.assertEqual([(1.0, False)], calls)
+        self.assertEqual(['brotherhood'], descriptor.skills)
+        self.assertEqual(1000, descriptor.totalXP())
+
+    def test_native_role_reset_failure_leaves_wallet_and_crew_unchanged(self):
+        state = self._skilled()
+        before = copy.deepcopy(state.snapshot())
+        revision = state.revision
+        with mock.patch.object(_TankmanDescriptor, 'dropSkills',
+                               side_effect=ValueError('reset rejected')):
+            with self.assertRaises(self.garage.GarageError):
+                state.change_tankman_role(201, 3, 50002)
+        self.assertEqual(before, state.snapshot())
+        self.assertEqual(revision, state.revision)
+
     def test_a_role_change_the_account_cannot_pay_for_changes_nothing(self):
         state = self._state(gold=100)
         before = copy.deepcopy(state.snapshot())

@@ -334,6 +334,13 @@ def _selected_vehicle_effective_params():
                 projected['name'])
             if (required_role is not None and
                     required_role not in member_roles):
+                # Legacy saved descriptors can contain a former specialty.
+                # The native isEnable flag disables it even when a trained
+                # perk still reports isActive. Omit only these
+                # disabled skills from the battle projection; never reset the
+                # account's skill descriptor or admit an enabled wrong role.
+                if not projected['enabled']:
+                    continue
                 raise ValueError(
                     'a mounted crew skill does not match its slot roles')
             projected_skills.append(projected)
