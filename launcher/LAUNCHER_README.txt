@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v0.9.2
+wot-0.9.22-offline-battles v0.9.4
 ================================
 
 The launcher prepares one battle before the game starts. It installs the mod,
@@ -46,7 +46,7 @@ with the supported vehicle catalogue and researched modules; a new-account
 save starts with starter vehicles. Purchases use the displayed currency and
 price. Change modules, optional devices, consumables, shells, camouflage and
 crew skills; the garage is saved after each change and the battle uses what
-you fitted. UPDATE_NOTES.md lists the complete changes since v0.8.4.
+you fitted. Release notes are on the GitHub v0.9.4 release page.
 
 The Tools tab also edits vehicle data directly. A vehicle data profile is a
 named set of Packed XML field changes (health, damage, penetration, armour,
@@ -456,3 +456,12 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+
+
+Version 0.9.4
+Selected Bot source: a3e4c5937789d9dd63fde6902783d5027ec7c6f3
+Upstream v0.7.7 Bot behavior and original maps; original mutual yielding retained.
+Radio visibility and battle-start compatibility fixes are retained.
+The no-yield comparison is not included. Shared physics and non-Bot game systems
+remain from the selected build; this is not the complete upstream game.
+Extract the whole ZIP to a new empty folder; do not mix _internal directories.
