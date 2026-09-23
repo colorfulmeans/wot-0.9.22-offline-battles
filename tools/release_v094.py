@@ -20,7 +20,7 @@ VERSIONS = (
     INIT, 'meta.xml', 'build_wotmod.py', 'build_for_client.sh',
     'launcher/wot_launcher.py', 'launcher/version_info.txt',
     'server/windows_server.py', 'server/version_info.txt',
-    'launcher/tests/test_launcher_window.py',
+    'launcher/tests/test_launcher_window.py', 'tests/test_port_0922.py',
 )
 ALLOWED = set(VERSIONS) | {
     PROOF, 'README.md', 'launcher/LAUNCHER_README.txt',
@@ -54,7 +54,7 @@ def expected_versions(path):
     old = baseline(path)
     assert b'0.9.3' in old, path
     result = old.replace(b'0.9.3', b'0.9.4')
-    if path.endswith('version_info.txt'):
+    if path.endswith('version_info.txt') or path == 'tests/test_port_0922.py':
         assert old.count(b'(0, 9, 3, 0)') == 2, path
         result = result.replace(b'(0, 9, 3, 0)', b'(0, 9, 4, 0)')
     return result
