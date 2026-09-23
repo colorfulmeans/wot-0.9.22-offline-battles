@@ -103,6 +103,8 @@ def audit():
     for n, expected in proof['exact_historical_sha256'].items():
         assert sha(read(os.path.join(ROOT, n))) == expected, n
     assert runtime_hashes() == proof['runtime_sha256_lf']
+    for n, record in proof.get('radio_visibility_fix', {}).get('intentional_exceptions', {}).items():
+        assert sha(read(os.path.join(ROOT, n)).replace(b'\r\n', b'\n')) == record['fixed_sha256_lf'], n
     # No caller can accidentally pass a callback unsupported by the exact
     # historical class. Check the actual production constructor, not a stub.
     tree = ast.parse(read(os.path.join(ROOT, PREFIX + 'bot_runtime.py')))

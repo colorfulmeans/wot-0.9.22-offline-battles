@@ -366,6 +366,12 @@ class BotPlanner(object):
                     if threatened is not None:
                         accepted_contact["threatened_bot_ids"] = list(
                             threatened)
+                    # Preserve the validated recipient schema even with the
+                    # historical tactical policy. Do not turn radio leases
+                    # back into a team-wide or self-spot-only presentation.
+                    if "radio_recipients" in raw:
+                        accepted_contact["radio_recipients"] = [
+                            dict(row) for row in raw["radio_recipients"]]
                     accepted_visibility.append(accepted_contact)
             elif previous is not None:
                 previous["visible"] = False
@@ -386,6 +392,8 @@ class BotPlanner(object):
                         "shootable_by_bot_ids": [],
                         "threatened_bot_ids": [],
                     })
+                    if "radio_recipients" in raw:
+                        accepted_visibility[-1]["radio_recipients"] = []
         return accepted
 
     @staticmethod
