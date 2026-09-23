@@ -1,0 +1,25 @@
+name: Navigation review removal test
+on:
+  push:
+    branches: [fix/093-remove-native-review-20260923]
+    paths: [.github/workflows/navigation-removal-test.yml, .navigation-removal/**]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Export exact branch source for the requested removal
+        run: |
+          mkdir -p export
+          git rev-parse HEAD > export/source-commit.txt
+          git archive --format=zip HEAD -o export/source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: navigation-removal-source
+          path: export/
+          retention-days: 3
+          if-no-files-found: error
