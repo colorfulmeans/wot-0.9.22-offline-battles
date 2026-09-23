@@ -1,0 +1,154 @@
+    records = [_bsp_triangle_record(section, 60 + index * triangle_size)
+               for index in range(triangle_count)]
+    return records if with_materials else [record[0] for record in records]
+
+
+def _bsp_triangle_record(section, offset):
+    """Keep the authored uint16 material ID, not the adjacent padding word."""
+    values = struct.unpack_from('<9f', section, offset)
+    material_id = struct.unpack_from('<H', section, offset + 36)[0]
+    return (values[0:3], values[3:6], values[6:9]), material_id
+
+
+NAVIGATION_COLLISION_POLICY = 'compiled-vehicle-surfaces-no-original-destructibles-v1'
+NAVIGATION_VEHICLE_SKIP_FLAGS = 0x10 | 0x40
+NAVIGATION_ORIGINAL_MATERIAL_MIN = 71
+NAVIGATION_ORIGINAL_MATERIAL_END = 86
+
+
+def _compiled_collision_materials(bsmo, collider, model_id):
+    """Resolve BSP material IDs through this BSMO model's inclusive table span.
+
+    The same primitive can have different remaps in different models.  Never
+    cache a classified mesh by primitive filename, nor infer a material from
+    the type of the whole model.  An incomplete map aborts the offline bake;
+    it must not silently create either holes or extra walls in an artifact.
+    """
+    records = bsmo['bsp_material_kinds']
+    first = int(collider['bsp_material_kind_begin'])
+    last = int(collider['bsp_material_kind_end'])
+    if first < 0 or first > last or last >= len(records):
+        raise UnsafeBakeInputError('BSMO model %d has an invalid material range' % model_id)
+    result = {}
+    for record in records[first:last + 1]:
+        index, flags = int(record['material_index']), int(record['flags'])
+        if not 0 <= index <= 0xffff or not 0 <= flags <= 0xffff:
+            raise UnsafeBakeInputError('BSMO model %d has invalid material data' % model_id)
+        if index in result and result[index] != flags:
+            raise UnsafeBakeInputError('BSMO model %d has conflicting material IDs' % model_id)
+        result[index] = flags
+    return result
+
+
+def compiled_navigation_obstacles(compiled, vfs, legacy):
+    """Build the static route raster directly from placed compiled colliders.
+
+    All original destructible surfaces (71..85) are removed BEFORE node,
+    clearance, link, component and route construction. Hard surfaces in mixed
+    structures, replacement materials and vehicle-only bridge decks remain.
+    Render sets, shaders and a model-wide structure label are not collision
+    evidence. This function runs only in the offline baker, never in battle.
+    """
+    bsmo = compiled.sections['BSMO']._data
+    bsmi = compiled.sections['BSMI']
+    strings = compiled.sections['BWST']
+    transforms = bsmi._data['transforms']
+    model_ids = list(bsmi.model_ids())
+    masks = (compiled.sections['BWSV']._data['visibility_masks']
+             if 'BWSV' in compiled.sections else bsmi._data['visibility_masks'])
+    if len(transforms) != len(model_ids) or len(masks) != len(model_ids):
+        raise UnsafeBakeInputError('BSMI placements and visibility masks do not align')
+    colliders = bsmo['models_colliders']
+
+    class CompiledObstacles(legacy.ObstacleField):
+        def __init__(self):
+            self.raster_size = 1.0
+            self.cells, self.surface_cells = {}, {}
+            self.instance_count = self.bridge_instance_count = 0
+            self.bridge_surface_triangle_count = self.soft_instance_count = 0
+            self.local_instance_count = self.skipped = self.invalid_triangles = 0
+            self.model_library = type('LibraryStats', (), {'cache': {}})()
+            self.soft_spawn_obbs = []
+            self.collision_stats = dict(
+                placed_colliders=0, invisible_instances=0, noncolliding_instances=0,
+                original_surfaces_excluded=0, nonvehicle_surfaces_excluded=0,
+                hard_surfaces_retained=0, mixed_instances=0)
+    obstacles = CompiledObstacles()
+    mesh_cache = {}
+    material_cache = {}
+    for instance_id, (model_id, transform, mask) in enumerate(zip(model_ids, transforms, masks)):
+        # Match the existing compiled-space adapter's standard battle filter.
+        if not int(mask) & 1:
+            obstacles.collision_stats['invisible_instances'] += 1
+            continue
+        if not 0 <= model_id < len(colliders):
+            raise UnsafeBakeInputError('BSMI references invalid collider %r' % model_id)
+        if len(transform) != 16 or not all(math.isfinite(float(v)) for v in transform):
+            raise UnsafeBakeInputError('BSMI instance %d has an invalid transform' % instance_id)
+        collider = colliders[model_id]
+        name_id = collider['bsp_section_name_fnv']
+        if not name_id:
+            if (int(collider['bsp_material_kind_begin']) != 0xffffffff or
+                    int(collider['bsp_material_kind_end']) != 0xffffffff):
+                raise UnsafeBakeInputError('BSMO model %d has materials but no BSP resource' % model_id)
+            obstacles.collision_stats['noncolliding_instances'] += 1
+            continue
+        name = strings.get(name_id)
+        if not isinstance(name, str) or not name.lower().endswith('.primitives'):
+            raise UnsafeBakeInputError('BSMO model %d has an invalid BSP resource: %r' % (model_id, name))
+        name = name[:-len('.primitives')] + '.primitives_processed'
+        if model_id not in material_cache:
+            material_cache[model_id] = _compiled_collision_materials(bsmo, collider, model_id)
+        materials = material_cache[model_id]
+        if name not in mesh_cache:
+            try:
+                sections = legacy._primitive_sections(vfs.read(name))
+                mesh_cache[name] = _bsp_triangles_0922(sections['bsp2'], legacy, with_materials=True)
+            except (KeyError, ValueError, struct.error, zipfile.BadZipFile) as error:
+                raise UnsafeBakeInputError('%s: no valid authored collision: %s' % (name, error))
+        obstacles.model_library.cache[name] = True
+        obstacles.collision_stats['placed_colliders'] += 1
+        hard = []
+        soft_count = 0
+        for triangle, material_id in mesh_cache[name]:
+            # Preserve the existing disabled-page sentinel handling. It has
+            # no finite geometry and must not demand a live material mapping.
+            if not all(math.isfinite(v) for point in triangle for v in point):
+                obstacles.invalid_triangles += 1
+                continue
+            if material_id not in materials:
+                raise UnsafeBakeInputError('%s model %d: BSP material %d has no compiled mapping' %
+                                           (name, model_id, material_id))
+            flags = materials[material_id]
+            material_kind = flags >> 8
+            if flags & NAVIGATION_VEHICLE_SKIP_FLAGS:
+                obstacles.collision_stats['nonvehicle_surfaces_excluded'] += 1
+                continue
+            if (NAVIGATION_ORIGINAL_MATERIAL_MIN <= material_kind <
+                    NAVIGATION_ORIGINAL_MATERIAL_END):
+                soft_count += 1
+                obstacles.collision_stats['original_surfaces_excluded'] += 1
+                continue
+            world_triangle = tuple(_transform_0922(transform, point) for point in triangle)
+            if not all(math.isfinite(v) for point in world_triangle for v in point):
+                raise UnsafeBakeInputError('BSMI instance %d overflows transformed collision' % instance_id)
+            hard.append(world_triangle)
+        if soft_count:
+            obstacles.soft_instance_count += 1
+            # Birth overlap is a separate concern, never a navigation penalty.
+            # A mixed building's complete box is conservative only for spawn.
+            bounds = tuple(collider['collision_bounds_min']) + tuple(collider['collision_bounds_max'])
+            if len(bounds) != 6 or not all(math.isfinite(float(v)) for v in bounds):
+                raise UnsafeBakeInputError('BSMO model %d has invalid spawn bounds' % model_id)
+            obstacles.soft_spawn_obbs.append(_soft_destructible_spawn_obb(transform, bounds))
+            if hard:
+                obstacles.collision_stats['mixed_instances'] += 1
+        if hard:
+            obstacles.instance_count += 1
+            obstacles.collision_stats['hard_surfaces_retained'] += len(hard)
+            # The raster itself applies the existing 0.65m ground clearance.
+            # Do not skip a whole short model: an elevated/rotated short shape
+            # can still be a hard obstacle, and mixed models need face granularity.
+            _raster_compiled_collision_instance(obstacles, name, hard, legacy)
+    obstacles.soft_spawn_obbs = tuple(obstacles.soft_spawn_obbs)
+    return obstacles
