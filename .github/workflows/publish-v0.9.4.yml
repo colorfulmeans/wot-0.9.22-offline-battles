@@ -38,6 +38,16 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           mkdir -p build-evidence
+          python - <<'PYFIX'
+          from pathlib import Path
+          p = Path('tools/release_v094.py')
+          text = p.read_text()
+          text = text.replace("    'launcher/tests/test_launcher_window.py',\n)", "    'launcher/tests/test_launcher_window.py', 'tests/test_port_0922.py',\n)")
+          text = text.replace("if path.endswith('version_info.txt'):", "if path.endswith('version_info.txt') or path == 'tests/test_port_0922.py':")
+          assert "'launcher/tests/test_launcher_window.py', 'tests/test_port_0922.py'," in text
+          assert "or path == 'tests/test_port_0922.py':" in text
+          p.write_text(text)
+          PYFIX
           python tools/release_v094.py prepare
           git diff --cached --stat
           if ! git diff --cached --quiet; then
