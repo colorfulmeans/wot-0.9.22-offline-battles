@@ -1,0 +1,33 @@
+name: Pinned Bot rollback source audit
+on:
+  push:
+    branches: [fix/093-restore-v080-bot-behavior-20260923]
+    paths: [.github/workflows/bot-rollback-source-audit.yml]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Export exact source trees and Bot history
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit
+          git archive --format=zip 5a7c20a124ab8ad76dc40db3012a31436ae6905b > audit/v080-source.zip
+          git archive --format=zip beb750bcc368bb4279959b53ef5aa4022158cba7 > audit/beb750bc-source.zip
+          git log --reverse --format='%H %ad %s' --date=iso-strict v0.8.0..beb750bcc368bb4279959b53ef5aa4022158cba7 -- src/res/scripts/client/gui/mods/offline_lan_0922/ai src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py > audit/bot-history.txt
+          git log --reverse -p v0.8.0..beb750bcc368bb4279959b53ef5aa4022158cba7 -- src/res/scripts/client/gui/mods/offline_lan_0922/ai src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py > audit/bot-history.patch
+          git diff --stat v0.8.0 beb750bcc368bb4279959b53ef5aa4022158cba7 -- src > audit/source-diff-stat.txt
+          git bundle create audit/history.bundle --all
+          sha256sum audit/* > audit/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pinned-bot-rollback-sources
+          path: audit/*
+          retention-days: 3
+          if-no-files-found: error
