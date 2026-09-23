@@ -7,7 +7,6 @@ steering, so it is safe to exercise outside the BigWorld client.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
-from gui.mods.offline_lan_0922 import tank_collision
 
 import math
 
@@ -99,7 +98,7 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		turn, throttle, recovery_mode, has_target=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn',
-			'pivot_recovery', 'forward_escape', 'contact_escape'):
+			'pivot_recovery'):
 		return float(turn), float(throttle), False
 	limited = not (float(minimum_yaw) <= -math.pi + 0.1 and
 	               float(maximum_yaw) >= math.pi - 0.1)
@@ -186,8 +185,6 @@ class LocalDriver(object):
 		if state is None:
 			return False
 		state['traffic_waiting'] = True
-		if state.get('traffic_origin') is None:
-			state['traffic_origin'] = state['last_position']
 		if elapsed is None:
 			elapsed = state.get('last_step', 0.0)
 		state['traffic_wait_time'] += max(0.0, float(elapsed))
@@ -383,22 +380,6 @@ class LocalDriver(object):
 				other_width = float(
 					neighbour.get('half_width', half_width) or half_width)
 			try:
-				contact = tank_collision.obb_contact(
-					position[0], position[2], yaw, (half_width, half_length),
-					other[0], other[2], other_yaw, (other_width, other_length))
-				if contact is not None:
-					back_x, back_z = -math.sin(yaw), -math.cos(yaw)
-					outward = back_x*contact[0] + back_z*contact[1]
-					away = back_x*(position[0]-other[0]) + back_z*(position[2]-other[2])
-					if outward >= -1.0e-9 and away >= -1.0e-9:
-						# The sweep includes the current hull. Its front/side
-						# contact is not a new rear obstacle when every point
-						# moves out or tangentially along that face. Centre
-						# distance may stay constant in an exactly parallel
-						# side hug; neither direction may be denied for that.
-						# At an offset prefer the nearer end of the overlap.
-						# Other peers still veto the complete swept corridor.
-						continue
 				if self._obb_overlap(
 						sweep, float(yaw), sweep_length, half_width,
 						other, other_yaw, other_length, other_width):
@@ -579,17 +560,7 @@ class LocalDriver(object):
 		"""
 		state = self._state(bot_id, team_slot, position)
 		step = max(0.0, float(dt))
-		traffic = state.pop('traffic_waiting', False)
-		origin = state.get('traffic_origin')
-		departed = origin is not None and math.hypot(
-			position[0]-origin[0], position[2]-origin[1]) >= half_length
-		free_progress = (not traffic and abs(float(speed)) > 0.0 and
-			math.hypot(position[0]-state['last_position'][0],
-			           position[2]-state['last_position'][1]) >= 0.08)
-		if departed or free_progress or not movement_intent:
-			state['traffic_wait_time'] = 0.0
-			state['traffic_origin'] = None
-		elif not traffic and origin is None:
+		if not state.pop('traffic_waiting', False):
 			state['traffic_wait_time'] = 0.0
 		state['last_step'] = step
 		state['clock'] += step
@@ -668,19 +639,10 @@ class LocalDriver(object):
 
 		timing_phase = state['recovery_timing_phase']
 		threshold = self.stuck_seconds + timing_phase * 0.42
-		# SAT separation can shuffle a blocked hull by centimetres while
-		# its engine makes no departure. Bound the complete contact pocket,
-		# not each tiny oscillation or one missed contact callback. Leaving
-		# by the descriptor half-length starts a fresh episode.
-		if (state.get('traffic_origin') is not None and
-				state['traffic_wait_time'] > TRAFFIC_WAIT_LEASE_SECONDS + threshold):
-			state['stuck_time'] = max(state['stuck_time'], threshold)
 		if state['recovery_time'] > 0.0:
 			state['recovery_time'] = max(0.0, state['recovery_time'] - step)
 			if state['recovery_time'] == 0.0:
 				state['recovery_count'] += 1
-				if state.get('traffic_origin') is not None:
-					state['traffic_wait_time'] = TRAFFIC_WAIT_LEASE_SECONDS
 				state['recovery_side'] = 0.0
 				state['stuck_time'] = 0.0
 				state['heading_progress_yaw'] = None
@@ -727,16 +689,6 @@ class LocalDriver(object):
 						state['recovery_side'] = direction = mirrored
 						recovery_yaw = float(yaw) + direction * RECOVERY_YAW_OFFSET
 					else:
-						# A side hug can forbid both pivots while a teammate
-						# closes the rear. Use the same bounded recovery drive
-						# forwards only if terrain and the complete hull sweep
-						# are clear; rotation must not create space for free.
-						if (self._clear(direction_clear, float(yaw), escape_distance) and
-								self._reverse_blocked_by_vehicle(
-									position, float(yaw)+math.pi, neighbours,
-									own_half_length, own_half_width) is None):
-							return {'throttle': 0.72, 'turn': 0.0,
-								'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
 						# Neither rotation fits and the rear is denied. Hold the
 						# pose instead of grinding the corners, and publish the
 						# hull that owns the escape so the queue can clear it.
@@ -765,13 +717,11 @@ class LocalDriver(object):
 			# manoeuvre parks the hull across the passage and blocks the whole
 			# column behind it. Keep the escape and drop the turn.
 			for fraction in RECOVERY_SWEEP_FRACTIONS:
-				if ((pose_clear is not None and not pose_clear(
-						float(yaw) + direction * RECOVERY_YAW_OFFSET * fraction)) or
-						not self._clear(
+				if not self._clear(
 						direction_clear,
 						float(yaw) + math.pi +
 						direction * RECOVERY_YAW_OFFSET * fraction,
-						escape_distance)):
+						escape_distance):
 					recovery_turn = 0.0
 					recovery_target = float(yaw)
 					break
