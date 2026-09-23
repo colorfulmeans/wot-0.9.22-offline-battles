@@ -29,7 +29,7 @@
     {
       "base_sha256": "bdeaa2344a52328149633e292d3a3829a9d939ab04b701044443653acd08c0b3",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py",
-      "sha256": "588500101e66df3d7e9306649c13a72848cd851461af2dec15fddcb4ef387e4b"
+      "sha256": "686bb47a102c36d0929593ce95dd1e5cf9cd6b6fda1efc00b65ed2461d17f634"
     },
     {
       "base_sha256": "9299a77c5f6d492a9a9f44b8f5a9c0333cb6ad18b4272820168ef718f816368d",
@@ -39,17 +39,17 @@
     {
       "base_sha256": "ac93cad444dff6b646e3d6e8640a5a329f5b6cda4967471eab88d9d2c7ca3ed3",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py",
-      "sha256": "da055c8cb590591b600ee707b8ab71ff8cc0050a1b3856c9c9d4681e41c9a9fc"
+      "sha256": "b2c2b411b29347d00bd6749c548eedf90ba7641ff7043c44818e4f3b8890bfe8"
     },
     {
       "base_sha256": "9436c11c34a825463dfc3e272e34df8ff4704ebf39f4f799cd6f823b6371b0f0",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py",
-      "sha256": "bba8f842f7c93e52180732b2835dcf9d9489b1720dc46c65fbe253247efe65a2"
+      "sha256": "7500a13e943fbaa0de5511044ab13ed9e17e58db71299eaf48590ebde2a26672"
     },
     {
       "base_sha256": "97a68a9f97a892f155220a73763c956e2e828084b42adb86b0918ae2fa9c649d",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/destructibles_sensor.py",
-      "sha256": "83d9a7b8568fecc62a9b2d222ef7e2ddf0fbc8d101cc4c62b859936134a38703"
+      "sha256": "97a68a9f97a892f155220a73763c956e2e828084b42adb86b0918ae2fa9c649d"
     },
     {
       "base_sha256": null,
@@ -67,6 +67,33 @@
       "sha256": "40f42db7a50d69b05db5638ceac3bbd667a09243f271b3fd59fd2a108c55ba05"
     }
   ],
+  "global_static_review_removal": {
+    "all_maps_rebaked": false,
+    "baseline": "dcbc5b686bb8f522175fc80d38cade4f756ccca6",
+    "changes": [
+      {
+        "after": "686bb47a102c36d0929593ce95dd1e5cf9cd6b6fda1efc00b65ed2461d17f634",
+        "before": "588500101e66df3d7e9306649c13a72848cd851461af2dec15fddcb4ef387e4b",
+        "path": "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py"
+      },
+      {
+        "after": "7500a13e943fbaa0de5511044ab13ed9e17e58db71299eaf48590ebde2a26672",
+        "before": "bba8f842f7c93e52180732b2835dcf9d9489b1720dc46c65fbe253247efe65a2",
+        "path": "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py"
+      },
+      {
+        "after": "b2c2b411b29347d00bd6749c548eedf90ba7641ff7043c44818e4f3b8890bfe8",
+        "before": "da055c8cb590591b600ee707b8ab71ff8cc0050a1b3856c9c9d4681e41c9a9fc",
+        "path": "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py"
+      },
+      {
+        "after": "97a68a9f97a892f155220a73763c956e2e828084b42adb86b0918ae2fa9c649d",
+        "before": "83d9a7b8568fecc62a9b2d222ef7e2ddf0fbc8d101cc4c62b859936134a38703",
+        "path": "src/res/scripts/client/gui/mods/offline_lan_0922/destructibles_sensor.py"
+      }
+    ],
+    "native_gameplay_tested": false
+  },
   "original_b51324c5_package_sha256": "67212336e4d4c333b2cb3ff7d133cb6fccc8e60d71c848c461361002c1bca8be",
   "preserved_runtime_build": "b51324c5",
   "public_base_commit": "e9e9417be5c0c4ab3d1271d705ef661549065ae6",
@@ -102,7 +129,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_group_a.py": "fb8207b74ce1fce7f203c352b5c7c44019803baf01bdd1626d2da20c22576c00",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_group_b.py": "fcb41bdb286c9187802437076541acd72737e6c15e7956a74899d8548d47d11e",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_group_c.py": "3c6c481495f956e0580484d8a10b10b8d0b4f1a4d8b6723d45e576078b90023d",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py": "588500101e66df3d7e9306649c13a72848cd851461af2dec15fddcb4ef387e4b",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py": "686bb47a102c36d0929593ce95dd1e5cf9cd6b6fda1efc00b65ed2461d17f634",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/planner.py": "ebf088f0ca4daf6d7b8ac8af4a6f1a2951f410b556ac7bf8b425f03e67b57253",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/reviewed_routes_20260811.py": "2f5060cfd47ba2188ad501b6e08ff3e73d85b5434461c94ab79a8b139020e935",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/tactical_geometry.py": "c48692bc6330779b7880e1ec5db34caa2017f25f91462ea24b8894ca591042fb",
@@ -117,11 +144,11 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_feedback.py": "562c937e80a11deaba8263e35c2cf3711345e8685cdf225535b8d74a5ffe4637",
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_mastery.py": "500e380e555d99f76e230edf1828e8eb6d6b6e6df5d889477f7c19bae577ab36",
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_missions.py": "8429f79c805b9aafd940e563002ec6c314df44c2fc3a54184e0339df5995979f",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py": "da055c8cb590591b600ee707b8ab71ff8cc0050a1b3856c9c9d4681e41c9a9fc",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py": "b2c2b411b29347d00bd6749c548eedf90ba7641ff7043c44818e4f3b8890bfe8",
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_shell_tooltip.py": "0e85d005f824611b8f4125785334c01e3c8ff210048e6e4387f7a0e7616124a0",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bootstrap.py": "ffa40eccdbd3d0c260a7f6fe17ed4f16222216a4fb4d032268cb99fcf160ed97",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_gunnery.py": "c47227c0cc4972fef1912eac7d392cd6f18303208d3bea14f72a130a4f28a2b0",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": "bba8f842f7c93e52180732b2835dcf9d9489b1720dc46c65fbe253247efe65a2",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": "7500a13e943fbaa0de5511044ab13ed9e17e58db71299eaf48590ebde2a26672",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_state_codec.py": "56006ca01860fc1bb35e30876ad01fa4a5262dc9844e9cee6632300eb2e3e163",
     "src/res/scripts/client/gui/mods/offline_lan_0922/burst_mechanics.py": "78364b9f429eda500773736cfe961d73d035fe0b50815fcf76aad2ca2c60b53b",
     "src/res/scripts/client/gui/mods/offline_lan_0922/collision_feedback.py": "705eb3e6e6ac4c951a038f0caeae41b508488cabd27b153671d8aba3a0f3b586",
@@ -136,7 +163,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/destructible_layout.py": "9cae03dd423ec19787e9977b0e874f7c8637d93b8727b0f9f28a326b366249a5",
     "src/res/scripts/client/gui/mods/offline_lan_0922/destructibles_authority.py": "6d1520c38a9f616dee6a75155f7c0302902e1a9cd039ad935c72c6f560cb1078",
     "src/res/scripts/client/gui/mods/offline_lan_0922/destructibles_compat.py": "bd676418d90855b126bc94bea61d034e9a41a16373661f9bb4e6cc99769d5f6e",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/destructibles_sensor.py": "83d9a7b8568fecc62a9b2d222ef7e2ddf0fbc8d101cc4c62b859936134a38703",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/destructibles_sensor.py": "97a68a9f97a892f155220a73763c956e2e828084b42adb86b0918ae2fa9c649d",
     "src/res/scripts/client/gui/mods/offline_lan_0922/device_damage.py": "b600c8ebed09c63e65ff02926ddeb04a262db2789c8a71908a217c5f4cc8e959",
     "src/res/scripts/client/gui/mods/offline_lan_0922/effective_params.py": "c3135c23e5b1d897f538b6f7ff4bbaef9244c3bb7dc885ff152c79d34652ad7f",
     "src/res/scripts/client/gui/mods/offline_lan_0922/entities/__init__.py": "94eed32bdd05bc163d62cf8c8a22b31096312857029bed78182872588797670d",

@@ -1987,21 +1987,6 @@ def set_catalog(catalog):
 	_clear_runtime_registry()
 
 
-def navigation_structure_regions():
-	"""Locate original structure modules for native repair of old route bakes.
-
-	The catalog is a broad phase only. It cannot grant passage through a
-	foundation, wall or cliff within the same bounds. TerrainGrid measures
-	the actual planning support and hard collision for every restored edge.
-	"""
-	if _destructible_catalog is None:
-		return ()
-	return tuple(_box_xz_bounds(box)
-		for instance in _destructible_catalog['baked_instances'].values()
-		if instance['kind'] == 'structure'
-		for box in instance['boxes'])
-
-
 def _destructible_bin_key(x, z):
 	import math
 	return (int(math.floor(float(x) / _DESTRUCTIBLE_BIN_METRES)),
