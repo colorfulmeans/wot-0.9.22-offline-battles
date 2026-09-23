@@ -2,8 +2,8 @@
 """Engine-free short-range driver for offline battle bots.
 
 The strategic director supplies a waypoint.  Callers supply ``direction_clear``
-for the current collision/terrain query; this module chooses throttle, braking
-and steering, so it is safe to exercise outside the BigWorld client.
+for the current collision/terrain query; this module chooses only throttle and
+steering, so it is safe to exercise outside the BigWorld client.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
@@ -14,9 +14,6 @@ import math
 
 WAYPOINT_ARRIVAL_RADIUS = 1.5
 TRAFFIC_WAIT_LEASE_SECONDS = 1.5
-# A pending search is not a physical collision. Only runtime-confirmed local
-# blockage may admit the separate, bounded navigation-wait recovery below.
-NAVIGATION_WAIT_RECOVERY_SECONDS = 4.0
 # First avoidance branch of the steering fan.
 FIRST_CANDIDATE_OFFSET = 0.42
 # Fifteen-degree circular buckets centre both the +/-pi seam and cardinal yaws.
@@ -28,14 +25,6 @@ BOT_TEAM_SLOT_COUNT = 15
 RECOVERY_TIMING_STRIDE = 7
 RECOVERY_YAW_OFFSET = 0.85
 RECOVERY_SWEEP_FRACTIONS = (0.25, 0.50, 0.75, 1.0)
-# Every short recovery consumer must prove exactly the same longitudinal hull
-# sweep. Keeping this ratio behind one helper prevents the adapter's selected
-# exit and the runtime's final motion probe from silently using two horizons.
-RECOVERY_SWEEP_LENGTH_FACTOR = 1.6
-
-
-def recovery_probe_distance(half_length):
-	return max(0.0, float(half_length)) * RECOVERY_SWEEP_LENGTH_FACTOR
 
 
 def _angle_delta(target, current):
@@ -107,36 +96,21 @@ def gun_yaw_limits(descriptor):
 
 
 def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
-		turn, throttle, recovery_mode, has_target=True,
-		combat_mode=None, movement_intent=False):
+		turn, throttle, recovery_mode, has_target=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn',
-			'pivot_recovery', 'forward_escape', 'contact_escape', 'friendly_yield',
-			'nav_wait', 'physical_hold'):
-		return float(turn), float(throttle), False
-	if movement_intent and combat_mode != 'engage':
-		# A target can remain visible while a TD retreats or follows a route.
-		# Laying its fixed gun must not stop that move or reverse its safe turn.
-		# Explicit engagement still owns its mature stop-and-aim behaviour;
-		# a tactical firing hold may aim once the planner has ended movement.
+			'pivot_recovery', 'forward_escape', 'contact_escape'):
 		return float(turn), float(throttle), False
 	limited = not (float(minimum_yaw) <= -math.pi + 0.1 and
 	               float(maximum_yaw) >= math.pi - 0.1)
 	if not limited:
 		return float(turn), float(throttle), False
 	relative = _angle_delta(target_yaw, hull_yaw)
-	minimum_yaw, maximum_yaw = float(minimum_yaw), float(maximum_yaw)
-	margin = min(0.04, max(0.0, maximum_yaw - minimum_yaw) * 0.25)
-	if minimum_yaw + margin <= relative <= maximum_yaw - margin:
-		# A firing hold must not hand the hull back to an incompatible armour
-		# angle and immediately push the target outside this same arc again.
-		# Travel and recovery keep their normal steering owner.
-		return (0.0 if abs(float(throttle)) <= 0.01 else float(turn),
-		        float(throttle), False)
-	# Aim inside the installed interval, including asymmetric and fixed guns.
-	# A zero-width gun must not create an inverted artificial margin interval.
-	center = (minimum_yaw + maximum_yaw) * 0.5
-	hull_delta = _angle_delta(target_yaw - center, hull_yaw)
+	if float(minimum_yaw) + 0.04 <= relative <= float(maximum_yaw) - 0.04:
+		return float(turn), float(throttle), False
+	# Rotate before the physics step. The former post-physics velocity write was
+	# overwritten by LocalDriver on the next frame and never moved the hull.
+	hull_delta = _angle_delta(target_yaw, hull_yaw)
 	aim_turn = max(-1.0, min(1.0, hull_delta / 0.58))
 	return aim_turn, 0.0, True
 
@@ -222,98 +196,6 @@ class LocalDriver(object):
 			state['recovery_time'] = 0.0
 			state['recovery_side'] = 0.0
 		return True
-
-	def end_navigation_wait(self, bot_id):
-		state = self.states.get(bot_id)
-		if state is not None:
-			state.pop('navigation_wait', None)
-
-	def wait_for_navigation(self, bot_id, team_slot, position, yaw, speed, dt,
-			neighbours, direction_clear, half_length=3.5, half_width=1.7,
-			recovery_allowed=False):
-		"""Hold a pending path, or back out once after proved local blockage.
-
-		The caller owns evidence that the current support/last physical movement
-		is unsafe; elapsed search time alone must not manufacture that evidence.
-		Recovery only translates backwards through a checked complete hull sweep.
-		Its deadline and distance never renew while the same path wait continues.
-		"""
-		state = self._state(bot_id, team_slot, position)
-		step = max(0.0, float(dt))
-		state['last_step'] = step
-		state['clock'] += step
-		self._prune_failures(state)
-		# A short pending search pauses ordinary driving; it does not erase
-		# accumulated movement, a committed avoidance side or a recovery lease.
-		# Repeated path waits otherwise reset a wedged hull before it can finish
-		# backing out. Only this independent wait episode earns elapsed time.
-		wait = state.get('navigation_wait')
-		if wait is None:
-			wait = {'age': 0.0, 'active': False, 'completed': False}
-			state['navigation_wait'] = wait
-		wait['age'] += step
-		diagnostic = {
-			'clock': state['clock'], 'source': 'navigation_wait',
-			'desired_yaw': None, 'chosen_yaw': float(yaw),
-			'old_yaw': state.get('steering_yaw'),
-			'steering_reason': state.get('steering_reason'),
-			'recovery_mode': 'nav_wait', 'reason': 'awaiting_path',
-			'candidates': [], 'wait_age': wait['age'],
-			'recovery_allowed': bool(recovery_allowed),
-		}
-		state['decision_diagnostic'] = diagnostic
-		result = {
-			'throttle': 0.0, 'brake': True, 'turn': 0.0,
-			'target_yaw': float(yaw), 'recovery_mode': 'nav_wait',
-		}
-		if wait['completed']:
-			diagnostic['reason'] = 'recovery_completed'
-			return result
-		phase = state['recovery_timing_phase']
-		if not wait['active']:
-			if (not recovery_allowed or
-					wait['age'] < NAVIGATION_WAIT_RECOVERY_SECONDS + phase * 0.42 or
-					abs(float(speed)) > 0.35):
-				return result
-			wait.update(active=True, elapsed=0.0, origin=tuple(position))
-			# This separately proved backout now owns recovery. Ordinary driving
-			# resumes from its realised endpoint when the new path is available.
-			state['recovery_time'] = 0.0
-			state['recovery_side'] = 0.0
-			state['stuck_time'] = 0.0
-			state['steering_yaw'] = None
-			state['heading_progress_yaw'] = None
-			state['braking_target'] = None
-			state['alignment_target'] = None
-		else:
-			wait['elapsed'] += step
-		length = max(0.5, float(half_length))
-		width = max(0.3, float(half_width))
-		distance = recovery_probe_distance(length)
-		travelled = _distance(position, wait['origin'])
-		finished = (wait['elapsed'] >= self.recovery_seconds + phase * 0.28 or
-			travelled >= distance)
-		reverse_yaw = float(yaw) + math.pi
-		remaining = max(0.0, distance - travelled)
-		if not finished:
-			finished = (
-				self._failure_penalty(state, reverse_yaw) > 0.0 or
-				not self._clear(direction_clear, reverse_yaw, remaining,
-					drive_direction=-1.0) or
-				self._reverse_blocked_by_vehicle(position, yaw, neighbours,
-					length, width, remaining) is not None)
-		if finished:
-			wait['completed'] = True
-			diagnostic['reason'] = 'recovery_finished_or_rear_denied'
-			# Invalidate only this bot's local path/search after the manoeuvre (or
-			# an unsafe rear). Keep failed-edge evidence and emit exactly once.
-			result['navigation_replan'] = True
-			return result
-		result.update(throttle=-0.72, brake=False, recovery_mode='reverse_turn',
-			navigation_recovery=True)
-		diagnostic.update(source='recovery', reason='navigation_reverse',
-			recovery_mode='reverse_turn')
-		return result
 
 	def _state(self, bot_id, team_slot, position):
 		team_slot = _team_slot(team_slot)
@@ -412,30 +294,13 @@ class LocalDriver(object):
 			return neighbour.get('position') or neighbour.get('pos')
 		return neighbour
 
-	def _clear(self, direction_clear, yaw, maximum_distance=None,
-			drive_direction=1.0):
+	def _clear(self, direction_clear, yaw, maximum_distance=None):
 		"""Ask one probe about a heading, optionally over a bounded distance.
 
 		A recovery manoeuvre travels a hull length, not the fifteen to twenty
 		metre travel horizon the ordinary drive candidates are ranked over.
 		Probes that predate the bounded form keep the unbounded answer.
 		"""
-		# A candidate behind the current hull may be a forward route after a
-		# pivot. Only an explicit backing command may use reverse-drive limits.
-		# Inspect Python callbacks before calling; a TypeError in their body
-		# must not execute a native query twice under a guessed legacy arity.
-		target = getattr(direction_clear, 'im_func',
-			getattr(direction_clear, '__func__', direction_clear))
-		code = getattr(target, 'func_code', getattr(target, '__code__', None))
-		if code is not None:
-			bound = getattr(direction_clear, 'im_self',
-				getattr(direction_clear, '__self__', None))
-			argument_count = code.co_argcount - (1 if bound is not None else 0)
-			if argument_count >= 3:
-				try:
-					return bool(direction_clear(yaw, maximum_distance, drive_direction))
-				except Exception:
-					return False
 		if maximum_distance is not None and self._probe_takes_distance:
 			try:
 				return bool(direction_clear(yaw, maximum_distance))
@@ -482,7 +347,7 @@ class LocalDriver(object):
 
 	@observed('driver.reverse_contacts')
 	def _reverse_blocked_by_vehicle(self, position, yaw, neighbours,
-			half_length, half_width, maximum_distance=None):
+			half_length, half_width):
 		"""Reject a blind reverse whose reachable hull sweep is occupied.
 
 		``direction_clear`` answers for terrain and static world geometry only.
@@ -490,8 +355,7 @@ class LocalDriver(object):
 		second of every other one, so an unchecked reverse recovery drives each
 		hull straight into the one behind it and the whole formation grinds.
 		"""
-		reverse_distance = (recovery_probe_distance(half_length)
-			if maximum_distance is None else max(0.0, float(maximum_distance)))
+		reverse_distance = half_length * 1.6
 		# Translating an OBB along its longitudinal axis sweeps one exact longer
 		# OBB. Sampling only the final pose misses a hull at the current or an
 		# intermediate reachable position.
@@ -519,10 +383,10 @@ class LocalDriver(object):
 				other_width = float(
 					neighbour.get('half_width', half_width) or half_width)
 			try:
-				contact = tank_collision._obb_overlap(
+				contact = tank_collision.obb_contact(
 					position[0], position[2], yaw, (half_width, half_length),
 					other[0], other[2], other_yaw, (other_width, other_length))
-				if contact[2] >= -1.0e-9:
+				if contact is not None:
 					back_x, back_z = -math.sin(yaw), -math.cos(yaw)
 					outward = back_x*contact[0] + back_z*contact[1]
 					away = back_x*(position[0]-other[0]) + back_z*(position[2]-other[2])
@@ -564,7 +428,7 @@ class LocalDriver(object):
 		about to enter, not a long-range forecast, so a wreck further along the
 		route never withdraws a heading that is still usable.
 		"""
-		reach = recovery_probe_distance(half_length)
+		reach = half_length * 1.6
 		sweep = (
 			float(position[0]) + math.sin(candidate_yaw) * reach * 0.5,
 			float(position[1]),
@@ -670,51 +534,28 @@ class LocalDriver(object):
 	@observed('driver.choose_yaw')
 	def _choose_yaw(self, state, desired_yaw, direction_clear,
 			position=None, neighbours=None,
-			half_length=3.5, half_width=1.7, rotation_clear=None):
+			half_length=3.5, half_width=1.7):
 		# Teammate proximity never replaces the route with a repulsion heading.
 		# Crossing priority is coordinated separately; real contact owns overlap.
 		candidates = []
-		diagnostic = state.get('decision_diagnostic')
-		candidate_rows = []
 		for offset in self._CANDIDATE_OFFSETS:
 			candidate = desired_yaw + offset
-			failure = self._failure_penalty(state, candidate)
-			score = abs(offset) + failure
-			side_penalty = 0.0
+			score = abs(offset) + self._failure_penalty(state, candidate)
 			if (state.get('escape_side_until', 0.0) > state['clock'] and
 					float(offset) * float(
 						state.get('escape_side', 0.0)) < -0.01):
 				# Continue around the selected side before testing the mirror branch.
 				# The finite penalty still permits the other side when this fan is spent.
 				score += 1.25
-				side_penalty = 1.25
 			candidates.append((score, candidate))
-			candidate_rows.append({
-				'yaw': candidate, 'score': score, 'failure_penalty': failure,
-				'side_penalty': side_penalty, 'reason': 'not_probed'})
-			if diagnostic is not None and offset == 0.0:
-				diagnostic['desired_failure_penalty'] = failure
 		candidates.sort(key=lambda item: item[0])
-		candidate_rows.sort(key=lambda item: item['score'])
-		if diagnostic is not None:
-			diagnostic.update(candidates=candidate_rows,
-				candidate_count=len(candidates), probed_count=0,
-				candidates_truncated=False)
 		# Probe in score order and return the first fully viable direction. Most
-		# frames need one terrain ray set instead of probing all nine candidates.
-		for index, (unused_score, candidate) in enumerate(candidates):
-			row = candidate_rows[index]
-			if diagnostic is not None:
-				diagnostic['probed_count'] += 1
-			if rotation_clear is not None and not rotation_clear(candidate):
-				row['reason'] = 'rotation_blocked'
-			elif not self._clear(direction_clear, candidate):
-				row['reason'] = 'direction_blocked'
-			elif position is not None and self._static_hull_ahead(
-					position, candidate, neighbours, half_length, half_width):
-				row['reason'] = 'static_hull'
-			else:
-				row['reason'] = 'selected'
+		# frames need one terrain ray set instead of probing all seven candidates.
+		for unused_score, candidate in candidates:
+			if (self._clear(direction_clear, candidate) and
+					not (position is not None and self._static_hull_ahead(
+						position, candidate, neighbours,
+						half_length, half_width))):
 				state['steering_reason'] = (
 					'route' if abs(_angle_delta(candidate, desired_yaw)) <= 0.05
 					else 'obstacle')
@@ -726,9 +567,8 @@ class LocalDriver(object):
 			neighbours, direction_clear, velocity=None,
 			half_length=3.5, half_width=1.7,
 			movement_intent=True, stopping_distance=None,
-			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
-			turn_speed_limit=None, rotation_clear=None):
-		"""Return throttle, explicit brake, steering and recovery intent.
+			stop_at_target=True, decision_horizon=0.0, pose_clear=None):
+		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
 		inferred from a network entity id because those numbering schemes differ.
@@ -759,15 +599,6 @@ class LocalDriver(object):
 		desired_yaw = _yaw_to(position, target)
 		heading_error = abs(_angle_delta(desired_yaw, yaw))
 		state['last_desired_yaw'] = desired_yaw
-		diagnostic = {
-			'clock': state['clock'], 'source': 'hold',
-			'desired_yaw': desired_yaw, 'chosen_yaw': float(yaw),
-			'old_yaw': state.get('steering_yaw'),
-			'steering_reason': state.get('steering_reason'),
-			'recovery_mode': 'arrived', 'reason': 'no_movement_intent',
-			'candidates': [],
-		}
-		state['decision_diagnostic'] = diagnostic
 		target_distance = _distance(position, target)
 		if not movement_intent:
 			# Cover/engagement orders intentionally stop within a tolerance. Do not
@@ -778,11 +609,8 @@ class LocalDriver(object):
 			state['steering_yaw'] = None
 			state['heading_progress_yaw'] = None
 			state['braking_target'] = None
-			state['alignment_target'] = None
-			state.pop('forward_escape_target', None)
 			return {
 				'throttle': 0.0,
-				'brake': True,
 				'turn': 0.0,
 				'target_yaw': float(yaw),
 				'recovery_mode': 'arrived',
@@ -793,7 +621,6 @@ class LocalDriver(object):
 		                         (state['last_position'][0], 0.0,
 		                          state['last_position'][1]))
 		if target_distance <= WAYPOINT_ARRIVAL_RADIUS:
-			diagnostic['reason'] = 'waypoint_arrived'
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)
 			# is zero and previously produced full throttle until the next order tick.
 			state['stuck_time'] = 0.0
@@ -804,11 +631,8 @@ class LocalDriver(object):
 			state['last_position'] = (
 				float(position[0]), float(position[2]))
 			state['braking_target'] = None
-			state['alignment_target'] = None
-			state.pop('forward_escape_target', None)
 			return {
 				'throttle': 0.0,
-				'brake': True,
 				'turn': 0.0,
 				'target_yaw': float(yaw),
 				'recovery_mode': 'arrived',
@@ -842,31 +666,6 @@ class LocalDriver(object):
 		else:
 			state['stuck_time'] += step
 
-		constrained = False
-		forward_escape = state.pop('forward_escape_target', None)
-		if forward_escape is not None:
-			# A short timer cannot tell whether the chassis has cleared a narrow
-			# mouth. Keep the selected straight exit until a real turn fits, the
-			# order changes, or that exit is refused. Recheck the full corridor
-			# and live hulls; physical contact still retires a failed direction.
-			constrained = (forward_escape == tuple(target) and heading_error > 0.30 and
-					not self._pivot_side_fits(pose_clear, yaw, -1.0) and
-					not self._pivot_side_fits(pose_clear, yaw, 1.0))
-			if not constrained:
-				state['recovery_time'] = 0.0
-				state['recovery_side'] = 0.0
-			elif (self._failure_penalty(state, float(yaw)) <= 0.0 and
-					self._clear(direction_clear, float(yaw),
-						recovery_probe_distance(own_half_length)) and
-					self._reverse_blocked_by_vehicle(
-						position, float(yaw)+math.pi, neighbours,
-						own_half_length, own_half_width) is None):
-				state['forward_escape_target'] = forward_escape
-				diagnostic.update(source='recovery', reason='exit_before_turn',
-					chosen_yaw=float(yaw), recovery_mode='forward_escape')
-				return {'throttle': 0.72, 'brake': False, 'turn': 0.0,
-					'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
-
 		timing_phase = state['recovery_timing_phase']
 		threshold = self.stuck_seconds + timing_phase * 0.42
 		# SAT separation can shuffle a blocked hull by centimetres while
@@ -896,10 +695,7 @@ class LocalDriver(object):
 					state, position, yaw, neighbours,
 					own_half_length, own_half_width)
 
-		if state['recovery_time'] > 0.0 or constrained:
-			state['alignment_target'] = None
-			diagnostic.update(source='recovery', reason='stuck_recovery',
-				stuck_time=state['stuck_time'], recovery_time=state['recovery_time'])
+		if state['recovery_time'] > 0.0:
 			# Keep one side for the whole episode. Geometry separates an asymmetric
 			# local jam; team-local slot parity breaks an exact tie without coupling
 			# steering to the timing phase. Never reverse blindly: at a cliff or
@@ -916,21 +712,14 @@ class LocalDriver(object):
 			# travel horizon rejects the rear of every gateway and alley on the
 			# map and leaves an in-place turn as the only recovery in exactly
 			# the places where a hull cannot turn.
-			escape_distance = recovery_probe_distance(own_half_length)
-			# The full motion sweep can disprove a corridor that these sparse
-			# planning rays still admit. Recovery must consume that same finite
-			# failure memory as the forward fan before repeating the manoeuvre.
-			reverse_clear = (
-				self._failure_penalty(state, float(yaw) + math.pi) <= 0.0 and
-				self._clear(direction_clear, float(yaw) + math.pi,
-					escape_distance, drive_direction=-1.0))
+			escape_distance = own_half_length * 1.6
+			reverse_clear = self._clear(
+				direction_clear, float(yaw) + math.pi, escape_distance)
 			reverse_blocker = None
 			if reverse_clear:
 				reverse_blocker = self._reverse_blocked_by_vehicle(
 					position, yaw, neighbours,
 					own_half_length, own_half_width)
-			diagnostic.update(reverse_clear=bool(reverse_clear),
-				reverse_blocked_by=reverse_blocker, recovery_side=direction)
 			if not reverse_clear or reverse_blocker is not None:
 				if not self._pivot_side_fits(pose_clear, yaw, direction):
 					mirrored = -direction
@@ -942,41 +731,26 @@ class LocalDriver(object):
 						# closes the rear. Use the same bounded recovery drive
 						# forwards only if terrain and the complete hull sweep
 						# are clear; rotation must not create space for free.
-						forward_blocker = None
-						if (self._failure_penalty(state, float(yaw)) <= 0.0 and
-								self._clear(direction_clear, float(yaw), escape_distance)):
-							forward_blocker = self._reverse_blocked_by_vehicle(
-								position, float(yaw)+math.pi, neighbours,
-								own_half_length, own_half_width)
-							if forward_blocker is None:
-								state['forward_escape_target'] = tuple(target)
-								diagnostic.update(reason='rear_and_pivots_denied',
-									chosen_yaw=float(yaw), recovery_mode='forward_escape')
-								return {'throttle': 0.72, 'brake': False, 'turn': 0.0,
-									'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
+						if (self._clear(direction_clear, float(yaw), escape_distance) and
+								self._reverse_blocked_by_vehicle(
+									position, float(yaw)+math.pi, neighbours,
+									own_half_length, own_half_width) is None):
+							return {'throttle': 0.72, 'turn': 0.0,
+								'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
 						# Neither rotation fits and the rear is denied. Hold the
 						# pose instead of grinding the corners, and publish the
 						# hull that owns the escape so the queue can clear it.
 						blocked = {
 							'throttle': 0.0,
-							'brake': True,
 							'turn': 0.0,
 							'target_yaw': float(yaw),
 							'recovery_mode': 'blocked',
 						}
 						if reverse_blocker is not None:
 							blocked['reverse_blocked_by'] = reverse_blocker
-						if forward_blocker is not None:
-							blocked['forward_blocked_by'] = forward_blocker
-						diagnostic.update(reason='all_exits_denied',
-							chosen_yaw=float(yaw), recovery_mode='blocked',
-							forward_blocked_by=forward_blocker)
 						return blocked
-				diagnostic.update(reason='rear_denied', chosen_yaw=recovery_yaw,
-					recovery_mode='pivot_recovery', recovery_side=direction)
 				return {
 					'throttle': 0.0,
-					'brake': True,
 					'turn': direction,
 					'target_yaw': recovery_yaw,
 					'recovery_mode': 'pivot_recovery',
@@ -993,22 +767,16 @@ class LocalDriver(object):
 			for fraction in RECOVERY_SWEEP_FRACTIONS:
 				if ((pose_clear is not None and not pose_clear(
 						float(yaw) + direction * RECOVERY_YAW_OFFSET * fraction)) or
-						self._failure_penalty(state, float(yaw) + math.pi +
-						direction * RECOVERY_YAW_OFFSET * fraction) > 0.0 or
 						not self._clear(
 						direction_clear,
 						float(yaw) + math.pi +
 						direction * RECOVERY_YAW_OFFSET * fraction,
-						escape_distance, drive_direction=-1.0)):
+						escape_distance)):
 					recovery_turn = 0.0
 					recovery_target = float(yaw)
 					break
-			diagnostic.update(reason=('checked_reverse' if recovery_turn else
-				'checked_straight_reverse'), chosen_yaw=recovery_target,
-				recovery_mode='reverse_turn')
 			return {
 				'throttle': -0.72,
-				'brake': False,
 				'turn': recovery_turn,
 				'target_yaw': recovery_target,
 				'recovery_mode': 'reverse_turn',
@@ -1024,50 +792,30 @@ class LocalDriver(object):
 		# The reason belongs to the original selection: motion past a nearby goal
 		# must not promote a held route heading into a fresh avoidance lease.
 		hold_seconds = 0.35 if steering_reason == 'route' else 1.20
-		if old_yaw is None:
-			retained_reason = 'missing'
-		elif not state['plan_age'] < hold_seconds:
-			retained_reason = 'expired'
-		elif not abs(_angle_delta(desired_yaw, old_yaw)) < 2.15:
-			retained_reason = 'goal_changed'
-		elif not self._failure_penalty(state, old_yaw) <= 0.0:
-			retained_reason = 'failure_penalty'
-		elif rotation_clear is not None and not rotation_clear(old_yaw):
-			retained_reason = 'rotation_blocked'
-		elif not self._clear(direction_clear, old_yaw):
-			retained_reason = 'direction_blocked'
-		elif self._static_hull_ahead(
-				position, old_yaw, neighbours, own_half_length, own_half_width):
-			retained_reason = 'static_hull'
-		else:
-			retained_reason = 'selected'
+		if (old_yaw is not None and state['plan_age'] < hold_seconds and
+				abs(_angle_delta(desired_yaw, old_yaw)) < 2.15 and
+				self._failure_penalty(state, old_yaw) <= 0.0 and
+				self._clear(direction_clear, old_yaw) and
+				not self._static_hull_ahead(
+					position, old_yaw, neighbours,
+					own_half_length, own_half_width)):
 			chosen_yaw = old_yaw
-		diagnostic['retained'] = {'yaw': old_yaw, 'reason': retained_reason}
 		if chosen_yaw is None:
 			chosen_yaw = self._choose_yaw(
 				state, desired_yaw, direction_clear, position, neighbours,
-				own_half_length, own_half_width, rotation_clear)
+				own_half_length, own_half_width)
 			state['plan_age'] = 0.0
 		if chosen_yaw is None:
 			# No forward ray is usable.  Start a timed recovery on the next tick
 			# rather than issuing an unsafe blind turn.
 			state['stuck_time'] = max(state['stuck_time'], threshold)
-			diagnostic.update(source='blocked', reason='no_viable_candidate',
-				chosen_yaw=float(yaw), recovery_mode='blocked')
 			return {
 				'throttle': 0.0,
-				'brake': True,
 				'turn': 0.0,
 				'target_yaw': float(yaw),
 				'recovery_mode': 'blocked',
 			}
 		state['last_clear_yaw'] = chosen_yaw
-		diagnostic.update(
-			source=('retained' if retained_reason == 'selected' else
-				'route' if state['steering_reason'] == 'route' else 'avoid'),
-			reason='selected_heading', chosen_yaw=chosen_yaw,
-			steering_reason=state['steering_reason'],
-			recovery_mode='drive' if state['steering_reason'] == 'route' else 'avoid')
 
 		# Retain a selected side for a short time. This removes left/right flip
 		# flop while the per-frame hard terrain veto remains active above.
@@ -1113,8 +861,8 @@ class LocalDriver(object):
 					brake_distance + reaction_distance):
 				state['braking_target'] = target_key
 			if state.get('braking_target') == target_key:
-				# Apply the same explicit brake used to calculate the supplied
-				# stopping distance. If tuning or a slope leaves the
+				# Releasing the throttle uses the same copied coast law that
+				# produced ``stopping_distance``. If tuning or a slope leaves the
 				# hull stopped short, release the latch and approach again.
 				if (abs(float(speed)) <= 0.35 and
 						target_distance > WAYPOINT_ARRIVAL_RADIUS + 0.5):
@@ -1123,49 +871,8 @@ class LocalDriver(object):
 					throttle = 0.0
 		elif not stop_at_target:
 			state['braking_target'] = None
-
-		# A short waypoint can lie wholly inside the hull's minimum turning
-		# circle. Full drive then circles a reachable point without ever entering
-		# its arrival radius; translation keeps the ordinary stuck timer clear.
-		# Use the caller's actual traverse limit, never a guessed vehicle rate.
-		# Braking for alignment is separate from stopping at a route endpoint.
-		alignment_target = (float(target[0]), float(target[2]))
-		if (avoiding or state.get('alignment_target') != alignment_target):
-			state['alignment_target'] = None
-		if not avoiding:
-			forward = target_distance * math.cos(_angle_delta(desired_yaw, yaw))
-			side = target_distance * abs(math.sin(_angle_delta(desired_yaw, yaw)))
-			try:
-				traverse_limit = float(turn_speed_limit)
-			except (TypeError, ValueError, OverflowError):
-				traverse_limit = 0.0
-			if (traverse_limit <= 0.0 or math.isinf(traverse_limit) or
-					math.isnan(traverse_limit) or speed < 0.0):
-				state['alignment_target'] = None
-			elif (heading_error > math.pi * 0.5 and
-					target_distance > own_half_length * 2.0):
-				# A new route behind the hull starts a pivot, not a moving
-				# semicircle. Releasing at 90 degrees drove M36 sideways into
-				# the wall of an otherwise proved exit. Finish this alignment
-				# even while speed is zero; ordinary forward bends still roll.
-				state['alignment_target'] = alignment_target
-			elif speed > 0.0:
-				radius = float(speed) / traverse_limit
-				if math.hypot(forward, side - radius) + WAYPOINT_ARRIVAL_RADIUS < radius:
-					state['alignment_target'] = alignment_target
-			if state.get('alignment_target') == alignment_target:
-				# Keep the brake through the pivot, rather than accelerating again
-				# as soon as the smaller speed makes the circle test pass. Release
-				# when the forward ray intersects the existing arrival disk.
-				if forward > 0.0 and side <= WAYPOINT_ARRIVAL_RADIUS:
-					state['alignment_target'] = None
-				else:
-					throttle = 0.0
 		return {
 			'throttle': throttle,
-			# Zero throttle here requests a pivot or a terminal stop. Merely
-			# releasing the accelerator cannot satisfy either control intent.
-			'brake': throttle == 0.0,
 			'turn': turn,
 			'target_yaw': chosen_yaw,
 			'recovery_mode': 'avoid' if avoiding else 'drive',
