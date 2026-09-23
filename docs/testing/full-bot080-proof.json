@@ -210,7 +210,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_feedback.py": "562c937e80a11deaba8263e35c2cf3711345e8685cdf225535b8d74a5ffe4637",
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_mastery.py": "500e380e555d99f76e230edf1828e8eb6d6b6e6df5d889477f7c19bae577ab36",
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_missions.py": "8429f79c805b9aafd940e563002ec6c314df44c2fc3a54184e0339df5995979f",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py": "382796c2abd617871c1267cf44ad327cb3b24f81e831a94c968ced1001891fc1",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py": "1cde8dbbf245f0a33d4483be9ac1a0ea1a25f7abbc85382ac0b731325c51a4c6",
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_shell_tooltip.py": "0e85d005f824611b8f4125785334c01e3c8ff210048e6e4387f7a0e7616124a0",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bootstrap.py": "ffa40eccdbd3d0c260a7f6fe17ed4f16222216a4fb4d032268cb99fcf160ed97",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_gunnery.py": "c47227c0cc4972fef1912eac7d392cd6f18303208d3bea14f72a130a4f28a2b0",
@@ -313,5 +313,6 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/worker_presentation.py": "fb8387e6c57a2eb54c6a19016da8efe00700dc9defb62bc7ae3777f4105ff5d3",
     "src/res/scripts/client/gui/mods/offline_lan_0922/world_census.py": "61cb89d68094cb3563b9a6d1bbcb4a8185e7612ba9413706a6af91d83f2e3838",
     "src/res/scripts/client/gui/mods/offline_lan_0922/world_collision.py": "be1dfbdaf1894b5eb846ec6490ea21a799ab8e14f5170305d7311321cb4243cc"
-  }
+  },
+  "startup_adapter_fix": "Remove unsupported required_tiers keyword from the retained caller; keep exact historical planner and maps."
 }

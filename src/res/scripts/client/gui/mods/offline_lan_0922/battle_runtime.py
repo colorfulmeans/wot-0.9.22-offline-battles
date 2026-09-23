@@ -5084,10 +5084,7 @@ class BattleRuntime(object):
                 int(candidate['level']) for candidate in candidates))
             match_tiers = list(bot_planner.bot_match_tiers(
                 tier, tier_mode, lineup_random.random(),
-                lineup_random.random(), available_tiers,
-                required_tiers=[profile['level']
-                                for profiles in humans_by_team.values()
-                                for profile in profiles]))
+                lineup_random.random(), available_tiers))
             for profiles in humans_by_team.values():
                 for profile in profiles:
                     if profile['level'] not in match_tiers:
@@ -5182,9 +5179,12 @@ class BattleRuntime(object):
                 return False
             self._bot_vehicle_assignments = assignments
             return True
-        except Exception:
-            # The local tank remains a valid descriptor fallback. The complete
-            # roster table itself is a #1513 retail API and is ABI-audited.
+        except Exception as error:
+            # Keep the actual preparation error instead of misreporting an
+            # adapter failure as a missing vehicle in the client's catalog.
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] Bot roster preparation failed: %s: %s\n' %
+                (type(error).__name__, error))
             self._bot_vehicle_assignments = {}
             return False
 
