@@ -1,5 +1,50 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## September 24 exchange confirmation and elite-notification audit
+
+Report `20260924-003508-5e4675963357` runs the v0.9.4 original-Bot077
+payload, identity `colorfulmeans-v094-bot077-original-35874200209-1`.
+The published Windows artifact was inspected: its garage/request producers
+match the a3e4c593 behavioral baseline. This is not a stale full-set sender.
+
+The exact #1513 Python resource contracts establish that
+`ExchangeXpMeta.submit` enumerates `FULLY_ELITE` catalog vehicles, excluding
+the research parent but not zero-XP/unowned entries. `Vehicle` treats an empty
+`unlocksDescrs` as elite without an account elite flag. The offline conversion
+loop wrote `vehicleXP[cd] = 0` for every empty candidate encountered before
+its positive-XP source. `data.stats` includes XP-history keys among its elite
+candidates. Consequently those new zero keys become new incremental elite
+entries; native `Account._update` raises one elite event per entry. A synthetic
+128-empty-candidate case reproduces the pollution and popup-producing delta.
+
+The correction skips zero debits, preserving genuine positive/sold-vehicle
+experience, existing zero history, source de-duplication, gold charging, and
+real research transitions. It does not suppress elite dialogs or clear saved
+research. A conversion followed by 65,600-XP research now produces only the
+research parent's genuine elite notification, never the empty catalog entries.
+
+The credit screenshot has 9,833,700 gold, a 400 rate, a 6,090,000-credit
+shortfall and a correct 15,225-gold default. The unbounded maximum product is
+3,933,480,000, exceeding signed 32-bit range. The exact Python meta publishes
+`maxGoldValue = actualGold`. A presentation-only wrapper on the shared
+`_ExchangeDialogMeta.makeVO` caps the maximum at floor(INT32_MAX / live rate)
+without rewriting the wallet, rate, needed/default amount, or transaction.
+It also bounds the same shared XP/restore control when applicable; ordinary
+values, including the reported 2,624-gold XP dialog, remain identical.
+
+Evidence limit: the original #1513 SWF was not supplied. The public 1.13 AS3
+ConfirmExchangeBlock confirms the maxGold * rate dataflow but is not #1513
+and uses Number for convertGold. Therefore the signed-overflow rendering
+explanation is a strong screenshot-bound hypothesis, not recovered #1513
+Flash proof. The range guard is covered by VO and explicit int32-model tests;
+only a Windows retest can confirm that the credit field now displays/accepts
+values. Do not describe that model as a native UI reproduction.
+
+The adapter uses the existing pre-lobby service installation and rollback.
+No Bot, map, penetration, movement, crew-requalification, price or research
+rules are changed by this patch. PR #32 remains independently applicable.
+
+
 This review is pinned to the Chinese HD client whose `version.xml` reports
 `v.0.9.22.0.1 #1513`. The executable is 32-bit x86. Packaged client modules use
 CPython 2.7 bytecode magic `03 f3 0d 0a`; the embedded build identifies itself

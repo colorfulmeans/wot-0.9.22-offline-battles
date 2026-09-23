@@ -1665,9 +1665,6 @@ class AccountRpcTests(unittest.TestCase):
             CONTRACT['dossiers']['streamTupleArity'], len(dossier_value))
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class CrewShopStreamTests(unittest.TestCase):
     """What the crew shop and the recycle bin look like on the wire."""
@@ -2152,3 +2149,113 @@ class GarageRefreshCompletionTests(unittest.TestCase):
         self.failure.assert_called_once()
         self.success.assert_not_called()
         self.assertEqual({}, self.timers)
+
+
+class ConversionResearchIsolationTests(unittest.TestCase):
+    """Native auto-conversion submits fully elite catalog entries with zero XP.
+
+    #1513 Vehicle treats an empty unlocksDescrs as elite even without a stored
+    elite flag. ExchangeXpMeta.submit selects FULLY_ELITE from the catalog,
+    not just owned vehicles or entries with positive XP. These entries must
+    remain candidates, not become new account history or elite events.
+    """
+
+    def _state(self):
+        snapshot = _full_garage_snapshot()
+        snapshot['wallet'] = {'credits': 10000, 'gold': 9833700, 'freeXP': 0}
+        snapshot['vehicleXP'] = {50001: 100000, 50002: 0}
+        snapshot['shopItemPrices'][4444] = {'credits': 100}
+        hidden = tuple(range(60000, 60128))
+        descriptors = {key: types.SimpleNamespace(unlocksDescrs=())
+                       for key in hidden + (50001, 70001, 70002)}
+        descriptors[50002] = types.SimpleNamespace(unlocksDescrs=((65600, 4444),))
+        vehicles = types.SimpleNamespace(
+            getVehicleType=descriptors.__getitem__,
+            getTypeOfCompactDescr=lambda unused: 4)
+        state = account_requests.garage.GarageState(snapshot, vehicles_module=vehicles)
+        return state, vehicles, hidden
+
+    def test_zero_xp_catalog_candidates_never_create_account_history(self):
+        for source_first in (False, True):
+            with self.subTest(source_first=source_first):
+                state, vehicles, hidden = self._state()
+                before = copy.deepcopy(state.snapshot())
+                candidates = ((50001,) + hidden if source_first else
+                              hidden + (50001,))
+                state.convert_to_free_xp(candidates, 65600)
+                self.assertEqual({50001: 34400, 50002: 0},
+                                 state.snapshot()['vehicleXP'])
+                self.assertEqual(before['unlockItemCompactDescrs'],
+                                 state.snapshot()['unlockItemCompactDescrs'])
+                self.assertEqual(before['vehicleTypeCompactDescrs'],
+                                 state.snapshot()['vehicleTypeCompactDescrs'])
+                self.assertEqual(9833700 - 2624, state.snapshot()['wallet']['gold'])
+                self.assertEqual(65600, state.snapshot()['wallet']['freeXP'])
+
+    def test_conversion_then_research_emits_only_the_real_elite_transition(self):
+        state, vehicles, hidden = self._state()
+        pushed = []
+        context = {'garage': state, 'push_update': pushed.append}
+        with mock.patch.dict(sys.modules, {
+                'items': types.SimpleNamespace(vehicles=vehicles)}):
+            original_elite = account_data.stats(state.snapshot())['stats']['eliteVehicles']
+            result = account_requests.dispatch(commands.CMD_FREE_XP_CONV, context,
+                ([0, 65600, 0] + list(hidden) + [50001],))
+            self.assertEqual(commands.RES_SUCCESS, result.result_id)
+            result.before_response()
+            self.assertNotIn('eliteVehicles', pushed[0].get('stats', {}))
+            self.assertNotIn('unlocks', pushed[0].get('stats', {}))
+            self.assertEqual(original_elite,
+                account_data.stats(state.snapshot())['stats']['eliteVehicles'])
+            result = account_requests.dispatch(commands.CMD_UNLOCK, context, (50002, 0))
+            self.assertEqual(commands.RES_SUCCESS, result.result_id)
+            result.before_response()
+            self.assertEqual({50002}, pushed[1]['stats']['eliteVehicles'])
+            self.assertEqual({4444}, pushed[1]['stats']['unlocks'])
+            self.assertEqual(0, state.snapshot()['wallet']['freeXP'])
+            # Exactly the plain incremental field drives Account's popup loop.
+            self.assertEqual([50002], [cd for diff in pushed for cd in
+                diff.get('stats', {}).get('eliteVehicles', ())])
+            # A repeated conversion and full sync must not replay that event.
+            result = account_requests.dispatch(commands.CMD_FREE_XP_CONV, context,
+                ([0, 25, 0] + list(hidden) + [50001],))
+            self.assertEqual(commands.RES_SUCCESS, result.result_id)
+            result.before_response()
+            self.assertNotIn('eliteVehicles', pushed[-1].get('stats', {}))
+            full = account_data.sync_data(10, state.snapshot())
+            self.assertNotIn('prevRev', full)
+            self.assertEqual({50001, 50002}, full['stats']['eliteVehicles'])
+
+    def test_positive_sold_sources_and_duplicates_still_convert_once(self):
+        state, vehicles, hidden = self._state()
+        state.snapshot()['vehicleXP'] = {50001: 10000, 50002: 0,
+                                         70001: 55600, 70002: 0}
+        before = copy.deepcopy(state.snapshot())
+        state.convert_to_free_xp(hidden + (50001, 50001, 70002, 70001), 65600)
+        self.assertEqual({50001: 0, 50002: 0, 70001: 0, 70002: 0},
+                         state.snapshot()['vehicleXP'])
+        self.assertEqual(before['vehicleTypeCompactDescrs'],
+                         state.snapshot()['vehicleTypeCompactDescrs'])
+        self.assertEqual(2624, before['wallet']['gold'] -
+                         state.snapshot()['wallet']['gold'])
+
+    def test_rejected_catalog_conversion_does_not_add_empty_sources(self):
+        for gold, amount in ((0, 65600), (9833700, 100001)):
+            with self.subTest(gold=gold, amount=amount):
+                state, vehicles, hidden = self._state()
+                state.snapshot()['wallet']['gold'] = gold
+                before = copy.deepcopy(state.snapshot())
+                with self.assertRaises(account_requests.garage.GarageError):
+                    state.convert_to_free_xp(hidden + (50001,), amount)
+                self.assertEqual(before, state.snapshot())
+
+    def test_existing_empty_history_is_preserved_not_pruned(self):
+        state, vehicles, hidden = self._state()
+        state.snapshot()['vehicleXP'][hidden[0]] = 0
+        state.convert_to_free_xp(hidden + (50001,), 25)
+        self.assertEqual({50001: 99975, 50002: 0, hidden[0]: 0},
+                         state.snapshot()['vehicleXP'])
+
+
+if __name__ == '__main__':
+    unittest.main()

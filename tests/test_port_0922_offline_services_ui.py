@@ -67,7 +67,8 @@ class NativeServiceUITests(unittest.TestCase):
         other_installs = ('_install_store_filters', '_install_shop',
             '_install_vehicle_filters_and_recovery', '_install_reserves',
             '_install_account', '_install_daily', '_install_mission_results',
-            '_install_settings', '_schedule_daily_rollover')
+            '_install_settings', '_install_exchange_dialog_limits',
+            '_schedule_daily_rollover')
         with native_modules({
                 'gui.shared.gui_items.fitting_item': {'FittingItem': FittingItem},
                 'gui.mods.offline_lan_0922.crew_voice': {'install': lambda patch: None}
@@ -850,6 +851,115 @@ class MissionResultUITests(unittest.TestCase):
         self.assertEqual(1, len(messages))
         self.assertEqual(1, len(dialogs))
         self.assertIn('\n', messages[0])
+
+
+
+class ExchangeDialogLimitTests(unittest.TestCase):
+    """Verify the #1513 VO boundary, not a live Scaleform render."""
+
+    def setUp(self):
+        self.ui = fixture._load_port_module('offline_services_ui')
+        self.addCleanup(self.ui.uninstall)
+        class Meta(object):
+            def __init__(self, gold=9833700, rate=400, needed=6090000):
+                self.actual_gold = gold
+                self.vo = {'title': 'stock title', 'exchangeBlockData': {
+                    'exchangeRate': rate, 'defaultExchangeRate': rate,
+                    'maxGoldValue': gold, 'goldStepSize': 1,
+                    'defaultGoldValue': (needed + rate - 1) // rate
+                        if rate > 0 else 0}}
+            def makeVO(self):
+                return self.vo
+        self.meta_type = Meta
+        self.original = Meta.makeVO
+
+    def test_reported_purchase_keeps_amount_but_bounds_large_wallet_product(self):
+        self.ui._install_exchange_dialog_limits(self.meta_type)
+        meta = self.meta_type()
+        before = copy.deepcopy(meta.vo)
+        block = meta.makeVO()['exchangeBlockData']
+        self.assertEqual(15225, block['defaultGoldValue'])
+        self.assertEqual(6090000, block['defaultGoldValue'] * block['exchangeRate'])
+        self.assertEqual(5368709, block['maxGoldValue'])
+        self.assertLessEqual(block['maxGoldValue'] * block['exchangeRate'], 2147483647)
+        self.assertEqual(9833700, meta.actual_gold)
+        self.assertEqual(before, meta.vo)
+        self.ui.uninstall()
+        self.assertIs(self.original, self.meta_type.makeVO)
+
+    def test_normal_and_xp_dialog_values_are_identical(self):
+        self.ui._install_exchange_dialog_limits(self.meta_type)
+        for gold, rate, needed in ((1000, 400, 4000), (0, 400, 6090000),
+                                   (9833700, 25, 65600), (5368709, 400, 6090000)):
+            with self.subTest(gold=gold, rate=rate):
+                meta = self.meta_type(gold, rate, needed)
+                self.assertIs(meta.vo, meta.makeVO())
+        self.assertEqual(2624, self.meta_type(9833700, 25, 65600).
+            makeVO()['exchangeBlockData']['defaultGoldValue'])
+
+    def test_changed_rate_and_very_large_balances_use_the_live_rate(self):
+        self.ui._install_exchange_dialog_limits(self.meta_type)
+        for rate in (1, 25, 400, 800, 1000):
+            with self.subTest(rate=rate):
+                meta = self.meta_type(10 ** 12, rate, 100000)
+                block = meta.makeVO()['exchangeBlockData']
+                self.assertLessEqual(block['maxGoldValue'] * rate, 2147483647)
+                self.assertGreater((block['maxGoldValue'] + 1) * rate, 2147483647)
+                self.assertEqual(meta.vo['exchangeBlockData']['defaultGoldValue'],
+                                 block['defaultGoldValue'])
+
+    def test_restore_subclass_inherits_the_same_limit(self):
+        class RestoreMeta(self.meta_type):
+            pass
+        self.ui._install_exchange_dialog_limits(self.meta_type)
+        self.assertEqual(5368709, RestoreMeta().makeVO()['exchangeBlockData']['maxGoldValue'])
+        self.assertNotIn('makeVO', RestoreMeta.__dict__)
+
+    def test_nonpositive_rate_preserves_the_native_disabled_state(self):
+        self.ui._install_exchange_dialog_limits(self.meta_type)
+        meta = self.meta_type(rate=0)
+        self.assertIs(meta.vo, meta.makeVO())
+
+    def test_signed_32_bit_limit_model_no_longer_clamps_needed_credits_to_zero(self):
+        # A boundary model for the observed zero field, NOT a native SWF test.
+        def render(block):
+            maximum = int(block['maxGoldValue'] * block['exchangeRate'])
+            maximum = (maximum + (1 << 31)) % (1 << 32) - (1 << 31)
+            wanted = block['defaultGoldValue'] * block['exchangeRate']
+            return max(0, min(maximum, wanted))
+        meta = self.meta_type()
+        self.assertEqual(0, render(meta.makeVO()['exchangeBlockData']))
+        self.ui._install_exchange_dialog_limits(self.meta_type)
+        self.assertEqual(6090000, render(meta.makeVO()['exchangeBlockData']))
+        block = meta.makeVO()['exchangeBlockData']
+        for wanted in (400, 1000000, 6090000, 8000000):
+            block['defaultGoldValue'] = wanted // 400
+            self.assertEqual(wanted, render(block))
+
+    def test_regular_services_install_and_rollback_own_the_native_base_hook(self):
+        original = self.meta_type.makeVO
+        others = ('_install_item_comparisons', '_install_store_filters',
+            '_install_shop', '_install_vehicle_filters_and_recovery',
+            '_install_reserves', '_install_account', '_install_daily',
+            '_install_mission_results', '_install_settings', '_schedule_daily_rollover')
+        with native_modules({
+                'gui.Scaleform.daapi.view.dialogs.ExchangeDialogMeta': {
+                    '_ExchangeDialogMeta': self.meta_type},
+                'gui.mods.offline_lan_0922.crew_voice': {'install': lambda patch: None}
+                }), mock.patch.multiple(self.ui, **{name: mock.Mock() for name in others}):
+            self.ui.install()
+            wrapper = self.meta_type.makeVO
+            self.assertIsNot(original, wrapper)
+            self.ui.install()
+            self.assertIs(wrapper, self.meta_type.makeVO)
+            self.ui.uninstall()
+            self.assertIs(original, self.meta_type.makeVO)
+            with mock.patch.object(self.ui, '_schedule_daily_rollover',
+                                   side_effect=RuntimeError('startup failed')):
+                with self.assertRaises(RuntimeError):
+                    self.ui.install()
+            self.assertIs(original, self.meta_type.makeVO)
+            self.assertEqual([], self.ui._patches)
 
 
 if __name__ == '__main__':

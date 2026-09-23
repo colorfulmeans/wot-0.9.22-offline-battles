@@ -337,6 +337,37 @@ class EffectiveParamsContractTests(unittest.TestCase):
             loadout.dynamic_spotting_ratios(healthy, injured))
 
     def test_garage_builder_uses_exact_client_final_value_providers(self):
+        self._assert_garage_builder()
+
+    def test_requalified_gunner_can_keep_disabled_radio_skills(self):
+        # The original client separates perk activity from role enablement.
+        # A trained radio perk can remain active but disabled on a gunner.
+        for name, level, active in (
+                ('radioman_finder', 63.0, True),
+                ('radioman_inventor', 100.0, True),
+                ('radioman_retransmitter', 100.0, True),
+                ('radioman_lasteffort', 100.0, True),
+                ('radioman_lasteffort', 63.0, False)):
+            with self.subTest(name=name, level=level, active=active):
+                self._assert_garage_builder((types.SimpleNamespace(
+                    name=name, level=level, isActive=active,
+                    isEnable=False),))
+
+    def test_requalification_preserves_other_disabled_specialties(self):
+        for name in ('commander_sixthsense', 'driver_rammingmaster',
+                     'loader_intuition'):
+            with self.subTest(name=name):
+                self._assert_garage_builder((types.SimpleNamespace(
+                    name=name, level=100.0, isActive=True,
+                    isEnable=False),))
+
+    def test_enabled_wrong_specialty_is_still_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'does not match its slot'):
+            self._assert_garage_builder((types.SimpleNamespace(
+                name='radioman_lasteffort', level=100.0, isActive=True,
+                isEnable=True),))
+
+    def _assert_garage_builder(self, inherited_skills=()):
         expected = effective_params()
         expected['ramming']['ramming_bonus'] = 0.15
         descriptor = types.SimpleNamespace()
@@ -376,6 +407,8 @@ class EffectiveParamsContractTests(unittest.TestCase):
                 skill('loader_intuition'),
                 skill('radioman_lasteffort')]),
         ]
+        crew[1].skills.extend(inherited_skills)
+        original_skills = copy.deepcopy(crew[1].skills)
         equipment_descriptor = types.SimpleNamespace(
             name='ration', id=(0, 9), compactDescr=1009,
             reuseCount=-1, cooldownSeconds=0.0,
@@ -444,6 +477,11 @@ class EffectiveParamsContractTests(unittest.TestCase):
                     return_value=expected['ramming']):
             result = lan_session._selected_vehicle_effective_params()
 
+        # Projection must not reset or rewrite the account's learned skills.
+        self.assertEqual(original_skills, crew[1].skills)
+        self.assertEqual(
+            ['gunner_rancorous', 'gunner_sniper'],
+            [entry['name'] for entry in result['crew']['members'][1]['skills']])
         self.assertEqual(33, attribute_factors.call_count)
         self.assertTrue(all(call.args[2] == (equipment_descriptor, directive)
                             for call in attribute_factors.call_args_list))

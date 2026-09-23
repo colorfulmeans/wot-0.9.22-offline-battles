@@ -1,11 +1,14 @@
 {
   "base": "889fd4076053fc4825a5a98c2ae6d7c38c1629fb",
   "changed_runtime": [
+    "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/garage.py",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/adapter.py",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/driver.py",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_state_codec.py"
+    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_state_codec.py",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/lan_session.py",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/offline_services_ui.py"
   ],
   "exact_historical_sha256": {
     "destructibles/01_karelia.json": "9aaca83190a9a41aa2914dd183697f0c3dda04a1ef752420198ec0210b3245cf",
@@ -167,6 +170,18 @@
     }
   },
   "native_gameplay_tested": false,
+  "packaged_hotfix": {
+    "base": "7159332d197a02e7128948c2eed7c3393d8d3db0",
+    "credit_range_guard_flash_acceptance_pending": true,
+    "crew_pr_32_source": "6d3af14755d6ba80bc6c25fc536f1bf8be9dbdd9",
+    "name": "exchange-crew-test-20260924",
+    "native_gameplay_tested": false,
+    "runtime_paths": [
+      "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/garage.py",
+      "src/res/scripts/client/gui/mods/offline_lan_0922/lan_session.py",
+      "src/res/scripts/client/gui/mods/offline_lan_0922/offline_services_ui.py"
+    ]
+  },
   "preserved_runtime_sha256_lf": {
     "src/res/scripts/client/gui/mods/mod_offline_lan_0922.py": "2493701cf7d6545dfaa7228dc51043dd5b4da76845c4505776a7a3d407f4c23c",
     "src/res/scripts/client/gui/mods/offline_lan_0922/__init__.py": "bcb8f4b31ac0c2ac25b124470269b6cb01f8fd9060150d43c7ca0a974dbfef00",
@@ -174,7 +189,6 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/commands.py": "1f90456ffdd35d8ea8c53c91200c3bb8485bb5269b9d03f8916d9cd2836fd2de",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/data.py": "1c31a767a75d76ff5e8f429e185f8e86777be211b38cda06ac3bba57a264c4e6",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/economy.py": "310ac116da6489ca09a3b9db39f2e43d8611a21f61b28487814e79c341dd85e5",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/garage.py": "8e46d223eeab9e85e341427a08fe2286c5e0d52e5ab8dbc187b9bb6d9b26837c",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/garage_store.py": "7d43d0a9a4f8249e97222a32ae08fa157a358bc1c1db4f9fce8d716b7126cc8e",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/postbattle_store.py": "5077d6e126e67ddead200cae415b171a5fefa40e915af44396daf63a21a6b801",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/requests.py": "263fd6ddacd1fbab966475480d86efac038b92af357e3b27a06353211d968e0f",
@@ -246,7 +260,6 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/internal_layout_store.py": "808ce9e879c904b1ab114d6b1f5892dbad2a546252e66152505194991459cdda",
     "src/res/scripts/client/gui/mods/offline_lan_0922/internal_mesh.py": "1ec5a0ebe60112466d9b3881826f30fb58d34b0f6809098323a044ae9c6901be",
     "src/res/scripts/client/gui/mods/offline_lan_0922/lan_client.py": "55b43f32536ae66a86fe90c3418ecfef68c249b959878a57ce184359b6f3ebb7",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/lan_session.py": "9049993f500ea7e1e4b1b972f5e058c7cc6c01555d11047571e4ebf0180da300",
     "src/res/scripts/client/gui/mods/offline_lan_0922/launcher_inbox.py": "b6028ee33338db7f4bd1e192eff0fad6810a0376c663e0b53cd5b8e70f8a62fe",
     "src/res/scripts/client/gui/mods/offline_lan_0922/loadout.py": "7e4f66c7793330868d0cd2eec1f7607e2811dff8e7e2a004726d4a82ee166b2c",
     "src/res/scripts/client/gui/mods/offline_lan_0922/lobby_ui.py": "13248c59bab14b23f247ac6822565ce54b0a87cfc0ebd2ee2ddb9b96ec5a4897",
@@ -256,7 +269,6 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/native_mapping_mask.py": "32cbedac4cff09d605a88983b4176aaa94c051c17e8daaebaae56c6fd443d768",
     "src/res/scripts/client/gui/mods/offline_lan_0922/navigation_graph_schema.py": "4d75b20ad91b3c6d603f42ffd9a2083fa675e3a1e89da5fbfa460e37cb2284cd",
     "src/res/scripts/client/gui/mods/offline_lan_0922/offline_services.py": "aa0f81f095f73c59d4f35ddc657af800172e93ff05850b4c476039c8388c2733",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/offline_services_ui.py": "fddf2375cf2bb4ee3612e6b9547412c78dea44290fe4dc5f6a4018c27caf2949",
     "src/res/scripts/client/gui/mods/offline_lan_0922/personal_campaign.py": "bf23b0292ce29fa5162facdd6a1d6f0c9592681fa5529009791eacd1eb36238a",
     "src/res/scripts/client/gui/mods/offline_lan_0922/personal_campaign_battle.py": "c31f2b979fab5f48b0c2b1eb8207402aa0fcfdd0eded360ea53fcd21f9cf3aa1",
     "src/res/scripts/client/gui/mods/offline_lan_0922/personal_campaign_ledger.py": "a25b4341d3b3407ccad244d5aaad6d8b709ce219087d79f9cd1664a5efaf595a",
@@ -318,7 +330,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/commands.py": "1f90456ffdd35d8ea8c53c91200c3bb8485bb5269b9d03f8916d9cd2836fd2de",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/data.py": "1c31a767a75d76ff5e8f429e185f8e86777be211b38cda06ac3bba57a264c4e6",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/economy.py": "310ac116da6489ca09a3b9db39f2e43d8611a21f61b28487814e79c341dd85e5",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/garage.py": "8e46d223eeab9e85e341427a08fe2286c5e0d52e5ab8dbc187b9bb6d9b26837c",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/garage.py": "884353b854434b095c660e7de32b709b10685df0fe40a2d9a2936f20f1d2104b",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/garage_store.py": "7d43d0a9a4f8249e97222a32ae08fa157a358bc1c1db4f9fce8d716b7126cc8e",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/postbattle_store.py": "5077d6e126e67ddead200cae415b171a5fefa40e915af44396daf63a21a6b801",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/requests.py": "263fd6ddacd1fbab966475480d86efac038b92af357e3b27a06353211d968e0f",
@@ -395,7 +407,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/internal_layout_store.py": "808ce9e879c904b1ab114d6b1f5892dbad2a546252e66152505194991459cdda",
     "src/res/scripts/client/gui/mods/offline_lan_0922/internal_mesh.py": "1ec5a0ebe60112466d9b3881826f30fb58d34b0f6809098323a044ae9c6901be",
     "src/res/scripts/client/gui/mods/offline_lan_0922/lan_client.py": "55b43f32536ae66a86fe90c3418ecfef68c249b959878a57ce184359b6f3ebb7",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/lan_session.py": "9049993f500ea7e1e4b1b972f5e058c7cc6c01555d11047571e4ebf0180da300",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/lan_session.py": "51a19a9fd4c1364f25e3fa85496aabdc3b2b9295433a1310d69a96c46e6504e2",
     "src/res/scripts/client/gui/mods/offline_lan_0922/launcher_inbox.py": "b6028ee33338db7f4bd1e192eff0fad6810a0376c663e0b53cd5b8e70f8a62fe",
     "src/res/scripts/client/gui/mods/offline_lan_0922/loadout.py": "7e4f66c7793330868d0cd2eec1f7607e2811dff8e7e2a004726d4a82ee166b2c",
     "src/res/scripts/client/gui/mods/offline_lan_0922/lobby_ui.py": "13248c59bab14b23f247ac6822565ce54b0a87cfc0ebd2ee2ddb9b96ec5a4897",
@@ -405,7 +417,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/native_mapping_mask.py": "32cbedac4cff09d605a88983b4176aaa94c051c17e8daaebaae56c6fd443d768",
     "src/res/scripts/client/gui/mods/offline_lan_0922/navigation_graph_schema.py": "4d75b20ad91b3c6d603f42ffd9a2083fa675e3a1e89da5fbfa460e37cb2284cd",
     "src/res/scripts/client/gui/mods/offline_lan_0922/offline_services.py": "aa0f81f095f73c59d4f35ddc657af800172e93ff05850b4c476039c8388c2733",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/offline_services_ui.py": "fddf2375cf2bb4ee3612e6b9547412c78dea44290fe4dc5f6a4018c27caf2949",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/offline_services_ui.py": "8428b5676f186c588234f8f2f5ee2f55430d4ea54077bbc177dcda2aa95cca13",
     "src/res/scripts/client/gui/mods/offline_lan_0922/personal_campaign.py": "bf23b0292ce29fa5162facdd6a1d6f0c9592681fa5529009791eacd1eb36238a",
     "src/res/scripts/client/gui/mods/offline_lan_0922/personal_campaign_battle.py": "c31f2b979fab5f48b0c2b1eb8207402aa0fcfdd0eded360ea53fcd21f9cf3aa1",
     "src/res/scripts/client/gui/mods/offline_lan_0922/personal_campaign_ledger.py": "a25b4341d3b3407ccad244d5aaad6d8b709ce219087d79f9cd1664a5efaf595a",
