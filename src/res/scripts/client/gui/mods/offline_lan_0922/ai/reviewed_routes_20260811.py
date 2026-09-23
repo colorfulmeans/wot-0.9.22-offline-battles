@@ -382,11 +382,7 @@ REVIEWED_ROUTE_POINTS = {
 	},
 	'47_canada_a': {
 		'west_hills': (
-			# The direct projection to (-250, -242) crossed the parked railway
-			# consist near (-214, -264).  This south-west road hold keeps the
-			# corridor north of the train before it turns toward the hills.
-			(-126.0, -306.0), (-190.0, -230.0), (-250.0, -242.0),
-			(-410.0, -38.0),
+			(-126.0, -306.0), (-250.0, -242.0), (-410.0, -38.0),
 			(-442.0, 86.0), (-410.0, 262.0), (-354.0, 310.0),
 			(-50.0, 418.0), (70.0, 410.0), (166.0, 370.0),
 			(214.0, 330.0),
@@ -625,13 +621,8 @@ REVIEWED_ROUTE_POINTS = {
 		),
 		'valley': (
 			(-10.0, -346.0), (34.0, -254.0), (46.0, -190.0),
-			# #1513 Workshop_new_doors placements 32638/48 and 32640/89:
-			# the openings are centred at (76.79,-97.70), (75.77,102.39).
-			# Keep straight approaches on both sides; x=54 crossed the wall
-			# beside the northern doorway despite the old baked links.
-			(78.0, -126.0), (78.0, -98.0), (78.0, -70.0),
-			(74.0, 10.0), (74.0, 74.0), (74.0, 102.0),
-			(74.0, 130.0), (62.0, 160.0),
+			(62.0, -140.0), (62.0, -100.0), (62.0, -25.0),
+			(62.0, 55.0), (62.0, 100.0), (62.0, 160.0),
 			(30.0, 220.0), (0.0, 300.0), (-2.0, 338.0),
 		),
 		'ridge': (
@@ -671,7 +662,7 @@ REVIEWED_GATE_INDEXES = {
 	'112_eiffel_tower_ctf': {
 		'tower_west': 4, 'center': 3, 'tower_east': 5,
 	},
-	'114_czech': {'town': 3, 'valley': 10, 'ridge': 5},
+	'114_czech': {'town': 3, 'valley': 8, 'ridge': 5},
 }
 
 

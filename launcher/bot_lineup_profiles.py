@@ -5,11 +5,6 @@ from __future__ import annotations
 import copy
 import re
 
-try:
-    from . import retired_vehicles
-except ImportError:
-    import retired_vehicles
-
 
 SCHEMA = 1
 AUTOMATIC_PROFILE_LABEL = "Automatic lineup"
@@ -113,8 +108,8 @@ def _vehicle_type_name(value):
     return value
 
 
-def vehicle_choice_is_standard(choice):
-    """The v0.8.4 standard-battle/resource filter, before Bot exclusions."""
+def vehicle_choice_is_eligible(choice):
+    """Mirror the server/hidden-worker admissible stock vehicle set."""
     type_name = vehicle_type_name(choice)
     tags = choice.get("tags") or ()
     if not isinstance(tags, (list, tuple, set, frozenset)):
@@ -127,12 +122,6 @@ def vehicle_choice_is_standard(choice):
         return False
     return (not NON_STANDARD_BOT_TAGS_0922.intersection(tags) and
             type_name not in UNUSABLE_BOT_VEHICLES_0922)
-
-
-def vehicle_choice_is_eligible(choice):
-    """Mirror the server/hidden-worker admissible stock vehicle set."""
-    return (vehicle_choice_is_standard(choice) and vehicle_type_name(choice)
-            not in retired_vehicles.RETIRED_BOT_VEHICLES_0922)
 
 
 def eligible_vehicle_choices(choices):
@@ -161,12 +150,10 @@ def _assignments(value):
         raw_vehicle = raw.get("vehicle")
         vehicle = (None if raw_vehicle is None else
                    _vehicle_type_name(raw_vehicle))
-        if vehicle in retired_vehicles.RETIRED_BOT_VEHICLES_0922:
-            vehicle = None
         skill = _skill(raw.get("skill"))
         if (team not in (1, 2) or not 0 <= slot < 15 or
                 (team, slot) in seen):
-            raise BotLineupProfileError("The Bot slot is invalid.")
+            raise BotLineupProfileError("The Bot lineup is invalid.")
         if vehicle is None and skill is None:
             # An entry that pins nothing is not a saved slot at all.
             continue
