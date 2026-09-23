@@ -33,6 +33,7 @@ from gui.mods.offline_lan_0922 import prebaked_navigation
 from gui.mods.offline_lan_0922 import shot_geometry
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
+from gui.mods.offline_lan_0922 import radio
 from gui.mods.offline_lan_0922 import loadout
 from gui.mods.offline_lan_0922 import lan_client
 from gui.mods.offline_lan_0922 import tank_collision
@@ -2182,6 +2183,8 @@ class BotRuntime(object):
         self._team_visibility_cache = {}
         self._visible_target_poses = {}
         self._spot_until = {}
+        self._radio_network = radio.RadioNetwork()
+        self._radio_factor_cache = {}
         self._human_observer_alive = {}
         self._human_last_alive_critical = {}
         self._human_direct_targets = {}
@@ -3264,6 +3267,8 @@ class BotRuntime(object):
             self._team_visibility_cache = {}
             self._visible_target_poses = {}
             self._spot_until = {}
+            self._radio_network = radio.RadioNetwork()
+            self._radio_factor_cache = {}
             self._human_observer_alive = {}
             self._human_last_alive_critical = {}
             self._human_direct_targets = {}
@@ -3322,6 +3327,8 @@ class BotRuntime(object):
             self._team_visibility_cache = {}
             self._visible_target_poses = {}
             self._spot_until = {}
+            self._radio_network = radio.RadioNetwork()
+            self._radio_factor_cache = {}
             self._human_observer_alive = {}
             self._human_last_alive_critical = {}
             self._human_direct_targets = {}
@@ -4602,6 +4609,77 @@ class BotRuntime(object):
         return value * device_damage.clamp_vision_factor(
             _critical_factor(source, descriptor, 'vision'))
 
+    @staticmethod
+    def _radio_identity(source):
+        return ('human' if source.get('kind') == 'human' else 'bot',
+                int(source.get('network_id', source.get('id', 0))))
+
+    def _source_radio_range(self, source, tick_cache=None):
+        if source.get('kind') == 'human':
+            # Missing round radio data fails closed; it never grants team vision.
+            try:
+                snapshot = _player_effective_params(source, tick_cache)
+            except ValueError:
+                return 0.0
+            descriptor = self._player_vehicle_profile(source, tick_cache)['descriptor']
+            unused_key, dynamic = _player_dynamic_spotting(snapshot, source)
+            devices, destroyed, unused_crew, yellow = _critical_parts(source)
+            factor = (snapshot['loadout']['radio_factor'] *
+                      dynamic.get('signal', 1.0) *
+                      device_damage.module_stat_factor(
+                          devices, destroyed, descriptor, 'signal', yellow))
+        else:
+            actor = int(source.get('id', 0))
+            descriptor = self._descriptors.get(actor, {})
+            cache = getattr(self, '_radio_factor_cache', None)
+            if cache is None:
+                cache = self._radio_factor_cache = {}
+            crew_level = self.bot_crew_level(actor)
+            key = (actor, id(descriptor), crew_level)
+            if key not in cache:
+                cache[key] = loadout.modifiers(descriptor, factors=
+                    _bot_default_crew_factors(descriptor, crew_level))['radio_factor']
+            factor = cache[key] * _critical_factor(source, descriptor, 'signal')
+        base = _number(_value(_value(descriptor, 'radio', {}), 'distance', 0.0))
+        return max(0.0, base * factor)
+
+    def _configure_radio(self, players, now, tick_cache=None):
+        actors = {}
+        for source in self.states.values():
+            if source.get('alive', True):
+                actors[self._radio_identity(source)] = (
+                    int(source.get('team', 0)), _position(source),
+                    self._source_radio_range(source, tick_cache))
+        for raw in players or ():
+            if not isinstance(raw, dict) or raw.get('id') is None:
+                continue
+            if not raw.get('alive', True) and now >= self._human_vengeance_until.get(
+                    int(raw['id']), 0.0):
+                continue
+            source = dict(raw, kind='human')
+            try:
+                snapshot = _player_effective_params(source, tick_cache)
+            except ValueError:
+                snapshot = None
+            relay_bonus = (effective_params.living_skill_level(
+                snapshot, 'radioman_retransmitter', source.get('critical') or {}) *
+                0.001) if snapshot is not None else 0.0
+            actors[self._radio_identity(source)] = (
+                int(source.get('team', 0)), _position(source),
+                self._source_radio_range(source, tick_cache), relay_bonus)
+        self._radio_network.configure(actors, now)
+
+    def _renew_observer_spot(self, source, target, now, duration=None, target_key=None):
+        self._radio_network.observe(
+            self._radio_identity(source),
+            target_key if target_key is not None else self._observer_target_key(target), now,
+            spotting.SPOT_MEMORY_SECONDS if duration is None else duration,
+            self._target_pose_snapshot(target))
+
+    def _recipient_contact(self, source, target_key, now):
+        return self._radio_network.contact(
+            self._radio_identity(source), tuple(target_key[-2:]), now)
+
     def _note_source_stillness(self, state, now):
         """Stamp when this bot stopped, so its own stereoscope can arm.
 
@@ -5376,6 +5454,7 @@ class BotRuntime(object):
                 entry[0] = bool(entry[0] or direct_visible)
                 entry[2] = target
                 if not direct_visible:
+                    self._radio_network.hidden(self._radio_identity(source), target_key)
                     continue
                 entry[3].add(source['id'])
                 team_visibility[key] = True
@@ -5387,6 +5466,7 @@ class BotRuntime(object):
                     duration = self._designated_spot_duration(
                         source, target, snapshot)
                 self._renew_team_spot(key, now, duration)
+                self._renew_observer_spot(source, target, now, duration, target_key)
             if alive:
                 self._human_direct_targets[source['id']] = direct_targets
         return True
@@ -5399,16 +5479,9 @@ class BotRuntime(object):
         source_team = int(source.get('team', 0))
         source_position = _position(source)
         source_view_range = [None]
-        remembered_team = (
-            visibility_tick.setdefault('remembered_team', {})
-            if isinstance(visibility_tick, dict) else {})
         pose_cache = (
             visibility_tick.setdefault('target_pose_snapshots', {})
             if isinstance(visibility_tick, dict) else None)
-
-        hidden_templates = (
-            visibility_tick.setdefault('hidden_target_templates', {})
-            if isinstance(visibility_tick, dict) else {})
 
         def resolve_source_view_range():
             if source_view_range[0] is None:
@@ -5419,47 +5492,18 @@ class BotRuntime(object):
         def retain_team_known_pose(target, template):
             key = (source_team, target.get('kind'),
                    int(target.get('network_id', 0)))
-            if target['fresh_visible']:
+            remembered = target.pop('_radio_pose', None)
+            if target['direct_visible']:
                 remembered = self._target_pose_snapshot(template, pose_cache)
                 self._visible_target_poses[key] = remembered
-                target.update(remembered)
-                return True
-            remembered = self._visible_target_poses.get(key)
-            cache_key = (source_team, id(template), id(remembered))
-            cached = hidden_templates.get(cache_key)
-            if cached is not None:
-                # Retain the original objects with the projection: identities
-                # cannot be recycled during this slice. Only pose removal and
-                # the team's remembered pose are shared, never observer flags.
-                visible = bool(target['visible'] and remembered is not None)
-                direct = target['direct_visible']
-                fresh = target['fresh_visible']
-                target.clear()
-                target.update(cached[2])
-                target.update(visible=visible, direct_visible=direct,
-                              fresh_visible=fresh)
-                return visible
-            # Discard every live pose field first: an old observation can lack
-            # articulation or velocity that the current hidden entity has.
             for name in _TARGET_POSE_FIELDS:
                 target.pop(name, None)
             if remembered is None:
-                # The server treats a first hidden sample as a valid no-op.
-                # Publish a shape-complete neutral record, but never expose
-                # the worker's omniscient live pose to local targeting.
-                target.update({
-                    'position': (0.0, 0.0, 0.0),
-                    'x': 0.0, 'y': 0.0, 'z': 0.0,
-                    'yaw': 0.0, 'speed': 0.0,
-                })
-                target['visible'] = False
+                target.update(position=(0.0, 0.0, 0.0), x=0.0, y=0.0, z=0.0,
+                              yaw=0.0, speed=0.0, visible=False)
             else:
                 target.update(remembered)
-            projection = dict(target)
-            for name in ('visible', 'direct_visible', 'fresh_visible'):
-                projection.pop(name, None)
-            hidden_templates[cache_key] = (template, remembered, projection)
-            return bool(target.get('visible'))
+            return bool(target['visible'])
 
         def visible_to_team(target):
             key = (source_team, target.get('kind'),
@@ -5469,18 +5513,15 @@ class BotRuntime(object):
                 resolve_source_view_range)
             if direct_visible:
                 self._renew_team_spot(key, now)
-                remembered_team[key] = True
-            if direct_visible and team_spotted is not None:
-                team_spotted[key] = True
-            if key not in remembered_team:
-                remembered_team[key] = \
-                    self._team_spot_time_left(key, now) > 0.0
-            remembered = remembered_team[key]
-            fresh_shared = bool(
-                team_spotted is not None and team_spotted.get(key, False))
-            return (bool(direct_visible or remembered or fresh_shared),
-                    bool(direct_visible),
-                    bool(direct_visible or fresh_shared))
+                self._renew_observer_spot(source, target, now)
+                if team_spotted is not None:
+                    team_spotted[key] = True
+            else:
+                self._radio_network.hidden(self._radio_identity(source), key[1:])
+            remaining, fresh_shared, radio_pose = self._recipient_contact(source, key, now)
+            target['_radio_pose'] = radio_pose
+            return (bool(direct_visible or remaining > 0.0),
+                    bool(direct_visible), bool(direct_visible or fresh_shared))
 
         for raw in players or ():
             if (not isinstance(raw, dict) or raw.get('id') is None or
@@ -10139,6 +10180,13 @@ class BotRuntime(object):
                 'visible': visible,
                 'fresh': fresh,
                 'time_left': round(time_left, 6),
+                'radio_recipients': [
+                    {'kind': actor[0], 'id': actor[1],
+                     'time_left': round(min(time_left, self._radio_network.contact(
+                         actor, key[1:], now)[0]), 6)}
+                    for actor, participant in sorted(self._radio_network.actors.items())
+                    if visible and participant[0] == key[0] and
+                    self._radio_network.contact(actor, key[1:], now)[0] > 0.0],
                 # These identities are produced only by the hidden worker's
                 # native LOS probes. Visible clients cannot submit this
                 # authority message.
@@ -10147,7 +10195,9 @@ class BotRuntime(object):
                 # Current clients always publish this field. An empty list
                 # means team-spotted without a local firing lane; the server
                 # rejects omission rather than guessing.
-                'shootable_by_bot_ids': sorted(shootable),
+                'shootable_by_bot_ids': sorted(
+                    actor for actor in shootable if self._radio_network.contact(
+                        ('bot', int(actor)), key[1:], now)[1]),
                 # Positive evidence only: an absent id is unknown, not safe.
                 'threatened_bot_ids': sorted(set(
                     incoming_by_target.get(key, ()))) if fresh else [],
@@ -11036,6 +11086,7 @@ class BotRuntime(object):
         visibility_tick = {'target_pose_snapshots': pose_cache}
         self._track_human_observer_lifecycle(
             players, now, visibility_tick)
+        self._configure_radio(players, now, visibility_tick)
         live_players = None
         live_probe_targets = {}
         processed_bot_ids = set()
@@ -12537,6 +12588,13 @@ class BotRuntime(object):
                 'type': 'bot_observation',
                 'contacts': self._pack_observations(
                     observation_entries, now),
+                'radio_links': [
+                    {'kind': actor[0], 'id': actor[1], 'allies': [
+                        {'kind': ally[0], 'id': ally[1]}
+                        for ally in sorted(self._radio_network.actors)
+                        if ally != actor and self._radio_network.connected(actor, ally)]}
+                    for actor in sorted(self._radio_network.actors)
+                    if actor[0] == 'human'],
                 'affordances': list(completed_affordances),
             })
         return outgoing

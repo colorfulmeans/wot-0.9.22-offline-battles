@@ -148,7 +148,6 @@
     "navgraphs/92_stalingrad.json": "b1a43fead7b4b542e9a5c31c6c4b8f173c30d95bc3c2aea8bc8eba4f80b1cba2",
     "navgraphs/95_lost_city.json": "c887e07609832ed5da6abf8a6c17e79737008e7caaae2c14045ab1d1354de96b",
     "navgraphs/manifest.json": "f1ffb6064ec15f6f58ca9221d59163659e4436fab4a5e3d7192e351387e953d0",
-    "server/server_bot_ai.py": "b7d3297a3ca19746c399f0b9f69a93ac3eca804af39f8d8fea8b3dd53aac3409",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/__init__.py": "df32db23a0d7371667bd40acdc6e2fec618e1956875de70aa28350f5083bbafe",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/adapter.py": "0820d8b30d7bb0a8be8d18544d209a43fdd15b574502b736970650d4bff4d8f6",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/cover.py": "136e1881322bf383f7cabc266038b451fc7c240aa5eae74fe2a3d93ddb9d5840",
@@ -165,12 +164,25 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/tactical_geometry.py": "c48692bc6330779b7880e1ec5db34caa2017f25f91462ea24b8894ca591042fb",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py": "44a5592aa2d913608a968db533d7822e2f61abda5572f7f8304e5e43f109511e",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_gunnery.py": "c47227c0cc4972fef1912eac7d392cd6f18303208d3bea14f72a130a4f28a2b0",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": "759bfc37f19e6b749a6e920031d8f5d40fedec14e3eb16caddd3ccca045a4731",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_state_codec.py": "56006ca01860fc1bb35e30876ad01fa4a5262dc9844e9cee6632300eb2e3e163",
     "src/res/scripts/client/gui/mods/offline_lan_0922/prebaked_navigation.py": "ac0249f1253a4d2721c31b116b2128b0dc5ee0e664037eb24c70dd37a01e752b"
   },
   "historical_source": "5a7c20a124ab8ad76dc40db3012a31436ae6905b",
   "native_gameplay_tested": false,
+  "radio_visibility_fix": {
+    "baseline": "c041bdddd02d7a6ca6240475d29b2fc86501ba51",
+    "intentional_exceptions": {
+      "server/server_bot_ai.py": {
+        "fixed_sha256_lf": "3fc17dfff672570b7bfc37b47131846b9966f559179b55c86ce9f231ff4725e3",
+        "historical_sha256_lf": "b7d3297a3ca19746c399f0b9f69a93ac3eca804af39f8d8fea8b3dd53aac3409"
+      },
+      "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": {
+        "fixed_sha256_lf": "1e66a7965c8e8fdb1fcd2847c17c4c899a5cf7c7505d9a455005306b42a55d23",
+        "historical_sha256_lf": "759bfc37f19e6b749a6e920031d8f5d40fedec14e3eb16caddd3ccca045a4731"
+      }
+    },
+    "scope": "Restore radio observation production and relay; retain old Bot driving, tactical policy and original maps."
+  },
   "retained_boundary": "Current shared physics, native scene adapters, protocol and non-Bot features.",
   "runtime_sha256_lf": {
     "src/res/scripts/client/gui/mods/mod_offline_lan_0922.py": "2493701cf7d6545dfaa7228dc51043dd5b4da76845c4505776a7a3d407f4c23c",
@@ -214,7 +226,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_shell_tooltip.py": "0e85d005f824611b8f4125785334c01e3c8ff210048e6e4387f7a0e7616124a0",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bootstrap.py": "ffa40eccdbd3d0c260a7f6fe17ed4f16222216a4fb4d032268cb99fcf160ed97",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_gunnery.py": "c47227c0cc4972fef1912eac7d392cd6f18303208d3bea14f72a130a4f28a2b0",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": "759bfc37f19e6b749a6e920031d8f5d40fedec14e3eb16caddd3ccca045a4731",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": "1e66a7965c8e8fdb1fcd2847c17c4c899a5cf7c7505d9a455005306b42a55d23",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_state_codec.py": "56006ca01860fc1bb35e30876ad01fa4a5262dc9844e9cee6632300eb2e3e163",
     "src/res/scripts/client/gui/mods/offline_lan_0922/burst_mechanics.py": "78364b9f429eda500773736cfe961d73d035fe0b50815fcf76aad2ca2c60b53b",
     "src/res/scripts/client/gui/mods/offline_lan_0922/collision_feedback.py": "705eb3e6e6ac4c951a038f0caeae41b508488cabd27b153671d8aba3a0f3b586",
