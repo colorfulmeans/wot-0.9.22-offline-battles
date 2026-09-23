@@ -169,7 +169,7 @@
   "native_gameplay_tested": false,
   "preserved_runtime_sha256_lf": {
     "src/res/scripts/client/gui/mods/mod_offline_lan_0922.py": "2493701cf7d6545dfaa7228dc51043dd5b4da76845c4505776a7a3d407f4c23c",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/__init__.py": "975577ef46414aafdbafc3346cd04884e19e22a9db22ca29f15c47a8ba3ca901",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/__init__.py": "bcb8f4b31ac0c2ac25b124470269b6cb01f8fd9060150d43c7ca0a974dbfef00",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/__init__.py": "4b2c50e7d7ba793dc5e52f3c775607500d913b803661f94099416325dd5ae1ff",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/commands.py": "1f90456ffdd35d8ea8c53c91200c3bb8485bb5269b9d03f8916d9cd2836fd2de",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/data.py": "1c31a767a75d76ff5e8f429e185f8e86777be211b38cda06ac3bba57a264c4e6",
@@ -304,10 +304,16 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/world_census.py": "61cb89d68094cb3563b9a6d1bbcb4a8185e7612ba9413706a6af91d83f2e3838",
     "src/res/scripts/client/gui/mods/offline_lan_0922/world_collision.py": "be1dfbdaf1894b5eb846ec6490ea21a799ab8e14f5170305d7311321cb4243cc"
   },
+  "release_metadata": {
+    "gameplay_modified_for_release": false,
+    "runtime_version_only_path": "src/res/scripts/client/gui/mods/offline_lan_0922/__init__.py",
+    "selected_source": "a3e4c5937789d9dd63fde6902783d5027ec7c6f3",
+    "version": "0.9.4"
+  },
   "removed_paths": [],
   "runtime_sha256_lf": {
     "src/res/scripts/client/gui/mods/mod_offline_lan_0922.py": "2493701cf7d6545dfaa7228dc51043dd5b4da76845c4505776a7a3d407f4c23c",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/__init__.py": "975577ef46414aafdbafc3346cd04884e19e22a9db22ca29f15c47a8ba3ca901",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/__init__.py": "bcb8f4b31ac0c2ac25b124470269b6cb01f8fd9060150d43c7ca0a974dbfef00",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/__init__.py": "4b2c50e7d7ba793dc5e52f3c775607500d913b803661f94099416325dd5ae1ff",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/commands.py": "1f90456ffdd35d8ea8c53c91200c3bb8485bb5269b9d03f8916d9cd2836fd2de",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/data.py": "1c31a767a75d76ff5e8f429e185f8e86777be211b38cda06ac3bba57a264c4e6",
