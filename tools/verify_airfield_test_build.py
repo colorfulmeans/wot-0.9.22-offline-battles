@@ -9,6 +9,7 @@ import marshal
 import math
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -97,6 +98,13 @@ def bytecode():
         result = {'python': sys.version, 'bytecode_magic': '03f30d0a', 'verified_modules': verified,
                   'compiled_cold_paths': paths, 'native_calls': len(calls), 'restored_edges': grid._live_edge_count,
                   'airfield_sha256': GRAPH_SHA, 'wotmod_sha256': sha(read(package)), 'gameplay_tested': False}
+        review_output = os.path.join(ROOT, 'dist', 'airfield-review-entry-verification.json')
+        subprocess.check_call([sys.executable, os.path.join(ROOT, 'tools',
+            'test_airfield_review_gate.py'), '--package', '--output', review_output], cwd=ROOT)
+        review = json.loads(read(review_output))
+        assert review['passed'] and review['mode'] == 'bytecode'
+        assert review['wotmod_sha256'] == result['wotmod_sha256']
+        result['review_entry_verification'] = review
         save(os.path.join(ROOT, 'dist', 'airfield-bytecode-verification.json'), result)
         print('PASS: %d exact CPython 2.7 modules and %d compiled cold paths; no native repairs.' % (len(verified), len(paths)))
     finally:
@@ -155,6 +163,18 @@ def distribution(app_root):
               'airfield_sha256': GRAPH_SHA, 'manifest_sha256': sha(manifest_data),
               'bytecode_verification': compiled, 'source_provenance': proof,
               'fake_client_install_passed': True, 'native_gameplay_tested': False}
+    review = compiled['review_entry_verification']
+    assert review['passed'] and review['tests_run'] == 7 and len(review['paths']) == 30
+    assert review['wotmod_sha256'] == sha(wotmod)
+    result['review_entry_verification'] = review
+    save(os.path.join(app_root, 'AIRFIELD_REVIEW_ENTRY_TESTS.json'), review)
+    with open(os.path.join(app_root, 'REVIEW_GATE_TEST_NOTES.txt'), 'wb') as stream:
+        stream.write(b'Airfield review-gate follow-up TEST BUILD.\n'
+            b'Based on 5e2ee54b; only ai/navigation.py changes at runtime (six added lines).\n'
+            b'The existing clean Airfield graph no longer enters legacy broad native edge review.\n'
+            b'Other maps, final physical collisions, traffic and recovery logic are unchanged.\n'
+            b'Source and compiled production-entry tests are not native driving tests.\n'
+            b'Tiger/north-side stalls and performance still require Windows gameplay testing.\n')
     save(os.path.join(app_root, 'AIRFIELD_BUILD_EVIDENCE.json'), result)
     print('PASS: real distribution contains the verified bytecode, all 139 source modules, 41 graph checksums and correct build identity; fake install passed.')
 

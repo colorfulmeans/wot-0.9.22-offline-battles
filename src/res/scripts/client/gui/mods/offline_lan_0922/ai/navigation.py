@@ -277,6 +277,12 @@ class TerrainGrid(object):
 	Traffic or a turn in place cannot manufacture blocked edges. A* and
 	shortcuts share native receipts only within that immutable capability.
 	"""
+		# A clean offline graph must not be reclassified by the legacy flat
+		# corridor rays. Their lateral lanes reuse centre-line heights and can
+		# intersect rising side terrain. Keep dynamic hull/contact penalties
+		# separate; physical movement still owns the final collision checks.
+		if self._static_topology_complete:
+			return False
 		if not self.prebaked or not callable(self.obstacle_probe):
 			return False
 		distance = _distance_2d(current, target)

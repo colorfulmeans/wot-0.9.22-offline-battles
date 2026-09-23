@@ -29,7 +29,7 @@
     {
       "base_sha256": "bdeaa2344a52328149633e292d3a3829a9d939ab04b701044443653acd08c0b3",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py",
-      "sha256": "42b130474f5ceee8f39028ef4720198fc935ee17348017071f54b56af1ad8d2f"
+      "sha256": "588500101e66df3d7e9306649c13a72848cd851461af2dec15fddcb4ef387e4b"
     },
     {
       "base_sha256": "9299a77c5f6d492a9a9f44b8f5a9c0333cb6ad18b4272820168ef718f816368d",
@@ -70,6 +70,16 @@
   "original_b51324c5_package_sha256": "67212336e4d4c333b2cb3ff7d133cb6fccc8e60d71c848c461361002c1bca8be",
   "preserved_runtime_build": "b51324c5",
   "public_base_commit": "e9e9417be5c0c4ab3d1271d705ef661549065ae6",
+  "review_gate_followup": {
+    "after_sha256": "588500101e66df3d7e9306649c13a72848cd851461af2dec15fddcb4ef387e4b",
+    "base_commit": "5e2ee54bd736593ec28aeee7549059fee5cd265f",
+    "before_sha256": "42b130474f5ceee8f39028ef4720198fc935ee17348017071f54b56af1ad8d2f",
+    "graph_changed": false,
+    "native_gameplay_tested": false,
+    "only_runtime_change": "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py",
+    "runtime_added_lines": 6,
+    "source_report": "wot-error-report-20260923-131201-9b6d65c11a80.zip"
+  },
   "runtime_source_sha256_lf": {
     "src/res/scripts/client/gui/mods/offline_lan_0922/__init__.py": "975577ef46414aafdbafc3346cd04884e19e22a9db22ca29f15c47a8ba3ca901",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/__init__.py": "4b2c50e7d7ba793dc5e52f3c775607500d913b803661f94099416325dd5ae1ff",
@@ -92,7 +102,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_group_a.py": "fb8207b74ce1fce7f203c352b5c7c44019803baf01bdd1626d2da20c22576c00",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_group_b.py": "fcb41bdb286c9187802437076541acd72737e6c15e7956a74899d8548d47d11e",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_group_c.py": "3c6c481495f956e0580484d8a10b10b8d0b4f1a4d8b6723d45e576078b90023d",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py": "42b130474f5ceee8f39028ef4720198fc935ee17348017071f54b56af1ad8d2f",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py": "588500101e66df3d7e9306649c13a72848cd851461af2dec15fddcb4ef387e4b",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/planner.py": "ebf088f0ca4daf6d7b8ac8af4a6f1a2951f410b556ac7bf8b425f03e67b57253",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/reviewed_routes_20260811.py": "2f5060cfd47ba2188ad501b6e08ff3e73d85b5434461c94ab79a8b139020e935",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/tactical_geometry.py": "c48692bc6330779b7880e1ec5db34caa2017f25f91462ea24b8894ca591042fb",
