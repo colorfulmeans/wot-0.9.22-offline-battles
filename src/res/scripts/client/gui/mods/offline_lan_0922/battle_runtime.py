@@ -3661,13 +3661,11 @@ class BattleRuntime(object):
                 arena_bounds=self._arena_bounds,
                 cover_probe=self._sample_bot_cover,
                 motion_resolver=self._resolve_bot_motion,
-                rotation_resolver=self._resolve_bot_rotation,
                 motion_report=self._report_bot_destructible_contact,
                 turret_motion_probe=self._turret_motion_is_clear,
                 turret_hulls_provider=self._turret_navigation_hulls,
                 world_receipt_probe=self._direction_world_receipt,
                 water_depth_probe=self._water_depth,
-                water_hull_pose=self._bot_water_hull_pose,
                 ram_contact_probe=self._bot_ram_contact_armor,
                 bot_equipment_resolver=(
                     self._default_bot_equipment_contracts),

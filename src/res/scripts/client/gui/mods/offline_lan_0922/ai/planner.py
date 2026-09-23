@@ -19,7 +19,7 @@ CONTACT_MEMORY_SECONDS = 7.0
 TARGET_HYSTERESIS_BONUS = 18.0
 DISCOVERED_ARTILLERY_PRIORITY_BONUS = 48.0
 LOCAL_FORCE_RADIUS = 185.0
-BATTLE_TIER_RADIUS = 2
+BATTLE_TIER_RADIUS = 1
 MATCH_CLASSES = ('heavyTank', 'mediumTank', 'AT-SPG', 'lightTank', 'SPG')
 CLASS_ROUTE_AFFINITY_WEIGHT = 42.0
 ARTILLERY_ROUTE_REPEAT_PENALTY = 120.0
@@ -29,12 +29,9 @@ BOT_TIER_MODE_SAME = 'same'
 BOT_TIER_MODE_MINUS1_0 = 'minus1_0'
 BOT_TIER_MODE_0_PLUS1 = '0_plus1'
 BOT_TIER_MODE_MINUS1_PLUS1 = 'minus1_plus1'
-BOT_TIER_MODE_0_PLUS2 = '0_plus2'
-BOT_TIER_MODE_MINUS2_0 = 'minus2_0'
 BOT_TIER_MODES = (
 	BOT_TIER_MODE_RANDOM, BOT_TIER_MODE_SAME, BOT_TIER_MODE_MINUS1_0,
-	BOT_TIER_MODE_0_PLUS1, BOT_TIER_MODE_MINUS1_PLUS1,
-	BOT_TIER_MODE_0_PLUS2, BOT_TIER_MODE_MINUS2_0)
+	BOT_TIER_MODE_0_PLUS1, BOT_TIER_MODE_MINUS1_PLUS1)
 
 
 def _number(value, default=0.0):
@@ -48,17 +45,17 @@ def _number(value, default=0.0):
 
 
 def vehicle_in_battle_tier_band(player_tier, candidate_tier):
-	"""Admit candidates within two tiers; choose_match_tiers narrows the battle."""
+	"""Keep one battle within a three-tier band, e.g. VI-VIII for tier VII."""
 	try:
 		return abs(int(candidate_tier) - int(player_tier)) <= BATTLE_TIER_RADIUS
 	except Exception:
 		return False
 
 
-def select_bot_lineup(pool, count, spg_limit=3, fallback_candidates=()):
+def select_bot_lineup(pool, count, spg_limit=0, fallback_candidates=()):
 	"""Fill a team while enforcing an exact SPG cap.
 
-	Automatic bots allow up to three artillery. ``AT-SPG`` is a tank destroyer
+	Automatic bots default to zero artillery. ``AT-SPG`` is a tank destroyer
 	in the legacy tags and does not consume the artillery quota.
 	"""
 	count = max(0, int(count))
@@ -112,13 +109,8 @@ def vehicle_match_class(candidate):
 
 
 def choose_match_tiers(player_tier, mode_roll, side_roll=0.5,
-		available_tiers=(), required_tiers=()):
-	"""Choose one contiguous tier window containing all configured humans.
-
-	A three-tier battle can put the player at its top, middle or bottom. The
-	candidate pool spans +/-2, but those five tiers never form one template.
-	Explicit human selections wider than two tiers are preserved, not widened.
-	"""
+		available_tiers=()):
+	"""Choose a one-, two-, or three-tier battle that includes the player."""
 	try:
 		player_tier = max(1, min(10, int(player_tier)))
 	except Exception:
@@ -132,32 +124,24 @@ def choose_match_tiers(player_tier, mode_roll, side_roll=0.5,
 		if 1 <= value <= 10:
 			available.add(value)
 	available.add(player_tier)
-	required = set((player_tier,))
-	for value in required_tiers or ():
-		try:
-			value = int(value)
-		except Exception:
-			continue
-		if 1 <= value <= 10:
-			required.add(value)
-	available.update(required)
-	minimum_width = max(required) - min(required) + 1
-	if minimum_width > 3:
-		return tuple(sorted(required))
-	mode_roll = _number(mode_roll, 0.5)
-	side_roll = max(0.0, min(1.0, _number(side_roll, 0.5)))
-	width = 1 if mode_roll < 0.28 else (2 if mode_roll < 0.72 else 3)
-	width = max(width, minimum_width)
-	for size in range(width, minimum_width - 1, -1):
-		windows = []
-		for start in range(max(1, max(required) - size + 1),
-				min(min(required), 11 - size) + 1):
-			window = tuple(range(start, start + size))
-			if all(value in available for value in window):
-				windows.append(window)
-		if windows:
-			return windows[min(int(side_roll * len(windows)), len(windows) - 1)]
-	return tuple(sorted(required))
+	lower = player_tier - 1 if player_tier - 1 in available else None
+	upper = player_tier + 1 if player_tier + 1 in available else None
+	try:
+		mode_roll = float(mode_roll)
+		side_roll = float(side_roll)
+	except Exception:
+		mode_roll = side_roll = 0.5
+	if mode_roll < 0.28 or (lower is None and upper is None):
+		return (player_tier,)
+	if mode_roll < 0.72 or lower is None or upper is None:
+		if lower is not None and upper is not None:
+			other = lower if side_roll < 0.5 else upper
+		elif lower is not None:
+			other = lower
+		else:
+			other = upper
+		return tuple(sorted((player_tier, other)))
+	return (lower, player_tier, upper)
 
 
 def normalize_bot_tier_mode(value):
@@ -166,7 +150,7 @@ def normalize_bot_tier_mode(value):
 
 
 def bot_match_tiers(player_tier, mode, mode_roll=0.5, side_roll=0.5,
-					available_tiers=(), required_tiers=()):
+					available_tiers=()):
 	"""Resolve a host-selected tier preset against the available catalog."""
 	try:
 		player_tier = max(1, min(10, int(player_tier)))
@@ -184,15 +168,13 @@ def bot_match_tiers(player_tier, mode, mode_roll=0.5, side_roll=0.5,
 	mode = normalize_bot_tier_mode(mode)
 	if mode == BOT_TIER_MODE_RANDOM:
 		return choose_match_tiers(
-			player_tier, mode_roll, side_roll, available, required_tiers)
+			player_tier, mode_roll, side_roll, available)
 	desired = {
 		BOT_TIER_MODE_SAME: (player_tier,),
 		BOT_TIER_MODE_MINUS1_0: (player_tier - 1, player_tier),
 		BOT_TIER_MODE_0_PLUS1: (player_tier, player_tier + 1),
 		BOT_TIER_MODE_MINUS1_PLUS1: (
 			player_tier - 1, player_tier, player_tier + 1),
-		BOT_TIER_MODE_0_PLUS2: (player_tier, player_tier + 1, player_tier + 2),
-		BOT_TIER_MODE_MINUS2_0: (player_tier - 2, player_tier - 1, player_tier),
 	}[mode]
 	return tuple(value for value in desired if value in available)
 

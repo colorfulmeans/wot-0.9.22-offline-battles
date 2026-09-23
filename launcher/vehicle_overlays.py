@@ -812,7 +812,7 @@ def list_gold_vehicles(game_root):
         is_retired = ("%s:%s" % (record["nation"], record["vehicle"]) in
                       retired_vehicles.RETIRED_BOT_VEHICLES_0922)
         if ((record["gold"] <= 0 and not is_reward and not is_retired) or
-                not bot_lineup_profiles.vehicle_choice_is_standard(record)):
+                not bot_lineup_profiles.vehicle_choice_is_eligible(record)):
             continue
         nation = record["nation"]
         if nation not in translators:

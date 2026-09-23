@@ -45,7 +45,7 @@
     {
       "file": "11_murovanka.json",
       "map": "11_murovanka",
-      "sha256": "1c282c842210ef2b265dc71c8824ac5242158466c80495eb868ac93865ead8e5"
+      "sha256": "542183fe22cd392f5caf3ec001f7c4b6f9e70360acf7f0bc70124a59b47c70cd"
     },
     {
       "file": "13_erlenberg.json",
@@ -95,7 +95,7 @@
     {
       "file": "31_airfield.json",
       "map": "31_airfield",
-      "sha256": "5c981f89f2ab2f36058cf8835e3ea9a666587d15521227a2e121e02c5d0a737f"
+      "sha256": "c70d02a60c5802c9377af81302f709f8b27a923ab991fffa845b11f05e6e006f"
     },
     {
       "file": "33_fjord.json",
@@ -140,7 +140,7 @@
     {
       "file": "47_canada_a.json",
       "map": "47_canada_a",
-      "sha256": "e09df26e456d089ce301bd3084be7da8684fcac127241bdde7fca0348477a287"
+      "sha256": "831a37fce3f0997d2162746a6d54c168a3b5807afcc8b4a81c55c0a14416958d"
     },
     {
       "file": "59_asia_great_wall.json",
@@ -185,7 +185,7 @@
     {
       "file": "100_thepit.json",
       "map": "100_thepit",
-      "sha256": "e9edede615eb65e238f1efdbcd6ec81ab887adb2af4b0d4345527283126dd635"
+      "sha256": "b16d1d70e25381953092428aa379d46a17f3a956199260ee2f1f1c706cfbdcc9"
     },
     {
       "file": "101_dday.json",
@@ -205,7 +205,7 @@
     {
       "file": "114_czech.json",
       "map": "114_czech",
-      "sha256": "172a6ccf9e51fa7f52c9c2b8c56cabfacf0a5436d622f255f28486e2c103fa4d"
+      "sha256": "667c9713c86356c2358ad8f37fe580feeb7f07e52052194dbd05a584ebb3e52b"
     }
   ],
   "version": 2
