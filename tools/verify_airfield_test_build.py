@@ -67,6 +67,13 @@ def bytecode():
                 assert not name.startswith('/') and '..' not in name.split('/'), name
             archive.extractall(unpacked)
         sys.path.insert(0, os.path.join(unpacked, 'res', 'scripts', 'client'))
+        # WoT owns these parent packages. Supply only their search paths in
+        # this isolated CPython 2.7 test; do not alter the distributed mod.
+        for package_name, relative in (('gui', 'gui'), ('gui.mods', 'gui/mods')):
+            package_stub = types.ModuleType(package_name)
+            package_stub.__path__ = [os.path.join(unpacked, 'res', 'scripts', 'client', *relative.split('/'))]
+            sys.modules[package_name] = package_stub
+        sys.modules['gui'].mods = sys.modules['gui.mods']
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
         graph = json.loads(read(os.path.join(ROOT, 'navgraphs', '31_airfield.json')))
         calls = []
