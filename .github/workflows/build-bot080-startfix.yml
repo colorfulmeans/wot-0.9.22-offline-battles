@@ -53,13 +53,6 @@ jobs:
           new="lineup_random.random(), available_tiers))"
           assert text.count(old)==1
           text=text.replace(old,new)
-          old="""        except Exception:
-                      # The local tank remains a valid descriptor fallback. The complete
-                      # roster table itself is a #1513 retail API and is ABI-audited.
-                      self._bot_vehicle_assignments = {}
-                      return False
-          """
-          # Match literal indentation independently of the workflow block.
           old='\n'.join(["        except Exception:",
               "            # The local tank remains a valid descriptor fallback. The complete",
               "            # roster table itself is a #1513 retail API and is ABI-audited.",
@@ -83,7 +76,7 @@ jobs:
           proof_path.write_text(json.dumps(proof,sort_keys=True,indent=2)+'\n')
           PY
           git diff --quiet 5cc40071b0b0e144575a9fde53fc80bf4eee18e3 -- navgraphs foliage destructibles src/res/scripts/client/gui/mods/offline_lan_0922/ai src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py
-          python tools/full_bot080_build.py audit
+          python -c 'import full_bot080_build; full_bot080_build.audit()'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py docs/testing/full-bot080-proof.json
@@ -101,7 +94,7 @@ jobs:
           set -euo pipefail
           python tools/test_bot080_startup_contract.py 2>&1 | tee build-evidence/roster-after.log
           python -m unittest test_bot080_pinned_startup test_port_0922_battle_runtime.BattleRuntimeContractTests.test_bot_roster_uses_complete_catalog_without_persistent_pool test_port_0922_battle_runtime.BattleRuntimeContractTests.test_all_clients_preload_the_same_server_roster 2>&1 | tee build-evidence/startup-tests.log
-          python tools/full_bot080_build.py source 2>&1 | tee build-evidence/historical-tests.log
+          python tools/full_bot080_build.py source-tests 2>&1 | tee build-evidence/historical-tests.log
           python -m unittest test_port_0922_world_collision test_port_0922_vehicle_physics test_port_0922 2>&1 | tee build-evidence/retained-tests.log
           cp docs/testing/full-bot080-proof.json build-evidence/
           git archive --format=zip --output=build-evidence/source.zip HEAD
