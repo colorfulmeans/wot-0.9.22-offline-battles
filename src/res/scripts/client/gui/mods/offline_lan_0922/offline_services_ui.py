@@ -963,6 +963,41 @@ def _install_item_comparisons(item_type=None):
     _patch(item_type, '__cmp__', compare_items)
 
 
+def _install_exchange_dialog_limits(meta_type=None):
+    """Keep one legacy exchange control within signed 32-bit item amounts.
+
+    #1513's shared meta sends maxGoldValue and exchangeRate to the stock
+    credit/XP confirmation block. Large offline balances can overflow a
+    32-bit converted-item limit even when the requested purchase is small.
+    Limit only the presentation maximum; balances, requested/default amounts,
+    rates and the Account transaction remain owned by their native paths.
+    Exact #1513 SWF rendering remains a Windows acceptance item.
+    """
+    if meta_type is None:
+        from gui.Scaleform.daapi.view.dialogs.ExchangeDialogMeta import (
+            _ExchangeDialogMeta)
+        meta_type = _ExchangeDialogMeta
+    original = meta_type.makeVO
+
+    def make_vo(meta):
+        value = original(meta)
+        block = value['exchangeBlockData']
+        rate = float(block['exchangeRate'])
+        if rate <= 0:
+            return value
+        safe_gold = int(2147483647 // rate)
+        if block['maxGoldValue'] <= safe_gold:
+            return value
+        # Never change a native/cached VO shared with another window.
+        limited = dict(block)
+        limited['maxGoldValue'] = safe_gold
+        result = dict(value)
+        result['exchangeBlockData'] = limited
+        return result
+
+    _patch(meta_type, 'makeVO', make_vo)
+
+
 def install():
     if _patches:
         return
@@ -976,6 +1011,7 @@ def install():
         _install_daily()
         _install_mission_results()
         _install_settings()
+        _install_exchange_dialog_limits()
         from gui.mods.offline_lan_0922 import crew_voice
         crew_voice.install(_patch)
         _schedule_daily_rollover()

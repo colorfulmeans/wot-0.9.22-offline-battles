@@ -2526,6 +2526,10 @@ class GarageState(object):
         # The transaction also rolls back the wallet and both seats if a
         # later ownership update fails.
         try:
+            # Requalification includes a lossless skill reset at no extra
+            # price. Delegate to the native descriptor so its free-skill
+            # prefix, rank and XP accounting are retained (#1513).
+            descriptor.dropSkills(1.0, False)
             descriptor.role = role
             descriptor.vehicleTypeID = _int(vehicle_type_id)
             serialized = descriptor.makeCompactDescr()
@@ -2850,6 +2854,12 @@ class GarageState(object):
             if remaining <= 0:
                 break
             taken = min(remaining, max(0, _int(vehicle_xp.get(key, 0))))
+            if not taken:
+                # #1513's automatic exchanger submits the fully-elite catalog,
+                # including unowned/hidden vehicles with no experience. A
+                # zero debit must not create XP history: stats() would then
+                # advertise those new keys as newly elite account vehicles.
+                continue
             vehicle_xp[key] = _int(vehicle_xp.get(key, 0)) - taken
             remaining -= taken
         wallet = self._wallet()
