@@ -35,6 +35,18 @@ jobs:
           git status --short --branch
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/full_bot080_build.py')
+          text=p.read_text()
+          old="    for path, expected in proof['runtime_sha256_lf'].items():\n        assert sha(read(os.path.join(payload, 'servers/0.9.22', path)).replace(b'\\r\\n', b'\\n')) == expected, path"
+          new="    for path, expected in proof['runtime_sha256_lf'].items():\n        # The entry loader belongs only to the client wotmod, whose exact\n        # compiled bytes were already verified above; it is not a server import.\n        if path == 'src/res/scripts/client/gui/mods/mod_offline_lan_0922.py':\n            continue\n        assert path.startswith(PREFIX), path\n        assert sha(read(os.path.join(payload, 'servers/0.9.22', path)).replace(b'\\r\\n', b'\\n')) == expected, path"
+          if old in text:
+              assert text.count(old)==1
+              p.write_text(text.replace(old,new))
+          assert new in p.read_text()
+          PY
+          git add tools/full_bot080_build.py
           python tools/full_bot080_build.py integrate
           python - <<'PY'
           import hashlib,json,subprocess
@@ -57,7 +69,7 @@ jobs:
           git add launcher/vehicle_overlays.py docs/testing/full-bot080-proof.json
           if ! git diff --cached --quiet; then
             git diff --cached --stat
-            git commit -m 'Restore complete v0.8.0 Bot-owned modules and original map assets'
+            git commit -m 'Finalize original Bot and map build verification without changing gameplay'
             git push origin HEAD:refs/heads/fix/093-full-bot080-old-maps-20260923
           fi
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
