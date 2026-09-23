@@ -834,65 +834,6 @@ def ctf_base_radii(control_points, bases):
     return result
 
 
-def _processed_primitives_name(strings, render):
-    """Return the processed primitive archive used by ``UniversalSpace``."""
-    name = strings.get(render['prims_name_fnv'])
-    if not name or '/' not in name:
-        raise UnsafeBakeInputError(
-            'BSMO render has no resolvable primitive resource')
-    return name[:name.rindex('/')].replace(
-        '.primitives', '.primitives_processed')
-
-
-def compiled_soft_destructible_instances(compiled):
-    """Identify the falling/fragile instances skipped by the mature baker.
-
-    The pinned baseline gets this classification from ``destructibles.xml``.
-    Compiled #1513 spaces already resolve the same classification per BSMO
-    model: type 1 is falling, type 2 is fragile, and type 3 is a solid
-    structure.  Preserve structures and return exact primitive/transform keys
-    so a shared render resource does not make unrelated placements soft.
-    """
-    bsmo = compiled.sections['BSMO']._data
-    bsmi = compiled.sections['BSMI']
-    strings = compiled.sections['BWST']
-    transforms = bsmi._data['transforms']
-    model_ids = list(bsmi.model_ids())
-    if len(transforms) != len(model_ids):
-        raise UnsafeBakeInputError(
-            'BSMI model ids do not match static transforms')
-    model_infos = bsmo['model_info_items']
-    loddings = bsmo['models_loddings']
-    lod_renders = bsmo['lod_renders']
-    renders = bsmo['renders']
-    keys = set()
-    counts = {'falling': 0, 'fragile': 0, 'structures_preserved': 0}
-    for transform, model_id in zip(transforms, model_ids):
-        if model_id < 0 or model_id >= len(model_infos):
-            raise UnsafeBakeInputError('BSMI references an invalid BSMO model')
-        model_type = int(model_infos[model_id]['type'])
-        if model_type == 3:
-            counts['structures_preserved'] += 1
-            continue
-        if model_type not in (1, 2):
-            continue
-        counts['falling' if model_type == 1 else 'fragile'] += 1
-        if model_id >= len(loddings):
-            raise UnsafeBakeInputError('BSMO model has no LOD record')
-        lod_id = int(loddings[model_id]['lod_begin'])
-        if lod_id < 0 or lod_id >= len(lod_renders):
-            raise UnsafeBakeInputError('BSMO model has an invalid LOD record')
-        first = int(lod_renders[lod_id]['render_set_begin'])
-        last = int(lod_renders[lod_id]['render_set_end'])
-        if first < 0 or last < first or last >= len(renders):
-            raise UnsafeBakeInputError('BSMO model has an invalid render range')
-        for render in renders[first:last + 1]:
-            keys.add((_processed_primitives_name(strings, render),
-                      tuple(float(value) for value in transform)))
-    counts['primitive_transform_keys'] = len(keys)
-    return keys, counts
-
-
 def _soft_destructible_spawn_obb(transform, bounds):
     minimum = tuple(float(value) for value in bounds[:3])
     maximum = tuple(float(value) for value in bounds[3:6])
@@ -922,99 +863,6 @@ def _soft_destructible_spawn_obb(transform, bounds):
     }
 
 
-def compiled_soft_destructible_spawn_obbs(compiled):
-    """Return transformed falling/fragile bounds used only at spawn.
-
-    Falling and fragile collision must stay absent from the navigation raster
-    so routes can cross objects a tank is expected to crush.  A tank must not,
-    however, be born already intersecting one of those native bodies.  Keep a
-    separate set of the exact BSMO local collision boxes transformed by their
-    BSMI placements for the formation audit and selector.
-    """
-    bsmo = compiled.sections['BSMO']._data
-    bsmi = compiled.sections['BSMI']
-    transforms = bsmi._data['transforms']
-    model_ids = list(bsmi.model_ids())
-    if len(transforms) != len(model_ids):
-        raise UnsafeBakeInputError(
-            'BSMI model ids do not match static transforms')
-    model_infos = bsmo['model_info_items']
-    colliders = bsmo['models_colliders']
-    result = []
-    for transform, model_id in zip(transforms, model_ids):
-        if model_id < 0 or model_id >= len(model_infos):
-            raise UnsafeBakeInputError('BSMI references an invalid BSMO model')
-        if int(model_infos[model_id]['type']) not in (1, 2):
-            continue
-        if model_id >= len(colliders):
-            raise UnsafeBakeInputError(
-                'soft BSMO model has no collision bounds')
-        collider = colliders[model_id]
-        minimum = tuple(collider['collision_bounds_min'])
-        maximum = tuple(collider['collision_bounds_max'])
-        if (len(minimum) != 3 or len(maximum) != 3 or
-                not all(math.isfinite(float(value))
-                        for value in minimum + maximum) or
-                any(float(minimum[index]) > float(maximum[index])
-                    for index in range(3)) or
-                all(abs(float(minimum[index]) - float(maximum[index])) <= 1e-9
-                    for index in range(3))):
-            raise UnsafeBakeInputError(
-                'soft BSMO model has invalid collision bounds')
-        bounds = minimum + maximum
-        result.append(_soft_destructible_spawn_obb(transform, bounds))
-    return tuple(result)
-
-
-def compiled_local_obstacle_instances(compiled, maximum_height):
-    """Identify low compiled collision shapes ignored by the mature baker."""
-    bsmo = compiled.sections['BSMO']._data
-    bsmi = compiled.sections['BSMI']
-    strings = compiled.sections['BWST']
-    transforms = bsmi._data['transforms']
-    model_ids = list(bsmi.model_ids())
-    if len(transforms) != len(model_ids):
-        raise UnsafeBakeInputError(
-            'BSMI model ids do not match static transforms')
-    colliders = bsmo['models_colliders']
-    loddings = bsmo['models_loddings']
-    lod_renders = bsmo['lod_renders']
-    renders = bsmo['renders']
-    keys = set()
-    low_instances = 0
-    for transform, model_id in zip(transforms, model_ids):
-        if model_id < 0 or model_id >= len(colliders):
-            raise UnsafeBakeInputError('BSMI references an invalid BSMO collider')
-        collider = colliders[model_id]
-        minimum = collider['collision_bounds_min']
-        maximum = collider['collision_bounds_max']
-        if len(minimum) != 3 or len(maximum) != 3:
-            raise UnsafeBakeInputError('BSMO collider has invalid local bounds')
-        local_height = float(maximum[1]) - float(minimum[1])
-        if not math.isfinite(local_height) or local_height < 0.0:
-            raise UnsafeBakeInputError('BSMO collider has invalid local height')
-        if local_height > float(maximum_height):
-            continue
-        low_instances += 1
-        if model_id >= len(loddings):
-            raise UnsafeBakeInputError('BSMO model has no LOD record')
-        lod_id = int(loddings[model_id]['lod_begin'])
-        if lod_id < 0 or lod_id >= len(lod_renders):
-            raise UnsafeBakeInputError('BSMO model has an invalid LOD record')
-        first = int(lod_renders[lod_id]['render_set_begin'])
-        last = int(lod_renders[lod_id]['render_set_end'])
-        if first < 0 or last < first or last >= len(renders):
-            raise UnsafeBakeInputError('BSMO model has an invalid render range')
-        for render in renders[first:last + 1]:
-            keys.add((_processed_primitives_name(strings, render),
-                      tuple(float(value) for value in transform)))
-    return keys, {
-        'instances': low_instances,
-        'primitive_transform_keys': len(keys),
-        'maximum_local_height': float(maximum_height),
-    }
-
-
 def _raster_compiled_collision_instance(obstacles, model_name, triangles,
                                         legacy):
     """Raster one compiled instance with the mature bridge-deck semantics."""
@@ -1030,7 +878,7 @@ def _raster_compiled_collision_instance(obstacles, model_name, triangles,
             obstacles._raster_triangle(triangle)
 
 
-def _bsp_triangles_0922(section, legacy):
+def _bsp_triangles_0922(section, legacy, with_materials=False):
     """Decode the exact BSP2 layouts used by the pinned client.
 
     BigWorld BSP version 0 stores its triangle count in the second header
@@ -1047,7 +895,15 @@ def _bsp_triangles_0922(section, legacy):
         raise ValueError('invalid BSP2 magic')
     version = (magic >> 24) & 0xFF
     if version == 0:
-        return legacy._bsp_triangles(section, (), {})
+        if not with_materials:
+            return legacy._bsp_triangles(section, (), {})
+        if len(section) < 16:
+            raise ValueError('truncated BSP2 version 0 header')
+        triangle_count = struct.unpack_from('<I', section, 4)[0]
+        if len(section) < 16 + triangle_count * 40:
+            raise ValueError('truncated BSP2 version 0 triangles')
+        return [_bsp_triangle_record(section, 16 + index * 40)
+                for index in range(triangle_count)]
     if version != 2:
         raise ValueError('unsupported BSP2 version %d' % version)
     # BSPTreeTool::saveBSPInMemory serialises these three ABI sizes followed
@@ -1072,18 +928,160 @@ def _bsp_triangles_0922(section, legacy):
     if (not all(math.isfinite(value) for value in bounds) or
             any(bounds[index] > bounds[index + 3] for index in range(3))):
         raise ValueError('BSP2 version 2 has invalid bounds')
-    triangles = []
-    for index in range(triangle_count):
-        offset = 60 + index * triangle_size
-        values = struct.unpack_from('<9f', section, offset)
-        # The trailing uint16 values are WorldTriangle::Flags flags_ and
-        # WorldTriangle::Padding padding_.  For authored bsp2 data flags_ holds
-        # a BSP material-ID index until BSMO remaps it to collision flags and a
-        # material kind.  Until that mapping is applied per compiled model
-        # instance, preserve the mature baker's conservative behaviour and
-        # raster every authored triangle.
-        triangles.append((values[0:3], values[3:6], values[6:9]))
-    return triangles
+    records = [_bsp_triangle_record(section, 60 + index * triangle_size)
+               for index in range(triangle_count)]
+    return records if with_materials else [record[0] for record in records]
+
+
+def _bsp_triangle_record(section, offset):
+    """Keep the authored uint16 material ID, not the adjacent padding word."""
+    values = struct.unpack_from('<9f', section, offset)
+    material_id = struct.unpack_from('<H', section, offset + 36)[0]
+    return (values[0:3], values[3:6], values[6:9]), material_id
+
+
+NAVIGATION_COLLISION_POLICY = 'compiled-vehicle-surfaces-no-original-destructibles-v1'
+NAVIGATION_VEHICLE_SKIP_FLAGS = 0x10 | 0x40
+NAVIGATION_ORIGINAL_MATERIAL_MIN = 71
+NAVIGATION_ORIGINAL_MATERIAL_END = 86
+
+
+def _compiled_collision_materials(bsmo, collider, model_id):
+    """Resolve BSP material IDs through this BSMO model's inclusive table span.
+
+    The same primitive can have different remaps in different models.  Never
+    cache a classified mesh by primitive filename, nor infer a material from
+    the type of the whole model.  An incomplete map aborts the offline bake;
+    it must not silently create either holes or extra walls in an artifact.
+    """
+    records = bsmo['bsp_material_kinds']
+    first = int(collider['bsp_material_kind_begin'])
+    last = int(collider['bsp_material_kind_end'])
+    if first < 0 or first > last or last >= len(records):
+        raise UnsafeBakeInputError('BSMO model %d has an invalid material range' % model_id)
+    result = {}
+    for record in records[first:last + 1]:
+        index, flags = int(record['material_index']), int(record['flags'])
+        if not 0 <= index <= 0xffff or not 0 <= flags <= 0xffff:
+            raise UnsafeBakeInputError('BSMO model %d has invalid material data' % model_id)
+        if index in result and result[index] != flags:
+            raise UnsafeBakeInputError('BSMO model %d has conflicting material IDs' % model_id)
+        result[index] = flags
+    return result
+
+
+def compiled_navigation_obstacles(compiled, vfs, legacy):
+    """Build the static route raster directly from placed compiled colliders.
+
+    All original destructible surfaces (71..85) are removed BEFORE node,
+    clearance, link, component and route construction. Hard surfaces in mixed
+    structures, replacement materials and vehicle-only bridge decks remain.
+    Render sets, shaders and a model-wide structure label are not collision
+    evidence. This function runs only in the offline baker, never in battle.
+    """
+    bsmo = compiled.sections['BSMO']._data
+    bsmi = compiled.sections['BSMI']
+    strings = compiled.sections['BWST']
+    transforms = bsmi._data['transforms']
+    model_ids = list(bsmi.model_ids())
+    masks = (compiled.sections['BWSV']._data['visibility_masks']
+             if 'BWSV' in compiled.sections else bsmi._data['visibility_masks'])
+    if len(transforms) != len(model_ids) or len(masks) != len(model_ids):
+        raise UnsafeBakeInputError('BSMI placements and visibility masks do not align')
+    colliders = bsmo['models_colliders']
+
+    class CompiledObstacles(legacy.ObstacleField):
+        def __init__(self):
+            self.raster_size = 1.0
+            self.cells, self.surface_cells = {}, {}
+            self.instance_count = self.bridge_instance_count = 0
+            self.bridge_surface_triangle_count = self.soft_instance_count = 0
+            self.local_instance_count = self.skipped = self.invalid_triangles = 0
+            self.model_library = type('LibraryStats', (), {'cache': {}})()
+            self.soft_spawn_obbs = []
+            self.collision_stats = dict(
+                placed_colliders=0, invisible_instances=0, noncolliding_instances=0,
+                original_surfaces_excluded=0, nonvehicle_surfaces_excluded=0,
+                hard_surfaces_retained=0, mixed_instances=0)
+    obstacles = CompiledObstacles()
+    mesh_cache = {}
+    material_cache = {}
+    for instance_id, (model_id, transform, mask) in enumerate(zip(model_ids, transforms, masks)):
+        # Match the existing compiled-space adapter's standard battle filter.
+        if not int(mask) & 1:
+            obstacles.collision_stats['invisible_instances'] += 1
+            continue
+        if not 0 <= model_id < len(colliders):
+            raise UnsafeBakeInputError('BSMI references invalid collider %r' % model_id)
+        if len(transform) != 16 or not all(math.isfinite(float(v)) for v in transform):
+            raise UnsafeBakeInputError('BSMI instance %d has an invalid transform' % instance_id)
+        collider = colliders[model_id]
+        name_id = collider['bsp_section_name_fnv']
+        if not name_id:
+            if (int(collider['bsp_material_kind_begin']) != 0xffffffff or
+                    int(collider['bsp_material_kind_end']) != 0xffffffff):
+                raise UnsafeBakeInputError('BSMO model %d has materials but no BSP resource' % model_id)
+            obstacles.collision_stats['noncolliding_instances'] += 1
+            continue
+        name = strings.get(name_id)
+        if not isinstance(name, str) or not name.lower().endswith('.primitives'):
+            raise UnsafeBakeInputError('BSMO model %d has an invalid BSP resource: %r' % (model_id, name))
+        name = name[:-len('.primitives')] + '.primitives_processed'
+        if model_id not in material_cache:
+            material_cache[model_id] = _compiled_collision_materials(bsmo, collider, model_id)
+        materials = material_cache[model_id]
+        if name not in mesh_cache:
+            try:
+                sections = legacy._primitive_sections(vfs.read(name))
+                mesh_cache[name] = _bsp_triangles_0922(sections['bsp2'], legacy, with_materials=True)
+            except (KeyError, ValueError, struct.error, zipfile.BadZipFile) as error:
+                raise UnsafeBakeInputError('%s: no valid authored collision: %s' % (name, error))
+        obstacles.model_library.cache[name] = True
+        obstacles.collision_stats['placed_colliders'] += 1
+        hard = []
+        soft_count = 0
+        for triangle, material_id in mesh_cache[name]:
+            # Preserve the existing disabled-page sentinel handling. It has
+            # no finite geometry and must not demand a live material mapping.
+            if not all(math.isfinite(v) for point in triangle for v in point):
+                obstacles.invalid_triangles += 1
+                continue
+            if material_id not in materials:
+                raise UnsafeBakeInputError('%s model %d: BSP material %d has no compiled mapping' %
+                                           (name, model_id, material_id))
+            flags = materials[material_id]
+            material_kind = flags >> 8
+            if flags & NAVIGATION_VEHICLE_SKIP_FLAGS:
+                obstacles.collision_stats['nonvehicle_surfaces_excluded'] += 1
+                continue
+            if (NAVIGATION_ORIGINAL_MATERIAL_MIN <= material_kind <
+                    NAVIGATION_ORIGINAL_MATERIAL_END):
+                soft_count += 1
+                obstacles.collision_stats['original_surfaces_excluded'] += 1
+                continue
+            world_triangle = tuple(_transform_0922(transform, point) for point in triangle)
+            if not all(math.isfinite(v) for point in world_triangle for v in point):
+                raise UnsafeBakeInputError('BSMI instance %d overflows transformed collision' % instance_id)
+            hard.append(world_triangle)
+        if soft_count:
+            obstacles.soft_instance_count += 1
+            # Birth overlap is a separate concern, never a navigation penalty.
+            # A mixed building's complete box is conservative only for spawn.
+            bounds = tuple(collider['collision_bounds_min']) + tuple(collider['collision_bounds_max'])
+            if len(bounds) != 6 or not all(math.isfinite(float(v)) for v in bounds):
+                raise UnsafeBakeInputError('BSMO model %d has invalid spawn bounds' % model_id)
+            obstacles.soft_spawn_obbs.append(_soft_destructible_spawn_obb(transform, bounds))
+            if hard:
+                obstacles.collision_stats['mixed_instances'] += 1
+        if hard:
+            obstacles.instance_count += 1
+            obstacles.collision_stats['hard_surfaces_retained'] += len(hard)
+            # The raster itself applies the existing 0.65m ground clearance.
+            # Do not skip a whole short model: an elevated/rotated short shape
+            # can still be a hard obstacle, and mixed models need face granularity.
+            _raster_compiled_collision_instance(obstacles, name, hard, legacy)
+    obstacles.soft_spawn_obbs = tuple(obstacles.soft_spawn_obbs)
+    return obstacles
 
 
 def _collision_linkage_summary(compiled):
@@ -2395,12 +2393,6 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
                 finally:
                     nested.close()
         world, compiled = _compiled_models(space_data)
-        soft_instance_keys, soft_destructible_counts = \
-            compiled_soft_destructible_instances(compiled)
-        soft_spawn_obbs = compiled_soft_destructible_spawn_obbs(compiled)
-        local_instance_keys, local_obstacle_counts = \
-            compiled_local_obstacle_instances(
-                compiled, legacy.LOCAL_OBSTACLE_MAX_HEIGHT)
         water_records = compiled.sections['BWWa']._data['1']
         water_cells = compiled.sections['BWWa']._data['2']
         if water_records and not water_cells:
@@ -2461,102 +2453,8 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
                         depth = max(depth, float(record['position'][1]) - ground)
                 return max(0.0, depth)
 
-        class TargetObstacles(legacy.ObstacleField):
-            def __init__(self):
-                self.raster_size = 1.0
-                self.cells = {}
-                self.surface_cells = {}
-                self.instance_count = 0
-                self.bridge_instance_count = 0
-                self.bridge_surface_triangle_count = 0
-                self.soft_instance_count = 0
-                self.local_instance_count = 0
-                self.skipped = 0
-                self.model_library = type('LibraryStats', (), {'cache': {}})()
-                self.unsupported = []
-                self.invalid_triangles = 0
-                # Spawn placement must see these exact authored bodies, while
-                # the route raster below must continue to omit them so tanks
-                # can plan through crushable scenery.
-                self.soft_spawn_obbs = soft_spawn_obbs
-                self._load_target()
-            def _load_target(self):
-                for model in world.models:
-                    try:
-                        sections = legacy._primitive_sections(vfs.read(model.prims_name))
-                        # BSP2 is the authored collision mesh, not a render proxy.
-                        # Prefer it whenever present; its triangles are already local
-                        # positions and do not depend on render-set index offsets.
-                        if 'bsp2' in sections:
-                            try:
-                                triangles = _bsp_triangles_0922(
-                                    sections['bsp2'], legacy)
-                            except ValueError as error:
-                                raise UnsafeBakeInputError(
-                                    '%s: %s' % (model.prims_name, error))
-                            mesh_triangles = [triangles]
-                        else:
-                            mesh_triangles = []
-                        if not mesh_triangles:
-                            vertices = _vertex_positions_0922(sections[model.verts_dataname])
-                            primitives, groups = legacy._index_groups(sections[model.prims_dataname])
-                            mesh_triangles = []
-                            for mesh_group in model.instances:
-                                for mesh in mesh_group.meshes:
-                                    if mesh.pg_idx < 0 or mesh.pg_idx >= len(groups):
-                                        raise ValueError('primitive group %s' % mesh.pg_idx)
-                                    primitive_offset, primitive_count, vertex_offset, vertex_count = groups[mesh.pg_idx]
-                                    local_vertices = vertices[vertex_offset:vertex_offset + vertex_count]
-                                    selected = []
-                                    for primitive in primitives[primitive_offset:primitive_offset + primitive_count]:
-                                        if max(primitive) >= len(local_vertices):
-                                            raise ValueError('invalid primitive index')
-                                        selected.append(tuple(local_vertices[index] for index in primitive))
-                                    mesh_triangles.append(selected)
-                    except UnsafeBakeInputError:
-                        raise
-                    except (KeyError, ValueError, struct.error, zipfile.BadZipFile) as error:
-                        self.unsupported.append('%s: %s' % (model.prims_name, error))
-                        # This is the old baker's narrow fallback policy: a
-                        # malformed *render* group without a usable BSP2 mesh
-                        # is omitted, while every successfully decoded BSP2
-                        # collision mesh remains authoritative.  The count is
-                        # emitted and is a review gate, never silently hidden.
-                        self.skipped += 1
-                        continue
-                    self.model_library.cache[model.prims_name] = True
-                    for instance_group in model.instances:
-                        for triangles in mesh_triangles:
-                            for transform in instance_group.transforms:
-                                instance_key = (
-                                    model.prims_name,
-                                    tuple(float(value) for value in transform))
-                                if instance_key in soft_instance_keys:
-                                    self.soft_instance_count += 1
-                                    continue
-                                if instance_key in local_instance_keys:
-                                    self.local_instance_count += 1
-                                    continue
-                                self.instance_count += 1
-                                world_triangles = []
-                                for triangle in triangles:
-                                    world_triangle = tuple(_transform_0922(transform, point)
-                                                           for point in triangle)
-                                    if not all(math.isfinite(value) for point in world_triangle
-                                               for value in point):
-                                        # BWSG/BSP2 contains sentinel triangles for
-                                        # disabled collision pages.  They have no
-                                        # spatial extent and are not geometry a tank
-                                        # could collide with.
-                                        self.invalid_triangles += 1
-                                        continue
-                                    world_triangles.append(world_triangle)
-                                _raster_compiled_collision_instance(
-                                    self, model.prims_name, world_triangles,
-                                    legacy)
-
         terrain = TargetTerrain()
-        obstacles = TargetObstacles()
+        obstacles = compiled_navigation_obstacles(compiled, vfs, legacy)
         vehicle_envelope = representative_vehicle_chassis_envelope(
             client_root)
         bases = tuple(tuple(point) for point in inspection['ctf_bases'])
@@ -2741,7 +2639,10 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
             legacy.validate_graph = original_validate
             legacy.bake_tactical_routes = original_bake_routes
             legacy.retain_base_component = original_retain
-        graph['bake']['source'] = '0.9.22 BSMI/BSMO transformed BSP2 collision; BWSG/BSGD decoded and present'
+        graph['bake']['source'] = '0.9.22 placed BSMI/BSMO colliders with per-model BSP material mapping'
+        graph['bake']['navigation_collision_policy'] = NAVIGATION_COLLISION_POLICY
+        graph['bake']['original_destructible_surfaces_excluded'] = True
+        graph['bake']['compiled_collision_filter'] = obstacles.collision_stats
         graph['bake']['water_mode'] = ('BWWa-cell-surface-depth' if water_cells else
                                        'verified-empty-BWWa')
         graph['bake']['water_cell_volumes'] = len(water_cells)
@@ -2752,8 +2653,6 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
                                              for cell in water_cells]
         graph['bake']['compiled_static_geometry_bytes'] = len(compiled.sections['BSGD']._data)
         graph['bake']['collision_linkage'] = _collision_linkage_summary(compiled)
-        graph['bake']['compiled_soft_destructibles'] = soft_destructible_counts
-        graph['bake']['compiled_local_obstacles'] = local_obstacle_counts
         if output:
             legacy.write_graph(output, graph)
         return graph
