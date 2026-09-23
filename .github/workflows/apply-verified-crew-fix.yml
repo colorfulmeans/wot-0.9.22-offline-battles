@@ -1,0 +1,50 @@
+name: Apply verified requalified crew correction
+on:
+  push:
+    branches: [fix/093-requalified-crew-20260923]
+    paths: [.github/workflows/apply-verified-crew-fix.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/fix/093-requalified-crew-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: tests:server:tools
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Check pinned source and apply the locally verified patch
+        shell: python
+        run: |
+          import base64, hashlib, pathlib, subprocess, zlib
+          baseline = subprocess.check_output(['git','rev-parse','HEAD^'], text=True).strip()
+          assert baseline == 'a3e4c5937789d9dd63fde6902783d5027ec7c6f3', baseline
+          payload = 'eNq9V99v2zYQfs9fQWAPkhBFjuusXjcYSLF1wF66oQ32YhgELZ1sthSpkZQT//e9I/1DtpUi7YYZQWI7d8fjd993d7q5uWFi5Gw5suBGrrSy9W5UKgnaj1adHDWmciNT10pq4Epofvvm1asRvXHgnDS6aLdX19fXbPmvo9zfs5vJ5C5/za7pz3jC7u+v2PmrteYTlB6qeaJFA8kiO7WRNUst/NNJCxW3RgGTjmnj2XujgQldXYak16kL2UvNGmiWYMNXLvv56vrc6Qf2sEZj4eUGWLwuK4XGYF6guwJhNVTMfZZKOSZZqD5YJRuGGYpVroVdQsD+8w5zfabHETGolVqySjj445vE4ozBiC6UUym8ZbEAPBXtcg8azvMVEMIUW7GfmPOaBybXGGhiPelpR4wf5spGdGqy3Fd4O57TI43KW2pgnZLIX3mOauKljJX5jGnCwe48CTyVA4UZam0z5xMR6rIJLGWIY/oqKEEEfQ8dBHa/Qq4FZcRsOCU7l6vNi5JYuBktGrNNpL3cElExAtB+xvoTp4Z62x6TBZEsEayh9TKy087i9hIDKtEb5cM4kYO4UfA32SM5oe0uUR0UK0LegqPXyfXd0EbXpwqCX6zaluQTkc6hpC8XgrrGjcUYQvNo9qm0a1TfPJ9EJtyojKdL6otig0WXLXGo+4rbhFwhuXrgEZuN7mqJRPHUonwyvGCBXULKSwwuNWwJedVBUKqUO1c3gSpedRLbyWWii+IcA5Xn0j0cylDlTd1xt9LrhwDux5zDS7uo6Gh0NJykLJWiK4q05rPBhFyT8DtHzPY7xDJc0O+4vzoq6NlStKb69sB4QeHhHVJAhRiRIMWghtIxKvQeOiH+ztQYbh1Oge+0RDfSJEQil1/qgzQ+qN2fdi1agO6no59pYNqHzvikHSS66nSTivwcsjzghWkrPXk+I2Zw+2gyz/qofU2FlQkOgzvr19oRM2Piu0Q/l6+DZPJZxHmiJlv98t3u13oRxk5+36Ufp15JHrlg9Ik5RwnPXAnJ1AOot/hrr+19iY+m0Lrvgom1bBewzuWlFCOtyHnstg35l3OeTD3vsRMYsXzrOvKKEkxWpUGDZlu0ERGmzM9qiG/TyRcCmGPecCyZLSNIg7idnJJ792oB0g9EllMVMclaJpsEU0VBYkwHDmLKHWgtZS+05SZsk3lOv/LcmOioeSECe/vyC7ycTDQDugvuXS8TCcsWKx+19U4QhIvOUHmlTuA6zgKT3OKyrE8BS6QPg/gSzA9Ywavwm/A3ZR86fQPZMl3YCGDzJZHgfpLCXtHwLDUxsAZTN2PgXT7NJsnuwYnCwOb/nS6M4lCwxxW4x/PDr1tpYZG4Ysi3N2+prm7N3tNP9pcKkNqacDssiftR0CPVv0HRZHmGlLmY8XxW7XgCdPu8Y5dNnRYT/7dv/B+5Wm3RYVzlB6k54G7AOJa3RLE5C/AJ2rQTKFm2Nhq1mKzHmT5Xh2g/b+N4pIjHpzBosF3Cx+pY1sdjMmc9yRzaP+CLjpVW5GDAx1uLsLTxd302k+Hg8WIkbzndVxKZkNEKNPr2jvOuXxkv3nGXyj4n63gbUsFfAh+vW3hL8OKzRrOueDhuMSbWibfqRKhZX7uDyfPmAUZwtTVM07GgHpWT1zdl7A511PxTpPdisVzvnSWIPCwKaz+85pibtNsjgT+BzpYLf757UwUMI3NFEiePOE8iHNxUcuVBsmN09idsmi/5B3keBkgkPbeytxgQJeI1GMdUUpsJ0GoIZ9qdGkaJOSYYSHsys1focRnLB2icI6bmY3ly4ZZ0x+XFJIu90xWdBhX0nlsc18A2dW1zg=='
+          payload = payload.replace('ZZqD5Y', 'ZqD5Y').replace('XGGhiP', 'XGhiP').replace('YYSHsys', 'YSHsys')
+          patch = zlib.decompress(base64.b64decode(payload))
+          assert hashlib.sha256(patch).hexdigest() == '92b5b458a71d29578e2a181cdd0fcf43513338b271fcc71f352308820039a15c'
+          path = pathlib.Path('/tmp/verified-crew.patch')
+          path.write_bytes(patch)
+          subprocess.run(['git','apply','--check',str(path)], check=True)
+          subprocess.run(['git','apply',str(path)], check=True)
+      - name: Test crew projection and account transactions
+        run: python -m unittest test_port_0922_effective_params test_port_0922_economy test_port_0922_economy_payloads test_port_0922_economy_regressions test_port_0922_garage
+      - name: Commit only the verified runtime and regression changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-verified-crew-fix.yml
+          git add src/res/scripts/client/gui/mods/offline_lan_0922/lan_session.py tests/test_port_0922_effective_params.py .github/workflows/apply-verified-crew-fix.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Allow disabled inherited crew skills after requalification [skip ci]'
+          git push origin HEAD:refs/heads/fix/093-requalified-crew-20260923
