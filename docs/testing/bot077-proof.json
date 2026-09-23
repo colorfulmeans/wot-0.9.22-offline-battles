@@ -3,7 +3,6 @@
   "changed_runtime": [
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/adapter.py",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/driver.py",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_state_codec.py"
   ],
@@ -150,7 +149,6 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/planner.py": "cf7bc8ea75cbfc2903ca49dc106ab6b045188605c5792fffde6d39f8b3ae603d",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/reviewed_routes_20260811.py": "a038052ae2f800affc5f0df6cd3937616f5e77c0ea870249c34e528abbdda2b2",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/tactical_geometry.py": "c48692bc6330779b7880e1ec5db34caa2017f25f91462ea24b8894ca591042fb",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py": "f51ea52ea01986f9c0c7225980e85567c241095a36d5eaa405edfac45b7f7710",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_gunnery.py": "c47227c0cc4972fef1912eac7d392cd6f18303208d3bea14f72a130a4f28a2b0",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_state_codec.py": "33e7c213e14b817c1a4825c0db1272a355582bc9b12f7c30a15d6b748e73b492",
     "src/res/scripts/client/gui/mods/offline_lan_0922/prebaked_navigation.py": "ac0249f1253a4d2721c31b116b2128b0dc5ee0e664037eb24c70dd37a01e752b"
@@ -162,7 +160,7 @@
       "historical_sha256": "b7d3297a3ca19746c399f0b9f69a93ac3eca804af39f8d8fea8b3dd53aac3409"
     },
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": {
-      "actual_sha256": "5002e8a192c0a487297a2a2ef8245909bcc2130f9e2c41036d496073d7466e5e",
+      "actual_sha256": "c57994fb57c3670c0831c7565aaf89e40ed73a9a16f978875f12d33a1bb7d949",
       "historical_sha256": "8f2a5f4cd65f016bcaa2ed29733255b07ce2e254f43e9358c709c67f13daa5e8"
     }
   },
@@ -304,7 +302,9 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/world_census.py": "61cb89d68094cb3563b9a6d1bbcb4a8185e7612ba9413706a6af91d83f2e3838",
     "src/res/scripts/client/gui/mods/offline_lan_0922/world_collision.py": "be1dfbdaf1894b5eb846ec6490ea21a799ab8e14f5170305d7311321cb4243cc"
   },
-  "removed_paths": [],
+  "removed_paths": [
+    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py"
+  ],
   "runtime_sha256_lf": {
     "src/res/scripts/client/gui/mods/mod_offline_lan_0922.py": "2493701cf7d6545dfaa7228dc51043dd5b4da76845c4505776a7a3d407f4c23c",
     "src/res/scripts/client/gui/mods/offline_lan_0922/__init__.py": "975577ef46414aafdbafc3346cd04884e19e22a9db22ca29f15c47a8ba3ca901",
@@ -332,7 +332,6 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/planner.py": "cf7bc8ea75cbfc2903ca49dc106ab6b045188605c5792fffde6d39f8b3ae603d",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/reviewed_routes_20260811.py": "a038052ae2f800affc5f0df6cd3937616f5e77c0ea870249c34e528abbdda2b2",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/tactical_geometry.py": "c48692bc6330779b7880e1ec5db34caa2017f25f91462ea24b8894ca591042fb",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py": "f51ea52ea01986f9c0c7225980e85567c241095a36d5eaa405edfac45b7f7710",
     "src/res/scripts/client/gui/mods/offline_lan_0922/artillery_arc_queue.py": "51a81f9802b331ae5f0a971f4feb8d7e032354c622f92a32dce94f981aeaab10",
     "src/res/scripts/client/gui/mods/offline_lan_0922/artillery_controller.py": "865754afb569e10ee590ce33abdd7a8f550057064198834d8c02df1c60107f8a",
     "src/res/scripts/client/gui/mods/offline_lan_0922/authority_worker.py": "4b2de5b66d9b18e2d715cb66f63c798b1b15d583651607c9da81e7101515a682",
@@ -347,7 +346,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_shell_tooltip.py": "0e85d005f824611b8f4125785334c01e3c8ff210048e6e4387f7a0e7616124a0",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bootstrap.py": "ffa40eccdbd3d0c260a7f6fe17ed4f16222216a4fb4d032268cb99fcf160ed97",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_gunnery.py": "c47227c0cc4972fef1912eac7d392cd6f18303208d3bea14f72a130a4f28a2b0",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": "5002e8a192c0a487297a2a2ef8245909bcc2130f9e2c41036d496073d7466e5e",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": "c57994fb57c3670c0831c7565aaf89e40ed73a9a16f978875f12d33a1bb7d949",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_state_codec.py": "33e7c213e14b817c1a4825c0db1272a355582bc9b12f7c30a15d6b748e73b492",
     "src/res/scripts/client/gui/mods/offline_lan_0922/burst_mechanics.py": "78364b9f429eda500773736cfe961d73d035fe0b50815fcf76aad2ca2c60b53b",
     "src/res/scripts/client/gui/mods/offline_lan_0922/collision_feedback.py": "705eb3e6e6ac4c951a038f0caeae41b508488cabd27b153671d8aba3a0f3b586",
@@ -448,5 +447,5 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/world_collision.py": "be1dfbdaf1894b5eb846ec6490ea21a799ab8e14f5170305d7311321cb4243cc"
   },
   "scope": "Upstream 0.7.7 Bot and original maps; current radio and non-Bot boundary retained. noyield also removes proactive traffic and post-contact waiting ownership; geometric clearance and physical contacts remain.",
-  "variant": "original"
+  "variant": "noyield"
 }
