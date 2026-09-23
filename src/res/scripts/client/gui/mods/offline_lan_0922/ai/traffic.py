@@ -2,14 +2,11 @@
 """Short friendly crossing leases; physical contact remains the motion owner."""
 
 import math
-from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 
 
 PREDICTION_SECONDS = 1.0
 YIELD_SECONDS = 1.5
 HEAD_ON_OFFSET = 0.42
-# A single bounded backing manoeuvre after both lateral exits are denied.
-HEAD_ON_RETREAT_SECONDS = 6.0
 _EPSILON = 1.0e-9
 
 
@@ -125,7 +122,6 @@ class TrafficCoordinator(object):
     def __init__(self):
         self._pairs = {}
         self._held = {}
-        self._escape_probe = LocalDriver()
 
     def forget(self, bot_id):
         self._held.pop(bot_id, None)
@@ -163,7 +159,7 @@ class TrafficCoordinator(object):
             if (ahead <= 0.0 or second_ahead <= 0.0 or lateral >= width or
                     (contact_time is None and gap > width * 0.5)):
                 return None
-            return {'mode': 'head_on', 'axis': first_axis, 'until': now + YIELD_SECONDS,
+            return {'mode': 'head_on', 'axis': first_axis,
                     'targets': {first['id']: first['yaw'] + HEAD_ON_OFFSET,
                                 second['id']: second['yaw'] + HEAD_ON_OFFSET}}
         if contact_time is None:
@@ -201,17 +197,11 @@ class TrafficCoordinator(object):
 
     def adjust(self, bot_id, body, command, neighbours, now, direction_clear):
         result = dict(command)
-        retreat_active = any(bot_id in pair and lease['mode'] == 'head_on' and
-                             len(lease.get('blocked', ())) == 2 and
-                             lease['until'] <= now < lease['until'] + HEAD_ON_RETREAT_SECONDS
-                             for pair, lease in self._pairs.items())
         if (not body.get('alive', True) or
-                not command.get('movement_intent', True) or
+                command.get('recovery_mode', 'drive') != 'drive' or
                 command.get('combat_mode', 'route') not in ('route', 'advance') or
-                (not retreat_active and
-                 (command.get('recovery_mode', 'drive') != 'drive' or
-                  command.get('throttle', 0.0) <= 0.0 or
-                  _dot(_velocity(body), _axes(body)[1]) < -_EPSILON))):
+                command.get('throttle', 0.0) <= 0.0 or
+                _dot(_velocity(body), _axes(body)[1]) < -_EPSILON):
             return result
         peers = dict((peer['id'], peer) for peer in neighbours
                      if peer['id'] != bot_id and peer.get('alive', True) and
@@ -240,43 +230,30 @@ class TrafficCoordinator(object):
                 continue
             if result.get('traffic_mode') == 'yield':
                 continue
-            # A frozen avoidance heading cannot own a junction forever.
-            # If both exits were denied, allow one bounded backing attempt.
-            # Neither deadline renews until this pair physically separates.
-            if now >= lease['until']:
-                blocked = lease.get('blocked', set())
-                if (len(blocked) == 2 and now < lease['until'] + HEAD_ON_RETREAT_SECONDS):
-                    # Only one member backs out, so alternating short driver
-                    # recoveries cannot make both hulls re-enter the same
-                    # narrow passage. This chooses controls, never moves a body.
-                    retreating = second['id']
-                    target = body['yaw'] + (math.pi if bot_id == retreating else 0.0)
-                    length = body.get('half_length', 3.5)
-                    width = body.get('half_width', 1.7)
-                    clear = self._escape_probe._clear(direction_clear, target, length*1.6)
-                    if bot_id == retreating:
-                        clear = clear and self._escape_probe._reverse_blocked_by_vehicle(
-                            body['position'], body['yaw'], neighbours, length, width) is None
-                    if clear:
-                        result.update(throttle=-0.72 if bot_id == retreating else 0.72,
-                                      turn=0.0, target_yaw=body['yaw'], traffic_mode='head_on_retreat')
-                continue
             target = lease['targets'][bot_id]
             try:
-                pose_clear = body.get('pose_clear')
-                clear = bool(direction_clear(target)) and (
-                    pose_clear is None or bool(pose_clear(target)))
+                clear = bool(direction_clear(target))
             except Exception:
                 clear = False
             if not clear:
-                lease.setdefault('blocked', set()).add(bot_id)
-                # Do not swing into a blocked passage during the finite
-                # yield lease. Its deadline above permits checked backing;
-                # the second deadline returns ordinary route/recovery control.
+                # A passage narrower than the offset blocks both hulls' swing.
+                # Holding both of them for as long as the lease exists is a
+                # deadlock: neither footprint can separate laterally and
+                # neither centre can pass the other, so nothing ever clears
+                # the lease. Hold the pair only long enough to keep it from
+                # steering into the wall, then keep exactly one hull waiting
+                # and return the other to its own command, so the blockage is
+                # resolved by physical contact and ordinary recovery.
+                if lease.get('blocked_until') is None:
+                    lease['blocked_until'] = now + YIELD_SECONDS
+                if (now >= lease['blocked_until'] and
+                        bot_id != max(lease['targets'])):
+                    continue
                 result.update(throttle=0.0, turn=0.0, target_yaw=body['yaw'],
                               traffic_mode='head_on_blocked')
                 self._held[bot_id] = now
                 continue
+            lease['blocked_until'] = None
             delta = (target - body['yaw'] + math.pi) % (2.0 * math.pi) - math.pi
             result.update(turn=max(-1.0, min(1.0, delta / 0.58)),
                           target_yaw=target, traffic_mode='head_on')

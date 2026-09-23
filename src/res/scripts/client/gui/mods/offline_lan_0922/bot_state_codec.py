@@ -27,7 +27,6 @@ compare, so a row carries them rather than depending on a second message.
 """
 
 import math
-from gui.mods.offline_lan_0922 import tank_contact_ledger
 
 
 # Canonical orders. A row carries slot indices into these tuples, never names.
@@ -99,8 +98,6 @@ SCALARS = (
     ('aim_yaw', ANGLE_SCALE),
     ('gun_pitch', ANGLE_SCALE),
     ('speed', SPEED_SCALE),
-    ('push_x', SPEED_SCALE),
-    ('push_z', SPEED_SCALE),
     ('fire_seq', None),
     ('shell_index', None),
     ('next_shell_index', None),
@@ -324,13 +321,6 @@ def encode_row(state):
                 elapsed = snapshot.get(field)
                 row.append(MISSING if elapsed is None else
                            _fixed(elapsed, SECONDS_SCALE))
-    acknowledgements = tank_contact_ledger.normalize(
-        state.get('contact_push_acks', []))
-    row.append(len(acknowledgements))
-    for actor in sorted(acknowledgements):
-        entry = acknowledgements[actor]
-        row.extend((actor, entry[1], _fixed(entry[2], SPEED_SCALE),
-                    _fixed(entry[3], SPEED_SCALE)))
     return row
 
 
@@ -462,18 +452,5 @@ def decode_row(row, static):
                 'aiPendingElapsed': pending[1],
             })
         result['equipment_states'] = snapshots
-    count = cursor.take()
-    if not 0 <= count <= tank_contact_ledger.MAX_ACTORS:
-        raise BotStateCodecError('invalid contact acknowledgement count')
-    result['contact_push_acks'] = []
-    for unused in range(count):
-        result['contact_push_acks'].append([
-            cursor.take(), cursor.take(),
-            _real(cursor.take(), SPEED_SCALE),
-            _real(cursor.take(), SPEED_SCALE)])
-    try:
-        tank_contact_ledger.normalize(result['contact_push_acks'])
-    except (ValueError, TypeError, OverflowError):
-        raise BotStateCodecError('invalid contact acknowledgement')
     cursor.finish()
     return result
