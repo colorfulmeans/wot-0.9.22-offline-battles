@@ -2785,30 +2785,7 @@ class BotRuntime(object):
         """One geometry policy for all routes, independent of crew or gear."""
         return NAVIGATION_STATIC_POLICY
 
-    def _navigation_recovery_allowed(self, bot_id, position):
-        """Allow a pending-path backout only with local obstruction evidence."""
-        navigator = self.navigator
-        grid = getattr(navigator, 'grid', None)
-        if getattr(grid, 'prebaked', False):
-            try:
-                if (grid._inside(float(position[0]), float(position[2])) and
-                        grid._baked_cell_height(grid.cell_for(position)) is None):
-                    return True
-            except (AttributeError, TypeError, ValueError):
-                pass
-        nav_state = getattr(navigator, 'bot_states', {}).get(int(bot_id), {})
-        return bool(nav_state.get('hard_contact_episode') or
-                    nav_state.get('blocked_step_tracker') or
-                    self._hard_contact_grinds.get(int(bot_id), 0) > 0)
 
-    @staticmethod
-    def _capability_probe(probe, native_capability):
-        """Bind one immutable consumer to an existing synchronous grid probe."""
-        if native_capability is None or not callable(probe):
-            return probe
-        def scoped(*args):
-            return probe(*args, **{'native_capability': native_capability})
-        return scoped
 
     def _refresh_navigation_crush_profiles(self, bot_id=None):
         """Snapshot changed consumers without clearing anyone else's routes.
@@ -6638,7 +6615,7 @@ class BotRuntime(object):
                 if len(failures) < 3:
                     failures.append({
                         'yaw': key[0], 'distance': key[1],
-                        'direction': key[2], 'result': summary})
+                        'direction': key[2] if len(key) > 2 else 1.0, 'result': summary})
         row = {
             'time': now, 'changes': tuple(changes),
             'position': _position(state), 'yaw': state.get('yaw'),
@@ -6935,8 +6912,7 @@ class BotRuntime(object):
     @observed('bot.corridor_hazards')
     def _planner_corridor_clear(self, position, yaw, speed,
                                 wet_escape=False, allow_shallow=False,
-                                hazard_only=False, maximum_distance=None,
-                                native_capability=None):
+                                hazard_only=False, maximum_distance=None):
         """Rank one candidate through the validated baked static corridor.
 
         ``True`` admits a planner candidate and ``False`` rejects a known fatal
@@ -6986,9 +6962,7 @@ class BotRuntime(object):
                 return False
             if hazard_only:
                 return True
-            segment_clear = self._capability_probe(
-                grid.segment_clear, native_capability)
-            if segment_clear(position, end):
+            if grid.segment_clear(position, end):
                 return True
             # A coarse baked corridor can reject a valid short turn on uneven
             # terrain. Let the native candidate probe decide that ambiguous
@@ -7114,11 +7088,10 @@ class BotRuntime(object):
 
     @observed('bot.contact_response')
     def _hard_contact_response(self, state, position, yaw, speed,
-                               descriptor, step, now, normal=None):
+                               descriptor, step, now):
         """Probe the shared glancing paths and apply copied hull damping."""
         slide_yaw = None
-        for candidate_yaw in vehicle_physics.hard_contact_candidate_yaws(
-                yaw, speed, normal):
+        for candidate_yaw in vehicle_physics.hard_contact_candidate_yaws(yaw):
             if callable(self.motion_resolver):
                 status = self._passive_motion_status(
                     state, position, candidate_yaw, speed,
@@ -7157,33 +7130,6 @@ class BotRuntime(object):
         if callable(remember):
             remember(bot_id, attempted_yaw, 5.0)
 
-    def _settled_navigation_feedback(self, state, start, attempted_yaw, now,
-                                     motion, support_blocked, pose_blocked,
-                                     contact_displaced=False,
-                                     drive_support_blocked=False):
-        """Report the final physical verdict, after all pose owners settle."""
-        physical_support = state.pop('_navigation_support_blocked', False)
-        if not motion:
-            return
-        bot_id = int(state['id'])
-        if physical_support or pose_blocked or drive_support_blocked:
-            # A teammate can push an otherwise legal drive onto a boundary.
-            # That final veto does not disprove the original intended edge.
-            if contact_displaced and not drive_support_blocked:
-                return
-            target = motion.get('target')
-            report = getattr(self.navigator, 'report_blocked_corridor', None)
-            if (callable(report) and target is not None and
-                    motion.get('intent', False)):
-                report(bot_id, start, target, attempted_yaw, now)
-        elif (not support_blocked and motion.get('world_clear', False) and
-                (abs(state['x'] - start[0]) > 0.000001 or
-                 abs(state['z'] - start[2]) > 0.000001)):
-            # A zero-distance clear sweep or a held/deferred frame does not
-            # end a contact episode. Only committed horizontal progress does.
-            clear = getattr(self.navigator, 'clear_blocked_contact', None)
-            if callable(clear):
-                clear(bot_id)
 
     def _apply_bot_fall_damage(self, state, impact_speed):
         """Apply the shared landing law to one hidden-worker Bot."""
@@ -8172,8 +8118,6 @@ class BotRuntime(object):
         segment_hazard = getattr(grid, 'segment_has_baked_hazard', None)
         point_hazard = getattr(grid, 'point_has_baked_hazard', None)
         dry_segment = getattr(grid, 'dry_segment_clear', None)
-        dry_segment = self._capability_probe(
-            dry_segment, self.navigation_planning_capability(bot_state['id']))
         if not all(callable(value) for value in (
                 ground, segment_hazard, point_hazard, dry_segment)):
             return None
@@ -8318,6 +8262,112 @@ class BotRuntime(object):
         own['_radio_ground_goal'] = (key, result)
         return result
 
+    @observed('bot.route_lane')
+    def _route_lane_target(
+            self, bot_id, position, goal, selected, strategic, now):
+        """Offset one proved non-join route target through its stable lane."""
+        bot_state = self.states.get(int(bot_id))
+        grid = getattr(self.navigator, 'grid', None)
+        selected = tuple(selected)
+        dx = selected[0] - position[0]
+        dz = selected[2] - position[2]
+        if (bot_state is None or grid is None or
+                math.hypot(dx, dz) < 0.25):
+            return selected
+
+        group_key = (
+            int(bot_state.get('team', 0)),
+            str(strategic.get('route_id', 'direct')),
+        )
+        desired, unused_row = self._route_lane_binding(
+            bot_id, group_key, goal, strategic)
+        segment_key = group_key + (
+            int(strategic.get('route_index', 0)),)
+        if bot_state.get('_route_lane_segment') != segment_key:
+            bot_state['_route_lane_segment'] = segment_key
+            bot_state['_route_lane_offset'] = desired
+
+        navigator_states = getattr(self.navigator, 'bot_states', {})
+        navigator_state = (
+            navigator_states.get(int(bot_id), {})
+            if isinstance(navigator_states, dict) else {})
+        if navigator_state.get('controlled_shallow_target') is not None:
+            bot_state['_route_lane_offset'] = 0.0
+            return selected
+
+        route_anchor = strategic.get('route_anchor')
+        try:
+            anchor_x = route_anchor[0]
+            anchor_z = route_anchor[2]
+        except (TypeError, IndexError, KeyError):
+            anchor_x = _value(route_anchor, 'x', position[0])
+            anchor_z = _value(route_anchor, 'z', position[2])
+        route_dx = goal[0] - anchor_x
+        route_dz = goal[2] - anchor_z
+        route_length = math.hypot(route_dx, route_dz)
+        if route_length < 0.25:
+            route_dx, route_dz = dx, dz
+            route_length = math.hypot(route_dx, route_dz)
+        if route_length < 0.25:
+            return selected
+        lateral_x = -route_dz / route_length
+        lateral_z = route_dx / route_length
+
+        ground = getattr(grid, '_ground', None)
+        segment_hazard = getattr(grid, 'segment_has_baked_hazard', None)
+        point_hazard = getattr(grid, 'point_has_baked_hazard', None)
+        dry_segment = getattr(grid, 'dry_segment_clear', None)
+        bot_edges_penalized = getattr(
+            self.navigator, 'bot_segment_penalized', None)
+        if not all(callable(value) for value in (
+                ground, segment_hazard, point_hazard, dry_segment)):
+            return selected
+        hazard_mask = BAKED_FATAL_HAZARDS | BAKED_SHALLOW_WATER
+        current_offset = bot_state.get('_route_lane_offset', 0.0)
+        for offset in _route_lane_fallbacks(current_offset):
+            if abs(offset) < 1.0e-9:
+                bot_state['_route_lane_offset'] = 0.0
+                return selected
+            candidate_x = selected[0] + lateral_x * offset
+            candidate_z = selected[2] + lateral_z * offset
+            candidate_dx = candidate_x - position[0]
+            candidate_dz = candidate_z - position[2]
+            # A short local A* target can sit closer than the requested lane
+            # offset. Never turn that proved forward step into a point behind
+            # the hull or inside LocalDriver's arrival radius: either result
+            # would convert a distant macro route into a persistent nav_wait.
+            if (math.hypot(candidate_dx, candidate_dz) <=
+                    ai_driver.WAYPOINT_ARRIVAL_RADIUS + 1.0e-9 or
+                    dx * candidate_dx + dz * candidate_dz <= 1.0e-9):
+                continue
+            candidate_y = ground(
+                candidate_x, candidate_z, selected[1])
+            if candidate_y is None:
+                continue
+            candidate = (candidate_x, candidate_y, candidate_z)
+            try:
+                if ((callable(bot_edges_penalized) and
+                     bot_edges_penalized(
+                         bot_id, position, candidate, now)) or
+                        point_hazard(candidate, hazard_mask) or
+                        segment_hazard(position, candidate, hazard_mask) or
+                        not dry_segment(position, candidate, now)):
+                    continue
+            except Exception:
+                continue
+            travel_yaw = math.atan2(
+                candidate[0] - position[0],
+                candidate[2] - position[2])
+            overflow = self._baked_boundary_overflow(
+                bot_state, candidate, travel_yaw)
+            if (overflow is None or
+                    any(value > 1.0e-6 for value in overflow)):
+                continue
+            bot_state['_route_lane_offset'] = offset
+            return candidate
+        bot_state['_route_lane_offset'] = 0.0
+        return selected
+
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
         mode = strategic.get('combat_mode', 'route')
@@ -8326,7 +8376,6 @@ class BotRuntime(object):
             state['navigation_stop_at_target'] = stop_at_goal
             return goal
         grid = getattr(self.navigator, 'grid', None)
-        native_capability = self.navigation_planning_capability(bot_id)
         if strategic.get('move_area_bounds') is not None:
             grounded = self._radio_ground_goal(bot_id, position, goal, strategic, grid)
             if grounded is None:
@@ -8380,7 +8429,6 @@ class BotRuntime(object):
             abs(state.get('speed', 0.0)) *
             BAKED_MOTION_LOOKAHEAD_SECONDS)
         direct = getattr(grid, 'dry_segment_clear', None)
-        direct = self._capability_probe(direct, native_capability)
         direct_close = _distance(position, goal) <= 15.0
         bot_edges_penalized = getattr(
             self.navigator, 'bot_segment_penalized', None)
@@ -8391,12 +8439,8 @@ class BotRuntime(object):
                     bot_id, position, goal, now))
             except Exception:
                 direct_penalized = True
-        # A live route owns its approach and progress. A proximity shortcut
-        # must not replace its climb setup with the macro goal on the next tick.
-        active_path = getattr(self.navigator, 'bot_states', {}).get(
-            int(bot_id), {}).get('path_key')
         direct_target = bool(
-            not active_path and direct_close and callable(direct) and
+            direct_close and callable(direct) and
             not direct_penalized and direct(position, goal, now))
         # Short, clear routes still need the navigator's progress monitor:
         # local motion alone cannot distinguish travel from oscillation.
@@ -8412,22 +8456,21 @@ class BotRuntime(object):
             and int(bot_id) not in self._artillery_reproofs)
         if direct_target:
             escape = self.navigator.observe_direct_target(
-                bot_id, position, goal, path_key, now, movement_intent,
-                native_capability=native_capability)
+                bot_id, position, goal, path_key, now, movement_intent)
             target = tuple(escape or goal)
         else:
             target = self.navigator.next_target(
                 bot_id, position, goal, path_key, now,
                 anchor, avoid, lookahead_distance,
-                movement_intent=movement_intent,
-                native_capability=native_capability)
+                movement_intent=movement_intent)
         terminal = getattr(self.navigator, 'target_is_terminal', None)
         state['navigation_stop_at_target'] = bool(
             stop_at_goal and
             ((direct_target and tuple(target) == tuple(goal)) or
              (not direct_target and callable(terminal) and terminal(bot_id))))
-        # Lane formation is planned through spawn macro goals above. Preserve
-        # every selected local point exactly, including its arrival ownership.
+        if mode in ('route', 'advance') and anchor is None:
+            target = self._route_lane_target(
+                bot_id, position, goal, target, strategic, now)
         return target
 
     def _player_neighbours(self, players):
@@ -8455,16 +8498,16 @@ class BotRuntime(object):
     @staticmethod
     def _traffic_stopping_distance(
             speed, physics_params, slope_pitch=0.0, steering=False):
-        """Integrate the requested active brake to the first stationary pose.
+        """Integrate the copied coast law to the first stationary pose.
 
         Traffic is evaluated before this authority tick's longitudinal step,
         so there is no separate reaction-distance term.  Advancing with the
         same nominal 30 Hz semi-implicit step used by copied physics gives the
-        actual travel remaining after an explicit Bot brake command. A grade
-        which cannot reduce travel speed has no finite stopping distance.
+        actual forward travel remaining after throttle is released.  A grade
+        which cannot reduce forward speed has no finite stopping distance.
         """
-        current = _number(speed)
-        if abs(current) <= TRAFFIC_DIRECTION_SPEED_EPSILON:
+        current = abs(_number(speed))
+        if current <= TRAFFIC_DIRECTION_SPEED_EPSILON:
             return 0.0
         step = PUBLICATION_SECONDS
         distance = 0.0
@@ -8474,23 +8517,23 @@ class BotRuntime(object):
         for unused_step in range(4096):
             following = vehicle_physics.longitudinal_step(
                 physics_params, current, 0.0, bool(steering),
-                float(slope_pitch), step, False, 0, True)
+                float(slope_pitch), step, False, 0, False)
             if math.isnan(following) or math.isinf(following):
                 return float('inf')
-            if abs(following) <= TRAFFIC_DIRECTION_SPEED_EPSILON:
-                return distance + abs(following) * step
-            if abs(following) >= abs(current):
+            if following <= TRAFFIC_DIRECTION_SPEED_EPSILON:
+                return distance + max(0.0, following) * step
+            if following >= current:
                 return float('inf')
-            distance += abs(following) * step
+            distance += following * step
             current = following
         return float('inf')
 
     @observed('bot.stopping_distance')
     def _cached_traffic_stopping_distance(
             self, source, command, physics_params):
-        """Memoize the active brake integral for unchanged physical inputs."""
+        """Memoize the exact coast integral for unchanged physical inputs."""
         bot_id = int(_number(source.get('id')))
-        speed = _number(source.get('speed'))
+        speed = abs(_number(source.get('speed')))
         slope_pitch = _number(source.get('last_drive_pitch'))
         steering = abs(_number(command.get('turn'))) > 0.01
         key = (id(physics_params), speed, slope_pitch, steering)
@@ -11843,13 +11886,6 @@ class BotRuntime(object):
         neighbours = list(neighbours or []) + self._player_neighbours(players)
         if refresh_control:
             self._publish_static_hulls(players)
-            # Pending routes belong to the authority frame, even when every
-            # current order reuses a decision or takes a short direct target.
-            # next_target() can call tick again; the frame serial makes it
-            # idempotent and the one begin_frame() owns all elapsed credit.
-            navigator_tick = getattr(self.navigator, 'tick', None)
-            if callable(navigator_tick):
-                navigator_tick(now)
         # Native terrain and visibility probes run on BigWorld's render thread.
         # Build the local-overlap view lazily, only when a staggered decision is
         # due. It steers apart hulls which already touch; it never predicts
@@ -11874,7 +11910,6 @@ class BotRuntime(object):
         track_pivot_yaws = {}
         tick_safe = {}
         attempted_yaws = {}
-        navigation_motion = {}
         siege_locked_poses = {}
         integrated = set()
         for state in self.states.values():
@@ -11950,22 +11985,8 @@ class BotRuntime(object):
             decision_state = None
             raw_command = None
             planner_probe_samples = {}
-            planner_clear_results = []
 
-            def remember_planner_clear(sample_yaw, distance, drive_direction,
-                                       source, accepted, probe=None):
-                # This is the already-made control verdict, not another test.
-                # Unknown/deferred evidence is kept distinct from a clear ray.
-                if len(planner_clear_results) < 12:
-                    planner_clear_results.append({
-                        'yaw': sample_yaw, 'distance': distance,
-                        'direction': drive_direction, 'source': source,
-                        'accepted': accepted,
-                        'probe': self._decision_probe_summary(probe)})
-                return accepted
-
-            def planner_sample_direction(sample_yaw, maximum_distance=None,
-                                         drive_direction=1.0):
+            def planner_sample_direction(sample_yaw, maximum_distance=None):
                 # Invalid or unavailable baked data retains the mature native
                 # planner path.  These advisory samples never enter the motion
                 # cache and never authorize the finally selected direction.
@@ -11973,15 +11994,12 @@ class BotRuntime(object):
                               (2.0 * math.pi) - math.pi)
                 key = (round(normalised, 4),
                        None if maximum_distance is None
-                       else round(float(maximum_distance), 2),
-                       -1.0 if drive_direction < 0.0 else 1.0)
+                       else round(float(maximum_distance), 2))
                 if key not in planner_probe_samples:
                     planner_probe_samples[key] = self._probe_direction(
                         position, sample_yaw, state.get('speed', 0.0),
                         self._descriptors.get(state['id']),
-                        maximum_distance,
-                        native_capability=self.navigation_planning_capability(
-                            state['id'], drive_direction))
+                        maximum_distance)
                 return planner_probe_samples[key]
 
             grid = getattr(self.navigator, 'grid', None)
@@ -11994,36 +12012,10 @@ class BotRuntime(object):
             controlled_shallow_commit = getattr(
                 self.navigator, 'controlled_shallow_committed', None)
 
-            def sample_rotation_clear(sample_yaw, native_only=True):
-                # Consume actual contact feedback in ordinary steering too.
-                # This adds no predicted obstacle, probe or distant brake.
-                blocked_rotations = state.get('_blocked_rotations', {})
-                sample_delta = _angle_delta(sample_yaw, state['yaw'])
-                for side, failed in list(blocked_rotations.items()):
-                    origin, old_yaw, rejected_delta, until, reason = failed
-                    if (now >= until or
-                            _distance(position, origin) > 0.08 or
-                            abs(position[1] - origin[1]) > 0.08 or
-                            abs(_angle_delta(state['yaw'], old_yaw)) > 0.02):
-                        del blocked_rotations[side]
-                    elif native_only and reason != 'native_world':
-                        continue
-                    elif (sample_delta * side > 0.0 and
-                            abs(sample_delta) >= abs(rejected_delta)):
-                        # The native commit already rejected this beginning
-                        # of the same angular sweep. Do not select it again
-                        # inside a backing manoeuvre just because baking is
-                        # clear. Straight rear travel needs its own proof and
-                        # can move the chassis away before turning is retried.
-                        return False
-                return True
-
             def sample_pose_clear(sample_yaw):
-                # Recovery also checks the whole swept rectangle against
-                # nearby hulls and supported ground, including native-proved
-                # original structure footprints absent from the old bake.
-                if not sample_rotation_clear(sample_yaw, native_only=False):
-                    return False
+                # Whether this hull may rotate where it stands is a question
+                # about a swept rectangle. Check live hulls before the
+                # shipped graph the navigator already owns.
                 if tank_collision.rotation_fraction(
                         position, state['yaw'], sample_yaw,
                         state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
@@ -12034,8 +12026,6 @@ class BotRuntime(object):
                 if not callable(pose_probe):
                     return True
                 try:
-                    pose_probe = self._capability_probe(pose_probe,
-                        self.navigation_planning_capability(state['id']))
                     return bool(pose_probe(
                         position, sample_yaw,
                         state.get('half_length', 3.5),
@@ -12043,82 +12033,33 @@ class BotRuntime(object):
                 except Exception:
                     return True
 
-            def sample_clear(sample_yaw, maximum_distance=None,
-                             drive_direction=1.0):
-                bounded_manoeuvre = maximum_distance is not None
-                # A vehicle brake must also reach local steering. Otherwise
-                # the planner repeatedly sees a clear world ray through the
-                # same live hull and renews its original drive heading. Keep
-                # the short vehicle sweep during the driver's avoidance lease;
-                # checked reverse and side departures remain available.
-                # Explicit short recovery/clearance probes already check the
-                # current hull and its swept turn in LocalDriver. Applying an
-                # instant candidate-yaw box there rejects valid backing turns.
-                vehicle_obstacles = state.get('traffic_obstacles', {})
-                if maximum_distance is None and vehicle_obstacles:
-                    live_neighbours = [peer for peer in
-                        self._neighbours_for(state, neighbours)
-                        if peer.get('alive', True) and now <
-                        vehicle_obstacles.get(peer.get('id'), 0.0)]
-                    # Remember every recently proved blocker, not just the
-                    # last one in an alternating queue. Unrelated passing
-                    # traffic must not turn every steering candidate into a wall.
-                    if self._traffic_coordinator._escape_probe._reverse_blocked_by_vehicle(
-                            position, sample_yaw + math.pi, live_neighbours,
-                            state.get('half_length', 3.5),
-                            state.get('half_width', 1.7)) is not None:
-                        return remember_planner_clear(
-                            sample_yaw, maximum_distance, drive_direction,
-                            'live_vehicle', False)
+            def sample_clear(sample_yaw, maximum_distance=None):
                 # A short manoeuvre asks about the space it actually enters.
                 # Ranking a five-metre backing escape against the fifteen to
                 # twenty metre travel horizon rejects every gateway, alley and
                 # bridge underpass on the map, which leaves an in-place turn
                 # as the only recovery in exactly the places no hull can turn.
-                if maximum_distance is None and decision_state is not None:
-                    # The adapter knows the selected navigation point only
-                    # after planning. Bound ordinary steering to that point's
-                    # full leading-hull sweep; preserve the live-vehicle check
-                    # above and every explicit recovery probe's own distance.
-                    maximum_distance = decision_state.get(
-                        'navigation_probe_distance')
                 advisory = self._planner_corridor_clear(
                     position, sample_yaw, state.get('speed', 0.0),
                     maximum_distance=maximum_distance,
-                    native_capability=self.navigation_planning_capability(
-                        state['id'], drive_direction),
                     wet_escape=(baked_shallow_escape or
                                 state.get('_water_depth', -1.0) >
                                 BOT_WATER_AVOID_DEPTH),
                     allow_shallow=(callable(controlled_shallow) and
                                    controlled_shallow(
                                        state['id'], position, sample_yaw)))
-                if advisory is False:
-                    return remember_planner_clear(
-                        sample_yaw, maximum_distance, drive_direction,
-                        'coarse_advisory', False)
-                if advisory is True and not bounded_manoeuvre:
-                    return remember_planner_clear(
-                        sample_yaw, maximum_distance, drive_direction,
-                        'coarse_advisory', True)
-                # A bounded backout must prove its whole requested distance;
-                # the advisory graph checks only the next coarse route edge.
+                if advisory is not None:
+                    return bool(advisory)
                 sample = planner_sample_direction(
-                    sample_yaw, maximum_distance, drive_direction)
+                    sample_yaw, maximum_distance)
                 # Exhausting the soft-static recast budget is not a wall. Keep
                 # the previous drive intent; commit-side world collision still
                 # stops the hull if this corridor reaches real hard geometry.
                 if (sample is None or
                         (isinstance(sample, dict) and
                          sample.get('deferred', False))):
-                    # Ordinary travel may retain intent until the physical
-                    # gate, but a new bounded escape needs a completed proof.
-                    return remember_planner_clear(
-                        sample_yaw, maximum_distance, drive_direction,
-                        'native_unknown', not bounded_manoeuvre, sample)
-                return remember_planner_clear(
-                    sample_yaw, maximum_distance, drive_direction,
-                    'native', self._probe_is_clear(sample), sample)
+                    return True
+                return self._probe_is_clear(sample)
 
             if decision_cache_valid and not decision_due:
                 command = dict(decision_cache[3])
@@ -12138,7 +12079,6 @@ class BotRuntime(object):
                     'fire_allowed': False,
                     'shell_index': int(state.get('shell_index', 0)),
                     'throttle': 0.0, 'turn': 0.0,
-                    'brake': True,
                     'target_yaw': state['yaw'],
                     'recovery_mode': 'physical_hold',
                     'movement_intent': False,
@@ -12164,15 +12104,6 @@ class BotRuntime(object):
                     server_order.get('combat_mode', 'route')
                     if isinstance(server_order, dict) else None)
                 physics_params = self._physics_params_for(state['id'])
-                # Match the copied traverse integrator's installed chassis
-                # rate (terrainIdx=0), including the current stun. Steering
-                # needs this physical limit to avoid orbiting short waypoints.
-                turn_speed_limit = (
-                    physics_params.get('rotSpd')
-                    if physics_params is not None else None)
-                if turn_speed_limit is not None:
-                    turn_speed_limit *= stun_mechanics.factor(
-                        state, 'traverse')
                 if (physics_params is not None and
                         abs(state['speed']) > 0.35 and
                         expected_mode not in ('route', 'advance')):
@@ -12194,7 +12125,6 @@ class BotRuntime(object):
                     'speed': state['speed'],
                     'dt': decision_step, 'now': now,
                     'pose_clear': sample_pose_clear,
-                    'rotation_clear': sample_rotation_clear,
                     'health': state['health'],
                     'max_health': state['max_health'],
                     'contacts': contacts,
@@ -12206,10 +12136,7 @@ class BotRuntime(object):
                     'half_length': state.get('half_length', 3.5),
                     'half_width': state.get('half_width', 1.7),
                     'stopping_distance': stopping_distance,
-                    'turn_speed_limit': turn_speed_limit,
                     'decision_horizon': decision_horizon,
-                    'navigation_recovery_allowed': self._navigation_recovery_allowed(
-                        state['id'], position),
                 }
                 reposition_order, reposition_expired = \
                     self._friendly_reposition_order(state, targets, now)
@@ -12239,17 +12166,9 @@ class BotRuntime(object):
                         self._combat_diagnostics, 'bot.planner_driver',
                         self.adapter.decide,
                         decision_state, sample_clear)
-                # Consume the one-shot request before caching the command. A
-                # reused control slice must not repeatedly restart this search.
-                if command.pop('navigation_replan', False):
-                    replan = getattr(self.navigator, 'request_replan', None)
-                    if callable(replan):
-                        replan(state['id'], position, now)
                 self._record_navigation_decision(
-                    state, command,
-                    (reposition_order if reposition_order is not None and
-                     callable(decide_with_order) else server_order),
-                    planner_probe_samples, now, planner_clear_results)
+                    state, command, reposition_order or server_order,
+                    planner_probe_samples, now)
                 command = timed_call(
                     self._combat_diagnostics, 'bot.traffic',
                     self._traffic_coordinator.adjust,
@@ -12270,8 +12189,9 @@ class BotRuntime(object):
                     DECISION_TIER_FACTOR[self._detail_tier(state)],
                     3, decision_cache is None)
                 raw_command = dict(command)
-            # Keep the plan until its next refresh. The final vehicle braking
-            # guard below still reads current neighbours on every physics slice.
+            # Keep this decision until the next scheduled refresh. Friendly
+            # following uses contact physics; crossing yields have a fixed
+            # deadline and never renew LocalDriver's stuck timer.
             command['throttle'] = max(
                 -1.0, min(1.0, command.get('throttle', 0.0)))
             if decision_due:
@@ -12467,46 +12387,13 @@ class BotRuntime(object):
                 state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
                 target is not None and
-                command.get('combat_mode') != 'base_defense',
-                combat_mode=command.get('combat_mode', 'route'),
-                movement_intent=command.get('movement_intent', True))
+                command.get('combat_mode') != 'base_defense')
             state['hull_aiming'] = bool(hull_aiming)
             if hull_aiming:
                 # Limited-traverse aiming deliberately stops translation so
                 # the hull can lay the gun. Releasing drive alone coasts.
                 command['brake'] = True
-            safety_body = {
-                'id': state['id'], 'position': position, 'yaw': state['yaw'],
-                'shape': state.get('collision_shape'),
-                'half_width': state.get('half_width', 1.7),
-                'half_length': state.get('half_length', 3.5),
-                'velocity': (math.sin(state['yaw']) * state['speed'], 0.0,
-                             math.cos(state['yaw']) * state['speed']),
-            }
-            def current_stopping_distance():
-                return self._cached_traffic_stopping_distance(
-                    state, dict(command, turn=turn),
-                    self._physics_params_for(state['id']) or
-                    vehicle_physics._DEFAULTS)
-            traffic_input = dict(command, throttle=throttle, turn=turn)
-            safety = self._traffic_coordinator.safe_controls(
-                safety_body, traffic_input,
-                self._neighbours_for(state, neighbours), now,
-                current_stopping_distance, step)
-            throttle, turn = safety['throttle'], safety['turn']
-            active_brake = bool(siege_braking or safety.get('brake', False))
-            if active_brake:
-                throttle = 0.0
-            state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
-            vehicle_obstacles = state.get('traffic_obstacles', {})
-            for peer_id, until in list(vehicle_obstacles.items()):
-                if now >= until:
-                    del vehicle_obstacles[peer_id]
-            if safety.get('forward_blocked_by') is not None:
-                # Match LocalDriver's 1.20-second avoidance-heading lease;
-                # an older obstruction must not outlive that local plan.
-                vehicle_obstacles[safety['forward_blocked_by']] = now + 1.2
-            state['traffic_obstacles'] = vehicle_obstacles
+            active_brake = bool(siege_braking or command.get('brake', False))
             if siege_braking:
                 command['throttle'] = 0.0
                 command['turn'] = 0.0
@@ -12554,11 +12441,6 @@ class BotRuntime(object):
             attempted_yaws[state['id']] = travel_yaw
             maximum_probe_distance = None
             move_position = command.get('move_position')
-            navigation_motion[state['id']] = {
-                'target': move_position,
-                'intent': command.get('movement_intent', True),
-                'world_clear': False,
-            }
             navigation_grid = getattr(self.navigator, 'grid', None)
             if getattr(navigation_grid, 'prebaked', False):
                 baked_cell_size = _number(
@@ -12571,14 +12453,7 @@ class BotRuntime(object):
                     BAKED_MOTION_LOOKAHEAD_SECONDS)
             else:
                 reactive_horizon = None
-            if command.get('recovery_mode') == 'contact_escape':
-                # BotAdapter admitted this separating direction with the same
-                # short hull sweep. A wall beyond that bounded exit must not
-                # turn the final selected-motion gate back into a long-range
-                # veto and leave contact_escape at zero throttle every frame.
-                maximum_probe_distance = ai_driver.recovery_probe_distance(
-                    state.get('half_length', 3.5))
-            elif (travel_sign > 0.0 and reactive_horizon is not None and
+            if (travel_sign > 0.0 and reactive_horizon is not None and
                     move_position is not None and
                     command.get('movement_intent', True) and
                     command.get('recovery_mode', 'drive') in
@@ -12596,32 +12471,6 @@ class BotRuntime(object):
                 # Recovery is intentionally a short backing manoeuvre. A wall
                 # beyond that escape edge must not veto clear space at the rear.
                 maximum_probe_distance = reactive_horizon
-            elif command.get('recovery_mode') == 'friendly_yield':
-                # A blocked teammate yields only a short, hull-checked gap.
-                # Neither the tactical route nor space beyond the fixed yield
-                # endpoint belongs to this manoeuvre. Recompute the remaining
-                # distance per slice, including between planner refreshes.
-                maximum_probe_distance = reactive_horizon
-                remaining = self._traffic_coordinator.clearance_distance(
-                    state['id'], position)
-                if remaining is not None:
-                    leading = max(0.5, state.get('half_length', 3.5))
-                    frame_reach = max(
-                        0.4, abs(state['speed']) * min(0.2, step) + 0.2)
-                    # Native receipts measure from the chassis origin and
-                    # must still contain the full leading hull plus this
-                    # slice's reach. The yield endpoint bounds centre travel,
-                    # never the evidence required for an occupied body.
-                    endpoint_reach = leading + remaining
-                    maximum_probe_distance = (
-                        endpoint_reach if reactive_horizon is None else
-                        min(endpoint_reach, reactive_horizon))
-                    maximum_probe_distance = max(
-                        leading + frame_reach, maximum_probe_distance)
-                    if remaining <= 0.0:
-                        throttle = 0.0
-                        turn = 0.0
-                        active_brake = True
             cached_motion_probe = self._motion_probe_cache.get(state['id'])
             # A frozen pose keeps this slice's realised translation at zero
             # without claiming that the corridor is blocked, so it must not
@@ -12862,40 +12711,26 @@ class BotRuntime(object):
                     remember(state['id'], travel_yaw)
                 report_blocked = getattr(
                     self.navigator, 'report_blocked_step', None)
-                report_corridor = getattr(
-                    self.navigator, 'report_blocked_corridor', None)
                 # A hull contact escalates from its realised status below.
                 if (callable(report_blocked) and not probe_deferred and
                         not (isinstance(motion_probe, dict) and
                              motion_probe.get('collision', False)) and
                         command.get('move_position') is not None):
-                    if (callable(report_corridor) and
-                            isinstance(motion_probe, dict) and
-                            not motion_probe.get('water', False)):
-                        # A terrain/world veto follows the realised hull yaw,
-                        # but a stationary wedged hull can wag that yaw every
-                        # decision. Accumulate against the stable semantic
-                        # route edge while travel still closes on it.
-                        report_corridor(
-                            state['id'], position,
-                            command.get('move_position'), travel_yaw, now)
-                    else:
-                        blocked_target = command.get('move_position')
-                        if navigation_grid is not None:
-                            # Water and legacy navigators retain the precise
-                            # sampled edge rather than penalising a whole
-                            # semantic corridor they cannot classify.
-                            edge_length = _number(
-                                getattr(navigation_grid, 'cell_size', 0.0), 0.0)
-                            if edge_length > 0.0:
-                                blocked_target = (
-                                    position[0] + math.sin(travel_yaw) *
-                                    edge_length,
-                                    position[1],
-                                    position[2] + math.cos(travel_yaw) *
-                                    edge_length)
-                        report_blocked(
-                            state['id'], position, blocked_target, now)
+                    blocked_target = command.get('move_position')
+                    if navigation_grid is not None:
+                        # The generic probe just rejected travel_yaw before
+                        # this slice turns the hull.  Mark that local edge,
+                        # rather than the strategic waypoint it was pursuing.
+                        edge_length = _number(
+                            getattr(navigation_grid, 'cell_size', 0.0), 0.0)
+                        if edge_length > 0.0:
+                            blocked_target = (
+                                position[0] + math.sin(travel_yaw) *
+                                edge_length,
+                                position[1],
+                                position[2] + math.cos(travel_yaw) *
+                                edge_length)
+                    report_blocked(state['id'], position, blocked_target, now)
             steer_dir = 0
             if abs(turn) > 0.01:
                 # LocalDriver already inverts reverse recovery steering for the
@@ -12908,7 +12743,7 @@ class BotRuntime(object):
             self._log_direction_flip(state, path_clear, motion_probe, now)
             self._log_motion_stall(
                 state, command, throttle, turn, path_clear, motion_probe, now,
-                pose_frozen, traffic_input, safety)
+                pose_frozen)
             if diagnostic is not None:
                 diagnostic.phase('bot.integrate')
             if not self.native_motion:
@@ -12995,15 +12830,7 @@ class BotRuntime(object):
                     rotation_blocked = not bool(rotation_clear)
                     if rotation_blocked:
                         rotation_block_reason = 'native_world'
-                rotation_drive_held = False
                 if rotation_blocked:
-                    rejected_delta = _angle_delta(
-                        candidate_hull_yaw, old_hull_yaw)
-                    if abs(rejected_delta) > 1.0e-8:
-                        side = 1 if rejected_delta > 0.0 else -1
-                        state.setdefault('_blocked_rotations', {})[side] = (
-                            tuple(position), old_hull_yaw, rejected_delta,
-                            now + 2.0, rotation_block_reason)
                     # Turning is a pose change even without translation. Keep
                     # the prior legal OBB until the hull first moves far enough
                     # inward to rotate without crossing a red line, turret or
@@ -13012,19 +12839,6 @@ class BotRuntime(object):
                     candidate_hull_yaw = old_hull_yaw
                     candidate_position = position
                     state['rotation_dir'] = 0
-                    if abs(turn) > 0.01 and abs(throttle) > 0.01:
-                        # A drive-and-turn command owns both components. If
-                        # its turn cannot happen, accelerating along the old
-                        # hull yaw can leave the selected road and enter the
-                        # hillside. Brake this failed manoeuvre and let the
-                        # driver's normal no-progress timer choose a new one.
-                        # A separately selected straight reverse/forward exit
-                        # still uses the unchanged native translation sweep.
-                        throttle = 0.0
-                        active_brake = True
-                        state['movement_dir'] = 0
-                        rotation_drive_held = True
-                        self._decision_cache.pop(state['id'], None)
                 self._turn_speeds[state['id']] = turn_speed
                 if pivot_offset and not rotation_blocked:
                     track_pivot_yaws[state['id']] = old_hull_yaw
@@ -13095,7 +12909,6 @@ class BotRuntime(object):
                         'rotation_block_reason': rotation_block_reason,
                         'rotation_contact': (state.get('_rotation_contact_trace')
                             if rotation_blocked else None),
-                        'rotation_drive_held': rotation_drive_held,
                         'actual_turn_speed': turn_speed,
                         'baked_veto': committed_corridor is False,
                         'path_clear': bool(path_clear),
@@ -13191,64 +13004,35 @@ class BotRuntime(object):
                     speed, contact_position, contact_deflected = \
                         self._hard_contact_response(
                             state, position, state['yaw'], speed,
-                            descriptor, step, now, normal=hard_contact_normal)
-                    report_hard_contact = getattr(
-                        self.navigator, 'report_hard_contact', None)
+                            descriptor, step, now)
                     report_contact = getattr(
                         self.navigator, 'report_blocked_step', None)
                     contact_target = command.get('move_position')
-                    # The driver owns the realised heading failure above.
-                    # Navigation instead needs a stable first route edge: a
-                    # wedged hull's recovery yaw can alternate on every try
-                    # and would otherwise restart the replan verdict count.
-                    contact_yaw = travel_yaw
-                    if realised_contact_yaw is not None:
-                        contact_yaw = realised_contact_yaw
-                    if (realised_contact_yaw is None and
-                            contact_target is not None and
+                    if (contact_target is not None and
                             navigation_grid is not None):
-                        # A generic direction probe looks well beyond the
-                        # distance this physics slice can realise.  Its
-                        # collision can therefore be several cells ahead and
-                        # must not veto the navigation target's first edge as
-                        # though the hull had touched it.  Preserve the old
-                        # local-edge verdict for forward forecasts.  Reverse
-                        # forecasts still enter ``report_hard_contact`` with
-                        # the semantic target so that method can pin their
-                        # separate realised rear edge for the episode.
-                        dx = float(contact_target[0]) - float(position[0])
-                        dz = float(contact_target[2]) - float(position[2])
-                        if (math.sin(contact_yaw) * dx +
-                                math.cos(contact_yaw) * dz > 0.0):
-                            edge_length = _number(
-                                getattr(navigation_grid, 'cell_size', 0.0),
-                                0.0)
-                            if edge_length > 0.0:
-                                contact_target = (
-                                    position[0] + math.sin(contact_yaw) *
-                                    edge_length,
-                                    position[1],
-                                    position[2] + math.cos(contact_yaw) *
-                                    edge_length)
-                    if (callable(report_hard_contact) and
-                            contact_target is not None and
-                            command.get('movement_intent', True)):
-                        report_hard_contact(
-                            state['id'], position, contact_target,
-                            contact_yaw, now)
-                    elif (callable(report_contact) and
-                            contact_target is not None and
-                            command.get('movement_intent', True)):
+                        # A generic contact came from the pre-turn direction
+                        # probe.  A resolved one came from this exact hull yaw
+                        # and signed speed; a reversing command can still be
+                        # braking a forward-moving hull (or vice versa).
+                        contact_yaw = travel_yaw
+                        if realised_contact_yaw is not None:
+                            contact_yaw = realised_contact_yaw
+                        edge_length = _number(
+                            getattr(navigation_grid, 'cell_size', 0.0), 0.0)
+                        if edge_length > 0.0:
+                            contact_target = (
+                                position[0] + math.sin(
+                                    contact_yaw) * edge_length,
+                                position[1],
+                                position[2] + math.cos(
+                                    contact_yaw) * edge_length)
+                    if (callable(report_contact) and
+                            contact_target is not None):
                         report_contact(
                             state['id'], position,
                             contact_target, now)
                 elif motion_status in ('soft', 'cap_crushed'):
                     self._hard_contact_grinds[state['id']] = 1
-                if (resolved_motion and
-                        motion_status in ('clear', 'crushed')):
-                    # A horizontal sweep alone cannot prove progress: the
-                    # support and final-pose guards may still reject this step.
-                    navigation_motion[state['id']]['world_clear'] = True
                 if resolved_motion and callable(self.motion_report):
                     self.motion_report(
                         state['id'], motion_status, contact_v0, speed)
@@ -13486,9 +13270,7 @@ class BotRuntime(object):
                     try:
                         candidates = (self.cover_probe(
                             source, target, route, allies,
-                            (self._capability_probe(
-                                self.navigator.grid.segment_clear,
-                                self.navigation_planning_capability(bot_id))
+                            (self.navigator.grid.segment_clear
                              if self.navigator is not None else None))
                                       if current else ())
                     finally:
@@ -13516,7 +13298,6 @@ class BotRuntime(object):
         ordered_states = self._ordered_states()
         slope_candidates = []
         support_blocked_by_id = {}
-        drive_support_failures = {}
         settled_poses = {}
         ballistic_ticks = {}
         for state in ordered_states:
@@ -13536,8 +13317,6 @@ class BotRuntime(object):
                     self._turn_speeds[state['id']] = 0.0
                     state['rotation_dir'] = 0
                 support_blocked_by_id[state['id']] = bool(support_blocked)
-                drive_support_failures[state['id']] = bool(
-                    state.get('_navigation_support_blocked', False))
                 ballistic_ticks[state['id']] = bool(
                     was_airborne or state.get('airborne', False))
                 settled_poses[state['id']] = _position(state)
@@ -13611,12 +13390,6 @@ class BotRuntime(object):
                 state['yaw'] = track_pivot_yaws[bot_id]
                 self._turn_speeds[bot_id] = 0.0
                 state['rotation_dir'] = 0
-            self._settled_navigation_feedback(
-                state, tick_poses[bot_id], attempted_yaw, now,
-                navigation_motion.get(bot_id),
-                support_blocked_by_id.get(bot_id, False), pose_rollback,
-                contact_displaced=moved_after_settle,
-                drive_support_blocked=drive_support_failures.get(bot_id, False))
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),
                 pose_rollback, settled)

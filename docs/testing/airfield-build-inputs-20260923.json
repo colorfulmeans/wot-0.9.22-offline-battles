@@ -1,5 +1,19 @@
 {
   "airfield_sha256": "5c981f89f2ab2f36058cf8835e3ea9a666587d15521227a2e121e02c5d0a737f",
+  "bot080_rollback": {
+    "base": "beb750bcc368bb4279959b53ef5aa4022158cba7",
+    "behavior_source": "5a7c20a124ab8ad76dc40db3012a31436ae6905b",
+    "core_sha256": {
+      "src/res/scripts/client/gui/mods/offline_lan_0922/ai/adapter.py": "0820d8b30d7bb0a8be8d18544d209a43fdd15b574502b736970650d4bff4d8f6",
+      "src/res/scripts/client/gui/mods/offline_lan_0922/ai/driver.py": "c44745e1dc3e4dc0e55aa4360f52cbe95140c9fadd9c7d4f6e6b02a88620cfa6",
+      "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py": "a550acdb7530daa61b30afea30bcbcc88fce72e827d17dceda6acc32c92d715c",
+      "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py": "44a5592aa2d913608a968db533d7822e2f61abda5572f7f8304e5e43f109511e"
+    },
+    "native_gameplay_tested": false,
+    "preserved": "Current game features, final collision, vehicle physics, stun/radio/gunnery and all graph assets. Driving core and runtime decision ownership restored.",
+    "source_report": "wot-error-report-20260923-170444-493dd6c415a7.zip",
+    "verified_v080_build_source": "4b532dabe74f9a63ef880bb8286ad3c61aec742e"
+  },
   "changed_files": [
     {
       "base_sha256": null,
@@ -19,22 +33,22 @@
     {
       "base_sha256": "1c13deef745f0c65e248979c8cb29fa66af7936b9f320737dcdb2b8a0a42c5db",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/ai/adapter.py",
-      "sha256": "f6c6cf63bb3f11f24774f295aec278230cca175d625923bad0eebc628b31c600"
+      "sha256": "0820d8b30d7bb0a8be8d18544d209a43fdd15b574502b736970650d4bff4d8f6"
     },
     {
       "base_sha256": "09989d8fdbfe0fc158438860226080a3185722f2654d5995d3de0532e3e58343",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/ai/driver.py",
-      "sha256": "0a7e923924056e5b22e98f348b6f362b6ee401f5d2127d37fcc1e0b4095a399c"
+      "sha256": "c44745e1dc3e4dc0e55aa4360f52cbe95140c9fadd9c7d4f6e6b02a88620cfa6"
     },
     {
       "base_sha256": "bdeaa2344a52328149633e292d3a3829a9d939ab04b701044443653acd08c0b3",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py",
-      "sha256": "686bb47a102c36d0929593ce95dd1e5cf9cd6b6fda1efc00b65ed2461d17f634"
+      "sha256": "a550acdb7530daa61b30afea30bcbcc88fce72e827d17dceda6acc32c92d715c"
     },
     {
       "base_sha256": "9299a77c5f6d492a9a9f44b8f5a9c0333cb6ad18b4272820168ef718f816368d",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py",
-      "sha256": "97809210899e10b434c40f116b16ed961a06602af4b422be2b2112cbcb0f7c11"
+      "sha256": "44a5592aa2d913608a968db533d7822e2f61abda5572f7f8304e5e43f109511e"
     },
     {
       "base_sha256": "ac93cad444dff6b646e3d6e8640a5a329f5b6cda4967471eab88d9d2c7ca3ed3",
@@ -44,7 +58,7 @@
     {
       "base_sha256": "9436c11c34a825463dfc3e272e34df8ff4704ebf39f4f799cd6f823b6371b0f0",
       "path": "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py",
-      "sha256": "7500a13e943fbaa0de5511044ab13ed9e17e58db71299eaf48590ebde2a26672"
+      "sha256": "904e77f969fe46c145218425bfad0c934d2d1ea5fd2f22333cc370572a08ffec"
     },
     {
       "base_sha256": "97a68a9f97a892f155220a73763c956e2e828084b42adb86b0918ae2fa9c649d",
@@ -120,20 +134,20 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/server.py": "5fa7b48c7e59d638c8d12ab0232afdcd3682ee9323c40182bf9f57475a5f808d",
     "src/res/scripts/client/gui/mods/offline_lan_0922/account_rpc/state.py": "fa97b29fcda3706c2c4ca1f49d45fe602579fad05d08f537b05cafde06ff1175",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/__init__.py": "df32db23a0d7371667bd40acdc6e2fec618e1956875de70aa28350f5083bbafe",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/adapter.py": "f6c6cf63bb3f11f24774f295aec278230cca175d625923bad0eebc628b31c600",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/adapter.py": "0820d8b30d7bb0a8be8d18544d209a43fdd15b574502b736970650d4bff4d8f6",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/cover.py": "136e1881322bf383f7cabc266038b451fc7c240aa5eae74fe2a3d93ddb9d5840",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/driver.py": "0a7e923924056e5b22e98f348b6f362b6ee401f5d2127d37fcc1e0b4095a399c",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/driver.py": "c44745e1dc3e4dc0e55aa4360f52cbe95140c9fadd9c7d4f6e6b02a88620cfa6",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps.py": "fb3965cffff03b755a2c72696b0421cbc173a1903f89369fab213226f538e6ee",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_0922_extra.py": "c7ced394777c7494c98d4da9c63aa57e395ccdca84267118958cbe76a7380216",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_extra.py": "93a3b82e1e58c01ba8d751d611f4b5afb4db2676f9540d7be51ce26824f8fca8",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_group_a.py": "fb8207b74ce1fce7f203c352b5c7c44019803baf01bdd1626d2da20c22576c00",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_group_b.py": "fcb41bdb286c9187802437076541acd72737e6c15e7956a74899d8548d47d11e",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/maps_group_c.py": "3c6c481495f956e0580484d8a10b10b8d0b4f1a4d8b6723d45e576078b90023d",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py": "686bb47a102c36d0929593ce95dd1e5cf9cd6b6fda1efc00b65ed2461d17f634",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/navigation.py": "a550acdb7530daa61b30afea30bcbcc88fce72e827d17dceda6acc32c92d715c",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/planner.py": "ebf088f0ca4daf6d7b8ac8af4a6f1a2951f410b556ac7bf8b425f03e67b57253",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/reviewed_routes_20260811.py": "2f5060cfd47ba2188ad501b6e08ff3e73d85b5434461c94ab79a8b139020e935",
     "src/res/scripts/client/gui/mods/offline_lan_0922/ai/tactical_geometry.py": "c48692bc6330779b7880e1ec5db34caa2017f25f91462ea24b8894ca591042fb",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py": "97809210899e10b434c40f116b16ed961a06602af4b422be2b2112cbcb0f7c11",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/ai/traffic.py": "44a5592aa2d913608a968db533d7822e2f61abda5572f7f8304e5e43f109511e",
     "src/res/scripts/client/gui/mods/offline_lan_0922/artillery_arc_queue.py": "51a81f9802b331ae5f0a971f4feb8d7e032354c622f92a32dce94f981aeaab10",
     "src/res/scripts/client/gui/mods/offline_lan_0922/artillery_controller.py": "865754afb569e10ee590ce33abdd7a8f550057064198834d8c02df1c60107f8a",
     "src/res/scripts/client/gui/mods/offline_lan_0922/authority_worker.py": "4b2de5b66d9b18e2d715cb66f63c798b1b15d583651607c9da81e7101515a682",
@@ -148,7 +162,7 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/battle_shell_tooltip.py": "0e85d005f824611b8f4125785334c01e3c8ff210048e6e4387f7a0e7616124a0",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bootstrap.py": "ffa40eccdbd3d0c260a7f6fe17ed4f16222216a4fb4d032268cb99fcf160ed97",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_gunnery.py": "c47227c0cc4972fef1912eac7d392cd6f18303208d3bea14f72a130a4f28a2b0",
-    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": "7500a13e943fbaa0de5511044ab13ed9e17e58db71299eaf48590ebde2a26672",
+    "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py": "904e77f969fe46c145218425bfad0c934d2d1ea5fd2f22333cc370572a08ffec",
     "src/res/scripts/client/gui/mods/offline_lan_0922/bot_state_codec.py": "56006ca01860fc1bb35e30876ad01fa4a5262dc9844e9cee6632300eb2e3e163",
     "src/res/scripts/client/gui/mods/offline_lan_0922/burst_mechanics.py": "78364b9f429eda500773736cfe961d73d035fe0b50815fcf76aad2ca2c60b53b",
     "src/res/scripts/client/gui/mods/offline_lan_0922/collision_feedback.py": "705eb3e6e6ac4c951a038f0caeae41b508488cabd27b153671d8aba3a0f3b586",
@@ -249,6 +263,6 @@
     "src/res/scripts/client/gui/mods/offline_lan_0922/world_collision.py": "be1dfbdaf1894b5eb846ec6490ea21a799ab8e14f5170305d7311321cb4243cc"
   },
   "schema": 1,
-  "scope": "Airfield test only; other 40 maps unchanged; no native gameplay claim",
+  "scope": "v0.8.0 driving-core rollback on latest 0.9.3 feature/physics baseline; retain rebuilt Airfield and other 40 graphs; native test pending.",
   "source_transfer_sha256": "5349b6cdb37e072f7384d2873c1ffe60b4be8f2b1e6fc7d8792e537ca2e3a87c"
 }

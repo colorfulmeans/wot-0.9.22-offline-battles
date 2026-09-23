@@ -4115,7 +4115,6 @@ class BotRuntimeTests(unittest.TestCase):
         contact_reports = []
         runtime.navigator.report_blocked_step = (
             lambda *args: contact_reports.append(args))
-        runtime.navigator.bot_states[11] = {}
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=attempted_yaw,
                      speed=4.0, grounded_once=True)
@@ -4130,10 +4129,10 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([(11, attempted_yaw, 5.0)],
                          adapter.driver.calls)
         self.assertEqual(1, len(contact_reports))
-        self.assertEqual((11, before_position, aim, 1.0),
+        realised_edge = (math.sin(attempted_yaw) * 4.0, 0.0,
+                         math.cos(attempted_yaw) * 4.0)
+        self.assertEqual((11, before_position, realised_edge, 1.0),
                          contact_reports[0])
-        self.assertIn(
-            'hard_contact_episode', runtime.navigator.bot_states[11])
         self.assertEqual(1, len(adapter.calls))
 
         status[0] = 'clear'
@@ -4144,22 +4143,6 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(2, len(adapter.calls))
         self.assertIn(11, runtime._decision_cache)
         self.assertIn(11, runtime._motion_probe_cache)
-        self.assertNotIn(
-            'hard_contact_episode', runtime.navigator.bot_states[11])
-
-        # ``crushed`` is equally conclusive: the obstacle no longer owns the
-        # swept corridor, so no pending hard-contact episode may survive it.
-        current_position = (state['x'], state['y'], state['z'])
-        runtime.navigator.report_hard_contact(
-            11, current_position, aim, state['yaw'], 1.06)
-        self.assertIn(
-            'hard_contact_episode', runtime.navigator.bot_states[11])
-        status[0] = 'crushed'
-        runtime.update(.04, 1.08)
-        self.assertNotIn(
-            'hard_contact_episode', runtime.navigator.bot_states[11])
-        self.assertIsNone(runtime.navigator.bot_states[11].get(
-            'blocked_step_tracker'))
 
     def test_repeated_runtime_hard_contacts_replan_despite_hull_yaw_wag(self):
         target = (0.0, 0.0, 200.0)
