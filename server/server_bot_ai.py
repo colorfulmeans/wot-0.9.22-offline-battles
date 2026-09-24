@@ -346,6 +346,12 @@ class BotPlanner(object):
                     # proof that the team is safe.
                     "threatened_bot_ids": threatened,
                 }
+                if "radio_recipients" in raw:
+                    self._contacts[observing_team][contact_key]["radio_bot_until"] = {
+                        _integer(row.get("id")): _number(now) + max(
+                            0.0, min(10.0, _number(row.get("time_left"))))
+                        for row in raw["radio_recipients"]
+                        if isinstance(row, dict) and row.get("kind") == "bot"}
                 accepted += 1
                 if accepted_visibility is not None:
                     accepted_contact = {
@@ -377,6 +383,8 @@ class BotPlanner(object):
                 previous["visible"] = False
                 previous["shootable_by_bot_ids"] = []
                 previous["threatened_bot_ids"] = []
+                if "radio_recipients" in raw or "radio_bot_until" in previous:
+                    previous["radio_bot_until"] = {}
                 accepted += 1
                 if accepted_visibility is not None:
                     accepted_visibility.append({
@@ -722,7 +730,8 @@ class BotPlanner(object):
                 defenders.get(team, {}), defense)
             for bot in team_bots:
                 commanded_focus = self._team_order_focus(
-                    team_order_by_bot.get(bot["id"]), bot, contacts[team])
+                    team_order_by_bot.get(bot["id"]), bot,
+                    self._contacts_for_bot(bot, contacts[team], now))
                 if (commanded_focus is not None and
                         bot["id"] not in defenders.get(team, {})):
                     assignments[bot["id"]] = commanded_focus
@@ -731,10 +740,11 @@ class BotPlanner(object):
             for index, bot in enumerate(team_bots):
                 order = self._order_for(
                     bot, index, len(team_bots), assignments.get(bot["id"]),
-                    contacts[team], now,
+                    self._contacts_for_bot(bot, contacts[team], now), now,
                     defenders.get(team, {}).get(bot["id"]), team_axis,
                     team_bots, capture_targets[team],
-                    not bool(contacts[team]) and bot["id"] in capture_ids)
+                    not self._contacts_for_bot(bot, contacts[team], now) and
+                    bot["id"] in capture_ids)
                 route_point = order.pop("_route_position")
                 turnback_point = order.pop("_turnback_position")
                 self._apply_team_order(
@@ -886,6 +896,19 @@ class BotPlanner(object):
                     known_targets.get(state.get("target")) is None):
                 del self._combat_states[bot_id]
 
+    @staticmethod
+    def _contact_known_to(contact, bot_id, now=None):
+        """Missing metadata is legacy input; an explicit empty lease is not."""
+        if "radio_bot_until" not in contact:
+            return True
+        until = contact["radio_bot_until"].get(bot_id)
+        return until is not None and (now is None or until > _number(now))
+
+    @classmethod
+    def _contacts_for_bot(cls, bot, contacts, now=None):
+        return [contact for contact in contacts
+                if cls._contact_known_to(contact, bot["id"], now)]
+
     def _prune_contacts(self, known_targets, now):
         result = {1: [], 2: []}
         for team in (1, 2):
@@ -895,6 +918,13 @@ class BotPlanner(object):
                 if target is None or not target.get("alive") or _number(now) - contact["last_seen"] > CONTACT_TTL_SECONDS:
                     stale.append(target_key)
                 else:
+                    if "radio_bot_until" in contact:
+                        contact["radio_bot_until"] = {
+                            identity: until for identity, until in
+                            contact["radio_bot_until"].items() if until > _number(now)}
+                        contact["shootable_by_bot_ids"] = [identity for identity in
+                            contact.get("shootable_by_bot_ids", ())
+                            if identity in contact["radio_bot_until"]]
                     result[team].append(dict(contact))
             for target_key in stale:
                 del self._contacts[team][target_key]
@@ -1088,7 +1118,8 @@ class BotPlanner(object):
                     responders, key=lambda bot_id:
                     self._defense_retention_key(
                         live[bot_id], responders[bot_id]["point"],
-                        contacts.get(team, ()), contributor_keys))
+                        self._contacts_for_bot(live[bot_id], contacts.get(team, ()), now),
+                        contributor_keys))
                 keep = set(ranked[:reserve_limit])
                 for bot_id in list(responders):
                     if bot_id not in keep:
@@ -1139,7 +1170,8 @@ class BotPlanner(object):
                         responders, key=lambda bot_id:
                         self._defense_retention_key(
                             live[bot_id], responders[bot_id]["point"],
-                            contacts.get(team, ()), contributor_keys))
+                            self._contacts_for_bot(live[bot_id], contacts.get(team, ()), now),
+                        contributor_keys))
                     keep = set(ranked[:keep_limit])
                     for bot_id in list(responders):
                         if bot_id not in keep:
@@ -1182,8 +1214,8 @@ class BotPlanner(object):
                                     bot["state"].get("z"))),
                             value["id"]))
                         key = self._defense_eta(
-                            bot, selected["point"], contacts.get(team, ()),
-                            deadline)
+                            bot, selected["point"], self._contacts_for_bot(
+                                bot, contacts.get(team, ()), now), deadline)
                         candidates.append((key, bot["id"], selected))
                     for unused_key, bot_id, selected in sorted(
                             candidates)[:missing]:
@@ -1340,7 +1372,7 @@ class BotPlanner(object):
             bx = _number(bot["state"].get("x"))
             bz = _number(bot["state"].get("z"))
             choices = []
-            for contact in contacts:
+            for contact in self._contacts_for_bot(bot, contacts):
                 key = (str(contact.get("target_kind") or ""),
                        _integer(contact.get("id")))
                 if (key not in contributor_keys or
@@ -1808,7 +1840,7 @@ class BotPlanner(object):
                 (capability, self._capable(bot, capability, occasion))
                 for capability in bot_gunnery.TARGET_CAPABILITIES)
             tactics[bot["id"]] = reads
-            for contact in contacts:
+            for contact in self._contacts_for_bot(bot, contacts, now):
                 if (not contact.get("visible") or
                         bot["id"] not in contact.get(
                             "shootable_by_bot_ids", ())):
@@ -1872,7 +1904,7 @@ class BotPlanner(object):
                          cover_target == previous.get("target"))):
                     bx = _number(bot["state"].get("x"))
                     bz = _number(bot["state"].get("z"))
-                    for contact in contacts:
+                    for contact in self._contacts_for_bot(bot, contacts, now):
                         key = (contact.get("target_kind"), contact["id"])
                         if (key != previous.get("target") or
                                 not contact.get("visible")):
@@ -2164,7 +2196,13 @@ class BotPlanner(object):
             assigned_id = (str(assigned_route.get("id") or "")
                            if isinstance(assigned_route, dict) else "")
             assigned_until = _number(assigned.get("until")) if isinstance(assigned, dict) else 0.0
-            if (assigned_id not in catalog or
+            knowledge_lost = bool(
+                isinstance(assigned, dict) and assigned.get("radio_scoped") and
+                not any(self._nearest_route(contact, catalog) == assigned_id
+                        for contact in self._contacts_for_bot(bot, contacts, now)))
+            if knowledge_lost:
+                self._next_route_rebalance[team] = 0.0
+            if (knowledge_lost or assigned_id not in catalog or
                     assigned_route != catalog.get(assigned_id) or
                     (assigned_until > 0.0 and assigned_until <= _number(now))):
                 if route_id in catalog:
@@ -2181,6 +2219,9 @@ class BotPlanner(object):
         self._next_route_rebalance[team] = _number(now) + ROUTE_REBALANCE_SECONDS
         pressure = dict((route_id, 0.0) for route_id in catalog)
         for contact in contacts:
+            if not any(self._contact_known_to(contact, bot["id"], now)
+                       for bot in bots):
+                continue
             route_id = self._nearest_route(contact, catalog)
             if route_id is None:
                 continue
@@ -2196,7 +2237,8 @@ class BotPlanner(object):
         for bot in bots:
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
                 continue
-            if not self._route_line_contributor(bot, contacts):
+            if not self._route_line_contributor(
+                    bot, self._contacts_for_bot(bot, contacts, now)):
                 continue
             assignment = self._route_assignments.get(bot["id"], {})
             route = assignment.get("route") if isinstance(assignment, dict) else None
@@ -2214,6 +2256,9 @@ class BotPlanner(object):
         # the same pressured route in place so its waypoint index survives;
         # only a real route change clears progress below.
         for bot in bots:
+            if not any(self._nearest_route(contact, catalog) == target_route
+                       for contact in self._contacts_for_bot(bot, contacts, now)):
+                continue
             assignment = self._route_assignments.get(bot["id"])
             route = assignment.get("route") if isinstance(assignment, dict) else None
             if (isinstance(route, dict) and
@@ -2226,6 +2271,10 @@ class BotPlanner(object):
             return
         candidates = []
         for bot in bots:
+            received = self._contacts_for_bot(bot, contacts, now)
+            if not any(self._nearest_route(contact, catalog) == target_route
+                       for contact in received):
+                continue
             if bot["id"] in protected_ids:
                 continue
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
@@ -2273,6 +2322,8 @@ class BotPlanner(object):
         self._route_assignments[donor["id"]] = {
             "route": catalog[target_route],
             "until": _number(now) + ROUTE_LEASE_SECONDS,
+            "radio_scoped": any("radio_bot_until" in contact
+                                for contact in contacts),
         }
         self._route_states.pop(donor["id"], None)
 

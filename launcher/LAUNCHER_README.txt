@@ -467,13 +467,16 @@ remain from the selected build; this is not the complete upstream game.
 Extract the whole ZIP to a new empty folder; do not mix _internal directories.
 
 
-Exchange / crew TEST BUILD - 2026-09-24
-This is not the unchanged v0.9.4 release. No new release tag was created.
-Includes the zero-XP elite-notification fix, exchange-input range guard,
-and PR #32 lossless requalification / legacy disabled-skill correction.
-Original Bot077, mutual yielding, all 41 maps, armor and downhill rules are unchanged.
-The silver input field still requires confirmation in the original #1513 Flash UI.
-Existing saved zero-XP records are not deleted; no account reset is performed.
-Close the old launcher and game. Extract this whole ZIP to a NEW empty folder.
-Keep the EXE and _internal together; select your existing #1513 game directory.
-Use the same launcher save slot and profile. Back up important saves first.
+Matchmaking / SPG / physical contact / radio TEST BUILD - 2026-09-24
+Not a formal release. Version remains 0.9.4; the build identity differs.
+Includes all preceding exchange, elite-notification and crew requalification fixes.
+Restores +/-2 presets and automatic 0..3 artillery, repairs delayed SPG proofs,
+reciprocal mass-based contact/acknowledgements, and Bot radio-recipient filtering.
+Original077 driving and traffic strategies, all 41 maps, armor and downhill
+settings remain unchanged. This is no longer byte-identical upstream Bot077:
+only the documented matchmaking/mechanical/radio interfaces have changed.
+No native Windows battle acceptance is claimed; see the separate test evidence.
+Close the old launcher and game. Extract the entire ZIP into a NEW folder.
+Do not mix old/new EXE or _internal files. Select your existing #1513 game folder.
+Use the same save slot/profile. Back up important saves; no reset is necessary.
+All LAN participants and the authority worker must use this matching package.
