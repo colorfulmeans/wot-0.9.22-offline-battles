@@ -28,6 +28,13 @@ PARAMETERS = {
 }
 TEXT = (str, type(u''))
 ID = re.compile(r'^[A-Za-z][A-Za-z0-9_-]{0,47}$')
+# Only the two capture radii were added between these exact Mittengard
+# resources. Bounds, coordinates and navigation geometry are identical.
+# Pin both ends so this cannot admit an older profile after a geometry change.
+_MITTENGARD_CAPTURE_METADATA_MIGRATION = (
+    'b16d1d70e25381953092428aa379d46a17f3a956199260ee2f1f1c706cfbdcc9',
+    'e9edede615eb65e238f1efdbcd6ec81ab887adb2af4b0d4345527283126dd635',
+)
 
 
 class TacticsError(ValueError):
@@ -133,7 +140,12 @@ def canonical(raw):
         meta = MAPS[name]
         _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions'),
               ('mode', 'resource_sha256', 'routes', 'positions'))
-        if settings['mode'] != 'regular' or settings['resource_sha256'] != meta['resource_sha256']:
+        resource = settings['resource_sha256']
+        if (name == '100_thepit' and
+                (resource, meta['resource_sha256']) ==
+                _MITTENGARD_CAPTURE_METADATA_MIGRATION):
+            resource = meta['resource_sha256']
+        if settings['mode'] != 'regular' or resource != meta['resource_sha256']:
             raise TacticsError('Map mode or resource fingerprint mismatch: %s' % name)
         entry = dict(mode='regular', resource_sha256=meta['resource_sha256'], routes=[], positions=[])
         for kind, limit in (('routes', 32), ('positions', 48)):

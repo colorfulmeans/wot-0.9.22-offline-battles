@@ -75,6 +75,7 @@ jobs:
             test_port_0922_server_capture \
             test_port_0922_navigation_baker.CompiledSpace0922Test.test_authored_mittengard_capture_circles_match_ctf_objectives \
             test_port_0922_capture_circles \
+            test_port_0922_bot_tactics_editor \
             test_port_0922_bot_runtime.BotRuntimeTests.test_worker_observation_carries_live_view_range_to_ht5_receipts \
             test_port_0922_bot_runtime.BotRuntimeTests.test_human_mission_radius_refreshes_binoculars_without_reusing_dead_observer \
             test_port_0922_bot_runtime.BotOwnStationaryVisionTests \

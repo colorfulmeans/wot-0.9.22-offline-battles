@@ -33,6 +33,61 @@ def profile():
 
 
 class TacticsContractTests(unittest.TestCase):
+    @staticmethod
+    def _mittengard_profile():
+        raw = cfg.empty('Mittengard saved tactics')
+        raw['maps']['100_thepit'] = dict(
+            mode='regular',
+            resource_sha256='e9edede615eb65e238f1efdbcd6ec81ab887adb2af4b0d4345527283126dd635',
+            routes=[dict(id='west', label='West route', team=1,
+                classes=['heavyTank'], slots=[2], policy='fixed', capacity=3,
+                weight=1., points=[[-34., -130., 0], [-54., -110., 1]])],
+            positions=[dict(id='rear', label='Rear SPG', team=1,
+                point=[-34., -197.603], radius=12., heading=0., priority=5)])
+        return raw
+
+    def test_mittengard_old_capture_metadata_fingerprint_preserves_saved_tactics(self):
+        expected = cfg.canonical(self._mittengard_profile())
+        old = copy.deepcopy(expected)
+        old['maps']['100_thepit']['resource_sha256'] = (
+            'b16d1d70e25381953092428aa379d46a17f3a956199260ee2f1f1c706cfbdcc9')
+        saved = copy.deepcopy(old)
+        self.assertEqual(expected, cfg.canonical(old))
+        self.assertEqual(saved, old)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'old-mittengard.json'
+            path.write_text(cfg.dumps(old))
+            self.assertEqual(expected, cfg.load(str(path)))
+
+    def test_mittengard_current_capture_metadata_fingerprint_is_accepted(self):
+        raw = self._mittengard_profile()
+        self.assertEqual(raw, cfg.canonical(raw))
+
+    def test_mittengard_metadata_migration_keeps_resource_mode_and_point_checks(self):
+        old_hash = 'b16d1d70e25381953092428aa379d46a17f3a956199260ee2f1f1c706cfbdcc9'
+        for mutation in ('unknown', 'mode', 'route_point', 'position_point', 'other_map'):
+            raw = self._mittengard_profile()
+            entry = raw['maps']['100_thepit']
+            entry['resource_sha256'] = old_hash
+            if mutation == 'unknown':
+                entry['resource_sha256'] = '0' * 64
+            elif mutation == 'mode':
+                entry['mode'] = 'assault'
+            elif mutation == 'route_point':
+                entry['routes'][0]['points'][0][0] = 999.
+            elif mutation == 'position_point':
+                entry['positions'][0]['point'][0] = 999.
+            else:
+                raw['maps'] = {'08_ruinberg': entry}
+            with self.subTest(mutation=mutation), self.assertRaises(cfg.TacticsError):
+                cfg.canonical(raw)
+        # A later geometry fingerprint must not inherit this one-time alias.
+        meta = dict(cfg.MAPS['100_thepit'], resource_sha256='f' * 64)
+        raw = self._mittengard_profile()
+        raw['maps']['100_thepit']['resource_sha256'] = old_hash
+        with mock.patch.dict(cfg.MAPS, {'100_thepit': meta}), self.assertRaises(cfg.TacticsError):
+            cfg.canonical(raw)
+
     def test_default_contains_no_hidden_parameter_retunes(self):
         raw=cfg.canonical(cfg.empty())
         self.assertEqual({},cfg.effective(raw,1,'SPG',3))

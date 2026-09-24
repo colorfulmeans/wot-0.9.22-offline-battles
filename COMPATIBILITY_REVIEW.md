@@ -6367,6 +6367,7 @@ checks four lateral columns per carrier and chooses the highest legal fresh
 support. A first pass fits a reliable plane from the direct columns before
 lateral heights are projected back to carrier centers. This preserves a
 continuous slope's landing normal when no prior support plane exists.
+
 The normal full-body budget is 62 queries (ten springs plus twelve
 pseudo contacts); a previously observed contact can add one fresh recast per
 carrier, up to 72 in a stable support frame. Missing/lower supports retain the
@@ -6379,3 +6380,10 @@ now supports a stationary hull while its footprint remains over the rail and
 releases it when rotation about the mass center moves it beyond the rail edge.
 Query counts and Python callback timing are bounded-test evidence;
 they do not establish native frame times on the Windows client.
+
+The editor map catalog is regenerated for Mittengard's corrected resource.
+Its navigation geometry, bounds and base coordinates are byte-value identical
+to the September 24 graph; only the two capture radii were added. Existing
+Mittengard tactics accept exactly that old fingerprint paired with exactly
+the new catalog fingerprint, then normalize to the new value. Other hashes,
+maps, modes, coordinates and future geometry changes retain their validation.
