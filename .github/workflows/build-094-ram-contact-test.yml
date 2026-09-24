@@ -1,5 +1,5 @@
 name: Build v0.9.4 ramming-contact Windows test
-# retry: preserve observed midpoint; sample structural span separately
+# retry: Python 2 verifier compatibility + idempotent source commit
 on:
   push:
     branches: [fix/094-ram-contact-20260924]
@@ -58,8 +58,10 @@ jobs:
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Repair position-sensitive ram proof and duplicate traverse impulse [skip ci]'
-          git push origin HEAD:refs/heads/fix/094-ram-contact-20260924
+          if ! git diff --cached --quiet; then
+            git commit -m 'Repair position-sensitive ram proof and duplicate traverse impulse [skip ci]'
+            git push origin HEAD:refs/heads/fix/094-ram-contact-20260924
+          fi
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git rev-parse HEAD > build-evidence/source-sha.txt
           git diff 10e08f800d093d0df1eee16344737defcde38fcd -- > build-evidence/final-source.patch
