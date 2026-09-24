@@ -42,6 +42,22 @@ def run(destination):
             assert active['maps']['08_ruinberg']['routes'][0]['policy'] == 'fixed'
             assert active['maps']['08_ruinberg']['positions'][0]['radius'] == 34.
             assert not ui.dirty()
+            # Test localized presentation in the actual frozen executable.
+            # Switching must not alter the applied document or its canonical IDs.
+            before_locale = ui.store.active_path.read_bytes()
+            ui.set_language('zh'); root.update()
+            assert ui.map_var.get() == '\u9c81\u522b\u514b'
+            assert tuple(ui.rule_boxes['skill']['values']) == (
+                '\u7ee7\u627f', '\u65b0\u624b', '\u666e\u901a', '\u8001\u5175', '\u7cbe\u82f1')
+            assert not ui.dirty()
+            ui.set_language('en'); root.update()
+            assert ui.map_var.get() == 'Ruinberg'
+            assert 'All vehicle classes' in ui.rule_boxes['class_tag']['values']
+            assert before_locale == ui.store.active_path.read_bytes()
+            assert not ui.dirty()
+            report['locale_roundtrip'] = ['en', 'zh', 'en']
+            report['locale_preserved_active_bytes'] = True
+            report['localized_maps'] = len(ui.map_labels)
             # Prove that the runtime plan reader, not just the form, sees it.
             spawn = graph['spawn_formations']['1'][0]
             state = dict(id=11, team=1, slot=0, vehicle='smoke:SPG', profile={'class_tag':'SPG'},
