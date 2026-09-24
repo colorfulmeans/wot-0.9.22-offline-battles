@@ -49,6 +49,22 @@ def run(destination):
             plans, statuses = storage.runtime.assign_manual_positions(active, '08_ruinberg', graph, [state])
             assert statuses[11] == 'manual_selected' and plans[11]['source'] == 'launcher_manual_v1'
             assert len(storage.contract.MAPS) == 41
+            # Verify translations from the real frozen executable, not just
+            # source tests, while retaining the active canonical document.
+            import bot_tactics_labels as labels
+            active_bytes = ui.store.active_path.read_bytes()
+            ui.set_language('zh'); root.update()
+            assert ui.map_var.get() == '鲁别克'
+            assert ui.rule_boxes['skill'].cget('values') == ('继承上级设置','新手','普通','老兵','精英')
+            assert labels.map_label('04_himmelsdorf', 'zh') == '锡莫尔斯多夫'
+            assert labels.route_label('waterfall', 'zh') == '瀑布'
+            ui.set_language('en'); root.update()
+            assert ui.map_var.get() == 'Ruinberg'
+            assert labels.map_label('86_himmelsdorf_winter', 'en') == 'Winter Himmelsdorf'
+            assert active_bytes == ui.store.active_path.read_bytes()
+            report.update(localization_checked=True, translated_map_count=len(labels.MAP_NAMES),
+                          translated_route_count=len(labels.ROUTE_NAMES),
+                          language_switch_preserves_active=True)
             report.update(ok=True, pillow=PIL.__version__, tk=tk.TkVersion,
                           map_count=41, canvas_route_points=len(active['maps']['08_ruinberg']['routes'][0]['points']),
                           manual_plan=plans[11], profile_sha256=storage.contract.digest(active),

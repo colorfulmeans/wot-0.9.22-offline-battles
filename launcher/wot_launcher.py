@@ -1155,6 +1155,12 @@ class LauncherWindow(object):
         self.language = i18n.resolve_language(self.language_preference)
         self._apply_language()
         self._save_settings()
+        editors = []
+        for editor in getattr(self, '_bot_tactics_editors', ()):
+            if editor.root.winfo_exists():
+                editor.set_language(self.language)
+                editors.append(editor)
+        self._bot_tactics_editors = editors
 
     def _sync_mode_tab(self):
         panel = (self.single_panel if self.mode.get() == core.MODE_SINGLE
@@ -2468,8 +2474,12 @@ class LauncherWindow(object):
             else:
                 from . import bot_tactics_ui
             status = self._refresh_client()
-            bot_tactics_ui.open_editor(self.root, status.get("path", ""),
-                                      language=self.language, log=self._log)
+            editor = bot_tactics_ui.open_editor(self.root, status.get("path", ""),
+                                               language=self.language, log=self._log)
+            editors = [value for value in getattr(self, '_bot_tactics_editors', ())
+                       if value.root.winfo_exists()]
+            editors.append(editor)
+            self._bot_tactics_editors = editors
             return True
         except Exception as error:
             self._log("Bot tactics editor: %s" % error)
