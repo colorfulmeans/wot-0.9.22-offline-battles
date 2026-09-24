@@ -5,7 +5,10 @@ import os
 import shutil
 import sys
 import zipfile
-from pathlib import Path
+try:
+    from pathlib import Path
+except ImportError:  # Python 2.7 bytecode verification imports this module
+    Path = None
 
 import full_bot080_build as common
 
