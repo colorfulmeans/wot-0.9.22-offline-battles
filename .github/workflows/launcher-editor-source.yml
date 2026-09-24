@@ -1,4 +1,4 @@
-name: Export launcher editor baseline
+name: Verify launcher editor transport
 on:
   push:
     branches: [fix/094-launcher-bot-editor-20260924]
@@ -12,11 +12,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 5fda392c88c0987ed110a097e3c668d0be011fa2
-          fetch-depth: 1
-      - run: git archive --format=zip --output=baseline-5fda392c.zip HEAD
+          ref: ${{ github.sha }}
       - uses: actions/upload-artifact@v4
         with:
-          name: launcher-editor-baseline
-          path: baseline-5fda392c.zip
+          name: launcher-editor-transport
+          path: tools/bot_editor.patch.*.b64
+          if-no-files-found: error
           retention-days: 7
