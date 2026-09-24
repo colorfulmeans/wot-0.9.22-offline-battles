@@ -5084,7 +5084,9 @@ class BattleRuntime(object):
                 int(candidate['level']) for candidate in candidates))
             match_tiers = list(bot_planner.bot_match_tiers(
                 tier, tier_mode, lineup_random.random(),
-                lineup_random.random(), available_tiers))
+                lineup_random.random(), available_tiers, required_tiers=[
+                    profile['level'] for profiles in humans_by_team.values()
+                    for profile in profiles]))
             for profiles in humans_by_team.values():
                 for profile in profiles:
                     if profile['level'] not in match_tiers:
