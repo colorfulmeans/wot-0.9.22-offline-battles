@@ -32,7 +32,7 @@ jobs:
       - name: Reconstruct and hash-check the locally tested source patch
         shell: python
         run: |
-          import base64, hashlib, pathlib, subprocess, zlib
+          import base64, hashlib, pathlib, re, subprocess, zlib
           base = '5fda392c88c0987ed110a097e3c668d0be011fa2'
           subprocess.run(['git','merge-base','--is-ancestor',base,'HEAD'],check=True)
           changed = subprocess.check_output(['git','diff','--name-only',base,'HEAD'],text=True).splitlines()
@@ -60,6 +60,12 @@ jobs:
           patch = zlib.decompress(base64.b64decode(''.join(chunks),validate=True))
           assert len(patch) == 306673
           assert hashlib.sha256(patch).hexdigest() == '6200aa370febccfcce64c60e34e93d8300afadd96f13418f9f0141e08e2aa234'
+          # The transport also contained a locally generated proof. Never apply
+          # or commit it as source; verification regenerates it from this tree.
+          blocks=re.split(b'(?=^diff --git )',patch,flags=re.M)
+          patch=b''.join(b for b in blocks if not b.startswith(b'diff --git a/build-evidence/bot-editor-source-proof.json '))
+          assert len(patch)==244979
+          assert hashlib.sha256(patch).hexdigest()=='a3083771f2aa0d44e94ca9f4fd8f4dae36a77562873080a5a56d457f2522c320'
           pathlib.Path('build-evidence').mkdir(exist_ok=True)
           target=pathlib.Path('build-evidence/reviewed-editor.patch'); target.write_bytes(patch)
           subprocess.run(['git','apply','--check',str(target)],check=True)
