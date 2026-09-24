@@ -130,10 +130,17 @@ def package(app):
         f.write('41 full map names / 96 built-in route captions / canonical profile IDs unchanged.\n')
         f.write('Launcher source: '+source+'\n')
         f.write('Client and server payloads remain byte-identical to the previous Bot editor package.\n')
-    extra=app/'TESTING_20260916_GROUP1_ZH.md'
-    if extra.exists():shutil.move(str(extra),str(evidence/extra.name))
+    # The required --serve smoke writes server.log beside its frozen EXE.
+    # Keep that build-only trace as evidence, not inside the user distribution.
+    for name in ('TESTING_20260916_GROUP1_ZH.md', 'server.log'):
+        extra = app / name
+        if extra.exists():
+            assert extra.is_file() and not extra.is_symlink(), str(extra)
+            shutil.move(str(extra), str(evidence / name))
     allowed={'wot-0.9.22-offline-battles.exe','_internal','README.txt','LICENSE','THIRD_PARTY_NOTICES.md','licenses'}
-    assert {p.name for p in app.iterdir()}==allowed
+    actual = {p.name for p in app.iterdir()}
+    assert actual == allowed, {'unexpected': sorted(actual - allowed),
+                               'missing': sorted(allowed - actual)}
     target=ROOT/PACKAGE
     with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
         for p in sorted(app.rglob('*')):
