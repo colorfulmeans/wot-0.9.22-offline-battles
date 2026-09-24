@@ -27,6 +27,11 @@ def apply():
     tank = "src/res/scripts/client/gui/mods/offline_lan_0922/tank_collision.py"
     battle = "src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py"
     bot = "src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py"
+    if ("def ram_contact_sample_heights(" in (ROOT / tank).read_text() and
+            "def _native_ram_contact_plate_pair(" in (ROOT / battle).read_text() and
+            "post_contact_velocity_bodies(" in (ROOT / bot).read_text()):
+        print("Ramming/contact repair already applied.")
+        return
 
     insert_before(tank, "def _contact_ram_inputs(tank, contact_armor=None):\n", r'''def ram_contact_sample_heights(hit_y, span):
     """Return stable structural-probe heights inside one real contact span.
