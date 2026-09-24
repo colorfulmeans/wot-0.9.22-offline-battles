@@ -58,6 +58,7 @@ jobs:
       - name: Run gameplay regressions from the final source
         env:
           PYTHONPATH: tests:server:tools
+          WOT_OFFLINE_BUILD_IDENTITY: ''
         shell: bash
         run: |
           set -euo pipefail
@@ -148,6 +149,8 @@ jobs:
           path: build-evidence
       - name: Test the retained localized editor and launcher on real Windows Tk
         working-directory: launcher
+        env:
+          WOT_OFFLINE_BUILD_IDENTITY: ''
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - run: pwsh -NoProfile -File launcher/build_launcher.ps1
       - name: Verify installed payload matches the final source
