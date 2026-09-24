@@ -1146,8 +1146,19 @@ class LauncherWindow(object):
         self.report_button.config(text=self._t("Create error report..."))
         self.log_panel.config(text=self._t("Activity log"))
         self._update_action_controls()
+        self._sync_bot_tactics_language()
         if refresh:
             self._refresh_client()
+
+    def _sync_bot_tactics_language(self):
+        # All open editors use this launcher's already resolved auto/en/zh
+        # choice. Relabel without discarding or applying any unsaved draft.
+        alive = []
+        for editor in getattr(self, "_bot_tactics_editors", ()):
+            if editor.root.winfo_exists():
+                editor.set_language(self.language)
+                alive.append(editor)
+        self._bot_tactics_editors = alive
 
     def _language_selected(self, unused_event=None):
         self.language_preference = i18n.language_for_choice(
@@ -2468,8 +2479,10 @@ class LauncherWindow(object):
             else:
                 from . import bot_tactics_ui
             status = self._refresh_client()
-            bot_tactics_ui.open_editor(self.root, status.get("path", ""),
-                                      language=self.language, log=self._log)
+            editor = bot_tactics_ui.open_editor(self.root, status.get("path", ""),
+                                               language=self.language, log=self._log)
+            self._bot_tactics_editors = getattr(self, "_bot_tactics_editors", [])
+            self._bot_tactics_editors.append(editor)
             return True
         except Exception as error:
             self._log("Bot tactics editor: %s" % error)

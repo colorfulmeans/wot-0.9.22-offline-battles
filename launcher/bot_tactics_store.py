@@ -26,14 +26,17 @@ for path in (_source, _bundled):
 from gui.mods.offline_lan_0922 import bot_tactics as contract
 from gui.mods.offline_lan_0922 import bot_tactics_runtime as runtime
 
-MAP_LABELS = {
-    '08_ruinberg': '鲁别克 / Ruinberg', '35_steppes': '荒蛮之地 / Steppes',
-    '04_himmelsdorf': '锡城 / Himmelsdorf', '31_airfield': '阿拉曼机场 / Airfield',
-    '01_karelia': '卡累利阿 / Karelia', '02_malinovka': '马利诺夫卡 / Malinovka',
-    '03_campania_big': '坎帕尼亚', '05_prohorovka': '普罗霍洛夫卡 / Prokhorovka',
-    '06_ensk': '安斯克 / Ensk', '07_lakeville': '拉斯威利 / Lakeville',
-    '92_stalingrad': '斯大林格勒 / Stalingrad', '112_eiffel_tower': '巴黎 / Paris',
-}
+try:
+    from . import bot_tactics_labels as labels
+except ImportError:
+    import bot_tactics_labels as labels
+
+# Kept for source callers; UI selects the main launcher's active language.
+MAP_LABELS = {key: labels.map_label(key, 'zh') for key in contract.MAPS}
+
+
+def map_labels(language):
+    return {key: labels.map_label(key, language) for key in contract.MAPS}
 
 
 def root_path():
