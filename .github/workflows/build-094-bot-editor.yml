@@ -29,52 +29,27 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
-      - name: Reconstruct and hash-check the locally tested source patch
+      - name: Verify implemented source and correct only build-host metadata loading
         shell: python
         run: |
-          import base64, hashlib, pathlib, re, subprocess, zlib
-          base = '5fda392c88c0987ed110a097e3c668d0be011fa2'
+          import hashlib, pathlib, subprocess
+          base='3d969bb0d37e78b9ffe111a0172777c6743635a7'
           subprocess.run(['git','merge-base','--is-ancestor',base,'HEAD'],check=True)
-          changed = subprocess.check_output(['git','diff','--name-only',base,'HEAD'],text=True).splitlines()
-          assert all(p in ('.github/workflows/build-094-bot-editor.yml','.github/workflows/launcher-editor-source.yml') or (p.startswith('tools/bot_editor.patch.') and p.endswith('.b64')) for p in changed), changed
-          def read(name):
-              return ''.join(pathlib.Path('tools/bot_editor.patch.'+name+'.b64').read_text().split())
-          repairs = ''.join(read('repair.%d'%i) for i in range(8))
-          assert len(repairs) == 14576
-          assert hashlib.sha256(repairs.encode()).hexdigest() == '7dca64d7dac512cf69b486aa4fed72acc0fe8a386f088d05a676ca958991b5d2'
-          edits = {
-              0: [[1069,1070,0,0],[3665,3666,0,0],[7256,7257,0,1],[12801,12802,1,2],[13812,13813,2,2]],
-              1: [[8495,8496,2,2]],
-              2: [[0,956,2,953],[6456,6457,953,953],[12932,12933,953,953],[12957,12959,953,953],[12990,12991,953,953]],
-              3: [[4206,4206,953,969],[4207,4207,969,2580],[6914,6914,2580,3883]],
-              4: [[217,463,3883,3883],[3561,3562,3883,3884]],
-              5: [[3308,10882,3884,14576]], 6: [],7: [],8: []}
-          before = ['e44cdf8028ac3cec051b7eddba9982c2d672369c445cf9ba9b2e31befbb63b97','48c3db73b67d1adba5ac7abaa5460943b5e4c8664fe6569565ed0d64f9d9a8ca','b1e45fd5488c26c31d21d52d8e20c7c9685e20898cd9139db23c1fbc94a33a8f','f6c1439414e6f29e91caa4f6af99df92fb57cbf43528156e62e3d340a22f160a','604561e2f513692a1c39a0726f702e5b4ed5faef3b7112b703f351bbcce99aa6','eb844eaad81ac9471bfa1a6cfa16c3a1b7bfca6df288d954026acd165b285bb2','3bea270127fdf85525f2cabd1cf4a10c54681019edbe5993a814a31bd1af3752','d66cee725417c2182b9a1d528e87b79f86d1e1f15c9bd242428bf74f316c5c26','2b9e61f856f72ca94809bb7addac9aae9c2d83da1df5762f5e43cf1618dda3b2']
-          chunks=[]
-          for i in range(9):
-              raw = ''.join(read('%d.%d'%(i,j)) for j in range(7)) if i in (6,7) else read(str(i))
-              assert hashlib.sha256(raw.encode()).hexdigest() == before[i], i
-              for start,end,left,right in reversed(edits[i]):
-                  raw = raw[:start]+repairs[left:right]+raw[end:]
-              chunks.append(raw)
-          patch = zlib.decompress(base64.b64decode(''.join(chunks),validate=True))
-          assert len(patch) == 306673
-          assert hashlib.sha256(patch).hexdigest() == '6200aa370febccfcce64c60e34e93d8300afadd96f13418f9f0141e08e2aa234'
-          # The transport also contained a locally generated proof. Never apply
-          # or commit it as source; verification regenerates it from this tree.
-          blocks=re.split(b'(?=^diff --git )',patch,flags=re.M)
-          patch=b''.join(b for b in blocks if not b.startswith(b'diff --git a/build-evidence/bot-editor-source-proof.json '))
-          assert len(patch)==244979
-          assert hashlib.sha256(patch).hexdigest()=='a3083771f2aa0d44e94ca9f4fd8f4dae36a77562873080a5a56d457f2522c320'
+          path=pathlib.Path('tools/bot_editor_build.py')
+          text=path.read_text()
+          digest=hashlib.sha256(path.read_bytes()).hexdigest()
+          expected='01f1802b871487b9baa085044f5be62e99b27b1d137448e96ac1fc5250e2985b'
+          if digest != expected:
+              assert digest=='f993bb80456188594907601b61085acb2df11cea53e07a822f88c341aa2b995b'
+              old="    sys.path.insert(0,os.path.join(ROOT,'src/res/scripts/client'))\n    from gui.mods.offline_lan_0922 import bot_editor_maps\n    assert len(bot_editor_maps.MAPS) == 41\n    for name, row in bot_editor_maps.MAPS.items():\n"
+              new="    # Python 2.7 build hosts do not provide retail gui/mods packages.\n    metadata = {}\n    eval(compile(common.read(os.path.join(ROOT, PREFIX + 'bot_editor_maps.py')),\n                 'bot_editor_maps.py', 'exec'), metadata)\n    assert len(metadata['MAPS']) == 41\n    for name, row in metadata['MAPS'].items():\n"
+              assert text.count(old)==1
+              path.write_text(text.replace(old,new))
+          assert hashlib.sha256(path.read_bytes()).hexdigest()==expected
           pathlib.Path('build-evidence').mkdir(exist_ok=True)
-          target=pathlib.Path('build-evidence/reviewed-editor.patch'); target.write_bytes(patch)
-          subprocess.run(['git','apply','--check',str(target)],check=True)
-          subprocess.run(['git','apply',str(target)],check=True)
-          paths=[line[6:] for line in patch.decode().splitlines() if line.startswith('+++ b/')]
-          subprocess.run(['git','add','-N','--']+paths,check=True)
           subprocess.run(['python','tools/bot_editor_build.py','verify'],check=True)
           subprocess.run(['git','diff','--check'],check=True)
-      - name: Verify active config, server freeze, routes, positions and retained mechanics
+      - name: Verify actual profile consumers and retained game mechanics
         shell: bash
         run: |
           set -euo pipefail
@@ -82,22 +57,19 @@ jobs:
           python tools/test_094_repairs.py 2>&1 | tee build-evidence/retained-mechanics.log
           python tools/test_bot080_radio_contract.py 2>&1 | tee build-evidence/radio-contract.log
           python tools/test_bot080_startup_contract.py 2>&1 | tee build-evidence/startup-contract.log
-      - name: Commit only verified source on the test branch
+      - name: Commit verified build helper only
         id: source
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import runpy, subprocess, sys
-          sys.path.insert(0,'tools')
-          module=runpy.run_path('tools/bot_editor_build.py')
-          subprocess.run(['git','add','--']+sorted(module['EXPECTED'])+['tools/bot_editor_build.py'],check=True)
-          PY
+          git add tools/bot_editor_build.py
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Add launcher Bot tactics editor and freeze actual route and SPG plans [skip ci]'
-          git push origin HEAD:refs/heads/fix/094-launcher-bot-editor-20260924
+          if ! git diff --cached --quiet; then
+            git commit -m 'Verify editor map data independently of retail namespace [skip ci]'
+            git push origin HEAD:refs/heads/fix/094-launcher-bot-editor-20260924
+          fi
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git rev-parse HEAD > build-evidence/source-sha.txt
           git diff 5fda392c88c0987ed110a097e3c668d0be011fa2 -- > build-evidence/final-source.patch
