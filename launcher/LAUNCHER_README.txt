@@ -480,3 +480,31 @@ Close the old launcher and game. Extract the entire ZIP into a NEW folder.
 Do not mix old/new EXE or _internal files. Select your existing #1513 game folder.
 Use the same save slot/profile. Back up important saves; no reset is necessary.
 All LAN participants and the authority worker must use this matching package.
+
+Bot tactics editor TEST BUILD - 2026-09-24
+-----------------------------------------
+Tools -> Bot tactics opens the behavior and map editor. The existing Exact
+lineup tab still controls specific vehicles. In Bot tactics, save a named draft
+or apply it for the host's next battle. Changes during a battle affect only a
+later battle. Joining another host uses that host's settings.
+
+On the map tab, choose a map and team (the actual base coordinates are shown).
+Copy a read-only built-in route or draw a new route. Click to add points, drag
+to move them, Shift-click to insert, Delete to remove; mark hold points when
+needed. Configure class/slot eligibility, capacity, weight and preferred/fixed
+route policy. Fixed is a strategic lane lock, not permission to cross walls.
+
+SPG positions are allowed parking circles with a heading and priority. They
+are not spawn teleports or guaranteed firing solutions. The worker selects
+reachable vehicle-sized parking space and still validates every real shot.
+The first community library covers Ruinberg and Steppes; manual authoring is
+available on all 41 maps. Dynamic switching among library positions is not
+part of this version.
+
+Profiles are stored under %LOCALAPPDATA%\WoTOfflineBattles\bot_tactics.
+Named saves, imports and default resets are drafts until Apply is selected.
+The previous active file is retained as a .bak. Updating tactics thereafter
+does not require rebuilding the EXE. Invalid or incompatible data is reported,
+not silently activated. Original map images are read from your game package;
+when unavailable the editor labels its navigation-grid background explicitly.
+A map check is baked-geometry evidence only, not original-client gameplay.

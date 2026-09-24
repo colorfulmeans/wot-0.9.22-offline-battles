@@ -47,6 +47,7 @@ from vehicle_overlay_store import (
     VehicleOverlayStoreError,
 )
 from gui.mods.offline_lan_0922 import battle_bonds, tank_collision
+from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
 from gui.mods.offline_lan_0922.battle_achievements import (
     ACHIEVEMENT_CONDITIONS, AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES,
@@ -2257,7 +2258,7 @@ class BattleState:
                  team_size=15,
                  receipt_state_path=None, team1_size=None, team2_size=None,
                  bot_tier_mode='random', bot_lineup=None,
-                 bot_skill_mode=None, bot_excluded_vehicles=None):
+                 bot_skill_mode=None, bot_excluded_vehicles=None, bot_tactics_path=None):
         self.map_option = map_name
         self.map_name = self._choose_map()
         self.client_build = None
@@ -2272,6 +2273,8 @@ class BattleState:
             bot_tier_mode)
         self.bot_skill_mode = bot_gunnery.normalize_skill_mode(
             bot_skill_mode)
+        self.bot_tactics_path = bot_tactics_path
+        self.bot_tactics = bot_tactics.empty()
         self.bot_lineup = self._normalize_bot_lineup(bot_lineup)
         self.bot_excluded_vehicles = self._normalize_bot_excluded_vehicles(
             bot_excluded_vehicles)
@@ -3743,6 +3746,11 @@ class BattleState:
                         raw["vehicle"] not in allowed_names
                         for raw in self.bot_lineup if "vehicle" in raw):
                     return None, "invalid_bot_lineup"
+            try:
+                proposed_tactics = bot_tactics.load(self.bot_tactics_path)
+            except bot_tactics.TacticsError as error:
+                _server_log("BOT TACTICS refused: %s" % error)
+                return None, "invalid_bot_tactics"
             if requested_map not in (None, ""):
                 requested_map = str(requested_map)
                 active_map_pool = tuple(self._active_map_pool())
@@ -3775,6 +3783,12 @@ class BattleState:
             self.bot_roster = (self._new_bot_roster(occupied_slots)
                                if battle_mode == "regular" or training_bots else [])
             self.roster_finalized = True
+            self.bot_tactics = bot_tactics.for_round(proposed_tactics, self.map_name)
+            self.bot_planner.tactics = copy.deepcopy(self.bot_tactics)
+            self.bot_planner.tactics_map = self.map_name
+            _server_log("BOT TACTICS pinned round=%d profile=%s profile_sha256=%s round_sha256=%s document=%s" % (
+                self.round_id, self.bot_tactics['name'], bot_tactics.digest(proposed_tactics), bot_tactics.digest(self.bot_tactics),
+                bot_tactics.dumps(self.bot_tactics)))
             self.phase = "loading"
             self._elect_bot_authority()
             self.state_revision += 1
@@ -3798,6 +3812,7 @@ class BattleState:
                 "bot_tier_mode": self.bot_tier_mode,
                 "bot_skill_mode": self.bot_skill_mode,
                 "bot_lineup": list(self.bot_lineup),
+                "bot_tactics": copy.deepcopy(self.bot_tactics),
                 "bot_excluded_vehicles": list(self.bot_excluded_vehicles),
                 "bot_authority_id": self.bot_authority_id,
                 "bot_manifest": list(self.bot_manifest),
@@ -4575,6 +4590,7 @@ class BattleState:
                 "bot_tier_mode": self.bot_tier_mode,
                 "bot_skill_mode": self.bot_skill_mode,
                 "bot_lineup": list(self.bot_lineup),
+                "bot_tactics": copy.deepcopy(self.bot_tactics),
                 "bot_excluded_vehicles": list(self.bot_excluded_vehicles),
                 "bot_authority_id": self.bot_authority_id,
                 "bot_manifest": takeover_manifest,
@@ -4795,6 +4811,18 @@ class BattleState:
                     "profile": self._sanitize_bot_profile(raw.get("profile")),
                     "route": route,
                 }
+                if (self.battle_mode == "regular" and
+                        entry["profile"].get("class_tag") == "SPG"):
+                    initial = spg_positions.canonical_plan(
+                        raw.get("spg_initial"), self.map_name, entry["vehicle"], team=entry["team"], tactics=self.bot_tactics)
+                    if initial is not None:
+                        # Optional round metadata: never make a missing or
+                        # malformed recommendation a fatal manifest rejection.
+                        entry["spg_initial"] = initial
+                    elif "spg_initial" in raw:
+                        _server_log_limited(
+                            ("spg_initial", self.round_id, bot_id),
+                            "SPG INITIAL ignored malformed optional plan bot=%d" % bot_id)
                 # Per-vehicle constants are validated once here. Every later
                 # publication carries only the values that change, and
                 # ``_decode_bot_row`` rejoins these.
@@ -15138,6 +15166,7 @@ class BattleState:
                     "bot_tier_mode": self.bot_tier_mode,
                     "bot_skill_mode": self.bot_skill_mode,
                     "bot_lineup": list(self.bot_lineup),
+                "bot_tactics": copy.deepcopy(self.bot_tactics),
                     "bot_excluded_vehicles": list(self.bot_excluded_vehicles),
                     "bot_authority_id": self.bot_authority_id,
                     "authority_epoch": self.authority_epoch,
@@ -16140,7 +16169,7 @@ def run_server(host, port, map_name, max_players,
                team1_size=None, team2_size=None,
                bot_tier_mode="random", bot_lineup=None,
                bot_skill_mode=None,
-               vehicle_overlay_root=None, bot_excluded_vehicles=None):
+               vehicle_overlay_root=None, bot_excluded_vehicles=None, bot_tactics_path=None):
     if receipt_state_path is None:
         receipt_state_path = _default_result_receipt_state_path(port)
     state = BattleState(map_name=map_name, max_players=max_players,
@@ -16150,7 +16179,8 @@ def run_server(host, port, map_name, max_players,
                         bot_tier_mode=bot_tier_mode,
                         bot_lineup=bot_lineup,
                         bot_skill_mode=bot_skill_mode,
-                        bot_excluded_vehicles=bot_excluded_vehicles)
+                        bot_excluded_vehicles=bot_excluded_vehicles,
+                        bot_tactics_path=bot_tactics_path)
     if vehicle_overlay_root:
         try:
             overlay = VehicleOverlayStore(vehicle_overlay_root)

@@ -30,6 +30,7 @@ from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import gun_pitch_limits
 from gui.mods.offline_lan_0922 import hull_aiming
 from gui.mods.offline_lan_0922 import prebaked_navigation
+from gui.mods.offline_lan_0922 import spg_positions, bot_tactics, bot_tactics_runtime
 from gui.mods.offline_lan_0922 import shot_geometry
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
@@ -2155,6 +2156,8 @@ class BotRuntime(object):
         self._reset_shot_lane_diagnostics()
         self._physics_params = {}
         self._bot_ratings = {}
+        self._bot_tactics = bot_tactics.empty()
+        self._bot_behavior = {}
         self._bot_skill_mode = bot_gunnery.DEFAULT_SKILL_MODE
         self._bot_skill_pins = {}
         self._gunnery_holds = {}
@@ -3170,7 +3173,8 @@ class BotRuntime(object):
 
     def bot_crew_level(self, bot_id):
         """Return the #1513 crew level this Bot's rating trains it to."""
-        return bot_gunnery.rating_crew_level(self.bot_rating(bot_id))
+        values = getattr(self, '_bot_behavior', {}).get(int(bot_id), {})
+        return int(values.get('crew_level', bot_gunnery.rating_crew_level(self.bot_rating(bot_id))))
 
     def bot_aim_selection_allowed(self, state, target):
         """Return whether this Bot's gunner picks the part it can hurt most.
@@ -3200,6 +3204,14 @@ class BotRuntime(object):
     def battle_start(self, message):
         """Build a local authority manifest from the server roster once per round."""
         message = message if isinstance(message, dict) else {}
+        if 'bot_tactics' in message:
+            proposed = bot_tactics.canonical(message['bot_tactics'])
+            if (message.get('round_id') == self.round_id and self._manifest_sent and
+                    bot_tactics.digest(proposed) != bot_tactics.digest(self._bot_tactics)):
+                raise ValueError('Bot tactics changed inside an active round')
+            self._bot_tactics = proposed
+        elif message.get('round_id') != self.round_id:
+            self._bot_tactics = bot_tactics.empty()
         self._bot_skill_mode = bot_gunnery.normalize_skill_mode(
             message.get('bot_skill_mode'))
         self._bot_skill_pins = self._lineup_skill_pins(message)
@@ -3239,6 +3251,7 @@ class BotRuntime(object):
             self._reset_shot_lane_diagnostics()
             self._physics_params = {}
             self._bot_ratings = {}
+            self._bot_behavior = {}
             self._gunnery_holds = {}
             self._suspension_params = {}
             self._suspension_param_failures = 0
@@ -3423,12 +3436,21 @@ class BotRuntime(object):
             wire_total = int(raw_wire_total)
             siege_time_left = wire_time / 1000.0
             siege_transition_total = wire_total / 1000.0
-            self._bot_ratings[bot_id] = self._resolve_bot_rating(raw)
-            crew_level = bot_gunnery.rating_crew_level(
-                self._bot_ratings[bot_id])
+            descriptor = siege_mechanics.active_descriptor(descriptor_pair, siege_state)
+            tags = getattr(getattr(descriptor, 'type', None), 'tags', ())
+            class_tag = (raw.get('profile') or {}).get('class_tag') or next(
+                (c for c in bot_tactics.CLASSES if c in tags), 'unknown')
+            values = bot_tactics.effective(self._bot_tactics, int(raw.get('team', 1)),
+                                           class_tag, int(raw.get('slot', 0)))
+            self._bot_behavior[bot_id] = values
+            rating = self._resolve_bot_rating(raw)
+            # Restored manifest rating is already canonical. New tactics skill
+            # overrides the room/lineup only when explicitly provided.
+            if not restoring_authority and 'skill' in values:
+                rating = bot_gunnery.rating_for_skill(values['skill'])
+            self._bot_ratings[bot_id] = rating
+            crew_level = self.bot_crew_level(bot_id)
             self._descriptor_pairs[bot_id] = descriptor_pair
-            descriptor = siege_mechanics.active_descriptor(
-                descriptor_pair, siege_state)
             half_length, half_width = _hull_dimensions(descriptor)
             self._descriptors[bot_id] = descriptor
             self._suspension_params.pop(bot_id, None)
@@ -3610,6 +3632,8 @@ class BotRuntime(object):
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)
+        self._prepare_user_routes(message, restoring_authority)
+        self._prepare_initial_spg_positions(message, restoring_authority)
         bots = [self._manifest_entry(state)
                 for state in self._ordered_states()]
         player_collision_profiles = (
@@ -3623,6 +3647,91 @@ class BotRuntime(object):
         self._pending_manifest_round_id = self.round_id
         self._pending_manifest_authority_id = self.authority_id
         return [copy.deepcopy(self._pending_manifest)]
+
+    def _prepare_user_routes(self, message, restoring):
+        name = tactical_maps.normalize_map_name(message.get('map', ''))
+        states = list(self._ordered_states())
+        if restoring:
+            plans = {}
+            for raw in message.get('bot_manifest') or ():
+                route = raw.get('route') or {}
+                authored = bot_tactics.route_config(self._bot_tactics, name, route.get('id'))
+                if authored is not None:
+                    plans[raw['id']] = bot_tactics_runtime.route_value(authored)
+            outcomes = dict((actor, 'restored') for actor in plans)
+        elif message.get('battle_mode', 'regular') == 'regular':
+            plans, outcomes = bot_tactics_runtime.assign_routes(
+                self._bot_tactics, name, self.baked_graph, states, self.round_id)
+        else:
+            plans, outcomes = {}, {}
+        for actor, status in sorted(outcomes.items()):
+            if actor in plans:
+                self.states[actor]['route'] = plans[actor]
+                agent = getattr(self.adapter.director, 'agents', {}).get(actor)
+                if agent is not None:
+                    agent['route'] = plans[actor]
+            sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS route bot=%d map=%s status=%s id=%s\n' % (
+                actor, name, status, (plans.get(actor) or {}).get('id', 'legacy_fallback')))
+
+    def _prepare_initial_spg_positions(self, message, restoring_authority):
+        """Own initial placement once; publish the same plan with the roster.
+
+        This never changes spawn poses or ordinary route endpoints. The server
+        receives one explicit SPG goal; moving there uses the existing driver.
+        A missing/invalid optional plan cannot abort a round or affect other Bots.
+        """
+        map_name = tactical_maps.normalize_map_name(message.get('map', ''))
+        mode = message.get('battle_mode', 'regular')
+        states = list(self._ordered_states())
+        if restoring_authority:
+            canonical = dict((int(raw['id']), raw) for raw in
+                             (message.get('bot_manifest') or ())
+                             if isinstance(raw, dict) and raw.get('id') is not None)
+            for state in states:
+                if (state.get('profile') or {}).get('class_tag') != 'SPG':
+                    continue
+                raw = canonical.get(state['id'], {})
+                plan = spg_positions.canonical_plan(
+                    raw.get('spg_initial'), map_name, state.get('vehicle'), team=state.get('team'), tactics=self._bot_tactics)
+                if mode == 'regular' and plan is not None:
+                    state['_spg_initial'] = plan
+                    state['_spg_initial_status'] = 'restored'
+                else:
+                    state.pop('_spg_initial', None)
+                    state['_spg_initial_status'] = 'restored_without_library_plan'
+            return
+        try:
+            plans, outcomes = spg_positions.assign_initial_positions(
+                map_name, self.baked_graph, states, mode)
+            manual, manual_outcomes = bot_tactics_runtime.assign_manual_positions(
+                self._bot_tactics, map_name, self.baked_graph, states, mode)
+            for actor in manual_outcomes:
+                plans.pop(actor, None)
+            plans.update(manual)
+            outcomes.update(manual_outcomes)
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+            plans = {}
+            outcomes = dict((state['id'], 'invalid_optional_position_data')
+                            for state in states if
+                            (state.get('profile') or {}).get('class_tag') == 'SPG')
+        for state in states:
+            actor = state['id']
+            if actor not in outcomes:
+                continue
+            plan = plans.get(actor)
+            if plan is not None:
+                state['_spg_initial'] = plan
+            else:
+                state.pop('_spg_initial', None)
+            state['_spg_initial_status'] = outcomes[actor]
+            # Once per initial manifest; never issue extra native collision rays.
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] SPG INITIAL map=%s bot=%d status=%s '
+                'side=%s zone=%s cell=%s point=%s source=%s fire=runtime_required\n' % (
+                    map_name, actor, outcomes[actor],
+                    plan['side'] if plan else '-', plan['zone'] if plan else '-',
+                    plan['cell'] if plan else '-', plan['point'] if plan else '-',
+                    plan['source'] if plan else 'legacy_fallback'))
 
     def pending_manifest(self):
         """Return one isolated copy of the current unsent manifest."""
@@ -4415,6 +4524,10 @@ class BotRuntime(object):
         # terminal projection as canonical.
         if (terminal is not None and terminal.get('crew_roster')):
             result['terminal_critical'] = terminal
+        initial = spg_positions.canonical_plan(
+            state.get('_spg_initial'), vehicle=state.get('vehicle'), team=state.get('team'), tactics=self._bot_tactics)
+        if initial is not None:
+            result['spg_initial'] = initial
         # These coordinates were resolved against the loaded retail map by
         # the authority.  Consumers must not run the formation resolver a
         # second time and nudge the same slot away from its canonical pose.
@@ -7738,7 +7851,14 @@ class BotRuntime(object):
             goal = grounded
         now = state.get('now', 0.0)
         route_index = int(strategic.get('route_index', 0))
-        if mode == 'base_defense':
+        # Adapter state is a reduced decision view; the round plan belongs to
+        # the authoritative Bot state, not that transient projection.
+        initial = (self.states.get(int(bot_id)) or {}).get('_spg_initial')
+        if initial is not None and mode in ('artillery_hold', 'artillery_deploy'):
+            # Target changes/spot leases must not throw away deployment progress.
+            path_key = ('spg_initial', int(bot_id), spg_positions.plan_identity(initial))
+            anchor = None
+        elif mode == 'base_defense':
             path_key = (
                 'local', int(bot_id), 'base_defense',
                 str(strategic.get('defense_base_id') or 'own_base'))
@@ -9463,7 +9583,7 @@ class BotRuntime(object):
             record['epoch'] = epoch
             record['error'] = bot_gunnery.engagement_error(
                 self.bot_rating(bot_id), self.round_id, bot_id,
-                record['key'], epoch)
+                record['key'], epoch, overrides=getattr(self, '_bot_behavior', {}).get(bot_id))
         return record['error']
 
     def _aimed_target(self, state, target, now):
@@ -9494,7 +9614,8 @@ class BotRuntime(object):
             return target
         lateral, vertical = bot_gunnery.aim_offset_metres(
             self.bot_rating(bot_id), error,
-            gun_state.fully_aimed_dispersion, _distance(origin, position))
+            gun_state.fully_aimed_dispersion, _distance(origin, position),
+            overrides=getattr(self, '_bot_behavior', {}).get(bot_id))
         velocity = self._target_velocity(target)
         scale = float(error['lead_scale'])
         aimed = dict(target)
@@ -9513,7 +9634,8 @@ class BotRuntime(object):
             return False
         return bot_gunnery.may_fire(
             self.bot_rating(int(state['id'])), held[0], held[1],
-            gun_state.current_dispersion_factor, held[2])
+            gun_state.current_dispersion_factor, held[2],
+            overrides=getattr(self, '_bot_behavior', {}).get(int(state['id'])))
 
     def _ballistic_solution(self, state, target, descriptor, shell_index,
                             now):
@@ -10591,6 +10713,23 @@ class BotRuntime(object):
         if str((state.get('profile') or {}).get('class_tag') or '') != 'SPG':
             return order
         mode = order.get('combat_mode')
+        initial = state.get('_spg_initial')
+        if initial is not None and mode in ('artillery_hold', 'artillery_deploy'):
+            # The new initial goal is not an ordinary route waypoint. In
+            # particular, do not replace it with the legacy 16..80 m route
+            # heuristic or stop fifteen metres short of its usable area.
+            state.pop('_spg_position', None)
+            destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
+            arrived = _distance(_position(state), destination) <= initial['radius']
+            result = dict(order)
+            result.update(move_position=destination, route_anchor=destination,
+                          route_join=False, throttle_override=0.0 if arrived else None,
+                          combat_mode='artillery_hold' if arrived else 'artillery_deploy')
+            if state.get('_spg_obstruction') is not None and arrived:
+                state['_spg_position_event'] = 'library_position_fire_obstructed'
+            # Neither reaching a position nor its source recommendation grants
+            # fire permission. Keep the selected target and all real fire gates.
+            return result
         if mode not in ('artillery_hold', 'artillery_deploy'):
             state.pop('_spg_position', None)
             return order
