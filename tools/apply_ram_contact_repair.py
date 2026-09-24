@@ -219,14 +219,23 @@ def apply():
                 float(own['y']) + float(own['shape'][3]),
                 float(other['y']) + float(other['shape'][3]))
 ''',
-'''            own_low, own_high = tank_collision.vertical_interval(
+'''            # Preserve the historical presentation midpoint as the first
+            # observed damage height.  Separately derive a pitched/rolled
+            # shared vertical span for structural fallbacks.
+            low = max(
+                float(own['y']) + float(own['shape'][2]),
+                float(other['y']) + float(other['shape'][2]))
+            high = min(
+                float(own['y']) + float(own['shape'][3]),
+                float(other['y']) + float(other['shape'][3]))
+            own_contact_low, own_contact_high = tank_collision.vertical_interval(
                 own['y'], own['shape'],
                 own.get('pitch', 0.0), own.get('roll', 0.0))
-            other_low, other_high = tank_collision.vertical_interval(
+            other_contact_low, other_contact_high = tank_collision.vertical_interval(
                 other['y'], other['shape'],
                 other.get('pitch', 0.0), other.get('roll', 0.0))
-            low = max(own_low, other_low)
-            high = min(own_high, other_high)
+            contact_low = max(own_contact_low, other_contact_low)
+            contact_high = min(own_contact_high, other_contact_high)
 ''')
 
     replace_once(battle,
@@ -235,7 +244,7 @@ def apply():
 ''',
 '''                player_ram_profile=own['ram_profile'],
                 contact_normal=impact_contact[:2],
-                contact_y_span=(low, high))
+                contact_y_span=(contact_low, contact_high))
 ''')
 
     replace_once(battle,
