@@ -1483,10 +1483,9 @@ class BotPlanner(object):
         roles = profile.get("roles") if isinstance(profile.get("roles"), dict) else {}
         desired = max(40.0, _number(profile.get("desired_range"), 180.0))
         if str(profile.get("class_tag") or "") == "SPG":
-            # The authority client puts an SPG id in shootable_by_bot_ids only
-            # after a pitch-valid, obstacle-free ballistic path is complete.
-            # Do not discard that stronger proof through the old 560 m direct
-            # fire envelope.
+            # Artillery may track received contacts beyond the ordinary
+            # direct-fire envelope. Tracking never substitutes for the
+            # worker's pitch-valid, obstacle-free launch proof.
             return max(
                 desired,
                 min(2500.0, _number(profile.get("fire_range"), 1250.0)))
@@ -1841,9 +1840,16 @@ class BotPlanner(object):
                 for capability in bot_gunnery.TARGET_CAPABILITIES)
             tactics[bot["id"]] = reads
             for contact in self._contacts_for_bot(bot, contacts, now):
+                # A curved artillery lane is tied to the physical muzzle
+                # pose. Requiring that lane before selecting a target creates
+                # a cycle: acquire -> turn hull -> invalidate lane -> lose the
+                # two-second lease -> face the base -> acquire again. Tracking
+                # received enemy intelligence is not permission to skip the
+                # worker's independent ballistic and exact launch checks.
+                artillery = str(bot.get("profile", {}).get("class_tag") or "") == "SPG"
                 if (not contact.get("visible") or
-                        bot["id"] not in contact.get(
-                            "shootable_by_bot_ids", ())):
+                        (not artillery and bot["id"] not in contact.get(
+                            "shootable_by_bot_ids", ()))):
                     continue
                 distance = math.hypot(
                     contact["position"]["x"] - bx,
@@ -1878,7 +1884,9 @@ class BotPlanner(object):
                     contact["id"], distance)
                 candidate = (
                     sort_key, bot, contact, distance,
-                    self._weapon_ready(bot))
+                    self._weapon_ready(bot) and
+                    (not artillery or bot["id"] in contact.get(
+                        "shootable_by_bot_ids", ())))
                 candidates.append(candidate)
                 by_bot.setdefault(bot["id"], []).append(candidate)
 
@@ -3008,11 +3016,13 @@ class BotPlanner(object):
             return order
         if str(profile.get("class_tag") or "") == "SPG":
             if focus is not None:
-                observers = focus.get("shootable_by_bot_ids")
+                # This flag admits an attempt, not an unchecked launch. The
+                # worker still requires a current family solution, alignment,
+                # ammunition, exact native arc proof and friendly clearance.
+                # An expired advisory must not cancel that pending proof.
                 self._set_target(
                     order, bot, focus, profile, personality,
-                    bool(focus.get("visible") and
-                         bot["id"] in (observers or ())))
+                    bool(focus.get("visible")))
             self._apply_artillery_order(order, bot, team_axis)
             return order
 

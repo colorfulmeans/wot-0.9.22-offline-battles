@@ -3650,6 +3650,7 @@ class BattleRuntime(object):
                 artillery_friendly_lane_probe=(
                     self._bot_artillery_friendly_lane),
                 artillery_launch_cancel=self._bot_artillery_cancel,
+                artillery_status_probe=self._bot_artillery_status,
                 spawn_resolver=self._formation_pose,
                 ground_probe=self._navigation_ground,
                 # Use the player's near-body support layer for Bot height
@@ -23911,6 +23912,9 @@ class BattleRuntime(object):
         """Read the same native muzzle used by the final SPG proof."""
         return self._bot_direct_launch_origin(
             source, descriptor, 0, 0, 0.0, 0.0, 0.0)
+
+    def _bot_artillery_status(self, source, target, shell_index, now):
+        return self._artillery.status(source, target, shell_index, now)
 
     def _bot_ballistic_solution(self, source, target, descriptor,
                                 shell_index, now):
