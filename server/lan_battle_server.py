@@ -14523,7 +14523,7 @@ class BattleState:
                      for p in self.players.values()
                      if p.connected and p.participating],
                     time.monotonic(), self._bot_defense_context(),
-                    team_orders=team_orders)
+                    team_orders=team_orders, map_name=self.map_name)
                 self._next_bot_planner_tick = (
                     self.tick + BOT_PLANNER_INTERVAL_TICKS)
             # Freeze the one current clock sample shared by this tick's durable

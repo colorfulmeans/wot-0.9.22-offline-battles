@@ -19,6 +19,7 @@ if _CLIENT_SCRIPT_ROOT not in sys.path:
     sys.path.insert(0, _CLIENT_SCRIPT_ROOT)
 
 from gui.mods.offline_lan_0922 import bot_gunnery
+from gui.mods.offline_lan_0922.ai import spg_positions
 from gui.mods.offline_lan_0922.ai.cover import (
     normalize_candidate,
     score_candidates,
@@ -207,6 +208,8 @@ class BotPlanner(object):
         self._base_defense = {1: {}, 2: {}}
         self._base_capture = {1: {}, 2: {}}
         self._artillery_anchors = {}
+        self._spg_map_name = None
+        self._spg_deployments = {}
         self._recent_hits = {}
 
     def reset(self, round_id=None):
@@ -236,6 +239,8 @@ class BotPlanner(object):
         self._base_defense = {1: {}, 2: {}}
         self._base_capture = {1: {}, 2: {}}
         self._artillery_anchors = {}
+        self._spg_map_name = None
+        self._spg_deployments = {}
         self._recent_hits = {}
 
     def _capable(self, bot, capability, *occasion):
@@ -701,10 +706,11 @@ class BotPlanner(object):
         return order
 
     def build_orders(self, manifest, bot_states, players, now,
-                     defense=None, team_orders=None):
+                     defense=None, team_orders=None, map_name=None):
         known_targets = self.known_targets(bot_states, players)
         contacts = self._prune_contacts(known_targets, now)
         bots = self._alive_bots(manifest, bot_states)
+        self._prepare_spg_deployments(map_name, bots)
         self._prune_tactical_state(bots, known_targets, now)
         defenders = self._update_base_defense(
             bots, contacts, defense, now)
@@ -750,6 +756,14 @@ class BotPlanner(object):
                 self._apply_team_order(
                     order, bot, team_order_by_bot.get(bot["id"]),
                     players, defense, route_point, turnback_point)
+                if ('spg_position_id' in order and
+                        (order.get('combat_mode') not in ('artillery_deploy', 'artillery_hold')
+                         or not spg_positions.plan_matches_order(order))):
+                    # A manual move/base defence owns the goal, not the stored
+                    # initial deployment. Do not send contradictory metadata.
+                    for name in spg_positions.ORDER_FIELDS:
+                        order.pop(name, None)
+                    order.pop('spg_position_status', None)
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
         payload = {"orders": orders}
@@ -2097,14 +2111,42 @@ class BotPlanner(object):
             return None
         return own, enemy
 
-    def _artillery_anchor(self, bot, team_axis):
-        """Choose a stable rear staging point from this SPG's safe route.
+    def _prepare_spg_deployments(self, map_name, bots):
+        """Reserve initial forum-derived goals once, independently of route churn."""
+        if map_name != self._spg_map_name:
+            self._spg_deployments = {}
+            self._spg_map_name = map_name
+        artillery = [bot for bot in bots if bot["profile"].get("class_tag") == "SPG"]
+        live = dict((bot["id"], bot) for bot in artillery)
+        self._spg_deployments = dict((identity, point) for identity, point in
+            self._spg_deployments.items() if identity in live and
+            point['team'] == live[identity]['team'])
+        reserved = [spg_positions.reservation(live[identity], point)
+                    for identity, point in sorted(self._spg_deployments.items())]
+        for bot in sorted(artillery, key=lambda value: value['id']):
+            if bot['id'] in self._spg_deployments:
+                continue
+            point = spg_positions.choose(map_name, bot, reserved, self._round_id)
+            if point is not None:
+                self._spg_deployments[bot['id']] = point
+                reserved.append(spg_positions.reservation(bot, point))
 
-        The server has graph-validated macro points but no static visibility or
-        shell-arc probe. Select only by distance from the own base and progress
-        on the own/enemy axis; ``hold`` annotations are deliberately not treated
-        as proof that a point is an artillery position.
+    def _artillery_anchor(self, bot, team_axis):
+        """Use a reserved historical marker, otherwise the explicit legacy fallback.
+
+        The library has graph-projected parking patches, not prevalidated native
+        firing arcs. Final shots still use the worker's complete ballistic proof.
         """
+        deployment = self._spg_deployments.get(bot['id'])
+        if deployment is not None:
+            entry = spg_positions.DATA['maps'][self._spg_map_name]
+            enemy = entry['spawn_anchors'][2-bot['team']]
+            x, y, z = deployment['point']
+            return {'point': {'x': x, 'y': y, 'z': z},
+                    'face': {'x': enemy[0], 'y': y, 'z': enemy[1]},
+                    'index': 0, 'spg_position_id': deployment['id']}
+        # Explicit compatibility fallback for maps without a usable historical
+        # marker. It is not represented as a forum-authored firing position.
         route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
         waypoints = route.get("waypoints")
         route_signature = (
@@ -2854,7 +2896,15 @@ class BotPlanner(object):
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         distance = math.hypot(point["x"] - _number(state.get("x")),
                               point["z"] - _number(state.get("z")))
-        arrived = distance <= 15.0
+        sourced = anchor.get('spg_position_id')
+        arrived = distance <= (spg_positions.ARRIVAL_RADIUS if sourced else 15.0)
+        if sourced:
+            order.update(spg_position_id=sourced, spg_position_map=self._spg_map_name,
+                         spg_position_revision=spg_positions.REVISION,
+                         spg_position_status='forum_graph_projected')
+        else:
+            status = spg_positions.map_status(self._spg_map_name)
+            order['spg_position_status'] = (status if status != 'ready' else 'no_free_slot')
         order["combat_mode"] = (
             "artillery_hold" if arrived else "artillery_deploy")
         order["move_position"] = dict(point)

@@ -16,6 +16,7 @@ from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.traffic import TrafficCoordinator
 from gui.mods.offline_lan_0922.ai import maps as tactical_maps
 from gui.mods.offline_lan_0922.ai import driver as ai_driver
+from gui.mods.offline_lan_0922.ai import spg_positions
 from gui.mods.offline_lan_0922.ai import planner as ai_planner
 from gui.mods.offline_lan_0922.ai.navigation import (
     BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, TerrainNavigator)
@@ -4362,6 +4363,14 @@ class BotRuntime(object):
                 cover_id = order['cover_id']
                 if not isinstance(cover_id, _STRING_TYPES) or len(cover_id) > 80:
                     return False
+            if not spg_positions.plan_matches_order(order):
+                return False
+            if 'spg_position_id' in order:
+                state = self.states.get(bot_id)
+                if state is not None and (
+                        (state.get('profile') or {}).get('class_tag') != 'SPG'
+                        or state.get('team') != order.get('team')):
+                    return False
             accepted[bot_id] = order
         previous = self._server_orders
         changed_ids = set(previous).union(accepted)
@@ -7743,6 +7752,13 @@ class BotRuntime(object):
                 'local', int(bot_id), 'base_defense',
                 str(strategic.get('defense_base_id') or 'own_base'))
             anchor = None
+        elif strategic.get('spg_position_id') and mode in (
+                'artillery_deploy', 'artillery_hold'):
+            # A new enemy is not a new deployment path. The goal belongs to
+            # the reserved firing position, independently of target leases.
+            path_key = ('local', int(bot_id), 'spg_deployment',
+                        strategic['spg_position_id'])
+            anchor = None
         elif mode in ('route', 'advance', 'hold'):
             anchor = (strategic.get('route_anchor')
                       if bool(strategic.get('route_join')) else None)
@@ -10581,6 +10597,58 @@ class BotRuntime(object):
         self._decision_cache.pop(bot_id, None)
         return True
 
+    def _library_artillery_deployment(self, state, order):
+        """Validate a sourced goal and finish parking before taking aim.
+
+        Graph checks are cached per immutable graph object/position. They issue
+        no native collision rays. Original navigation still proves the actual
+        movement; original firing queues still prove every launched shell.
+        """
+        result = dict(order)
+        map_name = order.get('spg_position_map')
+        point = spg_positions.lookup(map_name, order.get('spg_position_id'),
+                                     state.get('team'), order.get('spg_position_revision'))
+        graph = self.baked_graph
+        check = state.get('_spg_library_check')
+        key = (id(graph), map_name, order.get('spg_position_id'),
+               order.get('spg_position_revision'), state.get('team'))
+        if check is None or check[0] != key:
+            valid = (point is not None and map_name == self._navigation_map_name
+                     and spg_positions.graph_accepts(map_name, point, graph))
+            state['_spg_library_check'] = (key, bool(valid))
+        else:
+            valid = check[1]
+        if not valid:
+            self._cancel_artillery_intent(state['id'])
+            state['_spg_position_event'] = 'library_graph_mismatch'
+            result.update(combat_mode='spg_invalid_position',
+                          move_position=_position(state), route_anchor=_position(state),
+                          throttle_override=0.0, target_id=None, target_kind=None,
+                          fire_allowed=False, aim_position=_position(state),
+                          face_position=_position(state))
+            return result
+        primary = tuple(point['point'])
+        relocation = state.get('_spg_position')
+        destination = (relocation['point'] if relocation is not None and
+                       relocation.get('anchor') == primary else primary)
+        arrived = math.hypot(state['x']-destination[0], state['z']-destination[2]) <= spg_positions.ARRIVAL_RADIUS
+        result.update(combat_mode='artillery_hold' if arrived else 'artillery_deploy',
+                      throttle_override=0.0 if arrived else None)
+        if not arrived:
+            # combat_hull_aim must not replace the steering command with a
+            # target-facing turn while the SPG is still en route to its slot.
+            self._cancel_artillery_intent(state['id'])
+            result.update(target_id=None, target_kind=None, fire_allowed=False,
+                          aim_position=destination, face_position=destination)
+        state['_spg_position_event'] = 'library_parked' if arrived else 'library_deploying'
+        if state.get('_spg_library_logged') != point['id']:
+            state['_spg_library_logged'] = point['id']
+            sys.stdout.write('[Offline LAN 0.9.22] SPG DEPLOY map=%s bot=%d '
+                             'position=%s goal=(%.3f,%.3f,%.3f) source=hawg2527609\n' % (
+                                 map_name, state['id'], point['id'],
+                                 primary[0], primary[1], primary[2]))
+        return result
+
     def _artillery_position_order(self, state, order, targets, now):
         """Leave a confirmed muzzle-side obstruction via the existing driver.
 
@@ -10594,6 +10662,18 @@ class BotRuntime(object):
         if mode not in ('artillery_hold', 'artillery_deploy'):
             state.pop('_spg_position', None)
             return order
+        library_plan = order.get('spg_position_id')
+        if library_plan:
+            order = self._library_artillery_deployment(state, order)
+            mode = order.get('combat_mode')
+            if mode == 'spg_invalid_position':
+                return order
+        if not library_plan and order.get('spg_position_status'):
+            status = order['spg_position_status']
+            if state.get('_spg_library_fallback_logged') != status:
+                state['_spg_library_fallback_logged'] = status
+                sys.stdout.write('[Offline LAN 0.9.22] SPG DEPLOY bot=%d '
+                                 'source=legacy_fallback reason=%s\n' % (state['id'], status))
         anchor = _point(order.get('move_position'), _position(state))
         position = state.get('_spg_position')
         if position is not None and position['anchor'] != anchor:
@@ -10638,7 +10718,9 @@ class BotRuntime(object):
             return order
         result = dict(order)
         destination = position['point']
-        arrived = _distance(_position(state), destination) <= 15.0
+        distance = (math.hypot(state['x']-destination[0], state['z']-destination[2])
+                    if library_plan else _distance(_position(state), destination))
+        arrived = distance <= (spg_positions.ARRIVAL_RADIUS if library_plan else 15.0)
         result.update(move_position=destination, route_anchor=destination,
                       route_index=position['index'], route_join=False,
                       throttle_override=0.0 if arrived else None,
