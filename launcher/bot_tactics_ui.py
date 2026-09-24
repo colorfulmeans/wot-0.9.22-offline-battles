@@ -10,22 +10,59 @@ from tkinter import ttk, messagebox, filedialog
 
 try:
     from . import bot_tactics_store as storage
+    from . import bot_tactics_labels as labels, i18n
 except ImportError:
     import bot_tactics_store as storage
+    import bot_tactics_labels as labels
+    import i18n
 
 contract = storage.contract
-PARAM_LABELS = {
-    'reaction_seconds': ('反应时间（秒）', 'Reaction delay (s)'),
-    'patience_seconds': ('首次开火缩圈等待上限（秒）', 'Opening aim patience (s)'),
-    'converged_factor': ('接受的缩圈倍数', 'Accepted dispersion factor'),
-    'aim_bias_factor': ('瞄准点偏差系数', 'Aim-point bias factor'),
-    'lead_error': ('移动目标提前量误差', 'Lead error fraction'),
-}
+PARAM_LABELS = labels.PARAM_NAMES
+
+
+class LocalizedCombobox(ttk.Combobox):
+    """Translated captions with a separate canonical model variable.
+
+    Changing the UI language never rewrites a profile, enum or selection. The
+    existing form variables remain the API used by validation and runtime code.
+    """
+    def __init__(self, parent, *, variable, kind, values, language, **options):
+        self.canonical = variable
+        self.kind = kind
+        self.keys = tuple(str(value) for value in values)
+        self.language = language
+        self.display = tk.StringVar(master=parent)
+        super().__init__(parent, textvariable=self.display, state='readonly', **options)
+        self._trace = variable.trace_add('write', self._from_model)
+        self.bind('<<ComboboxSelected>>', self._from_view)
+        self.set_language(language)
+
+    def _from_model(self, *unused):
+        self.display.set(labels.enum_label(self.kind, self.canonical.get(), self.language))
+
+    def _from_view(self, unused=None):
+        index = self.current()
+        if 0 <= index < len(self.keys):
+            self.canonical.set(self.keys[index])
+
+    def set_language(self, language):
+        self.language = language
+        self.configure(values=tuple(labels.enum_label(self.kind, key, language) for key in self.keys))
+        self._from_model()
+
+    def destroy(self):
+        if self._trace is not None:
+            self.canonical.trace_remove('write', self._trace)
+            self._trace = None
+        super().destroy()
+
 
 
 class BotTacticsEditor:
     def __init__(self, parent, game_root='', store=None, language='zh', log=None):
-        self.zh = language == 'zh'; self.game_root = game_root
+        self.language = i18n.resolve_language(language)
+        self.zh = self.language == 'zh'; self.game_root = game_root
+        self._translations = {}
         self.store = store or storage.Store(); self.log = log or (lambda message: None)
         self.document = self.store.active()
         self.original = copy.deepcopy(self.document)
@@ -44,7 +81,58 @@ class BotTacticsEditor:
         self.root.bind('<Control-s>', lambda e: self.save(False))
 
     def tr(self, zh, en):
+        self._translations[zh] = self._translations[en] = (zh, en)
         return zh if self.zh else en
+
+    def _translated_text(self, text):
+        pair = self._translations.get(text)
+        if pair:
+            return pair[0 if self.zh else 1]
+        # Numeric limits, coordinates and a profile hash may follow a caption.
+        for old in sorted(self._translations, key=len, reverse=True):
+            if old and text.startswith(old):
+                pair = self._translations[old]
+                return pair[0 if self.zh else 1] + text[len(old):]
+        return text
+
+    def set_language(self, language):
+        """Refresh an open window without discarding pending edits or view state."""
+        language = i18n.resolve_language(language)
+        if language == self.language:
+            return
+        self.language = language; self.zh = language == 'zh'
+        def refresh(widget):
+            if isinstance(widget, LocalizedCombobox):
+                widget.set_language(language)
+            if isinstance(widget, (ttk.Label, ttk.Button, ttk.Checkbutton, ttk.LabelFrame)):
+                text = str(widget.cget('text'))
+                widget.configure(text=self._translated_text(text))
+            if isinstance(widget, ttk.Notebook):
+                for tab in widget.tabs():
+                    widget.tab(tab, text=self._translated_text(widget.tab(tab, 'text')))
+            for child in widget.winfo_children():
+                refresh(child)
+        refresh(self.root)
+        self.root.title(self.tr('Bot 配置与地图战术', 'Bot configuration and map tactics'))
+        for key in ('team', 'class', 'slot', 'values'):
+            self.rules.heading(key, text=self._translated_text(self.rules.heading(key, 'text')))
+        self.map_labels = {labels.map_label(name, language): name for name in sorted(contract.MAPS)}
+        self.map_box.configure(values=sorted(self.map_labels))
+        self.map_var.set(labels.map_label(self.map_name, language))
+        self.status.set(self._translated_text(self.status.get()))
+        self._refresh_rules()
+        # Update tree captions in-place: no selection callbacks, draft rewrites
+        # or changes to waypoint selection, zoom, pan or partially edited forms.
+        for iid in self.items.get_children():
+            kind, identity = iid.split(':', 1)
+            if kind == 'builtin':
+                text = self.tr('[内置] ', '[Built-in] ') + labels.route_label(identity, language)
+            else:
+                item = next(v for v in self.entry()[kind] if v['id'] == identity)
+                text = self.tr('路线 ', 'Route ') if kind == 'routes' else self.tr('炮位 ', 'SPG ')
+                text += item['label']  # user-authored names are never translated
+            self.items.item(iid, text=text)
+        self.redraw()
 
     def _build(self):
         head = ttk.Frame(self.root, padding=10); head.pack(fill='x')
@@ -86,20 +174,21 @@ class BotTacticsEditor:
         self.rules.pack(side='left',fill='both',expand=True)
         self.rules.bind('<<TreeviewSelect>>',self._select_rule)
         form=ttk.Frame(main,padding=(14,0));form.pack(side='left',fill='y')
-        self.rule_vars={}
+        self.rule_vars={}; self.rule_boxes={}
         for row,(name,label,values) in enumerate([
-            ('team',self.tr('队伍：0=全部','Team: 0=all'),('0','1','2')),
+            ('team',self.tr('队伍','Team'),('0','1','2')),
             ('class_tag',self.tr('车型','Class'),('all',)+contract.CLASSES),
-            ('slot',self.tr('槽位：空=全部','Slot: blank=all'),('',)+tuple(str(i) for i in range(1,16))),
-            ('skill',self.tr('难度：空=继承','Skill: blank=inherits'),('',)+contract.SKILLS),
-            ('crew_level',self.tr('乘员等级：空=继承','Crew level: blank=inherits'),('','75','90','100'))]):
+            ('slot',self.tr('槽位','Slot'),('',)+tuple(str(i) for i in range(1,16))),
+            ('skill',self.tr('难度','Difficulty'),('',)+contract.SKILLS),
+            ('crew_level',self.tr('乘员等级','Crew level'),('','75','90','100'))]):
             ttk.Label(form,text=label).grid(row=row,column=0,sticky='w',pady=5)
             var=tk.StringVar(value='0' if name=='team' else 'all' if name=='class_tag' else '')
             self.rule_vars[name]=var
-            ttk.Combobox(form,textvariable=var,values=values,state='readonly',width=15).grid(row=row,column=1,sticky='ew')
+            box=LocalizedCombobox(form,variable=var,kind=name,values=values,language=self.language,width=21)
+            box.grid(row=row,column=1,sticky='ew');self.rule_boxes[name]=box
         for row,key in enumerate(contract.PARAMETERS,5):
             lo,hi=contract.PARAMETERS[key]
-            label=PARAM_LABELS[key][0 if self.zh else 1]
+            label=self.tr(*PARAM_LABELS[key])
             ttk.Label(form,text='%s [%g–%g]'%(label,lo,hi)).grid(row=row,column=0,sticky='w',pady=5)
             var=tk.StringVar();self.rule_vars[key]=var
             ttk.Entry(form,textvariable=var,width=15).grid(row=row,column=1,sticky='ew')
@@ -111,14 +200,15 @@ class BotTacticsEditor:
     def _build_maps(self,parent):
         bar=ttk.Frame(parent);bar.pack(fill='x',pady=4)
         names=sorted(contract.MAPS)
-        self.map_labels={storage.MAP_LABELS.get(n,n):n for n in names}
-        self.map_var=tk.StringVar(value=storage.MAP_LABELS['08_ruinberg'])
+        self.map_labels={labels.map_label(n,self.language):n for n in names}
+        self.map_var=tk.StringVar(value=labels.map_label('08_ruinberg',self.language))
         box=ttk.Combobox(bar,textvariable=self.map_var,values=sorted(self.map_labels),state='readonly',width=35)
+        self.map_box=box
         box.pack(side='left');box.bind('<<ComboboxSelected>>',lambda e:self.change_map())
         self.team_var=tk.StringVar(value='1')
-        t=ttk.Combobox(bar,textvariable=self.team_var,values=('1','2'),width=3,state='readonly')
+        t=LocalizedCombobox(bar,variable=self.team_var,kind='team',values=('1','2'),language=self.language,width=9)
         ttk.Label(bar,text=self.tr('出生队伍','Spawn team')).pack(side='left',padx=6);t.pack(side='left')
-        t.bind('<<ComboboxSelected>>',lambda e:self.change_map())
+        t.bind('<<ComboboxSelected>>',lambda e:self.change_map(),add='+')
         self.base_label=ttk.Label(bar,text='');self.base_label.pack(side='left',padx=8)
         ttk.Label(bar,text=self.tr('模式：标准战','Mode: standard')).pack(side='right')
         tools=ttk.Frame(parent);tools.pack(fill='x')
@@ -157,14 +247,14 @@ class BotTacticsEditor:
             label=ttk.Label(right,text=self.tr(zh,en));label.grid(row=row*2,column=0,sticky='w')
             var=tk.StringVar();self.item_vars[key]=var
             if key=='policy':
-                widget=ttk.Combobox(right,textvariable=var,values=('preferred','fixed'),state='readonly',width=26)
+                widget=LocalizedCombobox(right,variable=var,kind='policy',values=('preferred','fixed'),language=self.language,width=26)
             else: widget=ttk.Entry(right,textvariable=var,width=28)
             widget.grid(row=row*2+1,column=0,sticky='ew',pady=(0,4));self.item_fields[key]=(label,widget)
         types=ttk.Frame(right);types.grid(row=16,column=0,sticky='ew');self.classes_frame=types
         self.class_vars={}
         for i,c in enumerate(contract.CLASSES[:-1]):
             var=tk.BooleanVar(value=True);self.class_vars[c]=var
-            ttk.Checkbutton(types,text=c,variable=var).grid(row=i//2,column=i%2,sticky='w')
+            ttk.Checkbutton(types,text=self.tr(*labels.ENUM_NAMES['class_tag'][c]),variable=var).grid(row=i,column=0,sticky='w')
         ttk.Button(right,text=self.tr('应用属性到草稿','Update draft properties'),command=self.update_properties).grid(row=17,column=0,sticky='ew',pady=5)
         self.points=ttk.Combobox(right,state='readonly',width=28);self.points.grid(row=18,column=0,sticky='ew')
         self.points.bind('<<ComboboxSelected>>',lambda e:self.choose_point())
@@ -196,9 +286,16 @@ class BotTacticsEditor:
         self.profile_box.configure(values=self.store.names())
 
     def _refresh_rules(self):
-        self.rules.delete(*self.rules.get_children())
+        keep = {str(i) for i in range(len(self.document['behavior']))}
+        for iid in self.rules.get_children():
+            if iid not in keep:self.rules.delete(iid)
         for i,r in enumerate(self.document['behavior']):
-            self.rules.insert('', 'end',iid=str(i),values=(r['team'],r['class_tag'],r['slot']+1 if r['slot']>=0 else '*',str(r['values'])))
+            values=(labels.enum_label('team',r['team'],self.language),
+                    labels.enum_label('class_tag',r['class_tag'],self.language),
+                    r['slot']+1 if r['slot']>=0 else self.tr('全部','All'),
+                    labels.parameter_summary(r['values'],self.language))
+            if self.rules.exists(str(i)):self.rules.item(str(i),values=values)
+            else:self.rules.insert('', 'end',iid=str(i),values=values)
 
     def _select_rule(self,event=None):
         selected=self.rules.selection()
@@ -238,8 +335,8 @@ class BotTacticsEditor:
         rating=bot_gunnery.rating_for_skill(values.get('skill','regular'))
         params=bot_gunnery.rating_parameters(rating,values)
         messagebox.showinfo(self.tr('生效值预览','Effective values'),
-            self.tr('示例：队伍%d / %s / 槽位%d；未指定难度按 regular 演示。\n','Example: Team %d / %s / slot %d. Unpinned skill uses regular for this preview.\n')%(team,tag,slot+1)+
-            '\n'.join('%s = %s'%item for item in params.items()),parent=self.root)
+            self.tr('示例：队伍%d / %s / 槽位%d；未指定难度按普通演示。\n','Example: Team %d / %s / slot %d. Unpinned skill uses Regular for this preview.\n')%(team,labels.enum_label('class_tag',tag,self.language),slot+1)+
+            '\n'.join('%s = %s'%(labels.parameter_label(k,self.language),labels.parameter_value(k,v,self.language)) for k,v in params.items()),parent=self.root)
 
     def entry(self):
         return self.document['maps'].get(self.map_name,dict(mode='regular',resource_sha256=contract.MAPS[self.map_name]['resource_sha256'],routes=[],positions=[]))
@@ -273,7 +370,7 @@ class BotTacticsEditor:
             self.background,label=self.image_cache[self.map_name]
         except (OSError,ValueError,ImportError,TypeError) as e:
             self.background=None;label=str(e)
-        self.map_status.config(text=label)
+        self.map_status.config(text=self._translated_text(label))
         self.selection=None;self.selected_point=None;self._refresh_items();self.redraw()
 
     def change_map(self):
@@ -284,11 +381,11 @@ class BotTacticsEditor:
         for kind in ('routes','positions'):
             for item in self.entry()[kind]:
                 if item['team']==self.team:
-                    self.items.insert('','end',iid=kind+':'+item['id'],text=('R ' if kind=='routes' else 'SPG ')+item['label'])
+                    self.items.insert('','end',iid=kind+':'+item['id'],text=(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label'])
         graph=self.graph_cache.get(self.map_name)
         if graph:
             for route in graph.get('routes',{}).get(str(self.team),()):
-                self.items.insert('','end',iid='builtin:'+route['id'],text=self.tr('[内置] ','[Built-in] ')+route['id'])
+                self.items.insert('','end',iid='builtin:'+route['id'],text=self.tr('[内置] ','[Built-in] ')+labels.route_label(route['id'],self.language))
         if self.selection and self.items.exists(':'.join(self.selection)):
             self.items.selection_set(':'.join(self.selection))
         else:self.selection=None
@@ -340,13 +437,13 @@ class BotTacticsEditor:
             source=next((v for v in self.graph_cache[self.map_name].get('routes',{}).get(str(self.team),()) if v['id']==self.selection[1]),None)
             if source:
                 self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
-                new=dict(id=identity,label=source['id']+' copy',team=self.team,
+                new=dict(id=identity,label=labels.route_label(source['id'],self.language)+self.tr(' 副本',' copy'),team=self.team,
                     classes=list(contract.CLASSES[:-1]),slots=[],policy='preferred',capacity=source.get('capacity',6),weight=1.0,
                     points=[[float(p[0]),float(p[1]),int(bool(p[2]))] for p in source['waypoints']])
                 self._ensure_entry()['routes'].append(new);self.selection=('routes',identity);self._refresh_items();self.mark()
             return
         if item is None:return
-        self.checkpoint();new=copy.deepcopy(item);new['id']=('r_' if self.selection[0]=='routes' else 'p_')+uuid.uuid4().hex[:12];new['label']+=' copy'
+        self.checkpoint();new=copy.deepcopy(item);new['id']=('r_' if self.selection[0]=='routes' else 'p_')+uuid.uuid4().hex[:12];new['label']+=self.tr(' 副本',' copy')
         self.entry()[self.selection[0]].append(new);self.selection=(self.selection[0],new['id']);self._refresh_items();self.mark()
 
     def delete_item(self):
@@ -478,14 +575,15 @@ class BotTacticsEditor:
         try:
             doc=contract.canonical(self.document);graph=self.graph_cache.get(self.map_name)
             result=storage.runtime.authoring_check(doc,self.map_name,graph)
-            text='\n'.join('%s: %s'%r for r in result) or self.tr('本图没有自定义数据。','No custom data on this map.')
+            names={v['id']:v['label'] for kind in ('routes','positions') for v in self.entry()[kind]}
+            text='\n'.join('%s: %s'%(names.get(identity,identity),labels.validation_label(status,self.language)) for identity,status in result) or self.tr('本图没有自定义数据。','No custom data on this map.')
             text+='\n\n'+self.tr('仅验证烘焙图连通性及通用停车空间。非原版车体/弹道验证；开炮仍需游戏中检查。',
                                  'Baked connectivity / generic parking only. Native hull and firing-arc checks still run in game.')
             messagebox.showinfo(self.tr('验证结果','Validation'),text,parent=self.root)
         except Exception as e:self.error(e)
 
     def load_background(self):
-        filename=filedialog.askopenfilename(parent=self.root,filetypes=[('Image','*.png *.jpg *.jpeg *.bmp')])
+        filename=filedialog.askopenfilename(parent=self.root,filetypes=[(self.tr('图片','Image'),'*.png *.jpg *.jpeg *.bmp')])
         if not filename:return
         if not messagebox.askokcancel(self.tr('底图校准','Map calibration'),self.tr(
             '必须是北朝上的完整地图，四边对应本图边界。不接受裁剪图；图片不会作为战术数据分发。',
@@ -493,7 +591,7 @@ class BotTacticsEditor:
         try:
             from PIL import Image
             with Image.open(filename) as image:
-                if image.width>4096 or image.height>4096:raise ValueError('Image too large')
+                if image.width>4096 or image.height>4096:raise ValueError(self.tr('图片尺寸过大','Image too large'))
                 self.background=image.convert('RGB')
             self.image_cache[self.map_name]=(self.background,self.tr('手动导入底图：需自行确认边界对应','Imported image: confirm arena alignment'))
             self.map_status.config(text=self.image_cache[self.map_name][1]);self.redraw()
@@ -533,13 +631,13 @@ class BotTacticsEditor:
         if self.discard_prompt():self.adopt(contract.empty('Default'))
 
     def import_profile(self):
-        filename=filedialog.askopenfilename(parent=self.root,filetypes=[('Bot tactics','*.json')])
+        filename=filedialog.askopenfilename(parent=self.root,filetypes=[(self.tr('Bot 战术配置','Bot tactics'),'*.json')])
         if filename and self.discard_prompt():
             try:self.adopt(self.store.import_file(filename))
             except Exception as e:self.error(e)
 
     def export_profile(self):
-        filename=filedialog.asksaveasfilename(parent=self.root,defaultextension='.json',filetypes=[('Bot tactics','*.json')])
+        filename=filedialog.asksaveasfilename(parent=self.root,defaultextension='.json',filetypes=[(self.tr('Bot 战术配置','Bot tactics'),'*.json')])
         if filename:
             try:
                 doc=copy.deepcopy(self.document);doc['name']=self.profile_name.get();self.store.export(doc,filename)
