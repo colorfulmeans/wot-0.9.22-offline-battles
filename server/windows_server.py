@@ -291,6 +291,9 @@ def main():
         vehicle_overlay_root = _vehicle_overlay_root_from_environment()
         if not loopback_only:
             _ensure_windows_firewall_rule(SERVER_PORT)
+        tactics_options = {}
+        if os.environ.get('WOT_0922_BOT_TACTICS_PATH'):
+            tactics_options['bot_tactics_path'] = os.environ['WOT_0922_BOT_TACTICS_PATH']
         run_server(
             server_host, SERVER_PORT, default_map, SERVER_MAX_PLAYERS,
             team_size=SERVER_TEAM_SIZE,
@@ -299,6 +302,7 @@ def main():
             bot_lineup=bot_lineup,
             bot_excluded_vehicles=bot_excluded_vehicles,
             vehicle_overlay_root=vehicle_overlay_root,
+            **tactics_options
         )
     except Exception:
         traceback.print_exc()

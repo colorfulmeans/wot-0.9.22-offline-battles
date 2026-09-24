@@ -19,6 +19,7 @@ if _CLIENT_SCRIPT_ROOT not in sys.path:
     sys.path.insert(0, _CLIENT_SCRIPT_ROOT)
 
 from gui.mods.offline_lan_0922 import bot_gunnery
+from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
 from gui.mods.offline_lan_0922.ai.cover import (
     normalize_candidate,
     score_candidates,
@@ -188,6 +189,8 @@ class BotPlanner(object):
     """Server-side route, focus-fire, and last-contact order coordinator."""
 
     def __init__(self):
+        self.tactics = bot_tactics.empty()
+        self.tactics_map = ''
         self.revision = 0
         self._round_id = 0
         self._contacts = {1: {}, 2: {}}
@@ -704,7 +707,7 @@ class BotPlanner(object):
                      defense=None, team_orders=None):
         known_targets = self.known_targets(bot_states, players)
         contacts = self._prune_contacts(known_targets, now)
-        bots = self._alive_bots(manifest, bot_states)
+        bots = self._alive_bots(manifest, bot_states, self.tactics)
         self._prune_tactical_state(bots, known_targets, now)
         defenders = self._update_base_defense(
             bots, contacts, defense, now)
@@ -931,7 +934,7 @@ class BotPlanner(object):
         return result
 
     @staticmethod
-    def _alive_bots(manifest, bot_states):
+    def _alive_bots(manifest, bot_states, tactics=None):
         states = {_integer(value.get("id")): value for value in (bot_states or [])}
         result = []
         for raw in manifest or []:
@@ -944,6 +947,8 @@ class BotPlanner(object):
                 "team": _integer(raw.get("team")),
                 "slot": _integer(raw.get("slot")),
                 "rating": _bot_rating(raw),
+                "spg_initial": spg_positions.canonical_plan(
+                    raw.get("spg_initial"), vehicle=raw.get("vehicle"), team=raw.get("team"), tactics=tactics),
                 "profile": raw.get("profile") if isinstance(raw.get("profile"), dict) else {},
                 "route": raw.get("route") if isinstance(raw.get("route"), dict) else {},
                 "state": state,
@@ -2098,13 +2103,18 @@ class BotPlanner(object):
         return own, enemy
 
     def _artillery_anchor(self, bot, team_axis):
-        """Choose a stable rear staging point from this SPG's safe route.
+        """Prefer the canonical sourced initial plan; otherwise keep legacy.
 
-        The server has graph-validated macro points but no static visibility or
-        shell-arc probe. Select only by distance from the own base and progress
-        on the own/enemy axis; ``hold`` annotations are deliberately not treated
-        as proof that a point is an artillery position.
+        The authority resolves community areas against the loaded #1513 graph
+        before publishing the manifest. A missing plan explicitly keeps the
+        old rear-route fallback; neither path proves a clear firing arc.
         """
+        initial = spg_positions.canonical_plan(bot.get("spg_initial"), tactics=self.tactics)
+        if initial is not None:
+            # This point was selected inside a sourced area by the authority's
+            # actual #1513 graph. It is independent of ordinary route catalogues.
+            return {"point": dict(initial["point"]), "face": dict(initial["face"]),
+                    "index": 0, "parking_radius": initial["radius"]}
         route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
         waypoints = route.get("waypoints")
         route_signature = (
@@ -2195,6 +2205,11 @@ class BotPlanner(object):
     def _rebalance_routes(self, team, bots, contacts, now,
                           protected_ids=()):
         """Move at most one adaptable tank toward a pressured route every 4s."""
+        protected_ids = set(protected_ids)
+        for bot in bots:
+            authored = bot_tactics.route_config(self.tactics, self.tactics_map, (bot.get('route') or {}).get('id'))
+            if authored is not None and authored['policy'] == 'fixed':
+                protected_ids.add(bot['id'])
         catalog = self._route_catalog(bots)
         for bot in bots:
             route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
@@ -2284,6 +2299,9 @@ class BotPlanner(object):
                        for contact in received):
                 continue
             if bot["id"] in protected_ids:
+                continue
+            target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, target_route)
+            if target_authored is not None and not bot_tactics.matches(target_authored, bot):
                 continue
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
                 continue
@@ -2854,7 +2872,7 @@ class BotPlanner(object):
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         distance = math.hypot(point["x"] - _number(state.get("x")),
                               point["z"] - _number(state.get("z")))
-        arrived = distance <= 15.0
+        arrived = distance <= anchor.get("parking_radius", 15.0)
         order["combat_mode"] = (
             "artillery_hold" if arrived else "artillery_deploy")
         order["move_position"] = dict(point)

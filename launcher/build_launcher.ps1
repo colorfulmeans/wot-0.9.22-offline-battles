@@ -52,6 +52,12 @@ python -m PyInstaller `
     --workpath $WorkRoot `
     --specpath $SpecRoot `
     --paths (Join-Path $RepoRoot "tools") `
+    --paths (Join-Path $RepoRoot "src/res/scripts/client") `
+    --hidden-import bot_tactics_ui `
+    --hidden-import bot_tactics_smoke `
+    --exclude-module gui `
+    --hidden-import PIL.ImageTk `
+    --hidden-import PIL.DdsImagePlugin `
     --hidden-import packed_xml `
     --hidden-import vehicle_prices `
     --add-data "$PayloadRoot\servers;servers" `
@@ -108,6 +114,11 @@ New-Item -ItemType Directory -Force -Path $LicenseRoot | Out-Null
 Copy-Item -Force `
     (Join-Path $RepoRoot "licenses\Boost-1.0.txt") `
     (Join-Path $LicenseRoot "Boost-1.0.txt")
+
+# The editor's shared pure modules are read from the bundled server source,
+# not a partial frozen gui package that would hide other server imports.
+python (Join-Path $RepoRoot "tools/stage_editor_licenses.py") $LicenseRoot
+if ($LASTEXITCODE -ne 0) { throw "Pillow license staging failed" }
 
 foreach ($entry in @("$AppName.exe", "README.txt",
                      "TESTING_20260916_GROUP1_ZH.md", "LICENSE",
