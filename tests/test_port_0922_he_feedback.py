@@ -46,37 +46,49 @@ class HEFeedbackTests(unittest.TestCase):
                  'dead': False, 'attack_reason': 0, 'death_reason': 0}
         return runtime, battle, attacker, target, event
 
-    def test_all_vehicle_classes_use_hp_for_he_direct_effect_and_voice(self):
+    def test_all_vehicle_classes_keep_he_penetration_and_blast_distinct(self):
+        cases = (
+            ('penetration', 150, 2, 'heExplosionFx',
+             'projectile_penetration'),
+            ('nonpenetrating_blast', 150, 1, 'heResistedFx',
+             'direct_explosion'),
+            ('zero_damage_nonpenetration', 0, 1, 'heResistedFx',
+             'nonpenetration'),
+        )
         for vehicle_class in ('lightTank', 'mediumTank', 'heavyTank',
                               'AT-SPG', 'SPG'):
-            for damage in (0, 150):
-                for result in (0, 1, 2):
-                    with self.subTest(vehicle_class=vehicle_class,
-                                      damage=damage, result=result):
-                        runtime, battle, attacker, target, event = (
-                            self._fixture(vehicle_class))
-                        event.update(damage=damage, shot_result=result)
-                        original = copy.deepcopy(event)
-                        battle._present_combat_hit(event, target, attacker, 10)
-                        battle._present_combat_feedback(event, target, attacker)
-                        effect = battle._avatar.terrainEffects.addNew.call_args
-                        self.assertEqual('heExplosionFx' if damage else
-                                         'heResistedFx', effect.args[1])
-                        self.assertEqual(10, effect.kwargs['attackerID'])
-                        self.assertEqual(11, effect.kwargs['entity_id'])
-                        self.assertFalse(effect.kwargs['isPlayerVehicle'])
-                        self.assertEqual(damage / 5.0,
-                                         effect.kwargs['damageFactor'])
-                        flags = battle._avatar.shot_results[0][0] >> 32
-                        vhf = runtime.constants.VEHICLE_HIT_FLAGS
-                        expected = (vhf.ATTACK_IS_DIRECT_PROJECTILE |
-                            (vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE
-                             if damage else
-                             vhf.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE))
-                        self.assertEqual(expected, flags)
-                        # Presentation must never turn a splash-damage hit
-                        # into a real penetration in the event/statistics.
-                        self.assertEqual(original, event)
+            for name, damage, result, effect_name, flag_kind in cases:
+                with self.subTest(vehicle_class=vehicle_class, case=name):
+                    runtime, battle, attacker, target, event = (
+                        self._fixture(vehicle_class))
+                    event.update(damage=damage, shot_result=result)
+                    original = copy.deepcopy(event)
+                    battle._present_combat_hit(event, target, attacker, 10)
+                    battle._present_combat_feedback(event, target, attacker)
+                    effect = battle._avatar.terrainEffects.addNew.call_args
+                    self.assertEqual(effect_name, effect.args[1])
+                    self.assertEqual(10, effect.kwargs['attackerID'])
+                    self.assertEqual(11, effect.kwargs['entity_id'])
+                    self.assertFalse(effect.kwargs['isPlayerVehicle'])
+                    self.assertEqual(damage / 5.0,
+                                     effect.kwargs['damageFactor'])
+                    flags = battle._avatar.shot_results[0][0] >> 32
+                    vhf = runtime.constants.VEHICLE_HIT_FLAGS
+                    expected = vhf.ATTACK_IS_DIRECT_PROJECTILE
+                    if flag_kind == 'projectile_penetration':
+                        expected |= (
+                            vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE)
+                    elif flag_kind == 'direct_explosion':
+                        expected |= (
+                            vhf.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE |
+                            vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION)
+                    else:
+                        expected |= (
+                            vhf.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE)
+                    self.assertEqual(expected, flags)
+                    # Presentation must never rewrite the canonical physical
+                    # result merely to choose an HE sound or commander voice.
+                    self.assertEqual(original, event)
 
     def test_he_splash_retains_near_explosion_voice_and_hull_sound(self):
         runtime, battle, attacker, target, event = self._fixture()

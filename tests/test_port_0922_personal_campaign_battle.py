@@ -193,6 +193,25 @@ class PersonalCampaignBattleTests(unittest.TestCase):
                 first['damage_events'] = required - 1
                 self.assertEqual({}, self.evaluate()['completed'])
 
+    def test_t28_ht5_missing_view_sample_does_not_poison_proven_damage(self):
+        qid = 95
+        self.snapshot['personalMissionSelections']['regular'] = [qid]
+        self.definitions[qid] = definition(
+            '<vehicleDamage><distance>0</distance><greaterOrEqual>2000'
+            '</greaterOrEqual></vehicleDamage>',
+            '<vehicleKills><greaterOrEqual>3</greaterOrEqual></vehicleKills>')
+        for interaction in self.receipt['interactions']:
+            interaction['mission_events_complete'] = True
+            interaction['mission_events_version'] = 3
+            interaction['mission_events'] = []
+        first = self.receipt['interactions'][0]
+        first['mission_events'] = [
+            ['damage', 1.0, 500, False, 150.0, False, None],
+            ['damage', 2.0, 1100, False, 250.0, False, 445.0],
+            ['damage', 3.0, 1000, False, 300.0, False, 445.0],
+        ]
+        self.assertEqual({'95': 1}, self.evaluate()['completed'])
+
     def test_damage_event_modifier_payload_is_not_silently_ignored(self):
         self.use_condition('<vehicleDamage><eventCount><whileInvisible/>'
                            '</eventCount><greaterOrEqual>1</greaterOrEqual>'

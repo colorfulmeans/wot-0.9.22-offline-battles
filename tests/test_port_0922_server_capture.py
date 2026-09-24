@@ -126,6 +126,19 @@ class ServerCaptureTests(unittest.TestCase):
         self.assertEqual(state.capture_bases,
                          state._sanitize_capture_bases(state.capture_bases))
 
+    def test_authored_small_capture_circles_are_kept_on_all_three_maps(self):
+        for map_name in ('100_thepit', '63_tundra', '44_north_america'):
+            with self.subTest(map_name=map_name):
+                graph = json.loads(
+                    (PORT_ROOT / ('navgraphs/%s.json' % map_name)).read_text())
+                planner = SpawnPlanner(navigation_graph=graph)
+                radii = [
+                    float(base['radius'])
+                    for bases in planner.capture_bases.values()
+                    for base in bases]
+                self.assertTrue(radii)
+                self.assertEqual({30.0}, set(radii))
+
     def test_invalid_explicit_capture_radius_is_not_a_legacy_circle(self):
         for radius in (0, -1, float('nan'), float('inf'), 1e300, 'bad'):
             with self.subTest(radius=radius):

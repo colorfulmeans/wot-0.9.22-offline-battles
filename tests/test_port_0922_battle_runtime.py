@@ -34890,3 +34890,57 @@ class LocalEngineAudioMotionTests(unittest.TestCase):
         # A native link that outlives teardown must still be answerable.
         self.assertEqual(0.0, battle._read_local_vehicle_speed())
         self.assertEqual(0.0, battle._read_local_vehicle_rotation_speed())
+
+
+class WreckAndAmmoOrderRegressionTests(unittest.TestCase):
+    def test_wreck_exact_collision_blocks_outline_before_target(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        wreck = _Vehicle(
+            99, _Descriptor(), _Vector(0, 0, 5), (0, 0, 0),
+            {'health': 0})
+        wreck.isStarted = True
+        runtime.bigworld.entities[99] = wreck
+        battle._records = {
+            'bot:7': {
+                'local': False, 'tombstone': False, 'ready': True,
+                'engine_id': 99,
+                'state': {'health': 0, 'x': 0.0, 'y': 0.0, 'z': 5.0},
+            }}
+        with mock.patch.object(
+                battle_runtime_module, 'collide_vehicle_at_matrix',
+                return_value=[types.SimpleNamespace(dist=5.0)]), \
+             mock.patch.object(
+                battle_runtime_module, 'vehicle_target_bounds_at_matrix',
+                return_value=None):
+            self.assertTrue(battle._wreck_blocks_target_outline(
+                _Vector(0, 0, 0), _Vector(0, 0, 10), 8.0))
+
+    def test_saved_shell_order_controls_hud_and_initial_shell_only(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        state = types.SimpleNamespace(
+            shots=[
+                {'shell': {'compactDescr': 101}},
+                {'shell': {'compactDescr': 202}},
+                {'shell': {'compactDescr': 303}},
+            ],
+            ammo=[5, 6, 0], shot_index=0, clip=1)
+        battle._garage_loadout = {
+            'shells': {101: 5, 202: 6, 303: 0},
+            'shell_order': (202, 101, 303),
+        }
+        self.assertEqual((1, 0, 2),
+                         battle._ammo_presentation_indices(state))
+        self.assertTrue(battle._apply_initial_garage_shell(state))
+        # The selected shell remains its canonical gun index for the worker.
+        self.assertEqual(1, state.shot_index)
+
+        battle._avatar = runtime.bigworld.avatar
+        battle._server = types.SimpleNamespace(vehicle_id=10)
+        battle._present_equipments = lambda: None
+        battle._publish_ammo_state(state, force=True)
+        compact_descrs = [
+            call.args[1]
+            for call in battle._avatar.updateVehicleAmmo.call_args_list]
+        self.assertEqual([202, 101, 303], compact_descrs)
