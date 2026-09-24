@@ -90,10 +90,12 @@ def verify():
         assert common.read(os.path.join(ROOT,path)).replace(b'\r\n',b'\n') == common.git('show',base+':'+path).replace(b'\r\n',b'\n'), path
     for path in common.git('ls-tree','-r','--name-only',base,'navgraphs','foliage','destructibles').decode().splitlines():
         assert common.read(os.path.join(ROOT,path)) == common.git('show',base+':'+path), path
-    sys.path.insert(0,os.path.join(ROOT,'src/res/scripts/client'))
-    from gui.mods.offline_lan_0922 import bot_editor_maps
-    assert len(bot_editor_maps.MAPS) == 41
-    for name, row in bot_editor_maps.MAPS.items():
+    # Python 2.7 build hosts do not provide retail gui/mods packages.
+    metadata = {}
+    eval(compile(common.read(os.path.join(ROOT, PREFIX + 'bot_editor_maps.py')),
+                 'bot_editor_maps.py', 'exec'), metadata)
+    assert len(metadata['MAPS']) == 41
+    for name, row in metadata['MAPS'].items():
         assert common.sha(common.read(os.path.join(ROOT,'navgraphs',name+'.json'))) == row['resource_sha256'], name
     common.save(os.path.join(ROOT,'build-evidence/bot-editor-source-proof.json'),proof)
     print('PASS exact Bot editor source, 41 map fingerprints, protected driving/contact/armor/game features.')
