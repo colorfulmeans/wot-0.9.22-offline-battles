@@ -70,14 +70,9 @@ def verify():
     # Every runtime file outside the three repaired contact owners must remain
     # byte-identical to the preceding SPG-targeting package.
     for path, digest in proof['runtime_sha256_lf'].items():
-        full = PREFIX + path if not path.startswith('src/') else path
-        candidate = path if path.startswith('server/') else PREFIX + path
-        if candidate in PRODUCTION or path in PRODUCTION:
+        if path in PRODUCTION:
             continue
-        try:
-            old = common.git('show', BASE + ':' + candidate).replace(b'\r\n', b'\n')
-        except Exception:
-            continue
+        old = common.git('show', BASE + ':' + path).replace(b'\\r\\n', b'\\n')
         assert digest == common.sha(old), path
     for path in ('ai/driver.py', 'ai/traffic.py', 'ai/adapter.py'):
         current = common.read(os.path.join(ROOT, PREFIX + path)).replace(b'\r\n', b'\n')
