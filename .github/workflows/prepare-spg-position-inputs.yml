@@ -1,0 +1,52 @@
+name: Prepare historical SPG position inputs
+on:
+  push:
+    branches: [fix/094-spg-position-library-20260924]
+    paths: [.github/workflows/prepare-spg-position-inputs.yml]
+permissions:
+  contents: read
+jobs:
+  inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 5fda392c88c0987ed110a097e3c668d0be011fa2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Archive exact baseline and retrieve author-hosted historical inputs
+        shell: python
+        run: |
+          import hashlib, io, json, pathlib, subprocess, urllib.request, zipfile
+          out = pathlib.Path('position-inputs'); out.mkdir()
+          subprocess.run(['git','archive','--format=zip','--output=position-inputs/baseline.zip','HEAD'],check=True)
+          urls = [
+            'https://www.curseforge.com/worldoftanks/wot-mods/hawgs-tactical-arty-minimaps/files/2527609',
+            'https://www.curseforge.com/worldoftanks/wot-mods/hawgs-tactical-arty-minimaps/download/2527609',
+            'https://edge.forgecdn.net/files/2527/609/Spg_Tac_1.zip',
+            'https://mediafilez.forgecdn.net/files/2527/609/Spg_Tac_1.zip',
+          ]
+          manifest=[]
+          for i,url in enumerate(urls):
+            try:
+              request=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+              with urllib.request.urlopen(request,timeout=45) as response:
+                data=response.read(30*1024*1024)
+                final=response.url
+              is_zip=zipfile.is_zipfile(io.BytesIO(data))
+              path=out/('hawg-%d.%s'%(i,'zip' if is_zip else 'html'))
+              path.write_bytes(data)
+              manifest.append({'url':url,'final_url':final,'file':path.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),'zip':is_zip})
+              if is_zip: print('Downloaded historical archive',path.name,len(data))
+            except Exception as error:
+              manifest.append({'url':url,'error':str(error)})
+          (out/'download-manifest.json').write_text(json.dumps(manifest,indent=2))
+          print(json.dumps(manifest,indent=2))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spg-position-inputs-${{ github.run_id }}
+          path: position-inputs/
+          retention-days: 7
+          if-no-files-found: error

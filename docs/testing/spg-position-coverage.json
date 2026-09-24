@@ -1,0 +1,433 @@
+{
+  "maps": {
+    "01_karelia": {
+      "markers": 7,
+      "rejected_markers": [],
+      "slots": 21,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 12,
+        "2": 9
+      }
+    },
+    "02_malinovka": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "04_himmelsdorf": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "05_prohorovka": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "06_ensk": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 15,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 6
+      }
+    },
+    "07_lakeville": {
+      "markers": 7,
+      "rejected_markers": [],
+      "slots": 20,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 11
+      }
+    },
+    "08_ruinberg": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "100_thepit": {
+      "markers": 4,
+      "rejected_markers": [],
+      "slots": 12,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 6
+      }
+    },
+    "101_dday": {
+      "markers": 0,
+      "rejected_markers": [],
+      "slots": 0,
+      "source_status": "no_source_markers",
+      "team_slots": {
+        "1": 0,
+        "2": 0
+      }
+    },
+    "103_ruinberg_winter": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "10_hills": {
+      "markers": 8,
+      "rejected_markers": [],
+      "slots": 20,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 7,
+        "2": 13
+      }
+    },
+    "112_eiffel_tower_ctf": {
+      "markers": 4,
+      "rejected_markers": [],
+      "slots": 12,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 6
+      }
+    },
+    "114_czech": {
+      "markers": 4,
+      "rejected_markers": [],
+      "slots": 12,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 6
+      }
+    },
+    "11_murovanka": {
+      "markers": 7,
+      "rejected_markers": [],
+      "slots": 21,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 12
+      }
+    },
+    "13_erlenberg": {
+      "markers": 8,
+      "rejected_markers": [],
+      "slots": 22,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 12,
+        "2": 10
+      }
+    },
+    "14_siegfried_line": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "17_munchen": {
+      "markers": 4,
+      "rejected_markers": [
+        "17_munchen:h01"
+      ],
+      "slots": 9,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 3
+      }
+    },
+    "18_cliff": {
+      "markers": 7,
+      "rejected_markers": [],
+      "slots": 19,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 10
+      }
+    },
+    "19_monastery": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "22_slough": {
+      "markers": 5,
+      "rejected_markers": [],
+      "slots": 15,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 9
+      }
+    },
+    "23_westfeld": {
+      "markers": 6,
+      "rejected_markers": [
+        "23_westfeld:h04"
+      ],
+      "slots": 15,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 9
+      }
+    },
+    "28_desert": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 16,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 8,
+        "2": 8
+      }
+    },
+    "29_el_hallouf": {
+      "markers": 9,
+      "rejected_markers": [],
+      "slots": 27,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 15,
+        "2": 12
+      }
+    },
+    "31_airfield": {
+      "markers": 8,
+      "rejected_markers": [],
+      "slots": 23,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 11,
+        "2": 12
+      }
+    },
+    "33_fjord": {
+      "markers": 10,
+      "rejected_markers": [
+        "33_fjord:h09",
+        "33_fjord:h10"
+      ],
+      "slots": 23,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 14
+      }
+    },
+    "34_redshire": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "35_steppes": {
+      "markers": 9,
+      "rejected_markers": [],
+      "slots": 26,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 11,
+        "2": 15
+      }
+    },
+    "36_fishing_bay": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 17,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 11
+      }
+    },
+    "37_caucasus": {
+      "markers": 7,
+      "rejected_markers": [
+        "37_caucasus:h05"
+      ],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 12,
+        "2": 6
+      }
+    },
+    "38_mannerheim_line": {
+      "markers": 7,
+      "rejected_markers": [],
+      "slots": 19,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 10
+      }
+    },
+    "44_north_america": {
+      "markers": 7,
+      "rejected_markers": [],
+      "slots": 21,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 12,
+        "2": 9
+      }
+    },
+    "45_north_america": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "47_canada_a": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "59_asia_great_wall": {
+      "markers": 0,
+      "rejected_markers": [],
+      "slots": 0,
+      "source_status": "missing_image",
+      "team_slots": {
+        "1": 0,
+        "2": 0
+      }
+    },
+    "63_tundra": {
+      "markers": 6,
+      "rejected_markers": [
+        "63_tundra:h02"
+      ],
+      "slots": 15,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 6
+      }
+    },
+    "73_asia_korea": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 17,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 8,
+        "2": 9
+      }
+    },
+    "83_kharkiv": {
+      "markers": 4,
+      "rejected_markers": [],
+      "slots": 12,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 6
+      }
+    },
+    "84_winter": {
+      "markers": 5,
+      "rejected_markers": [
+        "84_winter:h05"
+      ],
+      "slots": 9,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 3
+      }
+    },
+    "86_himmelsdorf_winter": {
+      "markers": 6,
+      "rejected_markers": [],
+      "slots": 18,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 9,
+        "2": 9
+      }
+    },
+    "92_stalingrad": {
+      "markers": 4,
+      "rejected_markers": [],
+      "slots": 12,
+      "source_status": "sourced",
+      "team_slots": {
+        "1": 6,
+        "2": 6
+      }
+    },
+    "95_lost_city": {
+      "markers": 0,
+      "rejected_markers": [],
+      "slots": 0,
+      "source_status": "no_source_markers",
+      "team_slots": {
+        "1": 0,
+        "2": 0
+      }
+    }
+  },
+  "maps_with_slots": 38,
+  "maps_with_source_markers": 38,
+  "runtime_maps": 41,
+  "runtime_parking_slots": 666,
+  "runtime_source_markers": 237,
+  "source_maps": 42
+}

@@ -1,0 +1,3350 @@
+{
+  "maps": {
+    "00_tank_tutorial": {
+      "image_sha256": "b190854944dcca12b0ff417798799483bfc44dd5c8d606e5bb4999785c60c710",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [],
+      "rejected": []
+    },
+    "01_karelia": {
+      "image_sha256": "272932de917c77f376ccfe112c9478689004df854bb442e7c8661fcd241003ba",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            497,
+            2,
+            511,
+            16
+          ],
+          "pixel_center": [
+            504.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            475,
+            15,
+            489,
+            29
+          ],
+          "pixel_center": [
+            482.0,
+            22.0
+          ]
+        },
+        {
+          "pixel_box": [
+            494,
+            54,
+            508,
+            67
+          ],
+          "pixel_center": [
+            501.0,
+            60.5
+          ]
+        },
+        {
+          "pixel_box": [
+            494,
+            284,
+            508,
+            298
+          ],
+          "pixel_center": [
+            501.0,
+            291.0
+          ]
+        },
+        {
+          "pixel_box": [
+            10,
+            444,
+            24,
+            458
+          ],
+          "pixel_center": [
+            17.0,
+            451.0
+          ]
+        },
+        {
+          "pixel_box": [
+            28,
+            488,
+            42,
+            502
+          ],
+          "pixel_center": [
+            35.0,
+            495.0
+          ]
+        },
+        {
+          "pixel_box": [
+            96,
+            494,
+            110,
+            507
+          ],
+          "pixel_center": [
+            103.0,
+            500.5
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "02_malinovka": {
+      "image_sha256": "025fe68bb2d63f09a4fbcdfd345a4a9496f9e20045123381c0b529bac77d1b04",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            88,
+            6,
+            102,
+            20
+          ],
+          "pixel_center": [
+            95.0,
+            13.0
+          ]
+        },
+        {
+          "pixel_box": [
+            76,
+            48,
+            90,
+            62
+          ],
+          "pixel_center": [
+            83.0,
+            55.0
+          ]
+        },
+        {
+          "pixel_box": [
+            38,
+            70,
+            52,
+            83
+          ],
+          "pixel_center": [
+            45.0,
+            76.5
+          ]
+        },
+        {
+          "pixel_box": [
+            391,
+            440,
+            405,
+            454
+          ],
+          "pixel_center": [
+            398.0,
+            447.0
+          ]
+        },
+        {
+          "pixel_box": [
+            495,
+            490,
+            509,
+            504
+          ],
+          "pixel_center": [
+            502.0,
+            497.0
+          ]
+        },
+        {
+          "pixel_box": [
+            457,
+            494,
+            471,
+            508
+          ],
+          "pixel_center": [
+            464.0,
+            501.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "04_himmelsdorf": {
+      "image_sha256": "1d4b229f895f823e28eb079ceaf9a2bfe1bb9ff9797f72b6d4399659056675c7",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            13,
+            2,
+            27,
+            16
+          ],
+          "pixel_center": [
+            20.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            493,
+            8,
+            507,
+            22
+          ],
+          "pixel_center": [
+            500.0,
+            15.0
+          ]
+        },
+        {
+          "pixel_box": [
+            221,
+            12,
+            235,
+            26
+          ],
+          "pixel_center": [
+            228.0,
+            19.0
+          ]
+        },
+        {
+          "pixel_box": [
+            495,
+            489,
+            509,
+            503
+          ],
+          "pixel_center": [
+            502.0,
+            496.0
+          ]
+        },
+        {
+          "pixel_box": [
+            188,
+            494,
+            202,
+            507
+          ],
+          "pixel_center": [
+            195.0,
+            500.5
+          ]
+        },
+        {
+          "pixel_box": [
+            67,
+            496,
+            81,
+            509
+          ],
+          "pixel_center": [
+            74.0,
+            502.5
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "05_prohorovka": {
+      "image_sha256": "80a699b3d7c53196efc09d03a1c550bc154946d71e0ca03ef1eef9be1747e8b3",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            271,
+            4,
+            285,
+            17
+          ],
+          "pixel_center": [
+            278.0,
+            10.5
+          ]
+        },
+        {
+          "pixel_box": [
+            91,
+            6,
+            105,
+            19
+          ],
+          "pixel_center": [
+            98.0,
+            12.5
+          ]
+        },
+        {
+          "pixel_box": [
+            354,
+            12,
+            368,
+            26
+          ],
+          "pixel_center": [
+            361.0,
+            19.0
+          ]
+        },
+        {
+          "pixel_box": [
+            111,
+            495,
+            125,
+            509
+          ],
+          "pixel_center": [
+            118.0,
+            502.0
+          ]
+        },
+        {
+          "pixel_box": [
+            365,
+            496,
+            379,
+            510
+          ],
+          "pixel_center": [
+            372.0,
+            503.0
+          ]
+        },
+        {
+          "pixel_box": [
+            18,
+            498,
+            32,
+            512
+          ],
+          "pixel_center": [
+            25.0,
+            505.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "06_ensk": {
+      "image_sha256": "b4dda3e4c3be9d507095724bdd3b8e7565d479967983509b744606473fd56412",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            253,
+            4,
+            267,
+            18
+          ],
+          "pixel_center": [
+            260.0,
+            11.0
+          ]
+        },
+        {
+          "pixel_box": [
+            167,
+            5,
+            181,
+            19
+          ],
+          "pixel_center": [
+            174.0,
+            12.0
+          ]
+        },
+        {
+          "pixel_box": [
+            498,
+            23,
+            512,
+            37
+          ],
+          "pixel_center": [
+            505.0,
+            30.0
+          ]
+        },
+        {
+          "pixel_box": [
+            362,
+            485,
+            376,
+            499
+          ],
+          "pixel_center": [
+            369.0,
+            492.0
+          ]
+        },
+        {
+          "pixel_box": [
+            29,
+            497,
+            43,
+            511
+          ],
+          "pixel_center": [
+            36.0,
+            504.0
+          ]
+        },
+        {
+          "pixel_box": [
+            496,
+            497,
+            510,
+            511
+          ],
+          "pixel_center": [
+            503.0,
+            504.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "07_lakeville": {
+      "image_sha256": "e43778f7ff80ecc483c43951841b4797f64cf94e934476064e75f4f7c12b0e07",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            232,
+            2,
+            246,
+            16
+          ],
+          "pixel_center": [
+            239.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            348,
+            2,
+            362,
+            16
+          ],
+          "pixel_center": [
+            355.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            71,
+            8,
+            85,
+            22
+          ],
+          "pixel_center": [
+            78.0,
+            15.0
+          ]
+        },
+        {
+          "pixel_box": [
+            47,
+            470,
+            61,
+            484
+          ],
+          "pixel_center": [
+            54.0,
+            477.0
+          ]
+        },
+        {
+          "pixel_box": [
+            199,
+            498,
+            213,
+            512
+          ],
+          "pixel_center": [
+            206.0,
+            505.0
+          ]
+        },
+        {
+          "pixel_box": [
+            110,
+            499,
+            124,
+            512
+          ],
+          "pixel_center": [
+            117.0,
+            505.5
+          ]
+        },
+        {
+          "pixel_box": [
+            422,
+            500,
+            436,
+            512
+          ],
+          "pixel_center": [
+            429.0,
+            506.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "08_ruinberg": {
+      "image_sha256": "16d192cc40a8124060e92de2904617d194149b91bf24d1a69bc1b522c03da359",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            127,
+            4,
+            141,
+            17
+          ],
+          "pixel_center": [
+            134.0,
+            10.5
+          ]
+        },
+        {
+          "pixel_box": [
+            284,
+            4,
+            298,
+            17
+          ],
+          "pixel_center": [
+            291.0,
+            10.5
+          ]
+        },
+        {
+          "pixel_box": [
+            46,
+            36,
+            60,
+            50
+          ],
+          "pixel_center": [
+            53.0,
+            43.0
+          ]
+        },
+        {
+          "pixel_box": [
+            7,
+            496,
+            21,
+            509
+          ],
+          "pixel_center": [
+            14.0,
+            502.5
+          ]
+        },
+        {
+          "pixel_box": [
+            260,
+            498,
+            274,
+            512
+          ],
+          "pixel_center": [
+            267.0,
+            505.0
+          ]
+        },
+        {
+          "pixel_box": [
+            346,
+            499,
+            360,
+            512
+          ],
+          "pixel_center": [
+            353.0,
+            505.5
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "100_thepit": {
+      "image_sha256": "ff9d70bb29468e64df750cef221c1a7ca259b4bc408321e2f8d3df85ef76f126",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            442,
+            10,
+            456,
+            23
+          ],
+          "pixel_center": [
+            449.0,
+            16.5
+          ]
+        },
+        {
+          "pixel_box": [
+            465,
+            126,
+            479,
+            139
+          ],
+          "pixel_center": [
+            472.0,
+            132.5
+          ]
+        },
+        {
+          "pixel_box": [
+            442,
+            416,
+            456,
+            429
+          ],
+          "pixel_center": [
+            449.0,
+            422.5
+          ]
+        },
+        {
+          "pixel_box": [
+            400,
+            439,
+            414,
+            452
+          ],
+          "pixel_center": [
+            407.0,
+            445.5
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "101_dday": {
+      "image_sha256": "66576874dc114a28208a767f60955719807cd901e8996008905c5afae55d5421",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [],
+      "rejected": []
+    },
+    "103_ruinberg_winter": {
+      "image_sha256": "64bfdf68fa35f043f276ed7bee20bb3dc57b980f4dcfb887a91539d2e25aa9e4",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            272,
+            8,
+            286,
+            21
+          ],
+          "pixel_center": [
+            279.0,
+            14.5
+          ]
+        },
+        {
+          "pixel_box": [
+            136,
+            14,
+            150,
+            27
+          ],
+          "pixel_center": [
+            143.0,
+            20.5
+          ]
+        },
+        {
+          "pixel_box": [
+            47,
+            29,
+            61,
+            43
+          ],
+          "pixel_center": [
+            54.0,
+            36.0
+          ]
+        },
+        {
+          "pixel_box": [
+            10,
+            490,
+            24,
+            503
+          ],
+          "pixel_center": [
+            17.0,
+            496.5
+          ]
+        },
+        {
+          "pixel_box": [
+            257,
+            495,
+            271,
+            509
+          ],
+          "pixel_center": [
+            264.0,
+            502.0
+          ]
+        },
+        {
+          "pixel_box": [
+            342,
+            495,
+            356,
+            509
+          ],
+          "pixel_center": [
+            349.0,
+            502.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "10_hills": {
+      "image_sha256": "de59162d6a747bce3f95f2e14d10fe1d65b2f19c04911955d38afe38e0f8323b",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            14,
+            0,
+            28,
+            12
+          ],
+          "pixel_center": [
+            21.0,
+            6.0
+          ]
+        },
+        {
+          "pixel_box": [
+            76,
+            0,
+            90,
+            10
+          ],
+          "pixel_center": [
+            83.0,
+            5.0
+          ]
+        },
+        {
+          "pixel_box": [
+            136,
+            0,
+            150,
+            13
+          ],
+          "pixel_center": [
+            143.0,
+            6.5
+          ]
+        },
+        {
+          "pixel_box": [
+            66,
+            56,
+            80,
+            70
+          ],
+          "pixel_center": [
+            73.0,
+            63.0
+          ]
+        },
+        {
+          "pixel_box": [
+            0,
+            114,
+            14,
+            127
+          ],
+          "pixel_center": [
+            7.0,
+            120.5
+          ]
+        },
+        {
+          "pixel_box": [
+            392,
+            490,
+            406,
+            503
+          ],
+          "pixel_center": [
+            399.0,
+            496.5
+          ]
+        },
+        {
+          "pixel_box": [
+            195,
+            494,
+            209,
+            508
+          ],
+          "pixel_center": [
+            202.0,
+            501.0
+          ]
+        },
+        {
+          "pixel_box": [
+            418,
+            502,
+            432,
+            512
+          ],
+          "pixel_center": [
+            425.0,
+            507.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "112_eiffel_tower_ctf": {
+      "image_sha256": "defb6daab016ef4560bc8b6401ef9b1487d1cdda3f6914d5616b14fbd4384928",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            460,
+            17,
+            474,
+            31
+          ],
+          "pixel_center": [
+            467.0,
+            24.0
+          ]
+        },
+        {
+          "pixel_box": [
+            0,
+            169,
+            14,
+            183
+          ],
+          "pixel_center": [
+            7.0,
+            176.0
+          ]
+        },
+        {
+          "pixel_box": [
+            489,
+            203,
+            503,
+            217
+          ],
+          "pixel_center": [
+            496.0,
+            210.0
+          ]
+        },
+        {
+          "pixel_box": [
+            3,
+            274,
+            17,
+            288
+          ],
+          "pixel_center": [
+            10.0,
+            281.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "114_czech": {
+      "image_sha256": "430e5382dc44d64949990b3010d1ef812442e9651ba5aa8917517a5079b8790f",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            122,
+            2,
+            136,
+            16
+          ],
+          "pixel_center": [
+            129.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            455,
+            4,
+            469,
+            18
+          ],
+          "pixel_center": [
+            462.0,
+            11.0
+          ]
+        },
+        {
+          "pixel_box": [
+            22,
+            496,
+            36,
+            509
+          ],
+          "pixel_center": [
+            29.0,
+            502.5
+          ]
+        },
+        {
+          "pixel_box": [
+            471,
+            500,
+            485,
+            512
+          ],
+          "pixel_center": [
+            478.0,
+            506.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "11_murovanka": {
+      "image_sha256": "a4fa4b74a4bd024fcb3d1a8f349a02b210571f72e6116bb304c3d59bfa2f8cb9",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            265,
+            0,
+            279,
+            13
+          ],
+          "pixel_center": [
+            272.0,
+            6.5
+          ]
+        },
+        {
+          "pixel_box": [
+            134,
+            2,
+            148,
+            15
+          ],
+          "pixel_center": [
+            141.0,
+            8.5
+          ]
+        },
+        {
+          "pixel_box": [
+            452,
+            4,
+            466,
+            18
+          ],
+          "pixel_center": [
+            459.0,
+            11.0
+          ]
+        },
+        {
+          "pixel_box": [
+            6,
+            452,
+            20,
+            466
+          ],
+          "pixel_center": [
+            13.0,
+            459.0
+          ]
+        },
+        {
+          "pixel_box": [
+            376,
+            456,
+            390,
+            469
+          ],
+          "pixel_center": [
+            383.0,
+            462.5
+          ]
+        },
+        {
+          "pixel_box": [
+            52,
+            458,
+            66,
+            472
+          ],
+          "pixel_center": [
+            59.0,
+            465.0
+          ]
+        },
+        {
+          "pixel_box": [
+            125,
+            459,
+            139,
+            473
+          ],
+          "pixel_center": [
+            132.0,
+            466.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "13_erlenberg": {
+      "image_sha256": "789b687b180e7a1d883a8551340b175932bb83fb1276ff720ef440abd18c662e",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            492,
+            2,
+            506,
+            16
+          ],
+          "pixel_center": [
+            499.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            219,
+            10,
+            233,
+            24
+          ],
+          "pixel_center": [
+            226.0,
+            17.0
+          ]
+        },
+        {
+          "pixel_box": [
+            133,
+            16,
+            147,
+            29
+          ],
+          "pixel_center": [
+            140.0,
+            22.5
+          ]
+        },
+        {
+          "pixel_box": [
+            61,
+            68,
+            75,
+            82
+          ],
+          "pixel_center": [
+            68.0,
+            75.0
+          ]
+        },
+        {
+          "pixel_box": [
+            385,
+            492,
+            399,
+            506
+          ],
+          "pixel_center": [
+            392.0,
+            499.0
+          ]
+        },
+        {
+          "pixel_box": [
+            491,
+            497,
+            505,
+            511
+          ],
+          "pixel_center": [
+            498.0,
+            504.0
+          ]
+        },
+        {
+          "pixel_box": [
+            303,
+            498,
+            317,
+            512
+          ],
+          "pixel_center": [
+            310.0,
+            505.0
+          ]
+        },
+        {
+          "pixel_box": [
+            37,
+            500,
+            51,
+            512
+          ],
+          "pixel_center": [
+            44.0,
+            506.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "14_siegfried_line": {
+      "image_sha256": "6a1376585e544cb877f97a1899a984faf3c13a106155297232c2b30237bdaaa2",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            5,
+            0,
+            19,
+            14
+          ],
+          "pixel_center": [
+            12.0,
+            7.0
+          ]
+        },
+        {
+          "pixel_box": [
+            237,
+            3,
+            251,
+            16
+          ],
+          "pixel_center": [
+            244.0,
+            9.5
+          ]
+        },
+        {
+          "pixel_box": [
+            475,
+            4,
+            489,
+            18
+          ],
+          "pixel_center": [
+            482.0,
+            11.0
+          ]
+        },
+        {
+          "pixel_box": [
+            395,
+            496,
+            409,
+            510
+          ],
+          "pixel_center": [
+            402.0,
+            503.0
+          ]
+        },
+        {
+          "pixel_box": [
+            260,
+            498,
+            274,
+            511
+          ],
+          "pixel_center": [
+            267.0,
+            504.5
+          ]
+        },
+        {
+          "pixel_box": [
+            429,
+            498,
+            443,
+            512
+          ],
+          "pixel_center": [
+            436.0,
+            505.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "17_munchen": {
+      "image_sha256": "958796e7e4b48cea046c1e02dd515d37aec8551880bd7434d4770f4578d82162",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            394,
+            12,
+            408,
+            26
+          ],
+          "pixel_center": [
+            401.0,
+            19.0
+          ]
+        },
+        {
+          "pixel_box": [
+            133,
+            36,
+            147,
+            50
+          ],
+          "pixel_center": [
+            140.0,
+            43.0
+          ]
+        },
+        {
+          "pixel_box": [
+            5,
+            481,
+            19,
+            495
+          ],
+          "pixel_center": [
+            12.0,
+            488.0
+          ]
+        },
+        {
+          "pixel_box": [
+            230,
+            490,
+            244,
+            503
+          ],
+          "pixel_center": [
+            237.0,
+            496.5
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "18_cliff": {
+      "image_sha256": "b6f87916e8fad0ae69850dc1870d5330a150e0c0a7bf4b2fc1f252b1c52271ca",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            186,
+            0,
+            200,
+            14
+          ],
+          "pixel_center": [
+            193.0,
+            7.0
+          ]
+        },
+        {
+          "pixel_box": [
+            88,
+            1,
+            102,
+            15
+          ],
+          "pixel_center": [
+            95.0,
+            8.0
+          ]
+        },
+        {
+          "pixel_box": [
+            4,
+            2,
+            18,
+            15
+          ],
+          "pixel_center": [
+            11.0,
+            8.5
+          ]
+        },
+        {
+          "pixel_box": [
+            63,
+            2,
+            77,
+            15
+          ],
+          "pixel_center": [
+            70.0,
+            8.5
+          ]
+        },
+        {
+          "pixel_box": [
+            238,
+            463,
+            252,
+            477
+          ],
+          "pixel_center": [
+            245.0,
+            470.0
+          ]
+        },
+        {
+          "pixel_box": [
+            38,
+            493,
+            52,
+            507
+          ],
+          "pixel_center": [
+            45.0,
+            500.0
+          ]
+        },
+        {
+          "pixel_box": [
+            8,
+            496,
+            22,
+            510
+          ],
+          "pixel_center": [
+            15.0,
+            503.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "19_monastery": {
+      "image_sha256": "a22a31ebcddbe27527cbfa1c291f8f33dc94ccea0b5256310ff2cb53f70bb5b6",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            160,
+            0,
+            174,
+            14
+          ],
+          "pixel_center": [
+            167.0,
+            7.0
+          ]
+        },
+        {
+          "pixel_box": [
+            292,
+            0,
+            306,
+            14
+          ],
+          "pixel_center": [
+            299.0,
+            7.0
+          ]
+        },
+        {
+          "pixel_box": [
+            348,
+            0,
+            362,
+            14
+          ],
+          "pixel_center": [
+            355.0,
+            7.0
+          ]
+        },
+        {
+          "pixel_box": [
+            213,
+            496,
+            227,
+            510
+          ],
+          "pixel_center": [
+            220.0,
+            503.0
+          ]
+        },
+        {
+          "pixel_box": [
+            292,
+            500,
+            306,
+            512
+          ],
+          "pixel_center": [
+            299.0,
+            506.0
+          ]
+        },
+        {
+          "pixel_box": [
+            356,
+            500,
+            370,
+            512
+          ],
+          "pixel_center": [
+            363.0,
+            506.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "22_slough": {
+      "image_sha256": "a197a3df5d1229dcacb3a46d4774b6946f7e1a282ec1dd0b8576a2be01ddadc1",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            52,
+            32,
+            66,
+            46
+          ],
+          "pixel_center": [
+            59.0,
+            39.0
+          ]
+        },
+        {
+          "pixel_box": [
+            89,
+            42,
+            103,
+            55
+          ],
+          "pixel_center": [
+            96.0,
+            48.5
+          ]
+        },
+        {
+          "pixel_box": [
+            265,
+            476,
+            279,
+            490
+          ],
+          "pixel_center": [
+            272.0,
+            483.0
+          ]
+        },
+        {
+          "pixel_box": [
+            451,
+            484,
+            465,
+            498
+          ],
+          "pixel_center": [
+            458.0,
+            491.0
+          ]
+        },
+        {
+          "pixel_box": [
+            363,
+            495,
+            377,
+            508
+          ],
+          "pixel_center": [
+            370.0,
+            501.5
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "23_westfeld": {
+      "image_sha256": "abc41f00c85071153e26fd1e74c1fbc07c452036552ecc3a250946ddd83261ee",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            339,
+            2,
+            353,
+            16
+          ],
+          "pixel_center": [
+            346.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            487,
+            5,
+            501,
+            19
+          ],
+          "pixel_center": [
+            494.0,
+            12.0
+          ]
+        },
+        {
+          "pixel_box": [
+            498,
+            134,
+            512,
+            148
+          ],
+          "pixel_center": [
+            505.0,
+            141.0
+          ]
+        },
+        {
+          "pixel_box": [
+            9,
+            294,
+            23,
+            308
+          ],
+          "pixel_center": [
+            16.0,
+            301.0
+          ]
+        },
+        {
+          "pixel_box": [
+            14,
+            403,
+            28,
+            417
+          ],
+          "pixel_center": [
+            21.0,
+            410.0
+          ]
+        },
+        {
+          "pixel_box": [
+            56,
+            497,
+            70,
+            511
+          ],
+          "pixel_center": [
+            63.0,
+            504.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "28_desert": {
+      "image_sha256": "c81888abd36ae9a74cae1961db4e1dafafa6f607f049e69f2a0d3ae8697e36ce",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            6,
+            0,
+            20,
+            13
+          ],
+          "pixel_center": [
+            13.0,
+            6.5
+          ]
+        },
+        {
+          "pixel_box": [
+            11,
+            58,
+            25,
+            72
+          ],
+          "pixel_center": [
+            18.0,
+            65.0
+          ]
+        },
+        {
+          "pixel_box": [
+            2,
+            224,
+            16,
+            238
+          ],
+          "pixel_center": [
+            9.0,
+            231.0
+          ]
+        },
+        {
+          "pixel_box": [
+            495,
+            320,
+            509,
+            333
+          ],
+          "pixel_center": [
+            502.0,
+            326.5
+          ]
+        },
+        {
+          "pixel_box": [
+            496,
+            365,
+            510,
+            379
+          ],
+          "pixel_center": [
+            503.0,
+            372.0
+          ]
+        },
+        {
+          "pixel_box": [
+            498,
+            460,
+            512,
+            474
+          ],
+          "pixel_center": [
+            505.0,
+            467.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "29_el_hallouf": {
+      "image_sha256": "41f2aca98359d6196791e3b627920f2228f332ab0f6ee4635b57934458831818",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            415,
+            6,
+            429,
+            20
+          ],
+          "pixel_center": [
+            422.0,
+            13.0
+          ]
+        },
+        {
+          "pixel_box": [
+            496,
+            82,
+            510,
+            96
+          ],
+          "pixel_center": [
+            503.0,
+            89.0
+          ]
+        },
+        {
+          "pixel_box": [
+            294,
+            83,
+            308,
+            97
+          ],
+          "pixel_center": [
+            301.0,
+            90.0
+          ]
+        },
+        {
+          "pixel_box": [
+            494,
+            287,
+            508,
+            300
+          ],
+          "pixel_center": [
+            501.0,
+            293.5
+          ]
+        },
+        {
+          "pixel_box": [
+            470,
+            335,
+            484,
+            349
+          ],
+          "pixel_center": [
+            477.0,
+            342.0
+          ]
+        },
+        {
+          "pixel_box": [
+            12,
+            395,
+            26,
+            409
+          ],
+          "pixel_center": [
+            19.0,
+            402.0
+          ]
+        },
+        {
+          "pixel_box": [
+            96,
+            459,
+            110,
+            473
+          ],
+          "pixel_center": [
+            103.0,
+            466.0
+          ]
+        },
+        {
+          "pixel_box": [
+            240,
+            478,
+            254,
+            492
+          ],
+          "pixel_center": [
+            247.0,
+            485.0
+          ]
+        },
+        {
+          "pixel_box": [
+            173,
+            485,
+            187,
+            499
+          ],
+          "pixel_center": [
+            180.0,
+            492.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "31_airfield": {
+      "image_sha256": "d2fcd1e1a8977a9108a77e3776f1ee587ac88e9a753657e7fce9344437ffa25b",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            458,
+            56,
+            472,
+            70
+          ],
+          "pixel_center": [
+            465.0,
+            63.0
+          ]
+        },
+        {
+          "pixel_box": [
+            2,
+            147,
+            16,
+            161
+          ],
+          "pixel_center": [
+            9.0,
+            154.0
+          ]
+        },
+        {
+          "pixel_box": [
+            34,
+            190,
+            48,
+            203
+          ],
+          "pixel_center": [
+            41.0,
+            196.5
+          ]
+        },
+        {
+          "pixel_box": [
+            495,
+            316,
+            509,
+            330
+          ],
+          "pixel_center": [
+            502.0,
+            323.0
+          ]
+        },
+        {
+          "pixel_box": [
+            2,
+            328,
+            16,
+            342
+          ],
+          "pixel_center": [
+            9.0,
+            335.0
+          ]
+        },
+        {
+          "pixel_box": [
+            472,
+            422,
+            486,
+            436
+          ],
+          "pixel_center": [
+            479.0,
+            429.0
+          ]
+        },
+        {
+          "pixel_box": [
+            479,
+            452,
+            493,
+            466
+          ],
+          "pixel_center": [
+            486.0,
+            459.0
+          ]
+        },
+        {
+          "pixel_box": [
+            5,
+            456,
+            19,
+            470
+          ],
+          "pixel_center": [
+            12.0,
+            463.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "33_fjord": {
+      "image_sha256": "23174b75fe708b1066525f6152bba489ccfdbf3a0bba5bd5800268d27e9eef5a",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            238,
+            0,
+            252,
+            14
+          ],
+          "pixel_center": [
+            245.0,
+            7.0
+          ]
+        },
+        {
+          "pixel_box": [
+            199,
+            4,
+            213,
+            18
+          ],
+          "pixel_center": [
+            206.0,
+            11.0
+          ]
+        },
+        {
+          "pixel_box": [
+            120,
+            25,
+            134,
+            39
+          ],
+          "pixel_center": [
+            127.0,
+            32.0
+          ]
+        },
+        {
+          "pixel_box": [
+            41,
+            69,
+            55,
+            83
+          ],
+          "pixel_center": [
+            48.0,
+            76.0
+          ]
+        },
+        {
+          "pixel_box": [
+            10,
+            95,
+            24,
+            108
+          ],
+          "pixel_center": [
+            17.0,
+            101.5
+          ]
+        },
+        {
+          "pixel_box": [
+            489,
+            241,
+            503,
+            255
+          ],
+          "pixel_center": [
+            496.0,
+            248.0
+          ]
+        },
+        {
+          "pixel_box": [
+            457,
+            244,
+            471,
+            258
+          ],
+          "pixel_center": [
+            464.0,
+            251.0
+          ]
+        },
+        {
+          "pixel_box": [
+            459,
+            333,
+            473,
+            347
+          ],
+          "pixel_center": [
+            466.0,
+            340.0
+          ]
+        },
+        {
+          "pixel_box": [
+            460,
+            392,
+            474,
+            405
+          ],
+          "pixel_center": [
+            467.0,
+            398.5
+          ]
+        },
+        {
+          "pixel_box": [
+            473,
+            425,
+            487,
+            439
+          ],
+          "pixel_center": [
+            480.0,
+            432.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "34_redshire": {
+      "image_sha256": "c25e2be5c7c0d0b8858b9d9c9361caba4fdc21d7821cac2413f34e3e30daee0f",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            68,
+            0,
+            82,
+            13
+          ],
+          "pixel_center": [
+            75.0,
+            6.5
+          ]
+        },
+        {
+          "pixel_box": [
+            148,
+            2,
+            162,
+            16
+          ],
+          "pixel_center": [
+            155.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            359,
+            4,
+            373,
+            17
+          ],
+          "pixel_center": [
+            366.0,
+            10.5
+          ]
+        },
+        {
+          "pixel_box": [
+            443,
+            476,
+            457,
+            489
+          ],
+          "pixel_center": [
+            450.0,
+            482.5
+          ]
+        },
+        {
+          "pixel_box": [
+            232,
+            496,
+            246,
+            510
+          ],
+          "pixel_center": [
+            239.0,
+            503.0
+          ]
+        },
+        {
+          "pixel_box": [
+            312,
+            496,
+            326,
+            509
+          ],
+          "pixel_center": [
+            319.0,
+            502.5
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "35_steppes": {
+      "image_sha256": "ec67298dc21e5fd6aad1a373fa98e52422a28d519589e9ceb98fa45f9d08d3b4",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            179,
+            5,
+            193,
+            19
+          ],
+          "pixel_center": [
+            186.0,
+            12.0
+          ]
+        },
+        {
+          "pixel_box": [
+            122,
+            7,
+            136,
+            21
+          ],
+          "pixel_center": [
+            129.0,
+            14.0
+          ]
+        },
+        {
+          "pixel_box": [
+            48,
+            72,
+            62,
+            85
+          ],
+          "pixel_center": [
+            55.0,
+            78.5
+          ]
+        },
+        {
+          "pixel_box": [
+            12,
+            90,
+            26,
+            104
+          ],
+          "pixel_center": [
+            19.0,
+            97.0
+          ]
+        },
+        {
+          "pixel_box": [
+            6,
+            185,
+            20,
+            199
+          ],
+          "pixel_center": [
+            13.0,
+            192.0
+          ]
+        },
+        {
+          "pixel_box": [
+            376,
+            490,
+            390,
+            504
+          ],
+          "pixel_center": [
+            383.0,
+            497.0
+          ]
+        },
+        {
+          "pixel_box": [
+            240,
+            498,
+            254,
+            512
+          ],
+          "pixel_center": [
+            247.0,
+            505.0
+          ]
+        },
+        {
+          "pixel_box": [
+            290,
+            500,
+            304,
+            512
+          ],
+          "pixel_center": [
+            297.0,
+            506.0
+          ]
+        },
+        {
+          "pixel_box": [
+            495,
+            500,
+            509,
+            512
+          ],
+          "pixel_center": [
+            502.0,
+            506.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "36_fishing_bay": {
+      "image_sha256": "484b31ebe1f443c6cfce7840bdda3282de7d9abd04cb78e8ede2979cfdb291db",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            73,
+            8,
+            87,
+            22
+          ],
+          "pixel_center": [
+            80.0,
+            15.0
+          ]
+        },
+        {
+          "pixel_box": [
+            405,
+            9,
+            419,
+            23
+          ],
+          "pixel_center": [
+            412.0,
+            16.0
+          ]
+        },
+        {
+          "pixel_box": [
+            218,
+            428,
+            232,
+            442
+          ],
+          "pixel_center": [
+            225.0,
+            435.0
+          ]
+        },
+        {
+          "pixel_box": [
+            450,
+            432,
+            464,
+            446
+          ],
+          "pixel_center": [
+            457.0,
+            439.0
+          ]
+        },
+        {
+          "pixel_box": [
+            208,
+            498,
+            222,
+            512
+          ],
+          "pixel_center": [
+            215.0,
+            505.0
+          ]
+        },
+        {
+          "pixel_box": [
+            359,
+            500,
+            373,
+            512
+          ],
+          "pixel_center": [
+            366.0,
+            506.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "37_caucasus": {
+      "image_sha256": "36db22630e9e5f4ebb7d885df5c775e8a7325c0029afb3ae271a32925ea1bd49",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            57,
+            12,
+            71,
+            26
+          ],
+          "pixel_center": [
+            64.0,
+            19.0
+          ]
+        },
+        {
+          "pixel_box": [
+            188,
+            14,
+            202,
+            28
+          ],
+          "pixel_center": [
+            195.0,
+            21.0
+          ]
+        },
+        {
+          "pixel_box": [
+            33,
+            66,
+            47,
+            79
+          ],
+          "pixel_center": [
+            40.0,
+            72.5
+          ]
+        },
+        {
+          "pixel_box": [
+            94,
+            96,
+            108,
+            110
+          ],
+          "pixel_center": [
+            101.0,
+            103.0
+          ]
+        },
+        {
+          "pixel_box": [
+            490,
+            348,
+            504,
+            362
+          ],
+          "pixel_center": [
+            497.0,
+            355.0
+          ]
+        },
+        {
+          "pixel_box": [
+            442,
+            411,
+            456,
+            424
+          ],
+          "pixel_center": [
+            449.0,
+            417.5
+          ]
+        },
+        {
+          "pixel_box": [
+            482,
+            492,
+            496,
+            506
+          ],
+          "pixel_center": [
+            489.0,
+            499.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "38_mannerheim_line": {
+      "image_sha256": "ec6bb334ee868b1a0b9bd7e59c4a661dc887a0963662457d2f87f7cd255e04a4",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            494,
+            70,
+            508,
+            83
+          ],
+          "pixel_center": [
+            501.0,
+            76.5
+          ]
+        },
+        {
+          "pixel_box": [
+            495,
+            142,
+            509,
+            156
+          ],
+          "pixel_center": [
+            502.0,
+            149.0
+          ]
+        },
+        {
+          "pixel_box": [
+            493,
+            211,
+            507,
+            225
+          ],
+          "pixel_center": [
+            500.0,
+            218.0
+          ]
+        },
+        {
+          "pixel_box": [
+            94,
+            462,
+            108,
+            476
+          ],
+          "pixel_center": [
+            101.0,
+            469.0
+          ]
+        },
+        {
+          "pixel_box": [
+            255,
+            484,
+            269,
+            497
+          ],
+          "pixel_center": [
+            262.0,
+            490.5
+          ]
+        },
+        {
+          "pixel_box": [
+            70,
+            495,
+            84,
+            509
+          ],
+          "pixel_center": [
+            77.0,
+            502.0
+          ]
+        },
+        {
+          "pixel_box": [
+            9,
+            496,
+            23,
+            510
+          ],
+          "pixel_center": [
+            16.0,
+            503.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "44_north_america": {
+      "image_sha256": "abced299050e854988a0ad86e0c747a1534f317ec80bf8ee8eb9c0df2ab222e7",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            460,
+            10,
+            474,
+            24
+          ],
+          "pixel_center": [
+            467.0,
+            17.0
+          ]
+        },
+        {
+          "pixel_box": [
+            488,
+            33,
+            502,
+            47
+          ],
+          "pixel_center": [
+            495.0,
+            40.0
+          ]
+        },
+        {
+          "pixel_box": [
+            495,
+            79,
+            509,
+            93
+          ],
+          "pixel_center": [
+            502.0,
+            86.0
+          ]
+        },
+        {
+          "pixel_box": [
+            46,
+            328,
+            60,
+            342
+          ],
+          "pixel_center": [
+            53.0,
+            335.0
+          ]
+        },
+        {
+          "pixel_box": [
+            8,
+            355,
+            22,
+            368
+          ],
+          "pixel_center": [
+            15.0,
+            361.5
+          ]
+        },
+        {
+          "pixel_box": [
+            33,
+            488,
+            47,
+            501
+          ],
+          "pixel_center": [
+            40.0,
+            494.5
+          ]
+        },
+        {
+          "pixel_box": [
+            98,
+            496,
+            112,
+            510
+          ],
+          "pixel_center": [
+            105.0,
+            503.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "45_north_america": {
+      "image_sha256": "603a02776c44b12ca77e43d796b60ff1073dbbadafef4e8990a9fa1146c1b650",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            353,
+            0,
+            367,
+            14
+          ],
+          "pixel_center": [
+            360.0,
+            7.0
+          ]
+        },
+        {
+          "pixel_box": [
+            445,
+            12,
+            459,
+            25
+          ],
+          "pixel_center": [
+            452.0,
+            18.5
+          ]
+        },
+        {
+          "pixel_box": [
+            453,
+            68,
+            467,
+            82
+          ],
+          "pixel_center": [
+            460.0,
+            75.0
+          ]
+        },
+        {
+          "pixel_box": [
+            63,
+            432,
+            77,
+            445
+          ],
+          "pixel_center": [
+            70.0,
+            438.5
+          ]
+        },
+        {
+          "pixel_box": [
+            16,
+            476,
+            30,
+            490
+          ],
+          "pixel_center": [
+            23.0,
+            483.0
+          ]
+        },
+        {
+          "pixel_box": [
+            82,
+            493,
+            96,
+            507
+          ],
+          "pixel_center": [
+            89.0,
+            500.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "47_canada_a": {
+      "image_sha256": "44190ca985f97b7257f3170c8157b93eb5d7985e44006dad3968e5d3c814230d",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            337,
+            10,
+            351,
+            24
+          ],
+          "pixel_center": [
+            344.0,
+            17.0
+          ]
+        },
+        {
+          "pixel_box": [
+            364,
+            49,
+            378,
+            63
+          ],
+          "pixel_center": [
+            371.0,
+            56.0
+          ]
+        },
+        {
+          "pixel_box": [
+            431,
+            137,
+            445,
+            151
+          ],
+          "pixel_center": [
+            438.0,
+            144.0
+          ]
+        },
+        {
+          "pixel_box": [
+            32,
+            394,
+            46,
+            408
+          ],
+          "pixel_center": [
+            39.0,
+            401.0
+          ]
+        },
+        {
+          "pixel_box": [
+            91,
+            464,
+            105,
+            478
+          ],
+          "pixel_center": [
+            98.0,
+            471.0
+          ]
+        },
+        {
+          "pixel_box": [
+            153,
+            490,
+            167,
+            504
+          ],
+          "pixel_center": [
+            160.0,
+            497.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "63_tundra": {
+      "image_sha256": "fc159f81da6704a56174a4a4804a1b37a599b22e66e3b6fb836a063e94325c5d",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            11,
+            0,
+            25,
+            14
+          ],
+          "pixel_center": [
+            18.0,
+            7.0
+          ]
+        },
+        {
+          "pixel_box": [
+            457,
+            6,
+            471,
+            19
+          ],
+          "pixel_center": [
+            464.0,
+            12.5
+          ]
+        },
+        {
+          "pixel_box": [
+            288,
+            8,
+            302,
+            22
+          ],
+          "pixel_center": [
+            295.0,
+            15.0
+          ]
+        },
+        {
+          "pixel_box": [
+            27,
+            492,
+            41,
+            506
+          ],
+          "pixel_center": [
+            34.0,
+            499.0
+          ]
+        },
+        {
+          "pixel_box": [
+            214,
+            494,
+            228,
+            508
+          ],
+          "pixel_center": [
+            221.0,
+            501.0
+          ]
+        },
+        {
+          "pixel_box": [
+            363,
+            498,
+            377,
+            512
+          ],
+          "pixel_center": [
+            370.0,
+            505.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "73_asia_korea": {
+      "image_sha256": "d1ea0c76d2d2fd9161db9f4869815681dcd7e2009017103c270daedb65902dac",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            472,
+            56,
+            486,
+            70
+          ],
+          "pixel_center": [
+            479.0,
+            63.0
+          ]
+        },
+        {
+          "pixel_box": [
+            406,
+            58,
+            422,
+            72
+          ],
+          "pixel_center": [
+            414.0,
+            65.0
+          ]
+        },
+        {
+          "pixel_box": [
+            444,
+            86,
+            458,
+            100
+          ],
+          "pixel_center": [
+            451.0,
+            93.0
+          ]
+        },
+        {
+          "pixel_box": [
+            24,
+            310,
+            38,
+            323
+          ],
+          "pixel_center": [
+            31.0,
+            316.5
+          ]
+        },
+        {
+          "pixel_box": [
+            87,
+            409,
+            102,
+            423
+          ],
+          "pixel_center": [
+            94.5,
+            416.0
+          ]
+        },
+        {
+          "pixel_box": [
+            7,
+            412,
+            21,
+            426
+          ],
+          "pixel_center": [
+            14.0,
+            419.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "83_kharkiv": {
+      "image_sha256": "75b3e0ca67c8f470c6c5600780bd75ddb3d72268d3329198a06c29e24379e76e",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            359,
+            5,
+            373,
+            19
+          ],
+          "pixel_center": [
+            366.0,
+            12.0
+          ]
+        },
+        {
+          "pixel_box": [
+            249,
+            6,
+            263,
+            20
+          ],
+          "pixel_center": [
+            256.0,
+            13.0
+          ]
+        },
+        {
+          "pixel_box": [
+            115,
+            464,
+            129,
+            478
+          ],
+          "pixel_center": [
+            122.0,
+            471.0
+          ]
+        },
+        {
+          "pixel_box": [
+            33,
+            468,
+            47,
+            481
+          ],
+          "pixel_center": [
+            40.0,
+            474.5
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "84_winter": {
+      "image_sha256": "fee659a2538895f472f0bd91e4a09027fe64c575f0462722747136fe57aedf4d",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            368,
+            2,
+            382,
+            16
+          ],
+          "pixel_center": [
+            375.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            488,
+            57,
+            502,
+            71
+          ],
+          "pixel_center": [
+            495.0,
+            64.0
+          ]
+        },
+        {
+          "pixel_box": [
+            469,
+            128,
+            483,
+            142
+          ],
+          "pixel_center": [
+            476.0,
+            135.0
+          ]
+        },
+        {
+          "pixel_box": [
+            10,
+            322,
+            24,
+            336
+          ],
+          "pixel_center": [
+            17.0,
+            329.0
+          ]
+        },
+        {
+          "pixel_box": [
+            50,
+            380,
+            64,
+            394
+          ],
+          "pixel_center": [
+            57.0,
+            387.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "86_himmelsdorf_winter": {
+      "image_sha256": "681fc23954dc8452ecb82eeb1a0a1e7f4cda024cb4350ca5a6f89322f11cda5a",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            17,
+            4,
+            31,
+            17
+          ],
+          "pixel_center": [
+            24.0,
+            10.5
+          ]
+        },
+        {
+          "pixel_box": [
+            495,
+            8,
+            509,
+            21
+          ],
+          "pixel_center": [
+            502.0,
+            14.5
+          ]
+        },
+        {
+          "pixel_box": [
+            220,
+            12,
+            234,
+            25
+          ],
+          "pixel_center": [
+            227.0,
+            18.5
+          ]
+        },
+        {
+          "pixel_box": [
+            491,
+            492,
+            505,
+            506
+          ],
+          "pixel_center": [
+            498.0,
+            499.0
+          ]
+        },
+        {
+          "pixel_box": [
+            176,
+            496,
+            190,
+            510
+          ],
+          "pixel_center": [
+            183.0,
+            503.0
+          ]
+        },
+        {
+          "pixel_box": [
+            68,
+            497,
+            82,
+            511
+          ],
+          "pixel_center": [
+            75.0,
+            504.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "92_stalingrad": {
+      "image_sha256": "f93b8604e185d87f3a823ba44bff4e63562fa2e4d48b85d246cda68a824fb962",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            391,
+            3,
+            406,
+            17
+          ],
+          "pixel_center": [
+            398.5,
+            10.0
+          ]
+        },
+        {
+          "pixel_box": [
+            223,
+            47,
+            238,
+            60
+          ],
+          "pixel_center": [
+            230.5,
+            53.5
+          ]
+        },
+        {
+          "pixel_box": [
+            194,
+            469,
+            208,
+            483
+          ],
+          "pixel_center": [
+            201.0,
+            476.0
+          ]
+        },
+        {
+          "pixel_box": [
+            395,
+            498,
+            409,
+            512
+          ],
+          "pixel_center": [
+            402.0,
+            505.0
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    "95_lost_city": {
+      "image_sha256": "953f1e7f56473e4c645559d85b87eeba769aca211d3abb26413d61663c995a4f",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [],
+      "rejected": []
+    },
+    "96_prohorovka_defense": {
+      "image_sha256": "db752b01c39790d85eeb13b612e7ab9423596fdfaecc692bce04912dfacd0cee",
+      "image_size": [
+        512,
+        512
+      ],
+      "markers": [
+        {
+          "pixel_box": [
+            268,
+            2,
+            282,
+            16
+          ],
+          "pixel_center": [
+            275.0,
+            9.0
+          ]
+        },
+        {
+          "pixel_box": [
+            93,
+            4,
+            107,
+            18
+          ],
+          "pixel_center": [
+            100.0,
+            11.0
+          ]
+        },
+        {
+          "pixel_box": [
+            356,
+            19,
+            370,
+            32
+          ],
+          "pixel_center": [
+            363.0,
+            25.5
+          ]
+        },
+        {
+          "pixel_box": [
+            4,
+            494,
+            18,
+            508
+          ],
+          "pixel_center": [
+            11.0,
+            501.0
+          ]
+        },
+        {
+          "pixel_box": [
+            100,
+            497,
+            114,
+            511
+          ],
+          "pixel_center": [
+            107.0,
+            504.0
+          ]
+        },
+        {
+          "pixel_box": [
+            368,
+            500,
+            382,
+            512
+          ],
+          "pixel_center": [
+            375.0,
+            506.0
+          ]
+        }
+      ],
+      "rejected": []
+    }
+  },
+  "source": {
+    "archive": "Spg_Tac_1.zip",
+    "archive_sha256": "22ec2f4bf5e438237b02eb94d9cf3e0b68c76d5fd51cfb05230c7113a04b0710",
+    "author": "Hawg (PigBrains / Hawgs_Mods)",
+    "author_listing_game_version": "9.22.0.1",
+    "curseforge_file_id": 2527609,
+    "download_url": "https://mediafilez.forgecdn.net/files/2527/609/Spg_Tac_1.zip",
+    "file_page": "https://www.curseforge.com/worldoftanks/wot-mods/hawgs-tactical-arty-minimaps/files/2527609",
+    "forum": "https://koreanrandom.com/forum/topic/43190-hawgs-spg-td-passive-scout-tactical-minimaps/",
+    "interpretation": "SPG-only yellow-bordered blue-filled squares. Pixel box centres, not surveyed exact world positions.",
+    "kind": "community_artillery_markers",
+    "source_project_license": "GPLv2 (no source images or third-party code redistributed)"
+  }
+}
