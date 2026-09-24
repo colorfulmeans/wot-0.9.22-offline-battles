@@ -8643,7 +8643,10 @@ class BotRuntime(object):
 
         by_id = dict((tank['id'], tank) for tank in tanks)
         physical_results = tank_collision.resolve_pairs(tanks, step)
-        for actor, delta in tank_collision.traverse_impulses(tanks, step).items():
+        traverse_bodies = tank_collision.post_contact_velocity_bodies(
+            tanks, physical_results)
+        for actor, delta in tank_collision.traverse_impulses(
+                traverse_bodies, step).items():
             result = physical_results[actor]
             result['delta_velocity'] = tuple(result['delta_velocity'][i]+delta[i]
                                               for i in range(2))

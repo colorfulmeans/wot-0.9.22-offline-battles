@@ -20056,6 +20056,37 @@ class BattleRuntime(object):
             return {'armor': armor, 'screened': False}
         return None
 
+    def _native_ram_contact_plate_pair(self, proof):
+        """Find one shared structural damage height inside the frozen contact.
+
+        Never substitutes primaryArmor or mixes plates sampled at different
+        heights.  The first candidate for which both native #1513 hit testers
+        expose structure owns the receipt.
+        """
+        contact_normal = proof.get('contact_normal')
+        if contact_normal is None:
+            return None, None, None
+        hit = proof['hit_point']
+        heights = tank_collision.ram_contact_sample_heights(
+            hit[1], proof.get('contact_y_span'))
+        seen_player = None
+        seen_bot = None
+        for sample_y in heights:
+            sample = self._vector((hit[0], sample_y, hit[2]))
+            player_plate = self._native_ram_vehicle_armor(
+                proof['local_vehicle'], proof['local_matrix'], sample,
+                contact_normal)
+            bot_plate = self._native_ram_vehicle_armor(
+                proof['bot_vehicle'], proof['bot_matrix'], sample,
+                (-contact_normal[0], -contact_normal[1]))
+            if player_plate is not None:
+                seen_player = player_plate
+            if bot_plate is not None:
+                seen_bot = bot_plate
+            if player_plate is not None and bot_plate is not None:
+                return (player_plate, bot_plate, float(sample_y)), seen_player, seen_bot
+        return None, seen_player, seen_bot
+
     def _ram_contact_armor_status(self, first, second, contact):
         """Classify one native contact probe without folding transient state."""
         if not self._worker_mode:
@@ -20255,7 +20286,7 @@ class BattleRuntime(object):
                                  hit_point, player_velocity, bot_velocity,
                                  contact_time_us, own_pose=None,
                                  bot_pose=None, player_ram_profile=None,
-                                 contact_normal=None):
+                                 contact_normal=None, contact_y_span=None):
         """Queue one immutable contact episode without applying HP locally."""
         if len(self._native_ram_contact_proofs) >= 16:
             return False
@@ -20279,6 +20310,22 @@ class BattleRuntime(object):
             own_pose[3], own_pose[4], own_pose[5])[:3]
         bot_pose = tuple(bot_pose[:3]) + vehicle_physics.canonical_body_rotation(
             bot_pose[3], bot_pose[4], bot_pose[5])[:3]
+        if contact_y_span is None:
+            try:
+                player_shape = self._collision_shape(
+                    local_vehicle.typeDescriptor)
+                bot_shape = self._collision_shape(bot_vehicle.typeDescriptor)
+                player_low, player_high = tank_collision.vertical_interval(
+                    own_pose[1], player_shape, own_pose[4], own_pose[5])
+                bot_low, bot_high = tank_collision.vertical_interval(
+                    bot_pose[1], bot_shape, bot_pose[4], bot_pose[5])
+                contact_low = max(player_low, bot_low)
+                contact_high = min(player_high, bot_high)
+                contact_y_span = (
+                    (float(contact_low), float(contact_high))
+                    if contact_high > contact_low else None)
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                contact_y_span = None
         if player_ram_profile is None:
             player_ram_profile = self._ram_profile(
                 local_vehicle.typeDescriptor, local=True)
@@ -20311,6 +20358,7 @@ class BattleRuntime(object):
             'bot_matrix': self._ram_pose_matrix(
                 bot_pose[:3], bot_pose[3], bot_pose[4], bot_pose[5]),
             'contact_normal': contact_normal,
+            'contact_y_span': contact_y_span,
             'contact_spall_player': player_spall,
             'contact_bonus_player': player_bonus,
             'vx': float(player_velocity[0]),
@@ -20382,17 +20430,16 @@ class BattleRuntime(object):
         local_matrix = proof['local_matrix']
         bot_matrix = proof['bot_matrix']
         contact_normal = proof.get('contact_normal')
+        matched = None
         if contact_normal is None:
             player_plate = bot_plate = None
         else:
-            player_plate = self._native_ram_vehicle_armor(
-                proof['local_vehicle'], local_matrix, proof['hit_point'],
-                contact_normal)
-            bot_plate = self._native_ram_vehicle_armor(
-                proof['bot_vehicle'], bot_matrix, proof['hit_point'],
-                (-contact_normal[0], -contact_normal[1]))
+            matched, player_plate, bot_plate = (
+                self._native_ram_contact_plate_pair(proof))
+            if matched is not None:
+                player_plate, bot_plate, unused_sample_y = matched
         if (revision is None or presentation_time_us is None or
-                player_plate is None or bot_plate is None):
+                matched is None):
             if proof['attempts'] < 2:
                 return False
             self._native_ram_contact_proofs.pop(event_seq, None)
@@ -20407,7 +20454,8 @@ class BattleRuntime(object):
         if len(self._local_ram_receipts) >= 16:
             return False
         self._local_ram_seq += 1
-        hit = proof['hit_point']
+        sample_y = matched[2]
+        hit = (proof['hit_point'][0], sample_y, proof['hit_point'][2])
         player_armor = player_plate['armor']
         bot_armor = bot_plate['armor']
         receipt = {
@@ -20592,12 +20640,23 @@ class BattleRuntime(object):
             overlap_point = self._ram_obb_overlap_point(own, other)
             if overlap_point is None:
                 continue
+            # Preserve the historical presentation midpoint as the first
+            # observed damage height.  Separately derive a pitched/rolled
+            # shared vertical span for structural fallbacks.
             low = max(
                 float(own['y']) + float(own['shape'][2]),
                 float(other['y']) + float(other['shape'][2]))
             high = min(
                 float(own['y']) + float(own['shape'][3]),
                 float(other['y']) + float(other['shape'][3]))
+            own_contact_low, own_contact_high = tank_collision.vertical_interval(
+                own['y'], own['shape'],
+                own.get('pitch', 0.0), own.get('roll', 0.0))
+            other_contact_low, other_contact_high = tank_collision.vertical_interval(
+                other['y'], other['shape'],
+                other.get('pitch', 0.0), other.get('roll', 0.0))
+            contact_low = max(own_contact_low, other_contact_low)
+            contact_high = min(own_contact_high, other_contact_high)
             if relative_normal >= 0.0 or bot_id in previous:
                 continue
             hit_point = self._vector((
@@ -20620,7 +20679,8 @@ class BattleRuntime(object):
                           _number(other.get('pitch')),
                           _number(other.get('roll'))),
                 player_ram_profile=own['ram_profile'],
-                contact_normal=impact_contact[:2])
+                contact_normal=impact_contact[:2],
+                contact_y_span=(contact_low, contact_high))
             # Queue admission, including one next-frame plate retry, owns the
             # episode. A sustained overlap must never generate another HP
             # proposal merely because rendering/polling continues.
@@ -20820,10 +20880,19 @@ class BattleRuntime(object):
             own, physical_others, now=now,
             ram_cooldowns=self._local_ram_cooldowns,
             active_ram_contacts=self._local_ram_contacts, dt=dt)
-        angular = tank_collision.traverse_impulses([own]+physical_others, dt, anchor=own['id'])
-        contact['delta_velocity'] = tuple(contact['delta_velocity'][i]+angular[own['id']][i]
-                                          for i in range(2))
         responses = dict(contact.get('responses', ()))
+        solved = {
+            own['id']: {'delta_velocity': contact['delta_velocity']}}
+        for other in physical_others:
+            solved[other['id']] = {
+                'delta_velocity': responses.get(other['id'], (0.0, 0.0))}
+        traverse_bodies = tank_collision.post_contact_velocity_bodies(
+            [own] + physical_others, solved)
+        angular = tank_collision.traverse_impulses(
+            traverse_bodies, dt, anchor=own['id'])
+        contact['delta_velocity'] = tuple(
+            contact['delta_velocity'][i] + angular[own['id']][i]
+            for i in range(2))
         for other in physical_others:
             delta = angular[other['id']]
             if delta != (0.0, 0.0):
