@@ -1,4 +1,4 @@
-"""HE presentation follows hit damage and the fired round, not vehicle class."""
+"""HE feedback distinguishes penetration, exterior blast damage and no damage."""
 
 import copy
 import unittest
@@ -24,8 +24,8 @@ class HEFeedbackTests(unittest.TestCase):
         # The user can already have selected AP when the HE reaches its target.
         descriptor.activeGunShotIndex = 0
         runtime.vehicles.g_cache.shotEffects[4] = {
-            'armorHit': ('heHitStages', 'heExplosionFx', None),
-            'armorResisted': ('heResistedStages', 'heResistedFx', None),
+            'armorHit': ('heHitStages', 'hePenetrationExplosionFx', None),
+            'armorResisted': ('heResistedStages', 'heSurfaceExplosionFx', None),
             'armorSplashHit': ('heSplashStages', 'heSplashFx', None),
         }
         shooter = _Vehicle(10, descriptor, _Vector(), (0, 0, 0),
@@ -46,7 +46,7 @@ class HEFeedbackTests(unittest.TestCase):
                  'dead': False, 'attack_reason': 0, 'death_reason': 0}
         return runtime, battle, attacker, target, event
 
-    def test_all_vehicle_classes_use_hp_for_he_direct_effect_and_voice(self):
+    def test_all_vehicle_classes_keep_three_distinct_he_direct_outcomes(self):
         for vehicle_class in ('lightTank', 'mediumTank', 'heavyTank',
                               'AT-SPG', 'SPG'):
             for damage in (0, 150):
@@ -60,8 +60,8 @@ class HEFeedbackTests(unittest.TestCase):
                         battle._present_combat_hit(event, target, attacker, 10)
                         battle._present_combat_feedback(event, target, attacker)
                         effect = battle._avatar.terrainEffects.addNew.call_args
-                        self.assertEqual('heExplosionFx' if damage else
-                                         'heResistedFx', effect.args[1])
+                        self.assertEqual('hePenetrationExplosionFx' if result == 2 else
+                                         'heSurfaceExplosionFx', effect.args[1])
                         self.assertEqual(10, effect.kwargs['attackerID'])
                         self.assertEqual(11, effect.kwargs['entity_id'])
                         self.assertFalse(effect.kwargs['isPlayerVehicle'])
@@ -69,13 +69,18 @@ class HEFeedbackTests(unittest.TestCase):
                                          effect.kwargs['damageFactor'])
                         flags = battle._avatar.shot_results[0][0] >> 32
                         vhf = runtime.constants.VEHICLE_HIT_FLAGS
-                        expected = (vhf.ATTACK_IS_DIRECT_PROJECTILE |
-                            (vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE
-                             if damage else
-                             vhf.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE))
+                        expected = vhf.ATTACK_IS_DIRECT_PROJECTILE
+                        if result == 2:
+                            expected |= vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE
+                        else:
+                            expected |= vhf.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE
+                            if damage:
+                                expected |= vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION
                         self.assertEqual(expected, flags)
-                        # Presentation must never turn a splash-damage hit
-                        # into a real penetration in the event/statistics.
+                        self.assertFalse(flags & vhf.ATTACK_IS_EXTERNAL_EXPLOSION)
+                        self.assertFalse(flags & vhf.RICOCHET)
+                        # A direct non-penetrating blast remains a direct hit;
+                        # both the voice flags and ledger preserve its cause.
                         self.assertEqual(original, event)
 
     def test_he_splash_retains_near_explosion_voice_and_hull_sound(self):
@@ -92,28 +97,58 @@ class HEFeedbackTests(unittest.TestCase):
                          vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION,
                          battle._avatar.shot_results[0][0] >> 32)
 
-    def test_he_critical_feedback_keeps_ribbons_without_replacing_plain_voice(self):
-        for damage in (0, 150):
+    def test_he_direct_hit_keeps_explosion_criticals_for_stock_voice_priority(self):
+        for damage, result in ((0, 1), (150, 1), (150, 2)):
             runtime, battle, attacker, target, event = self._fixture()
-            event['damage'] = damage
+            event.update(damage=damage, shot_result=result)
             event['critical'] = {'events': [
                 {'kind': 'device', 'name': 'leftTrackHealth',
-                 'old_state': 'normal', 'state': 'destroyed', 'cause': 'shot'},
+                 'old_state': 'normal', 'state': 'destroyed',
+                 'cause': 'explosion'},
                 {'kind': 'device', 'name': 'gunHealth',
-                 'old_state': 'normal', 'state': 'critical', 'cause': 'shot'}]}
+                 'old_state': 'normal', 'state': 'critical',
+                 'cause': 'explosion'},
+                {'kind': 'fire', 'state': True, 'cause': 'explosion'}]}
             original = copy.deepcopy(event)
             battle._present_combat_feedback(event, target, attacker)
             flags = battle._avatar.shot_results[0][0] >> 32
             vhf = runtime.constants.VEHICLE_HIT_FLAGS
+            self.assertTrue(flags & vhf.DEVICE_PIERCED_BY_EXPLOSION)
+            self.assertTrue(flags & vhf.DEVICE_DAMAGED_BY_EXPLOSION)
+            self.assertTrue(flags & vhf.GUN_DAMAGED_BY_EXPLOSION)
+            self.assertTrue(flags & vhf.CHASSIS_DAMAGED_BY_EXPLOSION)
+            self.assertTrue(flags & vhf.FIRE_STARTED)
             self.assertFalse(flags & (vhf.GUN_DAMAGED_BY_PROJECTILE |
-                                      vhf.CHASSIS_DAMAGED_BY_PROJECTILE |
-                                      vhf.GUN_DAMAGED_BY_EXPLOSION |
-                                      vhf.CHASSIS_DAMAGED_BY_EXPLOSION))
+                                      vhf.CHASSIS_DAMAGED_BY_PROJECTILE))
             criticals = [item for batch in battle._avatar.battle_events
                          for item in batch if item['eventType'] == 6]
             self.assertEqual(1, len(criticals))
             self.assertEqual(2, criticals[0]['details'] >> 16)
             self.assertEqual(original, event)
+
+    def test_he_critical_flags_retain_each_cause_and_exclude_repairs(self):
+        runtime, battle, attacker, target, event = self._fixture()
+        event['critical'] = {'events': [
+            {'kind': 'device', 'name': 'leftTrackHealth',
+             'old_state': 'normal', 'state': 'destroyed', 'cause': 'explosion'},
+            {'kind': 'device', 'name': 'gunHealth',
+             'old_state': 'normal', 'state': 'critical', 'cause': 'shot'},
+            {'kind': 'device', 'name': 'rightTrackHealth',
+             'old_state': 'destroyed', 'state': 'normal', 'cause': 'repair'}]}
+        battle._present_combat_feedback(event, target, attacker)
+        flags = battle._avatar.shot_results[0][0] >> 32
+        vhf = runtime.constants.VEHICLE_HIT_FLAGS
+        self.assertTrue(flags & vhf.CHASSIS_DAMAGED_BY_EXPLOSION)
+        self.assertTrue(flags & vhf.GUN_DAMAGED_BY_PROJECTILE)
+        self.assertFalse(flags & vhf.CHASSIS_DAMAGED_BY_PROJECTILE)
+        self.assertFalse(flags & vhf.GUN_DAMAGED_BY_EXPLOSION)
+
+    def test_he_kill_retains_stock_suppression_of_hit_voice(self):
+        runtime, battle, attacker, target, event = self._fixture()
+        event['dead'] = True
+        battle._present_combat_feedback(event, target, attacker)
+        flags = battle._avatar.shot_results[0][0] >> 32
+        self.assertTrue(flags & runtime.constants.VEHICLE_HIT_FLAGS.VEHICLE_KILLED)
 
     def test_spg_ap_uses_physical_result_even_after_switching_to_he(self):
         runtime, battle, attacker, target, event = self._fixture('SPG')

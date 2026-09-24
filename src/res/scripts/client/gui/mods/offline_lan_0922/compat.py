@@ -629,6 +629,7 @@ class OfflineCompatibility(object):
         self._original_vehicle_set_gun_angles = None
         self._original_vehicle_collide_segment = None
         self._original_vehicle_collide_segment_ext = None
+        self._original_vehicle_draw_edge = None
         self._vehicle_set_gun_angles_code = None
         self._gun_rotator_stabilised_code = None
         self._gun_rotator_predict_locked_target_code = None
@@ -685,6 +686,7 @@ class OfflineCompatibility(object):
         self._vehicle_set_gun_angles_wrapper = None
         self._vehicle_collide_segment_wrapper = None
         self._vehicle_collide_segment_ext_wrapper = None
+        self._vehicle_draw_edge_wrapper = None
         self._compound_getattribute_wrapper = None
         self._compound_deactivate_wrapper = None
         self._compound_models_refresh_wrapper = None
@@ -1027,6 +1029,10 @@ class OfflineCompatibility(object):
                 vehicle_type.__dict__.get(
                     'collideSegmentExt',
                     getattr(vehicle_type, 'collideSegmentExt', None)))
+            self._original_vehicle_draw_edge = getattr(
+                vehicle_type, 'drawEdge', None)
+            if not callable(self._original_vehicle_draw_edge):
+                raise RuntimeError('#1513 vehicle drawEdge is unavailable')
             if (not callable(self._original_vehicle_collide_segment) or
                     not callable(
                         self._original_vehicle_collide_segment_ext)):
@@ -1725,6 +1731,26 @@ class OfflineCompatibility(object):
             collisions.sort(key=lambda item: item.dist)
             return collisions
 
+        def vehicle_draw_edge(vehicle, forceSimpleEdge=False):
+            """Share the runtime's occlusion decision with stock targetFocus.
+
+            Native mouse picking still runs for LAN vehicles. Wrecks have no
+            target capabilities, so that picker can select a live vehicle
+            behind one even after the runtime rejected it. Both paths reach
+            Vehicle.drawEdge; only the current ray-validated candidate may
+            register a remote edge with the stock Highlighter.
+            """
+            if (compatibility._battle_active and
+                    bool(getattr(vehicle, '_offlineNativeRemote', False))):
+                if (vehicle is not compatibility._target_lock_candidate or
+                        not vehicle.isAlive() or
+                        not bool(getattr(vehicle, '_spot_visible', True)) or
+                        not bool(getattr(
+                            vehicle, '_offlineNativeDrawVisible', True))):
+                    return None
+            return compatibility._original_vehicle_draw_edge(
+                vehicle, forceSimpleEdge)
+
         def undrawn_lan_remote(entity):
             """Whether one entity is a LAN remote the client must not draw."""
             read = compatibility._original_vehicle_getattribute
@@ -2022,7 +2048,11 @@ class OfflineCompatibility(object):
             if is_lock_input:
                 compatibility._target_lock_input_pending = False
                 compatibility._target_lock_input_avatar = None
-                if target is None and candidate is not None:
+                # A native picker can return a LAN vehicle behind a wreck.
+                # Explicit lock input must use the same validated candidate
+                # as the outline, including its None (occluded) result.
+                if (target is None or bool(getattr(
+                        target, '_offlineNativeRemote', False))):
                     target = candidate
             # Map a native selection back to the gameplay adapter that owns
             # it.  ``target`` must be a live entity: a native remote candidate
@@ -2580,6 +2610,7 @@ class OfflineCompatibility(object):
         self._vehicle_set_gun_angles_wrapper = vehicle_set_gun_angles
         self._vehicle_collide_segment_wrapper = vehicle_collide_segment
         self._vehicle_collide_segment_ext_wrapper = vehicle_collide_segment_ext
+        self._vehicle_draw_edge_wrapper = vehicle_draw_edge
         self._projectile_segment_may_hit_wrapper = (
             projectile_segment_may_hit)
         self._projectile_collidable_entities_wrapper = (
@@ -2650,6 +2681,7 @@ class OfflineCompatibility(object):
                     vehicle_type.set_gunAnglesPacked = vehicle_set_gun_angles
                 vehicle_type.collideSegment = vehicle_collide_segment
                 vehicle_type.collideSegmentExt = vehicle_collide_segment_ext
+                vehicle_type.drawEdge = vehicle_draw_edge
             runtime.projectile_mover_module.segmentMayHitEntity = (
                 projectile_segment_may_hit)
             runtime.projectile_mover_module.getCollidableEntities = (
@@ -2890,6 +2922,11 @@ class OfflineCompatibility(object):
                 self._vehicle_collide_segment_ext_wrapper):
             vehicle_type.collideSegmentExt = (
                 self._original_vehicle_collide_segment_ext)
+        if (vehicle_type is not None and
+                self._original_vehicle_draw_edge is not None and
+                vehicle_type.__dict__.get('drawEdge') is
+                self._vehicle_draw_edge_wrapper):
+            vehicle_type.drawEdge = self._original_vehicle_draw_edge
         projectile_mover_module = getattr(
             runtime, 'projectile_mover_module', None)
         if (projectile_mover_module is not None and
@@ -2964,8 +3001,10 @@ class OfflineCompatibility(object):
         self._projectile_segment_may_hit_wrapper = None
         self._original_vehicle_collide_segment = None
         self._original_vehicle_collide_segment_ext = None
+        self._original_vehicle_draw_edge = None
         self._vehicle_collide_segment_wrapper = None
         self._vehicle_collide_segment_ext_wrapper = None
+        self._vehicle_draw_edge_wrapper = None
         self._original_projectile_collidable_entities = None
         self._projectile_collidable_entities_wrapper = None
         self._camera_acceleration_update_code = None

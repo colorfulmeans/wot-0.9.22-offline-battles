@@ -435,6 +435,9 @@ EXPECTED_ABI = {
         'AmmoController.setNextShellCD': ('self', 'intCD'),
         'AmmoController.setCurrentShellCD': ('self', 'intCD'),
         'AmmoController.useLoaderIntuition': ('self',),
+        'AmmoController.setShells': (
+            'self', 'intCD', 'quantity', 'quantityInClip'),
+        'AmmoController.getOrderedShellsLayout': ('self',),
     },
     'scripts/client/account_helpers/AccountSettings.pyc': {
         'AccountSettings.__readSection': ('ds', 'name'),
@@ -1332,6 +1335,11 @@ EXPECTED_CODE_NAMES = {
         'AmmoController.useLoaderIntuition': (
             '_AmmoController__gunSettings', 'clip', 'size',
             'isGunReloading', 'setShells'),
+        'AmmoController.setShells': (
+            '_AmmoController__ammo', '_order', 'append',
+            'onShellsAdded', 'onShellsUpdated'),
+        'AmmoController.getOrderedShellsLayout': (
+            '_order', '_AmmoController__ammo', 'getItemByCompactDescr'),
     },
     'scripts/client/gui/battle_control/controllers/vehicle_state_ctrl.pyc': {
         '_SpeedStateHandler._invalidate': (

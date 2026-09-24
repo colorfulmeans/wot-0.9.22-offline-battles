@@ -3605,6 +3605,7 @@ class BattleRuntime(object):
                 self._gun_state = gun_mechanics.GunState(
                     descriptor, self._local_loadout(descriptor),
                     ammo_layout=self._local_ammo_layout())
+                self._apply_initial_garage_shell(self._gun_state)
                 self._log_local_ammo(self._gun_state)
                 self._log_effective_parameters(descriptor)
                 self._gun_last_tick = self._clock()
@@ -7775,10 +7776,14 @@ class BattleRuntime(object):
         booster_slots = getattr(
             vehicle_equipment, 'battleBoosterConsumables', None)
         shells = None if item is None else {}
+        shell_order = None if item is None else []
         if shells is not None:
             for shell in (getattr(item, 'shells', None) or ()):
                 try:
-                    shells[int(shell.intCD)] = max(0, int(shell.count))
+                    compact_descr = int(shell.intCD)
+                    shells[compact_descr] = max(0, int(shell.count))
+                    if compact_descr not in shell_order:
+                        shell_order.append(compact_descr)
                 except (AttributeError, TypeError, ValueError):
                     continue
         equipment_ids = None
@@ -7793,6 +7798,8 @@ class BattleRuntime(object):
         crew = tuple(getattr(item, 'crew', None) or ())
         self._garage_loadout = {
             'shells': shells,
+            'shell_order': (None if shell_order is None
+                            else tuple(shell_order)),
             'equipment_ids': equipment_ids,
             'equipments': (() if consumables is None else
                            tuple(consumables.getInstalledItems())),
@@ -7926,6 +7933,50 @@ class BattleRuntime(object):
         """
         shells = self._garage_loadout_snapshot()['shells']
         return None if shells is None else dict(shells)
+
+    def _local_shell_order(self):
+        """Return the maintenance-page shell slots in their saved order."""
+        order = self._garage_loadout_snapshot().get('shell_order')
+        return None if order is None else tuple(order)
+
+    def _ammo_presentation_indices(self, state):
+        """Map saved shell slots onto canonical gun-shot indices.
+
+        Damage, projectile launch and the LAN protocol keep using the
+        descriptor's original shot index. Only the stock ammo controller's
+        insertion order follows ``shellsLayout``. #1513 setShells appends a
+        newly seen compact descriptor to _order; subsequent updates cannot
+        correct an earlier descriptor-ordered publication.
+        """
+        canonical = {}
+        for index, shot in enumerate(state.shots):
+            shell = _field(shot, 'shell', {})
+            try:
+                compact_descr = int(_field(shell, 'compactDescr', 0))
+            except (TypeError, ValueError):
+                continue
+            canonical[compact_descr] = index
+        result, seen = [], set()
+        for compact_descr in self._local_shell_order() or ():
+            index = canonical.get(int(compact_descr))
+            if index is None or index in seen:
+                continue
+            result.append(index)
+            seen.add(index)
+        for index in range(len(state.shots)):
+            if index not in seen:
+                result.append(index)
+        return tuple(result)
+
+    def _apply_initial_garage_shell(self, state):
+        """Load the first carried shell in the maintenance-page slot order."""
+        if not self._local_shell_order():
+            return False
+        for index in self._ammo_presentation_indices(state):
+            if index < len(state.ammo) and int(state.ammo[index]) > 0:
+                state.shot_index = index
+                return True
+        return False
 
     def _log_effective_parameters(self, descriptor):
         """Print the values this battle actually uses for the player's tank.
@@ -8298,7 +8349,8 @@ class BattleRuntime(object):
         if not force and signature == self._ammo_signature:
             return False
         current_shell = None
-        for index, shot in enumerate(state.shots):
+        for index in self._ammo_presentation_indices(state):
+            shot = state.shots[index]
             shell = _field(shot, 'shell', {})
             compact = _field(shell, 'compactDescr', 0)
             quantity = state.ammo[index]
@@ -8454,6 +8506,7 @@ class BattleRuntime(object):
             state = gun_mechanics.GunState(
                 descriptor, self._local_loadout(descriptor),
                 ammo_layout=self._local_ammo_layout())
+            self._apply_initial_garage_shell(state)
             self._gun_state = state
         now = self._clock() if now is None else float(now)
         if self._gun_last_tick is None:
@@ -10901,16 +10954,18 @@ class BattleRuntime(object):
             'vehicle hit impulse', self._present_hit_impulse,
             (event, target_record, effects_descr, direction))
         # Retail presents an HE near-miss through
-        # Vehicle.showDamageFromExplosion/armorSplashHit. HE direct impacts
-        # use the explosion group whenever HP damage was dealt, independently
-        # of physical penetration. Keep the protocol result for statistics.
+        # Vehicle.showDamageFromExplosion/armorSplashHit. Direct impacts use
+        # the physical penetration result, as DamageFromShotDecoder does.
+        # HE armorResisted already contains shellFall_HE explosion particles
+        # and imp_*_not_pierce_HE sounds; HP lost to that exterior blast must
+        # not select armorHit's penetrating-HE particle/sound instead.
         damage_factor = self._hit_damage_factor(event, target_record)
         if event.get('splash', False):
             return self._present_splash_hit(
                 target_record, effects_descr, effects_index, impact_position,
                 direction, damage_factor)
         if combat_rules.is_he(shot):
-            effect_group = 'armorHit' if damage > 0 else 'armorResisted'
+            effect_group = 'armorHit' if shot_result == 2 else 'armorResisted'
         else:
             effect_group = ('armorRicochet', 'armorResisted', 'armorHit')[
                 shot_result]
@@ -11255,13 +11310,15 @@ class BattleRuntime(object):
                         self._runtime.constants.SHELL_TYPES_INDICES[
                             'HIGH_EXPLOSIVE'])
                     if direct_he:
-                        # #1513 chooses commander voices from these flags,
-                        # independently of the canonical penetration result.
-                        # Every HE/HESH direct HP hit gets the normal damage
-                        # voice, including a non-penetrating explosion. The
-                        # fired shell owns this rule, never the vehicle class
-                        # or the round currently selected after firing.
-                        shot_result = 2 if damage > 0 else 1
+                        # #1513 has a distinct direct-hit explosion voice:
+                        # enemy_hp_damaged_by_explosion_at_direct_hit_by_player.
+                        # Keep the direct-projectile attack bit and report HP
+                        # lost to its explosion without inventing penetration
+                        # or misclassifying the direct hit as a near miss.
+                        shot_result = max(1, shot_result)
+                        if shot_result != 2 and damage > 0:
+                            flags |= int(flags_type.
+                                MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION)
                     if shot_result == 2:
                         flags |= int(
                             flags_type.
@@ -11282,9 +11339,32 @@ class BattleRuntime(object):
                         flags_type.GUN_DAMAGED_BY_PROJECTILE)
                 for critical_event in (
                         (critical or {}).get('events') or ()):
-                    if critical_event.get(
-                            'cause', 'shot') != critical_cause:
+                    cause = critical_event.get('cause', 'shot')
+                    if cause != critical_cause and not (
+                            direct_he and cause in ('shot', 'explosion')):
                         continue
+                    # Direct HE uses the explosion critical-damage producer
+                    # too. Keep its module flags so the stock selector owns
+                    # gun/track critical and kill/fire voice priorities.
+                    if direct_he:
+                        if cause == 'explosion':
+                            pierced_flag = int(flags_type.
+                                DEVICE_PIERCED_BY_EXPLOSION)
+                            device_flag = int(flags_type.
+                                DEVICE_DAMAGED_BY_EXPLOSION)
+                            chassis_flag = int(flags_type.
+                                CHASSIS_DAMAGED_BY_EXPLOSION)
+                            gun_flag = int(flags_type.
+                                GUN_DAMAGED_BY_EXPLOSION)
+                        else:
+                            pierced_flag = int(flags_type.
+                                DEVICE_PIERCED_BY_PROJECTILE)
+                            device_flag = int(flags_type.
+                                DEVICE_DAMAGED_BY_PROJECTILE)
+                            chassis_flag = int(flags_type.
+                                CHASSIS_DAMAGED_BY_PROJECTILE)
+                            gun_flag = int(flags_type.
+                                GUN_DAMAGED_BY_PROJECTILE)
                     kind = critical_event.get('kind')
                     state = critical_event.get('state')
                     if kind == 'fire' and bool(state):
@@ -11301,14 +11381,6 @@ class BattleRuntime(object):
                             flags |= chassis_flag
                         elif name == 'gunHealth':
                             flags |= gun_flag
-                if direct_he:
-                    # A module hit must not replace the requested plain
-                    # damage/non-penetration HE voice. Module
-                    # events remain in the independent critical feedback.
-                    flags &= ~(int(flags_type.GUN_DAMAGED_BY_PROJECTILE) |
-                               int(flags_type.GUN_DAMAGED_BY_EXPLOSION) |
-                               int(flags_type.CHASSIS_DAMAGED_BY_PROJECTILE) |
-                               int(flags_type.CHASSIS_DAMAGED_BY_EXPLOSION))
                 if bool(event.get('dead')):
                     flags |= int(flags_type.VEHICLE_KILLED)
                 callback = getattr(self._avatar, 'showShotResults', None)
@@ -17576,16 +17648,18 @@ class BattleRuntime(object):
                     not getattr(vehicle, 'isStarted', False) or
                     self._record_alive(record, vehicle)):
                 continue
-            # Avoid component transforms for distant wrecks using the same
-            # conservative radius as the projectile broad phase.
-            position = _xyz(getattr(
-                vehicle, 'position', record.get('state', {})))
+            provider = getattr(vehicle, 'matrix', None)
+            if provider is None:
+                continue
+            matrix = self._runtime.math.Matrix(provider)
+            # Use the drawn pose for both phases. A shoved native wreck's
+            # position is the latest snapshot while its matrix can still be
+            # interpolating from the previous one; mixing them can discard
+            # the very wreck the cursor visibly strikes.
+            position = _xyz(matrix.translation)
             if point_segment_distance_sq(
                     position, ray[0],
                     ray[1]) > _TARGET_PICK_BROADPHASE_SQ:
-                continue
-            matrix = getattr(vehicle, 'matrix', None)
-            if matrix is None:
                 continue
             distance = shot_geometry.segment_box_entry_distance(
                 start, end, vehicle_target_bounds_at_matrix(
@@ -17662,7 +17736,7 @@ class BattleRuntime(object):
                         (not record.get('native_remote') and
                          getattr(vehicle, 'bw_entity', None) is None)):
                     reason = 'has no visual entity'
-                elif not vehicle.isAlive():
+                elif not self._record_alive(record, vehicle):
                     reason = 'is destroyed'
                 else:
                     offset = self._vector(_xyz(vehicle.position)) - start
@@ -17787,6 +17861,14 @@ class BattleRuntime(object):
         self._outlined_entity = visual_entity
         self._outlined_vehicle = vehicle
         self._outlined_model = vehicle.model
+        set_candidate = getattr(
+            self._runtime.compatibility, 'set_target_lock_candidate', None)
+        if not callable(set_candidate):
+            raise RuntimeError(
+                '#1513 target-lock candidate boundary is unavailable')
+        # Publish permission before drawEdge: stock targetFocus reaches that
+        # same method independently of this occlusion-aware selector.
+        set_candidate(vehicle)
         if native_remote:
             # Stock Highlighter owns the EdgeDrawer entry across
             # CompoundAppearance refresh/deactivate.  A direct wgAdd call
@@ -17795,12 +17877,6 @@ class BattleRuntime(object):
         else:
             add_edge(visual_entity, color, 0, False)
         self._report_edge('add id=%s colour=%d' % (chosen, color))
-        set_candidate = getattr(
-            self._runtime.compatibility, 'set_target_lock_candidate', None)
-        if not callable(set_candidate):
-            raise RuntimeError(
-                '#1513 target-lock candidate boundary is unavailable')
-        set_candidate(vehicle)
         self.monitor_vehicle_damaged_devices(chosen)
 
     def _refresh_native_target_outline(self):
@@ -18033,6 +18109,11 @@ class BattleRuntime(object):
             trace['spring_layer_columns'] = 'height,normal_y,verdict'
             trace['spring_probes'] = getattr(
                 self, '_local_suspension_probe_trace', ())
+            trace['pseudo_columns'] = 'kind,x,z,minimum,maximum,support,layers'
+            trace['pseudo_probes'] = getattr(
+                self, '_local_pseudo_probe_trace', ())
+            trace['center_of_mass_y'] = (
+                self._local_suspension_params or {}).get('center_of_mass_y')
             trace['legacy_support'] = getattr(
                 self, '_local_legacy_support_sample', None)
             sys.stdout.write('[Offline LAN 0.9.22] LOCAL HARD CONTACT %s\n' %
@@ -21511,12 +21592,30 @@ class BattleRuntime(object):
         flat_limit = (None if self._local_airborne else
                       vehicle_physics.suspension_flat_support_limit(
                           params, probe_height, self._local_pitch, self._local_roll))
-        prepared_filter = self._prepared_ground_filter(points)
+        # Lateral, longitudinal and remembered contacts all stay inside a
+        # carrier's track patch. Include that complete envelope when preparing
+        # the shared broken-skin filter, including at adjacent catalog bins.
+        patch_reach = params.get('footprint_half_width', 0.15) + max(
+            max(spring.get('footprint_front', params.get('footprint_half_length', 0.3)),
+                spring.get('footprint_rear', params.get('footprint_half_length', 0.3)))
+            for spring in params['springs'])
+        filter_points = tuple(points) + (
+            (min(point[0] for point in points) - patch_reach,
+             min(point[1] for point in points) - patch_reach),
+            (max(point[0] for point in points) + patch_reach,
+             max(point[1] for point in points) + patch_reach))
+        prepared_filter = self._prepared_ground_filter(filter_points)
         memory = self._local_spring_ground_memory
+        round_id = (self._start_message or {}).get('round_id')
+        footprint = getattr(self, '_local_footprint_contacts', None)
+        if (footprint is None or footprint[0] is not params['springs'] or
+                footprint[1] != round_id or not isinstance(memory, list)):
+            footprint = (params['springs'], round_id,
+                         [{} for unused in points])
+            self._local_footprint_contacts = footprint
         if not isinstance(memory, list) or len(memory) != len(points):
             memory = [None] * len(points)
-        result = []
-        probe_trace = []
+        samples = []
         for index, point in enumerate(points):
             x, z = point
             spring = params['springs'][index]
@@ -21539,8 +21638,26 @@ class BattleRuntime(object):
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=flat_maximum_y,
                 prepared_filter=prepared_filter)
-            direct = value
-            layers = self._suspension_ground_probe_layers
+            samples.append((value, spring_height, minimum_y, maximum_y,
+                            flat_maximum_y, self._suspension_ground_probe_layers))
+        if support_gradient is None:
+            # The first airborne/spawn sample has no remembered slope. Fit
+            # only the fresh centre columns before lateral footprint heights
+            # are projected back to those centres; otherwise an ordinary
+            # uphill patch masquerades as a rail and bends the landing normal.
+            plane = vehicle_physics.suspension_world_ground_plane(
+                params, tuple(row[0] for row in samples), position, yaw,
+                GROUND_PLANE_EPSILON, self._local_pitch, self._local_roll)
+            if plane is not None:
+                support_gradient = (plane['gradient_x'], plane['gradient_z'])
+        result = []
+        probe_trace = []
+        for index, point in enumerate(points):
+            x, z = point
+            spring = params['springs'][index]
+            direct, spring_height, minimum_y, maximum_y, flat_maximum_y, layers = \
+                samples[index]
+            value = direct
             value = vehicle_physics.suspension_footprint_support(
                 params, point, value, memory[index], yaw,
                 lambda px, pz, low, high: self._suspension_ground_y(
@@ -21548,7 +21665,8 @@ class BattleRuntime(object):
                     prepared_filter=prepared_filter), support_gradient,
                 point_height=spring_height, spring=spring,
                 reference_height=vehicle_physics.suspension_plane_height(
-                    None if self._local_airborne else self._local_ground_plane, x, z))
+                    None if self._local_airborne else self._local_ground_plane, x, z),
+                contact_cache=footprint[2][index])
             value, memory[index] = vehicle_physics.retained_ground_contact(
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
@@ -21563,6 +21681,7 @@ class BattleRuntime(object):
             self, position, yaw, probe_height=None,
             support_gradient=None, sweep_drop=0.0, params=None):
         """Sample every track/belly constraint once for this physics tick."""
+        self._local_pseudo_probe_trace = ()
         if params is None:
             params = self._local_suspension_params
         if not isinstance(params, dict):
@@ -21577,6 +21696,7 @@ class BattleRuntime(object):
         if not isinstance(memory, list) or len(memory) != len(points):
             memory = [None] * len(points)
         result = []
+        probe_trace = []
         for index, point in enumerate(points):
             x, z = point
             contact = params['pseudo_contacts'][index]
@@ -21612,6 +21732,7 @@ class BattleRuntime(object):
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=flat_maximum_y,
                 prepared_filter=prepared_filter)
+            layers = self._suspension_ground_probe_layers
             if contact.get('kind') == 'rigid':
                 memory[index] = None
             else:
@@ -21619,7 +21740,10 @@ class BattleRuntime(object):
                     point, value, memory[index],
                     params['contact_memory_distance'], support_gradient)
             result.append(value)
+            probe_trace.append((contact.get('kind'), x, z, minimum_y,
+                                maximum_y, value, layers))
         self._local_pseudo_ground_memory = memory
+        self._local_pseudo_probe_trace = tuple(probe_trace)
         return tuple(result)
 
     def _local_suspension_predicted_probe_height(
@@ -22164,8 +22288,25 @@ class BattleRuntime(object):
             self._local_airborne = False
             self._local_support_rise_blocked = True
             return position
+        translated_position = position
+        origin_x, origin_z = solved.get('origin_shift', (0.0, 0.0))
+        self._local_pitch = float(solved['pitch'])
+        self._local_roll = float(solved['roll'])
+        sweep_position = (position[0], float(solved['height']), position[2])
+
+        def probe_origin_shift(dx, dz):
+            clear = self._motion_is_clear(
+                entity, sweep_position, math.atan2(dx, dz),
+                math.hypot(dx, dz), 1.0, hull_yaw=yaw)
+            trace = getattr(self, '_local_world_collision_trace', None) or {}
+            return clear, trace.get('normal')
+
+        shift_x, shift_z = vehicle_physics.resolve_suspension_origin_shift(
+            yaw, (origin_x, origin_z), probe_origin_shift)
         position = (
-            position[0], float(solved['height']), position[2])
+            position[0] + shift_x,
+            float(solved['height']),
+            position[2] + shift_z)
         self._local_vertical_speed = float(solved['vertical_velocity'])
         self._local_pitch = float(solved['pitch'])
         self._local_suspension_pitch_velocity = \
@@ -22183,17 +22324,18 @@ class BattleRuntime(object):
         self._local_right_flying = bool(solved['right_flying'])
         if solved['contact_count']:
             self._local_fall_armed = True
+        impact_vertical = solved.get('impact_speed')
+        if impact_vertical is None:
+            impact_vertical = solved.get(
+                'center_vertical_velocity_before', before_vertical_speed)
         if (before_airborne and not self._local_airborne and
-                before_vertical_speed < 0.0):
-            impact_vertical = solved.get('impact_speed')
-            if impact_vertical is None:
-                impact_vertical = before_vertical_speed
+                impact_vertical < 0.0):
             impact_speed = max(0.0, -float(impact_vertical))
             if motion_pose is not None and float(dt) > 0.0:
                 velocity = (
-                    (float(position[0]) - float(motion_pose[0])) / float(dt),
+                    (float(translated_position[0]) - float(motion_pose[0])) / float(dt),
                     float(impact_vertical),
-                    (float(position[2]) - float(motion_pose[2])) / float(dt),
+                    (float(translated_position[2]) - float(motion_pose[2])) / float(dt),
                 )
                 normal = (current_plane.get('normal')
                           if isinstance(current_plane, dict) else None)

@@ -86,6 +86,26 @@ class MissionVisibilityPolicyTests(unittest.TestCase):
             self.receipt['interactions'][threshold - 1]['mission_events'][0][2] = True
             self.assertEqual((True, set()), self.check(definition))
 
+    def test_ht5_missing_sample_does_not_erase_proved_damage_or_invent_completion(self):
+        for definition in self.definitions:
+            if definition['chain'] != 2:
+                continue
+            threshold = definition['operation'] * 1000
+            self.receipt['interactions'] = self.receipt['interactions'][:1]
+            row = self.receipt['interactions'][0]
+            row.update(damage=threshold + 500, damage_events=2)
+            row['mission_events'] = [
+                ['damage', 1000, 500, False, 100., True, None],
+                ['damage', 2000, threshold, False, 100., True, 400.]]
+            self.assertEqual((True, set()), self.check(definition))
+            row['mission_events'][1][2] -= 1
+            self.assertIsNone(self.check(definition)[0])
+            # Missing evidence never satisfies an exact or upper-bound count.
+            exact = dict(definition, main=definition['main'].replace(
+                'greaterOrEqual', 'equal'))
+            row['mission_events'][1][2] += 1
+            self.assertIsNone(self.check(exact)[0])
+
     def test_td4_uses_visibility_at_kill_and_does_not_infer_from_end_stat(self):
         self.receipt['stats']['not_spotted'] = 0
         for definition in self.definitions:

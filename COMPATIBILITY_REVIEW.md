@@ -589,10 +589,12 @@ when its target becomes unspotted. Its auto-aim behavior is unchanged in this
 follow-up. A third-party plugin conflict remains a hypothesis for the group's
 report; no particular plugin or failing session has been identified.
 
-HE direct impact presentation selects `armorHit` when HP damage is positive
-and `armorResisted` otherwise; the original physical penetration result stays
-in the damage/statistics ledger. AP and HE near-miss presentation retain their
-existing groups. Ordinary paid equipment demounting now publishes and charges
+HE direct impact presentation selects `armorHit` for penetration and
+`armorResisted` for a non-penetrating exterior explosion, whether or not that
+explosion removes HP. The earlier HP-based selection in this follow-up was
+incorrect and is superseded by the September 25 exact-resource audit below.
+AP and HE near-miss presentation retain their existing groups.
+Ordinary paid equipment demounting now publishes and charges
 10 gold in both economy modes; the descriptor still determines freely
 removable equipment, and improved equipment retains its 200-bond cost.
 
@@ -3648,9 +3650,24 @@ The pure-data server planner emits revisioned global `bot_orders`, which the
 0.9.22 authority now uses for macro targets after reporting bounded visibility
 observations. BigWorld terrain, collision, water and slope probes remain local,
 and the client planner is a fallback when no server order is available. The
-server derives its standard-mode capture law from the retired predecessor: a
-50-metre radius, one update per second, at most three capture points per
-update, defender stop, empty-base reset and victory at 100 points. Standard
+server derives its standard-mode capture cadence from the retired predecessor:
+one update per second, at most three capture points per update, empty-base
+reset and victory at 100 points. The base radius is map-authored. At graph load,
+the client streams the installed map package's `space.bin` root table and WTCP
+v2 control points, matching both team and position to the stock CTF objectives.
+Those same WTCP resources draw the native ground circles. `SpawnPlanner` puts
+the selected radii in the worker's ready packet, and the server uses them for
+both human and Bot capture and defense threats. This covers every installed
+map, including Tundra and Live Oaks, without assuming that their radii are 30
+metres. The existing Mittengard source fixture separately proves its two
+30-metre circles; that baked metadata is retained. The 50-metre fallback only
+applies to old coordinate-only base records. Successful local reads log the
+map, both radii and source; invalid local data is logged and never overwrites
+proved baked values. Third-map identification and the actual visible-boundary
+alignment still require those local resource/runtime observations. The new
+stream reader was also exercised against the uploaded original Airfield
+package under CPython 3 and 2.7.18, reading its two 50-metre circles from the
+actual 16,626,309-byte compiled space. Standard
 battles end by
 elimination, capture or the server-owned 15-minute timeout.
 
@@ -4201,11 +4218,49 @@ rear-anchor behavior; ordinary tank route leases are unchanged.
 
 ## Artillery feedback, Expert, directives and bonds
 
-Direct SPG hits with positive HP damage now use the direct-projectile
-penetration sound flags. A direct zero-HP hit uses non-penetration flags;
-only a splash event uses external-explosion flags. The physical shot result,
-decal and statistics remain unchanged. Module damage is still published in
-critical feedback; its alternative voice does not replace this SPG rule.
+Direct HE feedback now preserves the physical penetration result for every
+vehicle class, including SPGs. The former positive-HP-to-projectile-penetration
+conversion and forced suppression of gun/track voice flags were incorrect.
+Only a near-miss splash sets `ATTACK_IS_EXTERNAL_EXPLOSION`.
+
+The September 25 audit reads the owner's `scripts.pkg`, including
+`Avatar.PlayerAvatar.showShotResults`, `Vehicle.showDamageFromShot`,
+`VehicleEffects.DamageFromShotDecoder`, `helpers.EffectsList._SoundEffectDesc`,
+`constants.VEHICLE_HIT_FLAGS` and
+`scripts/item_defs/vehicles/common/shot_effects.xml`. The direct-projectile
+voice selector explicitly distinguishes these ordinary, non-killing cases:
+
+| HE outcome | Additional direct-projectile flags | Stock voice event | Direct effect group |
+| --- | --- | --- | --- |
+| Penetration | `MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE` | `enemy_hp_damaged_by_projectile_by_player` | `armorHit` |
+| No penetration, HP lost | `MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE` and `MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION` | `enemy_hp_damaged_by_explosion_at_direct_hit_by_player` | `armorResisted` |
+| No penetration, no HP lost | `MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE` | `enemy_no_hp_damage_at_attempt_by_player` | `armorResisted` |
+
+`DamageFromShotDecoder` maps hit codes 2/3 to `armorResisted` and code 4
+to `armorHit`; damage amount does not choose that group.
+HE `armorResisted` already owns `shellFall_HE_*` explosion particles and
+`imp_*_not_pierce_HE_*` sound events. `armorHit` instead owns
+`armorHit_HE_*` and `imp_*_pierce_HE_*`. Selecting the latter merely because
+an exterior blast removed HP changes both the visual and impact sound.
+The fired shell's effect descriptor remains authoritative after ammunition
+selection changes. Direct HE critical payloads have cause `explosion` and
+now retain their matching module/fire flags; the original client owns the
+special gun/track, kill and fire priorities.
+
+This also agrees with Wargaming's pre-1.0 sound documentation:
+[9.14 sound changes](https://worldoftanks.eu/en/news/general-news/version-914-sounds-physics/)
+distinguish HE/AP/HEAT impact sounds, and
+[9.15.1 features](https://worldoftanks.eu/en/news/general-news/ver-9151-features/)
+describe the separate near-explosion HE sound. The
+[March 2017 voice-mod discussion](https://jbbs.shitaraba.net/bbs/read.cgi/netgame/11943/1486814398/)
+identifies the direct-HE event separately from near-explosion notifications;
+its translated labels are not an exact Chinese voice transcript.
+The uploaded scripts establish the Python/resource contract, not a fresh
+inspection of the complete executable or an audible Windows acceptance run.
+Eight actual adapter outputs were executed through the unmodified
+`showShotResults` code object under CPython 2.7.18, covering the three direct
+outcomes, near-miss damage, three track-critical cases and kill suppression.
+Chinese spoken wording remains selected by the installed voice bank.
 
 Expert's four-second lock now publishes to the stock shared feedback adapter.
 The Avatar wrapper rechecks `BigWorld.target()` against a stock Vehicle, which
@@ -5546,6 +5601,17 @@ mission event. The visibility sampling boundary (up to one normal 0.4-second
 observation interval around a loadout-state change) remains a native
 acceptance limitation.
 
+The 0.9.4 Bot rollback had removed both the view-range producer and the
+`player_vision_ranges` observation field, while leaving the server and mission
+consumer intact. The worker now publishes each live human observer's radius
+even when that observer detects no target, reusing the exact spotting resolver.
+Dead observers are removed. A missing radius excludes that hit from the proved
+damage sum; it cannot invalidate an already-satisfied minimum from other hits,
+and an insufficient proved sum remains unknown. The uploaded client mission
+XML confirms T28 Concept HT-5's 2,000-damage main threshold and three-kill
+additional condition. Both filters and all four operations retain their
+existing installed-client definitions.
+
 Version 3 extends the existing bounded event history and preserves legacy
 v1/v2 receipt reads without inventing missing event-time evidence. Tests
 exercise reference conditions for every operation, event boundaries,
@@ -6234,3 +6300,82 @@ Live Oaks vehicle is already wedged against two faces: this prevention and
 conservative release fix does not prove that exact saved pose can leave.
 Windows gameplay still has to establish that new entries into these reported
 locations remain clear and that the full fleet's native frame rate is usable.
+
+## September 25 native outline and ammunition order follow-up
+
+The uploaded #1513 `scripts.pkg` confirms that `PlayerAvatar.targetFocus`
+calls `Vehicle.drawEdge()` independently of the offline reticle selector.
+Wrecks have no target capabilities, so native picking can select a live tank
+behind a wreck even when the offline selector has rejected it. The native
+`drawEdge(forceSimpleEdge=False)` wrapper now accepts only the current
+occlusion-checked candidate. Stock Highlighter activation and cleanup remain
+the presentation owner. Wreck broad and narrow phases use the same current
+render matrix; authoritative death removes target eligibility immediately.
+
+The stock garage `Vehicle._parseShells` preserves maintenance layout order,
+and battle `AmmoController.setShells` records the order of first publication.
+The loadout snapshot now carries that order separately from ammunition counts.
+HUD publication and the first carried shell follow the garage order, while
+`gun.shots`, worker fire intent, damage calculations, consumption and settlement
+retain the original descriptor indices. Tests exercise all three-shell
+permutations, zero stock, switching and firing the actual HE descriptor.
+
+The uploaded script archive matches the repository's four pinned entity
+definition hashes and representative CPython 2.7 magic values. This is a
+script/resource contract check, not a complete executable inspection or a
+native Windows rendering/audio/physics acceptance run.
+
+### September 25 bridge-edge suspension and retained Bot falling laws
+
+The KV-5 report shows Live Oaks at `(-76.63, 4.62, -426.59)` and Sacred
+Valley at `(5.95, 0.39, 96.18)`: one track has five supporting spring rays,
+the other five are absent, while horizontal bridge faces stop forward/reverse
+movement. Vehicle queries still use mask `0x50`; the old projectile-mask
+bridge fix has not disappeared. The report does not contain the map meshes
+or rigid pseudo-contact samples, so it cannot establish that every visible
+rail has a native collision body.
+
+The pinned `scripts/common/physics_shared.pyc` has a separate mass-center
+contract that the copied suspension omitted. CPython 2.7 disassembly of
+`initVehiclePhysicsClient` offsets 300–332 sets `centerOfMass.y` to the mounted
+hull bounds' middle plus hull height times `_computeCenterOfMassShift`.
+That helper divides descriptor engine power by weight and evaluates the stock
+power curve at `(9.5, 13, 21)` with shifts `(-0.15, -0.2, -0.3)`.
+The spring solver now applies forces and rigid projection around that center,
+then transforms position and velocity back to the model origin. The full
+origin displacement includes X/Z, so rotation alone cannot move the mass
+center sideways. No native physics object or new native API is introduced.
+
+A stopped, already tilted hull whose model origin remains inboard but whose
+mass center is beyond a bridge edge reproduces the old hanging state. The
+new 30/120 Hz scene falls without artificial driving, including a rotated
+bridge. Airborne tests conserve mass-center motion rather than incorrectly
+asserting that a rotating model origin itself follows a ballistic path.
+
+The Bot rollback had separately removed flipped-hull/roof support, the
+no-downward-snap cliff rules, the fall-aware pose-delta check, and airborne
+world-impact handling. Those physical boundaries are restored independently
+of Bot planning and recovery decisions. Existing player/Bot cliff, roof,
+rail-deck and glancing-impact tests cover their shared behavior. Diagnostics
+now include rigid/track/belly support samples and the selected mass-center
+height. Exact native bridge geometry, rail presentation and gameplay feel
+still require a Windows #1513 playtest.
+
+Narrow rails can fall between the original spring-center columns even when
+the native mesh has a valid collision face. Normal upright sampling now
+checks four lateral columns per carrier and chooses the highest legal fresh
+support. A first pass fits a reliable plane from the direct columns before
+lateral heights are projected back to carrier centers. This preserves a
+continuous slope's landing normal when no prior support plane exists.
+The normal full-body budget is 62 queries (ten springs plus twelve
+pseudo contacts); a previously observed contact can add one fresh recast per
+carrier, up to 72 in a stable support frame. Missing/lower supports retain the
+bounded 25-point recovery patch and can exceed that steady-frame budget.
+The per-vehicle/per-round cache contains only candidate world X/Z
+coordinates, never support heights. Candidates outside the current footprint
+are discarded, and every retained candidate is checked against the current
+native world. A 24-cm rail at X=1.17..1.23, between the former center columns,
+now supports a stationary hull while its footprint remains over the rail and
+releases it when rotation about the mass center moves it beyond the rail edge.
+Query counts and Python callback timing are bounded-test evidence;
+they do not establish native frame times on the Windows client.

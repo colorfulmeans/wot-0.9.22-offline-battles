@@ -5484,6 +5484,14 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
                 'native_remote': True, 'spot_visible': True,
                 'state': {'health': 500, 'alive': True}}}
 
+        original_draw_edge = vehicle.drawEdge
+
+        def draw_validated_edge(force_simple_edge):
+            self.assertIs(vehicle, runtime.compatibility.target_lock_candidate)
+            return original_draw_edge(force_simple_edge)
+
+        vehicle.drawEdge = draw_validated_edge
+
         with mock.patch.object(
                 battle_runtime_module, 'collide_vehicle_at_matrix',
                 return_value=(types.SimpleNamespace(dist=20.0),)):
@@ -5607,6 +5615,55 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         self.assertEqual([], runtime.bigworld.edge_adds)
         self.assertIsNone(battle._outlined_engine_id)
         self.assertIn('is behind a wreck', battle._outline_report)
+        factory.destroy_all()
+
+    def test_shoved_wreck_occlusion_uses_current_rendered_pose(self):
+        runtime = _runtime()
+        factory = RemoteVehicleFactory(
+            runtime.bigworld, runtime.math, runtime.model_assembler, 7)
+        wreck_id = factory.create(_Descriptor(), {
+            'publicInfo': {'team': 2, 'name': 'Wreck'},
+            'health': 0, 'isCrewActive': False,
+            'gunAnglesPacked': 0}, _Vector(0.0, 0.0, 100.0),
+            (0.0, 0.0, 0.0))
+        wreck = factory.get(wreck_id)
+        battle = BattleRuntime(runtime)
+        battle._remote_factory = factory
+        battle._records = {'bot:10': {
+            'engine_id': wreck_id, 'local': False, 'ready': True,
+            'spot_visible': False,
+            'state': {'health': 0, 'alive': False}}}
+        start, end = _Vector(0.0, 0.0, 0.0), _Vector(0.0, 0.0, 300.0)
+
+        # Native position holds the incoming snapshot; matrix holds the
+        # visible interpolation. Neither the snapshot nor the spawn location
+        # may veto a ray into the currently drawn corpse.
+        wreck.position = _Vector(50.0, 0.0, 100.0)
+        self.assertTrue(battle._wreck_blocks_target_outline(start, end, 300.0))
+        wreck.set_pose(_Vector(50.0, 0.0, 100.0), (0.0, 0.0, 0.0))
+        wreck.position = _Vector(0.0, 0.0, 100.0)
+        self.assertFalse(battle._wreck_blocks_target_outline(start, end, 300.0))
+        factory.destroy_all()
+
+    def test_committed_death_cannot_remain_an_outline_candidate(self):
+        runtime, factory, unused_binding, vehicle_id, vehicle = \
+            self._ready_native_factory()
+        battle = BattleRuntime(runtime)
+        battle.client = _Client()
+        battle._avatar = runtime.bigworld.avatar
+        battle._remote_factory = factory
+        battle._records = {'bot:11': {
+            'engine_id': vehicle_id, 'local': False, 'ready': True,
+            'native_remote': True, 'spot_visible': True,
+            'state': {'health': 0, 'alive': False}}}
+        # The health/model callback has not finished; authority death is
+        # already committed and owns target eligibility.
+        self.assertTrue(vehicle.isAlive())
+        battle._update_target_outline(1.0)
+        self.assertIsNone(battle._outlined_engine_id)
+        self.assertIsNone(runtime.compatibility.target_lock_candidate)
+        self.assertEqual([], vehicle.edge_draws)
+        self.assertIn('is destroyed', battle._outline_report)
         factory.destroy_all()
 
     @staticmethod
@@ -23726,7 +23783,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             [(0.0, 3.5), (0.0, 0.0), (0.0, -3.5), (1.5, 0.0), (-1.5, 0.0)], calls)
 
-    def test_local_suspension_samples_twenty_two_columns_once_per_tick(self):
+    def test_local_suspension_samples_sixty_two_columns_once_per_tick(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
@@ -23742,7 +23799,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             position = battle._update_vertical_motion(
                 entity, (0.0, 0.0, 0.0), 0.0, 0.1)
 
-        self.assertEqual(22, battle._suspension_ground_y.call_count)
+        # Each carrier has one direct and four lateral columns; the twelve
+        # track/belly contacts still need only one column each.
+        self.assertEqual(10 * 5 + 12, battle._suspension_ground_y.call_count)
         solver.assert_called_once()
         self.assertEqual(10, len(solver.call_args[0][2]))
         self.assertEqual(12, len(solver.call_args[0][4]))
@@ -23771,7 +23830,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 battle._update_vertical_motion(
                     entity, (0.0, 0.0, 0.0), 0.0, dt)
 
-        self.assertEqual(44, battle._suspension_ground_y.call_count)
+        self.assertEqual(2 * 62, battle._suspension_ground_y.call_count)
         self.assertAlmostEqual(0.005, battle._local_frame_stages['local_ground'])
         self.assertAlmostEqual(0.005, battle._local_frame_stages['local_solver'])
         battle._local_frame_stages = None
@@ -23779,10 +23838,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'gui.mods.offline_lan_0922.battle_runtime._PROFILE_CLOCK',
                 side_effect=AssertionError('disabled timing must not read the clock')):
             battle._update_vertical_motion(entity, (0.0, 0.0, 0.0), 0.0, 0.025)
-        self.assertEqual(66, battle._suspension_ground_y.call_count)
+        self.assertEqual(3 * 62, battle._suspension_ground_y.call_count)
 
     def test_local_suspension_tick_prepares_one_broken_skin_filter(self):
-        """The 22 columns of one pose share the prepared envelope filter."""
+        """The 62 columns of one pose share two prepared envelope filters."""
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
@@ -23810,7 +23869,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         # One prepared filter per sample pass, not one per sampled column.
         self.assertEqual(2, prepared.call_count)
-        self.assertEqual(22, len(filters))
+        self.assertEqual(62, len(filters))
         self.assertTrue(all(value is skin_filter for value in filters))
 
     def test_local_suspension_tick_probes_unfiltered_with_nothing_broken(self):
@@ -23838,7 +23897,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         battle._update_vertical_motion(entity, (0.0, 0.0, 0.0), 0.0, 0.1)
 
-        self.assertEqual(22, len(widths))
+        self.assertEqual(62, len(widths))
         self.assertEqual({0}, set(widths))
 
     def test_local_suspension_solves_slope_pitch_and_ground_metadata(self):
@@ -23856,7 +23915,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         position = battle._update_vertical_motion(
             entity, (0.0, 0.0, 0.0), 0.0, 0.05)
 
-        self.assertEqual(22, battle._suspension_ground_y.call_count)
+        self.assertEqual(62, battle._suspension_ground_y.call_count)
         self.assertFalse(battle._local_airborne)
         self.assertLess(battle._local_pitch, 0.0)
         self.assertLess(abs(battle._local_roll), 0.02)
@@ -23901,7 +23960,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         with mock.patch.object(
                 vehicle_physics, 'suspension_world_ground_plane',
-                side_effect=(plane, None, None, None, None)), \
+                # First fit normalizes fresh lateral contacts; the second
+                # publishes that same plane for the first supported solve.
+                side_effect=(plane, plane, None, None, None, None)), \
                 mock.patch.object(
                     vehicle_physics, 'damper_suspension_step',
                     side_effect=solve) as solver, \
@@ -24000,21 +24061,35 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertIsNone(battle._local_spring_ground_memory)
         self.assertIsNone(battle._local_pseudo_ground_memory)
 
-        airborne_velocity = battle._local_vertical_speed
+        def mass_center_vertical_state(position):
+            # Gravity acts on the mass center; the rotating model origin also
+            # moves as its offset changes. Differentiate c*cos(p)*cos(r).
+            center_y = battle._local_suspension_params['center_of_mass_y']
+            pitch, roll = battle._local_pitch, battle._local_roll
+            height = position[1] + center_y * math.cos(pitch) * math.cos(roll)
+            speed = battle._local_vertical_speed - center_y * (
+                math.sin(pitch) * math.cos(roll) *
+                battle._local_suspension_pitch_velocity +
+                math.cos(pitch) * math.sin(roll) *
+                battle._local_suspension_roll_velocity)
+            return height, speed
+
+        airborne_height, airborne_velocity = mass_center_vertical_state(position)
         before = position
         candidate = (
             before[0], before[1], before[2] + horizontal_speed * dt)
         battle._local_support_motion_pose = before
         position = battle._update_vertical_motion(
             entity, candidate, 0.0, dt)
+        final_height, final_velocity = mass_center_vertical_state(position)
 
         self.assertAlmostEqual(
             airborne_velocity - vehicle_physics.GRAVITY * dt,
-            battle._local_vertical_speed, places=10)
-        airborne_displacement = position[1] - before[1]
+            final_velocity, places=10)
+        airborne_displacement = final_height - airborne_height
         self.assertGreaterEqual(
             airborne_displacement,
-            battle._local_vertical_speed * dt - 1.0e-10)
+            final_velocity * dt - 1.0e-10)
         self.assertLessEqual(
             airborne_displacement,
             airborne_velocity * dt + 1.0e-10)
@@ -24289,9 +24364,13 @@ class BattleRuntimeContractTests(unittest.TestCase):
                     battle._local_support_motion_pose = position
                     position = battle._update_vertical_motion(
                         entity, position, 0.0, 0.04)
-                    self.assertAlmostEqual(-math.radians(angle),
-                                           battle._local_pitch, places=4)
+                    # An elevated mass center transfers load downhill and
+                    # permits small spring deflection, not exact plane lock.
+                    self.assertLess(abs(battle._local_pitch + math.radians(angle)),
+                                    math.radians(2.0))
+                    self.assertFalse(battle._local_airborne)
                     self.assertGreater(battle._local_surface_up_cosine, 0.5)
+                self.assertLess(abs(battle._local_suspension_pitch_velocity), 1e-6)
                 self.assertAlmostEqual(gradient,
                     battle._local_ground_plane['gradient_z'], places=4)
 
@@ -24403,7 +24482,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertIsNone(battle._local_spring_ground_memory)
         self.assertIsNone(battle._local_pseudo_ground_memory)
         self.assertIs(accepted_plane, battle._local_ground_plane)
-        self.assertEqual(22, battle._suspension_ground_y.call_count)
+        self.assertEqual(62, battle._suspension_ground_y.call_count)
 
     def test_local_suspension_ram_distance_does_not_authorise_high_platform(
             self):
@@ -24485,10 +24564,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual((5.0, 1.0, 0.0), position)
         self.assertFalse(battle._local_support_rise_blocked)
-        # One endpoint scan (22) plus the fixed maximum of three centre
-        # checkpoints proves this five-metre correction without 22-ray
+        # One endpoint scan (62) plus the fixed maximum of three centre
+        # checkpoints proves this five-metre correction without full-pose
         # segmentation along the entire path.
-        self.assertEqual(25, battle._suspension_ground_y.call_count)
+        self.assertEqual(62 + 3, battle._suspension_ground_y.call_count)
 
     def test_local_suspension_missing_path_support_rejects_high_rise(self):
         runtime = _runtime()
@@ -24504,11 +24583,11 @@ class BattleRuntimeContractTests(unittest.TestCase):
         entity = _Vehicle(
             10, _suspension_descriptor(), _Vector(), (0, 0, 0),
             {'health': 500})
-        calls = [0]
 
         def ground(x, unused_z, *unused_args, **unused_kw):
-            calls[0] += 1
-            return 0.2 * x if calls[0] <= 22 else None
+            # The endpoint footprint is supported, but the first interior
+            # path checkpoint lies over a gap. Query order is irrelevant.
+            return 0.2 * x if x >= 3.0 else None
 
         battle._suspension_ground_y = mock.Mock(side_effect=ground)
         raised = {
@@ -24534,7 +24613,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertTrue(battle._local_support_rise_blocked)
         # The first missing checkpoint fails closed; it does not spend the
         # rest of the three-ray exceptional budget.
-        self.assertEqual(23, battle._suspension_ground_y.call_count)
+        self.assertEqual(62 + 1, battle._suspension_ground_y.call_count)
+        self.assertEqual(
+            (1.25, 0.0), battle._suspension_ground_y.call_args.args[:2])
 
     def test_local_suspension_integrates_slide_once_before_settling_ram(self):
         runtime = _runtime()
@@ -24557,6 +24638,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._destructibles = mock.Mock()
         battle._destructibles.take_ground_skip_count.return_value = 0
         battle._smoothed_drive_pitch = mock.Mock(return_value=0.0)
+        # This scene has terrain and tank separation, but no static walls.
+        battle._motion_is_clear = mock.Mock(return_value=True)
         battle._suspension_ground_y = mock.Mock(
             side_effect=lambda x, unused_z, *unused_args, **unused_kw:
             0.08 * x)
@@ -24604,8 +24687,15 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(0.2, ram_input[1][2])
         self.assertEqual([0.1, 0.0], [
             call.args[3] for call in solver.call_args_list])
-        self.assertEqual(44, battle._suspension_ground_y.call_count)
-        self.assertAlmostEqual(0.2, battle._local_position[0])
+        # One timed scan and one zero-time endpoint scan; the slope itself
+        # must not acquire cached protrusions or expand a recovery grid.
+        self.assertEqual(2 * 62, battle._suspension_ground_y.call_count)
+        # X translations are prescribed once to the body mass center. Its
+        # model origin also shifts sideways while the springs rotate it.
+        center_x = (battle._local_position[0] -
+                    battle._local_suspension_params['center_of_mass_y'] *
+                    math.sin(battle._local_roll))
+        self.assertAlmostEqual(0.2, center_x)
         self.assertAlmostEqual(0.2, battle._local_position[2])
         self.assertFalse(battle._local_support_rise_blocked)
 
@@ -24634,6 +24724,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 battle._local_support_motion_pose = position
                 position = battle._update_vertical_motion(
                     entity, position, 0.0, dt)
+        # Spring load transfer changes the settled origin offset on a slope.
+        # Sliding must preserve that contact pose, not force the origin onto
+        # the plane through the uncompressed track attachment points.
+        settled_gap = position[1] - gradient * position[0]
         battle._local_downhill = (-1.0, 0.0, 0.0)
         battle._local_slope_tangent = gradient
 
@@ -24644,7 +24738,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 entity, position, 0.0, dt)
             maximum_gap = max(
                 maximum_gap,
-                abs(position[1] - gradient * position[0]))
+                abs(position[1] - gradient * position[0] - settled_gap))
             self.assertFalse(battle._local_airborne)
 
         self.assertLess(maximum_gap, 0.03)
@@ -24672,6 +24766,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._destructibles = mock.Mock()
         battle._destructibles.take_ground_skip_count.return_value = 0
         battle._smoothed_drive_pitch = mock.Mock(return_value=0.0)
+        # This scene has terrain and tank separation, but no static walls.
+        battle._motion_is_clear = mock.Mock(return_value=True)
         battle._suspension_ground_y = mock.Mock(
             side_effect=lambda x, unused_z, *unused_args, **unused_kw:
             0.2 * x)
@@ -24700,10 +24796,16 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual([0.1, 0.0, 0.1, 0.0], [
             call.args[3] for call in solver.call_args_list])
-        # Each tick uses 22 primary + 22 endpoint columns, and the exceptional
+        # Each tick uses 62 primary + 62 endpoint columns, and the exceptional
         # five-metre rise proof spends exactly three centre checkpoints.
-        self.assertEqual(94, battle._suspension_ground_y.call_count)
-        self.assertAlmostEqual(10.0, battle._local_position[0])
+        self.assertEqual(2 * (62 + 62 + 3),
+                         battle._suspension_ground_y.call_count)
+        # X translations are prescribed once to the body mass center. Its
+        # model origin also shifts sideways while the springs rotate it.
+        center_x = (battle._local_position[0] -
+                    battle._local_suspension_params['center_of_mass_y'] *
+                    math.sin(battle._local_roll))
+        self.assertAlmostEqual(10.0, center_x)
         self.assertGreater(first_height, 0.6)
         self.assertGreater(battle._local_position[1], first_height + 0.6)
         self.assertFalse(battle._local_support_rise_blocked)

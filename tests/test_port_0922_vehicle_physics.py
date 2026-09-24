@@ -437,7 +437,7 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
         self.assertNotEqual(state['pitch'], solved['pitch'])
         self.assertNotEqual(state['roll'], solved['roll'])
 
-    def test_airborne_step_integrates_without_unused_contact_rotations(self):
+    def test_airborne_step_integrates_center_of_mass_without_contact_rotations(self):
         state = self._state(height=2.0, vertical_velocity=-3.0,
                             pitch=0.2, roll=-0.3, pitch_velocity=0.1)
         dt = self.params['fixed_step'] * 0.5
@@ -450,12 +450,18 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
 
         self.assertTrue(solved['airborne'])
         self.assertEqual(0, solved['contact_count'])
-        velocity = -3.0 - vehicle_physics.GRAVITY * dt
-        self.assertAlmostEqual(velocity, solved['vertical_velocity'])
-        self.assertAlmostEqual(2.0 + velocity * dt, solved['height'])
+        center = dict(x=0.0, y=self.params['center_of_mass_y'], z=0.0)
+        velocity = (vehicle_physics._rigid_point_velocity(state, center) -
+                    vehicle_physics.GRAVITY * dt)
+        self.assertAlmostEqual(velocity,
+            vehicle_physics._rigid_point_velocity(solved, center))
+        self.assertAlmostEqual(
+            vehicle_physics._rigid_point_height(state, center) + velocity * dt,
+            vehicle_physics._rigid_point_height(solved, center))
         self.assertNotEqual(state['pitch'], solved['pitch'])
-        sine.assert_not_called()
-        cosine.assert_not_called()
+        # Only the initial/final origin-to-CoM transforms are required.
+        self.assertLessEqual(sine.call_count, 8)
+        self.assertLessEqual(cosine.call_count, 8)
 
     def test_support_velocity_comes_only_from_plane_and_horizontal_motion(
             self):
@@ -600,7 +606,8 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
             if state['airborne']:
                 airborne_state = state
                 break
-            last_supported_speed = state['vertical_velocity']
+            last_supported_speed = vehicle_physics._rigid_point_velocity(
+                state, dict(x=0.0, y=self.params['center_of_mass_y'], z=0.0))
 
         self.assertTrue(saw_partial)
         self.assertIsNotNone(airborne_state)
@@ -609,7 +616,8 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
         self.assertGreater(last_supported_speed, 0.0)
         self.assertAlmostEqual(
             last_supported_speed - vehicle_physics.GRAVITY * dt,
-            airborne_state['vertical_velocity'], places=10)
+            vehicle_physics._rigid_point_velocity(airborne_state,
+                dict(x=0.0, y=self.params['center_of_mass_y'], z=0.0)), places=10)
 
     def test_longitudinal_plane_converges_to_pitch(self):
         gradient = 0.16

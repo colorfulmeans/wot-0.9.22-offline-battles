@@ -1,0 +1,211 @@
+name: Build 0.9.4 gameplay repairs Windows test
+
+on:
+  push:
+    branches: [fix/094-six-bugs-20260925]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gameplay-fixes-20260925
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  WOT_OFFLINE_BUILD_IDENTITY: colorfulmeans-v094-gameplay-fixes-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  windows-server:
+    if: github.ref == 'refs/heads/fix/094-six-bugs-20260925'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11.9'
+          architecture: x64
+      - run: python tools/six_bug_build.py source
+      - run: python -m pip install -r server/requirements-windows-build.txt
+      - run: pwsh -NoProfile -File server/build_windows_server.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gameplay-fixes-server-${{ github.run_id }}
+          path: dist/server/WoT-0.9.22-LAN-Server.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  client-payload:
+    needs: windows-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: python tools/six_bug_build.py source
+      - run: python -m pip install Pillow==12.3.0
+      - name: Run gameplay regressions from the final source
+        env:
+          PYTHONPATH: tests:server:tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest -v \
+            test_port_0922 \
+            test_port_0922_he_feedback \
+            test_port_0922_bonds_and_directives.BondsAndDirectivesTests.test_direct_he_feedback_preserves_penetration_and_explosion_damage \
+            test_port_0922_battle_runtime \
+            test_port_0922_ammo_order \
+            test_port_0922_garage \
+            test_port_0922_gun_mechanics \
+            test_port_0922_bot_ammo \
+            test_port_0922_mission_visibility \
+            test_port_0922_server_capture \
+            test_port_0922_navigation_baker.CompiledSpace0922Test.test_authored_mittengard_capture_circles_match_ctf_objectives \
+            test_port_0922_capture_circles \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_worker_observation_carries_live_view_range_to_ht5_receipts \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_human_mission_radius_refreshes_binoculars_without_reusing_dead_observer \
+            test_port_0922_bot_runtime.BotOwnStationaryVisionTests \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_bot_leaving_support_enters_ballistic_fall \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_grounded_bot_uses_real_gap_for_remote_edge_support \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_grounded_bot_keeps_near_support_across_narrow_gap \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_high_speed_bot_does_not_snap_down_a_flat_ledge \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_reverse_uphill_bot_keeps_hull_axis_launch_velocity \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_realised_hazard_guard_never_rewinds_an_already_fallen_bot \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_bot_still_falls_off_a_cliff_edge_with_one_supported_end \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_bot_bridges_a_trench_narrower_than_its_chassis \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_bot_bridges_a_slot_running_along_its_hull \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_bot_landing_applies_the_shared_fall_damage_once \
+            test_port_0922_bot_runtime.BotRuntimeTests.test_vertical_motion_uses_edge_fallback_or_ballistic_fall \
+            test_port_0922_vehicle_physics \
+            test_port_0922_cliff_impacts \
+            test_port_0922_rollover_bridge \
+            test_port_0922_bridge_center_of_mass \
+            test_port_0922_rail_footprint \
+            test_port_0922_tank_collision \
+            test_bot080_pinned_startup \
+            test_bot080_radio_integration \
+            2>&1 | tee build-evidence/gameplay-tests.log
+      - uses: actions/download-artifact@v4
+        with:
+          name: gameplay-fixes-server-${{ github.run_id }}
+          path: dist/server
+      - name: Rebuild and inspect every Python 2.7 client module
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
+            -e WOT_OFFLINE_BUILD_IDENTITY -e GITHUB_SHA -e PYTHONDONTWRITEBYTECODE \
+            python:2.7.18 sh -c 'python build_wotmod.py && python tools/six_bug_build.py bytecode' \
+            2>&1 | tee build-evidence/compiled-tests.log
+          python tools/validate_wotmod.py dist/org.colorfulmeans.offline_lan_0922_*.wotmod
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gameplay-fixes-client-evidence-${{ github.run_id }}
+          path: build-evidence/
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gameplay-fixes-client-${{ github.run_id }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-package:
+    needs: client-payload
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11.9'
+          architecture: x64
+      - run: python -m pip install -r launcher/requirements-build.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: gameplay-fixes-client-${{ github.run_id }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: gameplay-fixes-client-evidence-${{ github.run_id }}
+          path: build-evidence
+      - name: Test the retained localized editor and launcher on real Windows Tk
+        working-directory: launcher
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - run: pwsh -NoProfile -File launcher/build_launcher.ps1
+      - name: Verify installed payload matches the final source
+        run: python tools/six_bug_build.py distribution launcher/dist/wot-0.9.22-offline-battles
+      - name: Exercise the actual packaged multilingual editor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'launcher/dist/wot-0.9.22-offline-battles/wot-0.9.22-offline-battles.exe'
+          foreach ($path in @($exe, (Join-Path $PWD 'dist/server/WoT-0.9.22-LAN-Server.exe'))) {
+            $v = (Get-Item $path).VersionInfo
+            if ($v.FileVersion -ne '0.9.4' -or $v.ProductVersion -ne '0.9.4') { throw "Incorrect version: $path" }
+          }
+          $receipt = Join-Path $PWD 'build-evidence/packaged-editor-smoke.json'
+          $process = Start-Process -FilePath $exe -ArgumentList '--verify-bot-editor',("`""+$receipt+"`"") -PassThru
+          if (-not $process.WaitForExit(90000)) { & taskkill.exe /PID $process.Id /T /F | Out-Null; throw 'Editor smoke timed out' }
+          $result = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
+          if (-not $result.ok -or -not $result.localization_checked -or -not $result.language_switch_preserves_active) { throw (Get-Content $receipt -Raw) }
+      - name: Start packaged server and verify readiness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'launcher/dist/wot-0.9.22-offline-battles/wot-0.9.22-offline-battles.exe'
+          $probe = @'
+          import os, sys
+          sys.path.insert(0, os.path.join(os.getcwd(), 'launcher'))
+          import core
+          raise SystemExit(0 if core.probe_server_protocol('0.9.22', '127.0.0.1', 28782, timeout=1.0) else 1)
+          '@
+          $process = Start-Process -FilePath $exe -ArgumentList '--serve','0.9.22' -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(60)
+            $ready = $false
+            while ((Get-Date) -lt $deadline) {
+              if ($process.HasExited) { throw 'Server exited before readiness' }
+              $probe | python -
+              if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+              Start-Sleep -Milliseconds 250
+            }
+            if (-not $ready) { throw 'Server readiness failed' }
+          } finally {
+            if (-not $process.HasExited) { & taskkill.exe /PID $process.Id /T /F | Out-Null }
+            $global:LASTEXITCODE = 0
+          }
+          python -c "import json; from pathlib import Path; Path('build-evidence/server-readiness.json').write_text(json.dumps({'ready': True, 'native_gameplay_tested': False, 'port': 28782}))"
+          if ($LASTEXITCODE -ne 0) { throw 'Server readiness receipt failed' }
+      - name: Package complete Windows gameplay repair build
+        run: python tools/six_bug_build.py package launcher/dist/wot-0.9.22-offline-battles
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gameplay-fixes-windows-evidence-${{ github.run_id }}
+          path: build-evidence/
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wot-094-gameplay-fixes-${{ github.run_id }}-Windows
+          path: wot-0.9.22-offline-battles-0.9.4-gameplay-fixes-20260925-Windows-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

@@ -15,6 +15,9 @@ class RolloverBridgeTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         battle._local_fall_armed = True
+        # These scenes define horizontal terrain layers only; static wall
+        # sweeps have their own native-ray/normal fixtures.
+        battle._motion_is_clear = lambda *args, **kwargs: True
         entity = fixtures._Vehicle(10, fixtures._suspension_descriptor(),
             fixtures._Vector(), (0, 0, 0), {'health': 500})
         return battle, entity

@@ -20187,6 +20187,81 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([11], key_calls)
         self.assertEqual(set((2,)), aggregate[(1, 'bot', 11)][3])
 
+    def test_worker_observation_carries_live_view_range_to_ht5_receipts(self):
+        from test_port_0922_personal_campaign_battle import node
+        from gui.mods.offline_lan_0922 import personal_campaign_battle as policy
+
+        runtime = self.runtime
+        runtime.battle_start(self.start)
+        player = _admit_player({
+            'id': 1, 'team': 1, 'alive': True,
+            'vehicle': 'ussr:R11_MS-1',
+            'x': 0.0, 'y': 0.0, 'z': 0.0,
+            'speed': 0.0, 'health': 1000, 'max_health': 1000,
+        })
+        # No direct visibility is required to qualify damage inside view range.
+        # This also exercises the previously-lazy radius with no successful LOS.
+        runtime._visible = lambda *unused: False
+        observations = [message for message in runtime.update(
+            .04, 1.0, players=[player])
+            if message['type'] == 'bot_observation']
+        self.assertEqual(1, len(observations))
+        message = observations[0]
+        radius = runtime._source_view_range(dict(player, kind='human'), 1.0)
+        self.assertEqual([{'id': 1, 'radius': radius}],
+                         message['player_vision_ranges'])
+
+        server, unused_a, unused_b = ServerBotObservationRelayTests._server()
+        message['round_id'] = server.round_id
+        self.assertTrue(server.update_bot_observation(
+            SIMULATION_WORKER_AUTHORITY_ID, message))
+        server.players[1].x = 0.0
+        server.players[1].y = server.players[1].z = 0.0
+        server.bot_states[11].update(x=100.0, y=0.0, z=0.0,
+                                     world_pose=True)
+        server._record_damage(('player', 1), ('bot', 11), 2000, {})
+        interactions = server._receipt_interactions(('player', 1))
+        self.assertEqual(radius, interactions[0]['mission_events'][0][6])
+        receipt = dict(player_id=1, team=1, interactions=interactions,
+            public_results=[dict(actor_kind='bot', actor_id=11, team=2)])
+        condition = node('<postBattle><vehicleDamage><distance>0</distance>'
+                         '<greaterOrEqual>2000</greaterOrEqual>'
+                         '</vehicleDamage></postBattle>')
+        self.assertEqual((True, set()), policy._condition(
+            'postBattle', condition, policy._Facts(receipt, None)))
+
+    def test_human_mission_radius_refreshes_binoculars_without_reusing_dead_observer(self):
+        runtime = self.runtime
+        player = _admit_player({
+            'id': 1, 'team': 1, 'alive': True,
+            'vehicle': 'ussr:R11_MS-1',
+            'x': 0.0, 'y': 0.0, 'z': 0.0, 'speed': 0.0,
+        })
+        profile = player['effective_params']['spotting']
+        profile.update(has_binoculars=True, binocular_delay=3.0,
+                       binocular_factor=1.25)
+        calls = []
+        original = runtime._source_view_range
+
+        def radius(*args):
+            calls.append(args[1])
+            return original(*args)
+
+        runtime._source_view_range = radius
+        sampled = []
+        for now in (1.0, 4.1):
+            tick = {}
+            runtime._append_human_observations(
+                [player], now, {}, {}, tick)
+            sampled.append(tick['player_vision_ranges'][0]['radius'])
+        self.assertEqual(sampled[0] * 1.25, sampled[1])
+        self.assertEqual([1.0, 4.1], calls)
+        tick = {}
+        runtime._append_human_observations(
+            [dict(player, alive=False)], 5.0, {}, {}, tick)
+        self.assertEqual([], tick['player_vision_ranges'])
+        self.assertEqual([1.0, 4.1], calls)
+
     def test_lane_identity_is_removed_when_target_dies_or_changes_team(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),

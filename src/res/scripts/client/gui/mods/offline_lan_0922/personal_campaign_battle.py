@@ -395,6 +395,7 @@ def _vehicle_events(name, node, facts):
     if immobilized is not None and (_names(immobilized) or immobilized.get('value', '')):
         return _unknown(name + ' enemyImmobilized modifier')
     amount, seen_classes = 0, set()
+    incomplete_view_range = False
     for event in facts.receipt['interactions']:
         if name == 'vehicleStun':
             field = 'stun_num' if event_count is not None else 'stun_duration'
@@ -471,9 +472,13 @@ def _vehicle_events(name, node, facts):
                         return _unknown('interaction: event distance')
                     # HT5's zero is the observer's view range, not zero metres.
                     if distance_limit == 0:
-                        if (name != 'vehicleDamage' or len(occurrence) < 7 or
-                                occurrence[6] is None):
+                        if name != 'vehicleDamage' or len(occurrence) < 7:
                             return _unknown('interaction: view range at damage')
+                        if occurrence[6] is None:
+                            # A missing sample cannot qualify this hit, but
+                            # other proved hits can already meet a minimum.
+                            incomplete_view_range = True
+                            continue
                         if distance > occurrence[6]:
                             continue
                     # Signed XML ranges use an inclusive lower bound and an
@@ -496,6 +501,10 @@ def _vehicle_events(name, node, facts):
     if name == 'vehicleStun' and event_count is None:
         amount /= 1000.0
     checks = [_compare(node, amount)]
+    if incomplete_view_range and (
+            checks[0][0] is not True or diversity is not None or
+            (_names(node) & _RELATIONS) - set(('greater', 'greaterOrEqual'))):
+        checks[0] = _unknown('interaction: view range at damage')
     if diversity is not None:
         try:
             checks.append(_known(len(seen_classes) >= int(

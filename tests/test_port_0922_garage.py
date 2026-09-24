@@ -1401,6 +1401,20 @@ class GarageStateTests(unittest.TestCase):
             {20010: 18, 20011: 12},
             state.snapshot()['inventoryItems'][10])
 
+    def test_reordered_shells_settle_by_physical_index_and_keep_saved_order(self):
+        state = self._matching_state()
+        state.set_layouts(9, shells_layout=[20011, 15, 20010, 30])
+
+        spent = state.settle_battle_ammunition(50001, {1: 3})
+
+        self.assertEqual({20011: 3}, spent)
+        record = state.snapshot()['vehicles'][0]
+        self.assertEqual([20011, 12, 20010, 30], record['shells'])
+        self.assertEqual(
+            [20011, 15, 20010, 30],
+            record['shellsLayout'][(7001, 7002)])
+        self.assertEqual({20010: 30, 20011: 12}, record['inventoryItems'][10])
+
     def test_a_receipt_cannot_fire_more_rounds_than_the_tank_carried(self):
         state = self._matching_state()
 

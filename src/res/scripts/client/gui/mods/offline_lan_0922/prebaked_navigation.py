@@ -6,6 +6,7 @@ import math
 import os
 
 from gui.mods.offline_lan_0922.config import CONFIG_PATH
+from gui.mods.offline_lan_0922 import capture_circles
 from gui.mods.offline_lan_0922.navigation_graph_schema import (
 	SUPPORTED_MAPS, short_map_name, validate_graph,
 )
@@ -56,6 +57,14 @@ def load_graph(map_name, base_dir=None):
 	finally:
 		handle.close()
 	graph = _validate(graph, short_name)
+	try:
+		capture_circles.apply_installed_radii(graph)
+	except (IOError, OSError, ValueError, KeyError,
+			capture_circles.zipfile.BadZipfile) as error:
+		# A bad local resource must not destroy a valid navigation graph or
+		# silently replace a proved baked radius with an invented one.
+		print('[Offline LAN 0.9.22] capture circle resource rejected map=%s: %s' %
+			  (short_name, error))
 	return _pack_cell_arrays(graph)
 
 

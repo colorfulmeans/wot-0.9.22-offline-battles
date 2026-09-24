@@ -132,6 +132,9 @@ HARD_RATIO_MAX = 0.52
 # the visual track centre, not this spring mount, and is deliberately unused.
 NUM_SPRING_PAIRS = 5
 SPRING_TRACK_WIDTH_RATIO = 0.45
+# Exact physics_shared._computeCenterOfMassShift power-curve anchors.
+COM_POWER_RATIOS = (9.5, 13.0, 21.0)
+COM_HEIGHT_SHIFTS = (-0.15, -0.2, -0.3)
 # Per-spring stiffness, damping and the hull inertia tensor are owned by the
 # native #1513 solver and are shipped to no process, client or cell.  These
 # remain an explicit trial projection rather than a recovered retail law.
@@ -783,6 +786,16 @@ def derive_suspension_params(descriptor):
 	clearance = max(
 		CLEARANCE_MIN * chassis_height,
 		min(CLEARANCE_MAX * chassis_height, clearance))
+	minimum, middle, maximum = COM_POWER_RATIOS
+	low, mid, high = COM_HEIGHT_SHIFTS
+	normalized_power = max(0.0, min(1.0,
+		(float(physics['powerW']) / mass - minimum) / (maximum - minimum)))
+	exponent = math.log((mid - low) / (high - low),
+		(middle - minimum) / (maximum - minimum))
+	com_shift = low + math.pow(normalized_power, exponent) * (high - low)
+	center_of_mass_y = (float(hull_position[1]) +
+		(hull_minimum[1] + hull_maximum[1]) * 0.5 +
+		com_shift * (hull_maximum[1] - hull_minimum[1]))
 	mass_tons = mass * WEIGHT_SCALE
 	compression_ratio = _suspension_compression(mass_tons)
 	rest_length = clearance / max(compression_ratio, 0.01)
@@ -943,6 +956,7 @@ def derive_suspension_params(descriptor):
 		12.0 * inertia_factors[2])
 	return {
 		'mass': mass, 'width': width, 'length': chassis_length,
+		'center_of_mass_y': center_of_mass_y,
 		'clearance': clearance, 'rest_length': rest_length,
 		'static_compression': static_compression,
 		'hard_ratio': hard_ratio,
@@ -1016,7 +1030,7 @@ def suspension_pose_params(params, pitch, roll, pitch_velocity=0.0,
 
 
 def suspension_footprint_support(params, point, ground, memory, yaw, query,
-		support_gradient=None, point_height=None, spring=None, reference_height=None):
+		support_gradient=None, point_height=None, spring=None, reference_height=None, contact_cache=None):
 	'''Find fresh support across the continuous track, including rail entries.
 
 	The old recovery required a wheel to have already touched exactly the
@@ -1038,7 +1052,15 @@ def suspension_footprint_support(params, point, ground, memory, yaw, query,
 		# layer while the other carriers still hold the tank on the bridge.
 		expected = max(float(reference_height) - 0.12,
 			expected if expected is not None else float(reference_height))
-	if expected is None or (ground is not None and ground >= expected - 0.12):
+	# A centre ray can see the ordinary deck while a higher narrow rail is
+	# already inside the track patch. That valid lower hit must not suppress
+	# every lateral query. Reuse it as this frame's centre sample and keep the
+	# ordinary-ground path bounded to four extra columns per carrier.
+	ordinary = ground is not None and (
+		expected is None or float(ground) >= expected - 0.12)
+	if ordinary:
+		expected = max(float(ground), expected if expected is not None else float(ground))
+	elif expected is None:
 		return ground
 	sine, cosine = math.sin(yaw), math.cos(yaw)
 	spring = spring or {}
@@ -1050,28 +1072,82 @@ def suspension_footprint_support(params, point, ground, memory, yaw, query,
 	ceiling = expected + rise
 	if point_height is not None:
 		ceiling = min(ceiling, float(point_height) + rise)
-	# Centre first also recovers a thin flat deck rejected by the ordinary
-	# damper compression band. The extra columns run only on a missing/lower
-	# carrier; ordinary flat-ground frames still use 22 native queries.
-	for side in (0.0, -width, width, -width * 0.5, width * 0.5):
+	if ordinary:
+		# Same-level samples are already accounted for by the centre ray. Only
+		# search for a protrusion; do not turn this into a 25-column grid on
+		# every frame of ordinary driving.
+		lower = float(ground) + 0.01
+		sides = (-width, width, -width * 0.5, width * 0.5)
+		forwards = (0.0,)
+	else:
+		# A missing/lower carrier still needs the full track patch, including
+		# the centre with the higher legal window, to recover a sparse deck.
+		lower = expected - 0.12
+		sides = (0.0, -width, width, -width * 0.5, width * 0.5)
+		forwards = (0.0, -rear, front, -rear * 0.5, front * 0.5)
+	result = ground
+	best_point = None
+	queried = set()
+	candidates = []
+	if isinstance(contact_cache, dict):
+		cached = contact_cache.pop('point', None)
+		if cached is not None:
+			dx, dz = cached[0] - x, cached[1] - z
+			side = cosine * dx - sine * dz
+			forward = sine * dx + cosine * dz
+			left = max(-width, -params['width'] * 0.5 - spring.get('x', 0.0))
+			right = min(width, params['width'] * 0.5 - spring.get('x', 0.0))
+			if left - 1e-6 <= side <= right + 1e-6 and -rear <= forward <= front:
+				delta = (support_gradient[0] * dx + support_gradient[1] * dz
+					if support_gradient is not None else 0.0)
+				low, high = lower + delta, ceiling + delta
+				value = query(cached[0], cached[1], low, high) if high >= low else None
+				queried.add((side, forward))
+				if value is not None and low - 0.01 <= float(value) <= high + 0.01:
+					candidate = float(value) - delta
+					if result is None or candidate > float(result):
+						result, best_point = candidate, cached
+					if candidate >= expected - 0.12:
+						# The remembered location just proved fresh support.
+						# Reuse that query instead of expanding a recovery grid.
+						ordinary = True
+						lower = float(result) + 0.01
+						sides = (-width, width, -width * 0.5, width * 0.5)
+						forwards = (0.0,)
+	for side in sides:
 		# Carriers sit close to the outside edge. Clamp that edge without
 		# shortening the inboard patch that rests on the ends of sleepers.
 		if 'x' in spring:
 			side = max(-params['width'] * 0.5 - spring['x'],
 				min(params['width'] * 0.5 - spring['x'], side))
-		for forward in (0.0, -rear, front, -rear * 0.5, front * 0.5):
-			px = x + cosine * side + sine * forward
-			pz = z - sine * side + cosine * forward
-			delta = 0.0
-			if support_gradient is not None:
-				delta = support_gradient[0] * (px - x) + support_gradient[1] * (pz - z)
-			low, high = expected - 0.12 + delta, ceiling + delta
-			if high < low:
+		for forward in forwards:
+			if (side, forward) in queried or (ordinary and side == 0.0):
 				continue
-			value = query(px, pz, low, high)
-			if value is not None and low - 0.01 <= float(value) <= high + 0.01:
-				return float(value) - delta
-	return ground
+			queried.add((side, forward))
+			candidates.append((side, forward))
+	# A previously observed point is only a candidate location, never stored
+	# support. Recast it in the current patch so tiny pose changes do not make
+	# a rail disappear between fixed lateral columns. No cache lives in the
+	# descriptor-derived params or springs shared by adapters.
+	for side, forward in candidates:
+		px = x + cosine * side + sine * forward
+		pz = z - sine * side + cosine * forward
+		delta = 0.0
+		if support_gradient is not None:
+			delta = support_gradient[0] * (px - x) + support_gradient[1] * (pz - z)
+		low, high = lower + delta, ceiling + delta
+		if high < low:
+			continue
+		value = query(px, pz, low, high)
+		if value is not None and low - 0.01 <= float(value) <= high + 0.01:
+			candidate = float(value) - delta
+			if result is None or candidate > float(result):
+				result, best_point = candidate, (px, pz)
+	if best_point is not None and isinstance(contact_cache, dict):
+		contact_cache['point'] = best_point
+	# Every candidate above came from fresh geometry. Neither the old plane
+	# nor the previous contact height can hold the tank beyond a bridge edge.
+	return result
 
 
 def _suspension_rotation(pitch, roll):
@@ -1649,12 +1725,37 @@ def suspension_vertical_sweep_drop(vertical_speed, dt):
 	return max(0.0, -float(vertical_speed) * step + GRAVITY * step * step)
 
 
+def resolve_suspension_origin_shift(yaw, shift, probe):
+	'''Sweep the model-origin translation without cancelling gravity/rotation.'''
+	sine, cosine = math.sin(yaw), math.cos(yaw)
+	dx = cosine * shift[0] + sine * shift[1]
+	dz = -sine * shift[0] + cosine * shift[1]
+	if dx * dx + dz * dz <= 1.0e-12:
+		return dx, dz
+	clear, normal = probe(dx, dz)
+	if clear:
+		return dx, dz
+	if normal is None:
+		return 0.0, 0.0
+	# A real wall can absorb the inward component, but does not cancel the
+	# independent Y fall or undo the angular solve. Recast the tangent because
+	# a second face at a corner remains authoritative.
+	projected = world_contact_velocity((dx, 0.0, dz), normal)
+	px, pz = projected[0], projected[2]
+	if ((px - dx) ** 2 + (pz - dz) ** 2 <= 1.0e-12 or
+			px * px + pz * pz <= 1.0e-12):
+		return 0.0, 0.0
+	clear, unused_normal = probe(px, pz)
+	return (px, pz) if clear else (0.0, 0.0)
+
+
 def _rigid_point_height(state, point, rotation=None):
 	if rotation is None:
 		rotation = _suspension_rotation(
 			state.get('pitch', 0.0), state.get('roll', 0.0))
 	sp, cp, sr, cr = rotation
 	x, y, z = float(point['x']), float(point.get('y', 0.0)), float(point['z'])
+	y -= float(state.get('_center_of_mass_y', 0.0))
 	return float(state['height']) + (cp * (sr * x + cr * y) - sp * z)
 
 
@@ -1663,6 +1764,7 @@ def _rigid_point_height_gradients(state, point, rotation=None):
 		rotation = _suspension_rotation(
 			state.get('pitch', 0.0), state.get('roll', 0.0))
 	x, y, z = float(point['x']), float(point.get('y', 0.0)), float(point['z'])
+	y -= float(state.get('_center_of_mass_y', 0.0))
 	sp, cp, sr, cr = rotation
 	return (-sp * (sr * x + cr * y) - cp * z, cp * (cr * x - sr * y))
 
@@ -1894,6 +1996,18 @@ def damper_suspension_step(params, state, ground_heights, dt,
 		'roll': float(state.get('roll', 0.0)),
 		'roll_velocity': float(state.get('roll_velocity', 0.0)),
 	}
+	# Entity position is the track/model origin, not the native centre of mass.
+	# Integrating torque about that origin can suspend a tipped hull from a
+	# bridge edge. Solve about the exact #1513 centre, then transform the full
+	# origin displacement back for the player and Bot adapters.
+	center = dict(x=0.0, y=float(params.get('center_of_mass_y', 0.0)), z=0.0)
+	before_center = suspension_point_offset(
+		center, result['pitch'], result['roll'])
+	center_velocity = _rigid_point_velocity(result, center)
+	result['center_vertical_velocity_before'] = center_velocity
+	result['height'] += before_center[1]
+	result['vertical_velocity'] = center_velocity
+	result['_center_of_mass_y'] = center['y']
 	total = max(0.0, min(0.2, float(dt)))
 	steps = min(SERVER_PHYSICS_MAX_SUBSTEPS, max(
 		1, int(math.ceil(total / params['fixed_step']))))
@@ -2057,6 +2171,16 @@ def damper_suspension_step(params, state, ground_heights, dt,
 			result['max_limit_excess'], float(ground) -
 			_rigid_point_height(result, contact, rotation) -
 			float(contact.get('penetration', ALLOWED_PENETRATION)))
+	del result['_center_of_mass_y']
+	after_center = suspension_point_offset(
+		center, result['pitch'], result['roll'])
+	center_pitch, center_roll = _rigid_point_height_gradients(result, center)
+	result['height'] -= after_center[1]
+	result['vertical_velocity'] -= (
+		center_pitch * result['pitch_velocity'] +
+		center_roll * result['roll_velocity'])
+	result['origin_shift'] = (before_center[0] - after_center[0],
+		before_center[2] - after_center[2])
 	return result
 
 

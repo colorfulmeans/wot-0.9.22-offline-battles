@@ -508,3 +508,23 @@ does not require rebuilding the EXE. Invalid or incompatible data is reported,
 not silently activated. Original map images are read from your game package;
 when unavailable the editor labels its navigation-grid background explicitly.
 A map check is baked-geometry evidence only, not original-client gameplay.
+
+Gameplay repair TEST BUILD - 2026-09-25
+--------------------------------------
+This build retains the September 24 localized Bot editor and updates battle
+mechanics. HE penetration, exterior blast damage and zero-damage hits use
+their original client feedback events. Wrecks block target outlines, battle
+ammunition slots follow the maintenance page, and T28 Concept HT-5 receives
+the observer's actual view range at the time of damage.
+
+Capture radii are read from each installed map's original control-point data;
+the server uses the same radius as the visible ground circle. Mittengard's
+verified 30-metre radius is also retained in the bundled map metadata.
+
+Bridge-edge suspension now rotates around the descriptor-derived mass center.
+Player and Bot falling share the restored cliff and overturned-hull rules;
+narrow rails are sampled across the track footprint with fresh world queries.
+
+Close the old launcher and game, extract this whole ZIP into a new folder,
+and select the same game folder and save profile. No account reset is needed.
+Gameplay acceptance still requires the exact Windows #1513 client.

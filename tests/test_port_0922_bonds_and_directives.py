@@ -363,7 +363,7 @@ class BondsAndDirectivesTests(unittest.TestCase):
         self.assertEqual(10.0, BotRuntime._designated_spot_duration(
             source, {'position': (100.0, 0.0, 0.0)}, snapshot))
 
-    def test_direct_he_feedback_uses_damage_instead_of_penetration(self):
+    def test_direct_he_feedback_preserves_penetration_and_explosion_damage(self):
         for splash, damage, result in ((False, 150, 1), (False, 0, 0),
                                        (False, 0, 2), (True, 100, 1)):
             runtime = _runtime()
@@ -385,7 +385,8 @@ class BondsAndDirectivesTests(unittest.TestCase):
             flags = battle._avatar.shot_results[0][0] >> 32
             constants = runtime.constants.VEHICLE_HIT_FLAGS
             expected = (constants.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION
-                        if splash else (constants.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE
-                        if damage else constants.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE))
+                        if splash or (damage and result != 2) else
+                        (constants.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE
+                        if result == 2 else constants.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE))
             self.assertTrue(flags & expected)
             self.assertEqual(result, event['shot_result'])

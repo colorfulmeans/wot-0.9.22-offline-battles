@@ -3176,6 +3176,9 @@ class OfflineCompatibilityTests(unittest.TestCase):
             def getSpeed(self):
                 return getattr(self, 'native_speed', 0.0)
 
+            def drawEdge(self, forceSimpleEdge=False):
+                operations.append(('vehicle_draw_edge', self, forceSimpleEdge))
+
             def __collideSegment(self, start_point, end_point,
                                  skip_gun=False, only_nearest=True):
                 unused_only_nearest = only_nearest
@@ -3992,6 +3995,87 @@ class OfflineCompatibilityTests(unittest.TestCase):
             smoother.update(vehicle, 0.016))
         self.assertIsNone(
             sniper._SniperCamera__calcCurOscillatorAcceleration(0.016))
+        compatibility.fini()
+
+    def test_native_picker_cannot_redraw_an_occluded_remote_outline(self):
+        """Stock targetFocus reaches drawEdge outside the runtime tick."""
+        compatibility_module = _load_port_source('compat')
+        runtime, operations = self._runtime()
+        vehicle_type = runtime.vehicle_module.Vehicle
+        original = vehicle_type.drawEdge
+        compatibility = compatibility_module.OfflineCompatibility(runtime)
+        compatibility.configure_battle()
+        remote = vehicle_type()
+        remote._offlineNativeRemote = True
+        remote.isAlive = lambda: True
+        remote._spot_visible = True
+        remote._offlineNativeDrawVisible = True
+
+        # The runtime found a nearer wreck and publishes no candidate. The
+        # native picker omits wreck targetCaps and still calls this endpoint.
+        remote.drawEdge()
+        self.assertNotIn(('vehicle_draw_edge', remote, False), operations)
+        compatibility.set_target_lock_candidate(remote)
+        remote.drawEdge()
+        self.assertIn(('vehicle_draw_edge', remote, False), operations)
+
+        # Death/spotting can advance before the next manual outline pass.
+        for unavailable in ('dead', 'unspotted', 'undrawn'):
+            with self.subTest(unavailable=unavailable):
+                operations[:] = []
+                remote.isAlive = lambda: unavailable != 'dead'
+                remote._spot_visible = unavailable != 'unspotted'
+                remote._offlineNativeDrawVisible = unavailable != 'undrawn'
+                remote.drawEdge(False)
+                self.assertEqual([], operations)
+        remote.isAlive = lambda: True
+        remote._spot_visible = True
+        remote._offlineNativeDrawVisible = True
+        compatibility.set_target_lock_candidate(None)
+        remote.drawEdge(False)
+        self.assertEqual([], operations)
+
+        stock = vehicle_type()
+        stock.drawEdge(True)
+        self.assertIn(('vehicle_draw_edge', stock, True), operations)
+        compatibility.deactivate_map()
+        remote.drawEdge(False)
+        self.assertIn(('vehicle_draw_edge', remote, False), operations)
+        compatibility.fini()
+        self.assertIs(original, vehicle_type.drawEdge)
+
+    def test_native_picker_cannot_lock_a_vehicle_rejected_by_occlusion(self):
+        compatibility_module = _load_port_source('compat')
+        runtime, unused_operations = self._runtime()
+        compatibility = compatibility_module.OfflineCompatibility(runtime)
+        compatibility.configure_battle()
+        avatar = runtime.avatar_module.PlayerAvatar()
+        avatar.team = 1
+        avatar.cell = types.SimpleNamespace(autoAim=mock.Mock())
+        avatar.inputHandler = types.SimpleNamespace(
+            setAimingMode=mock.Mock())
+        avatar.gunRotator = types.SimpleNamespace(
+            clientMode=True, dispersionAngle=0.24)
+        avatar.vehicleTypeDescriptor = types.SimpleNamespace(
+            gun=types.SimpleNamespace(shotDispersionAngle=0.08))
+        remote = runtime.vehicle_module.Vehicle()
+        remote._offlineNativeRemote = True
+        remote.id = 1000
+        remote.publicInfo = {'team': 2}
+        remote.isAlive = lambda: True
+        runtime.bigworld._player = avatar
+        runtime.bigworld._target = remote
+
+        runtime.control_modes.ArcadeControlMode().handleKeyEvent(
+            True, 'lock-target', 0, None)
+
+        self.assertEqual(0, avatar._PlayerAvatar__autoAimVehID)
+        avatar.cell.autoAim.assert_not_called()
+        compatibility.set_target_lock_candidate(remote)
+        runtime.control_modes.ArcadeControlMode().handleKeyEvent(
+            True, 'lock-target', 0, None)
+        self.assertEqual(1000, avatar._PlayerAvatar__autoAimVehID)
+        avatar.cell.autoAim.assert_called_once_with(1000)
         compatibility.fini()
 
     def test_remote_autoaim_admits_exact_outline_candidate_and_switches(self):

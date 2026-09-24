@@ -324,7 +324,9 @@ def straddled_support(body_y, follow_gap, axis_samples,
             heights.append(height)
         if len(heights) != 2:
             continue
-        candidate = max(heights)
+        # The sampled ends are symmetric about the chassis origin. Their
+        # support plane crosses its midpoint at the mean, not the high bank.
+        candidate = sum(heights) * 0.5
         if support is None or candidate > support:
             support = candidate
     return support
