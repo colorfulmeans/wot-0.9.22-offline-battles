@@ -1,4 +1,5 @@
 name: Build v0.9.4 ramming-contact Windows test
+# retry: preserve observed midpoint; sample structural span separately
 on:
   push:
     branches: [fix/094-ram-contact-20260924]
