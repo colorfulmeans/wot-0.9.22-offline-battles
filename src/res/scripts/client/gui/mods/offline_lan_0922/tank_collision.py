@@ -403,6 +403,41 @@ def _ram_profile(tank):
     return spall, bonus
 
 
+def ram_contact_sample_heights(hit_y, span):
+    """Return stable structural-probe heights inside one real contact span.
+
+    #1513 ramming damage is applied at a point inside the total contact area.
+    A synthetic OBB overlap has no native Y coordinate, so its single chassis
+    midpoint can land on track-only or empty material.  Keep the observed Y
+    first, then test nearby interior heights; callers still require both real
+    native hit testers to return structural armour at the same height.
+    """
+    try:
+        hit_y = float(hit_y)
+    except (TypeError, ValueError, OverflowError):
+        return ()
+    if not _finite(hit_y):
+        return ()
+    if not isinstance(span, (list, tuple)) or len(span) != 2:
+        return (hit_y,)
+    try:
+        low, high = float(span[0]), float(span[1])
+    except (TypeError, ValueError, OverflowError):
+        return (hit_y,)
+    if not (_finite(low) and _finite(high)) or high <= low:
+        return (hit_y,)
+    observed = max(low, min(high, hit_y))
+    raw = [observed]
+    for fraction in (0.5, 1.0 / 3.0, 2.0 / 3.0, 0.2, 0.8):
+        raw.append(low + (high - low) * fraction)
+    raw[1:] = sorted(raw[1:], key=lambda value: abs(value - observed))
+    result = []
+    for value in raw:
+        if not result or all(abs(value - old) > 1.0e-4 for old in result):
+            result.append(value)
+    return tuple(result)
+
+
 def _contact_ram_inputs(tank, contact_armor=None):
     """Return per-contact armour plus descriptor/crew ram modifiers.
 
@@ -533,6 +568,30 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others,
                     low = middle
             fraction = low
     return fraction
+
+
+def post_contact_velocity_bodies(tanks, results):
+    """Return frozen bodies after the already-solved normal contact impulse.
+
+    Traverse torque is a second constraint in the same physics slice.  Feeding
+    it pre-contact velocities makes the same closing speed available twice and
+    lets a small steering twitch add a second collision impulse.  Only velocity
+    is carried forward here; geometric separation remains owned by the normal
+    solver and its world-collision gate.
+    """
+    updated = []
+    results = results or {}
+    for tank in tanks or ():
+        body = dict(tank)
+        result = results.get(body.get('id'), {}) or {}
+        delta = result.get('delta_velocity', (0.0, 0.0))
+        try:
+            body['vx'] = float(body.get('vx', 0.0)) + float(delta[0])
+            body['vz'] = float(body.get('vz', 0.0)) + float(delta[1])
+        except (TypeError, ValueError, IndexError, OverflowError):
+            raise RuntimeError('invalid solved contact velocity')
+        updated.append(body)
+    return updated
 
 
 def traverse_impulses(tanks, dt, anchor=None):
