@@ -1,4 +1,5 @@
 name: Build historical SPG position library Windows test
+# Complete staged transfer; execute source, bytecode and Windows acceptance gates.
 on:
   push:
     branches: [fix/094-spg-position-library-20260924]
