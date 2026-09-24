@@ -1986,8 +1986,10 @@ class BotRuntime(object):
                  bot_equipment_resolver=None,
                  destructible_body_scan=None, control_seconds=None,
                  incoming_lane_probe=None, combat_diagnostics=None,
-                 turret_motion_probe=None, turret_hulls_provider=None):
+                 turret_motion_probe=None, turret_hulls_provider=None,
+                 artillery_status_probe=None):
         self.local_player_id = local_player_id
+        self.artillery_status_probe = artillery_status_probe
         self._combat_diagnostics = combat_diagnostics
         self.descriptor_resolver = descriptor_resolver or (lambda unused: {})
         self.player_descriptor_resolver = player_descriptor_resolver
@@ -10576,6 +10578,142 @@ class BotRuntime(object):
         self._decision_cache.pop(bot_id, None)
         return True
 
+    def _artillery_position_order(self, state, order, targets, now):
+        """Leave a confirmed muzzle-side obstruction via the existing driver.
+
+        No unproved lane is a movement trigger. Use only existing rear route
+        waypoints, never teleport or alter the collision/navmesh policy. Keep
+        an adopted firing position instead of returning to the blocked anchor.
+        """
+        if str((state.get('profile') or {}).get('class_tag') or '') != 'SPG':
+            return order
+        mode = order.get('combat_mode')
+        if mode not in ('artillery_hold', 'artillery_deploy'):
+            state.pop('_spg_position', None)
+            return order
+        anchor = _point(order.get('move_position'), _position(state))
+        position = state.get('_spg_position')
+        if position is not None and position['anchor'] != anchor:
+            state.pop('_spg_position', None)
+            position = None
+        evidence = state.get('_spg_obstruction')
+        target = targets.get(order.get('target_id'))
+        if (mode == 'artillery_hold' and target is not None and
+                evidence is not None and now - evidence['since'] >= 3.0 and
+                now - evidence['last'] <= 2.0 and abs(state.get('speed', 0.0)) < 0.2 and
+                _distance(evidence['stamp'][0], _position(state)) <= 0.25 and
+                abs(_angle_delta(evidence['stamp'][1], state['yaw'])) <= 0.05):
+            visited = list(position['visited']) if position else [anchor]
+            points = (state.get('route') or {}).get('waypoints') or ()
+            choices = []
+            if len(visited) <= 3 and len(points) > 1:
+                first, last = points[0], points[-1]
+                dx, dz = float(last[0])-float(first[0]), float(last[1])-float(first[1])
+                length2 = max(1.0, dx*dx + dz*dz)
+                for index, point in enumerate(points):
+                    candidate = (float(point[0]), state['y'], float(point[1]))
+                    distance = _distance(_position(state), candidate)
+                    progress = ((candidate[0]-first[0])*dx +
+                                (candidate[2]-first[1])*dz) / length2
+                    if (not 16.0 <= distance <= 80.0 or not -0.12 <= progress <= 0.30 or
+                            any((candidate[0]-old[0])**2 + (candidate[2]-old[2])**2 < 225.0
+                                for old in visited)):
+                        continue
+                    choices.append((distance, index, candidate))
+            if choices:
+                unused_distance, index, candidate = min(choices)
+                visited.append(candidate)
+                position = {'anchor': anchor, 'point': candidate, 'index': index,
+                            'visited': visited, 'since': now}
+                state['_spg_position'] = position
+                state['_spg_position_event'] = 'adopted_rear_waypoint'
+                self._cancel_artillery_intent(state['id'])
+            else:
+                state['_spg_position_event'] = 'no_safe_rear_waypoint'
+            state.pop('_spg_obstruction', None)
+        if position is None:
+            return order
+        result = dict(order)
+        destination = position['point']
+        arrived = _distance(_position(state), destination) <= 15.0
+        result.update(move_position=destination, route_anchor=destination,
+                      route_index=position['index'], route_join=False,
+                      throttle_override=0.0 if arrived else None,
+                      combat_mode='artillery_hold' if arrived else 'artillery_relocate')
+        if not arrived:
+            result.update(target_id=None, target_kind=None, fire_allowed=False,
+                          aim_position=destination, face_position=destination)
+        return result
+
+    def _record_artillery_gate(self, state, command, target, solution,
+                               gun_state, ammo_state, reload_factor,
+                               in_range, local_fresh, publish, now, launch_stage):
+        """Bounded observation, with no extra native collision queries."""
+        if str((state.get('profile') or {}).get('class_tag') or '') != 'SPG':
+            return
+        status = {}
+        try:
+            if callable(self.artillery_status_probe):
+                status = self.artillery_status_probe(
+                    state, target, int(state.get('shell_index', 0)), now) or {}
+        except Exception:
+            status = {'planning': {'state': 'status_unavailable'}}
+        planning = status.get('planning') or {}
+        target_key = ((target.get('kind'), target.get('network_id', target.get('id')))
+                      if target is not None else None)
+        stamp = (_position(state), state.get('yaw', 0.0), target_key)
+        blocked = state.get('_spg_obstruction')
+        if blocked is not None and (
+                blocked['stamp'][2] != target_key or
+                _distance(blocked['stamp'][0], stamp[0]) > 0.25 or
+                abs(_angle_delta(blocked['stamp'][1], stamp[1])) > 0.05):
+            state.pop('_spg_obstruction', None)
+            blocked = None
+        if (planning.get('state') == 'failed' and
+                planning.get('reason') == 'world_blocked' and
+                planning.get('local_blockage') and target is not None):
+            state['_spg_obstruction'] = {
+                'stamp': blocked['stamp'] if blocked else stamp,
+                'since': blocked['since'] if blocked else now,
+                'last': now, 'blocks': planning.get('blocks', ()),
+            }
+        elif target is None or planning.get('state') == 'clear':
+            state.pop('_spg_obstruction', None)
+        if now - state.get('_spg_gate_logged', -1e9) < 1.0:
+            return
+        state['_spg_gate_logged'] = now
+        if target is None:
+            reason = 'no_received_target'
+        elif not command.get('fire_allowed'):
+            reason = 'order_not_ready'
+        elif solution is None:
+            reason = 'planning_' + str(planning.get('state', 'unknown'))
+        elif not in_range:
+            reason = 'range'
+        elif not state.get('gun_aligned'):
+            reason = 'gun_not_aligned'
+        elif not gun_state.ready(reload_factor) or not ammo_state.can_fire():
+            reason = 'reload_or_ammunition'
+        elif not publish or not local_fresh:
+            reason = 'control_cadence'
+        else:
+            reason = launch_stage or 'gunner_or_selected_lane'
+        print('[SPG FIRE GATE] %s' % json.dumps({
+            'id': state['id'], 'vehicle': state.get('vehicle'), 'reason': reason,
+            'mode': command.get('combat_mode'), 'target': target_key,
+            'order_target': command.get('target_id'),
+            'order_fire': bool(command.get('fire_allowed')), 'pose': stamp[:2],
+            'target_position': target.get('position') if target is not None else None,
+            'gun_aligned': bool(state.get('gun_aligned')), 'gun_pitch': state.get('gun_pitch'),
+            'desired_pitch': state.get('desired_gun_pitch'), 'aim_yaw': state.get('aim_yaw'),
+            'reload': state.get('reload_time'), 'clip': state.get('clip'),
+            'ammo': state.get('ammo_remaining'), 'fire_seq': state.get('fire_seq'),
+            'planning': planning, 'launch': status.get('launch'),
+            'intent': state['id'] in self._artillery_intents,
+            'reproof': state['id'] in self._artillery_reproofs,
+            'position_event': state.get('_spg_position_event'),
+        }, separators=(',', ':')))
+
     def _friendly_reposition_order(self, state, targets, now):
         """Return an ordinary lane escape plus whether its lease expired."""
         bot_id = int(state['id'])
@@ -11409,6 +11547,8 @@ class BotRuntime(object):
                         server_order,
                         targets.get(server_order.get('target_id')),
                         position)
+                    server_order = self._artillery_position_order(
+                        state, server_order, targets, now)
                     command = timed_call(
                         self._combat_diagnostics, 'bot.planner_driver',
                         decide_with_order,
@@ -12229,6 +12369,7 @@ class BotRuntime(object):
             in_range = (target is not None and target_distance > 1.0 and
                         ballistic_solution is not None and
                         (fire_range <= 0.0 or target_distance < fire_range))
+            artillery_launch_stage = None
             if (publish and local_action_fresh and
                     command['fire_allowed'] and target is not None and
                     in_range and
@@ -12255,6 +12396,7 @@ class BotRuntime(object):
                 lane_clear = False
                 lane_verdict = {}
                 if is_spg:
+                    artillery_launch_stage = 'exact_launch_pending'
                     launch_receipt = self._artillery_launch_receipt(
                         state, target, descriptor, state['shell_index'],
                         gun_state, ballistic_solution, now)
@@ -12303,6 +12445,7 @@ class BotRuntime(object):
                         launch_preview=launch_preview,
                         launch_time_us=step_end_time_us)
                     if fired and is_spg:
+                        artillery_launch_stage = 'fired'
                         self._cancel_artillery_intent(state['id'])
                 elif launch is not None:
                     self._mark_friendly_reposition(
@@ -12312,6 +12455,15 @@ class BotRuntime(object):
                         # moving SPG must discard it and prove the next shot
                         # again after its normal safe-driver motion completes.
                         self._cancel_artillery_intent(state['id'])
+            if is_spg and publish:
+                try:
+                    self._record_artillery_gate(
+                        state, command, target, ballistic_solution, gun_state,
+                        ammo_state, reload_factor, in_range,
+                        local_action_fresh, publish, now, artillery_launch_stage)
+                except Exception:
+                    # Diagnostic serialization must never cost a shot.
+                    pass
             if diagnostic is not None:
                 diagnostic.phase('bot.cover_prepare')
             mode = command.get('combat_mode')
