@@ -3605,6 +3605,7 @@ class BattleRuntime(object):
                 self._gun_state = gun_mechanics.GunState(
                     descriptor, self._local_loadout(descriptor),
                     ammo_layout=self._local_ammo_layout())
+                self._apply_initial_garage_shell(self._gun_state)
                 self._log_local_ammo(self._gun_state)
                 self._log_effective_parameters(descriptor)
                 self._gun_last_tick = self._clock()
@@ -7775,10 +7776,14 @@ class BattleRuntime(object):
         booster_slots = getattr(
             vehicle_equipment, 'battleBoosterConsumables', None)
         shells = None if item is None else {}
+        shell_order = None if item is None else []
         if shells is not None:
             for shell in (getattr(item, 'shells', None) or ()):
                 try:
-                    shells[int(shell.intCD)] = max(0, int(shell.count))
+                    compact_descr = int(shell.intCD)
+                    shells[compact_descr] = max(0, int(shell.count))
+                    if compact_descr not in shell_order:
+                        shell_order.append(compact_descr)
                 except (AttributeError, TypeError, ValueError):
                     continue
         equipment_ids = None
@@ -7793,6 +7798,8 @@ class BattleRuntime(object):
         crew = tuple(getattr(item, 'crew', None) or ())
         self._garage_loadout = {
             'shells': shells,
+            'shell_order': (None if shell_order is None
+                            else tuple(shell_order)),
             'equipment_ids': equipment_ids,
             'equipments': (() if consumables is None else
                            tuple(consumables.getInstalledItems())),
@@ -7926,6 +7933,48 @@ class BattleRuntime(object):
         """
         shells = self._garage_loadout_snapshot()['shells']
         return None if shells is None else dict(shells)
+
+    def _local_shell_order(self):
+        """Return the maintenance-page shell slots in their saved order."""
+        order = self._garage_loadout_snapshot().get('shell_order')
+        return None if order is None else tuple(order)
+
+    def _ammo_presentation_indices(self, state):
+        """Map saved shell slots onto canonical gun-shot indices.
+
+        Damage, projectile launch and the LAN protocol keep using the
+        descriptor's original shot index. Only the stock ammo controller's
+        insertion order follows ``shellsLayout``.
+        """
+        canonical = {}
+        for index, shot in enumerate(state.shots):
+            shell = _field(shot, 'shell', {})
+            try:
+                compact_descr = int(_field(shell, 'compactDescr', 0))
+            except (TypeError, ValueError):
+                continue
+            canonical[compact_descr] = index
+        result, seen = [], set()
+        for compact_descr in self._local_shell_order() or ():
+            index = canonical.get(int(compact_descr))
+            if index is None or index in seen:
+                continue
+            result.append(index)
+            seen.add(index)
+        for index in range(len(state.shots)):
+            if index not in seen:
+                result.append(index)
+        return tuple(result)
+
+    def _apply_initial_garage_shell(self, state):
+        """Load the first carried shell in the maintenance-page slot order."""
+        if not self._local_shell_order():
+            return False
+        for index in self._ammo_presentation_indices(state):
+            if index < len(state.ammo) and int(state.ammo[index]) > 0:
+                state.shot_index = index
+                return True
+        return False
 
     def _log_effective_parameters(self, descriptor):
         """Print the values this battle actually uses for the player's tank.
@@ -8298,7 +8347,8 @@ class BattleRuntime(object):
         if not force and signature == self._ammo_signature:
             return False
         current_shell = None
-        for index, shot in enumerate(state.shots):
+        for index in self._ammo_presentation_indices(state):
+            shot = state.shots[index]
             shell = _field(shot, 'shell', {})
             compact = _field(shell, 'compactDescr', 0)
             quantity = state.ammo[index]
@@ -8454,6 +8504,7 @@ class BattleRuntime(object):
             state = gun_mechanics.GunState(
                 descriptor, self._local_loadout(descriptor),
                 ammo_layout=self._local_ammo_layout())
+            self._apply_initial_garage_shell(state)
             self._gun_state = state
         now = self._clock() if now is None else float(now)
         if self._gun_last_tick is None:
@@ -10901,19 +10952,18 @@ class BattleRuntime(object):
             'vehicle hit impulse', self._present_hit_impulse,
             (event, target_record, effects_descr, direction))
         # Retail presents an HE near-miss through
-        # Vehicle.showDamageFromExplosion/armorSplashHit. HE direct impacts
-        # use the explosion group whenever HP damage was dealt, independently
-        # of physical penetration. Keep the protocol result for statistics.
+        # Vehicle.showDamageFromExplosion/armorSplashHit. A direct impact,
+        # including HE/HESH, still chooses the armour group from the physical
+        # penetration result; shot_effects.xml then selects the shell-specific
+        # pierce/not-pierce HE Wwise event. HP splash damage must not turn a
+        # non-penetration into the penetration impact sound.
         damage_factor = self._hit_damage_factor(event, target_record)
         if event.get('splash', False):
             return self._present_splash_hit(
                 target_record, effects_descr, effects_index, impact_position,
                 direction, damage_factor)
-        if combat_rules.is_he(shot):
-            effect_group = 'armorHit' if damage > 0 else 'armorResisted'
-        else:
-            effect_group = ('armorRicochet', 'armorResisted', 'armorHit')[
-                shot_result]
+        effect_group = ('armorRicochet', 'armorResisted', 'armorHit')[
+            shot_result]
         stages, effects, unused = effects_descr[effect_group]
         hit_position = self._vector(impact_position)
         terrain_effects = getattr(self._avatar, 'terrainEffects', None)
@@ -11254,22 +11304,26 @@ class BattleRuntime(object):
                     direct_he = shell_type == int(
                         self._runtime.constants.SHELL_TYPES_INDICES[
                             'HIGH_EXPLOSIVE'])
-                    if direct_he:
-                        # #1513 chooses commander voices from these flags,
-                        # independently of the canonical penetration result.
-                        # Every HE/HESH direct HP hit gets the normal damage
-                        # voice, including a non-penetrating explosion. The
-                        # fired shell owns this rule, never the vehicle class
-                        # or the round currently selected after firing.
-                        shot_result = 2 if damage > 0 else 1
                     if shot_result == 2:
+                        # A genuine armour penetration uses the ordinary
+                        # projectile penetration commander voice.
                         flags |= int(
                             flags_type.
                             MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE)
                     elif shot_result == 1:
+                        # #1513 keeps the physical non-penetration bit even
+                        # when HE blast damage gets through. The separate
+                        # EXPLOSION positive-damage bit is what makes
+                        # Avatar.showShotResults choose the direct-explosion
+                        # ("critical hit") voice before its no-penetration
+                        # branch. Zero-HP HE keeps only the no-penetration bit.
                         flags |= int(
                             flags_type.
                             MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE)
+                        if direct_he and damage > 0:
+                            flags |= int(
+                                flags_type.
+                                MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION)
                     else:
                         flags |= int(flags_type.RICOCHET)
                     critical_cause = 'shot'
@@ -17587,9 +17641,19 @@ class BattleRuntime(object):
             matrix = getattr(vehicle, 'matrix', None)
             if matrix is None:
                 continue
-            distance = shot_geometry.segment_box_entry_distance(
-                start, end, vehicle_target_bounds_at_matrix(
-                    vehicle, matrix, self._runtime.math))
+            collisions = collide_vehicle_at_matrix(
+                vehicle, matrix, start, end, self._runtime.math)
+            distance = (min(float(item.dist) for item in collisions)
+                        if collisions else None)
+            if distance is None:
+                # A destroyed native compound can temporarily lose component
+                # collision transforms while its retained wreck model remains
+                # targetable. Keep the original full-bounds fallback so a
+                # cursor visibly sitting on that wreck still occludes a live
+                # tank behind it.
+                distance = shot_geometry.segment_box_entry_distance(
+                    start, end, vehicle_target_bounds_at_matrix(
+                        vehicle, matrix, self._runtime.math))
             if (distance is not None and
                     distance + _SHOT_OCCLUSION_EPSILON < target_depth):
                 return True

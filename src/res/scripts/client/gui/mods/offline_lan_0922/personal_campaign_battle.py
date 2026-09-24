@@ -471,9 +471,14 @@ def _vehicle_events(name, node, facts):
                         return _unknown('interaction: event distance')
                     # HT5's zero is the observer's view range, not zero metres.
                     if distance_limit == 0:
-                        if (name != 'vehicleDamage' or len(occurrence) < 7 or
-                                occurrence[6] is None):
+                        if name != 'vehicleDamage' or len(occurrence) < 7:
                             return _unknown('interaction: view range at damage')
+                        if occurrence[6] is None:
+                            # T28 HTC HT-5 is conservative per shot: a damage
+                            # event without its sampled live view range cannot
+                            # qualify, but it must not invalidate other damage
+                            # events whose range evidence is complete.
+                            continue
                         if distance > occurrence[6]:
                             continue
                     # Signed XML ranges use an inclusive lower bound and an
