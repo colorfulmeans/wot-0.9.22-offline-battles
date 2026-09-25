@@ -11,11 +11,16 @@ import math
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / 'tools'
 sys.path.insert(0, str(TOOLS))
+sys.path.insert(0, str(ROOT / 'src' / 'res' / 'scripts' / 'client'))
+
+from gui.mods.offline_lan_0922 import capture_circles
+from gui.mods.offline_lan_0922 import prebaked_navigation
 
 
 def load_module(name):
@@ -49,6 +54,36 @@ def compiled_space(sections):
 
 
 class CompiledSpace0922Test(unittest.TestCase):
+
+    def test_installed_map_wtcp_supplies_each_team_capture_radius(self):
+        graph = json.loads((ROOT / 'navgraphs/63_tundra.json').read_text())
+        points = []
+        for team, (x, z) in enumerate(graph['objective_bases'], 1):
+            row = bytearray(124)
+            struct.pack_into('<f', row, 48, x)
+            struct.pack_into('<f', row, 56, z)
+            struct.pack_into('<fI', row, 64, 30.0 + team, team)
+            points.append(bytes(row))
+        payload = struct.pack('<II', 124, 2) + b''.join(points)
+        raw_space = compiled_space([('WTCP', 2, payload)])
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / 'res/packages/63_tundra.pkg'
+            package.parent.mkdir(parents=True)
+            with zipfile.ZipFile(package, 'w') as archive:
+                archive.writestr('spaces/63_tundra/space.bin', raw_space)
+            self.assertEqual([31.0, 32.0], capture_circles.installed_radii(
+                temporary, '63_tundra', graph['objective_bases']))
+            config_dir = Path(temporary) / 'mods/configs/offline_lan_0922'
+            nav_dir = config_dir / 'navgraphs'
+            nav_dir.mkdir(parents=True)
+            shutil.copy2(ROOT / 'navgraphs/63_tundra.json', nav_dir)
+            with mock.patch.object(prebaked_navigation, 'mod_dir',
+                                   return_value=str(config_dir)):
+                loaded = prebaked_navigation.load_graph('63_tundra')
+            self.assertEqual([31.0, 32.0], loaded['objective_base_radii'])
+        with self.assertRaisesRegex(ValueError, 'both objectives'):
+            capture_circles.radii_from_space(
+                raw_space, [[500.0, 500.0], graph['objective_bases'][1]])
 
     def test_authored_mittengard_capture_circles_match_ctf_objectives(self):
         data = json.loads((ROOT / 'tests/fixtures/thepit_wtcp_circles.json').read_text())

@@ -5539,6 +5539,11 @@ class BotRuntime(object):
                             source, now, visibility_tick)
                     return source_view_range[0]
 
+                if isinstance(visibility_tick, dict):
+                    visibility_tick.setdefault(
+                        'player_vision_ranges', []).append({
+                            'id': source['id'],
+                            'radius': resolve_source_view_range()})
                 direct_targets = set()
             elif now < float(self._human_vengeance_until.get(
                     source['id'], 0.0)):
@@ -8322,6 +8327,16 @@ class BotRuntime(object):
         try:
             ground = self._ground_probe_at(
                 state['x'], state['z'], state['y'])
+            if (ground is None or
+                    float(ground) - _number(state.get('y')) <
+                    -WRECK_SUPPORT_DROP):
+                # A wreck spans the same narrow shell holes and trenches as
+                # a live chassis. A single empty centre column must not
+                # cancel its real contact momentum after the first shove.
+                bridged = self._straddled_terrain_support(
+                    state, _position(state), WRECK_SUPPORT_DROP)
+                if bridged is not None:
+                    ground = bridged
         except (TypeError, ValueError, AttributeError, RuntimeError,
                 OverflowError):
             # Without a ground authority the new column cannot be verified.
@@ -12914,6 +12929,8 @@ class BotRuntime(object):
                         if ally != actor and self._radio_network.connected(actor, ally)]}
                     for actor in sorted(self._radio_network.actors)
                     if actor[0] == 'human'],
+                'player_vision_ranges': visibility_tick.get(
+                    'player_vision_ranges', []),
                 'affordances': list(completed_affordances),
             })
         return outgoing

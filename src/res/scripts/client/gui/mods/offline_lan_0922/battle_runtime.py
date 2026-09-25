@@ -3604,7 +3604,8 @@ class BattleRuntime(object):
                     self._on_control_mode_changed)
                 self._gun_state = gun_mechanics.GunState(
                     descriptor, self._local_loadout(descriptor),
-                    ammo_layout=self._local_ammo_layout())
+                    ammo_layout=self._local_ammo_layout(),
+                    shell_order=self._garage_loadout_snapshot()['shell_order'])
                 self._log_local_ammo(self._gun_state)
                 self._log_effective_parameters(descriptor)
                 self._gun_last_tick = self._clock()
@@ -7719,6 +7720,15 @@ class BattleRuntime(object):
                     break
         self._equipment_state = states
         self._equipment_revision = revision
+        result = local.get('equipment_intent_result') or {}
+        sequence = int(result.get('intent_seq', 0) or 0)
+        if (sequence > getattr(self, '_equipment_result_logged_seq', 0) and
+                not result.get('accepted', False)):
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] equipment rejected seq=%d reason=%s\n' %
+                (sequence, result.get('reason', 'unknown')))
+        self._equipment_result_logged_seq = max(
+            sequence, getattr(self, '_equipment_result_logged_seq', 0))
         if repairkit_activated:
             # The server commits the kit's critical repair and this ledger
             # edge under one lock.  Stop suppressing that canonical critical
@@ -7775,10 +7785,13 @@ class BattleRuntime(object):
         booster_slots = getattr(
             vehicle_equipment, 'battleBoosterConsumables', None)
         shells = None if item is None else {}
+        shell_order = []
         if shells is not None:
             for shell in (getattr(item, 'shells', None) or ()):
                 try:
-                    shells[int(shell.intCD)] = max(0, int(shell.count))
+                    compact_descr = int(shell.intCD)
+                    shells[compact_descr] = max(0, int(shell.count))
+                    shell_order.append(compact_descr)
                 except (AttributeError, TypeError, ValueError):
                     continue
         equipment_ids = None
@@ -7793,6 +7806,7 @@ class BattleRuntime(object):
         crew = tuple(getattr(item, 'crew', None) or ())
         self._garage_loadout = {
             'shells': shells,
+            'shell_order': tuple(shell_order),
             'equipment_ids': equipment_ids,
             'equipments': (() if consumables is None else
                            tuple(consumables.getInstalledItems())),
@@ -8191,14 +8205,14 @@ class BattleRuntime(object):
         record = self._records.get('player:%s' % self.client.player_id)
         if record is None or self._server is None:
             return False
-        entity = self._server_entity(self._server.vehicle_id)
-        if entity is None or entity.typeDescriptor is None:
-            return False
         equipment_kind = equipment.contract['kind']
         repair_all = bool(equipment.contract.get('repairAll', False))
         selected = None
         if (not repair_all and
                 equipment_kind in ('repairkit', 'medkit')):
+            entity = self._server_entity(self._server.vehicle_id)
+            if entity is None or entity.typeDescriptor is None:
+                return False
             selected = self._critical_name_from_extra_index(
                 entity.typeDescriptor, extra_index)
         if (equipment_kind == 'medkit' and selected is not None and
@@ -8453,7 +8467,8 @@ class BattleRuntime(object):
         if state is None:
             state = gun_mechanics.GunState(
                 descriptor, self._local_loadout(descriptor),
-                ammo_layout=self._local_ammo_layout())
+                ammo_layout=self._local_ammo_layout(),
+                shell_order=self._garage_loadout_snapshot()['shell_order'])
             self._gun_state = state
         now = self._clock() if now is None else float(now)
         if self._gun_last_tick is None:
@@ -10900,17 +10915,17 @@ class BattleRuntime(object):
         self._run_optional_feature(
             'vehicle hit impulse', self._present_hit_impulse,
             (event, target_record, effects_descr, direction))
-        # Retail presents an HE near-miss through
-        # Vehicle.showDamageFromExplosion/armorSplashHit. HE direct impacts
-        # use the explosion group whenever HP damage was dealt, independently
-        # of physical penetration. Keep the protocol result for statistics.
+        # The physical penetration result chooses the direct impact. HE also
+        # detonates on armour when that result is resisted, even if the blast
+        # removes no HP; the bound splash effect supplies its explosion sound.
         damage_factor = self._hit_damage_factor(event, target_record)
         if event.get('splash', False):
             return self._present_splash_hit(
                 target_record, effects_descr, effects_index, impact_position,
                 direction, damage_factor)
-        if combat_rules.is_he(shot):
-            effect_group = 'armorHit' if damage > 0 else 'armorResisted'
+        is_he = combat_rules.is_he(shot)
+        if is_he:
+            effect_group = 'armorHit' if shot_result == 2 else 'armorResisted'
         else:
             effect_group = ('armorRicochet', 'armorResisted', 'armorHit')[
                 shot_result]
@@ -10946,6 +10961,10 @@ class BattleRuntime(object):
             self._warn_optional_failure(
                 'projectile impact presentation', error)
             return False
+        if is_he:
+            self._present_splash_hit(
+                target_record, effects_descr, effects_index,
+                impact_position, direction, damage_factor)
         return True
 
     _DECAL_REPORT_LIMIT = 32
@@ -11231,8 +11250,16 @@ class BattleRuntime(object):
                 if flags_type is None:
                     raise RuntimeError(
                         '#1513 VEHICLE_HIT_FLAGS are unavailable')
-                explosion = bool(event.get('splash'))
-                direct_he = False
+                shot_result = max(
+                    0, min(int(event.get('shot_result', 2)), 2))
+                direct_he = (not event.get('splash') and shell_type == int(
+                    self._runtime.constants.SHELL_TYPES_INDICES[
+                        'HIGH_EXPLOSIVE']))
+                # A resisted HE hit can still remove HP through its blast.
+                # Use the explosion voice flags for that damage while leaving
+                # the canonical projectile penetration result untouched.
+                explosion = bool(event.get('splash')) or (
+                    direct_he and shot_result != 2 and damage > 0)
                 if explosion:
                     flags = int(flags_type.ATTACK_IS_EXTERNAL_EXPLOSION)
                     if damage > 0:
@@ -11249,19 +11276,8 @@ class BattleRuntime(object):
                         flags_type.GUN_DAMAGED_BY_EXPLOSION)
                 else:
                     flags = int(flags_type.ATTACK_IS_DIRECT_PROJECTILE)
-                    shot_result = max(
-                        0, min(int(event.get('shot_result', 2)), 2))
-                    direct_he = shell_type == int(
-                        self._runtime.constants.SHELL_TYPES_INDICES[
-                            'HIGH_EXPLOSIVE'])
-                    if direct_he:
-                        # #1513 chooses commander voices from these flags,
-                        # independently of the canonical penetration result.
-                        # Every HE/HESH direct HP hit gets the normal damage
-                        # voice, including a non-penetrating explosion. The
-                        # fired shell owns this rule, never the vehicle class
-                        # or the round currently selected after firing.
-                        shot_result = 2 if damage > 0 else 1
+                    if direct_he and shot_result != 2:
+                        shot_result = 1
                     if shot_result == 2:
                         flags |= int(
                             flags_type.
@@ -17568,8 +17584,7 @@ class BattleRuntime(object):
         """
         ray = (_xyz(start), _xyz(end))
         for record in self._records.values():
-            if (record.get('local') or record.get('tombstone') or
-                    not record.get('ready')):
+            if record.get('tombstone') or not record.get('ready'):
                 continue
             vehicle = self._server_entity(record.get('engine_id'))
             if (vehicle is None or
@@ -20047,7 +20062,7 @@ class BattleRuntime(object):
                 damage_factor = float(getattr(
                     material, 'vehicleDamageFactor'))
             except (AttributeError, TypeError, ValueError, OverflowError):
-                return None
+                continue
             if (math.isnan(armor) or math.isinf(armor) or armor <= 0.0 or
                     math.isnan(damage_factor) or math.isinf(damage_factor)):
                 continue
@@ -20057,12 +20072,16 @@ class BattleRuntime(object):
         return None
 
     def _native_ram_contact_plate_pair(self, proof):
-        """Find one shared structural damage height inside the frozen contact.
+        """Find shared structural armour inside the actual contact area.
 
         Never substitutes primaryArmor or mixes plates sampled at different
         heights.  The first candidate for which both native #1513 hit testers
         expose structure owns the receipt.
         """
+        return self._ram_plate_pair_from_probe(
+            proof, self._native_ram_vehicle_armor)
+
+    def _ram_plate_pair_from_probe(self, proof, armor_probe):
         contact_normal = proof.get('contact_normal')
         if contact_normal is None:
             return None, None, None
@@ -20071,20 +20090,26 @@ class BattleRuntime(object):
             hit[1], proof.get('contact_y_span'))
         seen_player = None
         seen_bot = None
-        for sample_y in heights:
-            sample = self._vector((hit[0], sample_y, hit[2]))
-            player_plate = self._native_ram_vehicle_armor(
-                proof['local_vehicle'], proof['local_matrix'], sample,
-                contact_normal)
-            bot_plate = self._native_ram_vehicle_armor(
-                proof['bot_vehicle'], proof['bot_matrix'], sample,
-                (-contact_normal[0], -contact_normal[1]))
-            if player_plate is not None:
-                seen_player = player_plate
-            if bot_plate is not None:
-                seen_bot = bot_plate
-            if player_plate is not None and bot_plate is not None:
-                return (player_plate, bot_plate, float(sample_y)), seen_player, seen_bot
+        points = [(hit[0], hit[2])]
+        for x, z in proof.get('contact_xz_candidates', ()):
+            if all((x-px)**2 + (z-pz)**2 > 1.0e-6
+                   for px, pz in points):
+                points.append((x, z))
+        for x, z in points:
+            for sample_y in heights:
+                sample = self._vector((x, sample_y, z))
+                player_plate = armor_probe(
+                    proof['local_vehicle'], proof['local_matrix'], sample,
+                    contact_normal)
+                bot_plate = armor_probe(
+                    proof['bot_vehicle'], proof['bot_matrix'], sample,
+                    (-contact_normal[0], -contact_normal[1]))
+                if player_plate is not None:
+                    seen_player = player_plate
+                if bot_plate is not None:
+                    seen_bot = bot_plate
+                if player_plate is not None and bot_plate is not None:
+                    return (player_plate, bot_plate, float(sample_y), x, z), seen_player, seen_bot
         return None, seen_player, seen_bot
 
     def _ram_contact_armor_status(self, first, second, contact):
@@ -20131,28 +20156,39 @@ class BattleRuntime(object):
             float(second['y']) + float(second['shape'][3]))
         if high <= low:
             return 'invalid', None
-        hit_point = self._vector((
-            overlap_point[0], (low + high) * 0.5, overlap_point[1]))
-        plates = []
-        for index, (body, vehicle, record) in enumerate(zip(
-                (first, second), vehicles, records)):
+        hit_point = (overlap_point[0], (low + high) * 0.5,
+                     overlap_point[1])
+        matrices = []
+        for body, vehicle, record in zip(
+                (first, second), vehicles, records):
             ground_matrix = self._ram_pose_matrix(
                 (body['x'], body['y'], body['z']), body['yaw'],
                 _number(body.get('pitch')), _number(body.get('roll')))
             matrix, chassis_matrix = self._projectile_vehicle_matrices(
                 record, vehicle, ground_matrix=ground_matrix)
-            inward_normal = (contact_normal if index == 0 else
-                              (-contact_normal[0], -contact_normal[1]))
-            plate = self._native_ram_vehicle_armor(
-                vehicle, matrix, hit_point, inward_normal,
-                chassis_matrix=chassis_matrix)
-            if plate is None:
-                # At this point both exact entities and their contact geometry
-                # are ready. None now means the native ray found no supported
-                # contact layer, rather than an asynchronous startup failure.
-                return 'unavailable', None
-            plates.append(float(plate['armor']))
-        return 'available', tuple(plates)
+            matrices.append((matrix, chassis_matrix))
+        proof = {
+            'hit_point': hit_point,
+            'contact_normal': contact_normal,
+            'contact_y_span': (low, high),
+            'contact_xz_candidates': self._ram_contact_xz_samples(
+                first, second, contact_normal),
+            'local_vehicle': vehicles[0], 'bot_vehicle': vehicles[1],
+            'local_matrix': matrices[0][0], 'bot_matrix': matrices[1][0],
+        }
+        # Use the worker's component transforms for each sampled ray.
+        probe = self._native_ram_vehicle_armor
+        def worker_armor(vehicle, matrix, point, normal):
+            index = 0 if vehicle is vehicles[0] else 1
+            return probe(vehicle, matrix, point, normal,
+                         chassis_matrix=matrices[index][1])
+        # Share the same bounded point search as player/Bot contact proofs.
+        matched, unused_first, unused_second = self._ram_plate_pair_from_probe(
+            proof, worker_armor)
+        if matched is None:
+            return 'unavailable', None
+        return 'available', (float(matched[0]['armor']),
+                             float(matched[1]['armor']))
 
     def _bot_ram_contact_armor(self, first, second, contact):
         """Probe both real #1513 hit testers at one worker-owned contact."""
@@ -20359,6 +20395,12 @@ class BattleRuntime(object):
                 bot_pose[:3], bot_pose[3], bot_pose[4], bot_pose[5]),
             'contact_normal': contact_normal,
             'contact_y_span': contact_y_span,
+            'contact_xz_candidates': self._ram_contact_xz_samples(
+                {'x': own_pose[0], 'z': own_pose[2], 'yaw': own_pose[3],
+                 'shape': self._collision_shape(local_vehicle.typeDescriptor)},
+                {'x': bot_pose[0], 'z': bot_pose[2], 'yaw': bot_pose[3],
+                 'shape': self._collision_shape(bot_vehicle.typeDescriptor)},
+                contact_normal),
             'contact_spall_player': player_spall,
             'contact_bonus_player': player_bonus,
             'vx': float(player_velocity[0]),
@@ -20437,7 +20479,7 @@ class BattleRuntime(object):
             matched, player_plate, bot_plate = (
                 self._native_ram_contact_plate_pair(proof))
             if matched is not None:
-                player_plate, bot_plate, unused_sample_y = matched
+                player_plate, bot_plate = matched[:2]
         if (revision is None or presentation_time_us is None or
                 matched is None):
             if proof['attempts'] < 2:
@@ -20455,7 +20497,7 @@ class BattleRuntime(object):
             return False
         self._local_ram_seq += 1
         sample_y = matched[2]
-        hit = (proof['hit_point'][0], sample_y, proof['hit_point'][2])
+        hit = (matched[3], sample_y, matched[4])
         player_armor = player_plate['armor']
         bot_armor = bot_plate['armor']
         receipt = {
@@ -20515,8 +20557,8 @@ class BattleRuntime(object):
                            (1.0, 1.0), (-1.0, 1.0))]
 
     @classmethod
-    def _ram_obb_overlap_point(cls, body_a, body_b):
-        """Return a point inside the exact convex overlap of two OBBs."""
+    def _ram_obb_overlap_polygon(cls, body_a, body_b):
+        """Clip the mounted chassis footprints to their shared contact area."""
         polygon = cls._ram_obb_vertices(body_a)
         clip = cls._ram_obb_vertices(body_b)
         for index in range(4):
@@ -20553,11 +20595,40 @@ class BattleRuntime(object):
                 previous = current
                 previous_inside = current_inside
             polygon = output
+        return polygon
+
+    @classmethod
+    def _ram_obb_overlap_point(cls, body_a, body_b):
+        """Return a point inside the exact convex overlap of two OBBs."""
+        polygon = cls._ram_obb_overlap_polygon(body_a, body_b)
         if not polygon:
             return None
         count = float(len(polygon))
         return (sum(point[0] for point in polygon) / count,
                 sum(point[1] for point in polygon) / count)
+
+    @classmethod
+    def _ram_contact_xz_samples(cls, first, second, normal):
+        """Sample the real shared area along its tangential contact width.
+
+        Chassis contact often falls on a track or an empty gap at the centre.
+        Every alternative stays strictly within both mounted footprints; the
+        native hit testers still determine the armour of each vehicle there.
+        """
+        if normal is None:
+            return ()
+        polygon = cls._ram_obb_overlap_polygon(first, second)
+        if not polygon:
+            return ()
+        count = float(len(polygon))
+        center = (sum(point[0] for point in polygon) / count,
+                  sum(point[1] for point in polygon) / count)
+        tangent = (-normal[1], normal[0])
+        sides = (min(polygon, key=lambda p: p[0]*tangent[0]+p[1]*tangent[1]),
+                 max(polygon, key=lambda p: p[0]*tangent[0]+p[1]*tangent[1]))
+        return (center,) + tuple(
+            (center[0]*0.5+side[0]*0.5,
+             center[1]*0.5+side[1]*0.5) for side in sides)
 
     def _poll_local_ram_contact_episodes(self, entity, own, others):
         """Turn exact OBB compression episodes into immutable RAM proofs.

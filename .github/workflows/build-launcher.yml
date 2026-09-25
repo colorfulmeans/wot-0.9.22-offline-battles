@@ -8,6 +8,7 @@ on:
       - fix/0922-battle-followup-20260914
       - fix/0922-bonds-crew-grand-battles
       - fix/0922-native-offers-training-reserves-20260917
+      - fix/094-pr40-gameplay-20260925
 
 permissions:
   contents: read
@@ -86,7 +87,7 @@ jobs:
       - name: Install pinned Windows packager
         run: >-
           python -m pip install
-          -r server/requirements-windows-build.txt
+          -r launcher/requirements-build.txt
       - uses: actions/download-artifact@v4
         with:
           name: launcher-build-input

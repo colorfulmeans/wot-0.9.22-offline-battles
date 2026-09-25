@@ -187,6 +187,7 @@ def _selected_vehicle_effective_params():
     from gui.mods.offline_lan_0922 import descriptor_donation
     from gui.mods.offline_lan_0922 import effective_params
     from gui.mods.offline_lan_0922 import equipment_mechanics
+    from gui.mods.offline_lan_0922 import gun_mechanics
     from gui.mods.offline_lan_0922 import loadout
     from gui.mods.offline_lan_0922 import tank_collision
     from gui.mods.offline_lan_0922 import player_critical_mechanics
@@ -265,9 +266,12 @@ def _selected_vehicle_effective_params():
         descriptor, loadout.ramming_bonus(crew))
 
     ammo = []
+    shell_order = []
     for shell in (getattr(item, 'shells', None) or ()):
         try:
-            ammo.append([int(shell.intCD), max(0, int(shell.count))])
+            compact_descr = int(shell.intCD)
+            ammo.append([compact_descr, max(0, int(shell.count))])
+            shell_order.append(compact_descr)
         except (AttributeError, TypeError, ValueError):
             raise ValueError('the selected vehicle ammunition is invalid')
     ammo.sort(key=lambda entry: entry[0])
@@ -296,7 +300,8 @@ def _selected_vehicle_effective_params():
     except (IndexError, TypeError, ValueError):
         raise ValueError('the selected vehicle gun clip is invalid')
     shots = []
-    for shot in (_field(gun, 'shots', ()) or ()):
+    for shot in gun_mechanics.mounted_shot_order(
+            _field(gun, 'shots', ()), shell_order):
         try:
             compact_descr = int(_field(_field(shot, 'shell'), 'compactDescr'))
         except (AttributeError, TypeError, ValueError):

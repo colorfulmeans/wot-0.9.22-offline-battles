@@ -13,6 +13,40 @@ from test_port_0922_battle_runtime import BattleRuntime
 
 class RamContactFollowupTests(unittest.TestCase):
 
+    def test_shared_contact_width_recovers_a_native_plate_beside_a_track_gap(self):
+        runtime = object.__new__(BattleRuntime)
+        runtime._vector = lambda value: tuple(value)
+        first = {'x': 0.0, 'z': 0.0, 'yaw': 0.0,
+                 'shape': (1.5, 3.5, -0.8, 2.0)}
+        second = {'x': 0.0, 'z': 6.5, 'yaw': 0.0,
+                  'shape': (1.5, 3.5, -0.8, 2.0)}
+        samples = runtime._ram_contact_xz_samples(
+            first, second, (0.0, -1.0))
+        self.assertEqual(3, len(samples))
+        self.assertTrue(all(abs(x) < 1.5 and 3.0 < z < 3.5
+                            for x, z in samples))
+
+        def armor(self, vehicle, matrix, point, normal,
+                  chassis_matrix=None):
+            if vehicle == 'bot' and abs(point[0]) < 0.3:
+                return None
+            return {'armor': 40.0 if vehicle == 'player' else 20.0,
+                    'screened': False}
+
+        runtime._native_ram_vehicle_armor = types.MethodType(armor, runtime)
+        proof = {'hit_point': (0.0, 1.0, 3.25),
+                 'contact_y_span': (0.0, 2.0),
+                 'contact_xz_candidates': samples,
+                 'contact_normal': (0.0, -1.0),
+                 'local_vehicle': 'player', 'bot_vehicle': 'bot',
+                 'local_matrix': object(), 'bot_matrix': object()}
+        matched, unused_first, unused_second = (
+            runtime._native_ram_contact_plate_pair(proof))
+        self.assertEqual((40.0, 20.0),
+                         (matched[0]['armor'], matched[1]['armor']))
+        self.assertGreater(abs(matched[3]), 0.3)
+        self.assertTrue(3.0 < matched[4] < 3.5)
+
     def test_contact_height_candidates_stay_inside_shared_span_and_near_observation_first(self):
         values = tank_collision.ram_contact_sample_heights(2.0, (0.0, 4.0))
         self.assertEqual(2.0, values[0])
