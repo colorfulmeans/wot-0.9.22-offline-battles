@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v0.9.4
+wot-0.9.22-offline-battles v0.9.5
 ================================
 
 The launcher prepares one battle before the game starts. It installs the mod,
@@ -46,7 +46,7 @@ with the supported vehicle catalogue and researched modules; a new-account
 save starts with starter vehicles. Purchases use the displayed currency and
 price. Change modules, optional devices, consumables, shells, camouflage and
 crew skills; the garage is saved after each change and the battle uses what
-you fitted. Release notes are on the GitHub v0.9.4 release page.
+you fitted. Release notes are on the GitHub v0.9.5 release page.
 
 The Tools tab also edits vehicle data directly. A vehicle data profile is a
 named set of Packed XML field changes (health, damage, penetration, armour,
@@ -458,6 +458,16 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
 
+Version 0.9.5
+Changes since v0.9.4 include matchmaking and artillery repairs, an initial
+Ruinberg/Steppes SPG position library, the launcher Bot tactics editor, contact
+and wreck pushing fixes, HE feedback, wreck reticle occlusion, capture circle
+radii, HT-5 view range, shell order, premium consumables, exchange and crew.
+LT-5 logic remains at the PR #40 baseline. The original v0.7.7 Bot driving and
+41 navigation maps remain. See the GitHub v0.9.5 release for complete notes.
+All LAN participants must use this version of the launcher, client and server.
+Extract the whole ZIP to a new empty folder; do not mix _internal directories.
+
 Version 0.9.4
 Selected Bot source: a3e4c5937789d9dd63fde6902783d5027ec7c6f3
 Upstream v0.7.7 Bot behavior and original maps; original mutual yielding retained.
@@ -467,21 +477,7 @@ remain from the selected build; this is not the complete upstream game.
 Extract the whole ZIP to a new empty folder; do not mix _internal directories.
 
 
-Matchmaking / SPG / physical contact / radio TEST BUILD - 2026-09-24
-Not a formal release. Version remains 0.9.4; the build identity differs.
-Includes all preceding exchange, elite-notification and crew requalification fixes.
-Restores +/-2 presets and automatic 0..3 artillery, repairs delayed SPG proofs,
-reciprocal mass-based contact/acknowledgements, and Bot radio-recipient filtering.
-Original077 driving and traffic strategies, all 41 maps, armor and downhill
-settings remain unchanged. This is no longer byte-identical upstream Bot077:
-only the documented matchmaking/mechanical/radio interfaces have changed.
-No native Windows battle acceptance is claimed; see the separate test evidence.
-Close the old launcher and game. Extract the entire ZIP into a NEW folder.
-Do not mix old/new EXE or _internal files. Select your existing #1513 game folder.
-Use the same save slot/profile. Back up important saves; no reset is necessary.
-All LAN participants and the authority worker must use this matching package.
-
-Bot tactics editor TEST BUILD - 2026-09-24
+Bot tactics editor - v0.9.5
 -----------------------------------------
 Tools -> Bot tactics opens the behavior and map editor. The existing Exact
 lineup tab still controls specific vehicles. In Bot tactics, save a named draft

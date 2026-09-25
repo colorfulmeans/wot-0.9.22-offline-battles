@@ -9,6 +9,7 @@ on:
       - fix/0922-bonds-crew-grand-battles
       - fix/0922-native-offers-training-reserves-20260917
       - fix/094-pr40-gameplay-20260925
+      - release/v0.9.5
 
 permissions:
   contents: read
@@ -32,6 +33,15 @@ jobs:
         run: >-
           pwsh -NoProfile -File
           server/build_windows_server.ps1
+      - name: Verify v0.9.5 server executable version
+        if: github.ref == 'refs/heads/release/v0.9.5'
+        shell: pwsh
+        run: |
+          $version = (Get-Item -LiteralPath 'dist/server/WoT-0.9.22-LAN-Server.exe').VersionInfo
+          if ($version.FileVersion -ne '0.9.5' -or
+              $version.ProductVersion -ne '0.9.5') {
+            throw 'Incorrect Windows server executable version'
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: launcher-manual-server-input
@@ -100,6 +110,33 @@ jobs:
       - name: Build launcher distribution
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
+      - name: Verify v0.9.5 launcher and client versions
+        if: github.ref == 'refs/heads/release/v0.9.5'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $app = "launcher/dist/wot-0.9.22-offline-battles"
+          $archive = "$app/_internal/client/0.9.22.zip"
+          $version = (Get-Item -LiteralPath "$app/wot-0.9.22-offline-battles.exe").VersionInfo
+          if ($version.FileVersion -ne '0.9.5' -or
+              $version.ProductVersion -ne '0.9.5') {
+            throw 'Incorrect Windows launcher executable version'
+          }
+          @'
+          import io, json, sys, zipfile
+          from xml.etree import ElementTree
+          with zipfile.ZipFile(sys.argv[1]) as client:
+              identity = json.loads(client.read(
+                  'mods/configs/offline_lan_0922/build_identity.json'))
+              assert identity['semanticVersion'] == '0.9.5', identity
+              mods = [name for name in client.namelist() if name.endswith('.wotmod')]
+              assert len(mods) == 1 and mods[0].endswith('_0.9.5.wotmod'), mods
+              with zipfile.ZipFile(io.BytesIO(client.read(mods[0]))) as mod:
+                  assert mod.testzip() is None
+                  assert ElementTree.fromstring(mod.read('meta.xml')).findtext('version') == '0.9.5'
+          print('Verified v0.9.5 client build identity and mod.')
+          '@ | python - $archive
+          if ($LASTEXITCODE -ne 0) { throw "Client release version check failed" }
       - uses: actions/upload-artifact@v4
         with:
           name: wot-0.9.22-offline-battles-windows-${{ github.run_number }}
