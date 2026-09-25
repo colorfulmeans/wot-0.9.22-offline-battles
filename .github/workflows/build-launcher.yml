@@ -8,6 +8,7 @@ on:
       - fix/0922-battle-followup-20260914
       - fix/0922-bonds-crew-grand-battles
       - fix/0922-native-offers-training-reserves-20260917
+      - fix/094-pr40-gameplay-20260925
 
 permissions:
   contents: read

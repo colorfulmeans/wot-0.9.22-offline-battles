@@ -5609,6 +5609,40 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         self.assertIn('is behind a wreck', battle._outline_report)
         factory.destroy_all()
 
+    def test_the_player_wreck_blocks_an_enemy_outline_in_postmortem_view(self):
+        runtime = _runtime()
+        factory = RemoteVehicleFactory(
+            runtime.bigworld, runtime.math, runtime.model_assembler, 7)
+        wreck_id = factory.create(_Descriptor(), {
+            'publicInfo': {'team': 1, 'name': 'Player'},
+            'health': 0, 'isCrewActive': False,
+            'gunAnglesPacked': 0}, _Vector(0.0, 0.0, 100.0),
+            (0.0, 0.0, 0.0))
+        target_id = factory.create(_Descriptor(), {
+            'publicInfo': {'team': 2, 'name': 'Target'},
+            'health': 500, 'isCrewActive': True,
+            'gunAnglesPacked': 0}, _Vector(0.0, 0.0, 300.0),
+            (0.0, 0.0, 0.0))
+        factory.get(target_id).collideSegmentExt = lambda start, end: (
+            types.SimpleNamespace(dist=300.0),)
+        battle = BattleRuntime(runtime)
+        battle.client = _Client()
+        battle._avatar = runtime.bigworld.avatar
+        battle._remote_factory = factory
+        battle._records = {
+            'player:1': {'engine_id': wreck_id, 'local': True,
+                         'ready': True, 'state': {'health': 0, 'alive': False}},
+            'bot:2': {'engine_id': target_id, 'local': False,
+                      'ready': True, 'spot_visible': True,
+                      'state': {'health': 500, 'alive': True}},
+        }
+
+        battle._update_target_outline(1.0)
+
+        self.assertIsNone(battle._outlined_engine_id)
+        self.assertIn('is behind a wreck', battle._outline_report)
+        factory.destroy_all()
+
     @staticmethod
     def _picker_bounds(vehicle_yaw, turret_yaw, detached=False):
         math_module = types.SimpleNamespace(
@@ -9181,6 +9215,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, {
                 'CurrentVehicle': current_vehicle}):
             self.assertEqual({101: 30, 102: 12}, battle._local_ammo_layout())
+            self.assertEqual((101, 102), battle._garage_loadout_snapshot()[
+                'shell_order'])
             self.assertEqual(
                 [401, 0, 403], battle._local_mounted_equipments())
 
@@ -15513,6 +15549,57 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(
             (0.0, 0.0, 0.0),
             (translation.x, translation.y, translation.z))
+
+    def test_direct_he_separates_armor_result_from_explosion_damage(self):
+        for shot_result, damage, group, explosion_flags in (
+                (1, 0, 'resistedFx', False),
+                (1, 40, 'resistedFx', True),
+                (2, 40, 'hitFx', False)):
+            with self.subTest(result=shot_result, damage=damage):
+                runtime = _runtime()
+                battle = BattleRuntime(runtime)
+                battle._avatar = runtime.bigworld.avatar
+                battle._avatar.playerVehicleID = 11
+                battle._synchronise_player_identity(11)
+                descriptor = _Descriptor()
+                descriptor.gun.shots[0].shell.kind = 'HIGH_EXPLOSIVE'
+                target = _Vehicle(10, _Descriptor(), _Vector(), (0, 0, 0),
+                                  {'health': 500})
+                attacker = _Vehicle(11, descriptor, _Vector(10, 0, 0),
+                                    (0, 0, 0), {'health': 500})
+                runtime.bigworld.entities.update({10: target, 11: attacker})
+                target_record = {
+                    'engine_id': 10, 'kind': 'bot', 'network_id': 2,
+                    'spot_visible': True, 'state': {
+                        'team': 2, 'health': 500, 'alive': True,
+                        'x': 0.0, 'y': 0.0, 'z': 0.0}}
+                attacker_record = {
+                    'engine_id': 11, 'kind': 'player', 'network_id': 1,
+                    'local': True, 'state': {
+                        'team': 1, 'health': 500,
+                        'x': 10.0, 'y': 0.0, 'z': 0.0}}
+                event = {
+                    'kind': 'bot_hit', 'source': 'shot', 'world_pose': True,
+                    'x': 0.5, 'y': 1.0, 'z': 0.0, 'shell_index': 0,
+                    'shot_result': shot_result, 'damage': damage,
+                    'attack_reason': 0}
+                self.assertTrue(battle._present_combat_hit(
+                    event, target_record, attacker_record, 11))
+                effect = battle._avatar.terrainEffects.addNew.call_args
+                self.assertEqual(group, effect.args[1])
+                self.assertEqual(1, len(target.bound_effects.played))
+                battle._present_combat_feedback(
+                    event, target_record, attacker_record)
+                flags = battle._avatar.shot_results[0][0] >> 32
+                vehicle_flags = runtime.constants.VEHICLE_HIT_FLAGS
+                self.assertEqual(explosion_flags, bool(
+                    flags & vehicle_flags.ATTACK_IS_EXTERNAL_EXPLOSION))
+                if shot_result == 1 and not damage:
+                    self.assertTrue(flags & vehicle_flags.
+                                    MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE)
+                if shot_result == 2:
+                    self.assertTrue(flags & vehicle_flags.
+                                    MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE)
 
     def test_he_splash_on_a_dead_target_presents_nothing(self):
         runtime = _runtime()
@@ -31364,6 +31451,26 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 mock.call(41, activation_code=activation_code,
                           selected='engineHealth',
                           requested_active=None), call)
+
+    def test_large_repairkit_reaches_authority_before_vehicle_model_starts(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        sender = mock.Mock(return_value=1)
+        battle.client = types.SimpleNamespace(
+            player_id=1, send_equipment_intent=sender)
+        battle._server = types.SimpleNamespace(vehicle_id=10)
+        battle._records = {'player:1': {'engine_id': 10}}
+        kit = types.SimpleNamespace(
+            id=(11, 41), compactDescr=401, name='largeRepairkit',
+            tags=('repairkit',), cooldownSeconds=90.0, reuseCount=-1,
+            repairAll=True)
+        battle._equipment_state = [equipment_mechanics.EquipmentState(
+            equipment_mechanics.project_equipment(kit))]
+
+        self.assertTrue(battle._activate_equipment((1 << 16) | 41))
+        sender.assert_called_once_with(
+            41, activation_code=(1 << 16) | 41,
+            selected=None, requested_active=None)
 
     def test_stock_manual_extinguisher_activation_reaches_server_without_target(self):
         import test_port_0922_effective_params as fixtures

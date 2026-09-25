@@ -3604,7 +3604,8 @@ class BattleRuntime(object):
                     self._on_control_mode_changed)
                 self._gun_state = gun_mechanics.GunState(
                     descriptor, self._local_loadout(descriptor),
-                    ammo_layout=self._local_ammo_layout())
+                    ammo_layout=self._local_ammo_layout(),
+                    shell_order=self._garage_loadout_snapshot()['shell_order'])
                 self._log_local_ammo(self._gun_state)
                 self._log_effective_parameters(descriptor)
                 self._gun_last_tick = self._clock()
@@ -7719,6 +7720,15 @@ class BattleRuntime(object):
                     break
         self._equipment_state = states
         self._equipment_revision = revision
+        result = local.get('equipment_intent_result') or {}
+        sequence = int(result.get('intent_seq', 0) or 0)
+        if (sequence > getattr(self, '_equipment_result_logged_seq', 0) and
+                not result.get('accepted', False)):
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] equipment rejected seq=%d reason=%s\n' %
+                (sequence, result.get('reason', 'unknown')))
+        self._equipment_result_logged_seq = max(
+            sequence, getattr(self, '_equipment_result_logged_seq', 0))
         if repairkit_activated:
             # The server commits the kit's critical repair and this ledger
             # edge under one lock.  Stop suppressing that canonical critical
@@ -7775,10 +7785,13 @@ class BattleRuntime(object):
         booster_slots = getattr(
             vehicle_equipment, 'battleBoosterConsumables', None)
         shells = None if item is None else {}
+        shell_order = []
         if shells is not None:
             for shell in (getattr(item, 'shells', None) or ()):
                 try:
-                    shells[int(shell.intCD)] = max(0, int(shell.count))
+                    compact_descr = int(shell.intCD)
+                    shells[compact_descr] = max(0, int(shell.count))
+                    shell_order.append(compact_descr)
                 except (AttributeError, TypeError, ValueError):
                     continue
         equipment_ids = None
@@ -7793,6 +7806,7 @@ class BattleRuntime(object):
         crew = tuple(getattr(item, 'crew', None) or ())
         self._garage_loadout = {
             'shells': shells,
+            'shell_order': tuple(shell_order),
             'equipment_ids': equipment_ids,
             'equipments': (() if consumables is None else
                            tuple(consumables.getInstalledItems())),
@@ -8191,14 +8205,14 @@ class BattleRuntime(object):
         record = self._records.get('player:%s' % self.client.player_id)
         if record is None or self._server is None:
             return False
-        entity = self._server_entity(self._server.vehicle_id)
-        if entity is None or entity.typeDescriptor is None:
-            return False
         equipment_kind = equipment.contract['kind']
         repair_all = bool(equipment.contract.get('repairAll', False))
         selected = None
         if (not repair_all and
                 equipment_kind in ('repairkit', 'medkit')):
+            entity = self._server_entity(self._server.vehicle_id)
+            if entity is None or entity.typeDescriptor is None:
+                return False
             selected = self._critical_name_from_extra_index(
                 entity.typeDescriptor, extra_index)
         if (equipment_kind == 'medkit' and selected is not None and
@@ -8453,7 +8467,8 @@ class BattleRuntime(object):
         if state is None:
             state = gun_mechanics.GunState(
                 descriptor, self._local_loadout(descriptor),
-                ammo_layout=self._local_ammo_layout())
+                ammo_layout=self._local_ammo_layout(),
+                shell_order=self._garage_loadout_snapshot()['shell_order'])
             self._gun_state = state
         now = self._clock() if now is None else float(now)
         if self._gun_last_tick is None:
@@ -10900,17 +10915,17 @@ class BattleRuntime(object):
         self._run_optional_feature(
             'vehicle hit impulse', self._present_hit_impulse,
             (event, target_record, effects_descr, direction))
-        # Retail presents an HE near-miss through
-        # Vehicle.showDamageFromExplosion/armorSplashHit. HE direct impacts
-        # use the explosion group whenever HP damage was dealt, independently
-        # of physical penetration. Keep the protocol result for statistics.
+        # The physical penetration result chooses the direct impact. HE also
+        # detonates on armour when that result is resisted, even if the blast
+        # removes no HP; the bound splash effect supplies its explosion sound.
         damage_factor = self._hit_damage_factor(event, target_record)
         if event.get('splash', False):
             return self._present_splash_hit(
                 target_record, effects_descr, effects_index, impact_position,
                 direction, damage_factor)
-        if combat_rules.is_he(shot):
-            effect_group = 'armorHit' if damage > 0 else 'armorResisted'
+        is_he = combat_rules.is_he(shot)
+        if is_he:
+            effect_group = 'armorHit' if shot_result == 2 else 'armorResisted'
         else:
             effect_group = ('armorRicochet', 'armorResisted', 'armorHit')[
                 shot_result]
@@ -10946,6 +10961,10 @@ class BattleRuntime(object):
             self._warn_optional_failure(
                 'projectile impact presentation', error)
             return False
+        if is_he:
+            self._present_splash_hit(
+                target_record, effects_descr, effects_index,
+                impact_position, direction, damage_factor)
         return True
 
     _DECAL_REPORT_LIMIT = 32
@@ -11231,8 +11250,16 @@ class BattleRuntime(object):
                 if flags_type is None:
                     raise RuntimeError(
                         '#1513 VEHICLE_HIT_FLAGS are unavailable')
-                explosion = bool(event.get('splash'))
-                direct_he = False
+                shot_result = max(
+                    0, min(int(event.get('shot_result', 2)), 2))
+                direct_he = (not event.get('splash') and shell_type == int(
+                    self._runtime.constants.SHELL_TYPES_INDICES[
+                        'HIGH_EXPLOSIVE']))
+                # A resisted HE hit can still remove HP through its blast.
+                # Use the explosion voice flags for that damage while leaving
+                # the canonical projectile penetration result untouched.
+                explosion = bool(event.get('splash')) or (
+                    direct_he and shot_result != 2 and damage > 0)
                 if explosion:
                     flags = int(flags_type.ATTACK_IS_EXTERNAL_EXPLOSION)
                     if damage > 0:
@@ -11249,19 +11276,8 @@ class BattleRuntime(object):
                         flags_type.GUN_DAMAGED_BY_EXPLOSION)
                 else:
                     flags = int(flags_type.ATTACK_IS_DIRECT_PROJECTILE)
-                    shot_result = max(
-                        0, min(int(event.get('shot_result', 2)), 2))
-                    direct_he = shell_type == int(
-                        self._runtime.constants.SHELL_TYPES_INDICES[
-                            'HIGH_EXPLOSIVE'])
-                    if direct_he:
-                        # #1513 chooses commander voices from these flags,
-                        # independently of the canonical penetration result.
-                        # Every HE/HESH direct HP hit gets the normal damage
-                        # voice, including a non-penetrating explosion. The
-                        # fired shell owns this rule, never the vehicle class
-                        # or the round currently selected after firing.
-                        shot_result = 2 if damage > 0 else 1
+                    if direct_he and shot_result != 2:
+                        shot_result = 1
                     if shot_result == 2:
                         flags |= int(
                             flags_type.
@@ -17568,8 +17584,7 @@ class BattleRuntime(object):
         """
         ray = (_xyz(start), _xyz(end))
         for record in self._records.values():
-            if (record.get('local') or record.get('tombstone') or
-                    not record.get('ready')):
+            if record.get('tombstone') or not record.get('ready'):
                 continue
             vehicle = self._server_entity(record.get('engine_id'))
             if (vehicle is None or

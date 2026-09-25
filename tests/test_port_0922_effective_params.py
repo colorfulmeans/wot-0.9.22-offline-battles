@@ -516,7 +516,7 @@ class EffectiveParamsContractTests(unittest.TestCase):
         self.assertTrue(result['skills']['last_effort'])
         self.assertTrue(result['loadout']['has_sixth_sense'])
         self.assertEqual(2, result['gun']['clip_size'])
-        self.assertEqual([1, 2], [
+        self.assertEqual([2, 1], [
             shot['compact_descr'] for shot in result['gun']['shots']])
         self.assertTrue(all(
             shot['source_shot']['deadeye']

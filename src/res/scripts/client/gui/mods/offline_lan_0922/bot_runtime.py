@@ -5539,6 +5539,11 @@ class BotRuntime(object):
                             source, now, visibility_tick)
                     return source_view_range[0]
 
+                if isinstance(visibility_tick, dict):
+                    visibility_tick.setdefault(
+                        'player_vision_ranges', []).append({
+                            'id': source['id'],
+                            'radius': resolve_source_view_range()})
                 direct_targets = set()
             elif now < float(self._human_vengeance_until.get(
                     source['id'], 0.0)):
@@ -12914,6 +12919,8 @@ class BotRuntime(object):
                         if ally != actor and self._radio_network.connected(actor, ally)]}
                     for actor in sorted(self._radio_network.actors)
                     if actor[0] == 'human'],
+                'player_vision_ranges': visibility_tick.get(
+                    'player_vision_ranges', []),
                 'affordances': list(completed_affordances),
             })
         return outgoing

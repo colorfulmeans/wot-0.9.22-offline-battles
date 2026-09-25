@@ -2063,6 +2063,19 @@ class BotRuntimeTests(unittest.TestCase):
             observation_times[1] - observation_times[0],
             self.module.OBSERVATION_SECONDS - 1.0e-6)
 
+    def test_observation_publishes_the_player_view_range_for_ht5(self):
+        self.runtime.battle_start(self.start)
+        player = _admit_player({
+            'id': 2, 'team': 1, 'alive': True,
+            'x': 0.0, 'y': 0.0, 'z': 0.0})
+        outgoing = self.runtime.update(.04, 1.0, players=[player])
+        observation = next(message for message in outgoing
+                           if message['type'] == 'bot_observation')
+        ranges = observation['player_vision_ranges']
+
+        self.assertEqual([2], [row['id'] for row in ranges])
+        self.assertGreater(ranges[0]['radius'], 0.0)
+
     def test_direction_probe_receives_speed_and_descriptor_contract(self):
         calls = []
         descriptor = _combat_descriptor()
