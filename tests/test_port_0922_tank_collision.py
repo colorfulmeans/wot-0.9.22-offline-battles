@@ -689,11 +689,11 @@ class TankCollisionTests(unittest.TestCase):
 
 class StraddledSupportTests(unittest.TestCase):
     def test_opposing_ends_bridge_a_slot_narrower_than_the_hull(self):
-        """The centre rests on the banks' plane, not the trench floor."""
+        """A trench under the centre column must not lower the hull."""
         support = tank_collision.straddled_support(
             10.0, 1.0, ((10.0, 9.6), (None, None)))
 
-        self.assertAlmostEqual(9.8, support)
+        self.assertAlmostEqual(10.0, support)
 
     def test_one_supported_end_is_a_cliff_edge_and_not_a_bridge(self):
         self.assertIsNone(tank_collision.straddled_support(
@@ -710,7 +710,7 @@ class StraddledSupportTests(unittest.TestCase):
         support = tank_collision.straddled_support(
             4.0, 0.9, ((1.0, 1.0), (4.05, 3.9)))
 
-        self.assertAlmostEqual(3.975, support)
+        self.assertAlmostEqual(4.05, support)
 
     def test_span_offsets_follow_the_chassis_axes(self):
         (front, rear), (right, left) = tank_collision.chassis_span_offsets(

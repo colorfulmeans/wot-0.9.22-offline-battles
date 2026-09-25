@@ -1,5 +1,10 @@
 # Bridge-side support correction, physics-r5
 
+**Withdrawn:** the user's next report still reproduced bridge adhesion. The
+support changes described below were reverted to the 2026-09-24 baseline.
+See [the rollback record](094-support-reset-20260925.md). This document records
+the earlier attempt and does not describe the current support implementation.
+
 Report: `wot-error-report-20260925-130449-b4e95f5db4b0.zip`.
 Reported source: `d9ac97a3630783a01a134e0ee48dcb251f0ac803` (physics-r4).
 

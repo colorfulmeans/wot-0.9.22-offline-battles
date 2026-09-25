@@ -18,7 +18,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = 'a5401f87359ac916f6fcedc31aa09d25bf226dd8'
-PACKAGE = 'wot-0.9.22-offline-battles-0.9.4-physics-r5-20260925-Windows-x64.zip'
+PACKAGE = 'wot-0.9.22-offline-battles-0.9.4-support-reset-20260925-Windows-x64.zip'
 
 
 def read(path):
@@ -180,18 +180,18 @@ def package(app):
                'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses'}
     assert set(os.listdir(app)) == allowed, os.listdir(app)
     with open(os.path.join(app, 'README.txt'), 'ab') as stream:
-        stream.write(('\nPhysics follow-up r5 test build (2026-09-25).\nSource: ' +
+        stream.write(('\nSupport rollback checkpoint (2026-09-25).\nSource: ' +
                       receipt['source_commit'] + '\nBuild: ' +
                       receipt['identity']['buildIdentity'] + '\n'
-                      'Rigid corners no longer acquire bridge surfaces above their actual contact windows.\n'
-                      'Real corner sweeps preserve slope contacts and confirm support at the endpoint.\n'
-                      'No forced righting is added; Bot route selection and avoidance remain unchanged.\n'
-                      'The preceding mass-based contact and grounded resistance fixes are retained.\n'
-                      'Landing track damage uses a contact-weighted reconstruction.\n'
-                      'Landing crew loss uses floor(hull fall damage * actual crew count / max hull HP).\n'
-                      'Injured seats are sampled once from the actual healthy crew, not fixed to the commander.\n'
-                      'Crew severity is an explicit project reconstruction; internal-module falling damage is not implemented.\n'
-                      'Native Windows bridge departure and gameplay acceptance remain pending.\n').encode('utf8'))
+                      'Support physics restored to a5401f87 (2026-09-24 23:29 +08:00).\n'
+                      'Today\'s bridge support, COM correction and corner-sweep changes are withdrawn.\n'
+                      'This checkpoint does not claim to fix bridge or cliff adhesion.\n'
+                      'Bot routing and obstacle decisions remain unchanged.\n'
+                      'HE, ammunition order, mission, localization and tank-to-tank mass fixes are retained.\n'
+                      'The restored solver does not emit landing track loads.\n'
+                      'Landing hull HP damage remains; landing crew and track damage await real contact observations.\n'
+                      'Internal-module falling damage is not implemented.\n'
+                      'Native Windows gameplay acceptance has not been performed.\n').encode('utf8'))
     target = os.path.join(ROOT, PACKAGE)
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
         for folder, dirs, files in os.walk(app):

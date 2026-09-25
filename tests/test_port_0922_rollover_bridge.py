@@ -15,9 +15,6 @@ class RolloverBridgeTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         battle._local_fall_armed = True
-        # These scenes define horizontal terrain layers only; static wall
-        # sweeps have their own native-ray/normal fixtures.
-        battle._motion_is_clear = lambda *args, **kwargs: True
         entity = fixtures._Vehicle(10, fixtures._suspension_descriptor(),
             fixtures._Vector(), (0, 0, 0), {'health': 500})
         return battle, entity
@@ -26,73 +23,6 @@ class RolloverBridgeTests(unittest.TestCase):
     def floor(x, z, minimum, maximum, **kwargs):
         return 0.0 if minimum <= 0.0 <= maximum else None
 
-    def test_bridge_edge_fall_conserves_mass_centre_through_native_hull_sweeps(self):
-        from test_port_0922_world_collision import _Vector, _miss_mat_info_1513
-        from gui.mods.offline_lan_0922 import world_collision
-
-        for dt in (1.0 / 30.0, 1.0 / 120.0):
-            for side in (-1.0, 1.0):
-                with self.subTest(dt=dt, side=side):
-                    battle, entity = self.battle()
-
-                    def bridge(x, z, low, high, **kwargs):
-                        height = 5.0 if side*x < 0.0 else -20.0
-                        return height if low <= height <= high else None
-
-                    def collide(space, start, end, mask, *unused):
-                        delta = end - start
-                        if abs(delta.y) < 1e-12:
-                            return None
-                        hits = []
-                        for height in (5.0, -20.0):
-                            fraction = (height-start.y) / delta.y
-                            if not 0.0 <= fraction <= 1.0:
-                                continue
-                            point = start + delta.scale(fraction)
-                            if height == -20.0 or side*point.x < 0.0:
-                                hits.append((fraction, point))
-                        if not hits:
-                            return None
-                        unused_fraction, point = min(hits, key=lambda row: row[0])
-                        return point, _Vector(0.0, 1.0, 0.0), 0
-
-                    scene = types.SimpleNamespace(wg_collideSegment=collide,
-                        wg_getMatInfoNearPoint=_miss_mat_info_1513)
-
-                    def sweep(actor, position, motion_yaw, speed, step, hull_yaw=None):
-                        trace = {}
-                        status = world_collision.check_horizontal_collision(
-                            scene, types.SimpleNamespace(Vector3=_Vector), 1,
-                            _Vector(*position), motion_yaw if hull_yaw is None else hull_yaw,
-                            speed, actor.typeDescriptor, battle._local_airborne,
-                            step, True, commit_enabled=False,
-                            motion_yaw=motion_yaw if hull_yaw is not None else None,
-                            pitch=battle._local_pitch, roll=battle._local_roll, trace=trace)
-                        battle._local_world_collision_trace = trace
-                        return status == 'clear'
-
-                    battle._suspension_ground_y = bridge
-                    battle._motion_is_clear = sweep
-                    position = (side*0.8, 5.0, 0.0)
-                    crossed_vertical = False
-                    # There is only upward contact on this thin deck; no
-                    # horizontal force can move the centre of mass. Exercise
-                    # the real adapter/solver/sweep loop, not an always-clear
-                    # motion stub. The old loop shifted it by about 0.47 m.
-                    for unused in range(int(2.5 / dt)):
-                        battle._local_support_motion_pose = position
-                        position = battle._update_vertical_motion(entity, position, 0.0, dt)
-                        params = battle._local_suspension_params
-                        centre = vehicle_physics.suspension_point_offset(
-                            dict(x=0.0, y=params['center_of_mass_y'], z=0.0),
-                            battle._local_pitch, battle._local_roll)
-                        self.assertAlmostEqual(side*0.8, position[0]+centre[0], places=7)
-                        self.assertAlmostEqual(0.0, position[2]+centre[2], places=7)
-                        crossed_vertical |= abs(battle._local_roll) > math.pi/2.0
-                        self.assertFalse(battle._local_support_rise_blocked)
-                    self.assertTrue(crossed_vertical)
-                    self.assertTrue(battle._local_airborne)
-                    self.assertLess(position[1], 0.0)
 
     def test_side_roof_and_tumbling_landings_keep_the_hull_above_ground(self):
         for dt in (1.0 / 30.0, 1.0 / 120.0):

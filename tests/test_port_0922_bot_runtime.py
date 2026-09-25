@@ -21221,7 +21221,7 @@ class ShovedWreckTests(unittest.TestCase):
         self.assertTrue(any(after['y'] < before['y'] for before, after in probes))
         self.assertEqual(0.15, probes[-1][1]['chassis']['pitch'])
 
-    def test_a_slide_off_a_cliff_lip_releases_the_wreck_under_gravity(self):
+    def test_a_slide_off_a_cliff_lip_is_undone_instead_of_dropping(self):
         runtime = self._runtime(ground=-40.0)
         state = self._wreck(runtime)
 
@@ -21229,11 +21229,10 @@ class ShovedWreckTests(unittest.TestCase):
             state, {'delta_velocity': (0.0, 2.0),
                     'correction': (0.0, 0.05)}, 0.1)
 
-        self.assertTrue(moved)
-        self.assertGreater(state['z'], 0.0)
-        self.assertLess(state['y'], 0.0)
-        self.assertGreater(state['push_z'], 0.0)
-        self.assertTrue(state['airborne'])
+        self.assertFalse(moved)
+        self.assertEqual(0.0, state['z'])
+        self.assertEqual(0.0, state['y'])
+        self.assertEqual(0.0, state['push_z'])
 
     def test_a_wreck_keeps_no_engine_and_bleeds_at_the_parked_hold(self):
         runtime = self._runtime(ground=0.0)

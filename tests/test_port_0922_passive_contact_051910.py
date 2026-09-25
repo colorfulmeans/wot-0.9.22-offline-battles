@@ -40,49 +40,8 @@ class PassiveContactTests(unittest.TestCase):
             'delta_velocity': (0.0, 2.0), 'correction': (0.0, .05)}, .1)
         self.assertEqual((0.0, 0.0), (state['z'], state['push_z']))
 
-    def test_dead_hull_keeps_falling_after_contact_and_neighbours_disappear(self):
-        for dt in (1.0 / 30.0, 1.0 / 120.0):
-            runtime = self._runtime(ground=-40.0)
-            state = self._wreck(runtime)
-            runtime.states = {11: state}
-            runtime.contact_motion_probe = lambda *unused: True
-            runtime._apply_wreck_contact_response(state, {
-                'delta_velocity': (0.0, 2.0), 'correction': (0.0, .05)}, dt)
-            start_z = state['z']
-            self.assertTrue(state['airborne'])
-            self.assertLess(state['y'], 0.0)
-            velocity = state['push_z']
-            for tick in range(int(1.0 / dt) - 1):
-                runtime._resolve_tank_contacts((), tick * dt, dt)
-            self.assertAlmostEqual(-.5 * self.module.vehicle_physics.GRAVITY, state['y'])
-            self.assertGreater(state['z'], start_z)
-            self.assertEqual(velocity, state['push_z'])
-            self.assertEqual(0.0, state['speed'])
-            for tick in range(int(3.0 / dt)):
-                runtime._resolve_tank_contacts((), tick * dt, dt)
-            self.assertEqual(-40.0, state['y'])
-            self.assertFalse(state['airborne'])
 
-    def test_shallow_drop_obeys_gravity_instead_of_snapping_to_lower_support(self):
-        runtime = self._runtime(ground=-.3)
-        state = self._wreck(runtime)
-        runtime.contact_motion_probe = lambda *unused: True
-        step = 1. / 120.
-        runtime._apply_wreck_contact_response(state, {
-            'delta_velocity': (0., 2.), 'correction': (0., .05)}, step)
-        self.assertAlmostEqual(-.5 * self.module.vehicle_physics.GRAVITY * step * step,
-                               state['y'])
-        self.assertTrue(state['airborne'])
 
-    def test_missing_support_releases_wreck_without_reverting_its_horizontal_pose(self):
-        runtime = self._runtime(ground=None)
-        state = self._wreck(runtime)
-        runtime.contact_motion_probe = lambda *unused: True
-        runtime._apply_wreck_contact_response(state, {
-            'delta_velocity': (0.0, 2.0), 'correction': (0.0, .05)}, .1)
-        self.assertGreater(state['z'], 0.0)
-        self.assertLess(state['y'], 0.0)
-        self.assertTrue(state['airborne'])
 
     def test_mass_weighted_response_survives_the_native_callback_for_wrecks(self):
         def shove(wreck_mass):
@@ -103,43 +62,7 @@ class PassiveContactTests(unittest.TestCase):
         self.assertGreater(light[1], heavy[1])
         self.assertGreater(heavy[1], 0.)
 
-    def test_airborne_body_has_no_static_track_hold_in_the_pair_solver(self):
-        runtime = self._runtime(ground=None)
-        state = self._wreck(runtime)
-        state.update(airborne=True, y=1.)
-        runtime.contact_motion_probe = lambda *unused: True
-        driver = runtime.states[12]
-        driver.update(x=0., y=1., z=-5., speed=.01, yaw=0.)
-        runtime._resolve_tank_contacts((), 1., 1. / 30.)
-        self.assertGreater(state['push_z'], 0.)
 
-    def test_suspended_wreck_rotates_about_its_mass_center_while_falling(self):
-        runtime = self._runtime(ground=None)
-        state = self._wreck(runtime)
-        physics = self.module.vehicle_physics
-        descriptor = bots._suspension_descriptor()
-        params = physics.derive_suspension_params(descriptor)
-        params['center_of_mass_y'] = 1.2
-        original_params = dict(params)
-        runtime._descriptors[11] = descriptor
-        runtime._suspension_params[11] = params
-        runtime._suspension_ground_probe = lambda *unused, **kwargs: None
-        state.update(y=10., airborne=True, pitch=.1, terrain_pitch=.1,
-                     roll=.3, suspension_roll_velocity=.4)
-        seen = []
-        runtime.contact_motion_probe = lambda pose, *unused: seen.append(dict(pose)) or True
-        center = dict(x=0., y=1.2, z=0.)
-        before = physics.suspension_point_offset(center, state['pitch'], state['roll'])
-        runtime._apply_wreck_contact_response(state, {
-            'delta_velocity': (0., 0.), 'correction': (0., 0.)}, 1. / 30.)
-        after = physics.suspension_point_offset(center, state['pitch'], state['roll'])
-        self.assertAlmostEqual(before[0], state['x'] + after[0])
-        self.assertAlmostEqual(before[2], state['z'] + after[2])
-        self.assertLess(state['y'] + after[1], 10. + before[1])
-        self.assertTrue(state['airborne'])
-        self.assertEqual(state['roll'], seen[-1]['roll'])
-        self.assertEqual(state['terrain_pitch'], seen[-1]['terrain_pitch'])
-        self.assertEqual(original_params, params)
 
     def test_spring_wreck_cannot_settle_through_a_detached_turret(self):
         runtime = self._runtime(ground=None)

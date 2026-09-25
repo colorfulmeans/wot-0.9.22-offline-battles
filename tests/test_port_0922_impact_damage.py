@@ -10,78 +10,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] /
                        'src/res/scripts/client'))
 from gui.mods.offline_lan_0922 import critical_damage, impact_damage, vehicle_physics
-import test_port_0922_vehicle_physics as physics_fixture
 import test_port_0922_critical_damage as critical_fixture
 import test_port_0922_battle_runtime as battle_fixture
 import test_port_0922_bot_runtime as bot_fixture
-
-
-class ImpactLoadTests(unittest.TestCase):
-    def setUp(self):
-        self.fixture = physics_fixture.VehiclePhysicsSuspensionTrialTests()
-        self.fixture.setUp()
-        self.params = self.fixture.params
-
-    def solve(self, sides=('left', 'right'), height=0.0, speed=-20.0, dt=0.03):
-        ground = tuple(0.0 if row['side'] in sides else None
-                       for row in self.params['springs'])
-        return vehicle_physics.damper_suspension_step(
-            self.params, self.fixture._state(
-                height=height, vertical_velocity=speed), ground, dt,
-            (None,) * len(self.params['pseudo_contacts']))
-
-    def test_balanced_track_contacts_share_the_load_equally(self):
-        solved = self.solve()
-        self.assertAlmostEqual(0.5, solved['impact_track_loads'][0])
-        self.assertAlmostEqual(0.5, solved['impact_track_loads'][1])
-
-    def test_single_track_contact_never_loads_the_airborne_track(self):
-        for side, expected in (('left', (1.0, 0.0)),
-                               ('right', (0.0, 1.0))):
-            with self.subTest(side=side):
-                self.assertEqual(expected, self.solve((side,))['impact_track_loads'])
-
-    def test_final_substep_touch_records_only_the_contacted_track(self):
-        solved = self.solve(('left',), height=1.1, speed=-9.5, dt=0.1)
-        self.assertGreater(solved['contact_count'], 0)
-        self.assertLess(solved['impact_speed'], -vehicle_physics.FALL_SAFE_SPEED)
-        self.assertEqual((1.0, 0.0), solved['impact_track_loads'])
-
-    def test_belly_contact_does_not_invent_track_load(self):
-        pseudo = tuple(row['y'] + 0.02 if row['kind'] == 'body' else None
-                       for row in self.params['pseudo_contacts'])
-        solved = vehicle_physics.damper_suspension_step(
-            self.params, self.fixture._state(vertical_velocity=-20.0),
-            (None,) * len(self.params['springs']), 0.03, pseudo)
-        self.assertGreater(solved['touched_contact_count'], 0)
-        self.assertEqual((0.0, 0.0), solved['impact_track_loads'])
-
-    def test_hull_load_reduces_the_budget_given_to_tracks(self):
-        pseudo = tuple(row['y'] + 0.02 if row['kind'] == 'body' else None
-                       for row in self.params['pseudo_contacts'])
-        solved = vehicle_physics.damper_suspension_step(
-            self.params, self.fixture._state(vertical_velocity=-20.0),
-            (0.0,) * len(self.params['springs']), 0.03, pseudo)
-        self.assertGreater(sum(solved['impact_track_loads']), 0.0)
-        self.assertLess(sum(solved['impact_track_loads']), 1.0)
-
-    def test_zero_time_and_no_contact_produce_no_impact_load(self):
-        self.assertEqual((0.0, 0.0), self.solve(dt=0.0)['impact_track_loads'])
-        self.assertEqual((0.0, 0.0), self.solve(())['impact_track_loads'])
-
-    def test_reporting_impulses_does_not_change_projected_motion(self):
-        ground, pseudo = self.fixture._plane_samples(self.params)
-        before = self.fixture._state(height=-0.5, vertical_velocity=-20.0,
-                                     pitch=0.1, roll=0.2)
-        old, observed = copy.deepcopy(before), copy.deepcopy(before)
-        loads = {}
-        old_keys = vehicle_physics._project_suspension_limits(
-            self.params, old, ground, pseudo)
-        new_keys = vehicle_physics._project_suspension_limits(
-            self.params, observed, ground, pseudo, impact_impulses=loads)
-        self.assertEqual(old_keys, new_keys)
-        self.assertEqual(old, observed)
-        self.assertTrue(loads)
 
 
 class LandingTrackDamageTests(unittest.TestCase):
