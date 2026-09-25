@@ -180,17 +180,17 @@ def package(app):
                'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses'}
     assert set(os.listdir(app)) == allowed, os.listdir(app)
     with open(os.path.join(app, 'README.txt'), 'ab') as stream:
-        stream.write(('\nPhysics follow-up r4 test build (2026-09-25).\nSource: ' +
+        stream.write(('\nPhysics follow-up r5 test build (2026-09-25).\nSource: ' +
                       receipt['source_commit'] + '\nBuild: ' +
                       receipt['identity']['buildIdentity'] + '\n'
-                      'Fresh measured support under the mounted hull releases existing low bridge-top contacts.\n'
-                      'Outward bridge-side contacts can release while real backing walls still block motion.\n'
-                      'Bounded bridge-edge logs capture contact decisions and suspension movement.\n'
+                      'Rigid corners no longer acquire bridge surfaces above their actual contact windows.\n'
+                      'Real corner sweeps preserve slope contacts and confirm support at the endpoint.\n'
                       'No forced righting is added; Bot route selection and avoidance remain unchanged.\n'
                       'The preceding mass-based contact and grounded resistance fixes are retained.\n'
                       'Landing track damage uses a contact-weighted reconstruction.\n'
                       'Landing crew loss uses floor(hull fall damage * actual crew count / max hull HP).\n'
-                      'This deterministic crew rule is an explicit project reconstruction.\n'
+                      'Injured seats are sampled once from the actual healthy crew, not fixed to the commander.\n'
+                      'Crew severity is an explicit project reconstruction; internal-module falling damage is not implemented.\n'
                       'Native Windows bridge departure and gameplay acceptance remain pending.\n').encode('utf8'))
     target = os.path.join(ROOT, PACKAGE)
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
