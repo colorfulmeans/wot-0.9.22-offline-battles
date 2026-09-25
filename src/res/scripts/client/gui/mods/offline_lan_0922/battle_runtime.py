@@ -1888,6 +1888,8 @@ class BattleRuntime(object):
         self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
+        self._next_local_suspension_motion_report = 0.0
+        self._local_suspension_motion_tail_until = None
         self._local_suspension_failed_this_tick = False
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
@@ -2236,6 +2238,8 @@ class BattleRuntime(object):
         self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
+        self._next_local_suspension_motion_report = 0.0
+        self._local_suspension_motion_tail_until = None
         self._local_suspension_failed_this_tick = False
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
@@ -6686,6 +6690,8 @@ class BattleRuntime(object):
         self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
+        self._next_local_suspension_motion_report = 0.0
+        self._local_suspension_motion_tail_until = None
         self._local_suspension_failed_this_tick = False
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
@@ -18020,6 +18026,112 @@ class BattleRuntime(object):
             }))
         return True
 
+    def _report_local_suspension_motion(
+            self, entity, params, start, end, yaw, dt, before, solved,
+            ground, pseudo_ground, support_speed, plane, origin_probes=(),
+            resolved_shift=(0.0, 0.0), invalid_pose=False, raised_support=False,
+            before_airborne=False):
+        """Observe edge/tumble motion at 5 Hz, including released controls.
+
+        All inputs already belong to the committed solve. No diagnostic
+        terrain, collision, descriptor, or native calls are made here.
+        """
+        try:
+            sine, cosine = math.sin(yaw), math.cos(yaw)
+            local_shift = solved.get('origin_shift', (0.0, 0.0))
+            requested_shift = (
+                cosine * local_shift[0] + sine * local_shift[1],
+                -sine * local_shift[0] + cosine * local_shift[1])
+            shift_blocked = any(not row['clear'] for row in origin_probes)
+            steep = max(abs(before['pitch']), abs(before['roll']),
+                        abs(solved['pitch']), abs(solved['roll'])) >= math.pi / 6.0
+            missing = bool(ground and (
+                any(value is None for value in ground) or
+                int(solved.get('contact_count', 0)) < len(ground) or
+                solved.get('left_flying') or solved.get('right_flying')))
+            airborne = bool(before_airborne or self._local_airborne or
+                            solved.get('airborne'))
+            interesting = (missing or airborne or steep or shift_blocked or
+                           invalid_pose or raised_support)
+            tail = self._local_suspension_motion_tail_until
+            if not interesting and tail is None:
+                return False
+            now = _PROFILE_CLOCK()
+            if interesting:
+                self._local_suspension_motion_tail_until = now + 1.0
+            elif now > tail:
+                self._local_suspension_motion_tail_until = None
+                return False
+            if now < self._next_local_suspension_motion_report:
+                return False
+            self._next_local_suspension_motion_report = now + 0.2
+            center = dict(x=0.0, y=float(params.get('center_of_mass_y', 0.0)), z=0.0)
+
+            def world_center(position, pitch, roll):
+                offset = vehicle_physics.suspension_point_offset(center, pitch, roll)
+                return (position[0] + cosine * offset[0] + sine * offset[2],
+                        position[1] + offset[1],
+                        position[2] - sine * offset[0] + cosine * offset[2])
+
+            trace = getattr(self, '_local_world_collision_trace', None) or {}
+            payload = {
+                'wall_time': now, 'simulation_time': self._local_motion_clock,
+                'dt': dt, 'entity_id': getattr(entity, 'id', None),
+                'input': [getattr(self._sender, name, None)
+                          for name in ('forward', 'turn', 'handbrake')],
+                'drive': [self._local_drive_throttle, self._local_drive_turn],
+                'speed': self._local_speed, 'turn_speed': self._local_turn_speed,
+                'tick_position': getattr(self, '_local_support_tick_pose', None),
+                'motion_position': self._local_support_motion_pose,
+                'heading_before': self._local_yaw,
+                'pose_columns': 'x,y,z,yaw,pitch,roll',
+                'before_pose': tuple(start) + (yaw, before['pitch'], before['roll']),
+                'after_pose': tuple(end) + (yaw, self._local_pitch, self._local_roll),
+                'before_velocity': [before['vertical_velocity'],
+                                    before['pitch_velocity'], before['roll_velocity']],
+                'after_velocity': [self._local_vertical_speed,
+                    self._local_suspension_pitch_velocity,
+                    self._local_suspension_roll_velocity],
+                'velocity_columns': 'vertical,pitch,roll',
+                'support_vertical_speed': support_speed,
+                'committed_support_vertical_speed': self._local_suspension_support_vertical_speed,
+                'center_of_mass_y': center['y'],
+                'before_center': world_center(start, before['pitch'], before['roll']),
+                'after_center': world_center(end, self._local_pitch, self._local_roll),
+                'origin_shift_requested': requested_shift,
+                'origin_shift_resolved': resolved_shift,
+                'origin_probes': origin_probes,
+                'ground': ground, 'pseudo_ground': pseudo_ground,
+                'spring_layout_columns': 'side,x,y,z',
+                'spring_layout': [(row.get('side'), row['x'], row.get('y', 0.0), row['z'])
+                                  for row in params.get('springs', ())],
+                'pseudo_layout_columns': 'kind,x,y,z',
+                'pseudo_layout': [(row.get('kind'), row['x'], row.get('y', 0.0), row['z'])
+                                  for row in params.get('pseudo_contacts', ())],
+                'ground_plane': plane,
+                'solved': dict((name, solved.get(name)) for name in (
+                    'height', 'pitch', 'roll', 'vertical_velocity',
+                    'pitch_velocity', 'roll_velocity', 'airborne',
+                    'contact_count', 'rigid_contact_count', 'touched_contact_count',
+                    'left_flying', 'right_flying', 'max_compression',
+                    'max_limit_excess', 'impact_speed')),
+                'invalid_pose': bool(invalid_pose),
+                'raised_support': bool(raised_support),
+                'support_rise_blocked': self._local_support_rise_blocked,
+                'committed_airborne': self._local_airborne,
+                'before_airborne': bool(before_airborne),
+                'world': dict((key, trace.get(key)) for key in ('reason', 'normal', 'hit')),
+                'world_status': self._local_motion_status,
+                'recovery_tail': not interesting,
+            }
+            sys.stdout.write('[Offline LAN 0.9.22] LOCAL SUSPENSION %s\n' %
+                             json.dumps(payload, separators=(',', ':')))
+            return True
+        except Exception:
+            # Diagnostic serialization/output must never retire the solver
+            # or roll back an otherwise valid physical step.
+            return False
+
     def _report_local_motion_stall(self, start, end, dt, throttle, path,
                                    before=None, drive=None, pitch=None,
                                    contact=None, entity=None):
@@ -22301,6 +22413,7 @@ class BattleRuntime(object):
             support_vertical_speed
         previous_pitch = float(self._local_pitch)
         previous_roll = float(self._local_roll)
+        sample_position = tuple(position)
         physics_state = {
             'height': float(position[1]) + support_height_delta,
             'vertical_velocity': before_vertical_speed,
@@ -22357,18 +22470,30 @@ class BattleRuntime(object):
             self._local_ground_plane = previous_plane
             self._local_airborne = False
             self._local_support_rise_blocked = True
+            self._report_local_suspension_motion(
+                entity, params, sample_position, position, yaw, dt,
+                physics_state, solved, ground, pseudo_ground,
+                support_vertical_speed, current_plane,
+                invalid_pose=invalid_pose, raised_support=raised_support,
+                before_airborne=before_airborne)
             return position
         translated_position = position
         origin_x, origin_z = solved.get('origin_shift', (0.0, 0.0))
         self._local_pitch = float(solved['pitch'])
         self._local_roll = float(solved['roll'])
         sweep_position = (position[0], float(solved['height']), position[2])
+        origin_probes = []
 
         def probe_origin_shift(dx, dz):
             clear = self._motion_is_clear(
                 entity, sweep_position, math.atan2(dx, dz),
                 math.hypot(dx, dz), 1.0, hull_yaw=yaw)
             trace = getattr(self, '_local_world_collision_trace', None) or {}
+            origin_probes.append({
+                'shift': (dx, dz), 'clear': bool(clear),
+                'reason': trace.get('reason'), 'normal': trace.get('normal'),
+                'hit': trace.get('hit'), 'status': self._local_motion_status,
+                'kinds': self._local_motion_kinds})
             return clear, trace.get('normal')
 
         shift_x, shift_z = vehicle_physics.resolve_suspension_origin_shift(
@@ -22421,6 +22546,12 @@ class BattleRuntime(object):
         self._commit_local_suspension_metadata(
             position, yaw, solved, ground, plane=current_plane,
             sample_pose=(previous_pitch, previous_roll))
+        self._report_local_suspension_motion(
+            entity, params, sample_position, position, yaw, dt,
+            physics_state, solved, ground, pseudo_ground,
+            support_vertical_speed, current_plane,
+            origin_probes=origin_probes, resolved_shift=(shift_x, shift_z),
+            before_airborne=before_airborne)
         return position
 
     def _resettle_local_suspension_endpoint(

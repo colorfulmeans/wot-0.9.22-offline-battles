@@ -6497,3 +6497,65 @@ budget and actual admitted crew roster, with authoritative revision and
 replay handling shared with landing track damage. Its deliberately explicit
 project reconstruction and limits are described in the impact-damage audit;
 the available #1513 client does not reveal a retail crew-impact formula.
+
+### September 25 physics-r4: occupied bridge support and edge escape
+
+Report `20260925T041637Z-e68b3549a18b` confirms that the installed and bundled
+identity is physics-r3 (`4a50b58a`). The first attempt remains at approximately
+`(-5.6, 0.734, 117.37)` from 12:19:04 to 12:19:35 despite forward, reverse and
+turn inputs. The second attempt loses about half its forward speed at
+12:20:58 when an upward bridge face is classified as `solid_lane`; later
+records show that it does fall and continues below the bridge. These are two
+distinct failures, not evidence that the second attempt stayed on the bridge
+indefinitely.
+
+The first pose's mass center is still about 0.63 m inside the measured bridge
+edge. Stabilizing there is not by itself evidence of an automatic righting
+force: the incorrect horizontal block prevents the driver from carrying the
+mass center beyond the edge. The vertical side hit lies inside the previous
+body footprint and the forward displacement points out of that face, but
+the enclosing-backface guard rejects it. Simply removing that guard would
+also permit escape through an unrelated enclosing wall. Separately, the
+level-support test uses the track-origin plane as its ceiling, excluding an
+actual bridge top already supporting the mounted hull's underside. The
+12:19:06 origin-shift witness also rejects a tangential upward contact;
+discarding that displacement while committing attitude moves the mass
+center inboard without a horizontal impulse.
+
+The new translation predicate first preserves the existing departure rules.
+For a remaining low support contact it derives the installed lower hull from
+the descriptor's hull box and chassis mount, probes fresh upward support
+below that hull, and checks a bounded sampled profile to the struck top or
+the inside of its side face. Side release also requires an outward move and
+the actual swept footprint, anchored to support below the original hull.
+The original ray is recast after each
+accepted face, retaining unrelated backing walls. The proof is not used for
+inflated rotation-sweep descriptors, and clear sweeps do not add native rays.
+No suspension force, righting target, forced-airborne rule or Bot driving
+decision changes in this follow-up.
+
+Bounded `LOCAL SUSPENSION` records now cover partial support, airborne motion,
+steep attitude, rejected origin displacement and solver rollback, including
+released controls and a short recovery tail. They reuse already measured
+support, pose, velocity and contact data without additional native probes.
+They distinguish requested and accepted origin displacement and record the
+mass center before and after. A genuine blocking side contact still uses the
+existing reduced solver's displacement projection; this change does not claim
+a complete coupled six-degree-of-freedom collision solver.
+
+The preceding thin-deck regression began with the mass center outside an
+edge and did not include these support layers and vertical faces. It remains
+useful for that narrower invariant, but did not prove the reported powered
+bridge departure. The captured-contact replay fails on all four recorded
+support witnesses with r3's collision module and passes with the new predicate;
+independent backing walls still block. The powered-departure regression starts
+from both the stopped first-attempt pose and the moving second-attempt pose,
+at 30 and 120 Hz and in mirrored directions. With the same reconstructed scene
+and parameters, r3 leaves the stopped pose's X/Z unchanged through eight
+seconds of forward input in all four variants; the updated adapter permits
+departure and falling in all eight variants. The fixture uses the reported
+mass, engine power, hull bounds and mass-center height, with the mount height
+recovered through the existing descriptor law. Unrecorded chassis geometry
+is explicitly reconstructed rather than claimed as the complete descriptor.
+Reconstructed local surfaces still do not reproduce the complete #1513 map
+or establish native gameplay acceptance.
