@@ -1,0 +1,97 @@
+name: Update v0.9.5 Bot tactics editor release notes
+
+on:
+  push:
+    branches: [release/v0.9.5-publish]
+    paths: [.github/workflows/update-v095-release-notes.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-v095-release-notes
+  cancel-in-progress: false
+
+jobs:
+  update-notes:
+    if: github.repository == 'colorfulmeans/wot-0.9.22-offline-battles' && github.ref == 'refs/heads/release/v0.9.5-publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ae057791cf615ad158d3e4e9ed72c93be12b3183
+          persist-credentials: false
+      - name: Update published notes and verify unchanged tag and package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = ae057791cf615ad158d3e4e9ed72c93be12b3183
+          test "$(git hash-object docs/releases/v0.9.5.md)" = 4926308b87b8ad61f9a30d5a015114472424cfa1
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          repo = 'colorfulmeans/wot-0.9.22-offline-battles'
+          root = 'https://api.github.com/repos/' + repo
+          tag_sha = 'bfcae4bd24410db47331513c78a42f6edf358283'
+          asset_digest = 'sha256:1b1419d8bfb186dba74f5067b7f77bc8461190554e97030ea0e77bb12f89a89b'
+          notes_path = 'docs/releases/v0.9.5.md'
+          notes = Path(notes_path).read_text(encoding='utf-8')
+          for phrase in ('since the published v0.9.4 release',
+                         'Main feature: visual Bot tactics editor',
+                         '41 supported maps', 'next battle', 'Ruinberg and Steppes'):
+              assert phrase in notes, phrase
+
+          def api(path, method='GET', payload=None):
+              data = None if payload is None else json.dumps(payload).encode('utf-8')
+              request = Request(root + path, data=data, method=method, headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'User-Agent': 'v095-notes-only-update'})
+              with urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          def invariants(release):
+              assets = sorted((a['id'], a['name'], a['size'], a.get('digest')) for a in release['assets'])
+              return (release['id'], release['tag_name'], release['target_commitish'], release['name'],
+                      release['draft'], release['prerelease'], release['published_at'], assets)
+
+          tag = api('/git/ref/tags/v0.9.5')
+          assert tag['object']['type'] == 'commit' and tag['object']['sha'] == tag_sha
+          before = api('/releases/tags/v0.9.5')
+          assert before['tag_name'] == 'v0.9.5' and before['target_commitish'] == tag_sha
+          assert not before['draft'] and not before['prerelease']
+          assert len(before['assets']) == 1
+          asset = before['assets'][0]
+          assert (asset['id'], asset['name'], asset['size'], asset.get('digest')) == (
+              588380069, 'wot-0.9.22-offline-battles-0.9.5-Windows-x64.zip',
+              37446670, asset_digest)
+
+          if before['body'] != notes:
+              original = api('/contents/' + notes_path + '?ref=' + tag_sha)
+              original_notes = base64.b64decode(original['content']).decode('utf-8')
+              assert before['body'].strip() == original_notes.strip(), (
+                  'Release notes were edited since publication; refusing to overwrite those edits.')
+              api('/releases/' + str(before['id']), method='PATCH', payload={'body': notes})
+
+          after = api('/releases/' + str(before['id']))
+          assert after['body'] == notes
+          assert invariants(after) == invariants(before), 'Release metadata or package changed'
+          assert api('/git/ref/tags/v0.9.5')['object']['sha'] == tag_sha
+          print(json.dumps({'release': after['html_url'], 'body_updated': before['body'] != notes,
+                            'tag_sha': tag_sha, 'asset_id': asset['id'],
+                            'asset_sha256': asset_digest}, indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('Added the visual Bot tactics editor as the main v0.9.5 feature.\n\n')
+              summary.write('The published tag, package ID, size and SHA-256 are unchanged.\n')
+          PY
