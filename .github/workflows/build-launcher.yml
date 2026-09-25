@@ -33,6 +33,15 @@ jobs:
         run: >-
           pwsh -NoProfile -File
           server/build_windows_server.ps1
+      - name: Verify v0.9.5 server executable version
+        if: github.ref == 'refs/heads/release/v0.9.5'
+        shell: pwsh
+        run: |
+          $version = (Get-Item -LiteralPath 'dist/server/WoT-0.9.22-LAN-Server.exe').VersionInfo
+          if ($version.FileVersion -ne '0.9.5' -or
+              $version.ProductVersion -ne '0.9.5') {
+            throw 'Incorrect Windows server executable version'
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: launcher-manual-server-input
@@ -101,32 +110,17 @@ jobs:
       - name: Build launcher distribution
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
-      - name: Verify v0.9.5 release versions
+      - name: Verify v0.9.5 launcher and client versions
         if: github.ref == 'refs/heads/release/v0.9.5'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $app = "launcher/dist/wot-0.9.22-offline-battles"
           $archive = "$app/_internal/client/0.9.22.zip"
-          $server = Join-Path $env:RUNNER_TEMP "release-version-probe"
-          New-Item -ItemType Directory -Force -Path $server | Out-Null
-          $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $archive))
-          try {
-            $entry = $zip.GetEntry('WoT-0.9.22-LAN-Server.exe')
-            if ($null -eq $entry) { throw "No Windows server in $archive" }
-            [System.IO.Compression.ZipFileExtensions]::ExtractToFile(
-                $entry, (Join-Path $server 'WoT-0.9.22-LAN-Server.exe'), $true)
-          } finally {
-            $zip.Dispose()
-          }
-          foreach ($path in @(
-              "$app/wot-0.9.22-offline-battles.exe",
-              (Join-Path $server 'WoT-0.9.22-LAN-Server.exe'))) {
-            $version = (Get-Item -LiteralPath $path).VersionInfo
-            if ($version.FileVersion -ne '0.9.5' -or
-                $version.ProductVersion -ne '0.9.5') {
-              throw "Incorrect Windows executable version: $path"
-            }
+          $version = (Get-Item -LiteralPath "$app/wot-0.9.22-offline-battles.exe").VersionInfo
+          if ($version.FileVersion -ne '0.9.5' -or
+              $version.ProductVersion -ne '0.9.5') {
+            throw 'Incorrect Windows launcher executable version'
           }
           @'
           import io, json, sys, zipfile
