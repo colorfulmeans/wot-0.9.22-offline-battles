@@ -48,7 +48,7 @@ _SHOP_HELP = (
     "next game startup. Owned or queued vehicles cannot be added twice. "
     "Close the game before adding vehicles.")
 
-LAUNCHER_VERSION = "0.9.4"
+LAUNCHER_VERSION = "0.9.5"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
