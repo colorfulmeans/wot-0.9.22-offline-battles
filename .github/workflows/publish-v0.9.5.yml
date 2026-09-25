@@ -1,0 +1,114 @@
+name: Publish verified v0.9.5 Windows release
+
+on:
+  push:
+    branches: [release/v0.9.5-publish]
+    paths: [.github/workflows/publish-v0.9.5.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-v0.9.5
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'colorfulmeans/wot-0.9.22-offline-battles' && github.ref == 'refs/heads/release/v0.9.5-publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_SHA: bfcae4bd24410db47331513c78a42f6edf358283
+      SOURCE_TREE: fc290bb677087349b612496180f82554e3aea966
+      BUILD_RUN: '36137978481'
+      ARTIFACT_NAME: wot-0.9.22-offline-battles-windows-49
+      ARTIFACT_ID: '10865439643'
+      ARTIFACT_DIGEST: 'sha256:417c86c5f20d7c68a3fcc335ada937e75f353156f2e45c4775522fd23c0aa0c3'
+      CONTENT_MANIFEST: 'a387fe73e5b1b08add933759c59bb335b9487d59fa1fc7fac655d9bb813f1e8d'
+      ASSET_NAME: wot-0.9.22-offline-battles-0.9.5-Windows-x64.zip
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: bfcae4bd24410db47331513c78a42f6edf358283
+          persist-credentials: false
+      - name: Verify pinned source and successful Windows build
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git ls-remote origin refs/heads/release/v0.9.5 | cut -f1)" = "$SOURCE_SHA"
+          test "$(gh api "repos/$GH_REPO/actions/runs/$BUILD_RUN" --jq .head_sha)" = "$SOURCE_SHA"
+          test "$(gh api "repos/$GH_REPO/actions/runs/$BUILD_RUN" --jq .conclusion)" = success
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .name)" = "$ARTIFACT_NAME"
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .digest)" = "$ARTIFACT_DIGEST"
+          test "$(gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID" --jq .workflow_run.id)" = "$BUILD_RUN"
+          test -z "$(git ls-remote --tags origin refs/tags/v0.9.5)"
+          if gh release view v0.9.5 --json tagName >/dev/null 2>&1; then
+            echo 'v0.9.5 release already exists; refusing to replace it'
+            exit 1
+          fi
+      - name: Download and inspect the reviewed Windows artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "$BUILD_RUN" -n "$ARTIFACT_NAME" -D package-input
+          mkdir -p release-download
+          python3 - <<'PY'
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path
+          import zipfile
+          from xml.etree import ElementTree
+
+          root = Path('package-input')
+          entries = sorted(p for p in root.rglob('*') if p.is_file())
+          assert entries and not any(p.is_symlink() for p in root.rglob('*'))
+          manifest = ''.join('%s\t%d\t%s\n' % (
+              p.relative_to(root).as_posix(), p.stat().st_size,
+              hashlib.sha256(p.read_bytes()).hexdigest()) for p in entries)
+          actual = hashlib.sha256(manifest.encode('utf-8')).hexdigest()
+          assert actual == os.environ['CONTENT_MANIFEST'], actual
+          assert (root / 'wot-0.9.22-offline-battles.exe').read_bytes()[:2] == b'MZ'
+          assert (root / 'README.txt').read_text(encoding='utf-8').startswith(
+              'wot-0.9.22-offline-battles v0.9.5\n')
+          with zipfile.ZipFile(root / '_internal/client/0.9.22.zip') as client:
+              assert client.testzip() is None
+              ident = json.loads(client.read(
+                  'mods/configs/offline_lan_0922/build_identity.json'))
+              assert ident['semanticVersion'] == '0.9.5', ident
+              assert ident['buildIdentity'].startswith('colorfulmeans-36137978481-')
+              names = [n for n in client.namelist() if n.endswith('.wotmod')]
+              assert len(names) == 1 and names[0].endswith('_0.9.5.wotmod'), names
+              with zipfile.ZipFile(io.BytesIO(client.read(names[0]))) as mod:
+                  assert mod.testzip() is None
+                  assert ElementTree.fromstring(mod.read('meta.xml')).findtext('version') == '0.9.5'
+          package = Path('release-download') / os.environ['ASSET_NAME']
+          with zipfile.ZipFile(package, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as out:
+              for path in entries:
+                  out.write(path, path.relative_to(root).as_posix())
+          with zipfile.ZipFile(package) as check:
+              assert check.testzip() is None
+              assert len(check.namelist()) == len(entries)
+              assert len(check.namelist()) == len(set(check.namelist()))
+          print('Verified package manifest:', actual, 'files:', len(entries))
+          print('Release asset:', package, 'SHA-256:', hashlib.sha256(package.read_bytes()).hexdigest())
+          PY
+      - name: Publish v0.9.5 with English cumulative notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="release-download/$ASSET_NAME"
+          gh release create v0.9.5 "$asset" --draft --target "$SOURCE_SHA" \
+            --title 'wot-0.9.22-offline-battles v0.9.5' \
+            --notes-file docs/releases/v0.9.5.md
+          gh release edit v0.9.5 --draft=false --prerelease=false --latest
+          test "$(git ls-remote --tags origin refs/tags/v0.9.5 | cut -f1)" = "$SOURCE_SHA"
+          gh release view v0.9.5 --json tagName,isDraft,isPrerelease,url,assets
