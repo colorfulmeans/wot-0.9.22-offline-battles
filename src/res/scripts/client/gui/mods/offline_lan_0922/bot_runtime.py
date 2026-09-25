@@ -8327,6 +8327,16 @@ class BotRuntime(object):
         try:
             ground = self._ground_probe_at(
                 state['x'], state['z'], state['y'])
+            if (ground is None or
+                    float(ground) - _number(state.get('y')) <
+                    -WRECK_SUPPORT_DROP):
+                # A wreck spans the same narrow shell holes and trenches as
+                # a live chassis. A single empty centre column must not
+                # cancel its real contact momentum after the first shove.
+                bridged = self._straddled_terrain_support(
+                    state, _position(state), WRECK_SUPPORT_DROP)
+                if bridged is not None:
+                    ground = bridged
         except (TypeError, ValueError, AttributeError, RuntimeError,
                 OverflowError):
             # Without a ground authority the new column cannot be verified.

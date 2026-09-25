@@ -8585,7 +8585,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'seq': 7, 'first_id': 1, 'second_id': 2,
             'available': False,
         }], battle._human_ram_armor_results())
-        battle._native_ram_vehicle_armor.assert_called_once()
+        self.assertGreater(
+            battle._native_ram_vehicle_armor.call_count, 2)
 
     def test_native_ram_callbacks_dedupe_one_sustained_contact_episode(self):
         runtime = _runtime()

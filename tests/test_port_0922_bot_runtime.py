@@ -21125,6 +21125,31 @@ class ShovedWreckTests(unittest.TestCase):
         self.assertGreater(state['z'], 0.0)
         self.assertEqual(0.0, state['y'])
 
+    def test_second_shove_bridges_an_empty_centre_column(self):
+        runtime = self._runtime(ground=0.0)
+        state = self._wreck(runtime)
+        runtime._physics_ground_probe = (
+            lambda x, z, hint: None if 0.30 < z < 1.50 else 0.0)
+        impulse = {'delta_velocity': (0.0, 4.0),
+                   'correction': (0.0, 0.0)}
+        self.assertTrue(runtime._apply_wreck_contact_response(
+            state, impulse, 0.1))
+        first = state['z']
+        self.assertTrue(runtime._apply_wreck_contact_response(
+            state, impulse, 0.1))
+        self.assertGreater(state['z'], first)
+        self.assertGreater(state['push_z'], 0.0)
+
+    def test_wreck_cannot_bridge_a_cliff_with_only_one_supported_end(self):
+        runtime = self._runtime(ground=0.0)
+        state = self._wreck(runtime)
+        runtime._physics_ground_probe = (
+            lambda x, z, hint: 0.0 if z < 0.0 else None)
+        self.assertFalse(runtime._apply_wreck_contact_response(
+            state, {'delta_velocity': (0.0, 4.0),
+                    'correction': (0.0, 0.0)}, 0.1))
+        self.assertEqual(0.0, state['z'])
+
     def test_a_wreck_is_never_shoved_through_static_geometry(self):
         runtime = self._runtime(ground=0.0, clear=False)
         state = self._wreck(runtime)
@@ -21360,6 +21385,30 @@ class HumanShovedWreckTests(unittest.TestCase):
         # separation the solver would have applied to any mass at all.
         self.assertGreater(wreck['push_z'], 0.0)
         self.assertGreater(wreck['z'], 0.0)
+
+    def test_a_second_player_impulse_moves_the_same_settled_wreck(self):
+        runtime = self._runtime()
+        wreck = runtime.states[11]
+        wreck.update(x=0.0, y=0.0, z=0.0, yaw=0.0, speed=0.0,
+                     alive=False, health=0, mass=25000.0,
+                     grounded_once=True, push_x=0.0, push_z=0.0)
+        player = self._player(9.0)
+        player['tank_pushes'] = [[11, 1, 0.0, 150000.0]]
+        runtime._resolve_tank_contacts([player], 100.0, 1.0 / 30.0)
+        for tick in range(60):
+            runtime._resolve_tank_contacts([], 100.1 + tick / 30.0,
+                                            1.0 / 30.0)
+        settled = wreck['z']
+        self.assertEqual(0.0, wreck['push_z'])
+        player['z'] = settled - 5.0
+        player['tank_pushes'] = [[11, 2, 0.0, 300000.0]]
+        runtime._resolve_tank_contacts([player], 103.0, 1.0 / 30.0)
+        self.assertGreater(wreck['z'], settled)
+        self.assertGreater(wreck['push_z'], 0.0)
+        # A duplicate cumulative checkpoint cannot shove twice.
+        before_push = wreck['push_z']
+        runtime._resolve_tank_contacts([player], 103.0, 0.0)
+        self.assertAlmostEqual(before_push, wreck['push_z'])
 
     def test_a_creeping_player_cannot_break_the_tracks_loose(self):
         runtime = self._runtime()
