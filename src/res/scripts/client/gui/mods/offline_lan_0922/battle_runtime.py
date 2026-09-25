@@ -1888,8 +1888,6 @@ class BattleRuntime(object):
         self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
-        self._next_local_suspension_motion_report = 0.0
-        self._local_suspension_motion_tail_until = None
         self._local_suspension_failed_this_tick = False
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
@@ -2238,8 +2236,6 @@ class BattleRuntime(object):
         self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
-        self._next_local_suspension_motion_report = 0.0
-        self._local_suspension_motion_tail_until = None
         self._local_suspension_failed_this_tick = False
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
@@ -3664,7 +3660,6 @@ class BattleRuntime(object):
                 # and attitude. The wider placement query can acquire an
                 # overhead bridge and turn every clear step into a rollback.
                 physics_ground_probe=self._support_column,
-                suspension_contact_probe=self._suspension_contact_sweep,
                 obstacle_probe=self._navigation_obstacle,
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
@@ -5326,15 +5321,6 @@ class BattleRuntime(object):
         return self._runtime.bigworld.wg_collideSegment(
             self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS, ground_filter)
 
-    def _suspension_contact_sweep(self, start, end):
-        prepared = self._prepared_ground_filter((
-            (start[0], start[2]), (end[0], end[2])))
-        ground_filter = None if prepared is _EMPTY_GROUND_FILTER else prepared
-        hit = self._collide_down(self._vector(start), self._vector(end), ground_filter)
-        # Native #1513 always supplies the face normal. Descriptor-only test
-        # adapters may return just a point, which cannot prove a support face.
-        return (_xyz(hit[0]), _xyz(hit[1])) if hit is not None and len(hit) > 1 else None
-
     def _ground_y(self, x, z, hint=0.0, allow_wide=False):
         """Find upward-facing support below rejected overhead surfaces.
 
@@ -6700,8 +6686,6 @@ class BattleRuntime(object):
         self._local_suspension_probe_trace = ()
         self._local_suspension_disabled = False
         self._local_suspension_report = None
-        self._next_local_suspension_motion_report = 0.0
-        self._local_suspension_motion_tail_until = None
         self._local_suspension_failed_this_tick = False
         self._local_spring_ground_memory = None
         self._local_pseudo_ground_memory = None
@@ -18036,112 +18020,6 @@ class BattleRuntime(object):
             }))
         return True
 
-    def _report_local_suspension_motion(
-            self, entity, params, start, end, yaw, dt, before, solved,
-            ground, pseudo_ground, support_speed, plane, origin_probes=(),
-            resolved_shift=(0.0, 0.0), invalid_pose=False, raised_support=False,
-            before_airborne=False):
-        """Observe edge/tumble motion at 5 Hz, including released controls.
-
-        All inputs already belong to the committed solve. No diagnostic
-        terrain, collision, descriptor, or native calls are made here.
-        """
-        try:
-            sine, cosine = math.sin(yaw), math.cos(yaw)
-            local_shift = solved.get('origin_shift', (0.0, 0.0))
-            requested_shift = (
-                cosine * local_shift[0] + sine * local_shift[1],
-                -sine * local_shift[0] + cosine * local_shift[1])
-            shift_blocked = any(not row['clear'] for row in origin_probes)
-            steep = max(abs(before['pitch']), abs(before['roll']),
-                        abs(solved['pitch']), abs(solved['roll'])) >= math.pi / 6.0
-            missing = bool(ground and (
-                any(value is None for value in ground) or
-                int(solved.get('contact_count', 0)) < len(ground) or
-                solved.get('left_flying') or solved.get('right_flying')))
-            airborne = bool(before_airborne or self._local_airborne or
-                            solved.get('airborne'))
-            interesting = (missing or airborne or steep or shift_blocked or
-                           invalid_pose or raised_support)
-            tail = self._local_suspension_motion_tail_until
-            if not interesting and tail is None:
-                return False
-            now = _PROFILE_CLOCK()
-            if interesting:
-                self._local_suspension_motion_tail_until = now + 1.0
-            elif now > tail:
-                self._local_suspension_motion_tail_until = None
-                return False
-            if now < self._next_local_suspension_motion_report:
-                return False
-            self._next_local_suspension_motion_report = now + 0.2
-            center = dict(x=0.0, y=float(params.get('center_of_mass_y', 0.0)), z=0.0)
-
-            def world_center(position, pitch, roll):
-                offset = vehicle_physics.suspension_point_offset(center, pitch, roll)
-                return (position[0] + cosine * offset[0] + sine * offset[2],
-                        position[1] + offset[1],
-                        position[2] - sine * offset[0] + cosine * offset[2])
-
-            trace = getattr(self, '_local_world_collision_trace', None) or {}
-            payload = {
-                'wall_time': now, 'simulation_time': self._local_motion_clock,
-                'dt': dt, 'entity_id': getattr(entity, 'id', None),
-                'input': [getattr(self._sender, name, None)
-                          for name in ('forward', 'turn', 'handbrake')],
-                'drive': [self._local_drive_throttle, self._local_drive_turn],
-                'speed': self._local_speed, 'turn_speed': self._local_turn_speed,
-                'tick_position': getattr(self, '_local_support_tick_pose', None),
-                'motion_position': self._local_support_motion_pose,
-                'heading_before': self._local_yaw,
-                'pose_columns': 'x,y,z,yaw,pitch,roll',
-                'before_pose': tuple(start) + (yaw, before['pitch'], before['roll']),
-                'after_pose': tuple(end) + (yaw, self._local_pitch, self._local_roll),
-                'before_velocity': [before['vertical_velocity'],
-                                    before['pitch_velocity'], before['roll_velocity']],
-                'after_velocity': [self._local_vertical_speed,
-                    self._local_suspension_pitch_velocity,
-                    self._local_suspension_roll_velocity],
-                'velocity_columns': 'vertical,pitch,roll',
-                'support_vertical_speed': support_speed,
-                'committed_support_vertical_speed': self._local_suspension_support_vertical_speed,
-                'center_of_mass_y': center['y'],
-                'before_center': world_center(start, before['pitch'], before['roll']),
-                'after_center': world_center(end, self._local_pitch, self._local_roll),
-                'origin_shift_requested': requested_shift,
-                'origin_shift_resolved': resolved_shift,
-                'origin_probes': origin_probes,
-                'ground': ground, 'pseudo_ground': pseudo_ground,
-                'spring_layout_columns': 'side,x,y,z',
-                'spring_layout': [(row.get('side'), row['x'], row.get('y', 0.0), row['z'])
-                                  for row in params.get('springs', ())],
-                'pseudo_layout_columns': 'kind,x,y,z',
-                'pseudo_layout': [(row.get('kind'), row['x'], row.get('y', 0.0), row['z'])
-                                  for row in params.get('pseudo_contacts', ())],
-                'ground_plane': plane,
-                'solved': dict((name, solved.get(name)) for name in (
-                    'height', 'pitch', 'roll', 'vertical_velocity',
-                    'pitch_velocity', 'roll_velocity', 'airborne',
-                    'contact_count', 'rigid_contact_count', 'touched_contact_count',
-                    'left_flying', 'right_flying', 'max_compression',
-                    'max_limit_excess', 'impact_speed')),
-                'invalid_pose': bool(invalid_pose),
-                'raised_support': bool(raised_support),
-                'support_rise_blocked': self._local_support_rise_blocked,
-                'committed_airborne': self._local_airborne,
-                'before_airborne': bool(before_airborne),
-                'world': dict((key, trace.get(key)) for key in ('reason', 'normal', 'hit')),
-                'world_status': self._local_motion_status,
-                'recovery_tail': not interesting,
-            }
-            sys.stdout.write('[Offline LAN 0.9.22] LOCAL SUSPENSION %s\n' %
-                             json.dumps(payload, separators=(',', ':')))
-            return True
-        except Exception:
-            # Diagnostic serialization/output must never retire the solver
-            # or roll back an otherwise valid physical step.
-            return False
-
     def _report_local_motion_stall(self, start, end, dt, throttle, path,
                                    before=None, drive=None, pitch=None,
                                    contact=None, entity=None):
@@ -18237,8 +18115,6 @@ class BattleRuntime(object):
             trace['pseudo_columns'] = 'kind,x,z,minimum,maximum,support,layers'
             trace['pseudo_probes'] = getattr(
                 self, '_local_pseudo_probe_trace', ())
-            trace['center_of_mass_y'] = (
-                self._local_suspension_params or {}).get('center_of_mass_y')
             trace['legacy_support'] = getattr(
                 self, '_local_legacy_support_sample', None)
             sys.stdout.write('[Offline LAN 0.9.22] LOCAL HARD CONTACT %s\n' %
@@ -21776,30 +21652,12 @@ class BattleRuntime(object):
         flat_limit = (None if self._local_airborne else
                       vehicle_physics.suspension_flat_support_limit(
                           params, probe_height, self._local_pitch, self._local_roll))
-        # Lateral, longitudinal and remembered contacts all stay inside a
-        # carrier's track patch. Include that complete envelope when preparing
-        # the shared broken-skin filter, including at adjacent catalog bins.
-        patch_reach = params.get('footprint_half_width', 0.15) + max(
-            max(spring.get('footprint_front', params.get('footprint_half_length', 0.3)),
-                spring.get('footprint_rear', params.get('footprint_half_length', 0.3)))
-            for spring in params['springs'])
-        filter_points = tuple(points) + (
-            (min(point[0] for point in points) - patch_reach,
-             min(point[1] for point in points) - patch_reach),
-            (max(point[0] for point in points) + patch_reach,
-             max(point[1] for point in points) + patch_reach))
-        prepared_filter = self._prepared_ground_filter(filter_points)
+        prepared_filter = self._prepared_ground_filter(points)
         memory = self._local_spring_ground_memory
-        round_id = (self._start_message or {}).get('round_id')
-        footprint = getattr(self, '_local_footprint_contacts', None)
-        if (footprint is None or footprint[0] is not params['springs'] or
-                footprint[1] != round_id or not isinstance(memory, list)):
-            footprint = (params['springs'], round_id,
-                         [{} for unused in points])
-            self._local_footprint_contacts = footprint
         if not isinstance(memory, list) or len(memory) != len(points):
             memory = [None] * len(points)
-        samples = []
+        result = []
+        probe_trace = []
         for index, point in enumerate(points):
             x, z = point
             spring = params['springs'][index]
@@ -21822,26 +21680,8 @@ class BattleRuntime(object):
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=flat_maximum_y,
                 prepared_filter=prepared_filter)
-            samples.append((value, spring_height, minimum_y, maximum_y,
-                            flat_maximum_y, self._suspension_ground_probe_layers))
-        if support_gradient is None:
-            # The first airborne/spawn sample has no remembered slope. Fit
-            # only the fresh centre columns before lateral footprint heights
-            # are projected back to those centres; otherwise an ordinary
-            # uphill patch masquerades as a rail and bends the landing normal.
-            plane = vehicle_physics.suspension_world_ground_plane(
-                params, tuple(row[0] for row in samples), position, yaw,
-                GROUND_PLANE_EPSILON, self._local_pitch, self._local_roll)
-            if plane is not None:
-                support_gradient = (plane['gradient_x'], plane['gradient_z'])
-        result = []
-        probe_trace = []
-        for index, point in enumerate(points):
-            x, z = point
-            spring = params['springs'][index]
-            direct, spring_height, minimum_y, maximum_y, flat_maximum_y, layers = \
-                samples[index]
-            value = direct
+            direct = value
+            layers = self._suspension_ground_probe_layers
             value = vehicle_physics.suspension_footprint_support(
                 params, point, value, memory[index], yaw,
                 lambda px, pz, low, high: self._suspension_ground_y(
@@ -21849,8 +21689,7 @@ class BattleRuntime(object):
                     prepared_filter=prepared_filter), support_gradient,
                 point_height=spring_height, spring=spring,
                 reference_height=vehicle_physics.suspension_plane_height(
-                    None if self._local_airborne else self._local_ground_plane, x, z),
-                contact_cache=footprint[2][index])
+                    None if self._local_airborne else self._local_ground_plane, x, z))
             value, memory[index] = vehicle_physics.retained_ground_contact(
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
@@ -21865,7 +21704,6 @@ class BattleRuntime(object):
             self, position, yaw, probe_height=None,
             support_gradient=None, sweep_drop=0.0, params=None):
         """Sample every track/belly constraint once for this physics tick."""
-        self._local_pseudo_probe_trace = ()
         if params is None:
             params = self._local_suspension_params
         if not isinstance(params, dict):
@@ -21880,17 +21718,11 @@ class BattleRuntime(object):
         if not isinstance(memory, list) or len(memory) != len(points):
             memory = [None] * len(points)
         result = []
-        probe_trace = []
         for index, point in enumerate(points):
             x, z = point
             contact = params['pseudo_contacts'][index]
-            # A rigid corner owns its collision window. The model origin and
-            # old support plane can both lie metres above a corner hanging
-            # below a bridge; using either would pull that corner back up.
-            contact_height = (float(position[1])
-                              if contact.get('kind') == 'rigid' else probe_height)
             point_height = (
-                contact_height + vehicle_physics.suspension_point_offset(
+                probe_height + vehicle_physics.suspension_point_offset(
                     contact, self._local_pitch, self._local_roll)[1])
             minimum_y = (
                 point_height - params['rest_length'] -
@@ -21903,10 +21735,17 @@ class BattleRuntime(object):
             if contact.get('kind') == 'rigid':
                 future_pitch, future_roll = params.get(
                     'contact_sweep_pose', (self._local_pitch, self._local_roll))
-                future_height = contact_height + vehicle_physics.suspension_point_offset(
+                future_height = probe_height + vehicle_physics.suspension_point_offset(
                     contact, future_pitch, future_roll)[1]
                 minimum_y = min(minimum_y, future_height - sweep_drop -
                                 vehicle_physics.CONTACT_PENETRATION)
+                maximum_y = max(maximum_y, probe_height +
+                                vehicle_physics.CONTACT_PENETRATION)
+                previous_height = vehicle_physics.suspension_plane_height(
+                    params.get('contact_reference_plane'), x, z)
+                if previous_height is not None:
+                    maximum_y = max(maximum_y, previous_height +
+                                    vehicle_physics.CONTACT_PENETRATION)
             flat_maximum_y = (
                 point_height + vehicle_physics.CONTACT_PENETRATION
                 if contact.get('kind') == 'track' else None)
@@ -21914,23 +21753,14 @@ class BattleRuntime(object):
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=flat_maximum_y,
                 prepared_filter=prepared_filter)
-            layers = self._suspension_ground_probe_layers
             if contact.get('kind') == 'rigid':
-                corner = (x, point_height, z)
-                value = vehicle_physics.swept_rigid_support(
-                    memory[index], corner, value, self._suspension_contact_sweep,
-                    lambda px, pz, low, high: self._suspension_ground_y(
-                        px, pz, low, high, prepared_filter=prepared_filter))
-                memory[index] = corner
+                memory[index] = None
             else:
                 value, memory[index] = vehicle_physics.retained_ground_contact(
                     point, value, memory[index],
                     params['contact_memory_distance'], support_gradient)
             result.append(value)
-            probe_trace.append((contact.get('kind'), x, z, minimum_y,
-                                maximum_y, value, layers))
         self._local_pseudo_ground_memory = memory
-        self._local_pseudo_probe_trace = tuple(probe_trace)
         return tuple(result)
 
     def _local_suspension_predicted_probe_height(
@@ -22357,6 +22187,8 @@ class BattleRuntime(object):
             self._local_suspension_pitch_velocity,
             self._local_suspension_roll_velocity, dt,
             self._entity_turret_yaw(entity))
+        if params is not self._local_suspension_params:
+            params['contact_reference_plane'] = previous_plane
         timings = self._local_frame_stages
         ground_started = _PROFILE_CLOCK() if timings is not None else 0.0
         ground = self._local_suspension_ground_samples(
@@ -22424,7 +22256,6 @@ class BattleRuntime(object):
             support_vertical_speed
         previous_pitch = float(self._local_pitch)
         previous_roll = float(self._local_roll)
-        sample_position = tuple(position)
         physics_state = {
             'height': float(position[1]) + support_height_delta,
             'vertical_velocity': before_vertical_speed,
@@ -22481,38 +22312,9 @@ class BattleRuntime(object):
             self._local_ground_plane = previous_plane
             self._local_airborne = False
             self._local_support_rise_blocked = True
-            self._report_local_suspension_motion(
-                entity, params, sample_position, position, yaw, dt,
-                physics_state, solved, ground, pseudo_ground,
-                support_vertical_speed, current_plane,
-                invalid_pose=invalid_pose, raised_support=raised_support,
-                before_airborne=before_airborne)
             return position
-        translated_position = position
-        origin_x, origin_z = solved.get('origin_shift', (0.0, 0.0))
-        self._local_pitch = float(solved['pitch'])
-        self._local_roll = float(solved['roll'])
-        sweep_position = (position[0], float(solved['height']), position[2])
-        origin_probes = []
-
-        def probe_origin_shift(dx, dz):
-            clear = self._motion_is_clear(
-                entity, sweep_position, math.atan2(dx, dz),
-                math.hypot(dx, dz), 1.0, hull_yaw=yaw)
-            trace = getattr(self, '_local_world_collision_trace', None) or {}
-            origin_probes.append({
-                'shift': (dx, dz), 'clear': bool(clear),
-                'reason': trace.get('reason'), 'normal': trace.get('normal'),
-                'hit': trace.get('hit'), 'status': self._local_motion_status,
-                'kinds': self._local_motion_kinds})
-            return clear, trace.get('normal')
-
-        shift_x, shift_z = vehicle_physics.resolve_suspension_origin_shift(
-            yaw, (origin_x, origin_z), probe_origin_shift)
         position = (
-            position[0] + shift_x,
-            float(solved['height']),
-            position[2] + shift_z)
+            position[0], float(solved['height']), position[2])
         self._local_vertical_speed = float(solved['vertical_velocity'])
         self._local_pitch = float(solved['pitch'])
         self._local_suspension_pitch_velocity = \
@@ -22525,36 +22327,29 @@ class BattleRuntime(object):
             self._local_suspension_support_vertical_speed = 0.0
             self._local_suspension_support_gradient = None
             self._local_spring_ground_memory = None
-            if isinstance(self._local_pseudo_ground_memory, list):
-                self._local_pseudo_ground_memory = [
-                    value if params['pseudo_contacts'][index].get('kind') == 'rigid'
-                    else None for index, value in enumerate(self._local_pseudo_ground_memory)]
-                if not any(value is not None for value in self._local_pseudo_ground_memory):
-                    self._local_pseudo_ground_memory = None
+            self._local_pseudo_ground_memory = None
         self._local_left_flying = bool(solved['left_flying'])
         self._local_right_flying = bool(solved['right_flying'])
         if solved['contact_count']:
             self._local_fall_armed = True
-        impact_vertical = solved.get('impact_speed')
-        if impact_vertical is None:
-            impact_vertical = solved.get(
-                'center_vertical_velocity_before', before_vertical_speed)
         if (before_airborne and not self._local_airborne and
-                impact_vertical < 0.0):
+                before_vertical_speed < 0.0):
+            impact_vertical = solved.get('impact_speed')
+            if impact_vertical is None:
+                impact_vertical = before_vertical_speed
             impact_speed = max(0.0, -float(impact_vertical))
             if motion_pose is not None and float(dt) > 0.0:
                 velocity = (
-                    (float(translated_position[0]) - float(motion_pose[0])) / float(dt),
+                    (float(position[0]) - float(motion_pose[0])) / float(dt),
                     float(impact_vertical),
-                    (float(translated_position[2]) - float(motion_pose[2])) / float(dt),
+                    (float(position[2]) - float(motion_pose[2])) / float(dt),
                 )
                 normal = (current_plane.get('normal')
                           if isinstance(current_plane, dict) else None)
                 impact_speed = vehicle_physics.landing_impact_speed(
                     velocity, normal)
             self._apply_landing_impact(
-                entity, impact_speed, normal_impact=True,
-                track_loads=solved.get('impact_track_loads'))
+                entity, impact_speed, normal_impact=True)
         elif not before_airborne and self._local_airborne:
             self._local_turn_speed = 0.0
             self._local_drive_turn = 0.0
@@ -22562,12 +22357,6 @@ class BattleRuntime(object):
         self._commit_local_suspension_metadata(
             position, yaw, solved, ground, plane=current_plane,
             sample_pose=(previous_pitch, previous_roll))
-        self._report_local_suspension_motion(
-            entity, params, sample_position, position, yaw, dt,
-            physics_state, solved, ground, pseudo_ground,
-            support_vertical_speed, current_plane,
-            origin_probes=origin_probes, resolved_shift=(shift_x, shift_z),
-            before_airborne=before_airborne)
         return position
 
     def _resettle_local_suspension_endpoint(

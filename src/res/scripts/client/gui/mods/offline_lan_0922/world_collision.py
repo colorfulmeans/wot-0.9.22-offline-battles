@@ -18,9 +18,6 @@ _MAX_DESCENDING_GRADIENT = 1.75
 _MIN_DRIVABLE_HEIGHT_CHANGE = 0.15
 _GROUND_HIT_EPSILON = 1.0e-3
 _WORLD_SOFT_RECAST_BUDGET = 4
-# One top query plus the nine installed lower-face anchors and each anchor's
-# six profile intervals. Shared by the entire horizontal sweep, not per hit.
-_SUPPORT_PROOF_QUERY_BUDGET = 1 + 9 * 7
 _UNPREPARED_COLLISION_FILTER = object()
 
 
@@ -254,54 +251,30 @@ def _vehicle_motion_extents(descriptor):
 
 
 def _translation_departing_contact(pos, yaw, bounds, pose_y, dx, dz):
-	"""Release existing support tangents and outward wall translations.
+	"""Release only an existing wall plane whose penetration is decreasing.
 
-	The hit must stay inside the original XZ footprint and the swept height
-	range. A wall also requires the original body occupancy and the centre
-	outside its exposed face; upward support permits a tangent.
-	Each later native surface is still recast. A new wall, an inward step,
-	or a downward backface cannot borrow this exception.
+	The hit must be inside the original occupied hull, with its centre on the
+	outside of the exposed face. Each later native surface is still recast;
+	a new wall, an inward step, or a backface cannot borrow this exception.
 	"""
 	import math
 	left, right, back, front = bounds
 	sine, cosine = math.sin(yaw), math.cos(yaw)
-	step_x, step_z = dx * cosine - dz * sine, dx * sine + dz * cosine
 
 	def departing(collision):
 		point, normal = collision[:2]
+		if abs(normal.y) > 0.2 or abs(pose_y[1]) < 0.1:
+			return False
+		if dx * normal.x + dz * normal.z <= 1.0e-8:
+			return False
 		px, py, pz = point.x - pos.x, point.y - pos.y, point.z - pos.z
+		if px * normal.x + py * normal.y + pz * normal.z >= -1.0e-8:
+			return False
 		x, z = px * cosine - pz * sine, px * sine + pz * cosine
-		if not (left - 0.001 <= x <= right + 0.001 and
-				-back - 0.001 <= z <= front + 0.001):
-			return False
-		closing = dx * normal.x + dz * normal.z
-		if _drivable_surface(collision, _MAX_DESCENDING_GRADIENT):
-			# A tilted hull lane can cross its already occupied bridge top.
-			# Tangential/outward translation does not deepen that contact;
-			# gravity and suspension still own its vertical constraint. Treating
-			# this face as a side wall also cancels the model-origin correction
-			# while rolling, artificially moving the mass center back inboard.
-			# The destination perimeter belongs to the translated posed hull.
-			# Test its swept height interval too: using only the old local Y
-			# excludes valid tangents during a roll and absorbs the origin shift.
-			# Direct heights also remain valid when the hull passes vertical.
-			old_height = x * pose_y[0] + z * pose_y[2]
-			new_height = ((x - step_x) * pose_y[0] +
-				(z - step_z) * pose_y[2])
-			low = min(0.6 * pose_y[1], 1.6 * pose_y[1])
-			high = max(0.6 * pose_y[1], 1.6 * pose_y[1])
-			inside = (min(old_height, new_height) + low - 0.001 <= py <=
-				max(old_height, new_height) + high + 0.001)
-			# Recast this one face so a bridge side or later wall still blocks.
-			return inside and closing >= -1.0e-8
-		if abs(pose_y[1]) < 0.1:
-			return False
 		y = (py - x * pose_y[0] - z * pose_y[2]) / pose_y[1]
-		if not 0.6 - 0.001 <= y <= 1.6 + 0.001:
-			return False
-		if abs(normal.y) > 0.2 or closing <= 1.0e-8:
-			return False
-		return px * normal.x + py * normal.y + pz * normal.z < -1.0e-8
+		return (left - 0.001 <= x <= right + 0.001 and
+			-back - 0.001 <= z <= front + 0.001 and
+			0.6 - 0.001 <= y <= 1.6 + 0.001)
 	return departing
 
 
@@ -317,154 +290,6 @@ def _hull_pose_y(pitch, roll):
 		pitch_cos * math.sin(roll),
 		pitch_cos * math.cos(roll),
 		-math.sin(pitch))
-
-
-def _mounted_hull_floor_points(descriptor, pos, yaw, pitch, roll):
-	'''Return exact mounted lower-hull corners, edge centres and centre.'''
-	from gui.mods.offline_lan_0922.tank_collision import pose_axes
-	box = _vehicle_hull_bbox(descriptor)
-	chassis = _descriptor_value(descriptor, 'chassis')
-	mount = _descriptor_value(chassis, 'hullPosition')
-	if box is None or mount is None:
-		return ()
-	axes = pose_axes(yaw, pitch, roll)
-	xs = (float(box[0][0]), (float(box[0][0]) + float(box[1][0])) * 0.5,
-		float(box[1][0]))
-	zs = (float(box[0][2]), (float(box[0][2]) + float(box[1][2])) * 0.5,
-		float(box[1][2]))
-	origin = (float(pos.x), float(pos.y), float(pos.z))
-	points = []
-	for x in xs:
-		for z in zs:
-			local = (x + float(mount[0]), float(box[0][1]) + float(mount[1]),
-				z + float(mount[2]))
-			points.append(tuple(origin[i] + sum(
-				axes[j][i] * local[j] for j in range(3)) for i in range(3)))
-	return tuple(points)
-
-
-def _supported_sweep_departure(spaceID, Math, pos, yaw, bounds, pitch, roll,
-		descriptor, dx, dz, collision_filter, ordinary_departure, trace=None):
-	'''Prove a low support body before releasing its top or outward side.
-
-	A backface alone is not proof. Fresh native support below the installed
-	hull and a sampled upward-facing profile to the contact must establish
-	the same low body. A new wall, an inward side, a roof above the hull or an
-	unsupported gap retains the normal hard verdict. The caller still recasts
-	every later face. No query is added to a clear motion sweep.
-	'''
-	import math, BigWorld
-	from gui.mods.offline_lan_0922.vehicle_physics import ALLOWED_PENETRATION
-	left, right, back, front = bounds
-	sine, cosine = math.sin(yaw), math.cos(yaw)
-	step_x, step_z = dx*cosine - dz*sine, dx*sine + dz*cosine
-	anchors = [None]
-	receipts = {}
-	query_budget = [_SUPPORT_PROOF_QUERY_BUDGET]
-	support_filter = [collision_filter]
-
-	def support(x, z, lower, upper):
-		if query_budget[0] <= 0 or upper <= lower:
-			if trace is not None and query_budget[0] <= 0:
-				trace['support_proof_exhausted'] = True
-			return None
-		query_budget[0] -= 1
-		if trace is not None:
-			trace['support_proof_queries'] = _SUPPORT_PROOF_QUERY_BUDGET-query_budget[0]
-		start, end = Math.Vector3(x, upper, z), Math.Vector3(x, lower, z)
-		hit = collide_motion_segment(spaceID, start, end, support_filter[0],
-			BigWorld.wg_collideSegment, 'native.motion.ground')
-		if hit is None or not _drivable_surface(hit):
-			return None
-		return float(hit[0].y)
-
-	def departing(collision):
-		if ordinary_departure is not None and ordinary_departure(collision):
-			return True
-		point, normal = collision[:2]
-		key = tuple(float(value) for value in (
-			point.x, point.y, point.z, normal.x, normal.y, normal.z))
-		if key in receipts:
-			return receipts[key]
-		receipts[key] = False
-		px, pz = point.x-pos.x, point.z-pos.z
-		x, z = px*cosine-pz*sine, px*sine+pz*cosine
-		inside = lambda a, b: (left-_GROUND_HIT_EPSILON <= a <= right+_GROUND_HIT_EPSILON and
-			-back-_GROUND_HIT_EPSILON <= b <= front+_GROUND_HIT_EPSILON)
-		upward = _drivable_surface(collision)
-		closing = dx*normal.x + dz*normal.z
-		if upward:
-			if not (inside(x, z) or inside(x-step_x, z-step_z)):
-				return False
-		else:
-			# A finite low ledge may be left through its exposed side even
-			# when the model origin is still over that ledge. Retain the old
-			# outward-motion requirement and the actual old/new swept footprint.
-			# A translated perimeter can first meet this side just beyond the
-			# old edge; the support proof below must still start on the OLD
-			# installed hull, so a newly approached low wall earns no exception.
-			if (abs(normal.y) > 0.2 or closing <= 1.0e-8 or
-					not (inside(x, z) or inside(x-step_x, z-step_z))):
-				return False
-		if anchors[0] is None:
-			anchors[0] = _mounted_hull_floor_points(descriptor, pos, yaw, pitch, roll)
-		if not anchors[0]:
-			return False
-		# The ordinary forward lanes begin 0.5 m behind the model origin;
-		# rear hull anchors can lie outside those prepared destructible bins.
-		# Prepare exactly this proof's envelope so a broken rear skin cannot
-		# reappear as false support. Preparation itself makes no native query.
-		proof_points = anchors[0] + ((point.x, point.y, point.z),)
-		support_filter[0] = prepare_horizontal_collision_filter(
-			Math.Vector3(*(min(p[i] for p in proof_points)-_GROUND_HIT_EPSILON for i in range(3))),
-			Math.Vector3(*(max(p[i] for p in proof_points)+_GROUND_HIT_EPSILON for i in range(3))))
-		if upward:
-			target_x, target_z, target_y = point.x, point.z, point.y
-		else:
-			length = math.hypot(normal.x, normal.z)
-			if length <= 1.0e-12:
-				return False
-			# Stay immediately inside the observed side; this is a collision
-			# query epsilon, not a stand-off distance or wider vehicle body.
-			target_x = point.x - normal.x/length*_GROUND_HIT_EPSILON
-			target_z = point.z - normal.z/length*_GROUND_HIT_EPSILON
-			target_y = support(target_x, target_z,
-				float(point.y)-_GROUND_HIT_EPSILON,
-				max(anchor[1] for anchor in anchors[0]) + ALLOWED_PENETRATION)
-			if target_y is None or target_y < point.y-_GROUND_HIT_EPSILON:
-				return False
-		lower, upper = (float(target_y)-_MIN_DRIVABLE_HEIGHT_CHANGE,
-			float(target_y)+_MIN_DRIVABLE_HEIGHT_CHANGE)
-		for anchor in sorted(anchors[0], key=lambda value:
-				(value[0]-target_x)**2 + (value[2]-target_z)**2):
-			height = support(anchor[0], anchor[2], lower,
-				min(upper, anchor[1]+ALLOWED_PENETRATION))
-			if height is None:
-				continue
-			length = math.hypot(target_x-anchor[0], target_z-anchor[2])
-			segment = length/6.0
-			heights = [height]
-			for index in range(1, 7):
-				fraction = index/6.0
-				h = support(anchor[0]+(target_x-anchor[0])*fraction,
-					anchor[2]+(target_z-anchor[2])*fraction, lower, upper)
-				if h is None:
-					# Preserve negative geometry evidence. A more distant anchor
-					# would spread these six intervals farther apart and could
-					# step over the very gap this valid anchor just exposed.
-					# Missing anchor columns above may still try another anchor;
-					# a witnessed hole inside a support profile may not.
-					return False
-				heights.append(h)
-			if (len(heights) == 7 and
-					abs(heights[-1]-float(target_y)) <= _GROUND_HIT_EPSILON and
-					_drivable_ground_profile(heights, segment, allow_flat=True)):
-				receipts[key] = True
-				if trace is not None:
-					trace['support_proof_accepted'] = trace.get('support_proof_accepted', 0) + 1
-				return True
-		return False
-	return departing
 
 
 def _hull_pose_endpoint(local_start, local_end, half_width,
@@ -551,12 +376,6 @@ def _lane_ground_ahead(spaceID, Math, pos, start_x, start_z,
 	footprint_ground = _ground_top(
 		spaceID, Math, pos, footprint_x, footprint_z, look, ground_plane,
 		collision_filter)
-	if start_ground is None or footprint_ground is None:
-		# A surviving endpoint across a bridge edge is not a support chord.
-		# Lowering a rolled lane towards that lone endpoint invents geometry
-		# below the real hull, then blocks the mass-centre origin correction.
-		# The actual posed hull still sweeps walls; gravity owns the gap.
-		return None
 	if (start_ground is not None and support_start_y is not None and
 			float(start_ground) < float(support_start_y) - _GROUND_HIT_EPSILON):
 		# A floor below the posed chassis is not its support. This also applies
@@ -638,8 +457,7 @@ def _posed_support_top(pos, pose_y, extents):
 
 
 def _supported_flat_top_is_clear(spaceID, Math, pos, end, collision,
-		pose_y, extents, heights, segment, look, ground_plane, collision_filter,
-		profile_origin=None):
+		pose_y, extents, heights, segment, look, ground_plane, collision_filter):
 	'''Recognise a level deck already inside the posed track height range.
 
 	A small net height change cannot prove a wall. Require the actual upward
@@ -651,37 +469,10 @@ def _supported_flat_top_is_clear(spaceID, Math, pos, end, collision,
 			not _drivable_surface(collision) or
 			collision[0].y > _posed_support_top(pos, pose_y, extents) +
 			_GROUND_HIT_EPSILON or
-			not _drivable_ground_profile(heights, segment, allow_flat=True)):
+			not _drivable_ground_profile(heights, segment, allow_flat=True) or
+			not _hit_matches_exact_ground_top(spaceID, Math, pos, collision,
+				look, ground_plane, collision_filter)):
 		return False
-	if not _hit_matches_exact_ground_top(spaceID, Math, pos, collision,
-			look, ground_plane, collision_filter):
-		# Bridges can have several upward support layers inside the occupied
-		# height range. The highest rail is not the lower deck struck by this
-		# lane. Prove continuity on that exact lower face instead of calling it
-		# a side wall merely because a downward ray saw the rail first. This
-		# also covers the next few centimetres of deck in the actual translation
-		# sweep; it does not enlarge the previous occupied-body exception.
-		if profile_origin is None:
-			return False
-		point = collision[0]
-		# Reuse the permitted level-profile variation as this layer's ceiling.
-		# The captured flat deck and its shallow seam are separate triangles;
-		# extending the seam's tangent backwards can begin BELOW that deck.
-		layer_plane = (float(point.x),
-			float(point.y) + _MIN_DRIVABLE_HEIGHT_CHANGE,
-			float(point.z), 0.0, 0.0)
-		px, pz, psin, pcos, direction = profile_origin
-		layer_heights, layer_segment = _ground_profile(
-			spaceID, Math, pos, px, pz, psin, pcos, direction,
-			look, ground_plane=layer_plane, collision_filter=collision_filter)
-		if (not layer_heights or
-				abs(float(layer_heights[-1]) - float(layer_heights[0])) >
-					_MIN_DRIVABLE_HEIGHT_CHANGE or
-				not _drivable_ground_profile(
-					layer_heights, layer_segment, allow_flat=True) or
-				not _hit_matches_exact_ground_top(spaceID, Math, pos, collision,
-					look, layer_plane, collision_filter)):
-			return False
 	remaining = end - collision[0]
 	if remaining.length <= _GROUND_HIT_EPSILON:
 		return True
@@ -925,7 +716,6 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			float(yaw) + (math.pi if vel < 0.0 else 0.0))
 		travel_x = math.sin(travel_yaw) * _ahead
 		travel_z = math.cos(travel_yaw) * _ahead
-		automatic_departure = departing_contact is None
 		if departing_contact is None and _ahead > 0.0:
 			departing_contact = _translation_departing_contact(
 				pos, yaw, (left, right, hl_back, hl_front), pose_y,
@@ -1028,10 +818,6 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 			Math.Vector3(minimum_x, pos.y + 0.6, minimum_z),
 			Math.Vector3(maximum_x, pos.y + 1.6, maximum_z))
 		_sweep_filter = _trace_collision_filter(_sweep_filter, trace)
-		if automatic_departure and not airborne and _ahead > 0.0:
-			departing_contact = _supported_sweep_departure(
-				spaceID, Math, pos, yaw, (left, right, hl_back, hl_front),
-				pitch, roll, td, travel_x, travel_z, _sweep_filter, departing_contact, trace)
 		_crush_state = [False]
 		_kinetic_contact = False
 
@@ -1182,9 +968,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 						_supported_flat_top_is_clear(
 							spaceID, Math, pos, end_bot, col_bot, pose_y,
 							(hw, hl_back, hl_front), _heights, _segment,
-							profile_look, _profile_plane, _sweep_filter,
-							(profile_x, profile_z, profile_sin, profile_cos,
-								profile_direction)))
+							profile_look, _profile_plane, _sweep_filter))
 					if ((_heights and
 							_drivable_ground_profile(_heights, _segment) and
 							_surface_is_ground) or _supported_flat_top):
