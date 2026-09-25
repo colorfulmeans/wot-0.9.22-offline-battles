@@ -1,4 +1,4 @@
-name: Update v0.9.5 Bot tactics editor release notes
+name: Update v0.9.5 editor and artillery firing release notes
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ae057791cf615ad158d3e4e9ed72c93be12b3183
+          ref: 520a2a1fee5d0098aa58be3e487f1807fbda978c
           persist-credentials: false
       - name: Update published notes and verify unchanged tag and package
         shell: bash
@@ -30,8 +30,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = ae057791cf615ad158d3e4e9ed72c93be12b3183
-          test "$(git hash-object docs/releases/v0.9.5.md)" = 4926308b87b8ad61f9a30d5a015114472424cfa1
+          test "$(git rev-parse HEAD)" = 520a2a1fee5d0098aa58be3e487f1807fbda978c
+          test "$(git hash-object docs/releases/v0.9.5.md)" = d4f1a24a2dca3a0ed595c59505fe7d97ddfae8fa
           python3 - <<'PY'
           import base64
           import json
@@ -46,8 +46,8 @@ jobs:
           notes_path = 'docs/releases/v0.9.5.md'
           notes = Path(notes_path).read_text(encoding='utf-8')
           for phrase in ('since the published v0.9.4 release',
-                         'Main feature: visual Bot tactics editor',
-                         '41 supported maps', 'next battle', 'Ruinberg and Steppes'):
+                         'Bot tactics editor', 'Artillery firing and deployment',
+                         'SPG loop', '41 supported maps', 'next battle'):
               assert phrase in notes, phrase
 
           def api(path, method='GET', payload=None):
@@ -78,10 +78,10 @@ jobs:
               37446670, asset_digest)
 
           if before['body'] != notes:
-              original = api('/contents/' + notes_path + '?ref=' + tag_sha)
-              original_notes = base64.b64decode(original['content']).decode('utf-8')
-              assert before['body'].strip() == original_notes.strip(), (
-                  'Release notes were edited since publication; refusing to overwrite those edits.')
+              previous = api('/contents/' + notes_path + '?ref=ae057791cf615ad158d3e4e9ed72c93be12b3183')
+              previous_notes = base64.b64decode(previous['content']).decode('utf-8')
+              assert before['body'].strip() == previous_notes.strip(), (
+                  'Release notes were edited since the previous review; refusing to overwrite those edits.')
               api('/releases/' + str(before['id']), method='PATCH', payload={'body': notes})
 
           after = api('/releases/' + str(before['id']))
@@ -92,6 +92,6 @@ jobs:
                             'tag_sha': tag_sha, 'asset_id': asset['id'],
                             'asset_sha256': asset_digest}, indent=2))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
-              summary.write('Added the visual Bot tactics editor as the main v0.9.5 feature.\n\n')
+              summary.write('Rewrote v0.9.5 notes to feature the Bot tactics editor and SPG firing repair.\n\n')
               summary.write('The published tag, package ID, size and SHA-256 are unchanged.\n')
           PY
