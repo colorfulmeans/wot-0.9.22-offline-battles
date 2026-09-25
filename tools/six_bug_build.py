@@ -18,7 +18,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = 'a5401f87359ac916f6fcedc31aa09d25bf226dd8'
-PACKAGE = 'wot-0.9.22-offline-battles-0.9.4-gameplay-fixes-20260925-Windows-x64.zip'
+PACKAGE = 'wot-0.9.22-offline-battles-0.9.4-physics-r2-20260925-Windows-x64.zip'
 
 
 def read(path):
@@ -180,9 +180,14 @@ def package(app):
                'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses'}
     assert set(os.listdir(app)) == allowed, os.listdir(app)
     with open(os.path.join(app, 'README.txt'), 'ab') as stream:
-        stream.write(('\nGameplay repair test build (2026-09-25).\nSource: ' +
+        stream.write(('\nPhysics follow-up test build (2026-09-25).\nSource: ' +
                       receipt['source_commit'] + '\nBuild: ' +
-                      receipt['identity']['buildIdentity'] + '\n').encode('utf8'))
+                      receipt['identity']['buildIdentity'] + '\n'
+                      'Bridge support departure, passive mass-based contact and falling wrecks.\n'
+                      'Bot route selection and avoidance retain the preceding test build.\n'
+                      'Landing track damage uses a contact-weighted reconstruction.\n'
+                      'Nonfatal landing crew damage is not implemented.\n'
+                      'Native Windows gameplay acceptance remains to be checked.\n').encode('utf8'))
     target = os.path.join(ROOT, PACKAGE)
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
         for folder, dirs, files in os.walk(app):

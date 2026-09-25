@@ -1,4 +1,4 @@
-name: Build 0.9.4 gameplay repairs Windows test
+name: Build 0.9.4 physics follow-up Windows test
 
 on:
   push:
@@ -14,7 +14,7 @@ concurrency:
 
 env:
   PYTHONDONTWRITEBYTECODE: '1'
-  WOT_OFFLINE_BUILD_IDENTITY: colorfulmeans-v094-gameplay-fixes-${{ github.run_id }}-${{ github.run_attempt }}
+  WOT_OFFLINE_BUILD_IDENTITY: colorfulmeans-v094-physics-r2-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   windows-server:
@@ -55,6 +55,11 @@ jobs:
           python-version: '3.11'
       - run: python tools/six_bug_build.py source
       - run: python -m pip install Pillow==12.3.0
+      - name: Verify Bot navigation and avoidance are unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/verify_physics_only.py | tee build-evidence/bot-decision-freeze.log
       - name: Run gameplay regressions from the final source
         env:
           PYTHONPATH: tests:server:tools
@@ -73,6 +78,11 @@ jobs:
             test_port_0922_bot_ammo \
             test_port_0922_mission_visibility \
             test_port_0922_server_capture \
+            test_port_0922_server_projectiles.ServerProjectileLedgerTests \
+            test_port_0922_lan_client_projectiles \
+            test_port_0922_critical_damage \
+            test_port_0922_impact_damage \
+            test_port_0922_landing_critical \
             test_port_0922_navigation_baker.CompiledSpace0922Test.test_authored_mittengard_capture_circles_match_ctf_objectives \
             test_port_0922_capture_circles \
             test_port_0922_bot_tactics_editor \
@@ -94,8 +104,15 @@ jobs:
             test_port_0922_cliff_impacts \
             test_port_0922_rollover_bridge \
             test_port_0922_bridge_center_of_mass \
+            test_port_0922_support_departure \
             test_port_0922_rail_footprint \
             test_port_0922_tank_collision \
+            test_port_0922_passive_contact_051910 \
+            test_port_0922_ram_contact_followup \
+            test_port_0922_tank_contact_ledger \
+            test_port_0922_bot_runtime.ShovedWreckTests \
+            test_port_0922_bot_runtime.WreckPushMassTests \
+            test_port_0922_bot_runtime.HumanShovedWreckTests \
             test_bot080_pinned_startup \
             test_bot080_radio_integration \
             2>&1 | tee build-evidence/gameplay-tests.log
@@ -198,7 +215,7 @@ jobs:
           }
           python -c "import json; from pathlib import Path; Path('build-evidence/server-readiness.json').write_text(json.dumps({'ready': True, 'native_gameplay_tested': False, 'port': 28782}))"
           if ($LASTEXITCODE -ne 0) { throw 'Server readiness receipt failed' }
-      - name: Package complete Windows gameplay repair build
+      - name: Package complete Windows physics follow-up build
         run: python tools/six_bug_build.py package launcher/dist/wot-0.9.22-offline-battles
       - uses: actions/upload-artifact@v4
         if: always()
@@ -208,8 +225,8 @@ jobs:
           retention-days: 30
       - uses: actions/upload-artifact@v4
         with:
-          name: wot-094-gameplay-fixes-${{ github.run_id }}-Windows
-          path: wot-0.9.22-offline-battles-0.9.4-gameplay-fixes-20260925-Windows-x64.zip
+          name: wot-094-physics-r2-${{ github.run_id }}-Windows
+          path: wot-0.9.22-offline-battles-0.9.4-physics-r2-20260925-Windows-x64.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 30

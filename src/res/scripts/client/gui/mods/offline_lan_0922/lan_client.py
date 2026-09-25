@@ -16,6 +16,7 @@ from gui.mods.offline_lan_0922 import bot_gunnery
 from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import friendly_fire
+from gui.mods.offline_lan_0922 import impact_damage
 from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import server_aim
@@ -2453,6 +2454,8 @@ class LANClient(object):
                 'input_seq': int(pending['input_seq']),
                 'impact_speed': float(pending['impact_speed']),
             }
+            if 'track_loads' in pending:
+                wire['track_loads'] = list(pending['track_loads'])
             pending['wire'] = wire
         sent = bool(self._send(dict(wire)))
         pending['sent'] = sent
@@ -2461,8 +2464,12 @@ class LANClient(object):
             pending.pop('refresh_input_on_retry', None)
         return sent
 
-    def send_landing_observation(self, impact_speed):
+    def send_landing_observation(self, impact_speed, track_loads=None):
         """Publish one physical landing observation, never a damage verdict."""
+        try:
+            loads = impact_damage.track_loads(track_loads)
+        except ValueError:
+            return False
         if (isinstance(impact_speed, bool) or
                 not isinstance(impact_speed, integer_types + (float,))):
             return False
@@ -2499,6 +2506,8 @@ class LANClient(object):
                 'input_seq': int(self._input_seq),
                 'impact_speed': round(impact_speed, 6),
             })
+            if track_loads is not None:
+                self._landing_observation_queue[-1]['track_loads'] = loads
             if (not pending.get('sent', False) and
                     pending.get('retry_on_input', False)):
                 if pending.get('refresh_input_on_retry', False):
@@ -2513,6 +2522,8 @@ class LANClient(object):
             'sent': False,
             'reported': False,
         }
+        if track_loads is not None:
+            pending['track_loads'] = loads
         self._landing_observation_pending = pending
         if not self._send_pending_landing_observation():
             return False
@@ -2530,6 +2541,8 @@ class LANClient(object):
             'sent': False,
             'reported': True,
         }
+        if 'track_loads' in queued:
+            pending['track_loads'] = queued['track_loads']
         self._landing_observation_pending = pending
         sent = self._send_pending_landing_observation()
         if not sent:

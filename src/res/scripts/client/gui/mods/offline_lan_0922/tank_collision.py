@@ -440,6 +440,28 @@ def ram_contact_sample_heights(hit_y, span):
     return tuple(result)
 
 
+def ram_contact_sample_points(hit, span, normal, bodies=()):
+    """Probe a shared contact patch, never unrelated plates on each hull.
+
+    A vertical seam survives every height retry. Nearby tangent columns can
+    leave that seam while keeping the original contact normal and both frozen
+    hull bounds. The radii match the previously shipped hull-seam recovery.
+    """
+    heights = ram_contact_sample_heights(hit[1], span)
+    result = [(hit[0], y, hit[2]) for y in heights]
+    if len(bodies) != 2:
+        return result
+    tangent = (-normal[1], normal[0])
+    for radius in (0.12, 0.30, 0.55):
+        for sign in (1.0, -1.0):
+            for y in heights:
+                point = (hit[0] + tangent[0] * radius * sign, y,
+                         hit[2] + tangent[1] * radius * sign)
+                if all(body_contains_point(body, point) for body in bodies):
+                    result.append(point)
+    return result
+
+
 def _contact_ram_inputs(tank, contact_armor=None):
     """Return per-contact armour plus descriptor/crew ram modifiers.
 

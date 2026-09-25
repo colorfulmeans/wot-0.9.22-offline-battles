@@ -59,6 +59,7 @@ from gui.mods.offline_lan_0922 import effective_params as effective_params_wire
 from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import device_damage
 from gui.mods.offline_lan_0922 import friendly_fire
+from gui.mods.offline_lan_0922 import impact_damage
 from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import player_critical_mechanics
 from gui.mods.offline_lan_0922 import siege_mechanics
@@ -455,8 +456,11 @@ SPARTAN_HEALTH_PERCENT = 10.0
 LUCKY_DEVIL_RADIUS = ACHIEVEMENT_CONDITIONS["luckyDevil"]["radius"]
 ROCK_SOLID_MAX_SPEED = ACHIEVEMENT_CONDITIONS["monolith"]["maxSpeed_ms"]
 CRITICAL_STATES = frozenset(("normal", "critical", "destroyed"))
+# Keep the #1513 world-contact cause distinct from shell hits so copied
+# collision transitions reach the stock *_AT_WORLD_COLLISION notifications.
 CRITICAL_CAUSES = frozenset((
-    "shot", "explosion", "repair", "fire", "drowning", "ramming"))
+    "shot", "explosion", "repair", "fire", "drowning", "ramming",
+    "world_collision"))
 TRACK_DEVICE_NAMES = frozenset(("leftTrackHealth", "rightTrackHealth"))
 OUTFIT_SEASONS = frozenset((1, 2, 4))
 MAX_OUTFIT_BYTES = 64 * 1024
@@ -7506,7 +7510,7 @@ class BattleState:
         return deaths
 
     def _commit_player_environment_damage(
-            self, player, damage, reason, display_health=None):
+            self, player, damage, reason, display_health=None, critical=None):
         """Apply one server-decided fall or overturn HP delta atomically."""
         if player is None or not player.alive or player.health <= 0:
             return False
@@ -7534,7 +7538,7 @@ class BattleState:
         self._record_damage(
             None, ("player", player.player_id), damage, critical_before)
         self._drop_capture_for_vehicle("player", player.player_id)
-        self.pending_events.append({
+        event = {
             "kind": "health",
             "target": player.player_id,
             "damage": damage,
@@ -7545,7 +7549,12 @@ class BattleState:
             "attack_reason": reason,
             "death_reason": reason if dead else 0,
             "source": "environment",
-        })
+        }
+        if critical is not None:
+            event["critical"] = critical
+            event.update(self._commit_external_player_critical(
+                player, critical, restart_repair=True))
+        self.pending_events.append(event)
         return True
 
     def _player_overturn_danger(self, player_id):
@@ -7628,7 +7637,7 @@ class BattleState:
                     PLAYER_ENVIRONMENT_CAPABILITY not in
                     player.capabilities or
                     not isinstance(message, dict) or
-                    set(message) != {
+                    set(message) - {"track_loads"} != {
                         "type", "round_id", "authority_epoch",
                         "observation_seq", "input_seq", "impact_speed"} or
                     message.get("type") != "landing_observation" or
@@ -7651,11 +7660,17 @@ class BattleState:
                     PLAYER_LANDING_MAX_IMPACT_SPEED):
                 return False
             impact_speed = round(float(raw_impact_speed), 6)
+            try:
+                track_loads = impact_damage.track_loads(
+                    message.get("track_loads"))
+            except ValueError:
+                return False
             normalized = {
                 "authority_epoch": authority_epoch,
                 "observation_seq": observation_seq,
                 "input_seq": input_seq,
                 "impact_speed": impact_speed,
+                "track_loads": track_loads,
             }
             fingerprint = _message_fingerprint(normalized)
             previous = player.landing_observation_fingerprints.get(
@@ -7712,8 +7727,9 @@ class BattleState:
                 return False
             damage = vehicle_physics.fall_damage(
                 int(player.max_health), impact_speed)
+            critical = self._landing_track_critical(player, damage, track_loads)
             self._commit_player_environment_damage(
-                player, damage, 3, display_health=0)
+                player, damage, 3, display_health=0, critical=critical)
             player.landing_observation_seq = observation_seq
             player.landing_observation_input_seq = input_seq
             player.landing_observation_fingerprints[
@@ -7734,6 +7750,30 @@ class BattleState:
                 self.player_overturn_state.pop(player.player_id, None)
                 self._maybe_finish_battle()
             return offered
+
+    def _landing_track_critical(self, player, damage, loads):
+        """Reconstruct contact-only track damage against the current HP pools."""
+        profile = (player.effective_params or {}).get("critical")
+        if not isinstance(profile, dict):
+            return None
+        maxima = {row["name"]: row["max_hp"]
+                  for row in profile.get("devices", ())}
+        losses = impact_damage.track_losses(damage, loads, maxima)
+        if not losses:
+            return None
+        proposal = {
+            "devices": [{"name": name, "hp": 0.0,
+                         "max_hp": maxima[name], "state": "destroyed"}
+                        for name, unused_loss in losses],
+            "crew_ko": [], "fire": False,
+        }
+        delta = {"devices": [{"name": name, "hp_loss": loss}
+                             for name, loss in losses],
+                 "crew_ko": [], "ignite": False}
+        critical = self._merge_player_critical_damage(player, proposal, delta)
+        for event in critical["events"]:
+            event["cause"] = "world_collision"
+        return critical
 
     @staticmethod
     def _projectile_message_fits(message):

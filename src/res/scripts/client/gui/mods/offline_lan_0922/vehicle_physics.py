@@ -1871,7 +1871,7 @@ def _suspension_constraints(params, ground_heights, pseudo_ground_heights):
 
 def _project_suspension_limits(params, state, ground_heights,
 		pseudo_ground_heights=None, support_vertical_velocity=0.0,
-		support_height_offset=0.0, constraints=None):
+		support_height_offset=0.0, constraints=None, impact_impulses=None):
 	'''Resolve hard limits with an order-independent worst-contact projection.'''
 	inv_mass = 1.0 / params['mass']
 	inv_pitch = 1.0 / params['pitch_inertia']
@@ -1904,7 +1904,7 @@ def _project_suspension_limits(params, state, ground_heights,
 			if denominator <= 1.0e-12:
 				continue
 			rows.append((
-				point, excess, pitch_grad, roll_grad, denominator))
+				point, excess, pitch_grad, roll_grad, denominator, key))
 			maximum_excess = max(maximum_excess, excess)
 		if not rows:
 			break
@@ -1922,7 +1922,7 @@ def _project_suspension_limits(params, state, ground_heights,
 		velocity_height = []
 		velocity_pitch = []
 		velocity_roll = []
-		for point, excess, pitch_grad, roll_grad, denominator in selected:
+		for point, excess, pitch_grad, roll_grad, denominator, key in selected:
 			point_velocity = (
 				(float(state.get('vertical_velocity', 0.0)) +
 				-pitch_grad * float(state.get('pitch_velocity', 0.0)) +
@@ -1930,6 +1930,9 @@ def _project_suspension_limits(params, state, ground_heights,
 				support_vertical_velocity)
 			if point_velocity < 0.0:
 				velocity_impulse = -point_velocity / denominator
+				if impact_impulses is not None:
+					impact_impulses.setdefault(key, []).append(
+						velocity_impulse / float(len(selected)))
 				velocity_height.append(velocity_impulse * inv_mass)
 				velocity_pitch.append(
 					-velocity_impulse * pitch_grad * inv_pitch)
@@ -2013,6 +2016,7 @@ def damper_suspension_step(params, state, ground_heights, dt,
 		1, int(math.ceil(total / params['fixed_step']))))
 	step = total / float(steps) if steps else 0.0
 	touched_keys = set()
+	impact_impulses = {}
 	maximum_compression = 0.0
 	impact_speed = None
 	contact_transition_seen = False
@@ -2071,6 +2075,8 @@ def damper_suspension_step(params, state, ground_heights, dt,
 				force += spring['stiffness'] * 8.0 * excess * (
 					1.0 + excess / max(spring['max_compression'], 0.01))
 			force = max(0.0, min(spring['max_force'], force))
+			if relative_point_velocity < 0.0 and force > 0.0 and step > 0.0:
+				impact_impulses.setdefault(key, []).append(force * step)
 			total_force += force
 			pitch_torque += pitch_gradient * force
 			roll_torque += roll_gradient * force
@@ -2114,7 +2120,8 @@ def damper_suspension_step(params, state, ground_heights, dt,
 		pre_projection_speed = result['vertical_velocity']
 		projected = _project_suspension_limits(
 			params, result, ground_heights, pseudo_ground_heights,
-			support_vertical_velocity, support_projection_offset, constraints)
+			support_vertical_velocity, support_projection_offset, constraints,
+			impact_impulses)
 		if projected:
 			if (not contact_transition_seen and
 					pre_projection_speed -
@@ -2137,6 +2144,35 @@ def damper_suspension_step(params, state, ground_heights, dt,
 			impact_speed = result['vertical_velocity']
 		contact_transition_seen = True
 	touched_keys.update(contact_keys)
+	# Reporting only: never change the solver's forces or pose. A contact first
+	# reached by the final integration has not applied its impulse yet. Estimate
+	# that contact's normal impulse from its effective mass and closing speed;
+	# the exact same inverse-mass Jacobian is used by the hard-limit solver.
+	for key in contact_keys:
+		if key in impact_impulses or total <= 0.0:
+			continue
+		point = (params['springs'][key[1]] if key[0] == 'spring'
+			else pseudo_contacts[key[1]])
+		closing = support_vertical_velocity - _rigid_point_velocity(result, point)
+		if closing <= 0.0:
+			continue
+		pitch_grad, roll_grad = _rigid_point_height_gradients(result, point)
+		inverse_mass = (1.0 / params['mass'] +
+			pitch_grad * pitch_grad / params['pitch_inertia'] +
+			roll_grad * roll_grad / params['roll_inertia'])
+		impact_impulses[key] = [closing / inverse_mass]
+	loads = {'left': [], 'right': [], 'hull': []}
+	for key, impulses in impact_impulses.items():
+		point = (params['springs'][key[1]] if key[0] == 'spring'
+			else pseudo_contacts[key[1]])
+		side = point.get('side') if (key[0] == 'spring' or
+			point.get('kind') == 'track') else None
+		loads[side if side in ('left', 'right') else 'hull'].extend(impulses)
+	load_sums = [math.fsum(loads[name]) for name in ('left', 'right', 'hull')]
+	load_total = math.fsum(load_sums) if total > 0.0 else 0.0
+	result['impact_track_loads'] = tuple(
+		value / load_total if load_total > 0.0 else 0.0
+		for value in load_sums[:2])
 	if contact_count:
 		if (abs(vertical_acceleration) < FREEZE_ACCEL_EPSILON and
 				abs(result['vertical_velocity'] -

@@ -6387,3 +6387,72 @@ to the September 24 graph; only the two capture radii were added. Existing
 Mittengard tactics accept exactly that old fingerprint paired with exactly
 the new catalog fingerprint, then normalize to the new value. Other hashes,
 maps, modes, coordinates and future geometry changes retain their validation.
+
+### September 25 follow-up: occupied bridge tops during translation
+
+Session `20260924T210815Z-2efb588827cb` ran build
+`colorfulmeans-v094-gameplay-fixes-36037035573-1` in all three processes.
+Visible-client lines 627/633/879 record upward bridge contacts on Sacred
+Valley. Line 633 has no spring support but still has two rigid contacts;
+lines 646 and 902 subsequently place the vehicle below Y=-14. The evidence
+therefore shows delayed/restricted departure, not globally absent gravity.
+
+At line 879 the horizontal query is specifically the mass-center origin
+correction (`dt=1`, displacement 0.00558 m). Its occupied tilted hull ray
+crosses an existing upward face and reports `solid_lane`. Rejecting that
+translation moves the mass center inboard as the body rotates, contradicting
+the solver's free-rotation contract. The shared translation departure filter
+now recasts a drivable upward face only if its hit is already inside the
+original occupied hull lanes and the horizontal displacement is tangential
+or outward. Vertical support remains with the suspension solver. New faces,
+inward slope motion, downward faces and later walls still block; exhausted
+native recasts also remain blocking. This shared physical classification
+applies equally to drive, external pushes and origin corrections, without
+changing Bot command selection.
+
+The captured native rays and poses are retained in
+`tests/fixtures/sacred_valley_20260925_support_contacts.json`. Regressions
+replay those contacts, preserve the line-879 correction through the actual
+horizontal adapter, and retain a separate wall behind each bridge face.
+These local face reconstructions do not claim the missing full map mesh or
+Windows gameplay acceptance.
+
+### September 25 follow-up: passive contact and unsupported wrecks
+
+The same report includes successful mass-dependent collisions: the 100,575 kg
+KV-5 and 33,500 kg T-44-100B exchange unequal velocity changes, and a
+23,496 kg wreck moves about 3.94 m after contact. The repair therefore keeps
+the existing mass, momentum and ramming-damage curves. It addresses paths
+that incorrectly reject or lose the calculated response.
+
+Passive Bot and wreck displacement now uses a dedicated physical hull sweep
+with the actual descriptor, pitch and roll. Native world and exact catalog
+obstacles still block; a planner's water, slope or missing-ground rejection
+cannot cancel an external push. This callback does not commit destruction.
+The worker's human collision body also retains the observed pitch and roll.
+Structural armour queries retry a bounded patch inside both frozen hulls;
+both vehicles must return real armour at the same point before damage is
+accepted. Missing armour remains unavailable rather than using a guessed
+thickness. Existing mass weighting and damage coefficients are unchanged.
+
+Wreck motion continues through a separate physical integrator after overlap
+or external receipts disappear. Missing support releases gravity without
+rewinding horizontal position, and airborne bodies have no track friction or
+static ground hold. Spring integration keeps the stock-derived mass center,
+fresh support planes and detached-turret constraints. A 30 cm step at 120 Hz
+starts at Y=-0.00042578125 with vertical speed -0.1021875, rather than snapping
+immediately to Y=-0.3. Settling uses the shared damper's zero-motion result,
+so slow initial tipping is not mistaken for rest.
+
+`tools/verify_physics_only.py` pins the preceding test build `107084fa`.
+It checks all 16 AI/server decision files, all Bot functions and the seven
+navigation adapters. Physical functions are explicitly listed for review;
+the constructor and startup permit only the new physical callback. In
+particular, `_clear`, `_direction_probe`, `_update_once`, and
+`_hard_contact_response` retain their preceding source text. The check is a
+build gate, alongside captured-contact, mass-response and wreck regressions.
+
+World-collision critical events also retain their cause through server
+validation and stock presentation. The separate
+[impact-damage audit](docs/testing/094-world-impact-damage-audit.md) records
+the evidence and numerical limits of the landing damage reconstruction.

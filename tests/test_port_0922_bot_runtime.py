@@ -5226,7 +5226,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         impacts = []
         runtime._apply_bot_landing_impact = (
-            lambda unused_state, speed, normal_impact=False:
+            lambda unused_state, speed, normal_impact=False, track_loads=None:
             impacts.append((speed, normal_impact)) or 0)
         enabled[0] = True
         state['y'] = 0.05
@@ -5368,7 +5368,7 @@ class BotRuntimeTests(unittest.TestCase):
         })
         impacts = []
         runtime._apply_bot_landing_impact = (
-            lambda unused_state, speed, normal_impact=False:
+            lambda unused_state, speed, normal_impact=False, track_loads=None:
             impacts.append((speed, normal_impact)) or 0)
         solved = {
             'height': -0.1,
@@ -5410,7 +5410,7 @@ class BotRuntimeTests(unittest.TestCase):
                 })
                 impacts = []
                 runtime._apply_bot_landing_impact = (
-                    lambda unused_state, speed, normal_impact=False:
+                    lambda unused_state, speed, normal_impact=False, track_loads=None:
                     impacts.append((speed, normal_impact)) or 0)
                 solved = {
                     'height': -3.0 * dt,
@@ -5449,7 +5449,7 @@ class BotRuntimeTests(unittest.TestCase):
         })
         impacts = []
         runtime._apply_bot_landing_impact = (
-            lambda unused_state, speed, normal_impact=False:
+            lambda unused_state, speed, normal_impact=False, track_loads=None:
             impacts.append((speed, normal_impact)) or 0)
         runtime._suspension_world_ground_plane = (
             lambda *unused: None)
@@ -5592,7 +5592,7 @@ class BotRuntimeTests(unittest.TestCase):
         })
         impacts = []
         runtime._apply_bot_landing_impact = (
-            lambda unused_state, speed, normal_impact=False:
+            lambda unused_state, speed, normal_impact=False, track_loads=None:
             impacts.append(speed) or 0)
         maximum_attitude = 0.0
 
@@ -21221,7 +21221,7 @@ class ShovedWreckTests(unittest.TestCase):
         self.assertTrue(any(after['y'] < before['y'] for before, after in probes))
         self.assertEqual(0.15, probes[-1][1]['chassis']['pitch'])
 
-    def test_a_slide_off_a_cliff_lip_is_undone_instead_of_dropping(self):
+    def test_a_slide_off_a_cliff_lip_releases_the_wreck_under_gravity(self):
         runtime = self._runtime(ground=-40.0)
         state = self._wreck(runtime)
 
@@ -21229,10 +21229,11 @@ class ShovedWreckTests(unittest.TestCase):
             state, {'delta_velocity': (0.0, 2.0),
                     'correction': (0.0, 0.05)}, 0.1)
 
-        self.assertFalse(moved)
-        self.assertEqual(0.0, state['z'])
-        self.assertEqual(0.0, state['y'])
-        self.assertEqual(0.0, state['push_z'])
+        self.assertTrue(moved)
+        self.assertGreater(state['z'], 0.0)
+        self.assertLess(state['y'], 0.0)
+        self.assertGreater(state['push_z'], 0.0)
+        self.assertTrue(state['airborne'])
 
     def test_a_wreck_keeps_no_engine_and_bleeds_at_the_parked_hold(self):
         runtime = self._runtime(ground=0.0)

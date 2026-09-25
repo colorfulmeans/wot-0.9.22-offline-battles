@@ -13,6 +13,7 @@ import random
 
 from gui.mods.offline_lan_0922 import device_damage as _device_damage
 from gui.mods.offline_lan_0922 import track_damage as _track_damage
+from gui.mods.offline_lan_0922 import impact_damage as _impact_damage
 
 
 def _descriptor_value(value, name, default=None):
@@ -1650,6 +1651,37 @@ def tick_repair(vehicle, dt, repair_skill=100.0, repair_factor=None):
     _refresh_mobility_flags(vehicle)
     after = _state(vehicle)
     return _payload(before, after, descriptor, 'repair')
+
+
+def apply_landing_tracks(vehicle, damage_budget, track_loads):
+    """Apply the reconstructed landing budget only to load-bearing tracks."""
+    if vehicle is None:
+        return None
+    descriptor = getattr(vehicle, 'typeDescriptor', None)
+    maxima = dict((name, _device_damage.device_max_hp(descriptor, name) or 0.0)
+                  for name in _impact_damage.TRACK_NAMES)
+    losses = _impact_damage.track_losses(damage_budget, track_loads, maxima)
+    if not losses:
+        return None
+    before = _state(vehicle)
+    devices = dict(before['devices'])
+    destroyed = set(before['destroyed'])
+    critical = set(before['critical'])
+    for name, amount in losses:
+        maximum = maxima[name]
+        devices[name] = _device_damage.damaged_hp(
+            devices.get(name, maximum), amount, name in destroyed)
+        if devices[name] <= 0.0:
+            destroyed.add(name)
+            critical.discard(name)
+        elif (name in critical or _device_damage.device_state(
+                devices[name], maximum) == 'critical'):
+            critical.add(name)
+    vehicle.devices_hp = devices
+    vehicle._destroyed_devices = destroyed
+    vehicle._critical_devices = critical
+    _refresh_mobility_flags(vehicle)
+    return _payload(before, _state(vehicle), descriptor, 'world_collision')
 
 
 def damage_device_over_time(vehicle, name, amount, cause='equipment'):

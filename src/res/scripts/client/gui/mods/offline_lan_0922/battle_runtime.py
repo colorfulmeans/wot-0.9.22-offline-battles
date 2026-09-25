@@ -3663,6 +3663,7 @@ class BattleRuntime(object):
                 arena_bounds=self._arena_bounds,
                 cover_probe=self._sample_bot_cover,
                 motion_resolver=self._resolve_bot_motion,
+                contact_motion_probe=self._bot_contact_motion_is_clear,
                 motion_report=self._report_bot_destructible_contact,
                 turret_motion_probe=self._turret_motion_is_clear,
                 turret_hulls_provider=self._turret_navigation_hulls,
@@ -19871,6 +19872,49 @@ class BattleRuntime(object):
             bot_state['_rotation_contact_trace'] = contact_trace
         return clear
 
+    def _bot_contact_motion_is_clear(self, state, start, end, step):
+        """Test the actual passive hull sweep, independently of route grades.
+
+        A shove has no navigation choice. Water, a missing far ground column
+        and a steep downhill are not walls; the vertical integrator owns the
+        resulting support. Use the same native hull collision law as driving,
+        with no engine-assisted destruction or planner corridor reuse.
+        """
+        state['_passive_contact_normal'] = None
+        descriptor = self._bots._descriptors.get(int(state['id']))
+        if descriptor is None:
+            return False
+        dx, dz = end[0] - start[0], end[2] - start[2]
+        distance = math.hypot(dx, dz)
+        if distance <= 1.0e-6:
+            return True
+        duration = max(float(step), 1.0 / 120.0)
+        trace = {}
+        status = world_collision.check_horizontal_collision(
+            self._runtime.bigworld, self._runtime.math, self._avatar.spaceID,
+            self._vector(start), state['yaw'], distance / duration,
+            descriptor, bool(state.get('airborne', False)), duration,
+            True, False, None, commit_enabled=False,
+            pitch=_number(state.get('terrain_pitch', state.get('pitch'))),
+            roll=_number(state.get('roll')), motion_yaw=math.atan2(dx, dz),
+            trace=trace)
+        state['_passive_contact_normal'] = trace.get('normal')
+        if status is not False and status != 'clear':
+            return False
+        state['_passive_contact_normal'] = None
+        if self._destructibles is not None:
+            detail = self._destructibles._catalog_motion_blocked(
+                self._avatar.spaceID, self._vector(start), state['yaw'],
+                distance / duration, descriptor, self._clock(), dt=duration,
+                kinetic_speed=None, kinetic_commit=False, commit_enabled=False,
+                return_detail=True,
+                pitch=_number(state.get('terrain_pitch', state.get('pitch'))),
+                roll=_number(state.get('roll')), motion_yaw=math.atan2(dx, dz))
+            if isinstance(detail, dict):
+                detail = detail.get('status')
+            return detail is False or detail in ('clear', 'approach')
+        return True
+
     def _resolve_bot_motion(self, bot_id, position, yaw, speed,
                             descriptor, dt, now, commit_enabled=True,
                             motion_yaw=None):
@@ -20138,7 +20182,7 @@ class BattleRuntime(object):
         return None
 
     def _native_ram_contact_plate_pair(self, proof):
-        """Find one shared structural damage height inside the frozen contact.
+        """Find one shared structural damage point inside the frozen contact.
 
         Never substitutes primaryArmor or mixes plates sampled at different
         heights.  The first candidate for which both native #1513 hit testers
@@ -20148,23 +20192,27 @@ class BattleRuntime(object):
         if contact_normal is None:
             return None, None, None
         hit = proof['hit_point']
-        heights = tank_collision.ram_contact_sample_heights(
-            hit[1], proof.get('contact_y_span'))
+        samples = tank_collision.ram_contact_sample_points(
+            hit, proof.get('contact_y_span'), contact_normal,
+            proof.get('contact_bodies', ()))
         seen_player = None
         seen_bot = None
-        for sample_y in heights:
-            sample = self._vector((hit[0], sample_y, hit[2]))
+        for point in samples:
+            sample_y = point[1]
+            sample = self._vector(point)
             player_plate = self._native_ram_vehicle_armor(
                 proof['local_vehicle'], proof['local_matrix'], sample,
-                contact_normal)
+                contact_normal, chassis_matrix=proof.get('local_chassis_matrix'))
             bot_plate = self._native_ram_vehicle_armor(
                 proof['bot_vehicle'], proof['bot_matrix'], sample,
-                (-contact_normal[0], -contact_normal[1]))
+                (-contact_normal[0], -contact_normal[1]),
+                chassis_matrix=proof.get('bot_chassis_matrix'))
             if player_plate is not None:
                 seen_player = player_plate
             if bot_plate is not None:
                 seen_bot = bot_plate
             if player_plate is not None and bot_plate is not None:
+                proof['armor_hit_point'] = tuple(point)
                 return (player_plate, bot_plate, float(sample_y)), seen_player, seen_bot
         return None, seen_player, seen_bot
 
@@ -20196,7 +20244,9 @@ class BattleRuntime(object):
             return 'invalid', None
         if not tank_collision.vertical_overlap(
                 first.get('y'), first['shape'],
-                second.get('y'), second['shape']):
+                second.get('y'), second['shape'],
+                pitch_a=first.get('pitch', 0.0), roll_a=first.get('roll', 0.0),
+                pitch_b=second.get('pitch', 0.0), roll_b=second.get('roll', 0.0)):
             return 'invalid', None
         overlap_point = self._ram_obb_overlap_point(first, second)
         if overlap_point is None:
@@ -20204,36 +20254,33 @@ class BattleRuntime(object):
         contact_normal = self._validated_ram_contact_normal(contact)
         if contact_normal is None:
             return 'invalid', None
-        low = max(
-            float(first['y']) + float(first['shape'][2]),
-            float(second['y']) + float(second['shape'][2]))
-        high = min(
-            float(first['y']) + float(first['shape'][3]),
-            float(second['y']) + float(second['shape'][3]))
+        spans = [tank_collision.vertical_interval(
+            body['y'], body['shape'], body.get('pitch', 0.0), body.get('roll', 0.0))
+            for body in (first, second)]
+        low = max(span[0] for span in spans)
+        high = min(span[1] for span in spans)
         if high <= low:
             return 'invalid', None
         hit_point = self._vector((
             overlap_point[0], (low + high) * 0.5, overlap_point[1]))
-        plates = []
-        for index, (body, vehicle, record) in enumerate(zip(
-                (first, second), vehicles, records)):
+        proof = {
+            'hit_point': _xyz(hit_point), 'contact_normal': contact_normal,
+            'contact_y_span': (low, high), 'contact_bodies': (first, second),
+            'local_vehicle': vehicles[0], 'bot_vehicle': vehicles[1],
+        }
+        for label, body, vehicle, record in zip(
+                ('local', 'bot'), (first, second), vehicles, records):
             ground_matrix = self._ram_pose_matrix(
                 (body['x'], body['y'], body['z']), body['yaw'],
                 _number(body.get('pitch')), _number(body.get('roll')))
             matrix, chassis_matrix = self._projectile_vehicle_matrices(
                 record, vehicle, ground_matrix=ground_matrix)
-            inward_normal = (contact_normal if index == 0 else
-                              (-contact_normal[0], -contact_normal[1]))
-            plate = self._native_ram_vehicle_armor(
-                vehicle, matrix, hit_point, inward_normal,
-                chassis_matrix=chassis_matrix)
-            if plate is None:
-                # At this point both exact entities and their contact geometry
-                # are ready. None now means the native ray found no supported
-                # contact layer, rather than an asynchronous startup failure.
-                return 'unavailable', None
-            plates.append(float(plate['armor']))
-        return 'available', tuple(plates)
+            proof[label + '_matrix'] = matrix
+            proof[label + '_chassis_matrix'] = chassis_matrix
+        matched, unused_first, unused_second = self._native_ram_contact_plate_pair(proof)
+        if matched is None:
+            return 'unavailable', None
+        return 'available', (float(matched[0]['armor']), float(matched[1]['armor']))
 
     def _bot_ram_contact_armor(self, first, second, contact):
         """Probe both real #1513 hit testers at one worker-owned contact."""
@@ -20440,6 +20487,11 @@ class BattleRuntime(object):
                 bot_pose[:3], bot_pose[3], bot_pose[4], bot_pose[5]),
             'contact_normal': contact_normal,
             'contact_y_span': contact_y_span,
+            'contact_bodies': tuple(dict(
+                x=pose[0], y=pose[1], z=pose[2], yaw=pose[3],
+                pitch=pose[4], roll=pose[5],
+                shape=self._collision_shape(vehicle.typeDescriptor))
+                for pose, vehicle in ((own_pose, local_vehicle), (bot_pose, bot_vehicle))),
             'contact_spall_player': player_spall,
             'contact_bonus_player': player_bonus,
             'vx': float(player_velocity[0]),
@@ -20536,7 +20588,8 @@ class BattleRuntime(object):
             return False
         self._local_ram_seq += 1
         sample_y = matched[2]
-        hit = (proof['hit_point'][0], sample_y, proof['hit_point'][2])
+        hit = proof.get('armor_hit_point', (
+            proof['hit_point'][0], sample_y, proof['hit_point'][2]))
         player_armor = player_plate['armor']
         bot_armor = bot_plate['armor']
         receipt = {
@@ -20935,7 +20988,7 @@ class BattleRuntime(object):
             'contact_decel': (vehicle_physics.contact_push_decel(
                 self._local_physics, bool(self._local_speed or getattr(self._sender, 'forward', 0)),
                 normal_y=math.cos(self._local_pitch)*math.cos(self._local_roll))
-                              if self._local_physics else None),
+                              if self._local_physics and not self._local_airborne else None),
             'shape': self._collision_shape(entity.typeDescriptor),
             'ram_profile': self._ram_profile(
                 entity.typeDescriptor, local=True),
@@ -21871,7 +21924,7 @@ class BattleRuntime(object):
         self._local_slope_tangent = slope_tangent
         return True
 
-    def _apply_fall_damage(self, entity, impact_speed):
+    def _apply_fall_damage(self, entity, impact_speed, track_loads=None):
         """Queue a physical impact observation without mutating canonical HP."""
         maximum = max(1, int(getattr(
             entity.typeDescriptor, 'maxHealth', getattr(entity, 'health', 1))))
@@ -21884,7 +21937,9 @@ class BattleRuntime(object):
         if len(self._pending_landing_impacts) >= \
                 MAX_PENDING_LANDING_IMPACTS:
             raise RuntimeError('landing observation queue exceeded limit')
-        self._pending_landing_impacts.append(impact_speed)
+        self._pending_landing_impacts.append(
+            {'impact_speed': impact_speed, 'track_loads': tuple(track_loads)}
+            if track_loads is not None else impact_speed)
         return damage
 
     def _apply_world_contact_impact(self, entity, trace, speed, yaw):
@@ -21918,17 +21973,23 @@ class BattleRuntime(object):
         """Bind a queued landing to the next admitted local pose sample."""
         if not self._pending_landing_impacts or self._sender is None:
             return False
-        impact_speed = self._pending_landing_impacts[0]
+        observation = self._pending_landing_impacts[0]
         sender = getattr(self._sender, 'send_current', None)
         publish = getattr(self.client, 'send_landing_observation', None)
-        if (not callable(sender) or not callable(publish) or
-                not sender() or not publish(impact_speed)):
+        if not callable(sender) or not callable(publish) or not sender():
+            return False
+        if isinstance(observation, dict):
+            published = publish(
+                observation['impact_speed'], observation['track_loads'])
+        else:
+            published = publish(observation)
+        if not published:
             return False
         del self._pending_landing_impacts[0]
         return True
 
     def _apply_landing_impact(
-            self, entity, impact_speed, normal_impact=False):
+            self, entity, impact_speed, normal_impact=False, track_loads=None):
         """Retain airborne skid and apply legacy or normal impact speed."""
         lateral_x, lateral_z = self._local_air_lateral
         lateral_speed = math.sqrt(
@@ -21940,7 +22001,7 @@ class BattleRuntime(object):
         if not normal_impact:
             impact_speed = math.sqrt(
                 impact_speed * impact_speed + lateral_speed * lateral_speed)
-        return self._apply_fall_damage(entity, impact_speed)
+        return self._apply_fall_damage(entity, impact_speed, track_loads)
 
     def _update_vertical_motion_legacy(self, entity, position, yaw, dt):
         """Copy vertical motion while rejecting false raised support."""
@@ -22342,7 +22403,8 @@ class BattleRuntime(object):
                 impact_speed = vehicle_physics.landing_impact_speed(
                     velocity, normal)
             self._apply_landing_impact(
-                entity, impact_speed, normal_impact=True)
+                entity, impact_speed, normal_impact=True,
+                track_loads=solved.get('impact_track_loads'))
         elif not before_airborne and self._local_airborne:
             self._local_turn_speed = 0.0
             self._local_drive_turn = 0.0

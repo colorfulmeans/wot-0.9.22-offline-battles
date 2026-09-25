@@ -2506,6 +2506,7 @@ def _runtime():
             'DEVICE_CRITICAL_AT_WORLD_COLLISION': 11,
             'TANKMAN_HIT_AT_DROWNING': 12,
             'FIRE_STOPPED': 13,
+            'TANKMAN_HIT_AT_WORLD_COLLISION': 14,
         },
         DAMAGE_INFO_CODES=tuple(
             'CODE_%d' % index for index in range(38)),
@@ -8608,7 +8609,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'seq': 7, 'first_id': 1, 'second_id': 2,
             'available': False,
         }], battle._human_ram_armor_results())
-        battle._native_ram_vehicle_armor.assert_called_once()
+        calls = battle._native_ram_vehicle_armor.call_args_list
+        self.assertGreater(len(calls), 2)
+        self.assertLessEqual(len(calls), 84)
+        self.assertEqual(0, len(calls) % 2)
+        for first, second in zip(calls[::2], calls[1::2]):
+            self.assertEqual(tuple(first.args[2]), tuple(second.args[2]))
 
     def test_native_ram_callbacks_dedupe_one_sustained_contact_episode(self):
         runtime = _runtime()
@@ -16003,6 +16009,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
              'state': 'critical', 'cause': 'world_collision'},
             {'kind': 'crew', 'name': 'driver',
              'state': 'destroyed', 'cause': 'drowning'},
+            {'kind': 'crew', 'name': 'commander',
+             'state': 'destroyed', 'cause': 'world_collision'},
             {'kind': 'fire', 'state': False, 'cause': 'repair'},
             {'kind': 'ammo_rack', 'state': 'destroyed', 'cause': 'shot'},
         ]
@@ -16013,7 +16021,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual([
             (10, 10, 7, 99, 0), (10, 11, 7, 99, 0),
-            (10, 12, 7, 99, 0), (10, 13, 0, 99, 0)],
+            (10, 12, 7, 99, 0), (10, 14, 7, 99, 0),
+            (10, 13, 0, 99, 0)],
             battle._avatar.damage_info)
         self.assertEqual([(2, 0.0, 0.0)], entity.ammo_bay_effects)
 
@@ -24208,7 +24217,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             -0.5 * x)
         impacts = []
         battle._apply_landing_impact = mock.Mock(
-            side_effect=lambda unused_entity, speed, normal_impact=False:
+            side_effect=lambda unused_entity, speed, normal_impact=False, track_loads=None:
             impacts.append((speed, normal_impact)) or 0)
         solved = {
             'height': -0.5,
@@ -24256,7 +24265,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 impacts = []
                 battle._apply_landing_impact = mock.Mock(
                     side_effect=lambda unused_entity, speed,
-                    normal_impact=False:
+                    normal_impact=False, track_loads=None:
                     impacts.append((speed, normal_impact)) or 0)
                 solved = {
                     'height': -3.0 * dt,
@@ -24297,7 +24306,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._suspension_ground_y = mock.Mock(return_value=0.0)
         impacts = []
         battle._apply_landing_impact = mock.Mock(
-            side_effect=lambda unused_entity, speed, normal_impact=False:
+            side_effect=lambda unused_entity, speed, normal_impact=False, track_loads=None:
             impacts.append((speed, normal_impact)) or 0)
         solved = {
             'height': 0.0,

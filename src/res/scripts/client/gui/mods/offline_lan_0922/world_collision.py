@@ -251,11 +251,12 @@ def _vehicle_motion_extents(descriptor):
 
 
 def _translation_departing_contact(pos, yaw, bounds, pose_y, dx, dz):
-	"""Release only an existing wall plane whose penetration is decreasing.
+	"""Release existing support tangents and outward wall translations.
 
-	The hit must be inside the original occupied hull, with its centre on the
-	outside of the exposed face. Each later native surface is still recast;
-	a new wall, an inward step, or a backface cannot borrow this exception.
+	The hit must be inside the original occupied hull. A wall also requires
+	the centre outside its exposed face; upward support permits a tangent.
+	Each later native surface is still recast. A new wall, an inward step,
+	or a downward backface cannot borrow this exception.
 	"""
 	import math
 	left, right, back, front = bounds
@@ -263,18 +264,28 @@ def _translation_departing_contact(pos, yaw, bounds, pose_y, dx, dz):
 
 	def departing(collision):
 		point, normal = collision[:2]
-		if abs(normal.y) > 0.2 or abs(pose_y[1]) < 0.1:
-			return False
-		if dx * normal.x + dz * normal.z <= 1.0e-8:
+		if abs(pose_y[1]) < 0.1:
 			return False
 		px, py, pz = point.x - pos.x, point.y - pos.y, point.z - pos.z
-		if px * normal.x + py * normal.y + pz * normal.z >= -1.0e-8:
-			return False
 		x, z = px * cosine - pz * sine, px * sine + pz * cosine
 		y = (py - x * pose_y[0] - z * pose_y[2]) / pose_y[1]
-		return (left - 0.001 <= x <= right + 0.001 and
+		inside = (left - 0.001 <= x <= right + 0.001 and
 			-back - 0.001 <= z <= front + 0.001 and
 			0.6 - 0.001 <= y <= 1.6 + 0.001)
+		if not inside:
+			return False
+		closing = dx * normal.x + dz * normal.z
+		if _drivable_surface(collision, _MAX_DESCENDING_GRADIENT):
+			# A tilted hull lane can cross its already occupied bridge top.
+			# Tangential/outward translation does not deepen that contact;
+			# gravity and suspension still own its vertical constraint. Treating
+			# this face as a side wall also cancels the model-origin correction
+			# while rolling, artificially moving the mass center back inboard.
+			# Recast this one face so a bridge side or later wall still blocks.
+			return closing >= -1.0e-8
+		if abs(normal.y) > 0.2 or closing <= 1.0e-8:
+			return False
+		return px * normal.x + py * normal.y + pz * normal.z < -1.0e-8
 	return departing
 
 

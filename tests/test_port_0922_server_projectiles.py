@@ -2834,6 +2834,30 @@ class ServerProjectileLedgerTests(unittest.TestCase):
             mutate(message['source_shot'])
             self.assertTrue(_launch_authority(state, message))
 
+    def test_world_collision_critical_cause_survives_server_validation(self):
+        critical = {
+            'devices': [{
+                'name': 'leftTrackHealth', 'hp': 0.0,
+                'max_hp': 200.0, 'state': 'destroyed',
+            }],
+            'destroyed': ['leftTrackHealth'], 'crew_ko': ['driver'],
+            'crew_roster': ['commander', 'driver'], 'fire': False,
+            'ammo_rack_death': False,
+            'events': [
+                {'kind': 'device', 'name': 'leftTrackHealth',
+                 'old_state': 'normal', 'state': 'destroyed',
+                 'cause': 'world_collision'},
+                {'kind': 'crew', 'name': 'driver',
+                 'state': 'destroyed', 'cause': 'world_collision'},
+            ],
+        }
+
+        copied = _critical_payload(json.loads(json.dumps(critical)))
+
+        self.assertEqual(critical['events'], copied['events'])
+        self.assertEqual(critical['devices'], copied['devices'])
+        self.assertEqual(['driver'], copied['crew_ko'])
+
     def test_large_finite_module_values_survive_server_validation(self):
         amount = 500000000.0
         shot = _source_shot(
