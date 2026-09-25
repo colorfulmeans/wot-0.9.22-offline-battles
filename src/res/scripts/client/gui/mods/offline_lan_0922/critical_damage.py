@@ -1655,13 +1655,27 @@ def tick_repair(vehicle, dt, repair_skill=100.0, repair_factor=None):
 
 def apply_landing_tracks(vehicle, damage_budget, track_loads):
     """Apply the reconstructed landing budget only to load-bearing tracks."""
+    return apply_landing_damage(vehicle, damage_budget, track_loads, 0.0, ())
+
+
+def apply_landing_damage(vehicle, damage_budget, track_loads, max_health,
+                         crew_roster, impact_index=0):
+    """Apply one verified landing to tracks and the actual admitted crew.
+
+    None means contact provenance was not measured; (0, 0) is a measured
+    hull/belly impact. Only the latter may still produce crew injuries.
+    """
     if vehicle is None:
         return None
     descriptor = getattr(vehicle, 'typeDescriptor', None)
     maxima = dict((name, _device_damage.device_max_hp(descriptor, name) or 0.0)
                   for name in _impact_damage.TRACK_NAMES)
     losses = _impact_damage.track_losses(damage_budget, track_loads, maxima)
-    if not losses:
+    casualties = (_impact_damage.crew_casualties(
+        damage_budget, max_health, crew_roster,
+        getattr(vehicle, '_crew_ko', None), impact_index)
+        if track_loads is not None else [])
+    if not losses and not casualties:
         return None
     before = _state(vehicle)
     devices = dict(before['devices'])
@@ -1680,8 +1694,13 @@ def apply_landing_tracks(vehicle, damage_budget, track_loads):
     vehicle.devices_hp = devices
     vehicle._destroyed_devices = destroyed
     vehicle._critical_devices = critical
+    for name in casualties:
+        _knock_out_crew(vehicle, name, False)
     _refresh_mobility_flags(vehicle)
-    return _payload(before, _state(vehicle), descriptor, 'world_collision')
+    payload = _payload(before, _state(vehicle), descriptor, 'world_collision')
+    if payload is not None and crew_roster:
+        payload['crew_roster'] = list(crew_roster)
+    return payload
 
 
 def damage_device_over_time(vehicle, name, amount, cause='equipment'):

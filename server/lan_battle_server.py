@@ -7520,12 +7520,13 @@ class BattleState:
         reason = int(reason)
         critical_before = player.critical
         health = max(0, int(player.health) - damage)
-        dead = health <= 0
+        dead = health <= 0 or _whole_crew_knocked_out(critical)
         player.health = health
         player.alive = not dead
         if dead:
-            player.display_health = max(
-                0, int(health if display_health is None else display_health))
+            player.display_health = max(0, int(
+                health if health > 0 or display_health is None
+                else display_health))
             player.death_reason = reason
             player.death_attacker_kind = ""
             player.death_attacker_id = 0
@@ -7661,8 +7662,9 @@ class BattleState:
                 return False
             impact_speed = round(float(raw_impact_speed), 6)
             try:
-                track_loads = impact_damage.track_loads(
-                    message.get("track_loads"))
+                track_loads = (impact_damage.track_loads(
+                    message["track_loads"])
+                    if message.get("track_loads") is not None else None)
             except ValueError:
                 return False
             normalized = {
@@ -7727,7 +7729,8 @@ class BattleState:
                 return False
             damage = vehicle_physics.fall_damage(
                 int(player.max_health), impact_speed)
-            critical = self._landing_track_critical(player, damage, track_loads)
+            critical = self._landing_critical(
+                player, damage, track_loads, observation_seq - 1)
             self._commit_player_environment_damage(
                 player, damage, 3, display_health=0, critical=critical)
             player.landing_observation_seq = observation_seq
@@ -7751,25 +7754,31 @@ class BattleState:
                 self._maybe_finish_battle()
             return offered
 
-    def _landing_track_critical(self, player, damage, loads):
-        """Reconstruct contact-only track damage against the current HP pools."""
+    def _landing_critical(self, player, damage, loads, impact_index):
+        """Rebase measured landing track/crew injury on the current state."""
         profile = (player.effective_params or {}).get("critical")
         if not isinstance(profile, dict):
             return None
         maxima = {row["name"]: row["max_hp"]
                   for row in profile.get("devices", ())}
         losses = impact_damage.track_losses(damage, loads, maxima)
-        if not losses:
+        roster = profile.get("crew_roster") or ()
+        casualties = (impact_damage.crew_casualties(
+            damage, player.max_health, roster,
+            (player.critical or {}).get("crew_ko"), impact_index)
+            if loads is not None else [])
+        if not losses and not casualties:
             return None
         proposal = {
             "devices": [{"name": name, "hp": 0.0,
                          "max_hp": maxima[name], "state": "destroyed"}
                         for name, unused_loss in losses],
-            "crew_ko": [], "fire": False,
+            "crew_ko": casualties, "fire": False,
+            "crew_roster": list(roster),
         }
         delta = {"devices": [{"name": name, "hp_loss": loss}
                              for name, loss in losses],
-                 "crew_ko": [], "ignite": False}
+                 "crew_ko": casualties, "ignite": False}
         critical = self._merge_player_critical_damage(player, proposal, delta)
         for event in critical["events"]:
             event["cause"] = "world_collision"

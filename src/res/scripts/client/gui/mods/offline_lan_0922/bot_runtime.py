@@ -6744,22 +6744,29 @@ class BotRuntime(object):
         damage = vehicle_physics.fall_damage(maximum, impact_speed)
         if damage <= 0:
             return 0
+        impact_index = int(state.get('_landing_impact_index', 0))
+        state['_landing_impact_index'] = impact_index + 1
         descriptor = self._descriptors.get(state['id'], {})
         if track_loads is not None:
             shadow = _BotCriticalVehicle(
                 state, descriptor, None,
                 _number(state.get('combat_fire_timer')))
-            critical = critical_damage.apply_landing_tracks(
-                shadow, damage, track_loads)
+            roster = ((state.get('critical') or {}).get('crew_roster') or
+                      _descriptor_crew_roster(descriptor))
+            critical = critical_damage.apply_landing_damage(
+                shadow, damage, track_loads, maximum, roster, impact_index)
             if critical is not None:
-                roster = (state.get('critical') or {}).get('crew_roster')
                 if roster:
                     critical['crew_roster'] = list(roster)
                 state['critical'] = _canonical_critical(critical)
         health = max(0, int(state.get('health', maximum)) - damage)
         state['health'] = health
         state['display_health'] = health
-        state['alive'] = health > 0
+        landed_critical = state.get('critical') or {}
+        landed_roster = set(landed_critical.get('crew_roster') or ())
+        whole_crew_out = bool(landed_roster and landed_roster.issubset(
+            set(landed_critical.get('crew_ko') or ())))
+        state['alive'] = health > 0 and not whole_crew_out
         if state['alive']:
             return damage
         terminal = _terminal_critical(state, descriptor, 'world_collision')
@@ -8925,6 +8932,7 @@ class BotRuntime(object):
             tanks.append({
                 'traverse_speed': traverse[0], 'traverse_torque': traverse[1],
                 'contact_decel': grip,
+                'grounded_contacts': state.get('_grounded_contacts', ()),
                 'id': int(state['id']), 'kind': 'bot',
                 'network_id': int(state['id']), 'alive': alive,
                 'team': int(state.get('team', 0)),
@@ -8984,6 +8992,9 @@ class BotRuntime(object):
 
         by_id = dict((tank['id'], tank) for tank in tanks)
         physical_results = tank_collision.resolve_pairs(tanks, step)
+        for state in self._ordered_states():
+            state['_grounded_contacts'] = physical_results.get(
+                int(state['id']), {}).get('grounded_contacts', ())
         traverse_bodies = tank_collision.post_contact_velocity_bodies(
             tanks, physical_results)
         for actor, delta in tank_collision.traverse_impulses(

@@ -1859,6 +1859,7 @@ class BattleRuntime(object):
         self._local_push_z = 0.0
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
+        self._local_grounded_contacts = ()
         self._local_contact_pushes = {}
         self._local_turret_pushes = {}
         self._collision_feedback = CollisionFeedback()
@@ -2210,6 +2211,7 @@ class BattleRuntime(object):
         self._local_push_z = 0.0
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
+        self._local_grounded_contacts = ()
         self._local_contact_pushes = {}
         self._local_turret_pushes = {}
         self._collision_feedback = CollisionFeedback()
@@ -20925,7 +20927,7 @@ class BattleRuntime(object):
             grip = (vehicle_physics.contact_push_decel(
                 params, bool(alive and (speed or state.get('movement_dir') or state.get('forward'))),
                 normal_y=math.cos(_number(state.get('pitch')))*math.cos(_number(state.get('roll'))))
-                    if params else None)
+                    if params and not state.get('airborne', False) else None)
             traverse = (0.0, 0.0)
             motor_turn = state.get('rotation_dir', state.get('turn', 0)) if alive else 0
             if descriptor is not None and motor_turn and dt > 0.0:
@@ -20980,6 +20982,7 @@ class BattleRuntime(object):
             (self._local_physics or {}).get('mass'), 25000.0)
         own = {
             'id': -1,
+            'grounded_contacts': self._local_grounded_contacts,
             'alive': True,
             'team': int(_number(getattr(self.client, 'team', 0))),
             'x': position[0], 'y': position[1], 'z': position[2],
@@ -21035,6 +21038,7 @@ class BattleRuntime(object):
         contact['responses'] = sorted(responses.items())
         self._local_ram_cooldowns = contact['cooldowns']
         self._local_ram_contacts = contact['contacts']
+        self._local_grounded_contacts = contact.get('grounded_contacts', ())
         by_id = dict((other['id'], other) for other in others)
         for other_id, delta in contact.get('responses', ()):
             other = by_id[other_id]
@@ -21047,12 +21051,18 @@ class BattleRuntime(object):
                     self._local_contact_pushes, other['network_id'],
                     (delta[0] * other['mass'], delta[1] * other['mass']))
         delta_x, delta_z = contact['delta_velocity']
-        if ((delta_x or delta_z) and now >= self._local_contact_log_time):
+        correction_x, correction_z = contact['correction']
+        if ((delta_x or delta_z or correction_x or correction_z or
+                self._local_grounded_contacts) and
+                now >= self._local_contact_log_time):
             self._local_contact_log_time = now + 2.0
             sys.stdout.write(
                 '[Offline LAN 0.9.22] CONTACT local mass=%.3f '
-                'velocity=(%.4f,%.4f) delta=(%.4f,%.4f) peers=%s\n' % (
+                'velocity=(%.4f,%.4f) delta=(%.4f,%.4f) '
+                'correction=(%.4f,%.4f) held=%s peers=%s\n' % (
                     own_mass, own['vx'], own['vz'], delta_x, delta_z,
+                    correction_x, correction_z,
+                    list(self._local_grounded_contacts),
                     [(o['network_id'], o['mass'], o['vx'], o['vz'])
                      for o in physical_others]))
         forward_impulse = (delta_x * math.sin(yaw) +
@@ -21068,12 +21078,11 @@ class BattleRuntime(object):
                   applied_forward * math.sin(yaw))
         push_z = (self._local_push_z + delta_z -
                   applied_forward * math.cos(yaw))
-        if self._local_physics is not None:
+        if self._local_physics is not None and not self._local_airborne:
             push_x, push_z = vehicle_physics.contact_push_step(
                 self._local_physics, push_x, push_z, yaw, dt,
                 rolling=bool(self._local_speed or getattr(self._sender, 'forward', 0)),
                 normal_y=math.cos(self._local_pitch)*math.cos(self._local_roll))
-        correction_x, correction_z = contact['correction']
         move_x = correction_x + push_x * dt
         move_z = correction_z + push_z * dt
         distance = math.sqrt(move_x * move_x + move_z * move_z)

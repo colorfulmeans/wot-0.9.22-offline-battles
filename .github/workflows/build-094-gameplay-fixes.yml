@@ -14,7 +14,7 @@ concurrency:
 
 env:
   PYTHONDONTWRITEBYTECODE: '1'
-  WOT_OFFLINE_BUILD_IDENTITY: colorfulmeans-v094-physics-r2-${{ github.run_id }}-${{ github.run_attempt }}
+  WOT_OFFLINE_BUILD_IDENTITY: colorfulmeans-v094-physics-r3-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   windows-server:
@@ -109,6 +109,7 @@ jobs:
             test_port_0922_tank_collision \
             test_port_0922_passive_contact_051910 \
             test_port_0922_ram_contact_followup \
+            test_port_0922_mass_contact_110942 \
             test_port_0922_tank_contact_ledger \
             test_port_0922_bot_runtime.ShovedWreckTests \
             test_port_0922_bot_runtime.WreckPushMassTests \
@@ -225,8 +226,8 @@ jobs:
           retention-days: 30
       - uses: actions/upload-artifact@v4
         with:
-          name: wot-094-physics-r2-${{ github.run_id }}-Windows
-          path: wot-0.9.22-offline-battles-0.9.4-physics-r2-20260925-Windows-x64.zip
+          name: wot-094-physics-r3-${{ github.run_id }}-Windows
+          path: wot-0.9.22-offline-battles-0.9.4-physics-r3-20260925-Windows-x64.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 30

@@ -40,7 +40,7 @@ cause allowlist omitted world collision. The presentation consumer already
 distinguishes the official world-collision device and crew notifications.
 The cause tests preserve that distinction through validation and exercise
 the stock notification dispatch. The cause repair alone does not create
-nonfatal landing damage; the reconstruction below adds the track producer.
+nonfatal landing damage; the reconstruction below adds track and crew producers.
 
 ## Exact #1513 client evidence
 
@@ -96,10 +96,10 @@ These sources support contact-dependent suspension damage and distinct world
 collision feedback. They do not specify how to divide impulse between
 tracks, convert it into module HP, select internal modules or crew, or apply
 injury probabilities. The existence of a notification code is not proof that
-every fall should injure crew. Reusing projectile/HE saving throws or randomly
-destroying internal devices after a landing would introduce an unsupported
-rule. A complete retail-equivalent producer still needs server-side evidence
-or measured #1513 impact observations.
+every fall should injure crew. The approximation below does not borrow
+projectile/HE saving throws or randomly destroy internal devices. A complete
+retail-equivalent producer still needs server-side evidence or measured #1513
+impact observations.
 
 ## Bounded reconstruction implemented after the audit
 
@@ -124,10 +124,11 @@ solution. Zero-duration settling reports no damaging load.
 
 Only the existing airborne-to-supported landing gate submits these shares.
 Ordinary supported suspension compression cannot invoke the damage path.
-An absent contact observation, hull-only landing, or unproved legacy contact
-keeps the existing HP-only behavior; it does not assume both tracks took the
-load. This scope covers the active ten-spring solver, not the hydraulic
-suspension path excluded from that trial.
+An absent contact observation or unproved legacy contact keeps the existing
+HP-only behavior. A measured hull-only landing has zero track shares; it
+does not assume both tracks took the load, but can injure crew under the
+severity rule below. This scope covers the active ten-spring solver, not
+the hydraulic suspension path excluded from that trial.
 
 The player sends speed and contact shares through the existing sequenced
 landing observation. The server computes both HP and track loss and merges
@@ -139,9 +140,51 @@ HP law before publishing their existing canonical critical state. A new hit
 on a destroyed track resets incomplete repair progress under the same
 `device_damage.damaged_hp` law as server-admitted projectile damage.
 
-This is a deterministic approximation, not the official #1513 damage formula.
-It adds no random crew injury, internal-device selection, fire, or ammo-rack
-detonation. Nonfatal crew damage remains unimplemented without a supported
-contact-to-crew rule. The enhanced-suspension `vehicleByChassisDamageFactor`
-still has no collision-damage consumer here; this change does not claim full
-retail equipment protection.
+## Crew completion, 2026-09-25
+
+The `110942` follow-up requests nonfatal falling crew injuries explicitly.
+The preceding track-only producer could never generate those injuries: its
+only crew change was the complete terminal knockout when hull HP reached
+zero. The new shared `impact_damage.crew_casualties` fills that missing path
+with an explicit deterministic project reconstruction:
+
+`casualty_budget = floor(fall_damage * actual_crew_count / vehicle_max_health)`.
+
+The denominator is full vehicle HP, not remaining HP. This reuses the existing
+fall severity without adding a new impact constant or crew HP pool. Rounding
+down gives no crew damage to small falls; subthreshold landings do not build
+up hidden injury points. The actual admitted roster supplies individual seat
+names, including numbered loaders and gunners and seats covering several
+roles. No generic five-person fallback is used. Starting at the accepted
+impact ordinal, roster order selects at most that many still-active members;
+already injured members do not spend the budget and are never revived.
+Rotation is a reproducible tie-break, not a claim about the impacted
+compartment. Role impairment and medkit recovery use existing critical-state
+mechanisms.
+
+For example, a 359 HP fall on a full-HP scale of 1780 with six crew produces
+one casualty; the same severity with two crew produces none. This is a
+conservative discrete severity model, not evidence of those retail results.
+The model does not reproduce retail collision injury probability, compartment
+geometry, or equipment protection. Those remain calibration limits, rather
+than a reason to leave the requested nonfatal injury path empty.
+
+The human server computes casualties only after validating the sequenced
+physical observation and merges them over canonical crew and repair state.
+Unknown contact (`None`) and measured hull contact (`[0, 0]`) retain distinct
+receipt identities. Replay cannot injure twice, including after a medkit
+restores the casualty. The Bot worker uses the same shared law and preserves
+the admitted roster. All-crew knockout disables either actor through the
+world-collision death path while retaining remaining hull HP, as for existing
+crew-knockout deaths; it does not fabricate additional hull damage.
+
+Focused tests cover full-HP severity, no-contact and safe-speed exclusions,
+numbered seats, already injured crew, combined roles, human/Bot parity,
+canonical revision barriers, receipt identity, medkit use and replay, and
+positive-HP all-crew deaths. Native Windows landing behavior and the exact
+world-collision crew notification remain acceptance boundaries.
+
+This change adds no internal-device selection, fire, or ammo-rack detonation.
+The enhanced-suspension `vehicleByChassisDamageFactor` still has no
+collision-damage consumer here; this change does not claim full retail
+equipment protection.

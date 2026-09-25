@@ -851,31 +851,75 @@ def grounded_inverse_masses(contact, first, second, inverse_a, inverse_b, dt):
     because of its player/Bot identity. Once the load exceeds that budget,
     both real inverse masses participate. Engine power enters through the
     incoming speed produced by longitudinal_step over this very slice.
+
+    A previous grounded contact remains held while the peer's stopped pose
+    catches up. Otherwise stopping its velocity immediately restores ordinary
+    mass-weighted position recovery and shoves the held hull without force.
+    This history is contact-local, never an immovable vehicle classification.
     """
     if dt <= 0.0 or not inverse_a or not inverse_b:
         return inverse_a, inverse_b
     nx, nz = contact[:2]
     va = first.get('vx', 0.0)*nx + first.get('vz', 0.0)*nz
     vb = second.get('vx', 0.0)*nx + second.get('vz', 0.0)*nz
-    if va >= vb:
-        return inverse_a, inverse_b
+    closing = vb - va
 
-    def holds(body, speed, inverse, moving_inverse):
+    def holds(body, peer, speed, inverse, moving_inverse):
         grip = body.get('contact_decel')
         if grip is None or abs(speed) > 1.0e-9:
             return False
+        if closing <= 1.0e-9:
+            # Backing away does not load the tracks, but the last overlapping
+            # pose must still recover on the departing body, not the held one.
+            return peer['id'] in body.get('grounded_contacts', ())
         yaw = body.get('yaw', 0.0)
-        impulse_speed = (vb-va) * inverse/moving_inverse
-        forward = abs(nx*math.sin(yaw) + nz*math.cos(yaw))
-        side = abs(nx*math.cos(yaw) - nz*math.sin(yaw))
-        return (impulse_speed*forward <= grip[0]*dt and
-                impulse_speed*side <= grip[1]*dt)
+        normal_impulse = closing / moving_inverse
+        dx, dz = nx * normal_impulse, nz * normal_impulse
+        if _stationary(body):
+            # A held hull must also absorb hull friction. Test the whole
+            # reaction against the track budget before fixing either axis.
+            tx, tz = -nz, nx
+            tangent_speed = ((first.get('vx', 0.0) - second.get('vx', 0.0))*tx +
+                             (first.get('vz', 0.0) - second.get('vz', 0.0))*tz)
+            tangent_impulse = max(-0.3 * normal_impulse, min(
+                0.3 * normal_impulse, -tangent_speed / moving_inverse))
+            dx += tx * tangent_impulse
+            dz += tz * tangent_impulse
+        forward = abs(dx*math.sin(yaw) + dz*math.cos(yaw)) * inverse
+        side = abs(dx*math.cos(yaw) - dz*math.sin(yaw)) * inverse
+        return forward <= grip[0]*dt and side <= grip[1]*dt
 
-    if holds(first, va, inverse_a, inverse_b):
+    if holds(first, second, va, inverse_a, inverse_b):
         return 0.0, inverse_b
-    if holds(second, vb, inverse_b, inverse_a):
+    if holds(second, first, vb, inverse_b, inverse_a):
         return inverse_a, 0.0
     return inverse_a, inverse_b
+
+
+def _stationary(body):
+    return (abs(body.get('vx', 0.0)) <= 1.0e-9 and
+            abs(body.get('vz', 0.0)) <= 1.0e-9)
+
+
+def _grounded_pair_response(contact, first, second, inverse_a, inverse_b, dt):
+    """Solve the same ground constraint for position, normal and tangent."""
+    mobility_a, mobility_b = grounded_inverse_masses(
+        contact, first, second, inverse_a, inverse_b, dt)
+    held_a = bool(inverse_a and not mobility_a)
+    held_b = bool(inverse_b and not mobility_b)
+    # A hull already travelling along a face keeps its real tangent mass.
+    # Only a fully stationary, held hull has proved enough ground reaction
+    # for both axes in grounded_inverse_masses above.
+    tangent_a = 0.0 if held_a and _stationary(first) else inverse_a
+    tangent_b = 0.0 if held_b and _stationary(second) else inverse_b
+    response = pair_response(
+        contact, mobility_a, mobility_b,
+        ((0.0, 0.0) if first.get('immovable') else
+         (first.get('vx', 0.0), first.get('vz', 0.0))),
+        ((0.0, 0.0) if second.get('immovable') else
+         (second.get('vx', 0.0), second.get('vz', 0.0))),
+        friction_inverse=(tangent_a, tangent_b))
+    return response, held_a, held_b
 
 
 def resolve_pairs(tanks, dt):
@@ -889,7 +933,10 @@ def resolve_pairs(tanks, dt):
     """
     bodies = [dict(tank) for tank in sorted(tanks, key=lambda t: t['id'])]
     results = dict((b['id'], {'correction': (0.0, 0.0),
-                              'delta_velocity': (0.0, 0.0)}) for b in bodies)
+                              'delta_velocity': (0.0, 0.0),
+                              'grounded_contacts': set()}) for b in bodies)
+    for body in bodies:
+        body['grounded_contacts'] = set(body.get('grounded_contacts', ()))
     shapes = dict((b['id'], _tank_shape(b)) for b in bodies)
     radii = dict((key, math.hypot(*value[:2])) for key, value in shapes.items())
     pairs = []
@@ -918,10 +965,17 @@ def resolve_pairs(tanks, dt):
                 continue
             ia = 0.0 if a.get('immovable') else 1.0/max(a['mass'], 1.0)
             ib = 0.0 if b.get('immovable') else 1.0/max(b['mass'], 1.0)
-            mobility_a, mobility_b = grounded_inverse_masses(hit, a, b, ia, ib, dt)
-            response = pair_response(hit, mobility_a, mobility_b,
-                                     (a['vx'], a['vz']), (b['vx'], b['vz']),
-                                     friction_inverse=(ia, ib))
+            response, held_a, held_b = _grounded_pair_response(
+                hit, a, b, ia, ib, dt)
+            for body, peer, held in ((a, b, held_a), (b, a, held_b)):
+                history = body['grounded_contacts']
+                active = results[body['id']]['grounded_contacts']
+                if held:
+                    history.add(peer['id'])
+                    active.add(peer['id'])
+                else:
+                    history.discard(peer['id'])
+                    active.discard(peer['id'])
             apply_impulse = a.get('impulse', True) and b.get('impulse', True)
             for body, offset in ((a, 0), (b, 4)):
                 dx, dz, dvx, dvz = response[offset:offset+4]
@@ -934,6 +988,8 @@ def resolve_pairs(tanks, dt):
                                                 result['delta_velocity'][1]+dvz)
                     body['vx'] += dvx
                     body['vz'] += dvz
+    for result in results.values():
+        result['grounded_contacts'] = tuple(sorted(result['grounded_contacts']))
     return results
 
 
@@ -1078,6 +1134,11 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
         complete frame back as ``active_ram_contacts`` so sustained pressure
         cannot replay one impact. Harmless touching does not consume a later
         real impact from the same overlap.
+    ``grounded_contacts``
+        Peer ids whose force the tracks held. Feed this tuple back in the
+        next tank mapping to keep residual overlap from bypassing that hold.
+        Separation, loss of ground grip, normal movement or excess load
+        releases the constraint on the next solve.
 
     Supplying ``now=None`` disables ram-event admission while retaining all
     collision correction and impulses.
@@ -1112,6 +1173,7 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
     previous_contacts = set(active_ram_contacts or ())
     overlap_pairs = set()
     newly_damaging_pairs = set()
+    grounded_contacts = set()
 
     for other in others or ():
         other_id = _tank_value(other, 'id', -1)
@@ -1172,13 +1234,10 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
             x, z, yaw, own_shape, (velocity_x, velocity_z),
             other_x, other_z, other_yaw, other_shape,
             (other_velocity_x, other_velocity_z))
-        mobility_self, mobility_other = grounded_inverse_masses(
+        response, held_self, unused_held_other = _grounded_pair_response(
             contact, tank, other, inverse_self, inverse_other, dt)
-        response = pair_response(
-            contact, mobility_self, mobility_other,
-            (velocity_x, velocity_z),
-            (other_velocity_x, other_velocity_z),
-            friction_inverse=(inverse_self, inverse_other))
+        if held_self:
+            grounded_contacts.add(other_id)
         correction_x += response[0]
         correction_z += response[1]
         # One owner per contact velocity.  When both sides cancel the same
@@ -1295,6 +1354,7 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
 
     return {
         'correction': (correction_x, correction_z),
+        'grounded_contacts': tuple(sorted(grounded_contacts)),
         'delta_velocity': (delta_velocity_x, delta_velocity_z),
         'responses': tuple(responses),
         'ram_events': tuple(ram_events),

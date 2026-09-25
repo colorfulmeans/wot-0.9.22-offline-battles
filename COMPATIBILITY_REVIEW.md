@@ -6456,3 +6456,44 @@ World-collision critical events also retain their cause through server
 validation and stock presentation. The separate
 [impact-damage audit](docs/testing/094-world-impact-damage-audit.md) records
 the evidence and numerical limits of the landing damage reconstruction.
+
+### September 25 physics-r3: layered support and persistent ground reaction
+
+Report `20260925T030346Z-1dd0e5fe195f` identifies physics-r2, commit
+`df5f7aa3`. At 11:05:55 on Sacred Valley the KV-5 has five unsupported
+left-track probes and five supported right-track probes, but its almost
+upward bridge hit is classified `solid_lane` and brakes horizontal motion.
+The struck lower deck and the higher surface seen by the vertical profile
+are different layers. The horizontal adapter now proves the struck support
+layer with fresh native queries; it still recasts the remaining segment and
+retains real walls, unsupported discontinuities and inward slope contacts.
+
+A separate bridge-edge replay couples suspension with the real horizontal
+adapter. A lone support endpoint previously lowered the tilted hull's ray
+across an unsupported gap. Together with an old-pose-only height test for
+departure, this could reject the model-origin translation required to keep
+the center of mass fixed during a roll, artificially shifting the mass center
+horizontally. Unsupported endpoints no longer define a support chord, and the
+departure test covers the actual swept height interval of the posed hull.
+These are contact-classification changes; they add no automatic righting or
+steering behavior. The fixtures reconstruct local faces and an edge, not the
+complete native map, so final bridge departure still requires Windows play.
+
+The same report provides actual masses of 100,575 kg for KV-5 and 26,183 kg
+for VK 28.01. Static track grip previously stopped a gentle contact's normal
+velocity but later solver passes and replicated stopped poses resumed
+inverse-mass position correction, moving the held heavy hull without a new
+force. The solver now carries a contact-local ground constraint until actual
+separation, loss of support, self-motion or an excessive new impulse. The
+same ground reaction accounts for tangential hull friction. New stationary
+spawn overlaps and impulses exceeding available grip still use real inverse
+masses. Bounded local contact logs now include position correction and held
+peer IDs, which the report lacked. Airborne local contact momentum is not
+braked by ground friction.
+
+The two reported environment damage events (242 and 379 HP) have no adjacent
+crew injury updates. Nonfatal crew injury now uses the existing fall-damage
+budget and actual admitted crew roster, with authoritative revision and
+replay handling shared with landing track damage. Its deliberately explicit
+project reconstruction and limits are described in the impact-damage audit;
+the available #1513 client does not reveal a retail crew-impact formula.

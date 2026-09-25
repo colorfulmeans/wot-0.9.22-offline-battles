@@ -13,6 +13,8 @@ from gui.mods.offline_lan_0922 import vehicle_physics, world_collision
 Vector = fixtures._Vector
 REPORT = json.loads((Path(__file__).parent / 'fixtures' /
     'sacred_valley_20260925_support_contacts.json').read_text())
+LAYERED_REPORT = json.loads((Path(__file__).parent / 'fixtures' /
+    'sacred_valley_20260925_layered_support.json').read_text())
 
 
 def departure(contact, dx, dz):
@@ -54,7 +56,90 @@ def plane_scene(contact, backing=False):
     return types.SimpleNamespace(wg_collideSegment=collide)
 
 
+def layered_scene(contact, backing=False, lower_gap=False):
+    """Reconstruct the recorded lower face and the independently seen rail.
+
+    The report proves these contacts along the centre lane, not the shape of
+    the whole bridge. Restrict the planes to that local strip. A gap or wall
+    is an explicit negative-control variant rather than recorded geometry.
+    """
+    origin = Vector(*contact['hit'])
+    position = Vector(*contact['position'])
+    sine, cosine = math.sin(contact['yaw']), math.cos(contact['yaw'])
+    planes = [(origin, Vector(*contact['normal']), 'lower'),
+              (Vector(*LAYERED_REPORT['native_replay_contact']['hit']),
+               Vector(*LAYERED_REPORT['native_replay_contact']['normal']), 'deck'),
+              (Vector(origin.x, contact['profile'][0], origin.z),
+               Vector(0., 1., 0.), 'upper')]
+    # The two recorded hits are 8.6 cm apart along the ray. Reconstruct a
+    # junction between them, rather than pretending they were two answers
+    # at the same point or extending one triangle through the other.
+    join = (origin + Vector(*LAYERED_REPORT['native_replay_contact']['hit'])).scale(0.5)
+    join_z = (join.x-position.x)*sine + (join.z-position.z)*cosine
+    if backing:
+        end = Vector(*contact['ray_end'])
+        normal = origin - end
+        normal.y = 0.
+        normal.normalise()
+        planes.append((origin + (end - origin).scale(0.5), normal, 'wall'))
+
+    def collide(space, start, end, mask, *unused):
+        delta = end - start
+        hits = []
+        for point, normal, kind in planes:
+            denominator = delta.x*normal.x + delta.y*normal.y + delta.z*normal.z
+            if abs(denominator) < 1e-12:
+                continue
+            offset = point - start
+            fraction = (offset.x*normal.x + offset.y*normal.y + offset.z*normal.z) / denominator
+            if not 0. <= fraction <= 1.:
+                continue
+            hit = start + delta.scale(fraction)
+            relative = hit - position
+            local_x = relative.x*cosine - relative.z*sine
+            local_z = relative.x*sine + relative.z*cosine
+            if abs(local_x) >= 0.2:
+                continue
+            if ((kind == 'deck' and local_z >= join_z) or
+                    (kind == 'lower' and local_z < join_z)):
+                continue
+            if lower_gap and kind in ('lower', 'deck') and local_z < 1.0:
+                continue
+            hits.append((fraction, hit, normal))
+        if not hits:
+            return None
+        unused_fraction, point, normal = min(hits, key=lambda row: row[0])
+        return point, normal, 0
+    return types.SimpleNamespace(wg_collideSegment=collide,
+        wg_getMatInfoNearPoint=fixtures._miss_mat_info_1513)
+
+
 class SupportDepartureTests(unittest.TestCase):
+    def test_captured_lower_bridge_layer_is_not_a_horizontal_wall(self):
+        contact = LAYERED_REPORT['contact']
+        left, right = contact['lateral_bounds']
+        unused_width, back, front = contact['extents']
+        descriptor = fixtures._Strict1513Component(
+            hull=fixtures._Strict1513Component(hitTester=types.SimpleNamespace(
+                bbox=((left, -1., -back), (right, 2., front), None))))
+        # The old occupied-body exception correctly does not accept this new
+        # hit just beyond its front edge. Continuity of the actual lower deck
+        # must prove support instead of relaxing that boundary or its normal.
+        self.assertFalse(departure(contact, 0.01, 0.)(
+            (Vector(*contact['hit']), Vector(*contact['normal']))))
+        for backing, lower_gap, expected in ((False, False, 'clear'),
+                (True, False, 'hard'), (False, True, 'hard')):
+            trace = {}
+            with self.subTest(backing=backing, lower_gap=lower_gap), mock.patch.object(
+                    world_collision, '_destroy_and_recast', return_value=False):
+                result = world_collision.check_horizontal_collision(
+                    layered_scene(contact, backing, lower_gap),
+                    types.SimpleNamespace(Vector3=Vector), 1,
+                    Vector(*contact['position']), contact['yaw'], contact['speed'],
+                    descriptor, False, contact['dt'], True, commit_enabled=False,
+                    pitch=contact['pitch'], roll=contact['roll'], trace=trace)
+            self.assertEqual(expected, result, trace)
+
     def test_native_hull_probe_releases_captured_support_for_roll_and_push(self):
         contact = REPORT['contacts'][2]
         left, right = contact['lateral_bounds']
@@ -141,6 +226,18 @@ class SupportDepartureTests(unittest.TestCase):
         self.assertFalse(predicate((Vector(0., 1., 0.), Vector(-0.5, 1., 0.))))
         self.assertFalse(predicate((Vector(0., 1., 0.), Vector(0., -1., 0.))))
         self.assertTrue(predicate((Vector(0., 1., 0.), Vector(0.5, 1., 0.))))
+
+    def test_swept_roll_height_only_releases_tangent_support(self):
+        pose = world_collision._hull_pose_y(0.0, -0.55)
+        predicate = world_collision._translation_departing_contact(
+            Vector(), 0.0, (-1.5, 1.5, 3.0, 3.0), pose, -0.03, 0.0)
+        # Inside the previous XZ footprint but only in the destination
+        # perimeter's lower height band, the failure in a rolling origin shift.
+        point = Vector(-0.3, (-0.3+0.015)*pose[0] + 0.6*pose[1], 0.0)
+        self.assertTrue(predicate((point, Vector(0.0, 1.0, 0.0))))
+        self.assertFalse(predicate((point, Vector(0.5, 1.0, 0.0))))
+        self.assertFalse(predicate((point, Vector(1.0, 0.0, 0.0))))
+        self.assertFalse(predicate((point, Vector(0.0, -1.0, 0.0))))
 
     def test_repeated_native_surface_exhaustion_remains_blocking(self):
         contact = REPORT['contacts'][2]

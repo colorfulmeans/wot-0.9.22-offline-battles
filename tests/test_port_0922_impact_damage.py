@@ -157,6 +157,56 @@ class LandingTrackDamageTests(unittest.TestCase):
             20.0, (0.75, 0.0))
 
 
+class LandingCrewDamageTests(unittest.TestCase):
+    ROSTER = ('commander', 'driver', 'gunner1', 'loader1', 'loader2', 'radioman1')
+
+    def test_budget_uses_full_health_and_real_seats_without_rounding_up(self):
+        self.assertEqual([], impact_damage.crew_casualties(
+            166, 1000, self.ROSTER))
+        self.assertEqual(['commander'], impact_damage.crew_casualties(
+            167, 1000, self.ROSTER))
+        self.assertEqual(['commander', 'driver'], impact_damage.crew_casualties(
+            359, 1000, self.ROSTER))
+        self.assertEqual(['commander'], impact_damage.crew_casualties(
+            359, 1780, self.ROSTER))
+
+    def test_numbered_seats_rotate_and_existing_injuries_do_not_spend_budget(self):
+        self.assertEqual(['loader1', 'loader2'], impact_damage.crew_casualties(
+            400, 1000, self.ROSTER, ('gunner1',), impact_index=2))
+        self.assertEqual(['loader2'], impact_damage.crew_casualties(
+            200, 1000, self.ROSTER, impact_index=4))
+        self.assertEqual([], impact_damage.crew_casualties(
+            1000, 1000, self.ROSTER, self.ROSTER))
+        self.assertEqual([], impact_damage.crew_casualties(1000, 1000, ()))
+
+    def test_safe_and_unmeasured_landings_do_not_injure_crew(self):
+        for budget, loads in ((0, (1, 0)), (0, (0, 0)), (500, None)):
+            vehicle = LandingTrackDamageTests.vehicle()
+            before = copy.deepcopy(critical_damage._state(vehicle))
+            self.assertIsNone(critical_damage.apply_landing_damage(
+                vehicle, budget, loads, 1000, self.ROSTER))
+            self.assertEqual(before, critical_damage._state(vehicle))
+
+    def test_belly_impact_injures_combined_role_seat_without_inventing_modules(self):
+        vehicle = LandingTrackDamageTests.vehicle()
+        vehicle.typeDescriptor.type.crewRoles = (
+            ('commander', 'gunner', 'loader'), ('driver',))
+        vehicle._crew_ko = set()
+        before = dict(vehicle.devices_hp)
+        payload = critical_damage.apply_landing_damage(
+            vehicle, 600, (0, 0), 1000, ('commander', 'driver'))
+        self.assertEqual(before, vehicle.devices_hp)
+        self.assertEqual({'commander'}, vehicle._crew_ko)
+        self.assertEqual(frozenset(('commander', 'gunner', 'loader')),
+                         vehicle._crew_impaired)
+        self.assertEqual(['commander', 'driver'], payload['crew_roster'])
+        self.assertEqual([{'kind': 'crew', 'name': 'commander',
+                           'state': 'destroyed', 'cause': 'world_collision'}],
+                         payload['events'])
+        self.assertFalse(payload['fire'])
+        self.assertFalse(payload['ammo_rack_death'])
+
+
 class BotLandingDamageTests(unittest.TestCase):
     def setUp(self):
         self.fixture = bot_fixture.BotRuntimeTests()
@@ -189,6 +239,44 @@ class BotLandingDamageTests(unittest.TestCase):
         self.runtime._turret_pending_landing_impacts = None
         self.runtime._apply_bot_landing_impact(self.state, *pending[0])
         self.assertEqual(['rightTrackHealth'], self.state['critical']['destroyed'])
+
+    def test_human_and_bot_landings_share_hp_tracks_and_numbered_crew_law(self):
+        import test_port_0922_landing_critical as landing_fixture
+        from gui.mods.offline_lan_0922 import player_critical_mechanics
+
+        descriptor = self.runtime._descriptors[self.state['id']]
+        descriptor.type.crewRoles = (
+            ('commander',), ('driver',), ('gunner',), ('loader',),
+            ('loader',), ('radioman',))
+        roster = list(LandingCrewDamageTests.ROSTER)
+        self.state['critical']['crew_roster'] = roster
+        human = landing_fixture.LandingCriticalServerTests()
+        human.setUp()
+        human.player.max_health = human.player.health = 1000
+        human.player.effective_params['critical'] = \
+            player_critical_mechanics.project_profile(descriptor)
+        for unused_index in range(2):
+            human.next_input()
+            self.assertTrue(human.submit(human.observation((0.2, 0.1))))
+            self.runtime._apply_bot_fall_damage(self.state, 20, (0.2, 0.1))
+            self.assertEqual(human.player.health, self.state['health'])
+            self.assertEqual(human.player.alive, self.state['alive'])
+            for key in ('crew_ko', 'crew_roster', 'devices', 'destroyed', 'fire'):
+                self.assertEqual(human.player.critical[key],
+                                 self.state['critical'][key], key)
+        self.assertEqual(['commander', 'driver'], self.state['critical']['crew_ko'])
+
+    def test_last_bot_crew_landing_death_retains_hull_health(self):
+        descriptor = self.runtime._descriptors[self.state['id']]
+        descriptor.type.crewRoles = (('commander', 'gunner'), ('driver',))
+        self.state['critical']['crew_ko'] = ['commander']
+        damage = self.runtime._apply_bot_fall_damage(self.state, 30, (0, 0))
+        self.assertEqual(600, damage)
+        self.assertEqual((400, 400, False, 3), (
+            self.state['health'], self.state['display_health'],
+            self.state['alive'], self.state['death_reason']))
+        self.assertEqual(['commander', 'driver'], self.state['critical']['crew_ko'])
+        self.assertEqual(0, self.state['speed'])
 
     def test_supported_compression_does_not_submit_a_landing(self):
         self.runtime._descriptors[self.state['id']] = self.suspension_descriptor

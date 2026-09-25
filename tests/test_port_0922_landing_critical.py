@@ -89,6 +89,130 @@ class LandingCriticalServerTests(unittest.TestCase):
                 self.assertEqual(0, self.player.critical_revision)
                 self.assertNotIn('critical', self.state.pending_events[-1])
 
+    def test_severe_landing_injures_real_crew_once_and_rebases_old_reports(self):
+        roster = ['commander', 'driver', 'gunner1', 'loader1', 'loader2',
+                  'radioman1']
+        self.player.effective_params['critical']['crew_roster'] = roster
+        self.player.critical_revision = self.player.critical_report_base_revision = 4
+        observation = self.observation((0, 0))
+        self.assertTrue(self.submit(observation))
+        damage = vehicle_physics.fall_damage(1780, 20.0)
+        self.assertEqual(1780 - damage, self.player.health)
+        self.assertTrue(self.player.alive)
+        self.assertEqual(roster, self.player.critical['crew_roster'])
+        self.assertEqual(['commander'], self.player.critical['crew_ko'])
+        self.assertEqual([], self.player.critical['devices'])
+        self.assertEqual((5, 5, 0), (
+            self.player.critical_revision, self.player.critical_report_base_revision,
+            self.player.critical_ack_seq))
+        event = self.state.pending_events[-1]
+        self.assertEqual([{'kind': 'crew', 'name': 'commander',
+                           'state': 'destroyed', 'cause': 'world_collision'}],
+                         event['critical']['events'])
+        before = copy.deepcopy(self.player.critical)
+        self.assertTrue(self.submit(copy.deepcopy(observation)))
+        self.assertEqual(before, self.player.critical)
+        self.assertEqual(1, len(self.state.pending_events))
+        self.assertEqual(5, self.player.critical_revision)
+        self.next_input()
+        self.assertTrue(self.submit(self.observation((0, 0))))
+        self.assertEqual(['commander', 'driver'], self.player.critical['crew_ko'])
+
+    def test_unknown_contact_cannot_be_replayed_as_a_measured_hull_impact(self):
+        self.player.effective_params['critical']['crew_roster'] = [
+            'commander', 'driver', 'gunner1', 'loader1', 'loader2', 'radioman1']
+        observation = self.observation()
+        self.assertTrue(self.submit(observation))
+        self.assertFalse(self.player.critical)
+        self.assertFalse(self.submit(dict(observation, track_loads=[0, 0])))
+        self.assertEqual('identity_conflict', self.results[-1]['reason'])
+        self.assertFalse(self.player.critical)
+
+    def test_medkit_restores_a_landing_casualty_and_replay_cannot_injure_again(self):
+        from gui.mods.offline_lan_0922 import equipment_mechanics
+
+        self.player.effective_params['critical']['crew_roster'] = [
+            'commander', 'driver', 'gunner1', 'loader1', 'loader2', 'radioman1']
+        self.player.effective_params['critical']['activation_targets'] = [
+            {'index': 7, 'name': 'commander'}]
+        contract = equipment_mechanics.project_equipment(types.SimpleNamespace(
+            name='medkit', id=(15, 2), compactDescr=763,
+            cooldownSeconds=90.0, reuseCount=1, repairAll=False))
+        equipment = equipment_mechanics.EquipmentState(contract, 0.0)
+        before_uses = equipment.uses_left
+        self.player.equipment_states = [equipment]
+        observation = self.observation((0, 0))
+        self.assertTrue(self.submit(observation))
+        self.assertEqual(['commander'], self.player.critical['crew_ko'])
+        damaged_health = self.player.health
+        intent = {
+            'type': 'equipment_intent', 'round_id': self.state.round_id,
+            'intent_seq': 1, 'equipment_id': 2,
+            'activation_code': (7 << 16) | 2, 'selected': 'commander',
+            'requested_active': None,
+        }
+        self.assertTrue(self.state.submit_equipment_intent(1, intent))
+        self.assertTrue(self.player.equipment_intent_result['accepted'])
+        self.assertEqual([], self.player.critical['crew_ko'])
+        revision = self.player.critical_revision
+        self.assertTrue(self.state.submit_equipment_intent(1, intent))
+        self.assertEqual(before_uses - 1, equipment.uses_left)
+        self.assertTrue(self.submit(observation))
+        self.assertEqual([], self.player.critical['crew_ko'])
+        self.assertEqual(revision, self.player.critical_revision)
+        self.assertEqual(damaged_health, self.player.health)
+
+    def test_last_crew_loss_disables_vehicle_without_fabricating_hull_damage(self):
+        self.player.critical = {
+            'devices': [], 'destroyed': [], 'crew_ko': ['commander'],
+            'crew_roster': ['commander', 'driver'], 'fire': False,
+            'ammo_rack_death': False, 'events': [],
+        }
+        observation = self.observation((0, 0), speed=30)
+        self.assertTrue(self.submit(observation))
+        damage = vehicle_physics.fall_damage(1780, 30)
+        self.assertEqual(1780 - damage, self.player.health)
+        self.assertGreater(self.player.health, 0)
+        self.assertFalse(self.player.alive)
+        self.assertEqual(self.player.health, self.player.display_health)
+        self.assertEqual(3, self.player.death_reason)
+        event = self.state.pending_events[-1]
+        self.assertEqual((damage, self.player.health, True, 3), (
+            event['damage'], event['health'], event['dead'], event['death_reason']))
+        self.assertEqual(['commander', 'driver'], self.player.critical['crew_ko'])
+        self.assertTrue(self.submit(observation))
+        self.assertEqual(1, len(self.state.pending_events))
+
+        # Exercise the client adapter with positive hull HP; death must reach
+        # the native crew flag instead of manufacturing a zero-health hit.
+        import test_port_0922_battle_runtime as runtime_fixture
+
+        runtime = runtime_fixture._runtime()
+        battle = runtime_fixture.BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._binding = mock.Mock()
+        battle._avatar.playerVehicleID = 10
+        descriptor = runtime_fixture._Descriptor()
+        descriptor.type = types.SimpleNamespace(
+            crewRoles=(('commander',), ('driver',)))
+        entity = runtime_fixture._Vehicle(
+            10, descriptor, runtime_fixture._Vector(), (0, 0, 0),
+            {'health': 1780})
+        runtime.bigworld.entities[10] = entity
+        record = {'engine_id': 10, 'kind': 'player', 'network_id': 1,
+                  'local': True,
+                  'state': {'health': 1780, 'alive': True, 'team': 1}}
+        battle._records = {'player:1': record}
+        battle._present_critical = mock.Mock()
+        battle._sync_fire_effect = mock.Mock()
+        entity.onHealthChanged = mock.Mock(wraps=entity.onHealthChanged)
+        self.assertTrue(battle._apply_combat_event(event))
+        self.assertEqual(self.player.health, entity.health)
+        self.assertFalse(entity.isCrewActive)
+        entity.onHealthChanged.assert_called_once_with(self.player.health, 0, 3)
+        self.assertTrue(battle._apply_combat_event(event))
+        self.assertEqual(1, entity.onHealthChanged.call_count)
+
     def test_replay_and_load_tampering_cannot_damage_twice(self):
         message = self.observation((0.75, 0.25))
         self.assertTrue(self.submit(message))

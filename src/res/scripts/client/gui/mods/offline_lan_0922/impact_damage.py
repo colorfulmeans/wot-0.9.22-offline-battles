@@ -1,8 +1,9 @@
 """Deterministic reconstructed landing damage, not a retail server formula.
 
 The existing hull fall-damage budget is shared by the verified compressive
-loads. Hull/belly load consumes its share without damaging unrelated devices.
-Only the two external track pools have a supported contact mapping.
+loads. Only the two external track pools have a contact-to-device mapping.
+Crew casualties use that same budget's fraction of full hull HP, quantized
+against the actual crew roster; this is an explicit project reconstruction.
 """
 import math
 
@@ -44,3 +45,32 @@ def track_losses(budget, loads, maxima):
         if share > 0.0 and maximum > 0.0 and budget > 0.0:
             result.append((name, min(maximum, budget * share)))
     return result
+
+
+def crew_casualties(budget, max_health, roster, knocked_out=(), impact_index=0):
+    """Quantize one damaging landing's severity into actual injured seats.
+
+    There are no retail crew-impact coefficients in the available client.
+    Conservatively round down the already computed hull-damage fraction times
+    the number of real crew members. Do not accumulate subthreshold landings,
+    borrow projectile saving throws, or invent crew HP. Seat order rotates on
+    successive accepted damaging impacts, solely as a deterministic tie-break;
+    it is not an assertion that a particular compartment received the impact.
+    """
+    seats = []
+    for name in roster or ():
+        if name not in seats:
+            seats.append(name)
+    maximum = float(max_health)
+    budget = float(budget)
+    if (not seats or maximum <= 0.0 or budget <= 0.0 or
+            math.isnan(maximum) or math.isinf(maximum) or
+            math.isnan(budget) or math.isinf(budget)):
+        return []
+    count = min(len(seats), int(budget * len(seats) / maximum))
+    if count <= 0:
+        return []
+    start = int(impact_index) % len(seats)
+    ordered = seats[start:] + seats[:start]
+    unavailable = set(knocked_out or ())
+    return [name for name in ordered if name not in unavailable][:count]
