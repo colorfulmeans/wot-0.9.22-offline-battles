@@ -3664,6 +3664,7 @@ class BattleRuntime(object):
                 # and attitude. The wider placement query can acquire an
                 # overhead bridge and turn every clear step into a rollback.
                 physics_ground_probe=self._support_column,
+                suspension_contact_probe=self._suspension_contact_sweep,
                 obstacle_probe=self._navigation_obstacle,
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
@@ -5324,6 +5325,15 @@ class BattleRuntime(object):
                 self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS)
         return self._runtime.bigworld.wg_collideSegment(
             self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS, ground_filter)
+
+    def _suspension_contact_sweep(self, start, end):
+        prepared = self._prepared_ground_filter((
+            (start[0], start[2]), (end[0], end[2])))
+        ground_filter = None if prepared is _EMPTY_GROUND_FILTER else prepared
+        hit = self._collide_down(self._vector(start), self._vector(end), ground_filter)
+        # Native #1513 always supplies the face normal. Descriptor-only test
+        # adapters may return just a point, which cannot prove a support face.
+        return (_xyz(hit[0]), _xyz(hit[1])) if hit is not None and len(hit) > 1 else None
 
     def _ground_y(self, x, z, hint=0.0, allow_wide=False):
         """Find upward-facing support below rejected overhead surfaces.
@@ -21874,8 +21884,13 @@ class BattleRuntime(object):
         for index, point in enumerate(points):
             x, z = point
             contact = params['pseudo_contacts'][index]
+            # A rigid corner owns its collision window. The model origin and
+            # old support plane can both lie metres above a corner hanging
+            # below a bridge; using either would pull that corner back up.
+            contact_height = (float(position[1])
+                              if contact.get('kind') == 'rigid' else probe_height)
             point_height = (
-                probe_height + vehicle_physics.suspension_point_offset(
+                contact_height + vehicle_physics.suspension_point_offset(
                     contact, self._local_pitch, self._local_roll)[1])
             minimum_y = (
                 point_height - params['rest_length'] -
@@ -21888,17 +21903,10 @@ class BattleRuntime(object):
             if contact.get('kind') == 'rigid':
                 future_pitch, future_roll = params.get(
                     'contact_sweep_pose', (self._local_pitch, self._local_roll))
-                future_height = probe_height + vehicle_physics.suspension_point_offset(
+                future_height = contact_height + vehicle_physics.suspension_point_offset(
                     contact, future_pitch, future_roll)[1]
                 minimum_y = min(minimum_y, future_height - sweep_drop -
                                 vehicle_physics.CONTACT_PENETRATION)
-                maximum_y = max(maximum_y, probe_height +
-                                vehicle_physics.CONTACT_PENETRATION)
-                previous_height = vehicle_physics.suspension_plane_height(
-                    params.get('contact_reference_plane'), x, z)
-                if previous_height is not None:
-                    maximum_y = max(maximum_y, previous_height +
-                                    vehicle_physics.CONTACT_PENETRATION)
             flat_maximum_y = (
                 point_height + vehicle_physics.CONTACT_PENETRATION
                 if contact.get('kind') == 'track' else None)
@@ -21908,7 +21916,12 @@ class BattleRuntime(object):
                 prepared_filter=prepared_filter)
             layers = self._suspension_ground_probe_layers
             if contact.get('kind') == 'rigid':
-                memory[index] = None
+                corner = (x, point_height, z)
+                value = vehicle_physics.swept_rigid_support(
+                    memory[index], corner, value, self._suspension_contact_sweep,
+                    lambda px, pz, low, high: self._suspension_ground_y(
+                        px, pz, low, high, prepared_filter=prepared_filter))
+                memory[index] = corner
             else:
                 value, memory[index] = vehicle_physics.retained_ground_contact(
                     point, value, memory[index],
@@ -22344,8 +22357,6 @@ class BattleRuntime(object):
             self._local_suspension_pitch_velocity,
             self._local_suspension_roll_velocity, dt,
             self._entity_turret_yaw(entity))
-        if params is not self._local_suspension_params:
-            params['contact_reference_plane'] = previous_plane
         timings = self._local_frame_stages
         ground_started = _PROFILE_CLOCK() if timings is not None else 0.0
         ground = self._local_suspension_ground_samples(
@@ -22514,7 +22525,12 @@ class BattleRuntime(object):
             self._local_suspension_support_vertical_speed = 0.0
             self._local_suspension_support_gradient = None
             self._local_spring_ground_memory = None
-            self._local_pseudo_ground_memory = None
+            if isinstance(self._local_pseudo_ground_memory, list):
+                self._local_pseudo_ground_memory = [
+                    value if params['pseudo_contacts'][index].get('kind') == 'rigid'
+                    else None for index, value in enumerate(self._local_pseudo_ground_memory)]
+                if not any(value is not None for value in self._local_pseudo_ground_memory):
+                    self._local_pseudo_ground_memory = None
         self._local_left_flying = bool(solved['left_flying'])
         self._local_right_flying = bool(solved['right_flying'])
         if solved['contact_count']:

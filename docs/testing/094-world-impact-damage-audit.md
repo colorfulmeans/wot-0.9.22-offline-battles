@@ -146,7 +146,7 @@ The `110942` follow-up requests nonfatal falling crew injuries explicitly.
 The preceding track-only producer could never generate those injuries: its
 only crew change was the complete terminal knockout when hull HP reached
 zero. The new shared `impact_damage.crew_casualties` fills that missing path
-with an explicit deterministic project reconstruction:
+with an explicit project reconstruction of injury severity:
 
 `casualty_budget = floor(fall_damage * actual_crew_count / vehicle_max_health)`.
 
@@ -155,12 +155,21 @@ fall severity without adding a new impact constant or crew HP pool. Rounding
 down gives no crew damage to small falls; subthreshold landings do not build
 up hidden injury points. The actual admitted roster supplies individual seat
 names, including numbered loaders and gunners and seats covering several
-roles. No generic five-person fallback is used. Starting at the accepted
-impact ordinal, roster order selects at most that many still-active members;
-already injured members do not spend the budget and are never revived.
-Rotation is a reproducible tie-break, not a claim about the impacted
-compartment. Role impairment and medkit recovery use existing critical-state
-mechanisms.
+roles. No generic five-person fallback is used. The original selection started
+at the accepted impact ordinal in roster order. The `130449` report exposes
+the consequence: the first damaging fall of every battle selected the
+commander, since both the ordinal and roster start reset to zero. Nonfatal
+environment hits of 459, 418 and 150 HP in three battles are followed by the
+same `CREW out=commander` result.
+
+Selection now samples actual still-active seats without replacement, once in
+the authoritative damage producer. Already injured members do not spend the
+budget and are never revived. The accepted event retains the selected seats;
+receipt replay, client presentation and replay after a medkit do not sample
+again. This removes the roster-order bias without changing the severity
+formula or adding a per-role injury coefficient. The random source is
+injectable for tests. Role impairment and medkit recovery use existing
+critical-state mechanisms.
 
 For example, a 359 HP fall on a full-HP scale of 1780 with six crew produces
 one casualty; the same severity with two crew produces none. This is a
@@ -179,7 +188,8 @@ world-collision death path while retaining remaining hull HP, as for existing
 crew-knockout deaths; it does not fabricate additional hull damage.
 
 Focused tests cover full-HP severity, no-contact and safe-speed exclusions,
-numbered seats, already injured crew, combined roles, human/Bot parity,
+numbered seats, first impacts across fresh battles, already injured crew,
+combined roles, human/Bot parity,
 canonical revision barriers, receipt identity, medkit use and replay, and
 positive-HP all-crew deaths. Native Windows landing behavior and the exact
 world-collision crew notification remain acceptance boundaries.

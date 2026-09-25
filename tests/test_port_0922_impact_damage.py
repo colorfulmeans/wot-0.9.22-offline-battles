@@ -1,6 +1,7 @@
 """Reconstructed landing loads and physical-to-critical adapter regressions."""
 import copy
 from pathlib import Path
+import random
 import sys
 import types
 import unittest
@@ -161,20 +162,32 @@ class LandingCrewDamageTests(unittest.TestCase):
     ROSTER = ('commander', 'driver', 'gunner1', 'loader1', 'loader2', 'radioman1')
 
     def test_budget_uses_full_health_and_real_seats_without_rounding_up(self):
-        self.assertEqual([], impact_damage.crew_casualties(
-            166, 1000, self.ROSTER))
-        self.assertEqual(['commander'], impact_damage.crew_casualties(
-            167, 1000, self.ROSTER))
-        self.assertEqual(['commander', 'driver'], impact_damage.crew_casualties(
-            359, 1000, self.ROSTER))
-        self.assertEqual(['commander'], impact_damage.crew_casualties(
-            359, 1780, self.ROSTER))
+        for budget, maximum, expected in ((166, 1000, 0), (167, 1000, 1),
+                                           (359, 1000, 2), (359, 1780, 1)):
+            casualties = impact_damage.crew_casualties(
+                budget, maximum, self.ROSTER, rng=random.Random(130449))
+            self.assertEqual(expected, len(casualties))
+            self.assertTrue(set(casualties).issubset(self.ROSTER))
 
-    def test_numbered_seats_rotate_and_existing_injuries_do_not_spend_budget(self):
-        self.assertEqual(['loader1', 'loader2'], impact_damage.crew_casualties(
-            400, 1000, self.ROSTER, ('gunner1',), impact_index=2))
-        self.assertEqual(['loader2'], impact_damage.crew_casualties(
-            200, 1000, self.ROSTER, impact_index=4))
+    def test_first_impact_can_hit_every_real_seat_instead_of_always_commander(self):
+        rng = random.Random(130449)
+        casualties = [impact_damage.crew_casualties(
+            359, 1780, self.ROSTER, rng=rng)[0] for unused in range(60)]
+        self.assertEqual(set(self.ROSTER), set(casualties))
+
+    def test_numbered_seats_are_sampled_once_and_existing_injuries_are_excluded(self):
+        rng = mock.Mock()
+        rng.sample.return_value = ['loader2', 'radioman1']
+        self.assertEqual(['loader2', 'radioman1'], impact_damage.crew_casualties(
+            400, 1000, self.ROSTER, ('gunner1',), rng=rng))
+        rng.sample.assert_called_once_with(
+            ['commander', 'driver', 'loader1', 'loader2', 'radioman1'], 2)
+        # A real RNG must also never duplicate seats, even when the budget
+        # exceeds the remaining healthy crew.
+        result = impact_damage.crew_casualties(
+            1000, 1000, self.ROSTER, ('gunner1',), rng=random.Random(130449))
+        self.assertEqual(set(self.ROSTER) - {'gunner1'}, set(result))
+        self.assertEqual(len(result), len(set(result)))
         self.assertEqual([], impact_damage.crew_casualties(
             1000, 1000, self.ROSTER, self.ROSTER))
         self.assertEqual([], impact_damage.crew_casualties(1000, 1000, ()))
@@ -194,7 +207,8 @@ class LandingCrewDamageTests(unittest.TestCase):
         vehicle._crew_ko = set()
         before = dict(vehicle.devices_hp)
         payload = critical_damage.apply_landing_damage(
-            vehicle, 600, (0, 0), 1000, ('commander', 'driver'))
+            vehicle, 600, (0, 0), 1000, ('commander', 'driver'),
+            rng=types.SimpleNamespace(sample=lambda seats, count: seats[:count]))
         self.assertEqual(before, vehicle.devices_hp)
         self.assertEqual({'commander'}, vehicle._crew_ko)
         self.assertEqual(frozenset(('commander', 'gunner', 'loader')),
@@ -255,6 +269,11 @@ class BotLandingDamageTests(unittest.TestCase):
         human.player.max_health = human.player.health = 1000
         human.player.effective_params['critical'] = \
             player_critical_mechanics.project_profile(descriptor)
+        sample_patch = mock.patch.object(
+            impact_damage.random, 'sample',
+            side_effect=lambda seats, count: seats[-count:])
+        sample_patch.start()
+        self.addCleanup(sample_patch.stop)
         for unused_index in range(2):
             human.next_input()
             self.assertTrue(human.submit(human.observation((0.2, 0.1))))
@@ -264,7 +283,7 @@ class BotLandingDamageTests(unittest.TestCase):
             for key in ('crew_ko', 'crew_roster', 'devices', 'destroyed', 'fire'):
                 self.assertEqual(human.player.critical[key],
                                  self.state['critical'][key], key)
-        self.assertEqual(['commander', 'driver'], self.state['critical']['crew_ko'])
+        self.assertEqual(['loader2', 'radioman1'], self.state['critical']['crew_ko'])
 
     def test_last_bot_crew_landing_death_retains_hull_health(self):
         descriptor = self.runtime._descriptors[self.state['id']]

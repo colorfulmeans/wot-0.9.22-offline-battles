@@ -1,5 +1,6 @@
 """Landing contact observations retain server damage and repair ownership."""
 import copy
+import random
 import types
 import unittest
 from unittest import mock
@@ -7,7 +8,7 @@ from unittest import mock
 import test_port_0922_lan_client_projectiles as client_fixture
 import test_port_0922_server_projectiles as server_fixture
 
-from gui.mods.offline_lan_0922 import vehicle_physics
+from gui.mods.offline_lan_0922 import impact_damage, vehicle_physics
 
 
 LEFT = 'leftTrackHealth'
@@ -100,13 +101,15 @@ class LandingCriticalServerTests(unittest.TestCase):
         self.assertEqual(1780 - damage, self.player.health)
         self.assertTrue(self.player.alive)
         self.assertEqual(roster, self.player.critical['crew_roster'])
-        self.assertEqual(['commander'], self.player.critical['crew_ko'])
+        casualties = self.player.critical['crew_ko']
+        self.assertEqual(1, len(casualties))
+        self.assertIn(casualties[0], roster)
         self.assertEqual([], self.player.critical['devices'])
         self.assertEqual((5, 5, 0), (
             self.player.critical_revision, self.player.critical_report_base_revision,
             self.player.critical_ack_seq))
         event = self.state.pending_events[-1]
-        self.assertEqual([{'kind': 'crew', 'name': 'commander',
+        self.assertEqual([{'kind': 'crew', 'name': casualties[0],
                            'state': 'destroyed', 'cause': 'world_collision'}],
                          event['critical']['events'])
         before = copy.deepcopy(self.player.critical)
@@ -116,13 +119,36 @@ class LandingCriticalServerTests(unittest.TestCase):
         self.assertEqual(5, self.player.critical_revision)
         self.next_input()
         self.assertTrue(self.submit(self.observation((0, 0))))
-        self.assertEqual(['commander', 'driver'], self.player.critical['crew_ko'])
+        self.assertEqual(2, len(self.player.critical['crew_ko']))
+        self.assertTrue(set(casualties).issubset(self.player.critical['crew_ko']))
+
+    def test_first_landing_per_battle_does_not_lock_casualty_to_the_commander(self):
+        roster = ['commander', 'driver', 'gunner1', 'loader1', 'loader2',
+                  'radioman1']
+        casualties = []
+        rng = random.Random(130449)
+        with mock.patch.object(impact_damage.random, 'sample',
+                               side_effect=rng.sample) as sample:
+            for unused in range(60):
+                self.setUp()
+                self.player.effective_params['critical']['crew_roster'] = roster
+                observation = self.observation((0, 0))
+                self.assertEqual(1, observation['observation_seq'])
+                self.assertTrue(self.submit(observation))
+                casualties.extend(self.player.critical['crew_ko'])
+                before = copy.deepcopy(self.player.critical)
+                self.assertTrue(self.submit(copy.deepcopy(observation)))
+                self.assertEqual(before, self.player.critical)
+            self.assertEqual(60, sample.call_count)
+        self.assertEqual(set(roster), set(casualties))
 
     def test_unknown_contact_cannot_be_replayed_as_a_measured_hull_impact(self):
         self.player.effective_params['critical']['crew_roster'] = [
             'commander', 'driver', 'gunner1', 'loader1', 'loader2', 'radioman1']
         observation = self.observation()
-        self.assertTrue(self.submit(observation))
+        with mock.patch.object(impact_damage.random, 'sample',
+                               side_effect=AssertionError('unmeasured contact')):
+            self.assertTrue(self.submit(observation))
         self.assertFalse(self.player.critical)
         self.assertFalse(self.submit(dict(observation, track_loads=[0, 0])))
         self.assertEqual('identity_conflict', self.results[-1]['reason'])
@@ -142,7 +168,10 @@ class LandingCriticalServerTests(unittest.TestCase):
         before_uses = equipment.uses_left
         self.player.equipment_states = [equipment]
         observation = self.observation((0, 0))
-        self.assertTrue(self.submit(observation))
+        with mock.patch.object(impact_damage.random, 'sample',
+                               return_value=['commander']) as sample:
+            self.assertTrue(self.submit(observation))
+            self.assertEqual(1, sample.call_count)
         self.assertEqual(['commander'], self.player.critical['crew_ko'])
         damaged_health = self.player.health
         intent = {
@@ -157,7 +186,9 @@ class LandingCriticalServerTests(unittest.TestCase):
         revision = self.player.critical_revision
         self.assertTrue(self.state.submit_equipment_intent(1, intent))
         self.assertEqual(before_uses - 1, equipment.uses_left)
-        self.assertTrue(self.submit(observation))
+        with mock.patch.object(impact_damage.random, 'sample',
+                               side_effect=AssertionError('replayed casualty')):
+            self.assertTrue(self.submit(observation))
         self.assertEqual([], self.player.critical['crew_ko'])
         self.assertEqual(revision, self.player.critical_revision)
         self.assertEqual(damaged_health, self.player.health)

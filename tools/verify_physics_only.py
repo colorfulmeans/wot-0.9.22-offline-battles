@@ -57,43 +57,51 @@ def same_tree(first, second):
 
 
 def physical_callback_init(old, new):
-    """Permit exactly the trailing callback argument and direct assignment."""
+    """Permit only the reviewed trailing physics callbacks and assignments."""
     if same_tree(old, new):
         return True
     new = copy.deepcopy(new)
-    if (len(new.args.args) != len(old.args.args) + 1 or
-            new.args.args[-1].arg != 'contact_motion_probe' or
-            not new.args.defaults or
-            not same_tree(new.args.defaults[-1], ast.parse('None').body[0].value)):
+    additions = len(new.args.args) - len(old.args.args)
+    callbacks = (
+        ('contact_motion_probe', 'contact_motion_probe'),
+        ('suspension_contact_probe', '_suspension_contact_probe'))
+    if additions not in (1, 2):
         return False
-    new.args.args.pop()
-    new.args.defaults.pop()
-    assignment = ast.parse(
-        'self.contact_motion_probe = contact_motion_probe').body[0]
-    matches = [index for index, node in enumerate(new.body)
-               if same_tree(node, assignment)]
-    if len(matches) != 1:
-        return False
-    del new.body[matches[0]]
+    for argument, attribute in reversed(callbacks[:additions]):
+        if (new.args.args[-1].arg != argument or
+                not new.args.defaults or not same_tree(
+                    new.args.defaults[-1], ast.parse('None').body[0].value)):
+            return False
+        new.args.args.pop()
+        new.args.defaults.pop()
+        assignment = ast.parse('self.%s = %s' % (attribute, argument)).body[0]
+        matches = [index for index, node in enumerate(new.body)
+                   if same_tree(node, assignment)]
+        if len(matches) != 1:
+            return False
+        del new.body[matches[0]]
     return same_tree(old, new)
 
 
 def physical_callback_injection(old, new):
-    """Permit only the reviewed keyword in the existing BotRuntime call."""
+    """Permit only the reviewed physics keywords in the existing BotRuntime call."""
     if same_tree(old, new):
         return True
     new = copy.deepcopy(new)
-    expected = ast.parse('self._bot_contact_motion_is_clear').body[0].value
-    removed = 0
+    expected = dict((name, ast.parse(value).body[0].value) for name, value in (
+        ('contact_motion_probe', 'self._bot_contact_motion_is_clear'),
+        ('suspension_contact_probe', 'self._suspension_contact_sweep')))
+    removed = []
     for node in ast.walk(new):
         if not (isinstance(node, ast.Call) and
                 isinstance(node.func, ast.Name) and node.func.id == 'BotRuntime'):
             continue
         for keyword in list(node.keywords):
-            if keyword.arg == 'contact_motion_probe' and same_tree(keyword.value, expected):
+            if keyword.arg in expected and same_tree(keyword.value, expected[keyword.arg]):
                 node.keywords.remove(keyword)
-                removed += 1
-    return removed == 1 and same_tree(old, new)
+                removed.append(keyword.arg)
+    return (sorted(removed) in (['contact_motion_probe'],
+            ['contact_motion_probe', 'suspension_contact_probe']) and same_tree(old, new))
 
 
 def audit(repo, target=None):

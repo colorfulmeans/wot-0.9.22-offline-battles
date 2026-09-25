@@ -1659,7 +1659,7 @@ def apply_landing_tracks(vehicle, damage_budget, track_loads):
 
 
 def apply_landing_damage(vehicle, damage_budget, track_loads, max_health,
-                         crew_roster, impact_index=0):
+                         crew_roster, rng=None):
     """Apply one verified landing to tracks and the actual admitted crew.
 
     None means contact provenance was not measured; (0, 0) is a measured
@@ -1673,7 +1673,7 @@ def apply_landing_damage(vehicle, damage_budget, track_loads, max_health,
     losses = _impact_damage.track_losses(damage_budget, track_loads, maxima)
     casualties = (_impact_damage.crew_casualties(
         damage_budget, max_health, crew_roster,
-        getattr(vehicle, '_crew_ko', None), impact_index)
+        getattr(vehicle, '_crew_ko', None), rng)
         if track_loads is not None else [])
     if not losses and not casualties:
         return None

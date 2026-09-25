@@ -1,4 +1,4 @@
-"""Deterministic reconstructed landing damage, not a retail server formula.
+"""Reconstructed landing damage, not a retail server formula.
 
 The existing hull fall-damage budget is shared by the verified compressive
 loads. Only the two external track pools have a contact-to-device mapping.
@@ -6,6 +6,7 @@ Crew casualties use that same budget's fraction of full hull HP, quantized
 against the actual crew roster; this is an explicit project reconstruction.
 """
 import math
+import random
 
 
 TRACK_NAMES = ('leftTrackHealth', 'rightTrackHealth')
@@ -47,15 +48,17 @@ def track_losses(budget, loads, maxima):
     return result
 
 
-def crew_casualties(budget, max_health, roster, knocked_out=(), impact_index=0):
+def crew_casualties(budget, max_health, roster, knocked_out=(), rng=None):
     """Quantize one damaging landing's severity into actual injured seats.
 
     There are no retail crew-impact coefficients in the available client.
     Conservatively round down the already computed hull-damage fraction times
     the number of real crew members. Do not accumulate subthreshold landings,
-    borrow projectile saving throws, or invent crew HP. Seat order rotates on
-    successive accepted damaging impacts, solely as a deterministic tie-break;
-    it is not an assertion that a particular compartment received the impact.
+    borrow projectile saving throws, or invent crew HP. Sample the active
+    seats without replacement: roster order and landing sequence must not
+    make the first casualty of every battle the commander. The authoritative
+    damage producer calls this once; clients present its committed result and
+    replayed observations never sample again. An injected RNG supports tests.
     """
     seats = []
     for name in roster or ():
@@ -70,7 +73,9 @@ def crew_casualties(budget, max_health, roster, knocked_out=(), impact_index=0):
     count = min(len(seats), int(budget * len(seats) / maximum))
     if count <= 0:
         return []
-    start = int(impact_index) % len(seats)
-    ordered = seats[start:] + seats[:start]
     unavailable = set(knocked_out or ())
-    return [name for name in ordered if name not in unavailable][:count]
+    available = [name for name in seats if name not in unavailable]
+    count = min(count, len(available))
+    if count == 0:
+        return []
+    return (rng if rng is not None else random).sample(available, count)

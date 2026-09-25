@@ -1725,6 +1725,38 @@ def suspension_vertical_sweep_drop(vertical_speed, dt):
 	return max(0.0, -float(vertical_speed) * step + GRAVITY * step * step)
 
 
+def swept_rigid_support(previous, point, ground, collide, query):
+	'''Acquire only a support face actually crossed by a moving rigid corner.
+
+	Vertical columns cannot see a slope already penetrated by horizontal or
+	angular travel. Sweep the corner's real old/new world positions instead of
+	extending its query up to the model origin or a remembered bridge plane.
+	'''
+	if previous is None or not callable(collide):
+		return ground
+	delta = tuple(point[i] - previous[i] for i in range(3))
+	if sum(value * value for value in delta) <= 1.0e-12:
+		return ground
+	start = (previous[0], previous[1] + CONTACT_PENETRATION, previous[2])
+	end = (point[0], point[1] + CONTACT_PENETRATION, point[2])
+	hit = collide(start, end)
+	if hit is None:
+		return ground
+	position, normal = hit
+	if (normal[1] <= 0.5 or
+			sum(delta[i] * normal[i] for i in range(3)) >= -1.0e-10):
+		return ground
+	height = (position[1] - (normal[0] * (point[0] - position[0]) +
+		normal[2] * (point[2] - position[2])) / normal[1])
+	if ground is not None and height <= ground:
+		return ground
+	# A crossed triangle is finite: its tangent must not create support over
+	# the void beyond a bridge edge. Recast the destination on that exact layer.
+	fresh = query(point[0], point[2], height - ALLOWED_PENETRATION,
+		height + ALLOWED_PENETRATION)
+	return fresh if fresh is not None else ground
+
+
 def resolve_suspension_origin_shift(yaw, shift, probe):
 	'''Sweep the model-origin translation without cancelling gravity/rotation.'''
 	sine, cosine = math.sin(yaw), math.cos(yaw)

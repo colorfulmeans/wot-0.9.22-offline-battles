@@ -1988,10 +1988,12 @@ class BotRuntime(object):
                  destructible_body_scan=None, control_seconds=None,
                  incoming_lane_probe=None, combat_diagnostics=None,
                  turret_motion_probe=None, turret_hulls_provider=None,
-                 artillery_status_probe=None, contact_motion_probe=None):
+                 artillery_status_probe=None, contact_motion_probe=None,
+                 suspension_contact_probe=None):
         self.local_player_id = local_player_id
         self.artillery_status_probe = artillery_status_probe
         self.contact_motion_probe = contact_motion_probe
+        self._suspension_contact_probe = suspension_contact_probe
         self._combat_diagnostics = combat_diagnostics
         self.descriptor_resolver = descriptor_resolver or (lambda unused: {})
         self.player_descriptor_resolver = player_descriptor_resolver
@@ -6168,8 +6170,12 @@ class BotRuntime(object):
         for index, point in enumerate(points):
             x, z = point
             contact = params['pseudo_contacts'][index]
+            # Match the visible body's actual corner sweep; an overhead
+            # bridge face is not support merely because the origin is above it.
+            contact_height = (float(position[1])
+                              if contact.get('kind') == 'rigid' else body_height)
             point_height = (
-                body_height + vehicle_physics.suspension_point_offset(
+                contact_height + vehicle_physics.suspension_point_offset(
                     contact, pitch, roll)[1])
             minimum_y = (
                 point_height - params['rest_length'] -
@@ -6182,24 +6188,21 @@ class BotRuntime(object):
             if contact.get('kind') == 'rigid':
                 future_pitch, future_roll = params.get(
                     'contact_sweep_pose', (pitch, roll))
-                future_height = body_height + vehicle_physics.suspension_point_offset(
+                future_height = contact_height + vehicle_physics.suspension_point_offset(
                     contact, future_pitch, future_roll)[1]
                 minimum_y = min(minimum_y, future_height - sweep_drop -
                                 vehicle_physics.CONTACT_PENETRATION)
-                maximum_y = max(maximum_y, body_height +
-                                vehicle_physics.CONTACT_PENETRATION)
-                previous_height = vehicle_physics.suspension_plane_height(
-                    params.get('contact_reference_plane'), x, z)
-                if previous_height is not None:
-                    maximum_y = max(maximum_y, previous_height +
-                                    vehicle_physics.CONTACT_PENETRATION)
             flat_maximum_y = (
                 point_height + vehicle_physics.CONTACT_PENETRATION
                 if contact.get('kind') == 'track' else None)
             ground = self._suspension_ground_value(
                 x, z, minimum_y, maximum_y, flat_maximum_y)
             if contact.get('kind') == 'rigid':
-                memory[index] = None
+                corner = (x, point_height, z)
+                ground = vehicle_physics.swept_rigid_support(
+                    memory[index], corner, ground, self._suspension_contact_probe,
+                    self._suspension_ground_value)
+                memory[index] = corner
             else:
                 ground, memory[index] = \
                     vehicle_physics.retained_ground_contact(
@@ -6744,8 +6747,6 @@ class BotRuntime(object):
         damage = vehicle_physics.fall_damage(maximum, impact_speed)
         if damage <= 0:
             return 0
-        impact_index = int(state.get('_landing_impact_index', 0))
-        state['_landing_impact_index'] = impact_index + 1
         descriptor = self._descriptors.get(state['id'], {})
         if track_loads is not None:
             shadow = _BotCriticalVehicle(
@@ -6754,7 +6755,7 @@ class BotRuntime(object):
             roster = ((state.get('critical') or {}).get('crew_roster') or
                       _descriptor_crew_roster(descriptor))
             critical = critical_damage.apply_landing_damage(
-                shadow, damage, track_loads, maximum, roster, impact_index)
+                shadow, damage, track_loads, maximum, roster)
             if critical is not None:
                 if roster:
                     critical['crew_roster'] = list(roster)
@@ -6944,8 +6945,6 @@ class BotRuntime(object):
             _number(state.get('suspension_pitch_velocity')),
             _number(state.get('suspension_roll_velocity')), step,
             _number(state.get('turret_yaw')))
-        if 'contact_sweep_pose' in params:
-            params['contact_reference_plane'] = previous_plane
         ground = self._suspension_ground_samples(
             state, params, probe_height, support_gradient, sweep_drop)
         pseudo_ground = self._suspension_pseudo_ground_samples(
@@ -7103,7 +7102,13 @@ class BotRuntime(object):
             state['_suspension_support_vertical_speed'] = 0.0
             state.pop('_suspension_support_gradient', None)
             state.pop('_spring_ground_memory', None)
-            state.pop('_pseudo_ground_memory', None)
+            memory = state.get('_pseudo_ground_memory')
+            if isinstance(memory, list):
+                state['_pseudo_ground_memory'] = [
+                    value if params['pseudo_contacts'][index].get('kind') == 'rigid'
+                    else None for index, value in enumerate(memory)]
+                if not any(value is not None for value in state['_pseudo_ground_memory']):
+                    state.pop('_pseudo_ground_memory', None)
         state['left_flying'] = bool(solved['left_flying'])
         state['right_flying'] = bool(solved['right_flying'])
         if solved['contact_count']:
@@ -8475,7 +8480,6 @@ class BotRuntime(object):
             plane = state.get('_suspension_ground_plane')
             gradient = ((plane['gradient_x'], plane['gradient_z'])
                         if isinstance(plane, dict) else None)
-            posed['contact_reference_plane'] = plane
             sweep_drop = vehicle_physics.suspension_vertical_sweep_drop(
                 _number(state.get('vertical_speed')), step)
             ground = self._suspension_ground_samples(
@@ -8533,7 +8537,13 @@ class BotRuntime(object):
                     state.pop('_suspension_ground_plane', None)
             if state['airborne']:
                 state.pop('_spring_ground_memory', None)
-                state.pop('_pseudo_ground_memory', None)
+                memory = state.get('_pseudo_ground_memory')
+                if isinstance(memory, list):
+                    state['_pseudo_ground_memory'] = [
+                        value if posed['pseudo_contacts'][index].get('kind') == 'rigid'
+                        else None for index, value in enumerate(memory)]
+                    if not any(value is not None for value in state['_pseudo_ground_memory']):
+                        state.pop('_pseudo_ground_memory', None)
                 state.pop('_suspension_ground_plane', None)
             return
         ground = self._ground_probe_at(state['x'], state['z'], state['y'])

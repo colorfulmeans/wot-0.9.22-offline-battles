@@ -18,7 +18,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = 'a5401f87359ac916f6fcedc31aa09d25bf226dd8'
-PACKAGE = 'wot-0.9.22-offline-battles-0.9.4-physics-r4-20260925-Windows-x64.zip'
+PACKAGE = 'wot-0.9.22-offline-battles-0.9.4-physics-r5-20260925-Windows-x64.zip'
 
 
 def read(path):

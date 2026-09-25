@@ -7730,7 +7730,7 @@ class BattleState:
             damage = vehicle_physics.fall_damage(
                 int(player.max_health), impact_speed)
             critical = self._landing_critical(
-                player, damage, track_loads, observation_seq - 1)
+                player, damage, track_loads)
             self._commit_player_environment_damage(
                 player, damage, 3, display_health=0, critical=critical)
             player.landing_observation_seq = observation_seq
@@ -7754,7 +7754,7 @@ class BattleState:
                 self._maybe_finish_battle()
             return offered
 
-    def _landing_critical(self, player, damage, loads, impact_index):
+    def _landing_critical(self, player, damage, loads, rng=None):
         """Rebase measured landing track/crew injury on the current state."""
         profile = (player.effective_params or {}).get("critical")
         if not isinstance(profile, dict):
@@ -7765,7 +7765,7 @@ class BattleState:
         roster = profile.get("crew_roster") or ()
         casualties = (impact_damage.crew_casualties(
             damage, player.max_health, roster,
-            (player.critical or {}).get("crew_ko"), impact_index)
+            (player.critical or {}).get("crew_ko"), rng)
             if loads is not None else [])
         if not losses and not casualties:
             return None
