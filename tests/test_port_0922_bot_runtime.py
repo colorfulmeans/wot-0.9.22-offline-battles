@@ -4908,13 +4908,8 @@ class BotRuntimeTests(unittest.TestCase):
                              terrain_pitch=-math.radians(angle))
                 for unused in range(100):
                     runtime._update_vertical_motion(state, 0.04)
-                    params = runtime._suspension_params_for(state['id'])
-                    travel = max(spring['max_compression'] for spring in params['springs'])
-                    wheelbase = (max(spring['z'] for spring in params['springs']) -
-                                 min(spring['z'] for spring in params['springs']))
-                    self.assertLess(abs(state['terrain_pitch'] + math.radians(angle)),
-                                    math.atan2(2.0 * travel,
-                                               wheelbase * math.cos(math.radians(angle))))
+                    self.assertAlmostEqual(-math.radians(angle),
+                                           state['terrain_pitch'], places=4)
                 self.assertAlmostEqual(gradient,
                     state['_suspension_ground_plane']['gradient_z'], places=4)
 
@@ -5363,16 +5358,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertNotIn('_spring_ground_memory', state)
         self.assertNotIn('_pseudo_ground_memory', state)
 
-        physics = self.module.vehicle_physics
-        center = dict(zip(('x', 'y', 'z'),
-                          runtime._suspension_params_for(state['id'])['center_of_mass']))
-        def center_state():
-            return dict(height=state['y'], pitch=state['terrain_pitch'], roll=state['roll'],
-                        vertical_velocity=state['vertical_speed'],
-                        pitch_velocity=state['suspension_pitch_velocity'],
-                        roll_velocity=state['suspension_roll_velocity'])
-        airborne_velocity = physics._rigid_point_velocity(center_state(), center)
-        airborne_height = physics._rigid_point_height(center_state(), center)
+        airborne_velocity = state['vertical_speed']
         before = (state['x'], state['y'], state['z'])
         state['z'] += horizontal_speed * dt
         self.assertFalse(runtime._update_vertical_motion(
@@ -5380,11 +5366,11 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertAlmostEqual(
             airborne_velocity - self.module.vehicle_physics.GRAVITY * dt,
-            physics._rigid_point_velocity(center_state(), center), places=10)
-        airborne_displacement = physics._rigid_point_height(center_state(), center) - airborne_height
+            state['vertical_speed'], places=10)
+        airborne_displacement = state['y'] - before[1]
         self.assertGreaterEqual(
             airborne_displacement,
-            physics._rigid_point_velocity(center_state(), center) * dt - 1.0e-10)
+            state['vertical_speed'] * dt - 1.0e-10)
         self.assertLessEqual(
             airborne_displacement,
             airborne_velocity * dt + 1.0e-10)

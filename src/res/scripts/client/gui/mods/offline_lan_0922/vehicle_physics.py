@@ -758,9 +758,6 @@ def derive_suspension_params(descriptor):
 		'vehicle physics weight')
 	if mass <= 0.0:
 		raise ValueError('vehicle physics weight must be positive')
-	engine_power = _finite_number(_required_value(
-		descriptor_physics, 'enginePower', 'vehicle physics enginePower'),
-		'vehicle physics enginePower')
 	# Keep derive_params as the unit owner and reject any unexpected divergence
 	# instead of silently simulating suspension with a generic mass.
 	if abs(float(physics['mass']) - mass) > 1.0e-6:
@@ -774,16 +771,6 @@ def derive_suspension_params(descriptor):
 	width, chassis_height, chassis_length = chassis_size
 	hull_position = _required_value(
 		chassis, 'hullPosition', 'selected chassis hullPosition')
-	# Exact #1513 initVehiclePhysicsClient/_computeCenterOfMassShift.
-	# Engine power is already in the descriptor's native units (W).
-	ratio = max(0.0, min(1.0, (engine_power / mass - 9.5) / (21.0 - 9.5)))
-	exponent = math.log((-0.2 + 0.15) / (-0.3 + 0.15),
-		(13.0 - 9.5) / (21.0 - 9.5))
-	shift = -0.15 + (-0.3 + 0.15) * math.pow(ratio, exponent)
-	center_of_mass = (0.0,
-		float(hull_position[1]) +
-		(float(hull_minimum[1]) + float(hull_maximum[1])) * 0.5 +
-		shift * (float(hull_maximum[1]) - float(hull_minimum[1])), 0.0)
 	try:
 		clearance_raw = (
 			_finite_number(hull_position[1], 'chassis hullPosition.y') +
@@ -956,7 +943,6 @@ def derive_suspension_params(descriptor):
 		12.0 * inertia_factors[2])
 	return {
 		'mass': mass, 'width': width, 'length': chassis_length,
-		'center_of_mass': center_of_mass,
 		'clearance': clearance, 'rest_length': rest_length,
 		'static_compression': static_compression,
 		'hard_ratio': hard_ratio,
@@ -1881,48 +1867,14 @@ def _project_suspension_limits(params, state, ground_heights,
 
 def damper_suspension_step(params, state, ground_heights, dt,
 		pseudo_ground_heights=None, support_vertical_velocity=0.0):
-	'''Integrate the reduced suspension about the mounted centre of mass.
+	'''Advance the model-origin ten-spring heave/pitch/roll trial.
 
-	The public pose is a ground-level model origin, not a centre of mass.
-	Using that origin for torque puts the mass on the track plane and can
-	leave a tank balanced against a bridge edge. Translate both the points
-	and the heave state; gravity then accelerates the centre without creating
-	angular acceleration in free fall. This remains the reduced three-axis
-	trial, not a reproduction of the native six-axis solver.
+	Both motion adapters own model-origin X/Z separately. Translating only
+	contact points and heave to a raised mass centre leaves that origin fixed
+	horizontally during rotation and creates repeated lift/recontact at edges.
+	Keep this reduced model coherent until a complete coupled translation,
+	velocity and world-contact solve can replace it.
 	'''
-	center = params.get('center_of_mass')
-	if center is None:
-		return _damper_suspension_step(params, state, ground_heights, dt,
-			pseudo_ground_heights, support_vertical_velocity)
-	point = dict(x=center[0], y=center[1], z=center[2])
-	cache = params.get('_centered_suspension')
-	if (cache is None or cache[0] is not params['springs'] or
-			cache[1] is not params.get('pseudo_contacts') or cache[2] != center):
-		shifted = dict(params)
-		shifted.pop('_centered_suspension', None)
-		for name in ('springs', 'pseudo_contacts'):
-			shifted[name] = tuple(dict(contact,
-				x=contact['x'] - center[0],
-				y=contact.get('y', 0.0) - center[1],
-				z=contact['z'] - center[2]) for contact in params.get(name, ()))
-		params['_centered_suspension'] = (
-			params['springs'], params.get('pseudo_contacts'), center, shifted)
-	else:
-		shifted = cache[3]
-	centered = dict(state)
-	centered['height'] = _rigid_point_height(state, point)
-	centered['vertical_velocity'] = _rigid_point_velocity(state, point)
-	result = _damper_suspension_step(shifted, centered, ground_heights, dt,
-		pseudo_ground_heights, support_vertical_velocity)
-	zero = dict(result, height=0.0, vertical_velocity=0.0)
-	result['height'] -= _rigid_point_height(zero, point)
-	result['vertical_velocity'] -= _rigid_point_velocity(zero, point)
-	return result
-
-
-def _damper_suspension_step(params, state, ground_heights, dt,
-		pseudo_ground_heights=None, support_vertical_velocity=0.0):
-	'''Advance the contrib ten-spring heave/pitch/roll trial.'''
 	if not isinstance(state, dict):
 		raise ValueError('suspension state must be a dictionary')
 	if len(ground_heights) != len(params['springs']):

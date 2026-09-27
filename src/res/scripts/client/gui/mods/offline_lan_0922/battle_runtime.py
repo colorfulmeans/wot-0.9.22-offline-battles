@@ -18035,11 +18035,16 @@ class BattleRuntime(object):
     def _report_local_motion_stall(self, start, end, dt, throttle, path,
                                    before=None, drive=None, pitch=None,
                                    contact=None, entity=None):
-        """Record bounded pose evidence when powered travel cannot advance."""
+        """Record bounded stalled travel and unpowered tipping evidence."""
         blocked_turn = (abs(self._local_drive_turn) > 0.01 and
                         abs(self._local_turn_speed) <= 1.0e-8 and
                         self._local_motion_status == 'hard')
-        if dt <= 0.0 or (abs(throttle) <= 0.01 and not blocked_turn):
+        # The bridge report lost all poses after the user released controls.
+        # Use the same tipping boundary as rigid suspension contacts, without
+        # issuing any new world query or changing the simulation cadence.
+        idle_tilt = (abs(throttle) <= 0.01 and not blocked_turn and
+                     math.cos(self._local_pitch) * math.cos(self._local_roll) < 0.9)
+        if dt <= 0.0 or (abs(throttle) <= 0.01 and not blocked_turn and not idle_tilt):
             return False
         dx, dz = end[0] - start[0], end[2] - start[2]
         stalled = dx * dx + dz * dz <= (0.2 * dt) ** 2
@@ -18047,7 +18052,7 @@ class BattleRuntime(object):
         losing_speed = (before is not None and throttle * before > 0.0 and
                         abs(self._local_speed) + 0.1 < abs(before))
         now = self._clock()
-        if not (stalled or contact_limited or losing_speed):
+        if not (stalled or contact_limited or losing_speed or idle_tilt):
             return self._report_local_prop_support(end, now)
         if now < getattr(self, '_next_local_stall_report', 0.0):
             return False
@@ -18057,13 +18062,25 @@ class BattleRuntime(object):
             'pos=(%.3f,%.3f,%.3f) yaw=%.3f pitch=%.3f roll=%.3f '
             'throttle=%.2f speed=%.3f vertical=%.3f '
             'path=%s world=%s kinds=%s support_blocked=%s airborne=%s\n' % (
-                'STALL' if stalled else 'SLOWDOWN',
+                'TILT' if idle_tilt else ('STALL' if stalled else 'SLOWDOWN'),
                 end[0], end[1], end[2], self._local_yaw,
                 self._local_pitch, self._local_roll, throttle,
                 self._local_speed, self._local_vertical_speed,
                 path or 'still', self._local_motion_status,
                 self._local_motion_kinds, self._local_support_rise_blocked,
                 self._local_airborne))
+        if idle_tilt:
+            sys.stdout.write('[Offline LAN 0.9.22] LOCAL TILT SUPPORT %s\n' %
+                json.dumps({
+                    'pitch_velocity': self._local_suspension_pitch_velocity,
+                    'roll_velocity': self._local_suspension_roll_velocity,
+                    'plane': self._local_ground_plane,
+                    'spring_columns':
+                        'x,z,minimum,maximum,direct,support,flat_maximum,layers',
+                    'spring_layer_columns': 'height,normal_y,verdict',
+                    'spring_probes': self._local_suspension_probe_trace,
+                }))
+            return True
         trace = contact or getattr(self, '_local_world_collision_trace', None)
         if before is not None:
             physics = self._local_physics or {}

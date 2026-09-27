@@ -1,0 +1,94 @@
+"""Dynamic coverage for the 040026 bridge regression (synthetic geometry).
+
+The native report does not contain continuous idle poses. This finite deck
+exercises the actual player ground adapter, not a replay of that map's mesh.
+"""
+import math
+import unittest
+from unittest import mock
+
+import test_port_0922_battle_runtime as runtime_tests
+
+
+class BridgeTipRegressionTests(unittest.TestCase):
+    def test_idle_tip_is_recorded_at_existing_cadence_without_native_probes(self):
+        runtime = runtime_tests._runtime()
+        battle = runtime_tests.BattleRuntime(runtime)
+        now = [10.0]
+        battle._clock = lambda: now[0]
+        battle._local_support_rise_blocked = False
+        battle._local_suspension_roll_velocity = 0.8
+        probes = ((1.0, 2.0, -1.0, 1.0, None, None, 0.5, ()),)
+        battle._local_suspension_probe_trace = probes
+        args = ((0, 0, 0), (0, 0, 0), 0.02, 0.0, 'still')
+        with mock.patch('sys.stdout') as output, \
+                mock.patch.object(battle, '_suspension_ground_y') as native_query:
+            for pitch, roll in ((0.0, 1.5), (1.5, 0.0)):
+                battle._local_pitch, battle._local_roll = pitch, roll
+                self.assertTrue(battle._report_local_motion_stall(*args))
+                self.assertFalse(battle._report_local_motion_stall(*args))
+                now[0] += 2.01
+            battle._local_pitch = battle._local_roll = 0.0
+            self.assertFalse(battle._report_local_motion_stall(*args))
+            native_query.assert_not_called()
+        text = ''.join(call.args[0] for call in output.write.call_args_list)
+        self.assertEqual(2, text.count('LOCAL TILT SUPPORT'))
+        self.assertIn('"roll_velocity": 0.8', text)
+        self.assertIn('"spring_probes":', text)
+        self.assertEqual(probes, battle._local_suspension_probe_trace)
+
+    def test_tipped_body_does_not_keep_lifting_and_rocking_above_deck(self):
+        physics = runtime_tests.vehicle_physics
+        for hz in (25, 60):
+            for side in (-1.0, 1.0):
+                for initial_roll in (-2.4, 2.4):
+                    with self.subTest(hz=hz, side=side, roll=initial_roll):
+                        runtime = runtime_tests._runtime()
+                        battle = runtime_tests.BattleRuntime(runtime)
+                        battle._avatar = runtime.bigworld.avatar
+                        battle._local_fall_armed = True
+                        battle._local_roll = initial_roll
+                        entity = runtime_tests._Vehicle(
+                            10, runtime_tests._suspension_descriptor(),
+                            runtime_tests._Vector(), (0, 0, 0), {'health': 500})
+
+                        def ground(x, z, low, high, **kwargs):
+                            # One finite deck edge with real missing columns.
+                            # Respect the native query's vertical range.
+                            limit = kwargs.get('flat_maximum_y')
+                            if limit is not None:
+                                high = min(high, limit)
+                            return (0.0 if side * x <= 0.0 and
+                                    low <= 0.0 <= high else None)
+
+                        battle._suspension_ground_y = ground
+                        params = physics.derive_suspension_params(entity.typeDescriptor)
+                        posed = physics.suspension_pose_params(params, 0, initial_roll)
+                        x = side * 0.1
+                        offsets = [physics.suspension_point_offset(
+                            point, 0.0, initial_roll) for point in posed['pseudo_contacts']]
+                        # Start clear of the deck, with zero angular velocity:
+                        # no deliberately intersecting hull or powered input.
+                        height = max([0.0] + [-point[1] for point in offsets
+                                     if side * (x + point[0]) <= 0.0])
+                        position = (x, height, 0.0)
+                        tail = []
+                        with mock.patch('sys.stdout'):
+                            for tick in range(10 * hz):
+                                battle._local_support_motion_pose = position
+                                position = battle._update_vertical_motion(
+                                    entity, position, 0.0, 1.0 / hz)
+                                self.assertIsNotNone(battle._local_suspension_params)
+                                self.assertTrue(all(math.isfinite(value) for value in position))
+                                if tick >= 8 * hz:
+                                    tail.append((position[1], battle._local_roll))
+                        # It may fall or settle on remaining body support.
+                        # It must not stay in the introduced lift/recontact
+                        # cycle, even when the user has released all controls.
+                        self.assertLess(max(row[0] for row in tail), 0.0)
+                        self.assertLess(max(row[1] for row in tail) -
+                                        min(row[1] for row in tail), 0.06)
+
+
+if __name__ == '__main__':
+    unittest.main()

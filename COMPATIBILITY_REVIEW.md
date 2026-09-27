@@ -6462,6 +6462,9 @@ trace. LT-14's reviewed conditions remain unchanged.
 
 ### September 28 intermittent KV-5 contact and bridge support follow-up
 
+The centre-of-mass integration and its validation conclusion in this section
+are superseded by report 040026 below. The ram-contact changes remain active.
+
 Reports 031859 and 032344 both identify `test-20260928-e249724` and the
 supported Chinese #1513 client. The user clarified that the missing damage
 is on enemies hit by KV-5, including T26E5; some contacts hurt them and others
@@ -6527,3 +6530,49 @@ layout repair; nearby destroyed fences do not contain the witness in their
 recorded component bounds. The evidence does not establish a safe owner or
 filter extent. No blanket material, chunk or excluded-slot collision bypass
 is added, and this map is not claimed fixed by this patch.
+
+### September 28 bridge regression from report 040026
+
+Report `20260928-040026-f99b63f0ab92` confirms `test-20260928-041eab2`
+in launcher, visible client, hidden worker and server. Its battle is KV-5 on
+`37_caucasus`; the user observes repeated tipping without leaving the bridge.
+There is no continuous pose/support record for that idle bridge interval:
+the previous diagnostics required drive throttle or a blocked steering input.
+The report must not be interpreted as successful bridge acceptance. The
+unrelated tutorial weakref exception occurs on exit, after this gameplay.
+
+The preceding patch translated contact points, height and vertical velocity
+to a raised mass centre, but both motion adapters still retained model-origin
+X/Z. Rotation therefore changed the horizontal centre position without the
+corresponding translation/velocity/world-contact integration. Correct native
+mass-centre constants do not validate that incomplete reduced solver. Remove
+the translation wrapper and restore the coherent model-origin suspension for
+both player and Bot paths, including the previous ballistic and slope test
+contracts. Keep the exact-client ABI evidence as research, not as an active
+mass-centre integration claim. No extra torque, angular clamp or forced fall
+has been introduced. KV-5 armour sampling, repeat-contact retries, timestamp
+freezing and the 0.25 RAM coefficient are unchanged.
+
+A new finite-deck test uses the real player ground-sampling and integration
+adapter, real missing columns, an initially non-penetrating tipped body and
+zero input/angular velocity. Eight mirrored cases at 25/60 Hz run for ten
+seconds. All eight fail on 041eab2: the body repeatedly rises and rocks above
+the deck. After removing the incomplete transform, they fall or settle and
+the final two-second motion converges. This is a synthetic regression, not a
+replay of the reported bridge mesh. It does not prove that every older
+side-support or ledge-hanging defect is fixed.
+
+Idle tipping now emits pose, angular rates, support plane and existing wheel
+probe evidence at the established two-second diagnostic cadence. It reuses
+the rigid-contact tipping threshold and cached samples without additional
+native collision queries. Upright idle vehicles remain silent. Coverage
+checks pitch and roll, the cadence, and absence of extra world probes.
+
+Validation: 1,334 focused runtime, bridge, suspension, ram-contact, Bot slope
+and cliff, server-AI, capture and collision checks pass. All 146 client files
+compile with CPython 2.7.18; pinned #1513 inspection and ABI audit pass. The
+existing unrelated broader-suite failures are not represented as green.
+Actual bridge departure and absence of repeated flipping on the exact client
+remain unverified until Windows gameplay acceptance. This patch withdraws
+the regressing mass-centre change; it is not a claim of native six-axis parity
+or completion of the original bridge-sticking report.
