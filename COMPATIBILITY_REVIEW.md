@@ -6576,3 +6576,61 @@ Actual bridge departure and absence of repeated flipping on the exact client
 remain unverified until Windows gameplay acceptance. This patch withdraws
 the regressing mass-centre change; it is not a claim of native six-axis parity
 or completion of the original bridge-sticking report.
+
+### September 28 bridge hang and reciprocal separation (044826)
+
+Report `20260928-044826-c53da28eff15` confirms `test-20260928-7bc3842`
+on #1513. At the `37_caucasus` bridge, KV-5 repeatedly has one missing track
+column, no fitted support plane, roll around 0.55-0.65 and zero angular
+velocity. The reduced solver's sleep test ignored rigid-contact impulses and
+allowed a one-sided body to sleep. Its ground-memory helper also continued
+supplying old deck heights without a current plane. Those retained columns
+could alternately arrest the falling body as it rotated outside the deck.
+
+Sleep now requires an actual contact polygon surrounding the reduced body's
+origin and includes hard-projection impulses in the acceleration test.
+Missing columns are retained only with a proved terrain gradient; a known
+flat gradient still covers bounded query holes. Both adapters use these shared
+laws. No raised-centre transform, artificial tipping torque or forced fall
+timer is added. The eight earlier overturn regressions still pass. Twenty-four
+additional mirrored finite-edge cases at 25/60/100/144 Hz now fall below the
+deck; twenty-two failed on the parent. These use synthetic geometry through
+the player adapter, not a reconstruction of the native bridge mesh.
+
+The report already carries correct masses (KV-5 100575 kg, the early light
+contact 31370 kg, HWK-12 12495 kg). There are two independent physical response
+defects. Visible contact summed independently solved impulses for multiple
+neighbours, unlike the worker's sequential solver. It now uses that same
+solver restricted to player-owned pairs, preserving one reciprocal momentum
+budget; Bot/Bot pairs remain worker-owned.
+
+More importantly, the contact ledger transported momentum but not reciprocal
+positional separation. Between worker updates, each render frame moved the
+player again against the unchanged remote pose. A one-metre overlap against
+31370 kg should move the 100575-kg player by 0.23537 m after the existing slop.
+Across a 200-ms update gap, the parent instead moved it 0.71475/0.94414/0.98924 m
+at 25/60/144 Hz. The new tests retain the mass share at every rate, including
+the 12495-kg peer and an ACK arriving before render interpolation catches up.
+
+The cumulative checkpoint now carries `[actor, sequence, momentumX,
+momentumZ, separationX, separationZ]`. Server relay and compact Bot encoding
+preserve both totals; worker ACKs travel with the canonical pose/velocity.
+Unacknowledged separation shifts only the physical prediction. Historical
+presented poses still supply armour/HP evidence, while physical contact uses
+the coherent current pose plus pending response. The worker applies unseen
+separation through its existing world-collision guard once, and does not
+separately solve that human pair again. Retries and coalescing cannot replay
+it; a blocked separation remains blocked. Momentum and positional correction
+are separate quantities, so separation never creates ram damage or velocity.
+The launcher must install the matching client/server/worker bundle together.
+
+Validation: 1,442 focused tests run, one environment-dependent test skipped,
+with no failures. The focused selection excludes six unchanged navigation
+failures reproduced on the parent; the existing hydraulic Bot slope failure
+was also observed and is outside this selection. New coverage includes
+reciprocal separation under snapshot delay, codec/queue/relay round trips,
+worker world blockers, retry/coalescing, crowd momentum, and installed mass
+plus engine-power inputs through actual worker receipt application. All 146
+client files compile under CPython 2.7.18; #1513 inspection and ABI audit pass.
+Actual bridge geometry, KV-5/light-tank pushing feel and Windows timing still
+require gameplay acceptance; automated results do not establish retail parity.

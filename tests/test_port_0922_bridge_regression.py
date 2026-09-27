@@ -11,6 +11,15 @@ import test_port_0922_battle_runtime as runtime_tests
 
 
 class BridgeTipRegressionTests(unittest.TestCase):
+    def test_missing_plane_releases_a_remembered_edge_column(self):
+        physics = runtime_tests.vehicle_physics
+        unused, memory = physics.retained_ground_contact((0, 0), 1, None, .5)
+        self.assertEqual((None, None), physics.retained_ground_contact(
+            (.01, 0), None, memory, .5))
+        # A proved flat plane still covers the existing short query gaps.
+        self.assertEqual(1, physics.retained_ground_contact(
+            (.01, 0), None, memory, .5, (0, 0))[0])
+
     def test_idle_tip_is_recorded_at_existing_cadence_without_native_probes(self):
         runtime = runtime_tests._runtime()
         battle = runtime_tests.BattleRuntime(runtime)
@@ -38,10 +47,18 @@ class BridgeTipRegressionTests(unittest.TestCase):
         self.assertEqual(probes, battle._local_suspension_probe_trace)
 
     def test_tipped_body_does_not_keep_lifting_and_rocking_above_deck(self):
+        self._fall_cases((25, 60), (-2.4, 2.4))
+
+    def test_single_sided_support_does_not_freeze_at_high_frame_rates(self):
+        # 044826: an unsupported side kept a zero angular velocity. Include
+        # small per-frame impulses as well as the worker's longer slices.
+        self._fall_cases((25, 60, 100, 144), (-.6, 0., .6), must_fall=True)
+
+    def _fall_cases(self, rates, rolls, must_fall=False):
         physics = runtime_tests.vehicle_physics
-        for hz in (25, 60):
+        for hz in rates:
             for side in (-1.0, 1.0):
-                for initial_roll in (-2.4, 2.4):
+                for initial_roll in rolls:
                     with self.subTest(hz=hz, side=side, roll=initial_roll):
                         runtime = runtime_tests._runtime()
                         battle = runtime_tests.BattleRuntime(runtime)
@@ -86,6 +103,8 @@ class BridgeTipRegressionTests(unittest.TestCase):
                         # It must not stay in the introduced lift/recontact
                         # cycle, even when the user has released all controls.
                         self.assertLess(max(row[0] for row in tail), 0.0)
+                        if must_fall:
+                            self.assertLess(position[1], -10.0)
                         self.assertLess(max(row[1] for row in tail) -
                                         min(row[1] for row in tail), 0.06)
 

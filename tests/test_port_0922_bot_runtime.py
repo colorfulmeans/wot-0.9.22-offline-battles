@@ -21396,7 +21396,7 @@ class HumanShovedWreckTests(unittest.TestCase):
                      alive=False, health=0, mass=25000.0,
                      grounded_once=True, push_x=0.0, push_z=0.0)
         player = self._player(9.0)
-        player['tank_pushes'] = [[11, 1, 0.0, 150000.0]]
+        player['tank_pushes'] = [[11, 1, 0.0, 150000.0, 0.0, 0.0]]
         runtime._resolve_tank_contacts([player], 100.0, 1.0 / 30.0)
         for tick in range(60):
             runtime._resolve_tank_contacts([], 100.1 + tick / 30.0,
@@ -21404,7 +21404,7 @@ class HumanShovedWreckTests(unittest.TestCase):
         settled = wreck['z']
         self.assertEqual(0.0, wreck['push_z'])
         player['z'] = settled - 5.0
-        player['tank_pushes'] = [[11, 2, 0.0, 300000.0]]
+        player['tank_pushes'] = [[11, 2, 0.0, 300000.0, 0.0, 0.0]]
         runtime._resolve_tank_contacts([player], 103.0, 1.0 / 30.0)
         self.assertGreater(wreck['z'], settled)
         self.assertGreater(wreck['push_z'], 0.0)

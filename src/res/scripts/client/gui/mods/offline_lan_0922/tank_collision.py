@@ -879,7 +879,7 @@ def grounded_inverse_masses(contact, first, second, inverse_a, inverse_b, dt):
     return inverse_a, inverse_b
 
 
-def resolve_pairs(tanks, dt):
+def resolve_pairs(tanks, dt, anchor=None):
     """Resolve an authority's simultaneous contacts once per unordered pair.
 
     Each later constraint sees the velocities already changed by earlier
@@ -887,6 +887,9 @@ def resolve_pairs(tanks, dt):
     can cancel the same momentum several times in a crowded spawn and lets
     each side apply a different hull-friction impulse. This shared sweep is
     reciprocal and dissipative for every integrated pair.
+
+    A visible player owns only pairs containing its anchor. Bot/Bot pairs
+    remain with the worker; both owners still use the same sequential solve.
     """
     bodies = [dict(tank) for tank in sorted(tanks, key=lambda t: t['id'])]
     results = dict((b['id'], {'correction': (0.0, 0.0),
@@ -896,6 +899,12 @@ def resolve_pairs(tanks, dt):
     pairs = []
     for index, a in enumerate(bodies):
         for b in bodies[index+1:]:
+            if anchor is not None and anchor not in (a['id'], b['id']):
+                continue
+            # Current human checkpoints own both reciprocal shares. Re-solving
+            # their post-response pose here would separate the same pair twice.
+            if not a.get('separation', True) or not b.get('separation', True):
+                continue
             if a.get('kind') == b.get('kind') == 'player':
                 continue
             if not (a.get('alive', True) or b.get('alive', True) or

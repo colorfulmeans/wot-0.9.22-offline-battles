@@ -1596,7 +1596,11 @@ def retained_ground_contact(point, ground, memory, maximum_distance,
 		if math.isnan(ground) or math.isinf(ground):
 			return None, None
 		return ground, (x, z, ground, x, z, 0.0, False)
-	if memory is None:
+	# A remembered column cannot supply support after the surrounding
+	# contacts no longer establish a terrain plane. This is especially
+	# important at ledges: rotation can otherwise repeatedly recover the
+	# same old deck height while that carrier is already outside the deck.
+	if memory is None or support_gradient is None:
 		return None, None
 	try:
 		origin_x = float(memory[0])
@@ -1724,6 +1728,39 @@ def _suspension_contact_keys(params, state, ground_heights,
 		elif contact.get('side') == 'right':
 			right.add(key)
 	return contacts, left, right
+
+
+def _suspension_has_stable_support(params, state, contact_keys):
+	'''Only sleep when actual contacts surround this reduced body's origin.
+
+	Small angular speed is not equilibrium on a ledge. In particular a row
+	of rigid contacts can generate an impulse below the per-frame sleep
+	threshold forever. Sleeping it each slice erases gravity's accumulated
+	tipping motion. Use the posed contact polygon, including rigid contacts,
+	not uncompressed spring probes or an old fitted ground plane.
+	'''
+	rotation = _suspension_rotation(state['pitch'], state['roll'])
+	points = set()
+	for kind, index in contact_keys:
+		point = params['springs' if kind == 'spring' else 'pseudo_contacts'][index]
+		x, unused_y, z = _suspension_point_offset(point, rotation)
+		points.add((x, z))
+	points = sorted(points)
+	if len(points) < 3:
+		return False
+
+	def cross(a, b, c):
+		return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
+
+	lower, upper = [], []
+	for chain, ordered in ((lower, points), (upper, reversed(points))):
+		for point in ordered:
+			while len(chain) >= 2 and cross(chain[-2], chain[-1], point) <= 0.0:
+				chain.pop()
+			chain.append(point)
+	hull = lower[:-1] + upper[:-1]
+	return len(hull) >= 3 and all(cross(hull[index-1], point, (0.0, 0.0)) > 1.0e-10
+		for index, point in enumerate(hull))
 
 
 def suspension_limit_excess(params, state, ground_heights):
@@ -2005,10 +2042,21 @@ def damper_suspension_step(params, state, ground_heights, dt,
 		result['pitch'] += result['pitch_velocity'] * step
 		result['roll'] += result['roll_velocity'] * step
 		pre_projection_speed = result['vertical_velocity']
+		pre_projection_pitch_speed = result['pitch_velocity']
+		pre_projection_roll_speed = result['roll_velocity']
 		projected = _project_suspension_limits(
 			params, result, ground_heights, pseudo_ground_heights,
 			support_vertical_velocity, support_projection_offset, constraints)
 		if projected:
+			if step > 0.0:
+				# Hard contacts exert impulses too. Spring force alone cannot
+				# classify a rigid edge contact as static equilibrium.
+				vertical_acceleration += (
+					result['vertical_velocity'] - pre_projection_speed) / step
+				pitch_acceleration += (
+					result['pitch_velocity'] - pre_projection_pitch_speed) / step
+				roll_acceleration += (
+					result['roll_velocity'] - pre_projection_roll_speed) / step
 			if (not contact_transition_seen and
 					pre_projection_speed -
 					support_vertical_velocity < 0.0):
@@ -2030,7 +2078,8 @@ def damper_suspension_step(params, state, ground_heights, dt,
 			impact_speed = result['vertical_velocity']
 		contact_transition_seen = True
 	touched_keys.update(contact_keys)
-	if contact_count:
+	if (contact_count and total > 0.0 and
+			_suspension_has_stable_support(params, result, contact_keys)):
 		if (abs(vertical_acceleration) < FREEZE_ACCEL_EPSILON and
 				abs(result['vertical_velocity'] -
 					support_vertical_velocity) < FREEZE_VEL_EPSILON):

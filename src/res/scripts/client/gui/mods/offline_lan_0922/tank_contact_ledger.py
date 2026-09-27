@@ -1,10 +1,12 @@
-"""Round-local cumulative physical impulses, independent of armour/HP receipts.
+"""Round-local cumulative physical responses, independent of armour/HP receipts.
 
 Each visible human reports the opposite momentum of its contact impulse.
 The worker divides the unseen momentum by its canonical Bot mass.
 Cumulative checkpoints survive input/snapshot coalescing; retries are no-ops.
 The acknowledgement travels with the Bot velocity it produced, so prediction
-subtracts exactly the already-integrated share, never a positional correction.
+subtracts exactly the already-integrated share. Separation has the same owner:
+without its reciprocal checkpoint each render frame moves the player again
+against the same unchanged remote pose, effectively discarding the mass ratio.
 """
 import math
 
@@ -18,16 +20,16 @@ def normalize(rows):
         raise ValueError('invalid contact checkpoint list')
     result = {}
     for row in rows:
-        if not isinstance(row, (list, tuple)) or len(row) != 4:
+        if not isinstance(row, (list, tuple)) or len(row) != 6:
             raise ValueError('invalid contact checkpoint')
-        actor, seq, x, z = row
+        actor, seq, x, z, separation_x, separation_z = row
         if (isinstance(actor, bool) or isinstance(seq, bool) or
                 int(actor) != actor or int(seq) != seq or
                 not 1 <= actor <= MAX_SEQUENCE or
                 not 1 <= seq <= MAX_SEQUENCE or actor in result):
             raise ValueError('invalid contact identity')
         values = []
-        for value in (x, z):
+        for value in (x, z, separation_x, separation_z):
             if isinstance(value, bool):
                 raise ValueError('invalid contact total')
             number = float(value)
@@ -38,26 +40,28 @@ def normalize(rows):
     return result
 
 
-def record(ledger, actor, delta):
-    if not any(delta):
+def record(ledger, actor, delta, separation=(0.0, 0.0)):
+    if not any(delta) and not any(separation):
         return
-    old = ledger.get(actor, [actor, 0, 0.0, 0.0])
+    old = ledger.get(actor, [actor, 0, 0.0, 0.0, 0.0, 0.0])
     ledger[actor] = [actor, old[1] + 1,
-                     old[2] + delta[0], old[3] + delta[1]]
+                     old[2] + delta[0], old[3] + delta[1],
+                     old[4] + separation[0], old[5] + separation[1]]
 
 
-def unseen(row, previous):
+def unseen(row, previous, separation=False):
+    index = 4 if separation else 2
     if previous is None:
-        return row[2], row[3]
+        return row[index], row[index+1]
     if row[1] <= previous[1]:
         return 0.0, 0.0
-    return row[2] - previous[2], row[3] - previous[3]
+    return row[index] - previous[index], row[index+1] - previous[index+1]
 
 
-def pending(ledger, actor, acknowledgements, player_id):
+def pending(ledger, actor, acknowledgements, player_id, separation=False):
     row = ledger.get(actor)
     if row is None:
         return 0.0, 0.0
     acknowledged = next((r for r in acknowledgements or ()
                          if r[0] == player_id), None)
-    return unseen(row, acknowledged)
+    return unseen(row, acknowledged, separation=separation)

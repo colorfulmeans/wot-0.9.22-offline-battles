@@ -338,7 +338,9 @@ def encode_row(state):
         for actor in sorted(acknowledgements):
             entry = acknowledgements[actor]
             row.extend((actor, entry[1], _fixed(entry[2], SPEED_SCALE),
-                        _fixed(entry[3], SPEED_SCALE)))
+                        _fixed(entry[3], SPEED_SCALE),
+                        _fixed(entry[4], POSITION_SCALE),
+                        _fixed(entry[5], POSITION_SCALE)))
     return row
 
 
@@ -481,7 +483,9 @@ def decode_row(row, static):
             result['contact_push_acks'].append([
                 cursor.take(), cursor.take(),
                 _real(cursor.take(), SPEED_SCALE),
-                _real(cursor.take(), SPEED_SCALE)])
+                _real(cursor.take(), SPEED_SCALE),
+                _real(cursor.take(), POSITION_SCALE),
+                _real(cursor.take(), POSITION_SCALE)])
         try:
             tank_contact_ledger.normalize(result['contact_push_acks'])
         except (ValueError, TypeError, OverflowError):

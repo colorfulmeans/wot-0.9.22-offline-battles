@@ -7786,7 +7786,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         bodies = battle._contact_tanks((0.0, 0.0, 0.0), shape)
 
-        self.assertEqual([11, 13], sorted(body['network_id'] for body in bodies))
+        # Keep both the historical contact needed for armour evidence and
+        # the current canonical contact needed for reciprocal separation.
+        self.assertEqual([11, 12, 13], sorted(body['network_id'] for body in bodies))
         self.assertEqual(1.0, next(
             body['z'] for body in bodies if body['network_id'] == 11))
 
@@ -7938,6 +7940,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'tank_collision.resolve_tank', return_value=contact), \
                 mock.patch(
                     'gui.mods.offline_lan_0922.battle_runtime.'
+                    'tank_collision.resolve_pairs', return_value={-1: contact}), \
+                mock.patch(
+                    'gui.mods.offline_lan_0922.battle_runtime.'
                     'world_collision.check_horizontal_collision',
                     return_value='clear'):
             position = battle._resolve_local_tank_contacts(
@@ -8011,7 +8016,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             local, (0.0, 0.0, 0.0), 0.0, 0.1)
         receipt = battle.local_ram_contact()
 
-        self.assertLess(corrected[2], 0.0)
+        # The historical visible contact still proves damage, but the
+        # canonical Bot has already left. Do not repeat its physical shove.
+        self.assertEqual(0.0, corrected[2])
         self.assertEqual((11, 37), (
             receipt['bot_id'], receipt['bot_state_revision']))
         self.assertEqual(123000, receipt['presentation_time_us'])
@@ -8026,7 +8033,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual((0.21, -0.13), (
             receipt['pitch'], receipt['roll']))
         self.assertGreater(receipt['vz'], 0.0)
-        self.assertLess(battle._local_speed, 10.0)
+        self.assertEqual(10.0, battle._local_speed)
         player_inward = battle._native_ram_vehicle_armor.call_args_list[
             0].args[3]
         bot_inward = battle._native_ram_vehicle_armor.call_args_list[
@@ -9040,6 +9047,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         state['alive'] = False
         dead_results = []
         for team in (1, 2):
+            battle._local_contact_pushes.clear()
             state['team'] = team
             battle._local_speed = 0.0
             battle._local_push_x = 0.0

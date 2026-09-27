@@ -792,14 +792,14 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
             (1.0, 2.0), 3.0, None, 0.5)
         self.assertEqual(3.0, ground)
         retained, stationary_miss = vehicle_physics.retained_ground_contact(
-            (1.0, 2.0), None, memory, 0.5)
+            (1.0, 2.0), None, memory, 0.5, (0.0, 0.0))
         self.assertEqual(3.0, retained)
         self.assertEqual(
             (None, None),
             vehicle_physics.retained_ground_contact(
-                (1.0, 2.0), None, stationary_miss, 0.5))
+                (1.0, 2.0), None, stationary_miss, 0.5, (0.0, 0.0)))
         retained, moved_memory = vehicle_physics.retained_ground_contact(
-            (1.2, 2.2), None, memory, 0.5)
+            (1.2, 2.2), None, memory, 0.5, (0.0, 0.0))
         self.assertEqual(3.0, retained)
         self.assertNotEqual(memory, moved_memory)
         sloped, unused_sloped_memory = \
@@ -810,23 +810,23 @@ class VehiclePhysicsSuspensionTrialTests(unittest.TestCase):
         self.assertEqual(
             (None, None),
             vehicle_physics.retained_ground_contact(
-                (1.2, 2.2), None, moved_memory, 0.5))
+                (1.2, 2.2), None, moved_memory, 0.5, (0.0, 0.0)))
         self.assertEqual(
             (None, None),
             vehicle_physics.retained_ground_contact(
-                (1.6, 2.0), None, memory, 0.5))
+                (1.6, 2.0), None, memory, 0.5, (0.0, 0.0)))
 
         unused_ground, memory = vehicle_physics.retained_ground_contact(
             (0.0, 0.0), 4.0, None, 0.5)
         for point in ((0.1, 0.0), (0.1, 0.1), (0.0, 0.1),
                       (0.0, 0.0), (-0.1, 0.0)):
             retained, memory = vehicle_physics.retained_ground_contact(
-                point, None, memory, 0.5)
+                point, None, memory, 0.5, (0.0, 0.0))
             self.assertEqual(4.0, retained)
         self.assertEqual(
             (None, None),
             vehicle_physics.retained_ground_contact(
-                (-0.1, -0.1), None, memory, 0.5))
+                (-0.1, -0.1), None, memory, 0.5, (0.0, 0.0)))
 
     def test_ground_plane_uses_contacts_and_rejects_a_discontinuity(self):
         gradient_x = 0.12

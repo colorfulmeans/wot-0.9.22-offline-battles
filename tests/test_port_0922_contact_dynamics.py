@@ -7,6 +7,50 @@ from gui.mods.offline_lan_0922 import vehicle_physics as drive
 
 
 class GroundContactTests(unittest.TestCase):
+    def test_player_anchor_leaves_remote_pairs_with_worker(self):
+        a = _tank(-1, 100., 100.)
+        b = _tank(2, 0., 0., vz=10.)
+        c = _tank(3, 0., 6.9)
+        self.assertTrue(all(row['delta_velocity'] == (0., 0.) and
+                            row['correction'] == (0., 0.) for row in
+                            contact.resolve_pairs([a, b, c], .02, anchor=-1).values()))
+        self.assertNotEqual((0., 0.), contact.resolve_pairs([b, c], .02)[2]['delta_velocity'])
+
+    def test_crowded_player_uses_one_momentum_budget_and_reciprocal_receipts(self):
+        import test_port_0922_battle_runtime as t
+        for count in (2, 4):
+            for reverse in (False, True):
+                runtime = t._runtime()
+                battle = t.BattleRuntime(runtime)
+                battle.client = t._Client()
+                battle._avatar = runtime.bigworld.avatar
+                battle._local_physics = dict(t._effective_params_snapshot()['physics'], mass=100575.)
+                battle._local_speed = 10.
+                peers = [_tank(100+i, 0., 6.9, mass=100575., team=1)
+                         for i in range(count)]
+                for peer in peers:
+                    peer.update(network_id=peer['id'], kind='bot')
+                battle._contact_tanks = lambda *args: list(reversed(peers)) if reverse else peers
+                battle._motion_is_clear = lambda *args, **kw: True
+                battle._baked_pose_safe = lambda *args: True
+                battle._poll_local_ram_contact_episodes = lambda *args: None
+                local = t._Vehicle(10, t._Descriptor(), t._Vector(), (0, 0, 0), {'health': 500})
+                with mock.patch('sys.stdout'):
+                    battle._resolve_local_tank_contacts(local, (0, 0, 0), 0., .02)
+                velocity = battle._local_speed + battle._local_push_z
+                # Several stopped hulls must not reverse the approaching
+                # player or each consume the full original impact again.
+                self.assertGreaterEqual(velocity, 0.)
+                kinetic = 100575. * velocity**2
+                momentum = 100575. * velocity
+                for peer in peers:
+                    row = battle._local_contact_pushes.get(peer['id'])
+                    transferred = row[3] if row is not None else 0.
+                    momentum += transferred
+                    kinetic += transferred**2 / peer['mass']
+                self.assertAlmostEqual(100575. * 10., momentum, places=6)
+                self.assertLessEqual(kinetic, 100575. * 10.**2)
+
     def test_turning_a_pinned_hull_spends_mass_and_engine_power_for_either_owner(self):
         for dt in (1./15, 1./30, 1./60):
             for actor in (1, 1000001):

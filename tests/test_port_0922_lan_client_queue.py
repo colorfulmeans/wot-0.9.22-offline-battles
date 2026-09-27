@@ -587,6 +587,9 @@ class LanClientQueueTests(unittest.TestCase):
             'type': 'bot_state', 'round_id': client.round_id,
             'bots': states,
         }
+        for state in states:
+            state.update(push_x=0.0, push_z=0.0,
+                         contact_push_acks=[[1, 2, 150.0, -75.0, .2, -.1]])
         unused_frozen, full_size = lan_client_module._freeze_outbound(
             full_message, [0])
 

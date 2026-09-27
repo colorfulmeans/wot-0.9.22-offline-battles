@@ -20927,17 +20927,28 @@ class BattleRuntime(object):
                 record.get('kind') == 'bot' and
                 record.get('network_id') in self._local_ram_episode_contacts)
             if not active_episode:
-                if not tank_collision.vertical_overlap(
+                presented_overlap = tank_collision.vertical_overlap(
                         position[1], own_shape, y, shape,
                         pitch_a=self._local_pitch, roll_a=self._local_roll,
                         pitch_b=_number(pose.get('pitch', state.get('pitch'))),
-                        roll_b=_number(pose.get('roll', state.get('roll')))):
+                        roll_b=_number(pose.get('roll', state.get('roll'))))
+                canonical_overlap = (record.get('kind') == 'bot' and
+                    tank_collision.vertical_overlap(
+                        position[1], own_shape, _number(state.get('y')), shape,
+                        pitch_a=self._local_pitch, roll_a=self._local_roll,
+                        pitch_b=_number(state.get('pitch')),
+                        roll_b=_number(state.get('roll'))))
+                if not presented_overlap and not canonical_overlap:
                     continue
                 radius = math.sqrt(shape[0] * shape[0] + shape[1] * shape[1])
                 reach = (own_radius + radius + max(0.0, extra_reach) +
                          tank_collision.CONTACT_BROADPHASE_PADDING)
                 dx, dz = position[0] - x, position[2] - z
-                if dx * dx + dz * dz > reach * reach:
+                canonical_dx = position[0] - _number(state.get('x'))
+                canonical_dz = position[2] - _number(state.get('z'))
+                if (dx * dx + dz * dz > reach * reach and
+                        (not canonical_overlap or
+                         canonical_dx * canonical_dx + canonical_dz * canonical_dz > reach * reach)):
                     continue
             physical_state = state
             if isinstance(presented_pose, dict):
@@ -20973,6 +20984,7 @@ class BattleRuntime(object):
                 if player_effective is not None else
                 self._ram_profile(descriptor))
             physical_velocity = None
+            physical_pose = None
             if record.get('kind') == 'bot':
                 physical_yaw = _number(physical_state.get('yaw'))
                 physical_speed = (_number(physical_state.get('speed'))
@@ -20988,6 +21000,17 @@ class BattleRuntime(object):
                     _number(physical_state.get('push_x')) + pending[0],
                     math.cos(physical_yaw) * physical_speed +
                     _number(physical_state.get('push_z')) + pending[1])
+                separation = tank_contact_ledger.pending(
+                    self._local_contact_pushes, int(record['network_id']),
+                    physical_state.get('contact_push_acks'),
+                    int(getattr(self.client, 'player_id', 0)), separation=True)
+                # Pose and acknowledgement must come from the same canonical
+                # sample. Render interpolation may still show an older pose;
+                # using it here replays an already acknowledged separation.
+                physical_pose = dict((key, _number(physical_state.get(key)))
+                                     for key in ('x', 'y', 'z', 'yaw', 'pitch', 'roll'))
+                physical_pose['x'] += separation[0]
+                physical_pose['z'] += separation[1]
             params = (player_effective['physics'] if player_effective is not None else
                       (vehicle_physics.descriptor_contact_params(descriptor) if descriptor is not None else None))
             grip = (vehicle_physics.contact_push_decel(
@@ -21020,6 +21043,7 @@ class BattleRuntime(object):
                 # Historical armour receipts settle HP independently.
                 'impulse': True,
                 'physical_velocity': physical_velocity,
+                'physical_pose': physical_pose,
                 # A Bot wreck is shoved by the authority worker, so it keeps a
                 # real inverse mass here and the local hull only takes its own
                 # share of the separation.  A dead human hull has no
@@ -21077,17 +21101,25 @@ class BattleRuntime(object):
             physical = dict(other)
             if physical.get('physical_velocity') is not None:
                 physical['vx'], physical['vz'] = physical['physical_velocity']
+            if physical.get('physical_pose') is not None:
+                physical.update(physical['physical_pose'])
             physical_others.append(physical)
         contact = tank_collision.resolve_tank(
             own, physical_others, now=now,
             ram_cooldowns=self._local_ram_cooldowns,
             active_ram_contacts=self._local_ram_contacts, dt=dt)
-        responses = dict(contact.get('responses', ()))
-        solved = {
-            own['id']: {'delta_velocity': contact['delta_velocity']}}
-        for other in physical_others:
-            solved[other['id']] = {
-                'delta_velocity': responses.get(other['id'], (0.0, 0.0))}
+        # Damage keeps the frozen first-impact inputs above. Physical
+        # response must share the worker's sequential solve: independently
+        # summing several contacts spends the player's momentum repeatedly
+        # in a crowded spawn, and can even create kinetic energy.
+        solved = tank_collision.resolve_pairs(
+            [own] + physical_others, dt, anchor=own['id'])
+        contact['correction'] = solved[own['id']]['correction']
+        contact['delta_velocity'] = solved[own['id']]['delta_velocity']
+        responses = dict((other['id'], solved[other['id']]['delta_velocity'])
+                         for other in physical_others
+                         if (solved[other['id']]['delta_velocity'] != (0.0, 0.0) or
+                             solved[other['id']]['correction'] != (0.0, 0.0)))
         traverse_bodies = tank_collision.post_contact_velocity_bodies(
             [own] + physical_others, solved)
         angular = tank_collision.traverse_impulses(
@@ -21113,7 +21145,8 @@ class BattleRuntime(object):
             if other.get('kind') == 'bot':
                 tank_contact_ledger.record(
                     self._local_contact_pushes, other['network_id'],
-                    (delta[0] * other['mass'], delta[1] * other['mass']))
+                    (delta[0] * other['mass'], delta[1] * other['mass']),
+                    separation=solved[other_id]['correction'])
         delta_x, delta_z = contact['delta_velocity']
         if ((delta_x or delta_z) and now >= self._local_contact_log_time):
             self._local_contact_log_time = now + 2.0

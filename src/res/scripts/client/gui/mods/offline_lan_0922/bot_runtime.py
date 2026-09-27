@@ -8736,14 +8736,15 @@ class BotRuntime(object):
                 if previous is not None and row[1] <= previous[1]:
                     continue
                 momentum = tank_contact_ledger.unseen(row, previous)
+                separation = tank_contact_ledger.unseen(row, previous, separation=True)
                 mass = max(float(state['mass']), 1.0)
                 delta = (momentum[0] / mass, momentum[1] / mass)
                 self._apply_tank_contact_response(
-                    state, {'delta_velocity': delta, 'correction': (0.0, 0.0)},
-                    0.0, advance_push=False, apply_correction=False)
+                    state, {'delta_velocity': delta, 'correction': separation},
+                    0.0, advance_push=False, apply_correction=True)
                 if previous is not None:
                     acknowledgements.remove(previous)
-                acknowledgements.append([player_id, row[1], row[2], row[3]])
+                acknowledgements.append([player_id] + row[1:])
                 if now is not None and now >= state.get('_contact_log_time', 0.0):
                     state['_contact_log_time'] = now + 2.0
                     sys.stdout.write(
@@ -8808,6 +8809,7 @@ class BotRuntime(object):
                 # from the post-separation player pose. Bare law-test callers
                 # without that transport still resolve an ordinary pair.
                 'impulse': 'tank_pushes' not in raw,
+                'separation': not alive or 'tank_pushes' not in raw,
                 # A dead human hull has no integrator at all: the visible
                 # client stops its drive step on death and this worker never
                 # owned the player pose.  Keep it as world geometry instead of
