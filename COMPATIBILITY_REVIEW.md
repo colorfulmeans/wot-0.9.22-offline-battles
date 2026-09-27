@@ -6459,3 +6459,71 @@ repeated wreck pushing and light/heavy contact observations are not claimed
 fixed by these changes. Report 232418's final Python exception is tutorial
 teardown, not proof of an air-wall cause; 215741 contains no battle contact
 trace. LT-14's reviewed conditions remain unchanged.
+
+### September 28 intermittent KV-5 contact and bridge support follow-up
+
+Reports 031859 and 032344 both identify `test-20260928-e249724` and the
+supported Chinese #1513 client. The user clarified that the missing damage
+is on enemies hit by KV-5, including T26E5; some contacts hurt them and others
+do not. The first report records an unsupported proof at 03:18:05 against
+Bot 20, despite separately finding 180 mm and 80 mm plates, while later
+contacts in the same battle successfully damage enemies. This is not evidence
+for increasing the global ram coefficient.
+
+The contact sampler now searches the intersection of both mounted hull height
+bounds in addition to the wider track-to-roof contact envelope. A thin shared
+hull band can lie between every old sample. Bounds only place rays: both
+native hit testers must still return structural plates on the same ray, and
+the receipt stays inside the shared contact envelope. Different heights are
+never combined and no primary/minimum armour fallback is introduced. A
+terminally unproved contact no longer consumes the overlap episode; a later
+contact can submit its own current pose and pre-separation velocity. The
+presentation timestamp is frozen with the matrices, so a next-frame retry
+cannot attach old geometry to a newer Bot snapshot. Tilted contact broad phase
+uses both bodies' pitch and roll. Enemy RAM scaling remains 0.25.
+
+Report 032344 shows one supported track column at bridge height 1.109309,
+the other unsupported, and a rolled body near (4.94, 0.56, 111.79). This differs
+from the earlier unsupported-body/downward-speed cancellation. Inspection
+found the reduced suspension solving torque about the ground-level model
+origin. Exact `physics_shared.initVehiclePhysicsClient` instead places its
+centre of mass at mounted hull midpoint plus the hull-height-scaled power
+curve. The native curve uses enginePower/weight knots 9.5/13/21 and shifts
+-0.15/-0.2/-0.3. These constants, function signatures and consumers are now
+audited against the pinned PYC. The suspension integrates translated contact
+points and heave about that centre, then returns the model-origin pose and
+velocity. Cached points are refreshed when tipping adds rigid hull/turret
+contacts. The reduced three-axis model still is not native six-axis physics;
+this corrects a provable torque-origin defect but does not establish that all
+reported bridge sticking is resolved in game.
+
+Tests cover a narrow shared hull band, failed proof retirement, immutable
+contact time, tilted supported mass tipping, no gravity-induced rotation in
+free fall, curve control points and rigid-contact cache refresh. Existing
+ballistic checks now measure the physical centre rather than a rotating model
+origin; slope checks allow the spring-travel-bounded load transfer instead of
+requiring a perfectly uncompressed hull attitude. 1,335 focused runtime,
+suspension, contact, server-AI, capture and collision checks pass. The broader
+Bot run has the same 26 pre-existing failures and 14 errors after updating
+the two centre-of-mass expectations and rerunning those checks. All 146 client
+sources compile under CPython 2.7.18; exact-client inspection and ABI audit
+pass. Actual KV-5/T26E5 contact and bridge departure still need #1513 playtesting.
+
+The requested investigations have explicit limits. Falling still changes
+canonical vehicle HP without a module/crew injury operation. Searching the
+exact client PYC finds projectile/explosion saving throws, not an official
+falling injury-selection/damage law, so no invented probability or HP ratio
+is installed. Offline replay also remains unimplemented: stock BattleReplay
+auto-recording belongs to Account/native replay-controller lifecycle, whereas
+this port's offline entity and LAN event stream has no recording/playback
+adapter. Enabling the stock option alone does not supply that missing path.
+No empty or non-playable file is presented as a replay fix.
+
+The Stratford report 173316 ends on `34_redshire`, on the older 0.9.5 build
+`colorfulmeans-36137978481-1`. Its final witnesses include (125.94767, 4.58314,
+-144.74382), material 73/flags 0/item 8/chunk 32893, and a later material 73/
+flags 131/item 203 contact. The first slot is excluded/quarantined after a
+layout repair; nearby destroyed fences do not contain the witness in their
+recorded component bounds. The evidence does not establish a safe owner or
+filter extent. No blanket material, chunk or excluded-slot collision bypass
+is added, and this map is not claimed fixed by this patch.

@@ -577,6 +577,7 @@ def _suspension_descriptor():
     descriptor = _Descriptor()
     descriptor.physics.update({
         'weight': 12000.0,
+        'enginePower': 180000.0,
         'trackCenterOffset': 1.2,
     })
     descriptor.chassis.name = 'test_chassis'
@@ -24106,7 +24107,16 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertIsNone(battle._local_spring_ground_memory)
         self.assertIsNone(battle._local_pseudo_ground_memory)
 
-        airborne_velocity = battle._local_vertical_speed
+        center = dict(zip(('x', 'y', 'z'),
+                          battle._local_suspension_params['center_of_mass']))
+        def center_state():
+            return dict(height=position[1], pitch=battle._local_pitch,
+                        roll=battle._local_roll,
+                        vertical_velocity=battle._local_vertical_speed,
+                        pitch_velocity=battle._local_suspension_pitch_velocity,
+                        roll_velocity=battle._local_suspension_roll_velocity)
+        airborne_velocity = vehicle_physics._rigid_point_velocity(center_state(), center)
+        airborne_height = vehicle_physics._rigid_point_height(center_state(), center)
         before = position
         candidate = (
             before[0], before[1], before[2] + horizontal_speed * dt)
@@ -24116,11 +24126,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertAlmostEqual(
             airborne_velocity - vehicle_physics.GRAVITY * dt,
-            battle._local_vertical_speed, places=10)
-        airborne_displacement = position[1] - before[1]
+            vehicle_physics._rigid_point_velocity(center_state(), center), places=10)
+        airborne_displacement = (vehicle_physics._rigid_point_height(center_state(), center)
+                                 - airborne_height)
         self.assertGreaterEqual(
             airborne_displacement,
-            battle._local_vertical_speed * dt - 1.0e-10)
+            vehicle_physics._rigid_point_velocity(center_state(), center) * dt - 1.0e-10)
         self.assertLessEqual(
             airborne_displacement,
             airborne_velocity * dt + 1.0e-10)
@@ -24395,8 +24406,16 @@ class BattleRuntimeContractTests(unittest.TestCase):
                     battle._local_support_motion_pose = position
                     position = battle._update_vertical_motion(
                         entity, position, 0.0, 0.04)
-                    self.assertAlmostEqual(-math.radians(angle),
-                                           battle._local_pitch, places=4)
+                    # A raised centre of mass transfers load between axles;
+                    # spring compression may pitch the hull relative to the
+                    # plane. Bound that deflection by real spring travel.
+                    params = battle._local_suspension_params
+                    travel = max(spring['max_compression'] for spring in params['springs'])
+                    wheelbase = (max(spring['z'] for spring in params['springs']) -
+                                 min(spring['z'] for spring in params['springs']))
+                    self.assertLess(abs(battle._local_pitch + math.radians(angle)),
+                                    math.atan2(2.0 * travel,
+                                               wheelbase * math.cos(math.radians(angle))))
                     self.assertGreater(battle._local_surface_up_cosine, 0.5)
                 self.assertAlmostEqual(gradient,
                     battle._local_ground_plane['gradient_z'], places=4)
@@ -24743,6 +24762,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_downhill = (-1.0, 0.0, 0.0)
         battle._local_slope_tangent = gradient
 
+        settled_gap = position[1] - gradient * position[0]
         maximum_gap = 0.0
         for unused in range(100):
             battle._local_support_motion_pose = position
@@ -24750,7 +24770,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 entity, position, 0.0, dt)
             maximum_gap = max(
                 maximum_gap,
-                abs(position[1] - gradient * position[0]))
+                abs(position[1] - gradient * position[0] - settled_gap))
             self.assertFalse(battle._local_airborne)
 
         self.assertLess(maximum_gap, 0.03)

@@ -128,6 +128,10 @@ EXPECTED_ABI = {
     },
     'scripts/common/physics_shared.pyc': {
         'configurePhysicsMode': ('cfg', 'typeDesc', 'gravityFactor'),
+        'initVehiclePhysicsClient': ('physics', 'typeDesc'),
+        '_computeCenterOfMassShift': ('mass', 'enginePower'),
+        '_powerCurve': ('arg', 'argMin', 'argMid', 'argMax',
+                        'valMin', 'valMid', 'valMax'),
     },
     'scripts/common/items/components/legacy_stuff.pyc': {
         'NoLegacyStuff.get': ('self', 'k', 'd'),
@@ -1192,6 +1196,13 @@ EXPECTED_CODE_NAMES = {
     'scripts/common/physics_shared.pyc': {
         'configurePhysicsMode': (
             'chassis', 'hull', 'hitTester', 'bbox', 'hullPosition'),
+        'initVehiclePhysicsClient': (
+            'physics', 'hull', 'hitTester', 'bbox', 'chassis',
+            'hullPosition', '_computeCenterOfMassShift', 'centerOfMass'),
+        '_computeCenterOfMassShift': (
+            '_powerCurve', 'DYN_RATIO_MIN', 'DYN_RATIO_MID', 'DYN_RATIO_MAX',
+            'CMY_MIN', 'CMY_MID', 'CMY_MAX'),
+        '_powerCurve': ('_clamp', 'math', 'log', 'pow'),
     },
     'scripts/common/items/components/legacy_stuff.pyc': {
         'NoLegacyStuff.get': ('AssertionError',),
@@ -2243,6 +2254,8 @@ EXPECTED_PACKED_XML_PATH_VALUES = {
 EXPECTED_GLOBALS = {
     'scripts/common/physics_shared.pyc': {
         'WEIGHT_SCALE': 0.001,
+        'CMY_MIN': -0.15, 'CMY_MID': -0.2, 'CMY_MAX': -0.3,
+        'DYN_RATIO_MIN': 9.5, 'DYN_RATIO_MID': 13.0, 'DYN_RATIO_MAX': 21.0,
     },
     'scripts/client/vehicle_systems/CompoundAppearance.pyc': {
         # The effects LOD runs on this cadence and measures the camera, not

@@ -20165,6 +20165,34 @@ class BattleRuntime(object):
         hit = proof['hit_point']
         heights = tank_collision.ram_contact_sample_heights(
             hit[1], proof.get('contact_y_span'))
+        # The shared structural band may be much thinner than the chassis
+        # contact envelope (KV-5 against a lower hull, for example). Sampling
+        # only fractions of that envelope can miss every common hull plate.
+        # Preserve the actual observation first, then sample the mounted hull
+        # overlap before trying the wider body envelope.
+        spans = []
+        for prefix in ('local', 'bot'):
+            vehicle = proof[prefix + '_vehicle']
+            matrix = proof[prefix + '_matrix']
+            descriptor = getattr(vehicle, 'typeDescriptor', None)
+            if descriptor is None:
+                break
+            try:
+                spans.append(tank_collision.ram_hull_vertical_interval(
+                    descriptor, _xyz(matrix.translation)[1],
+                    float(matrix.pitch), float(matrix.roll)))
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                break
+        if len(spans) == 2:
+            low, high = max(span[0] for span in spans), min(
+                span[1] for span in spans)
+            contact_span = proof.get('contact_y_span')
+            if contact_span is not None:
+                low, high = max(low, contact_span[0]), min(high, contact_span[1])
+            if high > low:
+                structural = tank_collision.ram_contact_sample_heights(
+                    (low + high) * 0.5, (low, high))
+                heights = heights[:1] + structural + heights[1:]
         seen_player = None
         seen_bot = None
         points = [(hit[0], hit[2])]
@@ -20459,6 +20487,7 @@ class BattleRuntime(object):
         proof = {
             'bot_id': bot_id,
             'record': record,
+            'presentation_time_us': record.get('presentation_time_us'),
             'local_vehicle': local_vehicle,
             'bot_vehicle': bot_vehicle,
             'hit_point': _xyz(hit_point),
@@ -20544,7 +20573,7 @@ class BattleRuntime(object):
         bot_id = proof['bot_id']
         proof['attempts'] += 1
         record = proof['record']
-        presentation_time_us = record.get('presentation_time_us')
+        presentation_time_us = proof['presentation_time_us']
         revision = self._ram_bot_revision_at(bot_id, presentation_time_us)
         local_matrix = proof['local_matrix']
         bot_matrix = proof['bot_matrix']
@@ -20562,6 +20591,12 @@ class BattleRuntime(object):
             if proof['attempts'] < 2:
                 return False
             self._native_ram_contact_proofs.pop(event_seq, None)
+            # No HP receipt was admitted. An unsuccessful geometry probe is
+            # not a paid collision episode: a later real contact must be able
+            # to prove its own current pose and pre-separation velocity.
+            self._local_ram_episode_contacts = frozenset(
+                value for value in self._local_ram_episode_contacts
+                if value != bot_id)
             signature = (bot_id, player_plate is None, bot_plate is None)
             if signature not in self._native_ram_contact_failures:
                 self._native_ram_contact_failures.add(signature)
@@ -20763,7 +20798,9 @@ class BattleRuntime(object):
                     center_distance_squared)
             vertical = tank_collision.vertical_overlap(
                 own.get('y'), own['shape'],
-                other.get('y'), other['shape'])
+                other.get('y'), other['shape'],
+                pitch_a=own.get('pitch', 0.0), roll_a=own.get('roll', 0.0),
+                pitch_b=other.get('pitch', 0.0), roll_b=other.get('roll', 0.0))
             contact = (tank_collision.obb_contact(
                 own['x'], own['z'], own['yaw'], own['shape'],
                 other['x'], other['z'], other['yaw'], other['shape'])

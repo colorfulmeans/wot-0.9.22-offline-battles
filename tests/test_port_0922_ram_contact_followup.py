@@ -8,10 +8,59 @@ CLIENT = ROOT / 'src' / 'res' / 'scripts' / 'client'
 sys.path.insert(0, str(CLIENT))
 
 from gui.mods.offline_lan_0922 import tank_collision
-from test_port_0922_battle_runtime import BattleRuntime
+from test_port_0922_battle_runtime import BattleRuntime, _runtime
 
 
 class RamContactFollowupTests(unittest.TestCase):
+
+    def test_narrow_shared_hull_band_is_sampled_between_old_chassis_rays(self):
+        runtime = object.__new__(BattleRuntime)
+        runtime._vector = lambda value: tuple(value)
+        def vehicle(bottom, top):
+            return types.SimpleNamespace(typeDescriptor=types.SimpleNamespace(
+                hull=types.SimpleNamespace(hitTester=types.SimpleNamespace(
+                    bbox=((-1.0, bottom, -2.0), (1.0, top, 2.0)))),
+                chassis=types.SimpleNamespace(hullPosition=(0.0, 0.0, 0.0))))
+        player, bot = vehicle(1.01, 1.8), vehicle(0.4, 1.16)
+        matrix = types.SimpleNamespace(translation=(0, 0, 0), pitch=0, roll=0)
+        proof = dict(hit_point=(0, 0.9, 0), contact_y_span=(0, 1.8),
+                     contact_normal=(1, 0), local_vehicle=player,
+                     bot_vehicle=bot, local_matrix=matrix, bot_matrix=matrix)
+        def probe(tank, unused_matrix, point, unused_normal):
+            bounds = tank.typeDescriptor.hull.hitTester.bbox
+            return ({'armor': 180 if tank is player else 101.6,
+                     'screened': False}
+                    if bounds[0][1] < point[1] < bounds[1][1] else None)
+        self.assertFalse(any(1.01 < y < 1.16 for y in
+                             tank_collision.ram_contact_sample_heights(0.9, (0, 1.8))))
+        matched, unused, unused2 = runtime._ram_plate_pair_from_probe(proof, probe)
+        self.assertIsNotNone(matched)
+        self.assertTrue(1.01 < matched[2] < 1.16)
+
+    def test_failed_native_probe_does_not_consume_the_contact_episode(self):
+        runtime = BattleRuntime(_runtime())
+        runtime._local_ram_episode_contacts = frozenset((11, 12))
+        runtime._ram_bot_revision_at = lambda *args: 37
+        runtime._native_ram_contact_plate_pair = lambda proof: (None, None, None)
+        runtime._native_ram_contact_proofs[1] = dict(
+            bot_id=11, attempts=1, record={}, presentation_time_us=123000,
+            local_matrix=object(), bot_matrix=object(), contact_normal=(1, 0))
+        self.assertFalse(runtime._retry_native_ram_contact_proof(1))
+        self.assertEqual(frozenset((12,)), runtime._local_ram_episode_contacts)
+        self.assertEqual({}, runtime._native_ram_contact_proofs)
+        self.assertEqual({}, runtime._local_ram_receipts)
+
+    def test_deferred_probe_keeps_the_time_of_its_frozen_geometry(self):
+        runtime = BattleRuntime(_runtime())
+        times = []
+        runtime._ram_bot_revision_at = lambda bot, stamp: times.append(stamp)
+        runtime._native_ram_contact_plate_pair = lambda proof: (None, None, None)
+        runtime._native_ram_contact_proofs[1] = dict(
+            bot_id=11, attempts=0, record={'presentation_time_us': 999000},
+            presentation_time_us=123000, local_matrix=object(),
+            bot_matrix=object(), contact_normal=(1, 0))
+        self.assertFalse(runtime._retry_native_ram_contact_proof(1))
+        self.assertEqual([123000], times)
 
     def test_shared_contact_width_recovers_a_native_plate_beside_a_track_gap(self):
         runtime = object.__new__(BattleRuntime)

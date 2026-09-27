@@ -403,6 +403,31 @@ def _ram_profile(tank):
     return spall, bonus
 
 
+def ram_hull_vertical_interval(descriptor, y, pitch=0.0, roll=0.0):
+    """Bound the mounted hull, rather than the track-to-roof body envelope.
+
+    These bounds only select rays. Each accepted plate still requires a
+    structural material from the exact native hit tester on that same ray.
+    """
+    hull = _value(descriptor, 'hull')
+    chassis = _value(descriptor, 'chassis')
+    bounds = _bbox(hull)
+    origin = _value(chassis, 'hullPosition')
+    if origin is None:
+        raise RuntimeError('#1513 chassis hull position is unavailable')
+    sp, cp = math.sin(pitch), math.cos(pitch)
+    sr, cr = math.sin(roll), math.cos(roll)
+    heights = []
+    for ix in (0, 1):
+        for iy in (0, 1):
+            for iz in (0, 1):
+                x = _coord(bounds[ix], 0) + _coord(origin, 0)
+                local_y = _coord(bounds[iy], 1) + _coord(origin, 1)
+                z = _coord(bounds[iz], 2) + _coord(origin, 2)
+                heights.append(float(y) + cp * (sr*x + cr*local_y) - sp*z)
+    return min(heights), max(heights)
+
+
 def ram_contact_sample_heights(hit_y, span):
     """Return stable structural-probe heights inside one real contact span.
 
