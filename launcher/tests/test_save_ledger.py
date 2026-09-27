@@ -54,6 +54,8 @@ class SaveLedgerTest(unittest.TestCase):
                          save_ledger.DEFAULT_BALANCES[save_slots.MODE_NEW_ACCOUNT])
         self.assertEqual(economy.SANDBOX_WALLET,
                          save_ledger.DEFAULT_BALANCES[save_slots.MODE_UNLOCKED])
+        self.assertEqual(1000000, economy.SANDBOX_WALLET['crystal'])
+        self.assertEqual(0, economy.CAREER_WALLET['crystal'])
 
     def test_balances_are_read_from_the_saved_ledger(self):
         self._write(_state(credits_amount=250000, gold=1500, free_xp=90))

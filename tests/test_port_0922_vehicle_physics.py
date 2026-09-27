@@ -1271,7 +1271,7 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
         self.assertLess(self._coast(high_speed, 4.0, 0.1), high_speed)
         self.assertGreater(self._coast(high_speed, 28.0, 0.1), high_speed)
 
-    def test_a_45_kmh_powered_limit_does_not_clip_descent_to_47_25(self):
+    def test_a_45_kmh_vehicle_has_a_49_5_kmh_downhill_cap_at_every_frame_rate(self):
         # Reproduce the reported limit, without claiming a particular tank's
         # installed descriptor or calibrating its downhill terminal speed.
         params = dict(self.params, speedFwd=45.0 / 3.6)
@@ -1282,14 +1282,14 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
                 speed = vehicle_physics.longitudinal_step(
                     params, speed, 1.0, False, math.radians(20.0), 1.0 / fps)
             speeds.append(speed)
-        self.assertGreater(min(speeds) * 3.6, 60.0)
-        self.assertAlmostEqual(60.75, speeds[0] * 3.6)
+        self.assertGreater(min(speeds) * 3.6, 45.0)
+        self.assertAlmostEqual(49.5, speeds[0] * 3.6)
         self.assertLess(max(speeds) - min(speeds), 1e-9)
 
     def test_approximate_descent_cap_bounds_forward_reverse_and_neutral(self):
         for direction in (-1.0, 1.0):
             limit = self.params['speedFwd' if direction > 0.0 else 'speedBwd']
-            maximum = limit * 1.35
+            maximum = limit * 1.10
             for throttle in (0.0, direction):
                 for fps in (24, 60):
                     speed = direction * limit
@@ -1308,11 +1308,11 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
                 speed = vehicle_physics.longitudinal_step(
                     self.params, speed, 0.0, False,
                     direction * math.radians(65.0), 1.0 / 60.0, handbrake=True)
-                self.assertLessEqual(abs(speed), limit * 1.35)
-            self.assertAlmostEqual(abs(speed), limit * 1.35)
+                self.assertLessEqual(abs(speed), limit * 1.10)
+            self.assertAlmostEqual(abs(speed), limit * 1.10)
 
     def test_gravity_overspeed_does_not_depend_on_engine_power(self):
-        initial = self.params['speedFwd'] + 5.0
+        initial = self.params['speedFwd'] * 1.02
         base = vehicle_physics.longitudinal_step(
             self.params, initial, 1.0, False, math.radians(20.0), 0.1)
         powerful = vehicle_physics.longitudinal_step(
@@ -1358,7 +1358,7 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
                 params, forward, 1.0, False, math.radians(20.0), 1.0 / 30.0)
             reverse = vehicle_physics.longitudinal_step(
                 params, reverse, -1.0, False, -math.radians(20.0), 1.0 / 30.0)
-        self.assertGreater(forward, 16.0)
+        self.assertAlmostEqual(13.2, forward)
         self.assertAlmostEqual(forward, -reverse)
 
 

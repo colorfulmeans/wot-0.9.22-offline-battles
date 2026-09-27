@@ -10915,9 +10915,9 @@ class BattleRuntime(object):
         self._run_optional_feature(
             'vehicle hit impulse', self._present_hit_impulse,
             (event, target_record, effects_descr, direction))
-        # The physical penetration result chooses the direct impact. HE also
-        # detonates on armour when that result is resisted, even if the blast
-        # removes no HP; the bound splash effect supplies its explosion sound.
+        # Direct HE feedback follows actual HP loss: a damaging blast uses
+        # the shell's explosion effect even when armour resisted penetration.
+        # Keep the physical result and crew-voice flags unchanged.
         damage_factor = self._hit_damage_factor(event, target_record)
         if event.get('splash', False):
             return self._present_splash_hit(
@@ -10925,7 +10925,7 @@ class BattleRuntime(object):
                 direction, damage_factor)
         is_he = combat_rules.is_he(shot)
         if is_he:
-            effect_group = 'armorHit' if shot_result == 2 else 'armorResisted'
+            effect_group = 'armorHit' if damage > 0 else 'armorResisted'
         else:
             effect_group = ('armorRicochet', 'armorResisted', 'armorHit')[
                 shot_result]
@@ -10961,7 +10961,7 @@ class BattleRuntime(object):
             self._warn_optional_failure(
                 'projectile impact presentation', error)
             return False
-        if is_he:
+        if is_he and damage > 0:
             self._present_splash_hit(
                 target_record, effects_descr, effects_index,
                 impact_position, direction, damage_factor)
@@ -17573,15 +17573,7 @@ class BattleRuntime(object):
         return start, direction
 
     def _wreck_blocks_target_outline(self, start, end, target_depth):
-        """Suppress an outline behind a nearer retained wreck's full bounds.
-
-        #1513 Vehicle.onEnterWorld sets targetFullBounds. Public BigWorld
-        2.0.1 picker source motivates checking the whole compound envelope,
-        but it is not evidence for the shipped #1513 native implementation.
-        This local selection rule uses descriptor bounds and segment-entry
-        order; it is not the public engine's entity-origin zDistance score.
-        Exact Windows picker parity remains unverified.
-        """
+        """Only solid wreck geometry blocks a visible part under the cursor."""
         ray = (_xyz(start), _xyz(end))
         for record in self._records.values():
             if record.get('tombstone') or not record.get('ready'):
@@ -17602,11 +17594,13 @@ class BattleRuntime(object):
             matrix = getattr(vehicle, 'matrix', None)
             if matrix is None:
                 continue
-            distance = shot_geometry.segment_box_entry_distance(
-                start, end, vehicle_target_bounds_at_matrix(
-                    vehicle, matrix, self._runtime.math))
-            if (distance is not None and
-                    distance + _SHOT_OCCLUSION_EPSILON < target_depth):
+            if record.get('native_remote') or record.get('local'):
+                collisions = collide_vehicle_at_matrix(
+                    vehicle, matrix, start, end, self._runtime.math)
+            else:
+                collisions = vehicle.collideSegmentExt(start, end)
+            if any(float(hit.dist) + _SHOT_OCCLUSION_EPSILON < target_depth
+                   for hit in (collisions or ())):
                 return True
         return False
 
@@ -17648,7 +17642,6 @@ class BattleRuntime(object):
             return
         start, direction = self._mouse_targeting_ray()
         end = start + direction.scale(TARGET_MAX_DISTANCE)
-        selection_angle = TARGET_SELECTION_FOV_DEGREES * 0.5
         deselection_angle = TARGET_DESELECTION_FOV_DEGREES * 0.5
         held_id = self._outlined_engine_id
         held_seen = False
@@ -17714,9 +17707,6 @@ class BattleRuntime(object):
                         if collisions:
                             depth = min(
                                 float(item.dist) for item in collisions)
-                    elif bearing - self._target_angular_radius(
-                        vehicle, distance, tight=True) <= selection_angle:
-                        depth = distance
             if depth is None:
                 if held:
                     held_reason = 'is not under the cursor'
@@ -17816,7 +17806,21 @@ class BattleRuntime(object):
             raise RuntimeError(
                 '#1513 target-lock candidate boundary is unavailable')
         set_candidate(vehicle)
+        self._publish_cursor_focus(vehicle)
         self.monitor_vehicle_damaged_devices(chosen)
+
+    def _publish_cursor_focus(self, vehicle):
+        """Give the stock distance HUD the same occluded target as the edge.
+
+        #1513 PlayerAvatar.targetFocus/targetBlur publish these two fields.
+        Native target caps stay empty because the engine picker cannot see
+        our replicated pose or retained-wreck query.
+        """
+        if self._avatar is None:
+            return
+        self._avatar.target = vehicle
+        self._avatar.guiSessionProvider.shared.feedback.setTargetInFocus(
+            int(vehicle.id) if vehicle is not None else 0, vehicle is not None)
 
     def _refresh_native_target_outline(self):
         """Restore a held native outline after stock model replacement.
@@ -18372,6 +18376,7 @@ class BattleRuntime(object):
             raise RuntimeError(
                 '#1513 target-lock candidate boundary is unavailable')
         set_candidate(None)
+        self._publish_cursor_focus(None)
         if entity is None:
             raise RuntimeError(
                 'outlined vehicle %s lost its entity before edge removal' %
@@ -25128,7 +25133,7 @@ class BattleRuntime(object):
                 elif record.get('native_remote'):
                     vehicle._offlineNativeDrawVisible = initially_visible
                     set_draw_visibility(vehicle, initially_visible)
-                    vehicle.targetCaps = [1] if initially_visible else []
+                    vehicle.targetCaps = []
                     # The compatibility enter-world gate may already have
                     # stopped an enemy marker before this asynchronous ready
                     # boundary.
@@ -25620,7 +25625,7 @@ class BattleRuntime(object):
             if record.get('native_remote'):
                 vehicle._offlineNativeDrawVisible = draw_vehicle
                 set_draw_visibility(vehicle, draw_vehicle)
-                vehicle.targetCaps = [1] if visible and alive else []
+                vehicle.targetCaps = []
                 # Closing the draw pass is itself the track-presentation
                 # edge. Waiting for another pose update is insufficient:
                 # unchanged speed/yaw is deduplicated and could leave the

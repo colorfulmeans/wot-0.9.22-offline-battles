@@ -220,6 +220,8 @@ EXPECTED_ABI = {
     },
     'scripts/client/gui/battle_control/controllers/feedback_adaptor.pyc': {
         'BattleFeedbackAdaptor.__init__': ('self', 'setup'),
+        'BattleFeedbackAdaptor.setTargetInFocus': (
+            'self', 'vehicleID', 'isInFocus'),
         'BattleFeedbackAdaptor.handleBattleEvents': ('self', 'events'),
         'BattleFeedbackAdaptor.startVehicleVisual': (
             'self', 'vProxy', 'isImmediate'),
@@ -412,12 +414,25 @@ EXPECTED_ABI = {
         'Shell.count': ('self',),
     },
     'scripts/client/gui/shared/gui_items/vehicle_equipment.pyc': {
+        'EquipmentLayoutHelper.__init__': (
+            'self', 'vehicle', 'eqsLayout', 'battleBoosterLayout'),
+        'EquipmentLayoutHelper.getRawLayout': ('self',),
         'VehicleEquipment.regularConsumables': ('self',),
         # Appends the battle-booster slot, so an equipment payload is four
         # wide while the published garage holds three regular slots.
         'VehicleEquipment.getConsumablesIntCDs': ('self', 'default'),
         '_VehicleConsumables.getIntCDs': ('self', 'default'),
         '_VehicleConsumables.getInstalledItems': ('self',),
+    },
+    'scripts/client/gui/shared/gui_items/processors/module.pyc': {
+        'getInstallerProcessor': (
+            'vehicle', 'newComponentItem', 'slotIdx', 'install',
+            'isUseMoney', 'conflictedEqs', 'skipConfirm'),
+    },
+    'scripts/client/gui/shared/gui_items/processors/vehicle.pyc': {
+        'VehicleBattleBoosterLayoutProcessor.__init__': (
+            'self', 'vehicle', 'battleBooster', 'eqsLayout', 'skipConfirm'),
+        'VehicleLayoutProcessor._request': ('self', 'callback'),
     },
     'scripts/client/account_helpers/Inventory.pyc': {
         'Inventory.equipEquipments': ('self', 'vehInvID', 'eqs', 'callback'),

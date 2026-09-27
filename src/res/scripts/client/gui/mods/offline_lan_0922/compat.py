@@ -1607,6 +1607,10 @@ class OfflineCompatibility(object):
             if avatar is not None:
                 prime_initial_remote_enemy(avatar, vehicle)
             result = original(vehicle, prereqs)
+            # Offline poses live in the presentation matrix, not the native
+            # entity picker. Only the runtime's current-pose, occluded ray
+            # may publish target focus; stock focus can bypass that verdict.
+            vehicle.targetCaps = []
             try:
                 avatar = runtime.bigworld.player()
             except ReferenceError:
@@ -1640,6 +1644,7 @@ class OfflineCompatibility(object):
                 result = original(vehicle)
             finally:
                 compatibility._vehicle_starting_visual = previous
+            vehicle.targetCaps = []
             if avatar is not None:
                 hide_initial_remote_enemy(avatar, vehicle)
             return result

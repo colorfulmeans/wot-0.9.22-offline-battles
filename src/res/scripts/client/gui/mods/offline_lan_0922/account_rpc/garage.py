@@ -3065,10 +3065,17 @@ class GarageState(object):
         from gui.mods.offline_lan_0922.account_rpc import economy
 
         wallet = self._snapshot.get('wallet')
-        wallet = wallet if isinstance(wallet, dict) else {}
+        defaults = economy.SANDBOX_WALLET.copy()
+        if isinstance(wallet, dict):
+            # A persisted pre-bonds wallet did not own bonds. The new
+            # sandbox seed applies only when creating an account, never as
+            # an implicit grant during a crew/fitting transaction.
+            defaults['crystal'] = 0
+        else:
+            wallet = {}
         return dict(
             (name, max(0, _int(
-                wallet.get(name, economy.SANDBOX_WALLET[name]))))
+                wallet.get(name, defaults[name]))))
             for name in ('credits', 'gold', 'freeXP', 'crystal'))
 
     def _wallet(self):

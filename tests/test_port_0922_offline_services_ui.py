@@ -64,7 +64,7 @@ class NativeServiceUITests(unittest.TestCase):
                 return 200 - other
 
         original = FittingItem.__dict__['__cmp__']
-        other_installs = ('_install_store_filters', '_install_shop',
+        other_installs = ('_install_directive_fitting', '_install_store_filters', '_install_shop',
             '_install_vehicle_filters_and_recovery', '_install_reserves',
             '_install_account', '_install_daily', '_install_mission_results',
             '_install_settings', '_install_exchange_dialog_limits',
@@ -93,12 +93,56 @@ class NativeServiceUITests(unittest.TestCase):
         original = FittingItem.__dict__['__cmp__']
         with native_modules({
                 'gui.shared.gui_items.fitting_item': {'FittingItem': FittingItem}
-                }), mock.patch.object(self.ui, '_install_store_filters',
+                }), mock.patch.object(self.ui, '_install_directive_fitting'), \
+                mock.patch.object(self.ui, '_install_store_filters',
                                       side_effect=RuntimeError('startup failed')):
             with self.assertRaises(RuntimeError):
                 self.ui.install()
             self.assertIs(original, FittingItem.__dict__['__cmp__'])
             self.assertEqual([], self.ui._patches)
+
+    def test_generic_directive_install_and_remove_reach_the_native_layout_processor(self):
+        original = mock.Mock(return_value='ordinary installer')
+        helper = mock.Mock(side_effect=lambda *args: ('layout', args))
+        processor = mock.Mock(side_effect=lambda *args: ('processor', args))
+        exports = {
+            'gui.shared.gui_items.processors.module': {
+                'getInstallerProcessor': original,
+                'GUI_ITEM_TYPE': types.SimpleNamespace(BATTLE_BOOSTER=26)},
+            'gui.shared.gui_items.processors.vehicle': {
+                'VehicleBattleBoosterLayoutProcessor': processor},
+            'gui.shared.gui_items.vehicle_equipment': {
+                'EquipmentLayoutHelper': helper},
+            'gui.shared.gui_items.items_actions.actions': {
+                'getInstallerProcessor': original},
+        }
+        vehicle = object()
+        directive = types.SimpleNamespace(itemTypeID=26, intCD=27387)
+        with native_modules(exports) as modules:
+            producer = modules['gui.shared.gui_items.processors.module']
+            consumer = modules['gui.shared.gui_items.items_actions.actions']
+            self.ui._install_directive_fitting()
+            self.assertIs(producer.getInstallerProcessor, consumer.getInstallerProcessor)
+            for install in (True, False):
+                for slot in (0, 3):
+                    result = consumer.getInstallerProcessor(
+                        vehicle, directive, slot, install, True, skipConfirm=True)
+                    helper.assert_called_with(
+                        vehicle, None, (27387, 1) if install else (0, 0))
+                    processor.assert_called_with(
+                        vehicle, directive if install else None,
+                        ('layout', helper.call_args.args), True)
+                    self.assertEqual('processor', result[0])
+            original.assert_not_called()
+            regular = types.SimpleNamespace(itemTypeID=11)
+            self.assertEqual('ordinary installer', consumer.getInstallerProcessor(
+                vehicle, regular, 2, False, True, ['conflict'], True))
+            original.assert_called_once_with(
+                vehicle, regular, 2, False, True, ['conflict'], True)
+            self.ui.uninstall()
+            self.ui.uninstall()
+            self.assertIs(original, producer.getInstallerProcessor)
+            self.assertIs(original, consumer.getInstallerProcessor)
 
     def test_bond_shop_reuses_native_rows_and_filters_owned_vehicles(self):
         class UnboundMethod(object):
@@ -275,6 +319,16 @@ class NativeServiceUITests(unittest.TestCase):
             self.assertFalse(page.flashObject.viewStack.cache)
             self.assertEqual('ShopUI', page.data['buttonBarData'][0]['linkage'])
             self.assertEqual('StoreActionsViewUI', tabs['buttonBarData'][0]['linkage'])
+            bond_class = current['storeActions'].clazz
+            for unused_battle in range(3):
+                # Lobby package registration replaces the factory setting
+                # when the Account is rebuilt on return from battle.
+                current['storeActions'] = original
+                page = StoreView()
+                page.as_initS(tabs)
+                self.assertIs(bond_class, current['storeActions'].clazz)
+                self.assertEqual(1, len(self.ui._factory_settings))
+                self.assertFalse(page.flashObject.viewStack.cache)
             # Model StoreView.clearCurrentVew / ViewStack.createView: the
             # latter only dispatches NEED_UPDATE on a linkage-cache miss.
             # The same ShopUI linkage must register a fresh controller for
@@ -938,7 +992,7 @@ class ExchangeDialogLimitTests(unittest.TestCase):
 
     def test_regular_services_install_and_rollback_own_the_native_base_hook(self):
         original = self.meta_type.makeVO
-        others = ('_install_item_comparisons', '_install_store_filters',
+        others = ('_install_directive_fitting', '_install_item_comparisons', '_install_store_filters',
             '_install_shop', '_install_vehicle_filters_and_recovery',
             '_install_reserves', '_install_account', '_install_daily',
             '_install_mission_results', '_install_settings', '_schedule_daily_rollover')

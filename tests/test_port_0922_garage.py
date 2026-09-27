@@ -2205,6 +2205,23 @@ class BattleBoosterPurchaseTests(unittest.TestCase):
         self.assertEqual(30, self.state.snapshot()['wallet']['crystal'])
         self.assertEqual(1, self.pushed[-1]['inventory'][11][self.BOOSTER])
 
+    def test_native_directive_layout_can_unmount_with_no_bonds(self):
+        self._buy_and_equip()
+        self.state.snapshot()['wallet']['crystal'] = 0
+        result = self._dispatch(self.commands.CMD_SET_AND_FILL_LAYOUTS,
+            ([77, 9, 0, 1, 8, 0, 0, 0, 0, 0, 0, 0, 0],))
+        self.assertEqual(self.commands.RES_SUCCESS, result.result_id)
+        self.assertEqual([0, 0, 0, 0], self._record()['eqs'])
+        self.assertEqual([0, 0, 0, 0], self._record()['eqsLayout'])
+        self.assertEqual(0, self.state.snapshot()['wallet']['crystal'])
+        self.assertEqual(1, self.pushed[-1]['inventory'][11][self.BOOSTER])
+        # Reusing the owned copy must not charge bonds again.
+        result = self._dispatch(self.commands.CMD_SET_AND_FILL_LAYOUTS,
+            ([77, 9, 0, 1, 8, 0, 0, 0, 0, 0, 0, self.BOOSTER, 1],))
+        self.assertEqual(self.commands.RES_SUCCESS, result.result_id)
+        self.assertEqual(self.BOOSTER, self._record()['eqs'][3])
+        self.assertEqual(0, self.state.snapshot()['wallet']['crystal'])
+
     def test_buy_directive_preserves_used_regular_supply_and_currency_layout(self):
         self.state.equip_equipments(9, [-11001, 0, 0])
         self.state.settle_battle_consumables(50001, [11001])

@@ -6234,3 +6234,86 @@ Live Oaks vehicle is already wedged against two faces: this prevention and
 conservative release fix does not prove that exact saved pose can leave.
 Windows gameplay still has to establish that new entries into these reported
 locations remain clear and that the full fleet's native frame rate is usable.
+
+### September 27 priority follow-up on the 0.9.5 release line
+
+The requested downhill policy is a maximum of 110% of the descriptor's
+directional speed limit. The existing ground overspeed limiter now uses
+1.10 instead of 1.35; propulsion, airborne gravity and reverse-limit selection
+keep their existing owners. A 45 km/h forward limit therefore caps at
+49.5 km/h. This is an explicit product choice, not a retail coefficient claim.
+
+Cursor focus previously had two writers: the current-pose ray in the offline
+runtime and the engine picker enabled by native `Vehicle.targetCaps`. Report
+`20260927-151657` contains differing native TARGETING and offline TARGET
+vehicle IDs. In #1513, `PlayerAvatar.vehicle_onEnterWorld` enables target caps;
+`targetFocus` then independently calls `drawEdge` and `setTargetInFocus`.
+Offline vehicle entry, visual startup, visibility updates and model relinks
+now keep those caps empty. The offline ray is the sole cursor owner. It
+requires an actual component hit before scenery, retained wreck geometry or
+a landed turret; a candidate cone alone cannot acquire an outline. A ray
+through empty space within a wreck's bounding box may reach an exposed part
+of the live vehicle. Once acquired, the stock Highlighter draws the full
+outline and still owns removal during model replacement and teardown.
+
+The same acquisition and removal publish `avatar.target` and
+`BattleFeedbackAdaptor.setTargetInFocus(vehicleID, isInFocus)`. The exact
+`TargetDistancePlugin` consumes that feedback to start/stop its distance
+tracking. This addresses the competing target source behind the distance
+report as well as the outline. It does not establish native rendering or
+distance acceptance without a Windows battle.
+
+The offers page now checks the live Scaleform component registration rather
+than treating its saved rollback setting as proof that the replacement is
+still installed. Stock lobby package registration after a battle can replace
+that controller. Rebinding restores the offers controller while preserving
+one original setting for reversible cleanup; tests repeat this across three
+lobby registrations.
+
+Direct HE impacts choose `armorHit` when actual HP damage is positive and
+`armorResisted` otherwise. Damaging direct impacts also play the existing
+bound explosion path. The exact #1513 `shot_effects.xml` binds HE `armorHit`
+to its HE impact particles and penetration-impact sound, and `armorResisted`
+to the non-penetration impact sound. Physical shot results and crew-voice
+feedback remain unchanged. Tests separately assert impact effects and the
+unchanged voice flags, including damaging non-penetration and zero-damage
+direct hits.
+
+The default unlocked save was located in the launcher's default slot. The
+September 27 visible-client log records `OtherModuleInstaller` rejecting
+`BattleBooster` 27387 in `ModuleTypeValidator` before an Account request can
+be sent. Exact #1513 `getInstallerProcessor` does not branch on GUI item type
+`BATTLE_BOOSTER`; both direct consumers in `items_actions.actions` import
+that factory by name. The narrow offline wrapper patches both references
+and routes only that type through
+`VehicleBattleBoosterLayoutProcessor(vehicle, booster, layout, skipConfirm)`.
+`EquipmentLayoutHelper(vehicle, None, (cd, 1))` preserves regular consumables;
+`(0, 0)` and a `None` booster remove the directive through the same native
+four-slot `Inventory.setAndFillLayouts` request. Other module fitting and
+the native confirmation/response path are retained. Cleanup restores both
+factory references and is idempotent.
+
+New unlocked saves seed 1,000,000 bonds in both the client and launcher.
+Career saves still seed zero. Existing balances, including missing legacy
+bond fields (zero), remain intact; depleted saves are not silently refilled.
+Regression coverage verifies directive removal at zero bonds and reinstalling
+existing inventory without another charge.
+
+Validation on this change includes the battle runtime, physics, garage,
+offline services UI, economy, compatibility and launcher save-ledger suites.
+All 146 client sources compile with CPython 2.7.18. The exact installed CH
+#1513 ABI audit passes, including the new fitting/layout/focus signatures.
+The separate gameplay-followup suite has seven failures and two errors in
+both this change and an unmodified archive of its release-branch parent;
+these are existing Bot aiming/target-retention failures, not a passing CI
+claim. Native Windows gameplay, effects audio, repeated battle-to-lobby
+transitions and real directive fitting still need acceptance.
+
+Read-only checks requested alongside this batch made no mission changes.
+The four exact LT-14 definitions require solo radio assistance of
+1500/2500/5000/6000, with survival for honours; the current evaluator passes
+at those thresholds and awards main-only completion after death. This proves
+the condition path with supplied receipts, not a reported player's actual
+spotting attribution or installed version. Per the user's scope correction,
+all 0.8.4 reports are invalid evidence for this task. Report `20260927-024817`
+is excluded; no current-version ping conclusion or change is derived from it.

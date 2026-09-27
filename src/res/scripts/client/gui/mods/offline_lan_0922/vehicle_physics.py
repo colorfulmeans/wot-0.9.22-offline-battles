@@ -181,10 +181,10 @@ SLIDE_HOLD_TAN = 0.50   # 26.6 deg static perch; a powered hull can briefly clim
 # not climb - lower than the static hold so it does not hang mid-slope; it bleeds
 # down to the foot at a controlled speed. Lower = slides faster/further.
 SLIDE_KINETIC = 0.45
-# User-authorized approximation from a reported 45 km/h tank reaching slightly
-# above 60 km/h downhill. This is not a recovered universal retail constant.
+# User-requested downhill limit: at most 10% above the directional top speed.
+# This is an offline policy, not a recovered universal retail constant.
 # Gravity builds the surplus; this envelope only bounds its final speed.
-OVERSPEED_MAX_FACTOR = 1.35
+OVERSPEED_MAX_FACTOR = 1.10
 
 
 # ---- Live tuning: config.json "physics_tuning" can override these WITHOUT a

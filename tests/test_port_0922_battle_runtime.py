@@ -1275,6 +1275,7 @@ class _Avatar(object):
                 messages=types.SimpleNamespace(),
                 feedback=types.SimpleNamespace(
                     _BattleFeedbackAdaptor__visible=set(),
+                    setTargetInFocus=mock.Mock(),
                     setVehicleState=mock.Mock(),
                     invalidateStun=mock.Mock(),
                     showVehicleDamagedDevices=mock.Mock(),
@@ -1703,6 +1704,7 @@ class _OfflineMap(object):
                     arenaLoad=_ArenaLoadController(self.app_loader),
                     feedback=types.SimpleNamespace(
                         _BattleFeedbackAdaptor__visible=set(),
+                        setTargetInFocus=mock.Mock(),
                         setVehicleState=mock.Mock()),
                     viewPoints=avatar.view_points),
                 invalidateVehicleState=mock.Mock(),
@@ -3689,6 +3691,15 @@ class NativeRemoteVehicleFactoryTests(unittest.TestCase):
         self.assertTrue(vehicle.model.visible)
         self.assertEqual([], vehicle.targetCaps)
 
+        # A live, spotted replacement must not re-enable the competing
+        # native cursor picker either.
+        vehicle.health = 500
+        vehicle.isCrewActive = True
+        vehicle.targetCaps = [1]
+        for handler in tuple(vehicle.appearance.onModelChanged.handlers):
+            handler()
+        self.assertEqual([], vehicle.targetCaps)
+
         self.assertTrue(factory.set_entity_interpolate_motion(
             vehicle_id, True))
         self.assertIsNotNone(state.animation)
@@ -5491,6 +5502,8 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
 
         self.assertEqual([False], vehicle.edge_draws)
         self.assertEqual([], runtime.bigworld.edge_adds)
+        self.assertEqual([], vehicle.targetCaps)
+        self.assertIs(vehicle, battle._avatar.target)
         original_model = vehicle.model
         vehicle.appearance.highlighter.enabled = False
         vehicle.model = _Model()
@@ -5511,6 +5524,9 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         self.assertEqual([False], vehicle.edge_removes)
         self.assertEqual([], runtime.bigworld.edge_removes)
         self.assertIsNone(battle._outlined_engine_id)
+        self.assertIsNone(battle._avatar.target)
+        battle._avatar.guiSessionProvider.shared.feedback.setTargetInFocus.\
+            assert_has_calls([mock.call(vehicle_id, True), mock.call(0, False)])
         factory.destroy_all()
 
     def test_native_target_clear_skips_delete_after_stock_deactivation(self):
@@ -5637,7 +5653,11 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
                       'state': {'health': 500, 'alive': True}},
         }
 
-        battle._update_target_outline(1.0)
+        with mock.patch.object(
+                battle_runtime_module, 'collide_vehicle_at_matrix',
+                return_value=(types.SimpleNamespace(dist=100.0),)) as collide:
+            battle._update_target_outline(1.0)
+        self.assertIs(factory.get(wreck_id), collide.call_args.args[0])
 
         self.assertIsNone(battle._outlined_engine_id)
         self.assertIn('is behind a wreck', battle._outline_report)
@@ -5705,13 +5725,8 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
                     self.assertIsNone(self._picker_bounds(0.0, 0.0))
                 self.assertIsNotNone(self._picker_bounds(0.0, 0.0))
 
-    def test_full_bounds_wreck_blocks_an_outline_an_exact_ray_misses(self):
-        """The local outline rule uses the wreck's full descriptor envelope.
-
-        This deliberately suppresses an outline even where a shell's exact
-        hit test passes through a gap. Native picker parity is not established
-        by this pure-data test.
-        """
+    def test_visible_part_beyond_a_wreck_gap_can_acquire_the_full_outline(self):
+        """Wreck bounding boxes must not hide exposed, directly aimed parts."""
         runtime = _runtime()
         factory = RemoteVehicleFactory(
             runtime.bigworld, runtime.math, runtime.model_assembler, 7)
@@ -5748,9 +5763,12 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
 
         battle._update_target_outline(1.0)
 
-        self.assertEqual([], runtime.bigworld.edge_adds)
-        self.assertIsNone(battle._outlined_engine_id)
-        self.assertIn('is behind a wreck', battle._outline_report)
+        self.assertEqual([(target.bw_entity, 1, 0, False)],
+                         runtime.bigworld.edge_adds)
+        self.assertEqual(target_id, battle._outlined_engine_id)
+        self.assertIs(target, battle._avatar.target)
+        battle._avatar.guiSessionProvider.shared.feedback.\
+            setTargetInFocus.assert_called_once_with(target_id, True)
         factory.destroy_all()
 
     def test_a_block_is_logged_even_when_another_vehicle_missed(self):
@@ -5777,6 +5795,8 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
             'health': 500, 'isCrewActive': True,
             'gunAnglesPacked': 0}, _Vector(60.0, 0.0, 200.0),
             (0.0, 0.0, 0.0))
+        factory.get(wreck_id).collideSegmentExt = lambda start, end: (
+            types.SimpleNamespace(dist=100.0),)
         factory.get(target_id).collideSegmentExt = lambda start, end: (
             types.SimpleNamespace(dist=300.0),)
         factory.get(aside_id).collideSegmentExt = lambda start, end: ()
@@ -5954,9 +5974,8 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         self.assertIsNone(battle._outlined_engine_id)
         factory.destroy_all()
 
-    def test_the_outline_falls_back_to_the_inscribed_hull_width(self):
-        """Without the exact per-part test the cursor must still clear the
-        narrowest hull dimension, not the bounding box diagonal."""
+    def test_missing_exact_geometry_does_not_guess_a_cursor_hit(self):
+        """A selection cone cannot establish that an exposed part is hit."""
         runtime = _runtime()
         factory = RemoteVehicleFactory(
             runtime.bigworld, runtime.math, runtime.model_assembler, 7)
@@ -5986,9 +6005,8 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
 
         battle._update_target_outline(1.0)
 
-        self.assertEqual([(near.bw_entity, 1, 0, False)],
-                         runtime.bigworld.edge_adds)
-        self.assertEqual(near_id, battle._outlined_engine_id)
+        self.assertEqual([], runtime.bigworld.edge_adds)
+        self.assertIsNone(battle._outlined_engine_id)
         self.assertIsNot(far.bw_entity, None)
         factory.destroy_all()
 
@@ -15554,7 +15572,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
     def test_direct_he_separates_armor_result_from_explosion_damage(self):
         for shot_result, damage, group, explosion_flags in (
                 (1, 0, 'resistedFx', False),
-                (1, 40, 'resistedFx', True),
+                (1, 40, 'hitFx', True),
                 (2, 40, 'hitFx', False)):
             with self.subTest(result=shot_result, damage=damage):
                 runtime = _runtime()
@@ -15588,7 +15606,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                     event, target_record, attacker_record, 11))
                 effect = battle._avatar.terrainEffects.addNew.call_args
                 self.assertEqual(group, effect.args[1])
-                self.assertEqual(1, len(target.bound_effects.played))
+                self.assertEqual(int(damage > 0), len(target.bound_effects.played))
                 battle._present_combat_feedback(
                     event, target_record, attacker_record)
                 flags = battle._avatar.shot_results[0][0] >> 32

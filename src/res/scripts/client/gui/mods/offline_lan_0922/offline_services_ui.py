@@ -173,11 +173,11 @@ def _patch(owner, name, replacement):
 
 def _replace_component(alias, cls):
     from gui.Scaleform.framework import g_entitiesFactories
-    if any(saved.alias == alias for saved in _factory_settings):
-        return
     settings = g_entitiesFactories.getSettings(alias)
     if settings is None:
         raise RuntimeError('the native component is not registered: %s' % alias)
+    if settings.clazz is cls:
+        return
     replacement = settings.replaceSettings({'clazz': cls})
     g_entitiesFactories.removeSettings(alias)
     try:
@@ -185,7 +185,11 @@ def _replace_component(alias, cls):
     except Exception:
         g_entitiesFactories.addSettings(settings)
         raise
-    _factory_settings.append(settings)
+    # Lobby packages register their stock settings again after a battle.
+    # The saved rollback entry is not proof that the live factory still uses
+    # our controller. Rebind every new store page, retaining one original.
+    if not any(saved.alias == alias for saved in _factory_settings):
+        _factory_settings.append(settings)
 
 
 def _buy_vehicle(view, compact_descr):
@@ -963,6 +967,38 @@ def _install_item_comparisons(item_type=None):
     _patch(item_type, '__cmp__', compare_items)
 
 
+def _install_directive_fitting():
+    """Route #1513's generic fitting actions to its directive processor.
+
+    BattleBooster has a distinct GUI item type. The stock generic factory
+    falls through to OtherModuleInstaller, whose validator rejects it before
+    any Account request. Both action consumers import the factory by name.
+    Reuse the stock four-slot layout helper and confirmation/response path.
+    """
+    from gui.shared.gui_items.processors import module as module_processors
+    from gui.shared.gui_items.processors.vehicle import (
+        VehicleBattleBoosterLayoutProcessor)
+    from gui.shared.gui_items.vehicle_equipment import EquipmentLayoutHelper
+    from gui.shared.gui_items.items_actions import actions
+
+    original = module_processors.getInstallerProcessor
+
+    def get_installer(vehicle, newComponentItem, slotIdx=0, install=True,
+                      isUseMoney=False, conflictedEqs=None, skipConfirm=False):
+        if (newComponentItem.itemTypeID !=
+                module_processors.GUI_ITEM_TYPE.BATTLE_BOOSTER):
+            return original(vehicle, newComponentItem, slotIdx, install,
+                            isUseMoney, conflictedEqs, skipConfirm)
+        booster = newComponentItem if install else None
+        layout = EquipmentLayoutHelper(
+            vehicle, None, (booster.intCD, 1) if booster else (0, 0))
+        return VehicleBattleBoosterLayoutProcessor(
+            vehicle, booster, layout, skipConfirm)
+
+    _patch(module_processors, 'getInstallerProcessor', get_installer)
+    _patch(actions, 'getInstallerProcessor', get_installer)
+
+
 def _install_exchange_dialog_limits(meta_type=None):
     """Keep one legacy exchange control within signed 32-bit item amounts.
 
@@ -1003,6 +1039,7 @@ def install():
         return
     try:
         _install_item_comparisons()
+        _install_directive_fitting()
         _install_store_filters()
         _install_shop()
         _install_vehicle_filters_and_recovery()
