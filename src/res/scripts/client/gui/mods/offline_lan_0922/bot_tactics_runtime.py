@@ -38,7 +38,9 @@ def validate_route(grid, route):
 def route_value(route):
     return {'id': 'user_' + route['id'], 'capacity': route['capacity'], 'risk': 0.5,
             'role_weights': {}, 'class_weights': dict((c, 1.0 if c in route['classes'] else 0.0) for c in config.CLASSES),
-            'waypoints': tuple(tuple(p) for p in route['points'])}
+            # Wait conditions stay in the canonical tactics document on the
+            # server. The manifest keeps its existing three-field geometry.
+            'waypoints': tuple(tuple(p[:3]) for p in route['points'])}
 
 
 def assign_routes(profile, name, graph, states, round_id):

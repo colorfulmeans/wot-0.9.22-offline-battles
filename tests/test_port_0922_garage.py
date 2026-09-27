@@ -237,6 +237,11 @@ def _default_role(compact_descr):
 
 
 class _TankmanDescriptor(object):
+    roleLevel = 100
+
+    def skillLevel(self, name):
+        return 100 if name in self.skills else None
+
     def __init__(self, compact_descr):
         # The real TankmanDescr parses its skills out of the compact
         # descriptor, so the fake must round-trip them too.
@@ -382,6 +387,9 @@ def _modules():
 
     tankmen = types.SimpleNamespace(
         TankmanDescr=_TankmanDescriptor,
+        MAX_SKILL_LEVEL=100,
+        COMMON_SKILLS=('repair',),
+        SKILLS_BY_ROLES=dict((role[0], ('repair',)) for role in CREW_ROLES),
         commanderTutorXpBonusFactorForCrew=lambda crew, ammo: 0.0,
         SKILL_NAMES=tuple(skill_names),
         ROLES=('commander', 'radioman', 'driver', 'gunner', 'loader'),
@@ -2009,6 +2017,48 @@ class FittingRequestTests(unittest.TestCase):
         tankmen = state.snapshot()['vehicles'][0]['tankmen']
         self.assertEqual(150, _TankmanDescriptor(tankmen[101]).totalXP())
         self.assertEqual(150, _TankmanDescriptor(tankmen[102]).totalXP())
+
+    def test_acceleration_skips_full_skills_even_with_lower_total_xp(self):
+        snapshot = copy.deepcopy(SNAPSHOT)
+        record = snapshot['vehicles'][0]
+        record['settings'] = 1
+        record['tankmen'][101] = b'tman:101|repair#0'
+        record['tankmen'][102] = b'tman:102|#500'
+        vehicles, tankmen = _modules()
+        state = self.garage.GarageState(
+            snapshot, vehicles_module=vehicles, tankmen_module=tankmen)
+        result = state.award_battle_crew_xp(50001, 100, 1)
+        self.assertEqual(102, result['weakest_tankman_id'])
+        self.assertEqual({101: 100, 102: 200}, result['xp_by_tankman'])
+
+    def test_fully_trained_crew_keeps_accelerated_xp_on_the_vehicle(self):
+        snapshot = copy.deepcopy(SNAPSHOT)
+        record = snapshot['vehicles'][0]
+        record['settings'] = 1
+        record['tankmen'] = dict((identity, b'tman:%d|repair#100' % identity)
+                                 for identity in record['crew'])
+        vehicles, tankmen = _modules()
+        state = self.garage.GarageState(
+            snapshot, vehicles_module=vehicles, tankmen_module=tankmen)
+        result = state.award_battle_crew_xp(50001, 100, 1)
+        self.assertFalse(result['accelerated'])
+        self.assertEqual(0, result['weakest_tankman_id'])
+        self.assertEqual({101: 100, 102: 100}, result['xp_by_tankman'])
+
+    def test_acceleration_can_train_a_combined_role_in_slot_order(self):
+        snapshot = copy.deepcopy(SNAPSHOT)
+        record = snapshot['vehicles'][0]
+        record['settings'] = 1
+        record['tankmen'][101] = b'tman:101|repair#0'
+        record['tankmen'][102] = b'tman:102|#0'
+        vehicles, tankmen = _modules()
+        tankmen.SKILLS_BY_ROLES['loader'] = ('repair', 'loader_intuition')
+        state = self.garage.GarageState(
+            snapshot, vehicles_module=vehicles, tankmen_module=tankmen)
+        state._crew_roles = lambda unused: (
+            ('commander', 'loader'), ('driver',))
+        self.assertEqual(101, state.award_battle_crew_xp(
+            50001, 100, 1)['weakest_tankman_id'])
 
     def test_crew_training_falls_back_to_the_stock_rate(self):
         """An unreadable descriptor must not fail the battle transaction."""

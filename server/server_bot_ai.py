@@ -753,6 +753,7 @@ class BotPlanner(object):
                 self._apply_team_order(
                     order, bot, team_order_by_bot.get(bot["id"]),
                     players, defense, route_point, turnback_point)
+                self._apply_authored_route_order(order, bot, route_point)
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
         payload = {"orders": orders}
@@ -2368,8 +2369,10 @@ class BotPlanner(object):
                      "z": round(direction * 18.0, 3)}
             return route_id, 0, point, point, False
         route_id = str(route.get("id") or "uploaded_route")
+        authored = bot_tactics.route_config(
+            self.tactics, self.tactics_map, route_id)
         route_limit = len(waypoints) - 1
-        if stop_before_objective and len(waypoints) > 1:
+        if stop_before_objective and len(waypoints) > 1 and authored is None:
             route_limit -= 1
         state = self._route_states.get(bot["id"])
         if state is None or state.get("route_id") != route_id:
@@ -2415,6 +2418,9 @@ class BotPlanner(object):
                     if abs(delta) <= 1.75:
                         break
                     index += 1
+            # User point zero is an instruction, not a baked base connector.
+            if authored is not None:
+                index = 0
             state = {"index": index, "route_id": route_id,
                      "join_index": index,
                      "join_anchor": {"x": bx,
@@ -2431,9 +2437,22 @@ class BotPlanner(object):
         # Consume every already-reached adjacent gate in this one 1 Hz global
         # tactics pass; otherwise a short next segment makes LocalDriver stop
         # at it until the following planner tick.
-        while (index < route_limit and
-               _route_point_reached(
-                   bx, bz, waypoints, index, route_limit)):
+        state["holding"] = False
+        while _route_point_reached(bx, bz, waypoints, index, route_limit):
+            authored_point = (authored['points'][index]
+                              if authored is not None else ())
+            seconds = authored_point[3] if len(authored_point) > 3 else 0.0
+            if seconds:
+                # A timed parking instruction must be reached physically;
+                # passing a macro gate's forward corridor is insufficient.
+                if math.hypot(point['x'] - bx, point['z'] - bz) > ROUTE_ARRIVAL_RADIUS:
+                    break
+                arrived = state.setdefault("arrived", {}).setdefault(index, now)
+                if seconds < 0 or now - arrived < seconds:
+                    state["holding"] = True
+                    break
+            if index >= route_limit:
+                break
             index += 1
             state["index"] = index
             point = _point(waypoints[index])
@@ -2444,6 +2463,21 @@ class BotPlanner(object):
         else:
             anchor = _point(waypoints[max(0, index - 1)])
         return route_id, index, point, anchor, route_join
+
+    def _apply_authored_route_order(self, order, bot, route_point):
+        """Apply explicit parking/travel instructions without suppressing aim."""
+        authored = bot_tactics.route_config(
+            self.tactics, self.tactics_map, order.get('route_id'))
+        if authored is None:
+            return
+        scripted = (bot['profile'].get('class_tag') == 'SPG' or
+                    any(len(point) > 3 for point in authored['points']))
+        if not scripted:
+            return
+        holding = (self._route_states.get(bot['id']) or {}).get('holding', False)
+        order['move_position'] = dict(route_point)
+        order['combat_mode'] = 'hold' if holding else 'route'
+        order['throttle_override'] = 0.0 if holding else None
 
     def _retreat_point(self, bot, route_anchor):
         """Return the previous graph-validated route point when available."""

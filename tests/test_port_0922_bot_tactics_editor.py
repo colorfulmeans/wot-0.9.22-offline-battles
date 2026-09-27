@@ -65,7 +65,7 @@ class TacticsContractTests(unittest.TestCase):
             elif mutation=='extra':raw['behavior'][0]['values']['ignore_walls']=True
             elif mutation=='resource':raw['maps']['08_ruinberg']['resource_sha256']='0'*64
             elif mutation=='coords':raw['maps']['08_ruinberg']['positions'][0]['point']=[999,999]
-            elif mutation=='spg_route':raw['maps']['08_ruinberg']['routes'][0]['classes']=['SPG']
+            elif mutation=='spg_route':raw['maps']['08_ruinberg']['routes'][0]['classes']=['invalid']
             elif mutation=='crew':raw['behavior'][0]['values']['crew_level']=99
             else:raw['behavior'][0]['slot']=5
             with self.subTest(mutation=mutation),self.assertRaises(ValueError):cfg.canonical(raw)

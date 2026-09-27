@@ -6317,3 +6317,82 @@ the condition path with supplied receipts, not a reported player's actual
 spotting attribution or installed version. Per the user's scope correction,
 all 0.8.4 reports are invalid evidence for this task. Report `20260927-024817`
 is excluded; no current-version ping conclusion or change is derived from it.
+
+### September 28 roster, route editor, projectile and spotting follow-up
+
+The existing retired-vehicle list was not consumed by the Bot lineup paths.
+The launcher profile normalizer, server catalog and client automatic roster
+now exclude Aufkl. Panther, WT E 100, SU-122-54, Object 263B and Object 430B.
+Exact slot overrides drop only their retired vehicle selection, retaining
+their crew/difficulty choice. Human garage eligibility remains separate and
+still accepts these stock-loadable vehicles. A retired human vehicle cannot
+become the substitute for an unloadable Bot descriptor.
+
+Accelerated crew XP now selects the lowest-total-XP trainable crew member,
+with vehicle-slot order breaking ties. Exact #1513
+`Tankman.getSkillsToLearn` combines common skills and the crew member's
+combined vehicle roles. `TankmanDescr.skillLevel` returns None for an
+unlearned skill and the level for a learned skill. Fully trained members are
+excluded from the additional accelerated award; if all members are complete,
+vehicle XP is retained. Ordinary crew XP and the existing Mentor calculation
+are unchanged. The new exact calls are included in the ABI audit.
+
+SPG rear placement permutes the existing fifteen validated spawn poses on
+each team. Rear depth is measured away from the opposing spawn centroid,
+independent of slot numbering. Human and Bot SPGs share one complete roster
+mapping; displaced vehicles receive the vacated slots. No new coordinates,
+spawn spacing, steering or collision coefficients are introduced. Tests cover
+three SPGs on both sides, reversed slot numbering, human/Bot parity and reset
+between battles. Congestion on Ensk, Lakeville and Mitterrand still requires
+native departure acceptance.
+
+The route editor defaults to heavy-tank routes and can display one class or
+all classes. Switching the filter clears the selection, not saved routes.
+SPGs can receive authored routes as well as parking zones. Double-clicking a
+waypoint sets wait seconds: zero passes through, a positive value starts at
+physical arrival, and -1 holds indefinitely. The optional fourth point field
+stays in the canonical tactics profile; the existing manifest retains its
+three-field geometry. The server prevents forward-corridor shortcuts from
+skipping a parking instruction, preserves the opening authored waypoint and
+advances after its wait. Scripted movement overrides tactical movement while
+retaining aim/fire decisions. The worker's initial-SPG-position adapter only
+handles its ordinary artillery modes, so it does not restore an old parking
+goal over an authored route. Actual Tk tests cover filtering, persistence and
+condition editing; server-order tests cover arrival, timed departure,
+permanent hold and SPG movement.
+
+Bot direct and SPG physical launch origins previously used HP_gunFire, which
+may lie beyond a wall while the hull stays outside. Both now use the same
+descriptor gun-pivot transform as player shot geometry. SPG planning, final
+arc proof and the frozen launch receipt share that origin. Muzzle cosmetics
+retain their native node, and submerged-barrel and started-entity guards
+remain. A regression places the cosmetic muzzle beyond a wall and verifies
+that the first physical projectile chord stops at the wall before its target.
+
+Exact `items/vehicles.pyc:VehicleDescriptor.__updateAttributes` constructs
+`visibilityCheckPoints`, `observerPosOnChassis` and `observerPosOnTurret`
+only in its IS_CELLAPP branch. Reading that field on a client descriptor
+therefore fell back to one fixed-height ray even after six-point support was
+introduced. The adapter now reproduces the original six-point construction
+from the loaded hull/turret collision bounding boxes. The fixed chassis port
+is above the hull centre; the second port follows the turret's gun pivot.
+Rear-mounted turrets do not move the first port to the back. Target front,
+rear, sides, top and gun-pivot checkpoints share the original hull/turret
+transforms. Tests use client-shaped descriptors without the cell-only field,
+including a rear turret, exposed ridge target and client/worker parity. The
+existing phased visible-client check is bounded by three targets times six
+blocked rays per update; native full-room query cost remains unmeasured.
+
+Outstanding items are not claimed fixed by this change. Native BattleReplay
+recording still has no offline lifecycle/stream integration. The human fire
+intent path still commits one shell per intent despite the existing Bot burst
+clock. Map route/collision work and the remaining physical-contact reports
+need separate implementation and native evidence. In particular, Ghost
+Town's baked route endpoints are (-2, +/-350), while its exact WTCP standard
+capture centres and `objective_bases` agree at approximately (290.979,
+-100.311) and (-291.095, 100.010); this discrepancy is retained as a route
+investigation, not silently resolved by moving native capture circles.
+Report 232418 is a valid 0.9.5 Himmelsdorf session. Report 215741 is also
+0.9.5, but contains startup logs without the reported collision or a server
+log, so it cannot calibrate mass transfer or ram damage. No physics formula,
+LT-14 condition or ping behavior is changed here.

@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 import uuid
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 
 try:
     from . import bot_tactics_store as storage
@@ -209,6 +209,13 @@ class BotTacticsEditor:
         t=LocalizedCombobox(bar,variable=self.team_var,kind='team',values=('1','2'),language=self.language,width=9)
         ttk.Label(bar,text=self.tr('出生队伍','Spawn team')).pack(side='left',padx=6);t.pack(side='left')
         t.bind('<<ComboboxSelected>>',lambda e:self.change_map(),add='+')
+        self.route_class_var = tk.StringVar(value='heavyTank')
+        ttk.Label(bar,text=self.tr('显示车型','Show class')).pack(side='left',padx=6)
+        scope = LocalizedCombobox(bar,variable=self.route_class_var,
+            kind='class_tag',values=('all',)+contract.CLASSES,
+            language=self.language,width=13)
+        scope.pack(side='left')
+        scope.bind('<<ComboboxSelected>>',lambda e:self.change_route_class(),add='+')
         self.base_label=ttk.Label(bar,text='');self.base_label.pack(side='left',padx=8)
         ttk.Label(bar,text=self.tr('模式：标准战','Mode: standard')).pack(side='right')
         tools=ttk.Frame(parent);tools.pack(fill='x')
@@ -229,6 +236,7 @@ class BotTacticsEditor:
         self.canvas.bind('<ButtonPress-1>',self.press)
         self.canvas.bind('<B1-Motion>',self.motion)
         self.canvas.bind('<ButtonRelease-1>',self.release)
+        self.canvas.bind('<Double-Button-1>',self.edit_point_condition)
         self.canvas.bind('<MouseWheel>',self.wheel)
         self.canvas.bind('<Button-4>',lambda e:self.wheel(e,1))
         self.canvas.bind('<Button-5>',lambda e:self.wheel(e,-1))
@@ -252,7 +260,7 @@ class BotTacticsEditor:
             widget.grid(row=row*2+1,column=0,sticky='ew',pady=(0,4));self.item_fields[key]=(label,widget)
         types=ttk.Frame(right);types.grid(row=16,column=0,sticky='ew');self.classes_frame=types
         self.class_vars={}
-        for i,c in enumerate(contract.CLASSES[:-1]):
+        for i,c in enumerate(contract.CLASSES):
             var=tk.BooleanVar(value=True);self.class_vars[c]=var
             ttk.Checkbutton(types,text=self.tr(*labels.ENUM_NAMES['class_tag'][c]),variable=var).grid(row=i,column=0,sticky='w')
         ttk.Button(right,text=self.tr('应用属性到草稿','Update draft properties'),command=self.update_properties).grid(row=17,column=0,sticky='ew',pady=5)
@@ -261,9 +269,10 @@ class BotTacticsEditor:
         actions=ttk.Frame(right);actions.grid(row=19,column=0,sticky='ew');self.point_actions=actions
         ttk.Button(actions,text=self.tr('删点','Delete point'),command=self.delete_point).pack(side='left')
         ttk.Button(actions,text=self.tr('切换驻留点','Toggle hold'),command=self.toggle_hold).pack(side='left')
+        ttk.Button(actions,text=self.tr('停留条件','Wait condition'),command=self.edit_point_condition).pack(side='left')
         ttk.Label(right,text=self.tr(
-            '路线：点击空白处追加点；拖动节点。\nShift+点击：插在选中节点后。\n炮位：拖动中心；圆圈为可选停车区。\n滚轮缩放；中键拖动。\n固定路线不主动换线，交战/回防仍优先。',
-            'Click empty space to add a waypoint; drag nodes.\nShift-click inserts after selected node.\nDrag SPG centre; circle is the allowed zone.\nWheel zoom; middle-drag pan.\nFixed routes allow combat/emergency defense.'),justify='left',wraplength=250).grid(row=20,column=0,sticky='w',pady=8)
+            '路线：点击空白处追加点；拖动节点。\nShift+点击：插在选中节点后。\n双击节点设置停留时间，-1 为一直停留。\n带停留条件的路线按点位移动，仍可瞄准射击。\n切换车型只隐藏其他路线。\n滚轮缩放；中键拖动。',
+            'Click empty space to add a waypoint; drag nodes.\nShift-click inserts after selected node.\nDouble-click a node to set wait seconds; -1 holds indefinitely.\nTimed routes control movement while retaining aim/fire.\nSwitching class only hides other routes.\nWheel zoom; middle-drag pan.'),justify='left',wraplength=250).grid(row=20,column=0,sticky='w',pady=8)
 
     def checkpoint(self):
         self.undo_stack.append(copy.deepcopy(self.document));self.undo_stack=self.undo_stack[-50:];self.redo_stack=[]
@@ -376,15 +385,31 @@ class BotTacticsEditor:
     def change_map(self):
         self.map_name=self.map_labels[self.map_var.get()];self.team=int(self.team_var.get());self._load_map()
 
+    def change_route_class(self):
+        self.selection=None;self.selected_point=None;self.drag=None
+        self._refresh_items()
+
+    def _visible_for_class(self, kind, item):
+        tag = self.route_class_var.get()
+        if tag == 'all':
+            return True
+        if kind == 'positions':
+            return tag == 'SPG'
+        if kind == 'builtin':
+            weights = item.get('class_weights') or {}
+            return weights.get(tag, 0.0) > 0.0 if weights else tag != 'SPG'
+        return tag in item['classes']
+
     def _refresh_items(self):
         self.items.delete(*self.items.get_children())
         for kind in ('routes','positions'):
             for item in self.entry()[kind]:
-                if item['team']==self.team:
+                if item['team']==self.team and self._visible_for_class(kind,item):
                     self.items.insert('','end',iid=kind+':'+item['id'],text=(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label'])
         graph=self.graph_cache.get(self.map_name)
         if graph:
             for route in graph.get('routes',{}).get(str(self.team),()):
+                if not self._visible_for_class('builtin',route):continue
                 self.items.insert('','end',iid='builtin:'+route['id'],text=self.tr('[内置] ','[Built-in] ')+labels.route_label(route['id'],self.language))
         if self.selection and self.items.exists(':'.join(self.selection)):
             self.items.selection_set(':'.join(self.selection))
@@ -411,18 +436,23 @@ class BotTacticsEditor:
             var.set(str(val))
         for key,var in self.class_vars.items():var.set(key in (item or {}).get('classes',()))
         pts=(item or {}).get('points',[])
-        self.points.config(values=['%d: %.1f, %.1f%s'%(i+1,p[0],p[1],' *' if p[2] else '') for i,p in enumerate(pts)])
+        self.points.config(values=['%d: %.1f, %.1f%s'%(i+1,p[0],p[1],
+            (' [%s]'%self.tr('一直停留','Hold')) if len(p)>3 and p[3]<0 else
+            (' [%gs]'%p[3]) if len(p)>3 and p[3]>0 else ' *' if p[2] else '')
+            for i,p in enumerate(pts)])
         if self.selected_point is not None and self.selected_point<len(pts):self.points.current(self.selected_point)
         else:self.points.set('')
 
     def new_route(self):
         self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
+        scope=self.route_class_var.get()
         self._ensure_entry()['routes'].append(dict(id=identity,label=self.tr('新路线','New route'),team=self.team,
-            classes=list(contract.CLASSES[:-1]),slots=[],policy='preferred',capacity=6,weight=1.0,points=[]))
+            classes=list(contract.CLASSES[:-1]) if scope=='all' else [scope],slots=[],policy='preferred',capacity=6,weight=1.0,points=[]))
         self.selection=('routes',identity);self._refresh_items();self.mark()
         self.status.set(self.tr('在地图上点击添加路径点；最多16个。','Click the map to add up to 16 route points.'))
 
     def new_position(self):
+        self.route_class_var.set('SPG')
         self.checkpoint();identity='p_'+uuid.uuid4().hex[:12]
         base=contract.MAPS[self.map_name]['bases'][self.team-1]
         other=contract.MAPS[self.map_name]['bases'][2-self.team]
@@ -438,7 +468,7 @@ class BotTacticsEditor:
             if source:
                 self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
                 new=dict(id=identity,label=labels.route_label(source['id'],self.language)+self.tr(' 副本',' copy'),team=self.team,
-                    classes=list(contract.CLASSES[:-1]),slots=[],policy='preferred',capacity=source.get('capacity',6),weight=1.0,
+                    classes=list(contract.CLASSES[:-1]) if self.route_class_var.get()=='all' else [self.route_class_var.get()],slots=[],policy='preferred',capacity=source.get('capacity',6),weight=1.0,
                     points=[[float(p[0]),float(p[1]),int(bool(p[2]))] for p in source['waypoints']])
                 self._ensure_entry()['routes'].append(new);self.selection=('routes',identity);self._refresh_items();self.mark()
             return
@@ -482,7 +512,28 @@ class BotTacticsEditor:
     def toggle_hold(self):
         item=self._selected()
         if item is not None and self.selection[0]=='routes' and self.selected_point is not None and self.selected_point<len(item['points']):
-            self.checkpoint();p=item['points'][self.selected_point];p[2]=1-p[2];self._refresh_properties();self.mark()
+            self.checkpoint();p=item['points'][self.selected_point];p[2]=1-p[2]
+            p[3:]=[-1.0 if p[2] else 0.0];self._refresh_properties();self.mark()
+
+    def edit_point_condition(self,event=None):
+        item=self._selected()
+        if item is None or self.selection[0]!='routes':return
+        if event is not None:
+            self.selected_point=next((i for i,p in enumerate(item['points'])
+                if math.hypot(*(a-b for a,b in zip(self.view.screen(p),
+                    (event.x,event.y))))<10),None)
+        if self.selected_point is None:return
+        point=item['points'][self.selected_point]
+        seconds=simpledialog.askfloat(self.tr('停留条件','Wait condition'),
+            self.tr('到达后停留秒数：0=直接前进，-1=一直停留。','Seconds after arrival: 0 = continue, -1 = stay here.'),
+            parent=self.root,initialvalue=point[3] if len(point)>3 else 0,
+            minvalue=-1,maxvalue=3600)
+        if seconds is None:return
+        if not math.isfinite(seconds) or -1<seconds<0:
+            self.error(self.tr('请输入 -1 或 0–3600 秒。','Enter -1 or 0–3600 seconds.'));return
+        self.checkpoint();point[3:]=[seconds];point[2]=int(seconds!=0)
+        self.drag=None;self._refresh_properties();self.mark()
+        return 'break'
 
     def press(self,event):
         self.canvas.focus_set();item=self._selected()
@@ -548,6 +599,7 @@ class BotTacticsEditor:
         graph=self.graph_cache.get(self.map_name)
         if graph:
             for r in graph.get('routes',{}).get(str(self.team),()):
+                if not self._visible_for_class('builtin',r):continue
                 coords=[v for p in r.get('waypoints',()) for v in self.view.screen(p)]
                 if len(coords)>=4:c.create_line(*coords,fill='#818789',width=1,dash=(5,5))
         for i,p in enumerate(contract.MAPS[self.map_name]['bases'],1):
@@ -555,7 +607,7 @@ class BotTacticsEditor:
             c.create_text(x,y,text=str(i),fill='white')
         for kind in ('routes','positions'):
             for item in self.entry()[kind]:
-                if item['team']!=self.team:continue
+                if item['team']!=self.team or not self._visible_for_class(kind,item):continue
                 chosen=self.selection==(kind,item['id']);color='#ffc85b' if chosen else '#69cfe0'
                 if kind=='routes':
                     coords=[v for p in item['points'] for v in self.view.screen(p)]

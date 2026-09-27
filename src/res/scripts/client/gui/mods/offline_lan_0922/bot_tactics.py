@@ -152,9 +152,9 @@ def canonical(raw):
                 result = dict(id=identity, label=_text(item['label']), team=integer(item['team'], 1, 2))
                 if kind == 'routes':
                     tags, slots = item.get('classes', []), item.get('slots', [])
-                    if (not isinstance(tags, list) or not tags or len(tags) > 4 or
-                            any(t not in CLASSES[:-1] for t in tags) or len(set(tags)) != len(tags)):
-                        raise TacticsError('Routes apply to ground vehicles; use artillery positions for SPGs')
+                    if (not isinstance(tags, list) or not tags or len(tags) > len(CLASSES) or
+                            any(t not in CLASSES for t in tags) or len(set(tags)) != len(tags)):
+                        raise TacticsError('Invalid route vehicle classes')
                     if not isinstance(slots, list) or len(slots) > 15:
                         raise TacticsError('Invalid route slot list')
                     slots = [integer(v, 0, 14) for v in slots]
@@ -168,9 +168,14 @@ def canonical(raw):
                         raise TacticsError('A route must contain 1..16 waypoints')
                     points = []
                     for pt in pts:
-                        if not isinstance(pt, (list, tuple)) or len(pt) != 3:
-                            raise TacticsError('Waypoint must be [x, z, hold]')
+                        if not isinstance(pt, (list, tuple)) or len(pt) not in (3, 4):
+                            raise TacticsError('Waypoint must be [x, z, hold, optional wait seconds]')
                         value = point(pt[:2], meta['bounds']) + [integer(pt[2], 0, 1)]
+                        if len(pt) == 4:
+                            wait = number(pt[3], -1, 3600)
+                            if -1 < wait < 0:
+                                raise TacticsError('Use -1 for a permanent hold')
+                            value.append(wait)
                         if points and sum((value[i] - points[-1][i]) ** 2 for i in (0, 1)) < 1:
                             raise TacticsError('Consecutive waypoints need at least one metre separation')
                         points.append(value)

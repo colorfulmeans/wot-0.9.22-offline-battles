@@ -1517,9 +1517,9 @@ class GarageState(object):
 
         Every crew member receives battle XP scaled by the vehicle's own
         ``crewXpFactor``. On an elite vehicle with accelerated training
-        enabled, the least experienced crew member receives one additional
-        equal award. Both the vehicle setting and its current research
-        completion are required.
+        enabled, the least experienced member who can still train receives
+        one additional equal award. Ties follow the vehicle's crew order.
+        If every member is fully trained, keep the XP on the vehicle.
         """
         amount = _int(battle_xp)
         if amount < 0:
@@ -1555,8 +1555,24 @@ class GarageState(object):
             accelerated = False
         accelerated = bool(descriptors and accelerated and self._is_elite(
             vehicle_type_compact_descr))
-        weakest = (min(descriptors, key=lambda row: (row[2], row[0]))
-                   if descriptors else None)
+        trainable = []
+        if accelerated:
+            roles = self._crew_roles(record)
+            for row in descriptors:
+                slot, unused_id, unused_xp, descriptor = row
+                # Match #1513 Tankman.availableSkills(useCombinedRoles=True):
+                # a commander who also loads may still learn loader skills.
+                available = set(tankmen.COMMON_SKILLS)
+                for role in roles[slot]:
+                    available.update(tankmen.SKILLS_BY_ROLES.get(role, ()))
+                maximum = tankmen.MAX_SKILL_LEVEL
+                if (descriptor.roleLevel < maximum or any(
+                        (descriptor.skillLevel(skill) or 0) < maximum
+                        for skill in available)):
+                    trainable.append(row)
+        accelerated = bool(accelerated and trainable)
+        weakest = (min(trainable, key=lambda row: (row[2], row[0]))
+                   if trainable else None)
         try:
             # The shipped helper owns Mentor's factor, including Brothers in
             # Arms and food. Evaluate the starting crew and carried equipment

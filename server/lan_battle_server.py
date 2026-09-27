@@ -932,6 +932,8 @@ def _projectile_bounded_vector(value, lows, highs):
 
 def _bot_lineup_allowed_names(catalog):
     """Return catalog identities accepted by every Bot roster owner."""
+    from gui.mods.offline_lan_0922.vehicle_configuration import (
+        RETIRED_BOT_VEHICLES)
     excluded_tags = {
         "event_battles", "premiumIGR", "observer", "fallout",
     }
@@ -954,6 +956,7 @@ def _bot_lineup_allowed_names(catalog):
         if isinstance(row, dict) and row.get("name") and
         not excluded_tags.intersection(row.get("tags") or ()) and
         row.get("name") not in excluded_names and
+        row.get("name") not in RETIRED_BOT_VEHICLES and
         not ("secret" in (row.get("tags") or ()) and
              (row.get("name") in hidden_names or
               row.get("name").endswith(hidden_suffixes))))

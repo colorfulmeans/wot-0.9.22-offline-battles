@@ -10,6 +10,43 @@ import test_port_0922_battle_runtime as fixtures
 
 
 class LegacyDetectionPointsTests(unittest.TestCase):
+    def client_descriptor(self):
+        # Exact #1513 client descriptors do not run the IS_CELLAPP block.
+        return {
+            'chassis': {'hullPosition': (0.2, 0.5, 0.1)},
+            'hull': {'turretPositions': ((0, 1.5, -2),),
+                     'hitTester': {'bbox': ((-1.5, 0, -3), (1.5, 2, 4), 0)}},
+            'turret': {'gunPosition': (0, 0.5, 1),
+                       'hitTester': {'bbox': ((-1, 0, -1), (1, 1.5, 1), 0)}},
+            'gun': {'staticTurretYaw': None},
+        }
+
+    def test_client_builds_all_six_points_without_cell_only_attributes(self):
+        descriptor = self.client_descriptor()
+        points = spotting.descriptor_check_points(descriptor)
+        self.assertEqual(((0, 3.5, 0), (0.2, 2.5, -0.9),
+                          (0.2, 1.5, 4.1), (0.2, 1.5, -2.9),
+                          (1.7, 2.5, 0.6), (-1.3, 2.5, 0.6)), points)
+
+    def test_rear_turret_does_not_move_the_chassis_observer_back(self):
+        descriptor = self.client_descriptor()
+        pose = {'position': (100, 10, 100), 'turret_yaw': math.pi}
+        static = spotting.vehicle_check_points(descriptor, pose, True, 0)[0]
+        dynamic = spotting.vehicle_check_points(descriptor, pose, True, 1)[0]
+        self.assertEqual((100, 13.5, 100), static)
+        self.assertAlmostEqual(100.2, dynamic[0])
+        self.assertAlmostEqual(12.5, dynamic[1])
+        self.assertAlmostEqual(97.1, dynamic[2])
+
+    def test_real_client_descriptor_exposes_high_point_above_ridge(self):
+        runtime, battle = self.battle()
+        runtime.bigworld.wg_collideSegment = lambda space, start, end, mask: (
+            None if end.y >= 3.0 else (fixtures._Vector(50, 2, 0),))
+        descriptor = self.client_descriptor()
+        result = battle._spot_geometry({'position': (0, 0, 0)},
+            {'position': (100, 0, 0)}, descriptor, descriptor)
+        self.assertTrue(result['line_of_sight'])
+
     def descriptor(self):
         descriptor = fixtures._Descriptor()
         descriptor.visibilityCheckPoints = (

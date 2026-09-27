@@ -13907,7 +13907,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertTrue(battle._bot_friendly_firing_lane(
             source, target, descriptor, 0, launch)['clear'])
 
-    def test_worker_spg_launch_keeps_exact_remote_muzzle_node(self):
+    def test_worker_spg_launch_uses_the_same_physical_pivot_as_direct_fire(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         battle._worker_mode = True
@@ -13936,7 +13936,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         args = battle._artillery.request_launch.call_args.args
         self.assertEqual((4.0, 3.5, 6.0), args[5])
 
-    def test_stalled_bot_launch_uses_its_logical_barrel_pose(self):
+    def test_stalled_bot_launch_uses_its_logical_pivot_pose(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
         descriptor = _Descriptor()
@@ -13963,7 +13963,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             descriptor, 0, 2, 0.0, 0.0, 1.0)
 
         self.assertEqual((4.0, 3.5, 6.0), aligned)
-        self.assertEqual((9.0, 3.5, 8.0), moved)
+        self.assertEqual((9.0, 3.5, 6.0), moved)
 
     def test_bot_projectile_sends_frozen_logical_time_and_pose(self):
         runtime = _runtime()
@@ -28171,12 +28171,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             battle._update_spotting(now)
             per_update.append(len(rays) - before)
 
-        # Each client proves only its local human's direct sight. Bot and
-        # remote-human sightings arrive through the server-merged team relay,
-        # and the client now casts the hidden worker's single authority ray
-        # rather than its own two-height variant, so three phased enemies cost
-        # one static ray apiece.
-        self.assertEqual([3] * 10, per_update)
+        # Three phased enemies per update, each with one observer port and
+        # six blocked target checkpoints. Open rays short-circuit sooner.
+        self.assertEqual([18] * 10, per_update)
 
     def test_the_client_casts_the_hidden_worker_authority_ray(self):
         runtime = _runtime()
@@ -28196,10 +28193,15 @@ class BattleRuntimeContractTests(unittest.TestCase):
         observer_position = (0.0, 1.0, 0.0)
         target_position = (250.0, 3.0, 0.0)
 
+        battle._records = {'bot:11': {'engine_id': 11},
+                           'player:12': {'engine_id': 12}}
+        battle._server_entity = lambda identity: types.SimpleNamespace(
+            typeDescriptor=observer if identity == 11 else target)
+
         battle._bot_visibility(
-            {'x': observer_position[0], 'y': observer_position[1],
+            {'id': 11, 'x': observer_position[0], 'y': observer_position[1],
              'z': observer_position[2]},
-            {'position': target_position})
+            {'kind': 'human', 'network_id': 12, 'position': target_position})
         battle._spot_line_of_sight(
             (observer_position, observer, None), target_position,
             target, False, False)
@@ -28208,7 +28210,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         # the worker's would draw an enemy the authority never spotted.
         self.assertEqual(2, len(rays))
         self.assertEqual(rays[0], rays[1])
-        self.assertEqual(((0.0, 3.0, 0.0), (250.0, 4.5, 0.0), 128, 0),
+        self.assertEqual(((0.0, 3.0, 0.0), (250.0, 5.0, 0.0), 128, 0),
                          rays[0])
 
     def test_a_spotting_ray_carries_one_prepared_broken_skin_filter(self):
@@ -28330,7 +28332,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             sight, target_position, target, False, False))
         self.assertTrue(battle._spot_line_of_sight(
             sight, target_position, target, False, True))
-        self.assertEqual([False, True], calls)
+        self.assertEqual([False] * 6 + [True], calls)
 
     def test_runtime_foliage_failure_falls_back_to_zero_bonus_once(self):
         battle = BattleRuntime(_runtime())

@@ -98,6 +98,7 @@ EXPECTED_ABI = {
             'nationID', 'vehicleTypeID', 'roles', 'isPremium',
             'roleLevel', 'skillsMask', 'isPreview'),
         'TankmanDescr.__init__': ('self', 'compactDescr', 'battleOnly'),
+        'TankmanDescr.skillLevel': ('self', 'skillName'),
     },
     'scripts/common/items/__init__.pyc': {
         'ItemsPrices.__init__': ('self', 'prices'),
@@ -1146,6 +1147,14 @@ EXPECTED_CODE_LITERALS = {
 # string payload literals cannot express.  They are the exact #1513 APIs the
 # offline Account preservation and native lobby-ready gate depend on.
 EXPECTED_CODE_NAMES = {
+    'scripts/common/items/tankmen.pyc': {
+        'TankmanDescr.skillLevel': (
+            'skills', 'MAX_SKILL_LEVEL', '_TankmanDescr__lastSkillLevel'),
+    },
+    'scripts/client/gui/shared/gui_items/Tankman.pyc': {
+        'Tankman.getSkillsToLearn': (
+            'COMMON_SKILLS', 'SKILLS_BY_ROLES', 'combinedRoles'),
+    },
     'scripts/client/game.pyc': {
         'wg_onChunkLoad': (
             'AreaDestructibles', 'g_destructiblesManager', 'getSpaceID',
@@ -1172,6 +1181,10 @@ EXPECTED_CODE_NAMES = {
             'VEHICLE_SIEGE_STATE', 'SWITCHING_ON', 'SWITCHING_OFF'),
         'VehicleDescriptor.getHitTesters': (
             'chassis', 'hull', 'turrets', 'hitTester', 'append'),
+        'VehicleDescriptor.__updateAttributes': (
+            'IS_CELLAPP', 'hullPosition', 'hitTester', 'bbox',
+            'turretPositions', 'gunPosition', 'visibilityCheckPoints',
+            'observerPosOnChassis', 'observerPosOnTurret'),
         'CompositeVehicleDescriptor.onSiegeStateChanged': (
             'VEHICLE_SIEGE_STATE', 'ENABLED', 'VEHICLE_MODE', 'SIEGE',
             'DEFAULT'),

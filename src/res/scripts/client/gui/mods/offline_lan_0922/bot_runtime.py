@@ -2017,7 +2017,7 @@ class BotRuntime(object):
         self.friendly_lane_probe = self._adapt_friendly_lane_probe(
             friendly_lane_probe or (
                 lambda unused_source, unused_target: True))
-        # Production freezes the exact native HP_gunFire transform before the
+        # Production freezes the exact #1513 gun-pivot transform before the
         # friendly-hull proof.  The logical fallback keeps the pure runtime
         # usable in engine-free tests; BattleRuntime always injects the native
         # boundary.
@@ -2033,7 +2033,7 @@ class BotRuntime(object):
         # queue.  Returning None means pending or fail-closed; a dict is a
         # fully probed physical solution shared by aiming and firing.
         self.ballistic_solution_probe = ballistic_solution_probe
-        # BattleRuntime owns the native HP_gunFire origin. This second seam
+        # BattleRuntime owns the physical gun-pivot origin. This second seam
         # publishes a frozen receipt only after the next deterministic,
         # dispersed SPG trajectory itself has passed the bounded arc queue.
         self.artillery_launch_probe = artillery_launch_probe
@@ -9018,7 +9018,7 @@ class BotRuntime(object):
             return None
 
     def _exact_shot_origin(self, state, descriptor, shell_index=0):
-        """Read the worker's frozen native HP_gunFire transform."""
+        """Read the worker's physical gun-pivot origin for this shot."""
         direction = self._exact_shot_direction(state, descriptor)
         if direction is None:
             return None
@@ -9295,8 +9295,8 @@ class BotRuntime(object):
             'flight_time': flight_time, 'arc': 'low',
             # Gun aiming immediately follows this solve in the same authority
             # tick, before hydraulic, turret or barrel state advances. Reuse
-            # the exact frozen muzzle instead of crossing the native
-            # HP_gunFire boundary a second time for the identical pose.
+            # the exact frozen pivot instead of sampling the launch
+            # transform a second time for the identical pose.
             '_origin': start,
             '_aim_token': aim_token,
         }

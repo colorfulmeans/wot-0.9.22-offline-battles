@@ -61,6 +61,38 @@ class EditorUITests(unittest.TestCase):
         self.assertLess(abs(point['point'][0]+106),2)
         self.assertLess(abs(point['point'][1]-346),2)
 
+    def test_switching_class_keeps_saved_routes_and_limits_visible_items(self):
+        self.ui.new_route();self.root.update()
+        self.click((-66,306));self.click((-126,246))
+        heavy=copy.deepcopy(self.ui._selected())
+        self.assertEqual(['heavyTank'],heavy['classes'])
+        self.ui.route_class_var.set('mediumTank');self.ui.change_route_class()
+        self.assertNotIn('routes:'+heavy['id'],self.ui.items.get_children())
+        self.ui.new_route();self.root.update()
+        self.click((-76,306));self.click((-136,246))
+        medium=copy.deepcopy(self.ui._selected())
+        self.assertEqual(['mediumTank'],medium['classes'])
+        self.ui.profile_name.set('Separate classes');self.ui.save(False)
+        saved=self.ui.store.read('Separate classes')
+        self.assertEqual(2,len(saved['maps']['08_ruinberg']['routes']))
+        self.ui.route_class_var.set('heavyTank');self.ui.change_route_class()
+        self.assertIn('routes:'+heavy['id'],self.ui.items.get_children())
+        self.assertNotIn('routes:'+medium['id'],self.ui.items.get_children())
+
+    def test_double_click_condition_survives_save_and_reopen(self):
+        self.ui.new_route();self.root.update()
+        self.click((-66,306));self.click((-126,246))
+        point=self.ui._selected()['points'][0]
+        x,y=self.ui.view.screen(point)
+        event=type('Event',(),dict(x=x,y=y))()
+        with mock.patch.object(ui_module.simpledialog,'askfloat',return_value=25):
+            self.ui.edit_point_condition(event)
+        self.ui.profile_name.set('Timed route');self.ui.save(False)
+        saved=self.ui.store.read('Timed route')
+        self.assertEqual(25,saved['maps']['08_ruinberg']['routes'][0]['points'][0][3])
+        self.ui.adopt(saved)
+        self.assertEqual(saved,self.ui.document)
+
     def test_invalid_form_does_not_replace_prior_active_config(self):
         before=self.ui.store.active();self.ui.new_position();self.root.update()
         self.ui.item_vars['radius'].set('nan');self.ui.save(True)

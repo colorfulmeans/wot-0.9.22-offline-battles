@@ -3390,9 +3390,6 @@ class BattleRuntime(object):
             builder = EntityPropertyBuilder(
                 BigWorldVehicleBinding.PROPERTY_NAMES)
             self._sender = _LANInputSender(self)
-            position, yaw = self._state_world_pose(local)
-            self._local_position = position
-            self._local_yaw = yaw
             self._local_descriptor = descriptor
             # Resolve the complete line-up while BattleLoading is still up.
             # Every unique destroyed-model prerequisite is submitted now in
@@ -3404,6 +3401,10 @@ class BattleRuntime(object):
                     not lineup_ready:
                 raise RuntimeError(
                     'the configured Bot roster is not available in this client')
+            self._prepare_spawn_assignments()
+            position, yaw = self._state_world_pose(local)
+            self._local_position = position
+            self._local_yaw = yaw
             prewarm_enabled = getattr(
                 self._remote_factory, 'prewarm_wrecks_enabled', None)
             if callable(prewarm_enabled) and prewarm_enabled():
@@ -4908,6 +4909,11 @@ class BattleRuntime(object):
         offered = []
         for name in ([vehicle_name] + list(self._prepared_vehicle_names) +
                      [self._config.get('vehicle')]):
+            # Retired tanks remain legal as the explicitly requested human
+            # vehicle, but must never become another slot's load substitute.
+            if (name != vehicle_name and
+                    name in vehicle_configuration.RETIRED_BOT_VEHICLES):
+                continue
             if name and name not in offered:
                 offered.append(name)
                 yield name
@@ -4931,7 +4937,8 @@ class BattleRuntime(object):
     @staticmethod
     def _vehicle_excluded(entry):
         name = _field(entry, 'name')
-        if vehicle_blacklist.is_unusable(name):
+        if (vehicle_blacklist.is_unusable(name) or
+                name in vehicle_configuration.RETIRED_BOT_VEHICLES):
             return True
         return not vehicle_configuration.is_standard_battle_vehicle(entry)
 
@@ -5192,6 +5199,28 @@ class BattleRuntime(object):
             self._bot_vehicle_assignments = {}
             return False
 
+    def _prepare_spawn_assignments(self):
+        """Use the same complete lineup for visible and worker spawn poses."""
+        classes = {}
+        for kind in ('players', 'bots'):
+            for row in self._start_message.get(kind) or ():
+                if not isinstance(row, dict) or int(row.get('id', 0)) <= 0:
+                    continue
+                key = (int(row.get('team', 1)), int(row.get('slot', 0)))
+                name = (self._bot_vehicle_assignments.get(key)
+                        if kind == 'bots' else row.get('vehicle'))
+                if not name:
+                    continue
+                descriptor = self._resolve_descriptor(name)
+                tags = _field(descriptor.type, 'tags', ()) or ()
+                if 'SPG' in tags:
+                    classes[key] = 'SPG'
+        self._spawn_slot_assignments = {}
+        self._spawn_cache.clear()
+        if self._spawn_planner is not None:
+            self._spawn_slot_assignments = (
+                self._spawn_planner.assign_artillery_rear(classes))
+
     def _formation_pose(self, team, slot):
         key = (int(team), int(slot))
         cached = self._spawn_cache.get(key)
@@ -5202,7 +5231,9 @@ class BattleRuntime(object):
                 self._arena_type,
                 tactical_maps.get_tactical_map(self._config['map']),
                 self._navigation_graph)
-        result = self._spawn_planner.pose(key[0], key[1])
+        physical_slot = getattr(self, '_spawn_slot_assignments', {}).get(
+            key, key[1])
+        result = self._spawn_planner.pose(key[0], physical_slot)
         self._spawn_cache[key] = result
         return result
 
@@ -24013,15 +24044,20 @@ class BattleRuntime(object):
             source, path, splash_radius)
 
     def _bot_direct_launch_origin(
-            self, source, unused_descriptor, unused_shell_index,
+            self, source, descriptor, unused_shell_index,
             unused_fire_seq, unused_shot_yaw, unused_shot_pitch,
             unused_flight_time):
-        """Freeze one direct shell at its exact logical/native muzzle pose."""
+        """Freeze the physical shell at the gun pivot, before any wall.
+
+        HP_gunFire remains the cosmetic flash/tracer origin. The pivot is the
+        same #1513 transform that player gun rotation uses for a shot, so a
+        barrel through cover cannot spawn a physical shell beyond that cover.
+        """
         try:
             source_id = int(source.get('id'))
         except (AttributeError, TypeError, ValueError, OverflowError):
             return None
-        barrel = self._bot_barrel_point(source, unused_descriptor)
+        barrel = self._bot_barrel_point(source, descriptor)
         if barrel is None or self._barrel_under_water(barrel):
             return None
         source_record = self._records.get('bot:%s' % source_id)
@@ -24032,29 +24068,19 @@ class BattleRuntime(object):
                 not getattr(source_entity, 'isStarted', False)):
             return None
         try:
-            gun_node = source_entity.model.node('HP_gunFire')
-            native = _xyz(self._runtime.math.Matrix(gun_node).translation)
-        except Exception:
-            return None
-        presented = source_record.get('projectile_collision_pose')
-        if isinstance(presented, dict):
-            logical_pose = self._projectile_plain_pose((
+            pose = self._projectile_plain_pose((
                 _number(source.get('x')), _number(source.get('y')),
                 _number(source.get('z'))), source)
-            names = ('x', 'y', 'z', 'yaw', 'pitch', 'roll',
-                     'turret_yaw', 'gun_pitch')
-            if any(abs(_number(logical_pose.get(name)) -
-                       _number(presented.get(name))) > 1.0e-7
-                   for name in names):
-                # A stalled callback can simulate several physical edges before
-                # the hidden native compound is presented.  The pure #1513
-                # barrel transform binds each edge to its own logical pose;
-                # the native node remains the exact path for an aligned pose.
-                return tuple(barrel)
-        return native
+            origin, unused_direction = shot_geometry.shot_origin_and_direction(
+                descriptor, (pose['x'], pose['y'], pose['z']),
+                pose['yaw'], pose['pitch'], pose['roll'],
+                pose['turret_yaw'], pose['gun_pitch'])
+        except Exception:
+            return None
+        return origin
 
     def _bot_artillery_planning_origin(self, source, descriptor):
-        """Read the same native muzzle used by the final SPG proof."""
+        """Use the same gun pivot for SPG planning and launch proof."""
         return self._bot_direct_launch_origin(
             source, descriptor, 0, 0, 0.0, 0.0, 0.0)
 
@@ -24072,7 +24098,7 @@ class BattleRuntime(object):
     def _bot_artillery_launch(
             self, source, target, descriptor, shell_index, fire_seq,
             shot_yaw, shot_pitch, flight_time, now):
-        """Prove the exact dispersed SPG path from the live muzzle node."""
+        """Prove the exact dispersed SPG path from its physical gun pivot."""
         if (self._artillery is None or not isinstance(source, dict) or
                 not isinstance(target, dict)):
             return None
@@ -24087,15 +24113,10 @@ class BattleRuntime(object):
         if (entity is None or not getattr(entity, 'isStarted', False) or
                 getattr(entity, 'typeDescriptor', None) is None):
             return None
-        try:
-            gun_node = entity.model.node('HP_gunFire')
-            origin = _xyz(self._runtime.math.Matrix(gun_node).translation)
-        except Exception:
-            # A logical pose is not a muzzle proof.  SPGs wait until the
-            # native model exposes the exact launch transform.
-            return None
-        barrel = self._bot_barrel_point(source, descriptor)
-        if barrel is None or self._barrel_under_water(barrel):
+        origin = self._bot_direct_launch_origin(
+            source, descriptor, shell_index, fire_seq,
+            shot_yaw, shot_pitch, flight_time)
+        if origin is None:
             return None
         ready, receipt = self._artillery.request_launch(
             source, target, descriptor, int(shell_index), int(fire_seq),
