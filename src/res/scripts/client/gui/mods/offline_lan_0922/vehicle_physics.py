@@ -2677,6 +2677,25 @@ def world_contact_velocity(velocity, normal):
 		for i in range(3))
 
 
+def horizontal_contact_normal(normal):
+	'''A horizontal hull sweep constrains X/Z; suspension owns Y support.
+
+	Look-ahead rays can meet the upward face of a bridge while the centre of
+	mass falls beside it. That witness cannot cancel gravity or land the hull.
+	Discard float32 noise on an otherwise horizontal face before normalizing.
+	'''
+	try:
+		x, y, z = (float(normal[i]) for i in range(3))
+	except (IndexError, TypeError, ValueError, OverflowError):
+		return (0.0, 0.0, 0.0)
+	if any(math.isnan(v) or math.isinf(v) for v in (x, y, z)):
+		return (0.0, 0.0, 0.0)
+	length = math.sqrt(x * x + z * z)
+	if length <= 1.0e-6 * max(1.0, abs(y)):
+		return (0.0, 0.0, 0.0)
+	return (x / length, 0.0, z / length)
+
+
 def overturn_level_from_up_cosine(up_cosine, warning_cosine=None,
 			danger_cosine=None):
 	'''Return 0=safe, 1=caution or 2=danger from hull world-up cosine.'''

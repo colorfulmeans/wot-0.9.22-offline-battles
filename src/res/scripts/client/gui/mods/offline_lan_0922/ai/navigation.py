@@ -158,6 +158,9 @@ class TerrainGrid(object):
 		self._static_hull_edges = {}
 		self._static_hull_key = None
 		self.static_hull_revision = 0
+		self._native_review_cells = set()
+		self._native_review_seeds = set()
+		self._native_review_cache = {}
 
 	def _install_baked_graph(self, graph):
 		if (graph.get('format') != BAKED_FORMAT_NAME or
@@ -670,7 +673,10 @@ class TerrainGrid(object):
 		if distance < 0.25:
 			return True
 		if self.prebaked:
-			return self._baked_corridor(start, end)[0]
+			if not self._baked_corridor(start, end)[0]:
+				return False
+			return (not self._needs_native_review(start, end) or
+			        self._native_segment_clear(start, end))
 		start_key = self._point_key(start)
 		end_key = self._point_key(end)
 		key = (start_key, end_key)
@@ -713,6 +719,80 @@ class TerrainGrid(object):
 		self._segment_cache[key] = bool(clear)
 		self._segment_cache[(end_key, start_key)] = bool(clear)
 		return clear
+
+	def review_native_corridor(self, start, end):
+		'''Retire coarse-only clearance around an observed static refusal.
+
+		The 4 m bake can miss a doorway or a thin wall. Recheck this local
+		region with the native hull-width corridor, including A* and smoothing;
+		never turn a refusal into a guessed map-wide obstacle rectangle.
+		'''
+		if not self.prebaked or self.obstacle_probe is None:
+			return False
+		distance = _distance_2d(start, end)
+		if distance <= 0.0:
+			return False
+		fraction = min(1.0, self.cell_size * 8.0 / distance)
+		end = tuple(start[i] + (end[i] - start[i]) * fraction for i in range(3))
+		cells = self._baked_segment_cells(start, end, require_height=False)
+		before = len(self._native_review_cells)
+		# Include the local escape fan: otherwise A* simply crosses the same
+		# wall one cell outside the reviewed strip and rejoins behind it.
+		for x, z in cells:
+			if (x, z) in self._native_review_seeds:
+				continue
+			self._native_review_seeds.add((x, z))
+			for dx in range(-8, 9):
+				for dz in range(-8, 9):
+					cell = (x + dx, z + dz)
+					if self._baked_flat_index(cell) is not None:
+						self._native_review_cells.add(cell)
+		return len(self._native_review_cells) != before
+
+	def _needs_native_review(self, start, end):
+		return bool(self._native_review_cells and any(
+			cell in self._native_review_cells for cell in
+			self._baked_segment_cells(start, end, require_height=False)))
+
+	def _native_segment_clear(self, start, end):
+		'''Prove an affected local segment without using cached baked heights.'''
+		distance = _distance_2d(start, end)
+		# Long shortcuts must use the bounded A* edges through this region.
+		if distance > self.cell_size * 12.0:
+			return False
+		key = (self._point_key(start), self._point_key(end))
+		if key in self._native_review_cache:
+			return self._native_review_cache[key]
+		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
+		previous = None
+		first = None
+		clear = True
+		try:
+			for index in range(steps + 1):
+				fraction = float(index) / steps
+				x = start[0] + (end[0] - start[0]) * fraction
+				z = start[2] + (end[2] - start[2]) * fraction
+				hint = previous[1] if previous is not None else start[1]
+				y = self.ground_probe(x, z, hint)
+				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
+					return False
+				point = (x, float(y), z)
+				if previous is not None and abs(point[1] - previous[1]) > (
+						_distance_2d(point, previous) *
+						min(self.max_grade_up, self.max_grade_down)):
+					clear = False
+					break
+				if first is None:
+					first = point
+				previous = point
+			if clear:
+				clear = not self.obstacle_probe(first, previous, 2.15)
+		except Exception:
+			return False
+		if len(self._native_review_cache) >= 4096:
+			self._native_review_cache.clear()
+		self._native_review_cache[key] = bool(clear)
+		return bool(clear)
 
 	@staticmethod
 	def shortcut_preserves_climb_approach(path, start_index, end_index,
@@ -1058,6 +1138,11 @@ class TerrainGrid(object):
 				if self.prebaked:
 					(next_cell, next_y, run, slope_cost,
 					 plain_penalty, clearance_penalty, edge_key) = edge
+					start_point = self.point_for(current, current_y)
+					end_point = self.point_for(next_cell, next_y)
+					if (self._needs_native_review(start_point, end_point) and
+							not self._native_segment_clear(start_point, end_point)):
+						continue
 					terrain_penalty = (clearance_penalty if prefer_clearance else
 					                   plain_penalty)
 				else:
@@ -1695,6 +1780,21 @@ class TerrainNavigator(object):
 		state.pop('macro_escape_until', None)
 		state.pop('controlled_shallow_target', None)
 		self._cancel_bot_searches(bot_id)
+		return True
+
+	def report_blocked_plan(self, current, target):
+		'''A stopped local driver still has to retire its stale baked corridor.'''
+		if not self.grid.review_native_corridor(current, target):
+			return False
+		for key, path in list(self.paths.items()):
+			if any(self.grid._needs_native_review(a, b)
+			       for a, b in zip(path, path[1:])):
+				self.paths.pop(key, None)
+				self.path_times.pop(key, None)
+				self.path_hull_revisions.pop(key, None)
+		# In-flight searches may have already admitted edges through that wall.
+		self.searches.clear()
+		self.search_times.clear()
 		return True
 
 	def _cache_key(self, path_key, goal):

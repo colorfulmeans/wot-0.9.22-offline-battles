@@ -6396,3 +6396,66 @@ Report 232418 is a valid 0.9.5 Himmelsdorf session. Report 215741 is also
 0.9.5, but contains startup logs without the reported collision or a server
 log, so it cannot calibrate mass transfer or ram damage. No physics formula,
 LT-14 condition or ping behavior is changed here.
+
+### September 28 Prague, bridge gravity and player burst follow-up
+
+Reports 021030 and 021934 both identify `test-20260928-cabd5a4` on the
+supported #1513 client. Prague records repeated hard movement refusals near
+(55, 13, 100), including a stopped planner whose movement intent remains
+active. Previously those refusals could not retire the baked-clear corridor:
+the 4 m graph remained authoritative for the next search and shortcut.
+Actual hard contacts and blocked planner collision samples now request native
+terrain and hull-width checks in a bounded local region. A* edges and path
+smoothing share that check; affected paths and in-flight searches are retired.
+Repeated reports reuse the marked region and measured segment results.
+Traffic holds and unavailable probes do not invent static obstacles. The
+regression proves a fresh route around a measured wall; the supplied Prague
+coordinates still need an in-client departure check.
+
+The bridge report gives an unsupported body at y=0.5155965 and a forward
+upper-hull hit at y=0.8602448, with an almost exactly upward normal. Projecting
+the full velocity onto that forward contact erased downward speed each frame.
+Horizontal sweeps now constrain only horizontal velocity; suspension remains
+the owner of vertical support and landing. Float32 noise in an upward normal
+cannot create a horizontal collision normal. Repeated 30/120 Hz fixture
+contacts preserve gravity without phantom fall damage. The Bot legacy path
+also uses reachable support instead of pulling a hull down to a nearby lower
+floor, and consumes the actual airborne wall witness for impact HP before
+alternative-direction probes replace it. This changes no ram coefficient,
+mass transfer formula or fall-damage coefficient.
+
+One human trigger now schedules the loaded descriptor burst through the
+existing worker fire-intent channel. Every physical round still needs its
+own canonical acknowledgement before consuming ammunition. The next round
+uses the current native gun ray; duplicate clicks cannot start overlapping
+groups. Partial clips, late acknowledgements, gun destruction, queued reloads
+and round generation changes are covered. Exact `Vehicle.showShooting`
+requires the Avatar's initial shot-wait token. The first acknowledgement
+starts one native effect group for the full burst; later acknowledgements do
+not replay that group. Cancellation stops its remaining effects. Existing
+`ShowShooting.__doShot` owns the native afterShotInBurst/afterShot transition.
+Physical projectiles remain owned by the hidden worker.
+
+Capture staging incorrectly required proximity to the penultimate waypoint
+even after the route cursor passed it. Losing enemy contact then left a Bot
+at the route endpoint instead of handing over to the exact capture circle.
+Passing that waypoint now satisfies staging. This addresses the confirmed
+route-to-circle handover defect relevant to Ghost Town without moving bases
+or bypassing authored waypoint waits.
+
+Validation: 1,011 runtime/burst/gravity/contact-review checks and 318 server-AI,
+capture, tank-contact, world-collision and vehicle-physics checks pass. The
+pinned client inspection and Python 2.7 ABI audit pass. Broader Bot/navigation
+suites retain pre-existing failures; their failure identities are compared
+with the previous source, not represented as a green full suite. Native
+rendering, Prague doorway navigation, bridge falls and one-click bursts still
+require #1513 gameplay acceptance.
+
+Remaining requested work is explicit: playable offline replay recording has
+no native recorded-stream lifecycle yet; fall module/crew injuries have no
+implemented canonical rule. The available client contracts do not establish
+the official server's injury-selection law. The other reported map air walls,
+repeated wreck pushing and light/heavy contact observations are not claimed
+fixed by these changes. Report 232418's final Python exception is tutorial
+teardown, not proof of an air-wall cause; 215741 contains no battle contact
+trace. LT-14's reviewed conditions remain unchanged.

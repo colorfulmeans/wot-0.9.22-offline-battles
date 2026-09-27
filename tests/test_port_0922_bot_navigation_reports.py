@@ -216,6 +216,29 @@ class BlockedPlannerReviewTests(unittest.TestCase):
         self.assertGreaterEqual(max(point[0] for point in path), 40)
         self.assertFalse(any(obstacle(a, b, 2.15) for a, b in zip(path, path[1:])))
 
+    def test_repeated_contact_reuses_review_region_and_native_edge_result(self):
+        probe = mock.Mock(return_value=True)
+        nav = TerrainNavigator(lambda *unused: 0.0, probe,
+            baked_graph=navigation_tests.StaticHullNavigationTests._flat_graph())
+        start, goal = (20, 0, 20), (20, 0, 40)
+        key = ('stale',)
+        nav.paths[key] = (start, goal)
+        nav.path_times[key] = 0.0
+        nav.path_hull_revisions[key] = 0
+        self.assertTrue(nav.report_blocked_plan(start, goal))
+        self.assertNotIn(key, nav.path_hull_revisions)
+        self.assertFalse(nav.grid.segment_clear(start, goal))
+        reviewed_cells = len(nav.grid._native_review_cells)
+        class NoRepeatedExpansion(set):
+            def add(self, cell):
+                raise AssertionError('expanded twice')
+        nav.grid._native_review_cells = NoRepeatedExpansion(
+            nav.grid._native_review_cells)
+        self.assertFalse(nav.report_blocked_plan(start, goal))
+        self.assertFalse(nav.grid.segment_clear(start, goal))
+        self.assertEqual(reviewed_cells, len(nav.grid._native_review_cells))
+        probe.assert_called_once()
+
 
 class FrameOwnedNavigationTests(unittest.TestCase):
     @staticmethod

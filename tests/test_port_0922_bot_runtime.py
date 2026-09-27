@@ -3125,6 +3125,9 @@ class BotRuntimeTests(unittest.TestCase):
         class StaticGrid(_StaticGridLifecycle):
             prebaked = True
 
+            def review_native_corridor(self, unused_start, unused_end):
+                return False
+
             def near_baked_navigation(self, unused_position, unused_radius):
                 return True
 

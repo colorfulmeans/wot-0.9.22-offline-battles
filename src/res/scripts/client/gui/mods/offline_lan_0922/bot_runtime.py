@@ -6468,6 +6468,22 @@ class BotRuntime(object):
             return 1
         return 2
 
+    def _report_blocked_planner(self, position, command, samples):
+        """Do not wait for movement when the driver already proved a wall."""
+        report = getattr(self.navigator, 'report_blocked_plan', None)
+        target = command.get('move_position')
+        if (not callable(report) or target is None or
+                command.get('recovery_mode') != 'blocked' or
+                not command.get('movement_intent')):
+            return False
+        if not any(isinstance(sample, dict) and
+                   sample.get('collision') and
+                   not sample.get('deferred') and
+                   not sample.get('probe_failed')
+                   for sample in samples.values()):
+            return False
+        return bool(report(position, target))
+
     @observed('bot.corridor_hazards')
     def _planner_corridor_clear(self, position, yaw, speed,
                                 wet_escape=False, allow_shallow=False,
@@ -6722,6 +6738,26 @@ class BotRuntime(object):
             impact_speed = math.sqrt(
                 impact_speed * impact_speed + lateral_speed * lateral_speed)
         return self._apply_bot_fall_damage(state, impact_speed)
+
+    def _apply_world_contact_impact(self, state, speed, now):
+        """Consume only the realised hull sweep, before escape probes replace it."""
+        trace = state.pop('_world_contact_trace', None)
+        if (not state.get('airborne', False) or
+                not isinstance(trace, dict) or 'hit' not in trace):
+            return 0
+        yaw = _number(state.get('yaw'))
+        velocity = (math.sin(yaw) * speed,
+                    state.get('vertical_speed', 0.0),
+                    math.cos(yaw) * speed)
+        normal = vehicle_physics.horizontal_contact_normal(trace.get('normal'))
+        impact = vehicle_physics.world_impact_speed(velocity, normal)
+        if (impact <= vehicle_physics.FALL_SAFE_SPEED or
+                now - state.get('_last_world_impact_time', -1.0e30) < 0.25):
+            return 0
+        damage = self._apply_bot_fall_damage(state, impact)
+        if damage:
+            state['_last_world_impact_time'] = now
+        return damage
 
     @staticmethod
     def _tick_horizontal_travel(state, tick_pose):
@@ -7150,23 +7186,34 @@ class BotRuntime(object):
                     (state['yaw'] if attempted_yaw is None
                      else attempted_yaw))
                 return True
-            elif (state['y'] <= ground or
-                  (com_gap <= snap_gap and not state.get('airborne', False))):
+            elif (state['y'] < ground - 0.002 or
+                  (state['y'] <= ground and
+                   state.get('vertical_speed', 0.0) <= 0.0) or
+                  (not state.get('airborne', False) and
+                   vehicle_physics.ground_reachable(
+                       state['y'], ground,
+                       state.get('vertical_speed', 0.0), step))):
                 impact_speed = (state.get('vertical_speed', 0.0)
                                 if state.get('airborne', False) else 0.0)
+                previous_y = state['y']
                 if state['y'] < ground:
                     rise = ground - state['y']
                     state['y'] += min(rise, max_climb)
                 else:
-                    state['y'] += ((ground - state['y']) *
-                                   min(1.0, step * 15.0))
-                    state['y'] = min(state['y'], ground + 0.12)
-                state['vertical_speed'] = 0.0
+                    state['y'] = ground
+                state['vertical_speed'] = (
+                    ((state['y'] - previous_y) / step
+                     if state['y'] < previous_y else
+                     vehicle_physics.launch_vertical_speed(
+                         state['speed'], state.get('last_drive_pitch', 0.0)))
+                    if step > 0.0 and not state.get('airborne', False)
+                    else 0.0)
                 state['airborne'] = False
                 if impact_speed < 0.0:
                     self._apply_bot_landing_impact(state, impact_speed)
             else:
-                if not state.get('airborne', False):
+                if (not state.get('airborne', False) and
+                        abs(state.get('vertical_speed', 0.0)) < 1.0e-8):
                     pitch = state.get('last_drive_pitch', 0.0)
                     state['vertical_speed'] = (
                         vehicle_physics.launch_vertical_speed(
@@ -7189,7 +7236,8 @@ class BotRuntime(object):
                             state, impact_speed)
                         break
         elif state.get('grounded_once', False):
-            if not state.get('airborne', False):
+            if (not state.get('airborne', False) and
+                    abs(state.get('vertical_speed', 0.0)) < 1.0e-8):
                 state['vertical_speed'] = (
                     vehicle_physics.launch_vertical_speed(
                         state['speed'],
@@ -11716,6 +11764,8 @@ class BotRuntime(object):
                         self._combat_diagnostics, 'bot.planner_driver',
                         self.adapter.decide,
                         decision_state, sample_clear)
+                self._report_blocked_planner(
+                    position, command, planner_probe_samples)
                 command = timed_call(
                     self._combat_diagnostics, 'bot.traffic',
                     self._traffic_coordinator.adjust,
@@ -12421,6 +12471,8 @@ class BotRuntime(object):
                             speed = previous_speed
                             state.pop('destructible_contact_speed', None)
                         elif motion_status == 'hard':
+                            self._apply_world_contact_impact(
+                                state, contact_v0, now)
                             realised_contact_yaw = state['yaw']
                             if contact_v0 < 0.0:
                                 realised_contact_yaw += math.pi
@@ -12459,6 +12511,10 @@ class BotRuntime(object):
                                     contact_yaw) * edge_length)
                     if (callable(report_contact) and
                             contact_target is not None):
+                        review = getattr(
+                            self.navigator, 'report_blocked_plan', None)
+                        if callable(review):
+                            review(position, contact_target)
                         report_contact(
                             state['id'], position,
                             contact_target, now)

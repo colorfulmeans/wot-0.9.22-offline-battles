@@ -1354,6 +1354,11 @@ class BotPlanner(object):
         staging_index = max(0, len(waypoints) - 2)
         if route_index < staging_index:
             return False
+        if route_index > staging_index:
+            # The route cursor has already passed the screen. Losing enemy
+            # contact here must hand over to BattleState's actual circle,
+            # not require driving back within the old staging radius.
+            return True
         point = waypoints[staging_index]
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         return math.hypot(

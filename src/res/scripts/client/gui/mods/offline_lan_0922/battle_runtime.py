@@ -60,7 +60,7 @@ from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.worker_diagnostics import (
     WorkerCombatDiagnostics, timed, call as timed_call, observed_ray)
 from gui.mods.offline_lan_0922 import (
-    ballistics, combat_rules, critical_damage, descriptor_donation,
+    ballistics, burst_mechanics, combat_rules, critical_damage, descriptor_donation,
     destructibles_compat, device_damage, effective_params,
     equipment_mechanics, gun_mechanics, hull_aiming,
     lan_client as lan_protocol,
@@ -1968,6 +1968,7 @@ class BattleRuntime(object):
         self._player_fire_launch_pending = {}
         self._fire_timeline = collections.OrderedDict()
         self._local_fire_intent = None
+        self._local_player_burst = None
         self._fire_intent_reject_round = None
         self._fire_intent_reject_counts = {}
         self._ammo_signature = None
@@ -2311,6 +2312,7 @@ class BattleRuntime(object):
         self._player_fire_launch_pending = {}
         self._fire_timeline = collections.OrderedDict()
         self._local_fire_intent = None
+        self._local_player_burst = None
         self._fire_intent_reject_round = None
         self._fire_intent_reject_counts = {}
         self._ammo_signature = None
@@ -8753,7 +8755,7 @@ class BattleRuntime(object):
             if self._gun_state is None:
                 return False
             state = self._gun_state
-            pending_fire = self._local_fire_intent
+            pending_fire = self._local_player_burst or self._local_fire_intent
             if isinstance(pending_fire, dict):
                 if state.clip_size <= 1 or not state.shots:
                     return False
@@ -8769,6 +8771,10 @@ class BattleRuntime(object):
             shell = _field(shot, 'shell', {})
             if int(_field(shell, 'compactDescr', 0)) != int(value):
                 continue
+            if self._local_player_burst is not None:
+                self._defer_gun_setting(
+                    self._local_player_burst, state, code, index)
+                return True
             if code == current_shells:
                 pending_fire = self._local_fire_intent
                 if isinstance(pending_fire, dict):
@@ -9551,6 +9557,10 @@ class BattleRuntime(object):
                 '[Offline LAN 0.9.22] FIRE INTENT rejected intent=%d '
                 'reason=%s repeats=%d\n' % (sequence, reason, seen + 1))
         self._local_fire_intent = None
+        burst = self._cancel_local_player_burst()
+        if burst and burst.get('deferred_gun_settings'):
+            pending.update({key: burst[key] for key in (
+                'deferred_gun_settings', 'deferred_gun_pending_index')})
         self._cancel_native_shot_wait()
         if pending.get('deferred_gun_settings') and self._gun_state is not None:
             state = self._gun_state
@@ -12199,10 +12209,27 @@ class BattleRuntime(object):
             reload_factor = self._local_stat_factor(entity, 'reload')
             if pending.get('deferred_gun_settings'):
                 gun.pending_index = pending['deferred_gun_pending_index']
-            if (shell_index != gun.shot_index or
-                    not gun.commit_fire(reload_factor)):
+            if shell_index != gun.shot_index:
+                raise RuntimeError('canonical local shot changed ammunition')
+            burst = pending.get('player_burst')
+            if burst is not None:
+                if burst is not self._local_player_burst:
+                    raise RuntimeError('canonical shot lost its burst owner')
+                if burst['committed'] == 0 and not gun.begin_burst(burst['count']):
+                    raise RuntimeError('canonical player burst is not ready')
+                final_round = burst['committed'] + 1 == burst['count']
+                committed = gun.commit_burst_round(final_round, reload_factor)
+            else:
+                final_round = True
+                committed = gun.commit_fire(reload_factor)
+            if not committed:
                 raise RuntimeError(
                     'canonical local shot violates presented gun state')
+            if burst is not None:
+                burst['committed'] += 1
+                if final_round:
+                    self._local_player_burst = None
+                    self._apply_deferred_gun_settings(gun, burst)
             self._apply_deferred_gun_settings(gun, pending)
             # commit_fire applies the factor to a normal empty-magazine cycle.
             # A deferred shell change or partial reload replaces that duration
@@ -12359,6 +12386,15 @@ class BattleRuntime(object):
         if update_state:
             record['shot_penalty_until'] = (
                 self._clock() + spotting.SHOT_CAMOUFLAGE_SECONDS)
+        # #1513 Vehicle.showShooting requires the initial Avatar wait token.
+        # One native call starts the descriptor burst's effects and applies
+        # afterShotInBurst until its last round; tail intents do not create
+        # additional native trigger handshakes or repeat that effect group.
+        local_burst_presentation = None
+        if record.get('local') and isinstance(self._local_fire_intent, dict):
+            burst = self._local_fire_intent.get('player_burst')
+            if burst is not None:
+                local_burst_presentation = (burst['committed'], burst['count'])
         self._accept_player_fire_commit(event, record)
         if self._worker_mode:
             return True
@@ -12419,6 +12455,8 @@ class BattleRuntime(object):
                         ('_offlineLANCanonicalTracerOwned', True)):
                     setattr(entity, name, value)
                     transient_names.append(name)
+            if local_burst_presentation is not None:
+                burst_index = local_burst_presentation[0]
             if burst_index == 0:
                 # One native call owns the grouped muzzle effect and local
                 # waiting-for-shot handshake.  Later physical rounds already
@@ -12436,6 +12474,8 @@ class BattleRuntime(object):
                 except (TypeError, ValueError, OverflowError):
                     burst_count = 1
                 burst_count = max(1, burst_count)
+                if local_burst_presentation is not None:
+                    burst_count = local_burst_presentation[1]
                 if (visual_admitted and self._optional_feature_enabled(
                         'shot muzzle presentation') and
                         self._shot_muzzle_drawn(record)):
@@ -17169,6 +17209,7 @@ class BattleRuntime(object):
                 self._local_frame_stages = stages if profiling else None
                 try:
                     self._drive_local(dt)
+                    self._advance_local_player_burst()
                 finally:
                     self._local_frame_stages = None
             if profiling:
@@ -21886,7 +21927,9 @@ class BattleRuntime(object):
             return 0.0
         velocity = (math.sin(yaw) * speed, self._local_vertical_speed,
                     math.cos(yaw) * speed)
-        impact = vehicle_physics.world_impact_speed(velocity, trace.get('normal'))
+        impact = vehicle_physics.world_impact_speed(
+            velocity, vehicle_physics.horizontal_contact_normal(
+                trace.get('normal')))
         now = self._clock()
         if (impact > vehicle_physics.FALL_SAFE_SPEED and
                 now - getattr(self, '_last_world_impact_time', -1.0e30) >= 0.25):
@@ -22367,7 +22410,7 @@ class BattleRuntime(object):
             return 0.0, 0.0
         velocity = vehicle_physics.world_contact_velocity(
             (lateral_x, self._local_vertical_speed, lateral_z),
-            trace['normal'])
+            vehicle_physics.horizontal_contact_normal(trace['normal']))
         self._local_vertical_speed = velocity[1]
         return velocity[0], velocity[2]
 
@@ -22895,7 +22938,8 @@ class BattleRuntime(object):
                             (sine * self._local_speed,
                              self._local_vertical_speed,
                              cosine * self._local_speed),
-                            primary_contact['normal'])
+                            vehicle_physics.horizontal_contact_normal(
+                                primary_contact['normal']))
                         self._local_speed = velocity[0] * sine + velocity[2] * cosine
                         self._local_vertical_speed = velocity[1]
                         self._local_air_lateral = (
@@ -27573,7 +27617,56 @@ class BattleRuntime(object):
             'reload=%.3f\n' % (str(reason), remaining))
         return False
 
-    def shoot(self, aim_yaw, gun_pitch):
+    def _cancel_local_player_burst(self, apply_settings=False):
+        burst = self._local_player_burst
+        self._local_player_burst = None
+        if burst is not None and self._gun_state is not None:
+            gun = self._gun_state
+            gun.cancel_burst()
+            if burst['committed'] > 0 and self._server is not None:
+                entity = self._server_entity(self._server.vehicle_id)
+                extras = getattr(getattr(entity, 'typeDescriptor', None),
+                                 'extrasDict', {})
+                extra = extras.get('shoot')
+                if extra is not None:
+                    self._run_optional_feature(
+                        'shot muzzle retirement', extra.stopFor, args=(entity,))
+            if apply_settings:
+                edge = self._advance_local_gun_edge(gun)
+                entity = edge[0] if edge is not None else None
+                if burst.get('deferred_gun_settings'):
+                    gun.pending_index = burst['deferred_gun_pending_index']
+                    self._apply_deferred_gun_settings(gun, burst)
+                self._apply_current_reload_factor(gun, entity)
+                self._publish_ammo_state(gun, force=True)
+                self._publish_reload_event(
+                    gun.reload_time, gun.reload_duration, force=True)
+                if self._sender is not None:
+                    self._sender.send_current()
+        return burst
+
+    def _advance_local_player_burst(self):
+        """Keep a released trigger's tail on the existing worker fire path."""
+        burst = self._local_player_burst
+        if burst is None or self._local_fire_intent is not None:
+            return False
+        if burst['generation'] != self._generation:
+            self._cancel_local_player_burst()
+            return False
+        due = burst['started_at'] + burst['committed'] * burst['interval']
+        if self._clock() + 1.0e-9 < due:
+            return False
+        # shoot freezes a fresh native gun ray for every real subshot. Its
+        # worker acknowledgement remains the only ammunition debit.
+        if not self.shoot(0.0, 0.0, player_burst=burst):
+            self._cancel_local_player_burst(apply_settings=True)
+            return False
+        return True
+
+    def shoot(self, aim_yaw, gun_pitch, player_burst=None):
+        if (self._local_player_burst is not None and
+                player_burst is not self._local_player_burst):
+            return False
         if (self.state != 'running' or not self._battle_live or
                 self._battle_result is not None or
                 self._drown_level == 2 or self._overturn_level == 2):
@@ -27601,7 +27694,13 @@ class BattleRuntime(object):
         now = self._clock()
         # Close the 100 ms HUD/state race at the exact trigger edge.
         state = self._advance_local_gun_to(entity, now)
-        if not state.can_fire(self._battle_live):
+        continuing_burst = bool(
+            player_burst is not None and
+            player_burst is self._local_player_burst and
+            state._burst_remaining > 0 and state.reload_time <= 0.0 and
+            state.clip > 0 and state.shot_index == player_burst['shell_index'] and
+            state.ammo[state.shot_index] > 0)
+        if not continuing_burst and not state.can_fire(self._battle_live):
             return self._reject_local_fire('gun_not_ready')
         if isinstance(self._local_fire_intent, dict):
             return self._reject_local_fire('intent_pending')
@@ -27655,12 +27754,24 @@ class BattleRuntime(object):
             shells_before_shot)
         if not intent_seq:
             return self._reject_local_fire('intent_send_failed')
+        if player_burst is None:
+            count, interval = burst_mechanics.planned_count(
+                entity.typeDescriptor.gun, state.ammo[shell_index], state.clip)
+            if count > 1:
+                player_burst = {
+                    'count': count, 'interval': interval, 'committed': 0,
+                    'started_at': float(now), 'shell_index': shell_index,
+                    'generation': self._generation,
+                }
+                self._local_player_burst = player_burst
         self._local_fire_intent = {
             'intent_seq': int(intent_seq),
             'input_seq': int(getattr(self.client, '_input_seq', 0)),
             'sent_at': float(now),
             'sent_wall': trigger_wall,
         }
+        if player_burst is not None:
+            self._local_fire_intent['player_burst'] = player_burst
         sys.stdout.write(
             '[Offline LAN 0.9.22] FIRE TRIGGER intent=%d input=%d '
             'shell=%d\n' % (
@@ -28423,6 +28534,7 @@ class BattleRuntime(object):
         self._player_fire_launch_pending = {}
         self._fire_timeline = collections.OrderedDict()
         self._local_fire_intent = None
+        self._local_player_burst = None
         self._fire_intent_reject_round = None
         self._fire_intent_reject_counts = {}
         self._ammo_signature = None
