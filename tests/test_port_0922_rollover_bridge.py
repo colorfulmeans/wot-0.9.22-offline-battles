@@ -10,6 +10,48 @@ from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime
 
 
 class RolloverBridgeTests(unittest.TestCase):
+    def test_tilted_low_carriers_requery_the_known_deck_above_a_lower_beam(self):
+        # 224302: the permission for a shared flat support ceiling did not
+        # raise the actual ray start. A low carrier could therefore see only
+        # the lower layer after a pose update. Keep the native range guard,
+        # a finite deck edge, and an overhead layer in this regression.
+        for side in (-1., 1.):
+            battle, entity = self.battle()
+            params = vehicle_physics.derive_suspension_params(entity.typeDescriptor)
+            position, roll, deck = (0., .4, 0.), side*.37, 1.109309196472168
+            plane = dict(center_x=0., center_z=0., center_y=deck,
+                         gradient_x=0., gradient_z=0.)
+            def support(x, z, low, high, flat=None, **kwargs):
+                flat = kwargs.get('flat_maximum_y', flat)
+                for height in (3., deck, .45):
+                    if height == deck and side*x > 2.:
+                        continue
+                    if (low <= height <= high and
+                            vehicle_physics.suspension_support_allowed(height, 1., flat)):
+                        return height
+                return None
+            worker = bot_runtime.BotRuntime(1, suspension_ground_probe=support)
+            state = dict(id=11, x=0., y=.4, z=0., yaw=0., terrain_pitch=0.,
+                         roll=roll, airborne=False, _suspension_ground_plane=plane)
+            battle._local_roll = roll
+            battle._local_suspension_params = params
+            battle._local_ground_plane = plane
+            battle._suspension_ground_y = support
+            for owner in ('worker', 'player'):
+                with self.subTest(side=side, owner=owner):
+                    if owner == 'worker':
+                        ground = worker._suspension_ground_samples(state, params)
+                    else:
+                        ground = battle._local_suspension_ground_samples(position, 0.)
+                    self.assertEqual((deck,)*len(params['springs']), ground)
+            # Outside the finite deck the old plane can widen a query but
+            # cannot supply a contact or acquire an unrelated overhead roof.
+            state.update(x=side*5.)
+            state.pop('_spring_ground_memory', None)
+            ground = worker._suspension_ground_samples(state, params)
+            self.assertNotIn(deck, ground)
+            self.assertNotIn(3., ground)
+
     def battle(self):
         runtime = fixtures._runtime()
         battle = BattleRuntime(runtime)

@@ -1,4 +1,4 @@
-"""Reports 220344/221207: distinguish W/S reversal from forced back-driving."""
+"""Reports 220344/221207/224302: manual/cruise brakes and restored release drag."""
 import unittest
 from unittest import mock
 
@@ -10,6 +10,63 @@ from gui.mods.offline_lan_0922 import vehicle_physics as physics, bot_state_code
 
 
 class LocalDirectionBrakeTests(unittest.TestCase):
+    def test_manual_and_cruise_mailboxes_use_full_brakes_then_resume_drive(self):
+        # Exact #1513 manual movement and R/F presets share vehicle_moveWith.
+        # Exercise the real sender -> local integration, including the cruise
+        # mailbox, instead of setting the final throttle field directly.
+        for sign in (-1., 1.):
+            direction = 2 if sign > 0 else 1
+            modes = (-1, -2) if sign > 0 else (1, 2, 3)
+            commands = [('move', {'flags': direction}),
+                        ('move', {'flags': direction | 16})]
+            if sign < 0:
+                commands.append(('move', {'flags': direction | 32}))
+            commands += [('cruise', {'mode': mode}) for mode in modes]
+            for kind, payload in commands:
+                with self.subTest(sign=sign, kind=kind, payload=payload):
+                    battle, entity = local_battle('sweden:S22_Strv_S1', 0, sign*100./3.6)
+                    battle._local_physics.update(speedFwd=100./3.6, speedBwd=100./3.6)
+                    battle._sender.turn = 0.
+                    battle._local_direction_command = sign
+                    before = battle._local_speed
+                    battle._sender.send_avatar_input(10, kind, payload)
+                    with mock.patch('sys.stdout'):
+                        battle._drive_local(.01)
+                    self.assertTrue(battle._local_service_brake)
+                    expected = physics.longitudinal_step(battle._local_physics,
+                        before, -sign, False, 0., .01, service_brake=True)
+                    self.assertAlmostEqual(expected, battle._local_speed)
+                    for unused in range(400):
+                        with mock.patch('sys.stdout'):
+                            battle._drive_local(.01)
+                        self.assertGreaterEqual(battle._local_speed*sign, 0.)
+                        if not battle._local_speed:
+                            break
+                    self.assertEqual(0., battle._local_speed)
+                    with mock.patch('sys.stdout'):
+                        battle._drive_local(.01)
+                    self.assertFalse(battle._local_service_brake)
+                    self.assertGreater(battle._local_speed*-sign, 0.)
+
+    def test_releasing_manual_or_cruise_brakes_restores_existing_coast_drag(self):
+        for sign in (-1., 1.):
+            for kind, payload in (('move', {'flags': 0}), ('cruise', {'mode': 0})):
+                battle, entity = local_battle('sweden:S22_Strv_S1', 0, sign*8.)
+                battle._sender.turn = 0.
+                battle._local_service_brake = True
+                battle._local_direction_command = -sign
+                battle._sender.send_avatar_input(10, kind, payload)
+                before = battle._local_speed
+                expected = physics.longitudinal_step(battle._local_physics,
+                    before, 0., False, 0., .01)
+                rolling = abs(before) - physics.rolling_resist_force(
+                    battle._local_physics)/battle._local_physics['mass']*.01
+                with mock.patch('sys.stdout'):
+                    battle._drive_local(.01)
+                self.assertFalse(battle._local_service_brake)
+                self.assertAlmostEqual(expected, battle._local_speed)
+                self.assertLess(abs(battle._local_speed), rolling)
+
     def test_live_input_latches_both_direction_changes_until_stopped(self):
         for sign in (-1., 1.):
             for neutral in (False, True):

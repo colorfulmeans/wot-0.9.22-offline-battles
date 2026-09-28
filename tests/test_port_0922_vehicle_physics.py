@@ -1171,9 +1171,9 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
             self.params, speed, 0.0, False,
             math.radians(slope_degrees), dt)
 
-    def test_release_uses_rolling_resistance_without_engaging_brakes(self):
-        # Reports 220344/221207 distinguish release from W/S service braking.
-        # Use descriptor resistance, not a guessed partial parking brake.
+    def test_release_restores_partial_braking_without_locking_the_tracks(self):
+        # Retail observation establishes braking on release. These inequalities
+        # verify the restored offline calibration, not an official stop time.
         for direction in (-1.0, 1.0):
             initial = min(8.0, self.params[
                 'speedFwd' if direction > 0.0 else 'speedBwd'])
@@ -1183,7 +1183,7 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
                 self.params) / self.params['mass']) * 0.1
             locked = abs(vehicle_physics.longitudinal_step(
                 self.params, speed, 0.0, False, 0.0, 0.1, handbrake=True))
-            self.assertAlmostEqual(coast, rolling)
+            self.assertLess(coast, rolling)
             self.assertGreater(coast, locked)
             speeds = []
             for fps in (24, 60):
@@ -1210,7 +1210,9 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
                     coast = vehicle_physics.longitudinal_step(params, speed, 0, False, 0., .01)
                     speed = vehicle_physics.longitudinal_step(params, speed, command,
                         False, 0., .01, service_brake=active)
-                    self.assertLess(abs(speed), abs(coast))
+                    self.assertLessEqual(abs(speed), abs(coast))
+                    if speed:
+                        self.assertLess(abs(speed), abs(coast))
                     self.assertGreaterEqual(speed*sign, 0.)
                     previous = command
                     if speed == 0.:
@@ -1250,11 +1252,12 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
             self.assertGreater(speeds[1], speeds[2])
             self.assertGreater(speeds[2], 0.0)
 
-    def test_release_retains_gravity_and_rolling_resistance_on_slopes(self):
-        # Gravity can exceed rolling resistance without any brake intent.
+    def test_release_brakes_ordinary_slopes_and_relaxes_on_steep_descents(self):
+        # Restore the existing slope-dependent coast brake: ordinary descents
+        # can stop, while grades beyond the static perch shed the brake share.
         forward_down = self._coast(2.5, 15.0, 0.1)
         forward_up = self._coast(2.5, -15.0, 0.1)
-        self.assertGreater(forward_down, 2.5)
+        self.assertLess(forward_down, 2.5)
         self.assertLess(forward_up, self._coast(2.5, 0.0, 0.1))
         self.assertAlmostEqual(-forward_down, self._coast(-2.5, -15.0, 0.1))
         self.assertAlmostEqual(-forward_up, self._coast(-2.5, 15.0, 0.1))
@@ -1310,13 +1313,13 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
     def test_releasing_throttle_does_not_add_a_speed_limit_brake(self):
         limit = self.params['speedFwd']
         # Crossing the drivetrain speed limit does not change a neutral
-        # tank's rolling resistance.
+        # tank's restored drivetrain braking.
         low_speed = limit - 0.2
         high_speed = limit + 0.2
         low_next = self._coast(low_speed, 0.0, 0.1)
         high_next = self._coast(high_speed, 0.0, 0.1)
         self.assertAlmostEqual(low_speed - low_next, high_speed - high_next)
-        self.assertGreater(self._coast(high_speed, 4.0, 0.1), high_speed)
+        self.assertLess(self._coast(high_speed, 4.0, 0.1), high_speed)
         self.assertGreater(self._coast(high_speed, 28.0, 0.1), high_speed)
 
     def test_a_45_kmh_vehicle_has_a_49_5_kmh_downhill_cap_at_every_frame_rate(self):

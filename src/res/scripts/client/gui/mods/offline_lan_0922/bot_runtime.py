@@ -6122,6 +6122,15 @@ class BotRuntime(object):
                 vehicle_physics.CONTACT_PENETRATION)
             flat_maximum_y = (spring_maximum_y if flat_limit is None else
                               max(spring_maximum_y, flat_limit))
+            reference_height = vehicle_physics.suspension_plane_height(
+                None if state.get('airborne') else
+                state.get('_suspension_ground_plane'), x, z)
+            if flat_limit is not None and reference_height is not None:
+                # A low carrier's ray must start above the known deck, not
+                # inside it. The shared legal compression envelope caps this
+                # recovery; the old plane never supplies a contact itself.
+                maximum_y = max(maximum_y, min(flat_limit,
+                    reference_height + vehicle_physics.CONTACT_PENETRATION))
             ground = self._suspension_ground_value(
                 x, z, minimum_y, maximum_y, flat_maximum_y)
             ground = vehicle_physics.suspension_footprint_support(
@@ -6129,9 +6138,7 @@ class BotRuntime(object):
                 lambda px, pz, low, high: self._suspension_ground_value(
                     px, pz, low, high, high), support_gradient,
                 point_height=spring_height, spring=spring,
-                reference_height=vehicle_physics.suspension_plane_height(
-                    None if state.get('airborne') else
-                    state.get('_suspension_ground_plane'), x, z),
+                reference_height=reference_height,
                 pitch=pitch, roll=roll)
             ground, memory[index] = \
                 vehicle_physics.retained_ground_contact(

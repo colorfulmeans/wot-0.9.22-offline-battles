@@ -21868,6 +21868,14 @@ class BattleRuntime(object):
                 vehicle_physics.CONTACT_PENETRATION)
             flat_maximum_y = (spring_maximum_y if flat_limit is None else
                               max(spring_maximum_y, flat_limit))
+            reference_height = vehicle_physics.suspension_plane_height(
+                None if self._local_airborne else
+                self._local_ground_plane, x, z)
+            if flat_limit is not None and reference_height is not None:
+                # Match the worker: permission to use the known deck must
+                # also put the native ray start above that deck.
+                maximum_y = max(maximum_y, min(flat_limit,
+                    reference_height + vehicle_physics.CONTACT_PENETRATION))
             value = self._suspension_ground_y(
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=flat_maximum_y,
@@ -21880,8 +21888,7 @@ class BattleRuntime(object):
                     px, pz, low, high, flat_maximum_y=high,
                     prepared_filter=prepared_filter), support_gradient,
                 point_height=spring_height, spring=spring,
-                reference_height=vehicle_physics.suspension_plane_height(
-                    None if self._local_airborne else self._local_ground_plane, x, z),
+                reference_height=reference_height,
                 pitch=self._local_pitch, roll=self._local_roll)
             value, memory[index] = vehicle_physics.retained_ground_contact(
                 point, value, memory[index],

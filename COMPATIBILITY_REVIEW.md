@@ -7397,3 +7397,62 @@ suite failures are reported separately; this is not an all-green CI claim.
 Detached ammo-rack turrets remain visual-only, as the user confirms markedly
 better frame pacing. No native game session was run for this change: continuous
 bridge/cliff departures and driving feel require the generated package test.
+
+## Report 224302: restore release braking and requery the known deck
+
+This report identifies test-20260928-64c2cd4 in all three processes. The user
+explicitly rejects the removal of automatic deceleration: released drive was
+already correct; only intentional forward/reverse braking needed repair.
+Restore the exact 96b43dc neutral law, its existing 0.65 grip share, tuning key,
+and steep-descent relief. A 1,134-case comparison against that commit matches
+exactly across both directions, terrain, steering, timestep and slope. This
+supersedes the preceding section's rolling-resistance-only neutral behavior.
+No new coast coefficient or retail stopping-distance claim is introduced.
+
+Keep the intentional service-brake latch. The report already shows it active:
+at 22:38:59.223 forward speed 28.9342 becomes 28.8043 m/s under command -1;
+at 22:42:34.130 reverse speed -2.3011 becomes -2.0582 under command +1.
+These observations establish the deployed path, not numerical retail parity.
+The restored neutral law and full service brake are tested through the real
+input sender, including manual movement flags, both native cruise flags and
+the cruise mailbox, with both speed limits tuned to 100 km/h. Braking stops at
+zero before opposite drive begins. Releasing either input clears the latch
+and recovers the previous neutral drag. A held input pushed backward still
+cannot acquire an automatic parking lock.
+
+The exact installed #1513 Avatar.pyc was inspected under CPython 2.7.18:
+handleKey changes __cruiseControlMode by one or selects the end mode on a
+double press, updates the stock panel, and issues moveVehicle only when no
+manual W/S command is held. makeVehicleMovementCommandByKeys emits FORWARD
+or BACKWARD plus CRUISE_CONTROL25/50; moveVehicle forwards those flags to
+base.vehicle_moveWith. R/F therefore retain stock cruise-preset semantics;
+an actual opposite-direction command engages the same service brake as W/S.
+No raw-key override replaces stock input/HUD ownership. Official controls and
+the 2015 physics-test article confirm cruise controls and distinct braking
+behavior, but do not expose the retail C++ brake curve:
+https://worldoftanks.eu/en/content/guide/newcomers-guide/game_controls/
+https://worldoftanks.eu/en/news/general-news/public-test-new-physics-2015/
+
+The bridge issue remains observed, not accepted as fixed. Bot 19 is at
+(32.239887,0.393629,92.344363), roll -0.37283, while its solid sweep hits
+upward support at y=0.909833. Bot 15 later receives an inward vertical-face
+hit after its origin has descended below the bridge. Those hits must not be
+blindly ignored. A reproducible support-query defect is corrected: the shared
+flat support ceiling was allowed by the layer filter but did not raise a low
+carrier's actual ray start, so it could see only the lower beam after tilting.
+Both motion owners now widen that ray up to the previous proved support plane,
+capped by the existing legal carrier envelope. Fresh native geometry must
+still provide the height; the old plane alone creates no contact. Airborne
+queries and unrelated roofs retain their existing limits.
+
+A finite layered-deck regression fails on 64c2cd4 for both sides and owners,
+then passes with this change; the synthetic chassis is explicitly not a full
+reconstruction of the report's native mesh/descriptor. Missing deck columns
+and an unrelated roof cannot become support. The 243 targeted cases and 252
+bridge/turret preservation cases pass. The 1,480-case subsystem selection
+passes with its existing one environment skip and six named navigation
+exclusions. Exact installed-client inspection/ABI audit and Python 2.7.18
+compilation of all 146 client modules pass. The reduced suspension model and
+loaded-map edge departure still require #1513 playtesting; the report does
+not prove that navigation avoidance is the blocker. Detached turrets remain
+visual-only, retaining the user-confirmed frame-pacing improvement.
