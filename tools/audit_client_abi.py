@@ -25,7 +25,13 @@ except ImportError:
 
 
 EXPECTED_ABI = {
+    'scripts/client/tutorial/gui/Scaleform/effects_player.pyc': {
+        'ApplicationEffect._getTutorialLayout': ('self',),
+        'SetTriggerEffect.stop': ('self', 'effectID'),
+        'EffectsPlayer.stopAll': ('self',),
+    },
     'scripts/client/game.pyc': {
+        'fini': (),
         'wg_onChunkLoad': (
             'spaceID', 'chunkID', 'numDestructibles', 'isOutside'),
         'wg_onChunkLoose': ('spaceID', 'chunkID', 'isOutside'),
@@ -1151,6 +1157,11 @@ EXPECTED_CODE_LITERALS = {
 # string payload literals cannot express.  They are the exact #1513 APIs the
 # offline Account preservation and native lobby-ready gate depend on.
 EXPECTED_CODE_NAMES = {
+    'scripts/client/tutorial/gui/Scaleform/effects_player.pyc': {
+        'ApplicationEffect._getTutorialLayout': ('_app', 'tutorialManager'),
+        'SetTriggerEffect.stop': ('_itemsIDs', '_getTutorialLayout', 'clearTriggers'),
+        'EffectsPlayer.stopAll': ('_effects', 'itervalues', 'stop'),
+    },
     'scripts/common/items/tankmen.pyc': {
         'TankmanDescr.skillLevel': (
             'skills', 'MAX_SKILL_LEVEL', '_TankmanDescr__lastSkillLevel'),

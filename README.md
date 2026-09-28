@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.9.5** — [Release notes](docs/releases/v0.9.5.md).
+Current release: **v0.9.6** — [Release notes](docs/releases/v0.9.6.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.9.5-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.9.6-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -66,10 +66,12 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
-The [v0.9.5 release notes](docs/releases/v0.9.5.md) describe all changes
-since v0.9.4. The selected upstream v0.7.7 driving and original navigation
-maps remain, with the documented mechanical, artillery, radio, garage, launcher
-and gameplay repairs added on the PR #40 line.
+The [v0.9.6 release notes](docs/releases/v0.9.6.md) cover the complete
+follow-up since v0.9.5, centered on player/Bot collision, repeated wreck
+pushing and rotation, bridge support, braking, ammunition effects and
+battle notifications. The release includes a separate English Word
+inventory of unresolved internal-module geometry. Read its coverage
+limits before interpreting an absent critical hit as missing geometry.
 
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched

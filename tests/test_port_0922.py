@@ -350,7 +350,7 @@ class PortSourceTests(unittest.TestCase):
         build_script = (PORT_ROOT / 'build_for_client.sh').read_text(
             encoding='utf-8')
 
-        self.assertEqual('0.9.5', packager.MOD_VERSION)
+        self.assertEqual('0.9.6', packager.MOD_VERSION)
         self.assertEqual(packager.MOD_VERSION, package.PORT_VERSION)
         self.assertEqual(packager.MOD_VERSION, meta_version)
         self.assertIn(
@@ -367,10 +367,10 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual([packager.MOD_VERSION], values, filename)
         for directory in ('launcher', 'server'):
             source = (PORT_ROOT / directory / 'version_info.txt').read_text()
-            self.assertIn("StringStruct('FileVersion', '0.9.5')", source)
-            self.assertIn("StringStruct('ProductVersion', '0.9.5')", source)
-            self.assertIn('filevers=(0, 9, 5, 0)', source)
-            self.assertIn('prodvers=(0, 9, 5, 0)', source)
+            self.assertIn("StringStruct('FileVersion', '0.9.6')", source)
+            self.assertIn("StringStruct('ProductVersion', '0.9.6')", source)
+            self.assertIn('filevers=(0, 9, 6, 0)', source)
+            self.assertIn('prodvers=(0, 9, 6, 0)', source)
 
     def test_port_sources_are_python_2_compatible_syntax(self):
         source_root = PORT_ROOT / 'src'
@@ -490,7 +490,7 @@ class PortSourceTests(unittest.TestCase):
                 config_path.parent / packager.BUILD_IDENTITY_FILENAME
             ).read_text(encoding='utf-8'))
             self.assertEqual(1, identity['schema'])
-            self.assertEqual('0.9.5', identity['semanticVersion'])
+            self.assertEqual('0.9.6', identity['semanticVersion'])
             self.assertRegex(
                 identity['buildIdentity'],
                 r'^local-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
@@ -2576,6 +2576,102 @@ class OfflineCompatibilityTests(unittest.TestCase):
         self.assertNotIn(
             'destroy', runtime.sound_groups_module.g_instance.__dict__)
         self.assertIs(zombie, runtime.bigworld.player())
+
+    def _tutorial_shutdown_fixture(self):
+        operations = []
+
+        class ApplicationEffect(object):
+            # Exact #1513 ApplicationEffect._getTutorialLayout, including its
+            # missing expired-weakref guard. The native-bytecode audit also
+            # executes the retail accessor and SetTriggerEffect.stop.
+            def _getTutorialLayout(self):
+                if self._app is None:
+                    return None
+                return self._app.tutorialManager
+
+            def stop(self):
+                layout = self._getTutorialLayout()
+                if layout is not None:
+                    layout.clearTriggers('hint')
+                operations.append('effect-stopped')
+
+        def loader_fini():
+            for effect in effects:
+                effect.stop()
+            operations.append('tutorial-finished')
+
+        effects = []
+        game = types.SimpleNamespace(tutorialLoaderFini=loader_fini)
+        module = types.SimpleNamespace(ApplicationEffect=ApplicationEffect)
+        return game, module, effects, operations
+
+    def test_late_tutorial_cleanup_survives_expired_gui_weakrefs(self):
+        compatibility_module = _load_port_source('compat')
+        runtime, unused_operations = self._runtime()
+        compatibility = compatibility_module.OfflineCompatibility(runtime)
+        compatibility.install()
+        game, module, effects, operations = self._tutorial_shutdown_fixture()
+        original_fini = game.tutorialLoaderFini
+        original_layout = module.ApplicationEffect._getTutorialLayout
+
+        class App(object):
+            pass
+
+        app = App()
+        app.tutorialManager = types.SimpleNamespace(
+            clearTriggers=lambda item: operations.append(('clear', item)))
+        live = module.ApplicationEffect()
+        live._app = weakref.proxy(app)
+        expired_app = App()
+        dead = module.ApplicationEffect()
+        dead._app = weakref.proxy(expired_app)
+        del expired_app
+        absent = module.ApplicationEffect()
+        absent._app = None
+        effects.extend([dead, live, absent])
+        with self.assertRaises(ReferenceError):
+            game.tutorialLoaderFini()
+        with mock.patch.dict(sys.modules, {
+                'game': game,
+                'tutorial.gui.Scaleform.effects_player': module}):
+            compatibility.fini()
+            compatibility.fini()
+            # Mod rollback must not remove the late cleanup wrapper.
+            game.tutorialLoaderFini()
+            operations.extend(['replay-destroy', 'sound-destroy', 'save-settings'])
+        self.assertEqual([
+            'effect-stopped', ('clear', 'hint'), 'effect-stopped',
+            'effect-stopped', 'tutorial-finished', 'replay-destroy',
+            'sound-destroy', 'save-settings'], operations)
+        self.assertIs(original_fini, game.tutorialLoaderFini)
+        self.assertIs(original_layout, module.ApplicationEffect._getTutorialLayout)
+        self.assertIs(app.tutorialManager, live._getTutorialLayout())
+
+    def test_tutorial_shutdown_does_not_hide_unrelated_errors(self):
+        compatibility_module = _load_port_source('compat')
+        runtime, unused_operations = self._runtime()
+        compatibility = compatibility_module.OfflineCompatibility(runtime)
+        game, module, effects, operations = self._tutorial_shutdown_fixture()
+        original_fini = game.tutorialLoaderFini
+        original_layout = module.ApplicationEffect._getTutorialLayout
+        # Missing _app is a programming error, not an expired GUI owner.
+        effects.append(module.ApplicationEffect())
+        with mock.patch.dict(sys.modules, {
+                'game': game,
+                'tutorial.gui.Scaleform.effects_player': module}):
+            self.assertTrue(compatibility._arm_tutorial_shutdown_guard())
+            with self.assertRaises(AttributeError):
+                game.tutorialLoaderFini()
+        self.assertEqual([], operations)
+        self.assertIs(original_fini, game.tutorialLoaderFini)
+        self.assertIs(original_layout, module.ApplicationEffect._getTutorialLayout)
+
+    def test_tutorial_shutdown_skips_partial_startup_without_loading_gui(self):
+        compatibility_module = _load_port_source('compat')
+        compatibility = compatibility_module.OfflineCompatibility()
+        with mock.patch.dict(sys.modules, {
+                'tutorial.gui.Scaleform.effects_player': None}):
+            self.assertFalse(compatibility._arm_tutorial_shutdown_guard())
 
     def test_control_mode_listener_runs_after_completed_native_transition(self):
         compatibility_module = _load_port_source('compat')

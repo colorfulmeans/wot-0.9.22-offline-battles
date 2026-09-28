@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v0.9.5
+wot-0.9.22-offline-battles v0.9.6
 ================================
 
 The launcher prepares one battle before the game starts. It installs the mod,
@@ -46,7 +46,7 @@ with the supported vehicle catalogue and researched modules; a new-account
 save starts with starter vehicles. Purchases use the displayed currency and
 price. Change modules, optional devices, consumables, shells, camouflage and
 crew skills; the garage is saved after each change and the battle uses what
-you fitted. Release notes are on the GitHub v0.9.5 release page.
+you fitted. Release notes are on the GitHub v0.9.6 release page.
 
 The Tools tab also edits vehicle data directly. A vehicle data profile is a
 named set of Packed XML field changes (health, damage, penetration, armour,
@@ -457,6 +457,15 @@ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 
+
+Version 0.9.6
+Improvements since v0.9.5 focus on reciprocal player/Bot collision, repeated
+wreck pushing and rotation, bridge support, downhill speed and braking.
+Direct HE effects, physical gun origins, burst fire, garage supplies,
+squad messages, environment death notices and the governor are repaired.
+Ammo-rack turret debris is visual-only to reduce severe collision stalls.
+See the complete English notes and unresolved module Word inventory on GitHub.
+Use the same package for every LAN participant. Keep your existing save slots.
 
 Version 0.9.5
 Changes since v0.9.4 include matchmaking and artillery repairs, an initial

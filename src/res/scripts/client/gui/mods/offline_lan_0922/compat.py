@@ -3877,8 +3877,52 @@ class OfflineCompatibility(object):
         try:
             self.disconnect()
         finally:
+            self._arm_tutorial_shutdown_guard()
             self._arm_sound_shutdown_guard()
             self._rollback_install()
+
+    def _arm_tutorial_shutdown_guard(self):
+        """Let exact #1513's late tutorial cleanup survive a retired GUI.
+
+        game.fini calls gui_personality.fini (including guiModsFini) before
+        its cached tutorialLoaderFini alias. ApplicationEffect still holds a
+        weak proxy to the destroyed app. SetTriggerEffect.stop already handles
+        a missing layout, but its accessor raises before reaching that guard.
+        Scope the expired-proxy fallback to the original loader cleanup and
+        restore both hooks afterward. Do not import GUI modules during partial
+        shutdown, skip any effect's cleanup, or hide other shutdown errors.
+        """
+        import sys
+
+        game = sys.modules.get('game')
+        effects = sys.modules.get('tutorial.gui.Scaleform.effects_player')
+        effect_type = getattr(effects, 'ApplicationEffect', None)
+        original_fini = getattr(game, 'tutorialLoaderFini', None)
+        if (effect_type is None or not callable(original_fini) or
+                not callable(getattr(effect_type, '_getTutorialLayout', None))):
+            return False
+
+        def guarded_fini():
+            original_layout = effect_type.__dict__['_getTutorialLayout']
+
+            def available_layout(effect):
+                try:
+                    return original_layout(effect)
+                except ReferenceError:
+                    return None
+
+            effect_type._getTutorialLayout = available_layout
+            try:
+                return original_fini()
+            finally:
+                if (effect_type.__dict__.get('_getTutorialLayout') is
+                        available_layout):
+                    effect_type._getTutorialLayout = original_layout
+                if getattr(game, 'tutorialLoaderFini', None) is guarded_fini:
+                    game.tutorialLoaderFini = original_fini
+
+        game.tutorialLoaderFini = guarded_fini
+        return True
 
     def _arm_sound_shutdown_guard(self):
         """Protect exact #1513's late SoundGroups.destroy zombie lookup.

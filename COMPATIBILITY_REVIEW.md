@@ -7849,3 +7849,44 @@ from the instrumented Windows build; neither symptom is claimed fully fixed.
 All 146 client modules compile under CPython 2.7.18. Three existing bridge
 support/bank regression methods also pass with EDGE logging explicitly
 enabled, exercising zero-contact, spring-only and rigid-contact formatting.
+
+## v0.9.6: confirmed governor wear and safe shutdown
+
+Report 035714 uses e3d430e and records MT-25 engine HP reaching 129.5/260
+and critical state at 03:53:05; high-speed intervals leave HP unchanged.
+The KV-5 interval reaches 264/360, above its 180 HP yellow threshold.
+Remove the temporary governor diagnostics without changing its accepted
+switch, wear, power, settlement or resupply behavior.
+
+The report's game.fini fails at tutorialLoaderFini after gui_personality.fini
+has destroyed the Scaleform app. Exact #1513 ApplicationEffect accesses a
+dead weak proxy; SetTriggerEffect.stop already supports a None layout.
+At mod fini, arm a one-shot wrapper on game's cached tutorial finalizer.
+Only during that finalizer, the native layout accessor maps ReferenceError
+to None. Keep every effect's cleanup and restore both wrappers in finally.
+Do not load GUI modules during partial startup or swallow other exceptions.
+An independent Python 2.7 audit executes the installed accessor, trigger
+stop and stopAll code: it reproduces the stock failure and completes cleanup
+with the adapter, including live-layout trigger clearing and hook restoration.
+The retained late sound guard then remains available for SoundGroups.destroy.
+183 compatibility tests pass and all 146 client files compile under Python 2.7.
+
+The native starter also waited ten seconds after both its Job and tracked
+players were empty. Every descendant belongs to that Job: a live replacement
+keeps its process count nonzero; an empty Job has no parent left to start
+another descendant. Exit at the empty-Job boundary. Preserve stop events,
+process tracking, exit codes and bounded crash-monitor handling. Rebuild the
+x86 GUI executable with LLVM-MinGW 20260922 (MSVCRT), with warnings as errors.
+Real Windows tests with a controlled native client reproduce the old delay
+in both normal and handoff cases; the rebuilt starter completes in 0-0.1 s
+after the final child exits and keeps a live replacement running after its
+parent exits. The 24 starter tests pass. These are process-lifetime tests,
+not a claim of a measured full #1513 game shutdown speedup.
+
+Maintenance tests previously inherited the host APPDATA and could reach real
+saves. Pin their default environment to the test's temporary/fallback paths;
+external-save cases explicitly supply a temporary APPDATA. A regression
+exercises normal install, forced reinstall and startup repair against default
+and named external slots, including legacy state and rotated backups. The
+746 launcher tests pass (14 platform/environment skips). Product reset stays
+behind its separate confirmation and is not invoked by installation or repair.
