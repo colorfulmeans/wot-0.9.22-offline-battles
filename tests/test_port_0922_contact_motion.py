@@ -111,7 +111,10 @@ class WorkerSolidMotionTests(unittest.TestCase):
             battle = t.BattleRuntime(native)
             battle.client = t._Client()
             battle._avatar = native.bigworld.avatar
-            battle._bots = types.SimpleNamespace(states={})
+            battle._bots = types.SimpleNamespace(states={},
+                replica_contact_params=lambda raw, descriptor: dict(
+                    t.battle_runtime_module.vehicle_physics.derive_params(descriptor),
+                    mass=wreck_mass))
             battle._local_physics = dict(t._effective_params_snapshot()['physics'], mass=100575.)
             local = t._Vehicle(10, t._Descriptor(), t._Vector(), (0,0,0), {'health':500})
             remote = t._Vehicle(11, t._Descriptor(), t._Vector(), (0,0,0), {'health':0})

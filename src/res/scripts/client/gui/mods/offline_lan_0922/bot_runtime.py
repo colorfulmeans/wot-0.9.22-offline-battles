@@ -2685,6 +2685,24 @@ class BotRuntime(object):
         self._physics_params[bot_id] = params
         return params
 
+    def replica_contact_params(self, raw, descriptor):
+        """Derive contact forces without an authority-owned descriptor cache.
+
+        Non-authority battle_start intentionally creates no Bot simulations.
+        Its _physics_params_for therefore cannot describe a presented Bot.
+        Use the same installed descriptor, crew rating and tactics as its owner.
+        """
+        if descriptor is None:
+            return None
+        tags = getattr(getattr(descriptor, 'type', None), 'tags', ())
+        class_tag = (raw.get('profile') or {}).get('class_tag') or next(
+            (c for c in bot_tactics.CLASSES if c in tags), 'unknown')
+        values = bot_tactics.effective(self._bot_tactics, int(raw.get('team', 1)),
+                                      class_tag, int(raw.get('slot', 0)))
+        rating = self._resolve_bot_rating(raw)
+        crew_level = int(values.get('crew_level', bot_gunnery.rating_crew_level(rating)))
+        return _bot_physics_params(descriptor, crew_level)
+
     @staticmethod
     def _reset_bot_suspension_state(state, reset_grounded=False):
         """Discard solver-only history at a descriptor/authority boundary."""

@@ -20898,7 +20898,7 @@ class BattleRuntime(object):
             (previous & (overlapping | closing_gaps)) | newly_armed)
         return bool(newly_armed)
 
-    def _predict_bot_contact_velocity(self, bot_id, state, shape):
+    def _predict_bot_contact_velocity(self, bot_id, state, shape, params):
         """Use ACK-coherent momentum and its elapsed drive/ground reaction."""
         timeline = self._ram_bot_history_index.get(bot_id)
         now = self._estimated_motion_time_us(self._clock())
@@ -20908,7 +20908,6 @@ class BattleRuntime(object):
         checkpoint = self._ram_bot_history.get(revision, {}).get(bot_id)
         if checkpoint is None or now < sample_time:
             return None
-        params = self._bots._physics_params_for(bot_id)
         if params is None:
             return None
         ack = next((row[1] for row in checkpoint.get('contact_push_acks', ())
@@ -21033,8 +21032,21 @@ class BattleRuntime(object):
                 if player_effective is not None else
                 self._ram_profile(descriptor))
             physical_velocity = None
+            bot_contact_params = None
             push_yaw = _number(physical_state.get('push_yaw'))
             if record.get('kind') == 'bot':
+                parameter_key = (descriptor, state.get('skill_rating'), state.get('skill'),
+                                 state.get('team'), state.get('slot'))
+                cached = record.get('_contact_parameters')
+                if cached is None or cached[0] != parameter_key:
+                    bot_contact_params = (self._bots.replica_contact_params(state, descriptor)
+                                          if self._bots is not None else None)
+                    record['_contact_parameters'] = (parameter_key, bot_contact_params)
+                    if bot_contact_params is not None:
+                        sys.stdout.write('[Offline LAN 0.9.22] CONTACT parameters bot=%d mass=%.3f powerW=%.3f source=presented_descriptor\n' % (
+                            int(record['network_id']), bot_contact_params['mass'], bot_contact_params['powerW']))
+                else:
+                    bot_contact_params = cached[1]
                 physical_yaw = _number(physical_state.get('yaw'))
                 physical_speed = (_number(physical_state.get('speed'))
                                   if alive else 0.0)
@@ -21057,23 +21069,22 @@ class BattleRuntime(object):
                         physical_state.get('contact_push_acks'),
                         int(getattr(self.client, 'player_id', 0)))/inertia
                 predicted = self._predict_bot_contact_velocity(
-                    int(record['network_id']), physical_state, shape)
+                    int(record['network_id']), physical_state, shape, bot_contact_params)
                 if predicted is not None:
                     physical_velocity, push_yaw = predicted[:2], predicted[2]
                 # Pending momentum is reciprocal; pending space is not.
                 # A worker can reject displacement against a rock or another
                 # hull. Use the actual presented body, never a requested pose.
             params = (player_effective['physics'] if player_effective is not None else
-                      (vehicle_physics.descriptor_contact_params(descriptor) if descriptor is not None else None))
+                      bot_contact_params)
             grip = (vehicle_physics.contact_push_decel(
                 params, bool(alive and (speed or state.get('movement_dir') or state.get('forward'))),
                 normal_y=math.cos(_number(state.get('pitch')))*math.cos(_number(state.get('roll'))))
                     if params else None)
             traverse = (0.0, 0.0)
             motor_turn = state.get('rotation_dir', state.get('turn', 0)) if alive else 0
-            if descriptor is not None and motor_turn and dt > 0.0:
-                drive_params = (player_effective['physics'] if player_effective is not None
-                                else vehicle_physics.derive_params(descriptor))
+            if params is not None and motor_turn and dt > 0.0:
+                drive_params = params
                 traverse = vehicle_physics.contact_traverse(
                     drive_params, shape[0], speed, motor_turn, dt,
                     state.get('movement_dir', state.get('forward', 0)), _number(state.get('pitch')))

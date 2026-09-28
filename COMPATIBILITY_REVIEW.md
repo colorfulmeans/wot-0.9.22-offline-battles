@@ -7167,3 +7167,62 @@ pass. No native API was added. Native shove feel, bank departure and modified
 shell hit locations remain test-package acceptance items; no game session was
 run by the agent. Earlier outstanding replay/fall-injury work is not claimed
 fixed by this change.
+
+### Report 194317: replica prediction used an empty authority cache
+
+The report identifies test-20260928-254db07 in all three processes. The visible
+client is deliberately not Bot authority: battle_start returns before creating
+states, descriptors or physics caches. Contact velocity prediction nevertheless
+called _physics_params_for on that non-authority runtime. Its missing descriptor
+silently derived the 5,730 kg / 45 hp defaults. Pending momentum was divided by
+that mass instead of the installed Bot mass, exaggerating the predicted escape
+velocity and suppressing subsequent reciprocal pushes. The previous coupled
+tests shared the worker object, concealing this lifecycle defect.
+
+The replica now derives parameters from the presented entity's installed
+descriptor, published rating and round tactics through the same crew/physics
+adapter as the worker. A per-record descriptor/rating/slot cache avoids repeated
+native crew evaluation. Prediction, ground reaction and powered traverse share
+those parameters; a compact first-contact witness records mass and power.
+The replica creates no authority state, changes no vehicle coefficients and
+still treats only the displayed hull as occupied space. The worker retains
+canonical momentum, swept movement and HP ownership.
+
+The regression starts an actual non-authority round with empty caches and makes
+any authority-cache lookup fail. A 35,500 kg vehicle receiving (71,000, -35,500)
+momentum yields (2, -1) m/s for both live and dead wire states. Coupled tests now
+use separate owners, the real contact-body adapter and worker update_once rather
+than a shared cache or an abbreviated force loop. At 150 ms delay in each
+direction, reinstating the old default cache reproduces zero KV-5/AT-15A head-on
+travel; the corrected six-second synthetic scenario advances 8.88 m. Swapped
+owners, weaker engines, reverse input and 30/60/144 Hz remain covered. Both a
+live and a dead hull can be pushed beyond a supported ledge into a 30 m drop
+with the existing ten-spring support solver. These are regression scenarios,
+not measured native vehicle performance or retail calibration.
+
+The report also records real native bridge-side vetoes. Wreck 19 eventually
+falls from about 0.85 to -14.90 m, while live Bot 6 remains blocked near the
+bridge. The source change above repairs deficient sustained push, but native
+loaded-map bridge departure is not certified by the synthetic ledge test.
+New-wall and occupied-hull guards remain intact; no unproved bridge-normal
+exception ships in this change.
+
+High-damage strike witnesses show the configured 5,000 device damage arriving,
+including applied engine and surveying-device losses. Five reached ammoBay
+candidates were all rejected by the existing single 27% damage-chance roll;
+there is no evidence of overflow or universally disabled rack damage. A larger
+device-damage number changes loss after a successful roll, not hit geometry or
+the roll probability. Tests still cover success and rejection with that value.
+The report also proves unavailable internal layouts for R98_T44_85M,
+J30_Edelweiss and R121_KV4_KTT. The read-only catalog audit finds 650 decoded
+console meshes, eight reconstructed profiles and 22 unavailable vehicle layouts.
+Those missing interiors are a real unresolved coverage limitation; generic
+invented boxes or another vehicle's layout were not substituted.
+
+Validation: 313 focused cases pass. The 1,474-case subsystem selection passes
+with one environment skip and the same six documented navigation exclusions.
+All 146 client sources compile under CPython 2.7.18, and exact Chinese HD #1513
+inspection and ABI audit pass. Existing test doubles were updated to supply
+explicit contact parameters; the new lifecycle regression uses the real replica.
+No native API was added and no native game session was run. Earlier replay,
+fall-injury and missing-layout work is not claimed fixed here.

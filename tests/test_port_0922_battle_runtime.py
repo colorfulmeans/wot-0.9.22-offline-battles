@@ -7977,7 +7977,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'state': {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 30.0,
                       'yaw': math.pi, 'speed': 0.0, 'alive': True,
                       'team': 2}}}
-        battle._bots = types.SimpleNamespace(states={11: {
+        battle._bots = types.SimpleNamespace(
+            replica_contact_params=battle_runtime_module.BotRuntime(
+                battle.client.player_id).replica_contact_params, states={11: {
             'id': 11, 'mass': 25000.0,
             'collision_shape': (1.5, 3.5, 0.0, 1.0),
             'vehicle': 'ussr:T-34', 'team': 2,
@@ -8061,7 +8063,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
                       'yaw': math.pi, 'speed': 0.0, 'alive': True,
                       'team': 2}}
         battle._records = {'bot:11': record}
-        battle._bots = types.SimpleNamespace(states={11: {
+        battle._bots = types.SimpleNamespace(
+            replica_contact_params=battle_runtime_module.BotRuntime(
+                battle.client.player_id).replica_contact_params, states={11: {
             'id': 11, 'mass': 25000.0, 'speed': 0.0,
             'collision_shape': (1.5, 3.5, 0.0, 1.0),
             'vehicle': 'ussr:T-34', 'team': 2,
@@ -9016,7 +9020,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'local': False, 'ready': True, 'tombstone': False,
             'state': state,
         }}
-        battle._bots = types.SimpleNamespace(states={11: state})
+        battle._bots = types.SimpleNamespace(
+            replica_contact_params=battle_runtime_module.BotRuntime(
+                battle.client.player_id).replica_contact_params, states={11: state})
         battle._local_physics = _effective_params_snapshot()['physics']
         battle._local_speed = 0.0
         battle._local_push_x = 0.0

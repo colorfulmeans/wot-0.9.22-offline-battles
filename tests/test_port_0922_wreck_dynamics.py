@@ -161,6 +161,38 @@ class WreckOwnerTests(unittest.TestCase):
     _runtime = bt.ShovedWreckTests._runtime
     _wreck = bt.ShovedWreckTests._wreck
 
+    def test_real_replica_lifecycle_has_no_worker_cache_but_uses_mounted_mass(self):
+        replica=self._runtime()
+        replica.battle_start(dict(self.start,round_id=6,bot_authority_id=-1))
+        self.assertFalse(replica.is_authority())
+        self.assertEqual({},replica.states)
+        self.assertEqual({},replica._descriptors)
+        native=vt._runtime();battle=vt.BattleRuntime(native)
+        battle.client=vt._Client();battle._avatar=native.bigworld.avatar
+        battle._bots=replica
+        battle._clock=lambda:1.
+        battle._estimated_motion_time_us=lambda unused:1000000
+        descriptor=vt._Descriptor()
+        descriptor.physics.update(weight=35500.,enginePower=600.*735.49875)
+        native.bigworld.entities[11]=vt._Vehicle(11,descriptor,vt._Vector(),(0,0,0),{'health':500})
+        for alive in (True,False):
+            state=dict(id=11,x=0.,y=0.,z=3.,yaw=0.,alive=alive,airborne=True,
+                       speed=0.,team=2,slot=0,skill_rating=5000,
+                       collision_shape=c.DEFAULT_SHAPE,vehicle='ussr:R11_MS-1')
+            record=dict(engine_id=11,network_id=11,kind='bot',ready=True,
+                        state=state,presented_pose=state)
+            battle._records={'bot:11':record}
+            battle._remember_ram_bot_snapshot(dict(bot_state_revision=1,
+                bot_state_time_us=1000000,bots=[state]))
+            battle._local_contact_impulses={11:[(1,1000000,71000.,-35500.,0.)]}
+            with mock.patch('sys.stdout'), mock.patch.object(replica,'_physics_params_for',
+                    side_effect=AssertionError('replica has no authority descriptors')):
+                peer=battle._contact_tanks((0.,0.,0.),c.DEFAULT_SHAPE,.02)[0]
+            self.assertEqual(35500.,peer['mass'])
+            self.assertEqual((2.,-1.),peer['physical_velocity'])
+            self.assertEqual(600.*735.49875,record['_contact_parameters'][1]['powerW'])
+            self.assertEqual({},replica._physics_params)
+
     def test_worker_commits_coupled_wreck_turn_only_after_whole_world_sweep(self):
         for blocked in (False,True):
             worker=self._runtime();worker.states.pop(12)
@@ -196,7 +228,7 @@ class WreckOwnerTests(unittest.TestCase):
             battle._ram_bot_history={1:{11:published}}
             battle._local_contact_impulses={11:[(1,1000000,71000.,-35500.,0.)]}
             self.assertEqual((2.,-1.,0.),battle._predict_bot_contact_velocity(
-                11,published,c.DEFAULT_SHAPE))
+                11,published,c.DEFAULT_SHAPE,params))
 
     def test_receipt_transit_is_measured_once_and_stops_without_pending_impulses(self):
         worker=self._runtime()
@@ -205,18 +237,19 @@ class WreckOwnerTests(unittest.TestCase):
         battle._clock=lambda:1.
         battle._estimated_motion_time_us=lambda unused:1000000
         state=dict(worker.states[11],contact_push_acks=[[battle.client.player_id,1]])
+        params=worker._physics_params_for(11)
         battle._ram_bot_history_index={11:[(800000,1)]}
         battle._ram_bot_history={1:{11:state}}
         battle._local_contact_impulses={11:[(1,700000,1.,0.,0.),(2,750000,2.,0.,0.)]}
         with mock.patch.object(self.module.vehicle_physics,'predict_contact_velocity',
                                return_value=(0.,0.,0.)) as predict:
-            battle._predict_bot_contact_velocity(11,state,c.DEFAULT_SHAPE)
+            battle._predict_bot_contact_velocity(11,state,c.DEFAULT_SHAPE,params)
             self.assertAlmostEqual(.7,predict.call_args.args[3])
             battle._ram_bot_history_index={11:[(900000,1)]}
-            battle._predict_bot_contact_velocity(11,state,c.DEFAULT_SHAPE)
+            battle._predict_bot_contact_velocity(11,state,c.DEFAULT_SHAPE,params)
             self.assertAlmostEqual(.8,predict.call_args.args[3])
             state['contact_push_acks']=[[battle.client.player_id,2]]
-            battle._predict_bot_contact_velocity(11,state,c.DEFAULT_SHAPE)
+            battle._predict_bot_contact_velocity(11,state,c.DEFAULT_SHAPE,params)
             self.assertAlmostEqual(.9,predict.call_args.args[3])
 
     def test_sliding_track_friction_does_not_apply_a_second_full_yaw_brake(self):
@@ -291,7 +324,8 @@ class WreckOwnerTests(unittest.TestCase):
         native=vt._runtime();battle=vt.BattleRuntime(native)
         battle.client=vt._Client();battle._avatar=native.bigworld.avatar
         battle._local_physics=human_params
-        battle._bots=types.SimpleNamespace(states={11:copy.deepcopy(state)},_physics_params_for=lambda unused:params)
+        battle._bots=types.SimpleNamespace(states={11:copy.deepcopy(state)},
+            replica_contact_params=lambda raw,descriptor:params)
         local=vt._Vehicle(10,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':500})
         native.bigworld.entities[11]=vt._Vehicle(11,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':0})
         record=dict(engine_id=11,network_id=11,kind='bot',local=False,ready=True,
@@ -557,13 +591,29 @@ class HeadOnOwnerTests(unittest.TestCase):
 
     def travel(self, human_mass, human_hp, bot_mass, bot_hp, hz,
                delay=0.0, reverse=False, prediction=True, input_delay=0.0,
-               human_throttle=1, bot_throttle=1):
+               human_throttle=1, bot_throttle=1, drop_edge=None, alive=True):
         worker=self._runtime()
         worker.states.pop(12)
+        worker.baked_graph=bt._flat_open_graph()
+        worker.adapter=bt._FixedAdapter(dict(throttle=bot_throttle,turn=0.,fire_allowed=False))
         state=worker.states[11]
         state.update(x=0.,y=0.,z=6.99,yaw=math.pi,speed=0.,mass=bot_mass,
                      pitch=0.,roll=0.,push_x=0.,push_z=0.,grounded_once=True,
                      collision_shape=c.DEFAULT_SHAPE,movement_dir=bot_throttle)
+        if drop_edge is not None:
+            state.update(alive=alive,health=500 if alive else 0)
+            worker._physics_ground_probe=lambda x,z,hint:0. if z<=drop_edge else -30.
+            worker._ground_probe=lambda x,z,*unused:0. if z<=drop_edge else -30.
+            spring_descriptor=bt._suspension_descriptor()
+            spring_descriptor.physics['weight']=bot_mass
+            def spring_ground(x,z,minimum_y,maximum_y,flat_maximum_y=None):
+                height=0. if z<=drop_edge else -30.
+                if (minimum_y-.01<=height<=maximum_y+.01 and
+                        (flat_maximum_y is None or height<=flat_maximum_y)):
+                    return height
+                return None
+            worker._wreck_ground_probe=spring_ground
+            worker._suspension_params[11]=self.module.vehicle_physics.derive_suspension_params(spring_descriptor)
         params=worker._physics_params_for(11)
         params.update(mass=bot_mass,powerW=bot_hp*735.49875)
         human_params=dict(params,mass=human_mass,powerW=human_hp*735.49875)
@@ -572,7 +622,11 @@ class HeadOnOwnerTests(unittest.TestCase):
         native=vt._runtime();battle=vt.BattleRuntime(native)
         battle.client=vt._Client();battle._avatar=native.bigworld.avatar
         battle._local_physics=human_params
-        battle._bots=worker
+        replica=self._runtime()
+        replica.battle_start(dict(self.start,round_id=6,bot_authority_id=-1))
+        self.assertFalse(replica.states)
+        self.assertFalse(replica._descriptors)
+        battle._bots=replica
         clock=[0.0]
         battle._clock=lambda:clock[0]
         battle._estimated_motion_time_us=lambda unused:int(clock[0]*1000000)
@@ -584,16 +638,25 @@ class HeadOnOwnerTests(unittest.TestCase):
         battle._baked_pose_safe=lambda *args:True
         battle._poll_local_ram_contact_episodes=lambda *args:None
         published=copy.deepcopy(state)
+        descriptor=vt._Descriptor()
+        descriptor.physics.update(weight=bot_mass,enginePower=bot_hp*735.49875,
+            specificFriction=params['specificFriction'],terrainResistance=params['terrainResist'],
+            speedLimits=(params['speedFwd'],params['speedBwd']))
+        native.bigworld.entities[11]=vt._Vehicle(11,descriptor,vt._Vector(),(0,0,0),{'health':500})
+        record=dict(engine_id=11,network_id=11,kind='bot',local=False,ready=True,
+                    tombstone=False,state=published,presented_pose=published)
+        battle._records={'bot:11':record}
         def others(*args,**kw):
             pending=ledger.pending(battle._local_contact_pushes,11,published.get('contact_push_acks'),battle.client.player_id)
             peer=_tank(1000011,0.,published['z'],yaw=math.pi,mass=bot_mass,
                        vz=-published['speed']+published.get('push_z',0.)+pending[1]/bot_mass)
             if prediction:
-                peer['vz']=battle._predict_bot_contact_velocity(11,published,c.DEFAULT_SHAPE)[1]
+                peer['vz']=battle._predict_bot_contact_velocity(11,published,c.DEFAULT_SHAPE,params)[1]
             peer.update(kind='bot',network_id=11,physical_velocity=(0.,peer['vz']),
                         contact_decel=self.module.vehicle_physics.contact_push_decel(params,True))
             return [peer]
-        battle._contact_tanks=others
+        if not prediction:
+            battle._contact_tanks=others
         position=(0.,0.,0.);dt=1./hz;bank=0.;queue=[]
         human_queue=[];published_human=None
         sign=-1 if reverse else 1
@@ -617,20 +680,41 @@ class HeadOnOwnerTests(unittest.TestCase):
                     if published_human is None:
                         published_human=dict(raw,z=0.,speed=0.,tank_pushes=[])
                     raw=published_human
-                    worker._consume_human_contact_pushes([raw],tick*dt)
-                    state['speed']=self.module.vehicle_physics.longitudinal_step(
-                        params,state['speed'],bot_throttle,False,0.,bank)
-                    before=(state['x'],state['y'],state['z'])
-                    state['z']-=state['speed']*bank
-                    worker._guard_tank_translations([raw],{11:before})
-                    worker._resolve_tank_contacts([raw],tick*dt,bank)
+                    # Exercise the real drive/passive split, navigation pose
+                    # guards, human receipts and complete contact pass.
+                    raw=bt._admit_player(raw,mass=human_mass)
+                    worker._update_once(bank,clock[0],[raw])
                     queue.append((clock[0]+delay,int(clock[0]*1000000),tick+1,copy.deepcopy(state)))
                     bank=0.
                 while queue and queue[0][0]<=clock[0]+1.e-9:
                     unused,stamp,revision,published=queue.pop(0)
+                    record['state']=published
+                    record['presented_pose']=published
                     battle._ram_bot_history_index={11:[(stamp,revision)]}
                     battle._ram_bot_history={revision:{11:published}}
+        if drop_edge is not None:
+            self.assertFalse(worker._suspension_param_failures)
+            return state
         return state['z']-6.99
+
+    def test_separate_owners_can_shove_live_and_dead_hulls_off_a_supported_edge(self):
+        for alive in (True,False):
+            with self.subTest(alive=alive):
+                state=self.travel(100575.,1200.,23496.,520.,60,delay=.15,
+                    input_delay=.15,drop_edge=9.,alive=alive)
+                self.assertGreater(state['z'],9.)
+                self.assertLess(state['y'],-20.)
+
+    def test_empty_authority_descriptor_cache_reproduces_report_head_on_deadlock(self):
+        original=vt.BattleRuntime._predict_bot_contact_velocity
+        def old_cache(runtime,bot_id,state,shape,unused_params):
+            return original(runtime,bot_id,state,shape,
+                            self.module.vehicle_physics.derive_params({}))
+        with mock.patch.object(vt.BattleRuntime,'_predict_bot_contact_velocity',old_cache):
+            blocked=self.travel(100575.,1200.,55883.,800.,60,delay=.15,input_delay=.15)
+        released=self.travel(100575.,1200.,55883.,800.,60,delay=.15,input_delay=.15)
+        self.assertAlmostEqual(0.,blocked)
+        self.assertGreater(released,1.)
 
     def test_bidirectional_delay_does_not_turn_head_on_power_into_a_deadlock(self):
         for hz in (30,60,144):

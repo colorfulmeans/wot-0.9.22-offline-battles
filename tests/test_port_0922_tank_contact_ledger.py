@@ -30,7 +30,10 @@ class ContactLedgerTests(unittest.TestCase):
                     battle._records = {'bot:11': dict(engine_id=11, network_id=11,
                         kind='bot', local=False, ready=True, tombstone=False,
                         state=state, presented_pose=dict(state))}
-                    battle._bots = types.SimpleNamespace(states={11:state})
+                    battle._bots = types.SimpleNamespace(states={11:state},
+                        replica_contact_params=lambda raw, descriptor: dict(
+                            t.battle_runtime_module.vehicle_physics.derive_params(descriptor),
+                            mass=bot_mass))
                     battle._collision_shape = lambda unused: shape
                     battle._motion_is_clear = lambda *args, **kw: True
                     battle._baked_pose_safe = lambda *args: True
