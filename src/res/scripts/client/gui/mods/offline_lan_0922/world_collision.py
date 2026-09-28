@@ -904,7 +904,10 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 					descending=descending_lane,
 					support_start_y=(pos.y + local_start[0] * pose_y[0] +
 						local_start[1] * pose_y[2]))
-				if pose_y[2] else None)
+				if pose_y[2] and motion_yaw is None else None)
+			# An explicit displacement direction is a passive, posed sweep.
+			# Do not bend it down toward future ground: at a ledge that ray
+			# crosses the cliff below the actual body and vetoes departure.
 			
 			# Spodní paprsek pro pevnou geometrii (0.6m nad zemí)
 			start_bot, end_bot = _posed_ray(

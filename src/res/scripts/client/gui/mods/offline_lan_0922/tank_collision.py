@@ -1172,12 +1172,13 @@ def resolve_pairs(tanks, dt, anchor=None):
                                      friction_inverse=(ia, ib))
             angular = (_angular_pair_response(a, b, hit, mobility_a, mobility_b)
                        if wreck_yaw_inertia(a) or wreck_yaw_inertia(b) else None)
-            # A replica's pose is an obstacle until its owner actually moves
-            # it. This constrains position only: reciprocal momentum still
-            # uses both real masses and is delivered exactly once.
+            # Ownership does not make the peer infinitely heavy. Solve the
+            # positional shares with the same physical mobilities in this
+            # private constraint roster, then publish only the owned share.
+            # The caller still sweeps against the actual remote pose; no
+            # speculative remote travel can open a passage through it.
             position_response = pair_response(
-                hit, 0.0 if a.get('position_fixed') else mobility_a,
-                0.0 if b.get('position_fixed') else mobility_b,
+                hit, mobility_a, mobility_b,
                 (0.0, 0.0), (0.0, 0.0))
             apply_impulse = a.get('impulse', True) and b.get('impulse', True)
             for body, offset in ((a, 0), (b, 4)):
@@ -1187,7 +1188,8 @@ def resolve_pairs(tanks, dt, anchor=None):
                     dvx, dvz, dv_yaw = angular[0 if offset == 0 else 1]
                 dx, dz = position_response[offset:offset+2]
                 result = results[body['id']]
-                result['correction'] = (result['correction'][0]+dx, result['correction'][1]+dz)
+                if not body.get('position_fixed'):
+                    result['correction'] = (result['correction'][0]+dx, result['correction'][1]+dz)
                 body['x'] += dx
                 body['z'] += dz
                 if apply_impulse:

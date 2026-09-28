@@ -12589,13 +12589,12 @@ class BotRuntime(object):
                 hard_contact = False
                 contact_position = position
                 contact_deflected = False
-                if (forced_speed and (not path_clear or pose_frozen) and
-                        not (isinstance(motion_probe, dict) and
-                             motion_probe.get('collision', False))):
-                    # Navigation may withhold the driver's travel, but cannot
-                    # erase a shove. Sweep that share after the drive guard,
-                    # through exactly the same passive world/vehicle gate as
-                    # lateral contact momentum. It still brakes physically.
+                if forced_speed:
+                    # Always keep external travel after the autonomous pose
+                    # guard, including when the forecast was clear but the
+                    # realised endpoint enters a hazard. A planning ray's
+                    # collision flag is not a physical veto of this short
+                    # shove: the passive native sweep below owns that proof.
                     passive_forwards[state['id']] = forced_speed
                     speed -= forced_speed
                     state['_contact_forward_speed'] = 0.0

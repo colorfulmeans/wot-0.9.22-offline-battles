@@ -7047,3 +7047,63 @@ failures and two errors. All 146 client sources compile under CPython 2.7.18;
 the installed #1513 inspection and ABI audit pass. No native API is added.
 Actual delayed pushing, native bridge departure and wreck presentation still
 require Windows gameplay acceptance of the replacement package.
+
+### September 28 report 180736: owner recovery, passive rays and turret debt
+
+The coherent three-round `20260928-180736-67aa6cf49729` session runs
+`test-20260928-9232d11` on `37_caucasus`. The player masses are 100,575 kg
+and 35,500 kg. The light contact peer logged in the third round is
+`Ch16_WZ_131` at 21,100 kg; the second round also records `GB52_A45` at
+55,883 kg. These contacts do not prove a native reproduction of the user's
+specific 59-16/AT 15A examples. The user confirms improved wreck turning.
+
+Replica pose ownership previously zeroed its inverse mass for penetration
+recovery, assigning the complete positional correction to the local actor
+even when its physical mass was much larger. The private constraint roster
+now solves both physical shares, publishes only the owned correction and
+retains the peer's actual occupied pose for every subsequent motion sweep.
+Inverse mass, existing track hold and reciprocal impulses are unchanged;
+no player-only force or altered engine/friction constants are introduced.
+Recovery of a pre-existing overlap converges without opening unaccepted
+remote space. First-impact ram HP inputs remain separate.
+
+Wreck 29's native veto around 18:04:39 includes a ray from
+`(71.34747, -5.06367, 83.68707)` to `(71.06791, -8.22347, 86.97670)`;
+its endpoint had been lowered to future ground at -8.82347. A passive
+fixed-attitude translation must not bend down to that future terrain:
+the chord can hit a cliff below the body and prevent departure. Explicit
+passive sweeps now retain the occupied body's pitch/roll height. Autonomous
+terrain look-ahead, inward/new wall rejection and the arena rectangle remain.
+Received live longitudinal travel always follows the autonomous pose guard,
+including when a clear forecast reaches a fatal baked cell or a distant
+planning collision does not intersect the short physical displacement.
+
+At 18:02:44 Bot 22 loses a 5,640 kg turret. Recorded simulation debt grows
+from 196 ms to 19,634 ms by 18:03:07; this is real worker lag, not just a
+render interpolation symptom. The planner constructed angular vehicle sweeps
+before discarding dynamic turret rows. Filtering those rows first removes
+that unused work while leaving the canonical body contact solver active.
+A 1,200-query synthetic comparison removes 2,400 discarded component sweeps
+(321 ms to 4.9 ms in this local run). This is not a native frame-rate claim.
+The body solver also stops repeating unchanged blocked recovery, skips empty
+Bot responses and continues iterating when either body's velocity or geometry
+actually changes. Substeps, world queries, time debt and safety budget remain.
+
+The 271-case targeted run passes; the additional landed-turret pipeline check
+passes in its seven-case module. It verifies visible reciprocal momentum,
+canonical displacement and exactly-once receipt handling, not native visual
+mesh alignment. The 1,473-case subsystem selection passes with one environment
+skip and six known navigation exclusions. The full 528-case Bot run retains
+26 failures and 14 errors; the 27-case gameplay gate retains seven failures
+and two errors. Both failure-identifier lists match the parent baseline.
+All 146 sources compile under CPython 2.7.18;
+the installed #1513 inspection and ABI audit pass. No native API is added.
+
+An extra two-way publication-delay experiment still shows timing-sensitive
+head-on pushing. It uses simplified common descriptors and cannot certify
+the named vehicle matchups or retail parity. These repairs address proven
+positional, navigation and redundant-work defects; they do not establish
+that all Bot/player asymmetry, loaded-map ledges or turret frame pacing and
+visible collision alignment are solved. Those remain native test-package
+acceptance items. Crew/module fall injury and playable offline replay remain
+open from the earlier requests.

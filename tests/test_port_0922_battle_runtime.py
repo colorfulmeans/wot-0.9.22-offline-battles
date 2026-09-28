@@ -8016,9 +8016,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             local, (0.0, 0.0, 0.0), 0.0, 0.1)
         receipt = battle.local_ram_contact()
 
-        # Damage preserves the observed pre-response pose. A newer canonical
-        # sample cannot make the still-presented hull permeable meanwhile.
-        self.assertLessEqual(corrected[2], -0.4899)
+        # Damage preserves the observed pre-response pose. Equal masses
+        # receive equal recovery shares even across different pose owners.
+        self.assertAlmostEqual(-.245, corrected[2], places=4)
         self.assertEqual((11, 37), (
             receipt['bot_id'], receipt['bot_state_revision']))
         self.assertEqual(123000, receipt['presentation_time_us'])

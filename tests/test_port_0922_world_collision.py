@@ -1050,10 +1050,16 @@ class WorldCollisionTests(unittest.TestCase):
                 return None
             scene = types.SimpleNamespace(wg_collideSegment=collide,
                 wg_getMatInfoNearPoint=_miss_mat_info_1513)
-            self.assertFalse(world_collision.check_horizontal_collision(
-                scene, types.SimpleNamespace(Vector3=_Vector),
-                1, _Vector(), 0.0, 5.0, descriptor, False, 0.1,
-                motion_yaw=0.55, pitch=pitch, roll=roll))
+            # 180736: a lower floor was used to bend a passive hull ray
+            # into a cliff below the occupied body. Its future ground must
+            # not change this fixed-attitude translation, in either tilt.
+            with mock.patch.object(world_collision, '_lane_ground_ahead',
+                                   return_value=-8.82347) as future_ground:
+                self.assertFalse(world_collision.check_horizontal_collision(
+                    scene, types.SimpleNamespace(Vector3=_Vector),
+                    1, _Vector(), 0.0, 5.0, descriptor, False, 0.1,
+                    motion_yaw=0.55, pitch=pitch, roll=roll))
+                self.assertEqual(0, future_ground.call_count)
             pose = world_collision._hull_pose_y(pitch, roll)
             dx, dz = math.sin(0.55) * 0.5, math.cos(0.55) * 0.5
             for index, (start, end) in enumerate(calls[-12:]):

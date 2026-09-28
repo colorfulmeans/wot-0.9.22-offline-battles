@@ -409,13 +409,13 @@ class ForcedHazardTests(unittest.TestCase):
     tearDown = bt.ShovedWreckTests.tearDown
 
     def scenario(self, pushed=False, side=False, wall=False, water=False,
-                 reverse=False):
+                 reverse=False, forecast='hazard'):
         worker=self.module.BotRuntime(1,
             descriptor_resolver=lambda unused:bt._combat_descriptor(),
             adapter_factory=lambda *args,**kwargs:bt._FixedAdapter(dict(
                 throttle=1.,turn=0.,fire_allowed=False,movement_intent=True)),
-            direction_probe=lambda *args,**kwargs:dict(clear=False,collision=False,
-                water=True,slope=0.),
+            direction_probe=lambda *args,**kwargs:dict(clear=forecast=='clear',
+                collision=forecast=='distant_wall',water=forecast=='hazard',slope=0.),
             ground_probe=lambda *args:0.,
             physics_ground_probe=lambda x,z,hint:0. if water or z<=1. else -100.,
             spawn_resolver=bt._spawn_resolver,baked_graph=bt._flat_open_graph(),
@@ -424,7 +424,7 @@ class ForcedHazardTests(unittest.TestCase):
         state=worker.states[11]
         state.update(x=0.,y=0.,z=0.,yaw=math.pi if reverse else math.pi/2 if side else 0.,speed=0.,
                      grounded_once=True,push_x=0.,push_z=0.,movement_dir=0)
-        worker._planner_corridor_clear=lambda *args,**kwargs:False
+        worker._planner_corridor_clear=lambda *args,**kwargs:forecast=='clear'
         worker._water_depth_probe=lambda position:20. if water and position[2]>1. else -1.
         checkpoints={}
         if pushed:ledger.record(checkpoints,11,(0.,state['mass']*8.))
@@ -439,6 +439,22 @@ class ForcedHazardTests(unittest.TestCase):
                 worker.update(1./30.,tick/30.,[player])
                 if not state['alive']:break
         return worker,state
+
+    def test_forecast_and_realised_navigation_cannot_erase_external_travel(self):
+        # A long planning ray may see a distant wall, or miss a fatal cell
+        # reached this tick. Neither result can override the short physical
+        # sweep of an already received shove.
+        for forecast in ('clear', 'distant_wall'):
+            for reverse in (False, True):
+                with self.subTest(forecast=forecast, reverse=reverse):
+                    unused, forced = self.scenario(pushed=True, forecast=forecast,
+                                                   reverse=reverse)
+                    self.assertGreater(forced['z'], 1.)
+                    self.assertLess(forced['y'], -20.)
+                    self.assertFalse(forced['alive'])
+            unused, blocked = self.scenario(pushed=True, forecast=forecast, wall=True)
+            self.assertAlmostEqual(0., blocked['z'])
+            self.assertTrue(blocked['alive'])
 
     def test_driver_avoids_hazard_but_external_shove_can_fall_and_die(self):
         unused,unforced=self.scenario()

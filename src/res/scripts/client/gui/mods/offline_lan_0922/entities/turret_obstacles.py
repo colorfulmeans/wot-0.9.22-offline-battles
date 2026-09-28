@@ -436,7 +436,12 @@ class DetachedTurretObstacles(object):
         return nearest
 
     def sweep_blocks(self, start_pose, end_pose, descriptor, server_time_ms):
-        ready = tuple(self._ready(server_time_ms))
+        # Dynamic debris is resolved by its impulse owner. Filter it before
+        # constructing vehicle sweeps: planners call this for many headings,
+        # and an ammo-rack explosion must not make every Bot build discarded
+        # rotating hull geometry for the rest of the round.
+        ready = tuple(turret for turret in self._ready(server_time_ms)
+                      if 'body' not in turret['row']['flight'])
         if not ready:
             return False
         # Use the physical chassis root even when a hydraulic hull supplies
@@ -472,10 +477,6 @@ class DetachedTurretObstacles(object):
                 moving_radius += math.sqrt(radial[0] ** 2 + radial[2] ** 2) * (
                     1.0 - math.cos(abs(pivot[1]) * 0.5))
             for turret in ready:
-                if 'body' in turret['row']['flight']:
-                    # A dynamic body is resolved by the mass/impulse owner,
-                    # never by a speculative yes/no static-wall guard.
-                    continue
                 if (start_pose.get('actor_key') is not None and
                         turret['row'].get('support_key') == start_pose['actor_key']):
                     continue

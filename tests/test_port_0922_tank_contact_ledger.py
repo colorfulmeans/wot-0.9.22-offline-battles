@@ -43,8 +43,17 @@ class ContactLedgerTests(unittest.TestCase):
                         # A 200-ms worker/snapshot gap contains many render
                         # frames, but the displayed hull remains occupied.
                         for unused in range(int(.2*hz)):
+                            before = position
                             position = battle._resolve_local_tank_contacts(local,position,0.,1./hz)
-                        self.assertLessEqual(position[2], -.9899)
+                            self.assertLess(position[2], before[2])
+                        # Ownership no longer assigns the entire separation
+                        # to the local tank. A fixed snapshot converges at
+                        # the true mass share; inward travel stays blocked
+                        # throughout, even before that recovery finishes.
+                        own = _tank(-1, 0., position[2], mass=100575.)
+                        peer = _tank(11, 0., 6., mass=bot_mass)
+                        self.assertEqual(0., tank_collision.translation_fraction(
+                            own, (0., 20.), [peer]))
                         checkpoint = battle._local_contact_pushes[11]
                         self.assertEqual(20.,checkpoint[5])
                         state['z'] += 20.
@@ -52,7 +61,8 @@ class ContactLedgerTests(unittest.TestCase):
                         # ACK and canonical pose arrive before the renderer
                         # catches up. They do not clear its occupied space.
                         after = battle._resolve_local_tank_contacts(local,position,0.,1./hz)
-                    self.assertAlmostEqual(position[2],after[2],places=5)
+                    self.assertLessEqual(after[2],position[2])
+                    self.assertGreaterEqual(after[2],-.99)
 
     def test_mass_weighted_reciprocal_impulse_survives_a_late_worker(self):
         for human_mass, bot_mass in ((10000, 100000), (100000, 10000), (25000, 25000)):

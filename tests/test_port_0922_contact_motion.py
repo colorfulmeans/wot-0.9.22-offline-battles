@@ -58,7 +58,8 @@ class TranslationSweepTests(unittest.TestCase):
         self.assertEqual(1., contact.translation_fraction(a, (0., 100.), [b]))
 
     def test_position_ownership_cannot_change_the_mass_weighted_impulse(self):
-        for first_mass, second_mass in ((100575., 31370.), (31370., 100575.)):
+        for first_mass, second_mass in ((100575., 31370.), (31370., 100575.),
+                                       (35500., 21100.), (21100., 35500.)):
             a = _tank(1, 0., 0., mass=first_mass, vz=10.)
             b = _tank(2, 0., 6.9, mass=second_mass)
             free = contact.resolve_pairs([a,b], .1)
@@ -66,7 +67,14 @@ class TranslationSweepTests(unittest.TestCase):
             fixed = contact.resolve_pairs([a,b], .1)
             for actor in (1,2):
                 self.assertEqual(free[actor]['delta_velocity'], fixed[actor]['delta_velocity'])
+            self.assertEqual(free[1]['correction'], fixed[1]['correction'])
             self.assertEqual((0.,0.), fixed[2]['correction'])
+            a['position_fixed'], b['position_fixed'] = True, False
+            other_owner = contact.resolve_pairs([a,b], .1)
+            self.assertEqual(free[2]['correction'], other_owner[2]['correction'])
+            self.assertEqual((0.,0.), other_owner[1]['correction'])
+            self.assertAlmostEqual(0., first_mass*fixed[1]['correction'][1] +
+                                   second_mass*other_owner[2]['correction'][1])
             total = first_mass*fixed[1]['delta_velocity'][1] + second_mass*fixed[2]['delta_velocity'][1]
             self.assertAlmostEqual(0., total, places=6)
 
@@ -224,7 +232,15 @@ class WorkerSolidMotionTests(unittest.TestCase):
         player = dict(id=1,x=0.,y=0.,z=-6.,yaw=0.,alive=True,speed=0.,
                       team=1,tank_pushes=[])
         runtime._resolve_tank_contacts([player],1.,.1)
-        self.assertGreater(runtime.states[11]['z'],.9899)
+        state = runtime.states[11]
+        expected = .99 * 100575. / (state['mass'] + 100575.)
+        self.assertAlmostEqual(expected, state['z'], places=4)
+        self.assertEqual(-6., player['z'])
+        # An unchanged peer still occupies its real pose. Repeated recovery
+        # converges without pretending the remote owner already moved it.
+        for tick in range(1, 10):
+            runtime._resolve_tank_contacts([player],1.+tick*.1,.1)
+        self.assertAlmostEqual(.99, state['z'], places=8)
 
     def test_opposing_drive_endpoints_cannot_exchange_sides(self):
         runtime = self.prepare()

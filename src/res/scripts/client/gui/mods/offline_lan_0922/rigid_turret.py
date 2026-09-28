@@ -676,12 +676,18 @@ def advance(body, dt, vehicles, collide, apply_vehicle=None, budget=None, clock=
                                     abs(hit['normal'][1]) < max(abs(hit['normal'][0]), abs(hit['normal'][2])))
                 if not human_horizontal:
                     body.momentum(hit['momentum'], hit['angular_momentum'])
-                    if callable(apply_vehicle) and not vehicle.get('human'):
+                    touched = touched or length(hit['momentum']) > EPSILON
+                    if (callable(apply_vehicle) and not vehicle.get('human') and
+                            (length(hit['delta']) > EPSILON or
+                             length(hit['vehicle_correction']) > EPSILON)):
+                        old_boxes, old_velocity = vehicle['boxes'], vehicle['velocity']
                         apply_vehicle(vehicle, hit, step)
+                        touched = (touched or vehicle['boxes'] != old_boxes or
+                                   vehicle['velocity'] != old_velocity)
                 correction = hit['body_correction']
                 if length(correction) > EPSILON:
-                    translate(body, correction, collide)
-                    touched = True
+                    actual = translate(body, correction, collide)
+                    touched = touched or length(actual) > EPSILON
             if not touched:
                 break
             # A correction or an earlier contact can change the trajectory.
