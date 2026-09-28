@@ -7717,3 +7717,73 @@ expectation, two legacy downhill subcases and stale clear_blocked_contact
 fixture). The two new rigid-bank subcases fail on that parent and pass after
 the fix. The accepted braking calibration, native physical contacts and
 existing performance limitations remain unchanged.
+
+## Report 021924: personal/squad messages and the governor switch
+
+The report identifies test-20260929-a614d83, including 37_caucasus, with one
+local human. The user's clarification supersedes the previous personal-feed
+presentation: own deaths use the central PostmortemPanel only, own enemy kills
+retain native SELF templates and their whole-line self color, and only other
+LAN squad members receive gold name/vehicle fields inside team-colored text.
+Remove the extra own-death PlayerMessages event while preserving its reviewed
+five-argument VehicleMessage event. Suppress an own-victim feed at the scoped
+formatter too. The observed-teammate supplement and missing environmental
+templates remain. No credit, sound, voice or physical behavior changes.
+
+The exact installed BattleMessagesController.showAllyHitMessage emits
+ALLY_HIT with an entity argument and an extra (entity, vehicleID) tuple, not
+the death handler's target field. Extend squad-only formatting to that native
+shape. An ordinary ally retains the native red message; a LAN squad ally has
+a gold name/vehicle, including when the stock formatter would prefer its
+team-killer color. Preserve all non-squad fields and avoid double wrapping.
+The independent CPython 2.7 execution audit covers the actual controller,
+PlayerMessages and FadingMessages methods, Chinese XML/MO resources, 210 death
+combinations and four friendly-hit/squad/team-killer combinations. Own deaths
+are intentionally absent; all other expected lines reach the Flash boundary.
+
+Reinspection of Chinese HD #1513 confirms the removedRpmLimiter descriptor:
+item ID 12, trigger tag, 1.1 engine-power factor and 1.5 engine HP lost per
+second. The previous active echo (quantity=1, PREPARING, time=0) is incorrect.
+Native _EquipmentItem.isAvailableToUse requires READY; _TriggerItem uses zero
+remaining time to generate the activate flag (65536 + ID), and nonzero time
+to generate the deactivate ID. EquipmentsController treats PREPARING as a
+targeted combat item and deactivates it when another item is used. Echo an
+active governor as (1, READY, -1), preserving native indefinite activation,
+availability and the next off command. Deduplication includes the indefinite
+activity bit without republishing every cooldown tick. Actual installed
+canActivate/activate/deactivate/getActivationCode and controller methods pass
+five alternating states and unrelated-item isolation; the old echo reproduces
+the failures. These checks do not claim native Flash rendering acceptance.
+
+The user supplied this first-hand 2024 experiment:
+https://www.reddit.com/r/WorldofTanks/comments/1b1go9f/how_the_speed_governor_works_in_wot/
+Apply its below-half-base-forward-speed gate and one-second wear pulses to
+the authoritative human critical-state path, using the accepted physics speed
+and the descriptor's rate. Absolute reverse speed uses the same forward
+threshold. Off or cruising states discard an incomplete pulse, as does an
+accepted switch edge; new rounds and new equipment installations reset it.
+Late ticks preserve complete elapsed seconds. The 60 HP example describes
+engine module durability, not horsepower: 30 HP are lost in 20 seconds.
+The 1.1/1.5 values are pinned-client evidence; the speed/pulse rule is the
+user's supplied modern experimental reference, not recovered #1513 server
+code. Do not infer an exception for health-boosting equipment from the disputed
+comment alone; the existing module health profile remains authoritative.
+
+Official WG descriptions call the governor permanent and never consumed,
+including https://worldoftanks.eu/uk/news/specials/weekly-offers-4-february2022/ .
+Further historical searches did not verify the user's active-at-death loss
+exception. Implement it as the explicitly requested offline settlement rule,
+not a certified retail fact: sample the canonical switch on the first actual
+player death and charge one item only when active. Activation, survival,
+inactive death and a live departure do not charge it. Existing receipt
+deduplication and depot-first auto-resupply own the subsequent inventory
+change. No visible replica becomes an inventory or combat authority.
+
+Validation: 1,839 tests pass across compatibility, entities, battle runtime,
+consumable audit, equipment mechanics, critical damage, postbattle, garage,
+server projectiles and combat lineage on Python 3.12.14. Coverage includes
+toggle retries, native command flags, power factors, speed boundaries,
+one-second wear, terminal-state sampling, environment deaths, repeat receipts
+after reopening the garage, and auto-resupply from stock or credits. All 146
+client modules compile under CPython 2.7.18. Real Windows switch highlighting,
+multiplayer message rendering and gameplay timing still need playtesting.

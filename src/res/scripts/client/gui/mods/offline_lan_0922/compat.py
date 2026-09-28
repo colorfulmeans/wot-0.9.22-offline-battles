@@ -27,19 +27,20 @@ _SETTINGS_KEYS = ('settings', 'filters', 'counters', 'notifications')
 
 def _show_lan_death_message(panel, original, own_id, color_format,
                             key, args=None, extra=None, postfix=None):
-    """Keep #1513 death templates and color only personal/squad name fields."""
-    if not key or not key.startswith('DEATH_FROM_') or not postfix:
+    """Preserve personal messages and color only LAN squad name fields."""
+    death = bool(key and key.startswith('DEATH_FROM_') and postfix)
+    attacker, target = '', ''
+    if death:
+        # Own deaths belong to PostmortemPanel, never the right-hand feed.
+        if any(name == 'target' and vehicle_id == own_id
+               for name, vehicle_id in extra or ()):
+            return None
+        relations = postfix.split('_')
+        if len(relations) == 2:
+            attacker, target = relations
+    if not extra and not death:
         return original(panel, key, args, extra, postfix)
-    relations = postfix.split('_')
-    if len(relations) != 2:
-        return original(panel, key, args, extra, postfix)
-    attacker, target = relations
-    # SELF templates omit the personal name and use a whole-line self style.
-    # Use named-ally templates for personal kills/deaths without changing IDs.
-    attacker = 'ALLY' if attacker == 'SELF' else attacker
-    target = 'ALLY' if target == 'SELF' else target
-    postfix = '%s_%s' % (attacker, target)
-    templates = panel._FadingMessages__messages
+    templates = panel._FadingMessages__messages if death else {}
     if (attacker == 'UNKNOWN' and target in ('ALLY', 'ENEMY') and
             key != 'DEATH_FROM_SHOT'):
         # Environmental deaths carry attackerID=0. #1513 has no UNKNOWN
@@ -53,13 +54,15 @@ def _show_lan_death_message(panel, original, own_id, color_format,
     context = panel.sessionProvider.getCtx()
     for name, vehicle_id in extra or ():
         if (formatted and formatted.get(name) and vehicle_id and
-                (vehicle_id == own_id or context.isSquadMan(vID=vehicle_id))):
+                vehicle_id != own_id and context.isSquadMan(vID=vehicle_id)):
             rgba = panel.app.colorManager.getRGBA('squad')
             formatted[name] = color_format.format(
                 int(rgba[0]), int(rgba[1]), int(rgba[2]), formatted[name])
         else:
             remaining.append((name, vehicle_id))
-    # Do not let the stock formatter wrap our personal/squad fields twice.
+    # Keep native SELF templates, including their whole-line gold kill style.
+    # Squad names also retain gold in friendly-hit/team-killer notifications.
+    # Do not let the stock formatter wrap our squad fields twice.
     # Other participants retain its ordinary/team-killer formatting.
     if key == 'DEATH_FROM_SHOT' and attacker == 'UNKNOWN':
         # These two #1513 XML entries reference absent Chinese translations.

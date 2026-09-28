@@ -327,8 +327,8 @@ class BigWorldVehicleBinding(object):
                                  _pickle.dumps(payload))
         if own or observed:
             # #1513's Avatar skips the own-vehicle feed, and msgs_ctrl skips
-            # the observed vehicle after death. Keep their death/camera path,
-            # then publish only the omitted text through PlayerMessages.
+            # the observed vehicle after death. Own deaths use the central
+            # PostmortemPanel; an observed teammate still needs the killfeed.
             messages = self._need(self._need(
                 self._need(avatar, 'guiSessionProvider'), 'shared'), 'messages')
             kill_info = self._need(
@@ -351,17 +351,9 @@ class BigWorldVehicleBinding(object):
                     death_code = 'DEATH_UNKNOWN'
                 self._need(messages, 'onShowVehicleMessageByCode')(
                     death_code, postfix, int(attacker_id), None, 0)
-                # player_messages_panel.xml has no SHOT_*_SELF templates.
-                # Use its allied-victim wording with the real roster IDs;
-                # neither the killer relation nor kill voice is changed.
-                attacker, target = postfix.split('_')
-                if target == 'SELF':
-                    target = 'ALLY'
-                if target == 'SUICIDE' and attacker == 'SELF':
-                    attacker = 'ALLY'
-                postfix = '%s_%s' % (attacker, target)
-            self._need(messages, 'onShowPlayerMessageByCode')(
-                code, postfix, int(entity_id), int(attacker_id), 0)
+            else:
+                self._need(messages, 'onShowPlayerMessageByCode')(
+                    code, postfix, int(entity_id), int(attacker_id), 0)
 
     def arena_vehicle_statistics(self, entity_id, frags):
         """Publish exact #1513 compressed ``(vehicleID, frags)`` stats."""

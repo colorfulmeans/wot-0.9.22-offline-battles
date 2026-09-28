@@ -9886,6 +9886,41 @@ class BattleRuntimeContractTests(unittest.TestCase):
         ], send_intent.call_args_list)
         self.assertFalse(battle._equipment_state[0].active)
 
+    def test_governor_hud_keeps_key_available_and_echoes_each_toggle_once(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._avatar.updateVehicleAmmo = mock.Mock()
+        battle._server = types.SimpleNamespace(vehicle_id=10)
+        battle._client_ready_received = True
+        descriptor = types.SimpleNamespace(
+            id=(11, 12), compactDescr=3083, name='removedRpmLimiter',
+            tags=('trigger',), cooldownSeconds=0.0, reuseCount=0,
+            enginePowerFactor=1.1, engineHpLossPerSecond=1.5)
+        equipment = equipment_mechanics.EquipmentState(
+            equipment_mechanics.project_equipment(descriptor))
+        battle._equipment_state = [equipment]
+        stages = runtime.constants.EQUIPMENT_STAGES
+        expected_calls = []
+        for active in (False, True, False, True, False):
+            with self.subTest(active=active, edge=len(expected_calls)):
+                equipment.active = active  # Accepted canonical snapshot.
+                self.assertTrue(battle._present_equipments(100.0))
+                expected_calls.append(mock.call(
+                    10, 3083, 1, stages.READY, -1 if active else 0))
+                self.assertEqual(expected_calls,
+                    battle._avatar.updateVehicleAmmo.call_args_list)
+                quantity, stage, remaining = battle._equipment_echo(equipment, 100.0)
+                # Exact _EquipmentItem.isAvailableToUse and _TriggerItem code.
+                self.assertTrue(quantity > 0 and stage == stages.READY)
+                code = ((1 if remaining == 0 else 0) << 16) + 12
+                self.assertEqual(12 if active else 65548, code)
+                self.assertAlmostEqual(1.1 if active else 1.0,
+                                       battle._active_engine_power_factor())
+                self.assertFalse(battle._present_equipments(101.0))
+                self.assertEqual(expected_calls,
+                    battle._avatar.updateVehicleAmmo.call_args_list)
+
     def test_active_removed_rpm_limiter_damages_engine_at_exact_rate(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)

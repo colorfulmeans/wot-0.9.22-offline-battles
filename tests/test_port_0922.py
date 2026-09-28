@@ -1739,7 +1739,9 @@ class BattleDeathMessageTests(unittest.TestCase):
 
     @staticmethod
     def original(panel, key, args, extra, postfix):
-        template = panel._FadingMessages__messages.get(key + '_' + postfix)
+        template = panel._FadingMessages__messages.get(key + '_' + str(postfix))
+        if template is None:
+            template = panel._FadingMessages__messages.get(key)
         if template is None:
             return None
         return template[1], template[0] % args, extra
@@ -1753,7 +1755,7 @@ class BattleDeathMessageTests(unittest.TestCase):
         self.assertEqual('Killer (Tank K)', args['attacker'])
         return result
 
-    def test_environment_templates_cover_self_squad_allies_enemies_and_bots(self):
+    def test_environment_templates_cover_squad_allies_enemies_and_bots(self):
         for code in self.codes:
             for victim, relation in ((1, 'SELF'), (2, 'ALLY'), (3, 'ALLY'),
                                      (4, 'ENEMY'), (5, 'ENEMY')):
@@ -1762,15 +1764,18 @@ class BattleDeathMessageTests(unittest.TestCase):
                         postfix = (attacker + '_SUICIDE' if killer else
                                    attacker + '_' + relation)
                         result = self.show(code, postfix, victim, killer)
+                        if victim == 1:
+                            self.assertIsNone(result)
+                            continue
                         self.assertIsNotNone(result)
                         color, text, extra = result
                         self.assertEqual('green' if relation == 'ENEMY' else
                                          'red', color)
                         self.assertIn('Victim (Tank V)', text)
                         self.assertNotIn('Killer (Tank K)', text)
-                        self.assertEqual(victim in (1, 2), '#FFD700' in text)
+                        self.assertEqual(victim == 2, '#FFD700' in text)
 
-    def test_personal_and_squad_names_gold_but_kill_death_body_green_red(self):
+    def test_self_kills_keep_native_style_while_only_squad_names_are_gold(self):
         for code in self.codes:
             for personal, relation in ((1, 'SELF'), (2, 'ALLY')):
                 for dies in (False, True):
@@ -1778,13 +1783,37 @@ class BattleDeathMessageTests(unittest.TestCase):
                         victim, killer = ((personal, 4) if dies else (4, personal))
                         postfix = ('ENEMY_' + relation if dies else
                                    relation + '_ENEMY')
-                        color, text, extra = self.show(code, postfix, victim, killer)
+                        result = self.show(code, postfix, victim, killer)
+                        if personal == 1:
+                            if dies:
+                                self.assertIsNone(result)
+                            else:
+                                color, text, extra = result
+                                self.assertEqual('self', color)
+                                self.assertEqual('Victim (Tank V) destroyed', text)
+                                self.assertNotIn('<font', text)
+                            continue
+                        color, text, extra = result
                         self.assertEqual('red' if dies else 'green', color)
                         name = 'Victim (Tank V)' if dies else 'Killer (Tank K)'
                         self.assertIn(self.format.format(255, 215, 0, name), text)
                         self.assertEqual(1, text.count('<font'))
                         self.assertEqual((('attacker', 4),) if dies else
                                          (('target', 4),), extra)
+
+    def test_friendly_hit_is_red_with_only_squad_name_gold(self):
+        self.panel._FadingMessages__messages['ALLY_HIT'] = (
+            'You hit ally [%(entity)s]', 'red')
+        for victim in (2, 3):
+            with self.subTest(victim=victim):
+                args = {'entity': 'Victim (Tank V)'}
+                color, text, extra = self.module._show_lan_death_message(
+                    self.panel, self.original, 1, self.format, 'ALLY_HIT',
+                    args, (('entity', victim),))
+                self.assertEqual('red', color)
+                self.assertEqual(victim == 2, '#FFD700' in text)
+                self.assertIn('Victim (Tank V)', text)
+                self.assertNotIn(('entity', 2), extra)
 
     def test_non_death_message_keeps_original_arguments(self):
         original = mock.Mock()
@@ -1799,13 +1828,13 @@ class BattleDeathMessageTests(unittest.TestCase):
         templates = self.panel._FadingMessages__messages
         templates[key] = ('untranslated-key', 'red')
         previous = templates[key]
-        self.assertEqual('red', self.show('DEATH_FROM_SHOT', 'UNKNOWN_ALLY', 1, 0)[0])
+        self.assertEqual('red', self.show('DEATH_FROM_SHOT', 'UNKNOWN_ALLY', 2, 0)[0])
         self.assertIs(previous, templates[key])
         with self.assertRaises(RuntimeError):
             self.module._show_lan_death_message(
                 self.panel, mock.Mock(side_effect=RuntimeError('UI retired')),
                 1, self.format, 'DEATH_FROM_SHOT', {'target': 'V'},
-                (('target', 1),), 'UNKNOWN_ALLY')
+                (('target', 2),), 'UNKNOWN_ALLY')
         self.assertIs(previous, templates[key])
 
 

@@ -291,9 +291,11 @@ class BigWorldBindingTests(unittest.TestCase):
                     lambda yaw, pitch, limits: 321,
                     outfit_provider=lambda descriptor: '')
                 binding.arena_vehicle_killed(target, attacker, 0)
-                messages.onShowPlayerMessageByCode.assert_called_once_with(
-                    'DEATH_FROM_SHOT', 'ALLY_SUICIDE' if suicide else 'ENEMY_ALLY',
-                    target, attacker, 0)
+                if own:
+                    messages.onShowPlayerMessageByCode.assert_not_called()
+                else:
+                    messages.onShowPlayerMessageByCode.assert_called_once_with(
+                        'DEATH_FROM_SHOT', 'ENEMY_ALLY', target, attacker, 0)
                 self.assertEqual((target, attacker, 0, 0),
                                  pickle.loads(avatar.updates[0][1]))
                 if own:

@@ -8179,10 +8179,11 @@ class BattleRuntime(object):
             return 0, int(stages.EXHAUSTED), 0
         if (equipment.contract.get('kind') == 'rpm_limiter' and
                 equipment.active):
-            # #1513's trigger item interprets PREPARING with zero remaining
-            # time as the toggled-on state and sends the raw equipment id to
-            # deactivate it on the next click.
-            return 1, int(stages.PREPARING), 0
+            # #1513's trigger stays READY for native availability and toggles.
+            # A negative time denotes indefinite activity: getActivationCode
+            # then sends the raw ID (off), while zero sends 65536 + ID (on).
+            # PREPARING instead belongs to targeted combat-equipment setup.
+            return 1, int(stages.READY), -1
         remaining = float(equipment.ready_at) - float(now)
         if remaining > 0.0:
             return 1, int(stages.COOLDOWN), int(math.ceil(remaining))
@@ -8205,7 +8206,9 @@ class BattleRuntime(object):
         for equipment in self._equipment_state:
             compact = equipment.contract['compactDescr']
             quantity, stage, remaining = self._equipment_echo(equipment, now)
-            state = (quantity, stage)
+            # Indefinite trigger activity changes without changing READY.
+            # Keep that edge, but do not re-echo a kit's ticking cooldown.
+            state = (quantity, stage, remaining < 0)
             signature.append((compact, state))
             if previous.get(compact) == state:
                 continue

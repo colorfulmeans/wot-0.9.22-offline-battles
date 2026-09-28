@@ -2114,6 +2114,7 @@ class Player(_EndpointSendMixin):
         default_factory=OrderedDict, repr=False)
     equipment_states: list = field(default_factory=list, repr=False)
     equipment_clock: float = 0.0
+    rpm_damage_elapsed: float = 0.0
     equipment_revision: int = 0
     equipment_intent_seq: int = 0
     equipment_intent_fingerprints: OrderedDict = field(
@@ -3404,6 +3405,7 @@ class BattleState:
             player.track_repair_fingerprints.clear()
             player.equipment_states = []
             player.equipment_clock = 0.0
+            player.rpm_damage_elapsed = 0.0
             player.equipment_revision = 0
             player.equipment_intent_seq = 0
             player.equipment_intent_fingerprints.clear()
@@ -3851,6 +3853,7 @@ class BattleState:
         player.effective_params = params
         player.equipment_states = states
         player.equipment_clock = 0.0
+        player.rpm_damage_elapsed = 0.0
         player.equipment_revision = 1
         player.equipment_intent_seq = 0
         player.equipment_intent_fingerprints.clear()
@@ -12334,9 +12337,10 @@ class BattleState:
             return True
 
     def _record_equipment_consumption(self, player_id, equipment,
-                                      activated=False):
+                                      activated=False, destroyed=False):
         """Record one inventory charge, independently of trigger use count."""
-        if not equipment_mechanics.consumed_in_battle(equipment, activated):
+        if not equipment_mechanics.consumed_in_battle(
+                equipment, activated=activated, destroyed=destroyed):
             return
         compact_descr = _exact_int(
             equipment.contract.get("compactDescr"), 1, 2 ** 31 - 1)
@@ -12520,12 +12524,15 @@ class BattleState:
                 if payload is None and not effect.get("clearStun", False):
                     return self._finish_equipment_intent(
                         player, intent_seq, False, "equipment_no_effect")
+            was_active = equipment.active
             committed = equipment.activate(
                 now, critical, selected=selected,
                 requested_active=requested_active, stunned=stunned)
             if committed != effect:
                 raise RuntimeError(
                     "canonical player equipment commit diverged")
+            if (kind == "rpm_limiter" and was_active != equipment.active):
+                player.rpm_damage_elapsed = 0.0
             if payload is not None:
                 self._commit_player_critical_progress(
                     player, payload)
@@ -13207,8 +13214,8 @@ class BattleState:
                 # only the client owns the item definitions.
                 "shells_fired": {},
                 # Inventory charges, not activation counts: food/fuel at
-                # accepted start, kits/extinguishers only when used, never
-                # the permanent governor. Repeated uses still cost one item.
+                # accepted start, kits/extinguishers only when used, and an
+                # active governor at death. Repeated edges cost one item.
                 "equipment_used": {},
             }
             self.vehicle_statistics[key] = row
@@ -13219,7 +13226,18 @@ class BattleState:
     def _record_vehicle_end(self, kind, vehicle_id):
         """Freeze the first canonical terminal tick, including non-shot deaths."""
         identity = (str(kind), int(vehicle_id))
+        if identity in self.vehicle_end_ticks:
+            return
         self.vehicle_end_ticks.setdefault(identity, int(self.tick))
+        if identity[0] == "player":
+            player = self.players.get(identity[1])
+            # A live departure also freezes lifetime but is not a combat
+            # death. Sample the canonical switch before cleanup or rejoin.
+            if player is not None and not player.alive:
+                for equipment in player.equipment_states:
+                    if equipment.contract.get("kind") == "rpm_limiter":
+                        self._record_equipment_consumption(
+                            identity[1], equipment, destroyed=True)
 
     def _record_vehicle_travel(self, kind, vehicle_id, previous, current):
         """Accumulate accepted world-pose segments; never count a spawn or wreck."""
