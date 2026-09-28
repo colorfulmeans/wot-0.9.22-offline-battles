@@ -4929,6 +4929,43 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertFalse(state['airborne'])
         self.assertGreater(state['y'], -0.1)
 
+    def test_reported_t71_rigid_bank_contact_is_not_a_drive_step(self):
+        # Report 014503: replay the frozen pose and measured bank plane with
+        # the fixture descriptor. A real body contact corrects penetration;
+        # the old Bot-only step guard repeatedly restores the penetrating pose.
+        def bank(x, z):
+            height = (-5.156481838226318 - 0.7016571925659405 *
+                      (x + 21.361649722228698) + 1.2808723489468936 *
+                      (z - 113.22620269138464))
+            return height, 0.5649666308517438
+
+        for alive in (True, False):
+            with self.subTest(alive=alive):
+                runtime, state, unused = self._suspension_case(bank)
+                state.update(x=-21.34563180690458, y=-4.404955537105205,
+                             z=112.98689169656124, yaw=2.112926910639421,
+                             pitch=13.854776169322516,
+                             terrain_pitch=13.854776169322516,
+                             roll=-7.435818139362981, speed=0.0, alive=alive)
+                solver = self.module.vehicle_physics
+                solved = []
+                original = solver.damper_suspension_step
+
+                def capture(*args):
+                    result = original(*args)
+                    solved.append(result)
+                    return result
+
+                with mock.patch.object(solver, 'damper_suspension_step', capture):
+                    for unused in range(3):
+                        pose = state['x'], state['y'], state['z']
+                        self.assertFalse(runtime._update_vertical_motion(
+                            state, 0.1, pose, state['yaw']))
+                self.assertGreater(solved[0]['rigid_contact_count'], 0)
+                self.assertLess(solved[0]['max_limit_excess'], 1e-6)
+                self.assertNotEqual(solved[0]['height'], solved[-1]['height'])
+                self.assertAlmostEqual(state['y'], solved[-1]['height'])
+
     def test_bot_suspension_inclined_plane_does_not_invent_overturn(self):
         for angle in (35.0, 45.0, 55.0):
             with self.subTest(angle=angle):

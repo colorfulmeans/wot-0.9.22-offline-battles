@@ -7015,6 +7015,9 @@ class BotRuntime(object):
             abs(solved['roll'] - physics_state['roll']) > 1.2)
         raised_support = bool(
             grounded_before and solved.get('contact_count') and
+            # Body/turret contact can lift the model origin during a tumble.
+            # Like the player adapter, do not treat that as climbing a step.
+            not solved.get('rigid_contact_count') and
             self._suspension_rise_exceeds_base(
                 state.get('y'), solved['height']))
         if raised_support:

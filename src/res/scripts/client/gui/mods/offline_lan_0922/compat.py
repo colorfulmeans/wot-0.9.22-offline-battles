@@ -25,6 +25,57 @@ _dossier_cache_pinned = False
 _SETTINGS_KEYS = ('settings', 'filters', 'counters', 'notifications')
 
 
+def _show_lan_death_message(panel, original, own_id, color_format,
+                            key, args=None, extra=None, postfix=None):
+    """Keep #1513 death templates and color only personal/squad name fields."""
+    if not key or not key.startswith('DEATH_FROM_') or not postfix:
+        return original(panel, key, args, extra, postfix)
+    relations = postfix.split('_')
+    if len(relations) != 2:
+        return original(panel, key, args, extra, postfix)
+    attacker, target = relations
+    # SELF templates omit the personal name and use a whole-line self style.
+    # Use named-ally templates for personal kills/deaths without changing IDs.
+    attacker = 'ALLY' if attacker == 'SELF' else attacker
+    target = 'ALLY' if target == 'SELF' else target
+    postfix = '%s_%s' % (attacker, target)
+    templates = panel._FadingMessages__messages
+    if (attacker == 'UNKNOWN' and target in ('ALLY', 'ENEMY') and
+            key != 'DEATH_FROM_SHOT'):
+        # Environmental deaths carry attackerID=0. #1513 has no UNKNOWN
+        # drowning/collision/overturn variants and silently drops that key.
+        # SUICIDE variants name only the victim; kill credit stays zero.
+        unassisted = '%s_SUICIDE' % target
+        if '%s_%s' % (key, unassisted) in templates:
+            postfix = unassisted
+    formatted = dict(args) if args is not None else None
+    remaining = []
+    context = panel.sessionProvider.getCtx()
+    for name, vehicle_id in extra or ():
+        if (formatted and formatted.get(name) and vehicle_id and
+                (vehicle_id == own_id or context.isSquadMan(vID=vehicle_id))):
+            rgba = panel.app.colorManager.getRGBA('squad')
+            formatted[name] = color_format.format(
+                int(rgba[0]), int(rgba[1]), int(rgba[2]), formatted[name])
+        else:
+            remaining.append((name, vehicle_id))
+    # Do not let the stock formatter wrap our personal/squad fields twice.
+    # Other participants retain its ordinary/team-killer formatting.
+    if key == 'DEATH_FROM_SHOT' and attacker == 'UNKNOWN':
+        # These two #1513 XML entries reference absent Chinese translations.
+        # Reuse the neutral "target destroyed" text, with the existing team
+        # colors. An unknown killer is not evidence of self-destruction.
+        message_key = '%s_%s' % (key, postfix)
+        previous = templates[message_key]
+        templates[message_key] = (
+            templates['DEATH_FROM_SHOT_SELF_ENEMY'][0], previous[1])
+        try:
+            return original(panel, key, formatted, tuple(remaining), postfix)
+        finally:
+            templates[message_key] = previous
+    return original(panel, key, formatted, tuple(remaining), postfix)
+
+
 def _entity_bytes(value, default=''):
     """Return the exact byte-string shape expected by BigWorld STRING."""
     if value is None:
@@ -337,6 +388,9 @@ def _load_runtime():
         VehicleMarkerSettings
     from gui.prb_control.dispatcher import g_prbLoader
     from gui.battle_control.arena_info import settings as ArenaInfoSettings
+    from gui.Scaleform.daapi.view.battle.shared.messages.player_messages import \
+        PlayerMessages
+    from gui.Scaleform.daapi.view.battle.shared.messages import fading_messages
     from helpers import dependency
     from predefined_hosts import g_preDefinedHosts
     from skeletons.connection_mgr import IConnectionManager
@@ -353,6 +407,8 @@ def _load_runtime():
     runtime.avatar_getter = avatar_getter
     runtime.ammo_controller_type = AmmoController
     runtime.arena_info_settings = ArenaInfoSettings
+    runtime.player_messages_type = PlayerMessages
+    runtime.battle_message_color_format = fading_messages._EXTRA_COLOR_FORMAT
     runtime.control_modes = ControlModes
     runtime.avatar_position_control = AvatarPositionControl
     runtime.acceleration_smoother_type = AccelerationSmoother
@@ -714,6 +770,9 @@ class OfflineCompatibility(object):
         self._target_focus_clear_attempted = False
         self._original_squad_range = None
         self._lan_squad_range = tuple(range(2, 31))
+        self._original_player_message_show = None
+        self._player_message_show = None
+        self._player_message_show_owned = False
 
     def install(self):
         if self._installed:
@@ -2604,6 +2663,25 @@ class OfflineCompatibility(object):
 
         try:
             self._install_host()
+            player_messages = getattr(runtime, 'player_messages_type', None)
+            if player_messages is not None:
+                original_show = player_messages.showMessage
+                self._original_player_message_show = (
+                    player_messages.__dict__.get('showMessage'))
+                self._player_message_show_owned = (
+                    'showMessage' in player_messages.__dict__)
+
+                def show_player_message(panel, key, args=None, extra=None,
+                                        postfix=None):
+                    own_id = getattr(runtime.bigworld.player(),
+                                     'playerVehicleID', 0)
+                    return _show_lan_death_message(
+                        panel, original_show, own_id,
+                        runtime.battle_message_color_format,
+                        key, args, extra, postfix)
+
+                self._player_message_show = show_player_message
+                player_messages.showMessage = show_player_message
             squad_settings = getattr(runtime, 'arena_info_settings', None)
             if squad_settings is not None:
                 self._original_squad_range = squad_settings.SQUAD_RANGE_TO_SHOW
@@ -2707,6 +2785,16 @@ class OfflineCompatibility(object):
 
     def _rollback_install(self):
         runtime = self._runtime
+        player_messages = getattr(runtime, 'player_messages_type', None)
+        if (player_messages is not None and self._player_message_show is not None
+                and player_messages.__dict__.get('showMessage') is
+                self._player_message_show):
+            if self._player_message_show_owned:
+                player_messages.showMessage = self._original_player_message_show
+            else:
+                del player_messages.showMessage
+        self._original_player_message_show = None
+        self._player_message_show = None
         squad_settings = getattr(runtime, 'arena_info_settings', None)
         if (squad_settings is not None and
                 squad_settings.SQUAD_RANGE_TO_SHOW is self._lan_squad_range):

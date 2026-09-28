@@ -7639,3 +7639,81 @@ The two new unsupported-fall subcases fail only on the parent; the below-hull
 support control passes on both. These results do not establish native LAN UI
 rendering, all bridge positions, or improved frame time. The reported worker
 performance issue remains separate; no collision safety was removed for speed.
+
+## Report 014503: environmental death feed and T71 bank contact
+
+The session uses test-20260929-e5bd274 on 37_caucasus, with one local KV-5
+player. The player's recorded death is a reciprocal ram at 01:44:34. The log
+does not independently demonstrate a second LAN human or a fatal environment
+event, so the reported missing categories were traced through their producers
+and exact installed consumers rather than claimed as captured render evidence.
+Server environment admission retains attacker zero and reason 3/5/7 for
+world collision/drowning/overturn; the common health edge dispatches each
+death once. These authority, HP, credit and replay-deduplication paths remain
+unchanged.
+
+Reinspection confirms Chinese HD #1513 x86. The installed msgs_ctrl
+__getKillInfo produces UNKNOWN_ALLY/UNKNOWN_ENEMY for attacker zero, while
+player_messages_panel.xml contains no such collision/drowning/overturn
+variants. FadingMessages.showMessage checks the extended key then the base
+key and returns without displaying anything when both are absent. Its
+unassisted SUICIDE variants instead name the victim, with red/purple for an
+ally and green for an enemy. Select those display variants without replacing
+either arena ID or assigning self-kill credit. Ordinary SHOT_UNKNOWN keys
+exist in XML but their Chinese ingame_gui.mo translations are absent: render
+the installed neutral SHOT_SELF_ENEMY victim text with the UNKNOWN entry's
+team colors, restoring the instance template in finally after the synchronous
+native formatter returns. Do not label an unknown shot killer as suicide.
+
+PlayerMessages.showMessage now has a scoped offline adapter. Personal SELF
+templates omit the local name and select the native whole-line self style;
+named-ally templates retain the victim-relative red/green body. The adapter
+colors only complete personal or squad name/vehicle fields using the native
+color manager's squad RGBA and _EXTRA_COLOR_FORMAT, including a solo local
+player. Other names keep native formatting. Preformatted fields are removed
+from the remaining native extra list to avoid nested color tags. The stock
+PlayerMessages event consumer, FadingMessages formatter/render dispatch and
+actual Chinese XML/MO templates were audited. This adapter adds no message
+event, sound, voice, damage or kill-credit changes. Installation is idempotent;
+teardown restores either the original owned method or inherited lookup, using
+the class dictionary to avoid Python 2 unbound-method identity mistakes.
+
+An independent CPython 2.7 audit executes the actual installed __getKillInfo,
+PlayerMessages consumer and all three FadingMessages display/format methods.
+The native no-adapter baseline drops three unknown-attacker environmental
+deaths. With the adapter, 210 combinations of seven supported attack reasons,
+five personal/squad/ally/enemy participants and six killer identities each
+produce one localized message with the expected team body and personal/squad
+name colors. This reaches the mocked Flash dispatch, not native rendering.
+Pure-data tests cover the missing-template guard, no double wrapping, unchanged
+non-death messages, neutral unknown-shot text and restoration on errors, plus
+compatibility install/reinstall/fini for owned and inherited methods.
+
+T71 (Bot 15, usa:A103_T71E1) initially falls from y=0.763 at 01:42:08.070,
+with subsequent bank contacts. At 01:42:12.513 the measured support plane has
+normal (0.396413, 0.564967, -0.723650), gradient (-0.701657, 1.280872) and ten
+samples; a following world query also hits the actual steep bank. Such
+contact can legitimately rotate the hull. However, by 01:42:15.819 the Bot
+remains exactly at (-21.345632, -4.404956, 112.986892), pitch=13.854776 and
+roll=-7.435818, repeatedly reporting support_rollback through 01:42:43.309.
+The Bot's anti-step guard incorrectly classifies model-origin correction from
+a rigid hull/turret contact as a driven step. The player adapter already
+excludes rigid_contact_count from this guard; apply that same exclusion to
+live/dead Bots. Real spring-supported steps, invalid solver jumps and world
+collision sweeps retain their guards. No physical coefficient changes.
+
+A report-pose/bank-plane regression with the fixture descriptor reproduces
+the frozen rollback for live and dead vehicles on e5bd274. Its solver produces
+one rigid contact and zero limit excess, but the old adapter discards it every
+time; the new adapter accepts the correction and continues integrating. This
+proves the guard defect, not exact T71 geometry or all visual behavior during
+the preceding tumble. Native same-position bridge acceptance remains needed.
+
+Validation: all 1,203 compatibility/entity/battle cases pass on Python 3.12.14;
+all 146 client modules compile with CPython 2.7.18. The selected 271-case
+Bot/support/fall/physics/wreck/world suite retains three failures and one error.
+The affected methods reproduce identically against e5bd274 (slot-height
+expectation, two legacy downhill subcases and stale clear_blocked_contact
+fixture). The two new rigid-bank subcases fail on that parent and pass after
+the fix. The accepted braking calibration, native physical contacts and
+existing performance limitations remain unchanged.

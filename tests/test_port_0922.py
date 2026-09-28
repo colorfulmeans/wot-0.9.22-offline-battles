@@ -1707,6 +1707,108 @@ def _fake_account_settings(accounts=None):
     return root, module, package, settings
 
 
+class BattleDeathMessageTests(unittest.TestCase):
+    def setUp(self):
+        self.module = _load_port_source('compat')
+        self.format = '<font color="#{0:02X}{1:02X}{2:02X}">{3:>s}</font>'
+        # Relevant #1513 guards: missing extended AND base keys display no
+        # message; SELF_ENEMY colors the entire line gold; environment has
+        # SUICIDE templates but no UNKNOWN templates.
+        templates = {}
+        self.codes = ('DEATH_FROM_SHOT', 'DEATH_FROM_RAMMING', 'DEATH_FROM_DROWNING',
+                      'DEATH_FROM_WORLD_COLLISION', 'DEATH_FROM_OVERTURN',
+                      'DEATH_FROM_DEATH_ZONE')
+        for code in self.codes:
+            for relation in ('ALLY', 'ENEMY'):
+                color = 'red' if relation == 'ALLY' else 'green'
+                templates[code + '_' + relation + '_SUICIDE'] = (
+                    '%(target)s destroyed', color)
+                for attacker in ('ALLY', 'ENEMY'):
+                    templates[code + '_' + attacker + '_' + relation] = (
+                        '%(attacker)s destroys %(target)s', color)
+            templates[code + '_SELF_ENEMY'] = ('%(target)s destroyed', 'self')
+        for relation in ('ALLY', 'ENEMY'):
+            templates['DEATH_FROM_SHOT_UNKNOWN_' + relation] = (
+                '%(target)s destroyed', 'red' if relation == 'ALLY' else 'green')
+        self.panel = types.SimpleNamespace(
+            _FadingMessages__messages=templates,
+            sessionProvider=types.SimpleNamespace(getCtx=lambda:
+                types.SimpleNamespace(isSquadMan=lambda vID: vID == 2)),
+            app=types.SimpleNamespace(colorManager=types.SimpleNamespace(
+                getRGBA=lambda name: (255, 215, 0, 255))))
+
+    @staticmethod
+    def original(panel, key, args, extra, postfix):
+        template = panel._FadingMessages__messages.get(key + '_' + postfix)
+        if template is None:
+            return None
+        return template[1], template[0] % args, extra
+
+    def show(self, code, postfix, victim, killer):
+        args = {'target': 'Victim (Tank V)', 'attacker': 'Killer (Tank K)'}
+        result = self.module._show_lan_death_message(
+            self.panel, self.original, 1, self.format, code, args,
+            (('target', victim), ('attacker', killer)), postfix)
+        self.assertEqual('Victim (Tank V)', args['target'])
+        self.assertEqual('Killer (Tank K)', args['attacker'])
+        return result
+
+    def test_environment_templates_cover_self_squad_allies_enemies_and_bots(self):
+        for code in self.codes:
+            for victim, relation in ((1, 'SELF'), (2, 'ALLY'), (3, 'ALLY'),
+                                     (4, 'ENEMY'), (5, 'ENEMY')):
+                for killer, attacker in ((0, 'UNKNOWN'), (victim, relation)):
+                    with self.subTest(code=code, victim=victim, killer=killer):
+                        postfix = (attacker + '_SUICIDE' if killer else
+                                   attacker + '_' + relation)
+                        result = self.show(code, postfix, victim, killer)
+                        self.assertIsNotNone(result)
+                        color, text, extra = result
+                        self.assertEqual('green' if relation == 'ENEMY' else
+                                         'red', color)
+                        self.assertIn('Victim (Tank V)', text)
+                        self.assertNotIn('Killer (Tank K)', text)
+                        self.assertEqual(victim in (1, 2), '#FFD700' in text)
+
+    def test_personal_and_squad_names_gold_but_kill_death_body_green_red(self):
+        for code in self.codes:
+            for personal, relation in ((1, 'SELF'), (2, 'ALLY')):
+                for dies in (False, True):
+                    with self.subTest(code=code, personal=personal, dies=dies):
+                        victim, killer = ((personal, 4) if dies else (4, personal))
+                        postfix = ('ENEMY_' + relation if dies else
+                                   relation + '_ENEMY')
+                        color, text, extra = self.show(code, postfix, victim, killer)
+                        self.assertEqual('red' if dies else 'green', color)
+                        name = 'Victim (Tank V)' if dies else 'Killer (Tank K)'
+                        self.assertIn(self.format.format(255, 215, 0, name), text)
+                        self.assertEqual(1, text.count('<font'))
+                        self.assertEqual((('attacker', 4),) if dies else
+                                         (('target', 4),), extra)
+
+    def test_non_death_message_keeps_original_arguments(self):
+        original = mock.Mock()
+        args, extra = {}, (('target', 1),)
+        self.module._show_lan_death_message(
+            self.panel, original, 1, self.format,
+            'RELOADING', args, extra, None)
+        original.assert_called_once_with(self.panel, 'RELOADING', args, extra, None)
+
+    def test_unknown_shot_translation_is_neutral_and_restored_on_failure(self):
+        key = 'DEATH_FROM_SHOT_UNKNOWN_ALLY'
+        templates = self.panel._FadingMessages__messages
+        templates[key] = ('untranslated-key', 'red')
+        previous = templates[key]
+        self.assertEqual('red', self.show('DEATH_FROM_SHOT', 'UNKNOWN_ALLY', 1, 0)[0])
+        self.assertIs(previous, templates[key])
+        with self.assertRaises(RuntimeError):
+            self.module._show_lan_death_message(
+                self.panel, mock.Mock(side_effect=RuntimeError('UI retired')),
+                1, self.format, 'DEATH_FROM_SHOT', {'target': 'V'},
+                (('target', 1),), 'UNKNOWN_ALLY')
+        self.assertIs(previous, templates[key])
+
+
 class OfflineCompatibilityTests(unittest.TestCase):
     def setUp(self):
         self.preferences, module, package, settings = _fake_account_settings()
@@ -1797,6 +1899,36 @@ class OfflineCompatibilityTests(unittest.TestCase):
         finally:
             compatibility.fini()
         self.assertIs(original, runtime.arena_info_settings.SQUAD_RANGE_TO_SHOW)
+
+    def test_death_message_adapter_restores_owned_or_inherited_method(self):
+        for owns in (True, False):
+            with self.subTest(owns=owns):
+                class Base(object):
+                    showMessage = mock.Mock()
+                class PlayerMessages(Base):
+                    pass
+                if owns:
+                    PlayerMessages.showMessage = mock.Mock()
+                original = PlayerMessages.showMessage
+                module = _load_port_source('compat')
+                runtime, unused = self._runtime()
+                runtime.player_messages_type = PlayerMessages
+                runtime.battle_message_color_format = ''
+                runtime.bigworld.player = lambda: types.SimpleNamespace(
+                    playerVehicleID=1)
+                compatibility = module.OfflineCompatibility(runtime)
+                compatibility.install()
+                installed = PlayerMessages.__dict__['showMessage']
+                compatibility.install()
+                self.assertIs(installed, PlayerMessages.__dict__['showMessage'])
+                panel = PlayerMessages()
+                panel.showMessage('RELOADING')
+                original.assert_called_once_with(
+                    panel, 'RELOADING', None, None, None)
+                compatibility.fini()
+                compatibility.fini()
+                self.assertIs(original, PlayerMessages.showMessage)
+                self.assertEqual(owns, 'showMessage' in PlayerMessages.__dict__)
 
     def test_offline_current_shell_change_defers_stock_optimistic_update(self):
         compatibility_module = _load_port_source('compat')
