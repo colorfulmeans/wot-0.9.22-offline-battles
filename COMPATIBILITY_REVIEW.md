@@ -6705,3 +6705,53 @@ errors. Full-suite success is not claimed. All 146 client files compile
 under CPython 2.7.18, and the exact installed #1513 inspection and ABI audit
 pass. Actual crowded KV-5 pushing, native map obstruction and presentation
 timing remain Windows gameplay acceptance boundaries for the test package.
+
+### September 28 first-impact chassis-corner armour (131321)
+
+Report `20260928-131321-61e174bddd87` identifies `test-20260928-79cafb7`
+in all roles. In the first `37_caucasus` round the 100575-kg KV-5 transfers
+momentum to the 23496-kg enemy M41 Bulldog at 13:04:55, with incoming
+horizontal velocity `(9.4165, -5.8926)`. No RAM HP receipt accompanies it.
+The visible client reports an unsupported contact while independently seeing
+180-mm and 31.8-mm plates. The first accepted ram is at 13:05:06.830 and
+reaches the worker/server at 13:05:07. The earlier spawn contacts are friendly
+and correctly have no ram HP damage. The old failure message did not separate
+a missing historical revision from a missing same-ray plate pair, so it alone
+cannot prove which condition rejected that exact frame.
+
+The exact installed #1513 `Hull.primitives_processed` meshes and packed XML
+mounts reproduce a geometry defect at the reported contact location. Sweeping
+the solid chassis envelopes to their existing 0.01-m slop gives a very narrow
+corner patch. Across M41 yaw samples 0.414683, 0.44 and 0.4719746 (bracketing
+the nearby logged target/actual attitudes), the old normal-only pair search
+finds KV-5 `armor_3` and M41 `armor_2` independently but no common sample. A
+contact-to-interior query recovers those structural materials at the same
+point and height. These are offline triangle intersections with captured
+nearby poses, not a native replay of the missing exact frame.
+
+Both visible receipts and worker-owned armour queries now finish the entire
+original contact-normal search first. Only if it finds no pair do they query
+missing plates from the same contact sample toward each body's centre. Each
+existing native hit tester still supplies the first positive structural
+material, with its ray terminating at the centre plane. Missing geometry,
+separated height bands and far-side queries fail closed; no primary/thinnest
+armour value is substituted. The original contact normal, incoming velocity,
+historical timestamp, receipt identity and worker HP authority are unchanged.
+This geometric contact-envelope adapter is not a claim about the official
+server's unpublished ram material-selection implementation.
+
+The correction preserves solid hull/wreck sweeps, actual mass response,
+enemy RAM scale 0.25, friendly damage disablement and bridge suspension.
+Bounded failure diagnostics now distinguish history, normal and geometry
+and include whether a pair was found, contact point and historical identity.
+
+Validation: both new first-contact/receipt regressions fail on the parent's
+unchanged pair search and pass here. Six new tests use finite structural-box
+ray intersections to cover corner plates, centre-plane termination, immutable
+pre-impact speed/normal, no duplicate receipt, original-pair priority,
+disjoint heights and missing geometry. All 1,470 selected checks pass with
+one environment-dependent skip, excluding the same six previously reproduced
+navigation failures. All 146 client files compile under CPython 2.7.18; exact
+#1513 inspection and ABI audit pass. Existing full-suite failures are not
+claimed fixed. Actual Windows KV-5 first-impact HP/timing still requires the
+user's gameplay acceptance of the matching test package.

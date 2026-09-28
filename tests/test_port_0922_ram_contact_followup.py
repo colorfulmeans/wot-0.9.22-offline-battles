@@ -2,13 +2,139 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 CLIENT = ROOT / 'src' / 'res' / 'scripts' / 'client'
 sys.path.insert(0, str(CLIENT))
 
 from gui.mods.offline_lan_0922 import tank_collision
-from test_port_0922_battle_runtime import BattleRuntime, _runtime
+from test_port_0922_battle_runtime import BattleRuntime, _runtime, _Vector
+
+
+class RamCornerContactTests(unittest.TestCase):
+    """Exercise actual finite ray/plate intersections, not an always-hit fake."""
+
+    def setUp(self):
+        self.battle = BattleRuntime(_runtime())
+        self.battle._collision_shape = lambda descriptor: (1.5, 3.5, 0, 2)
+        self.player = self.vehicle()
+        self.bot = self.vehicle()
+        self.proof = dict(
+            local_vehicle=self.player, bot_vehicle=self.bot,
+            local_matrix=types.SimpleNamespace(translation=(0, 0, 0), pitch=0, roll=0),
+            bot_matrix=types.SimpleNamespace(translation=(2.9, 0, 6.8), pitch=0, roll=0),
+            hit_point=(1.45, 1.0, 3.4), contact_normal=(0, -1),
+            contact_y_span=(0, 2))
+        self.calls = []
+
+    @staticmethod
+    def vehicle(low=0.5, high=1.5):
+        return types.SimpleNamespace(typeDescriptor=types.SimpleNamespace(
+            hull=types.SimpleNamespace(hitTester=types.SimpleNamespace(
+                bbox=((-1.1, low, -3.4), (1.1, high, 3.4)))),
+            chassis=types.SimpleNamespace(hullPosition=(0, 0, 0))))
+
+    def native_collision(self, vehicle, matrix, start, end, math_module,
+                         chassis_matrix=None):
+        start, end = tuple(start), tuple(end)
+        self.calls.append((vehicle, start, end))
+        bounds = vehicle.typeDescriptor.hull.hitTester.bbox
+        origin = tuple(matrix.translation)
+        first, last, face = 0.0, 1.0, None
+        for axis in range(3):
+            offset = start[axis] - origin[axis]
+            travel = end[axis] - start[axis]
+            if abs(travel) < 1e-10:
+                if not bounds[0][axis] < offset < bounds[1][axis]:
+                    return []
+                continue
+            enter, leave = sorted(((bounds[0][axis]-offset)/travel,
+                                   (bounds[1][axis]-offset)/travel))
+            if enter > first:
+                first, face = enter, axis
+            last = min(last, leave)
+            if first > last:
+                return []
+        if face is None:
+            return []
+        # Different plate values make a minimum/primary armour substitution
+        # observable. The side actually met by the corner ray is 150 mm.
+        armor = (150.0, 20.0, 180.0)[face]
+        return [types.SimpleNamespace(dist=first, matInfo=types.SimpleNamespace(
+            armor=armor, vehicleDamageFactor=1.0))]
+
+    def native_patch(self):
+        return mock.patch(
+            'gui.mods.offline_lan_0922.battle_runtime.collide_vehicle_at_matrix',
+            side_effect=self.native_collision)
+
+    def test_solid_chassis_corner_proves_actual_near_side_plates(self):
+        with self.native_patch():
+            with mock.patch.object(self.battle, '_ram_corner_probe_direction',
+                                   return_value=None):
+                self.assertIsNone(self.battle._native_ram_contact_plate_pair(self.proof)[0])
+            matched, unused, unused2 = self.battle._native_ram_contact_plate_pair(self.proof)
+        self.assertIsNotNone(matched)
+        self.assertEqual((150.0, 150.0), (matched[0]['armor'], matched[1]['armor']))
+        self.assertEqual((1.0, 1.45, 3.4), matched[2:])
+        # The radial queries end at each body's centre, never the far armour.
+        for actual, expected in zip(self.calls[-2][2], (0.0, 1.0, 0.0)):
+            self.assertAlmostEqual(expected, actual)
+        for actual, expected in zip(self.calls[-1][2], (2.9, 1.0, 6.8)):
+            self.assertAlmostEqual(expected, actual)
+
+    def test_first_corner_receipt_freezes_incoming_speed_and_impact_normal(self):
+        self.battle._ram_bot_revision_at = lambda *args: 37
+        record = dict(network_id=29, presentation_time_us=123000)
+        with self.native_patch():
+            self.assertTrue(self.battle._queue_ram_contact_proof(
+                record, self.player, self.bot, _Vector(1.45, 1, 3.4),
+                (0, 0, 11.1082), (0, 0, 0), 150000,
+                own_pose=(0, 0, 0, 0, 0, 0), bot_pose=(2.9, 0, 6.8, 0, 0, 0),
+                player_ram_profile=dict(spall_coefficient=1, ramming_bonus=0),
+                contact_normal=(0, -1), contact_y_span=(0, 2)))
+        receipt = self.battle.local_ram_contact()
+        self.assertEqual(11.1082, receipt['vz'])
+        self.assertEqual((0, -1), (receipt['contact_normal_x'], receipt['contact_normal_z']))
+        self.assertEqual((123000, 37), (receipt['presentation_time_us'], receipt['bot_state_revision']))
+        self.assertEqual(1, len(self.battle._local_ram_receipts))
+        # Retrying the completed proof cannot duplicate the HP receipt.
+        self.assertFalse(self.battle._retry_native_ram_contact_proof(1))
+        self.assertEqual(1, len(self.battle._local_ram_receipts))
+
+    def test_complete_normal_search_wins_over_earlier_corner_candidate(self):
+        self.proof['hit_point'] = (0, 0.25, 3.4)
+        self.proof['bot_matrix'].translation = (0, 0, 6.8)
+        with self.native_patch(), mock.patch.object(
+                self.battle, '_ram_corner_probe_direction',
+                side_effect=AssertionError('valid normal pair must win')):
+            matched, unused, unused2 = self.battle._native_ram_contact_plate_pair(self.proof)
+        self.assertIsNotNone(matched)
+        self.assertEqual((180.0, 180.0), (matched[0]['armor'], matched[1]['armor']))
+
+    def test_corner_rays_cannot_mix_disjoint_hull_heights(self):
+        self.proof['local_vehicle'] = self.vehicle(0.1, 0.8)
+        self.proof['bot_vehicle'] = self.vehicle(1.2, 1.9)
+        with self.native_patch():
+            matched, first, second = self.battle._native_ram_contact_plate_pair(self.proof)
+        self.assertIsNone(matched)
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+
+    def test_corner_direction_rejects_far_side_and_invalid_geometry(self):
+        direction = self.battle._ram_corner_probe_direction
+        matrix = self.proof['local_matrix']
+        for point, normal in (((1, 1, 1), (0, 1)), ((0, 1, 0), (0, -1)),
+                              ((float('nan'), 1, 1), (0, -1))):
+            self.assertIsNone(direction(matrix, point, normal))
+        self.assertIsNone(direction(object(), (1, 1, 1), (0, -1)))
+
+    def test_empty_native_mesh_does_not_invent_corner_armour(self):
+        with mock.patch('gui.mods.offline_lan_0922.battle_runtime.collide_vehicle_at_matrix',
+                        return_value=[]):
+            self.assertEqual((None, None, None),
+                             self.battle._native_ram_contact_plate_pair(self.proof))
 
 
 class RamContactFollowupTests(unittest.TestCase):

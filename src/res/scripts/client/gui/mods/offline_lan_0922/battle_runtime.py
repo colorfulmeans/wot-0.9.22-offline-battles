@@ -20169,8 +20169,8 @@ class BattleRuntime(object):
         """Find shared structural armour inside the actual contact area.
 
         Never substitutes primaryArmor or mixes plates sampled at different
-        heights.  The first candidate for which both native #1513 hit testers
-        expose structure owns the receipt.
+        heights. Prefer the contact-normal rays, then resolve a chassis corner
+        toward each body's interior without changing the impact normal.
         """
         return self._ram_plate_pair_from_probe(
             proof, self._native_ram_vehicle_armor)
@@ -20212,6 +20212,7 @@ class BattleRuntime(object):
                 heights = heights[:1] + structural + heights[1:]
         seen_player = None
         seen_bot = None
+        unresolved = []
         points = [(hit[0], hit[2])]
         for x, z in proof.get('contact_xz_candidates', ()):
             if all((x-px)**2 + (z-pz)**2 > 1.0e-6
@@ -20232,7 +20233,55 @@ class BattleRuntime(object):
                     seen_bot = bot_plate
                 if player_plate is not None and bot_plate is not None:
                     return (player_plate, bot_plate, float(sample_y), x, z), seen_player, seen_bot
+                unresolved.append((x, sample_y, z, player_plate, bot_plate))
+        # The solid chassis envelope can touch at a corner outside a tapered
+        # hull. A parallel normal ray there may miss structure even though
+        # the contact has already transferred momentum. Resolve only missing
+        # plates from that SAME point/height toward the corresponding body
+        # centre. Native hit testers still choose the first structural plate
+        # and stop at its centre plane; no primary/minimum armour is guessed.
+        # Finish the original search first so existing valid pairs keep their
+        # plates. This changes material lookup, never the kinetic normal.
+        for x, sample_y, z, player_plate, bot_plate in unresolved:
+            sample = self._vector((x, sample_y, z))
+            plates = [player_plate, bot_plate]
+            for index, prefix in enumerate(('local', 'bot')):
+                if plates[index] is not None:
+                    continue
+                normal = (contact_normal if index == 0 else
+                          (-contact_normal[0], -contact_normal[1]))
+                matrix = proof[prefix + '_matrix']
+                inward = self._ram_corner_probe_direction(matrix, sample, normal)
+                if inward is not None:
+                    plates[index] = armor_probe(
+                        proof[prefix + '_vehicle'], matrix, sample, inward)
+            player_plate, bot_plate = plates
+            if player_plate is not None:
+                seen_player = player_plate
+            if bot_plate is not None:
+                seen_bot = bot_plate
+            if player_plate is not None and bot_plate is not None:
+                return (player_plate, bot_plate, float(sample_y), x, z), seen_player, seen_bot
         return None, seen_player, seen_bot
+
+    @staticmethod
+    def _ram_corner_probe_direction(matrix, point, contact_normal):
+        """Address the near-side structure behind a solid chassis corner."""
+        try:
+            center = _xyz(matrix.translation)
+            point = _xyz(point)
+            dx, dz = center[0]-point[0], center[2]-point[2]
+            length = math.hypot(dx, dz)
+            if (math.isnan(length) or math.isinf(length) or length <= 1.0e-6):
+                return None
+            nx, nz = dx/length, dz/length
+            alignment = nx*contact_normal[0] + nz*contact_normal[1]
+            # Do not cross the contacted side or repeat the same empty ray.
+            if alignment <= 0.0 or alignment >= 1.0-1.0e-9:
+                return None
+            return nx, nz
+        except (AttributeError, IndexError, TypeError, ValueError, RuntimeError):
+            return None
 
     def _ram_contact_armor_status(self, first, second, contact):
         """Classify one native contact probe without folding transient state."""
@@ -20614,13 +20663,18 @@ class BattleRuntime(object):
             self._local_ram_episode_contacts = frozenset(
                 value for value in self._local_ram_episode_contacts
                 if value != bot_id)
-            signature = (bot_id, player_plate is None, bot_plate is None)
+            reason = ('history' if revision is None or presentation_time_us is None
+                      else 'normal' if contact_normal is None else 'geometry')
+            signature = (bot_id, reason, player_plate is None, bot_plate is None)
             if signature not in self._native_ram_contact_failures:
                 self._native_ram_contact_failures.add(signature)
                 sys.stdout.write(
                     '[Offline LAN 0.9.22] RAM native contact unsupported '
-                    'bot_id=%d player_plate=%s bot_plate=%s\n' % (
-                        bot_id, player_plate, bot_plate))
+                    'bot_id=%d reason=%s player_plate=%s bot_plate=%s '
+                    'paired=%s hit=%s normal=%s presentation=%s revision=%s\n' % (
+                        bot_id, reason, player_plate, bot_plate,
+                        matched is not None, proof.get('hit_point'),
+                        contact_normal, presentation_time_us, revision))
             return False
         if len(self._local_ram_receipts) >= 16:
             return False
