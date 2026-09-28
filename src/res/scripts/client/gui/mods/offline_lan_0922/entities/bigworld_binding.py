@@ -349,6 +349,14 @@ class BigWorldVehicleBinding(object):
                                   else 'DEATH_FROM_DEVICE_EXPLOSION_AT_SHOT')
                 elif not attacker_id and code == 'DEATH_FROM_SHOT' and not fire:
                     death_code = 'DEATH_UNKNOWN'
+                if not attacker_id and death_code in (
+                        'DEATH_FROM_WORLD_COLLISION', 'DEATH_FROM_DROWNING',
+                        'DEATH_FROM_OVERTURN', 'DEATH_FROM_DEATH_ZONE',
+                        'DEATH_FROM_INACTIVE_CREW_AT_WORLD_COLLISION'):
+                    # #1513 has no UNKNOWN_SELF postmortem templates. Its
+                    # unassisted cause text is under SELF_SUICIDE; select the
+                    # template without inventing an attacker or kill credit.
+                    postfix = 'SELF_SUICIDE'
                 self._need(messages, 'onShowVehicleMessageByCode')(
                     death_code, postfix, int(attacker_id), None, 0)
             else:

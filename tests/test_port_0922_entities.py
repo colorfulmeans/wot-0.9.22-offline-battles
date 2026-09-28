@@ -326,6 +326,33 @@ class BigWorldBindingTests(unittest.TestCase):
                 messages.onShowVehicleMessageByCode.assert_called_once_with(
                     expected, 'ENEMY_SELF', attacker, None, 0)
 
+    def test_unassisted_environment_death_selects_native_central_template(self):
+        module = _binding_module()
+        for reason, code in ((3, 'WORLD_COLLISION'), (5, 'DROWNING'),
+                             (7, 'OVERTURN'), (4, 'DEATH_ZONE'),
+                             (3, 'INACTIVE_CREW_AT_WORLD_COLLISION')):
+            for attacker in (0, 23):
+                with self.subTest(code=code, attacker=attacker):
+                    avatar, bigworld = _Avatar(), _BigWorld()
+                    avatar.playerVehicleID = 91
+                    bigworld.entity_value.health = 0
+                    messages = avatar.guiSessionProvider.shared.messages
+                    postfix = 'UNKNOWN_SELF' if not attacker else 'ENEMY_SELF'
+                    key = 'DEATH_FROM_' + code
+                    messages._BattleMessagesController__getKillInfo = mock.Mock(
+                        return_value=(key, postfix, None, None))
+                    binding = module.BigWorldVehicleBinding(
+                        bigworld, avatar, _Constants, _VehicleDescr,
+                        lambda yaw, pitch, limits: 321,
+                        outfit_provider=lambda descriptor: '')
+                    binding.arena_vehicle_killed(91, attacker, reason)
+                    messages.onShowVehicleMessageByCode.assert_called_once_with(
+                        key, 'SELF_SUICIDE' if not attacker else 'ENEMY_SELF',
+                        attacker, None, 0)
+                    messages.onShowPlayerMessageByCode.assert_not_called()
+                    self.assertEqual((91, attacker, 0, reason),
+                                     pickle.loads(avatar.updates[0][1]))
+
     def test_siege_state_drives_exact_vehicle_callback_once_per_edge(self):
         module = _binding_module()
         bigworld = _BigWorld()

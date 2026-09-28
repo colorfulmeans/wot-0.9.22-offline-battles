@@ -12533,6 +12533,8 @@ class BattleState:
                     "canonical player equipment commit diverged")
             if (kind == "rpm_limiter" and was_active != equipment.active):
                 player.rpm_damage_elapsed = 0.0
+                _server_log("GOVERNOR switch round=%d player=%d active=%s" % (
+                    self.round_id, player.player_id, equipment.active))
             if payload is not None:
                 self._commit_player_critical_progress(
                     player, payload)
@@ -12579,6 +12581,28 @@ class BattleState:
                 self._commit_player_critical_progress(
                     player, _critical_payload(payload))
                 changed += 1
+            if (self.tick % max(1, int(round(5.0 * TICK_HZ))) == 0 and
+                    any(item.contract.get("kind") == "rpm_limiter"
+                        for item in player.equipment_states)):
+                # Hidden HP loss has no HUD color until the half-health edge.
+                # Record canonical evidence without adding any native query.
+                params = player.effective_params or {}
+                engine = next((row for row in
+                    (params.get("critical") or {}).get("devices", ())
+                    if row.get("name") == "engineHealth"), {})
+                current = next((row for row in
+                    (player.critical or {}).get("devices", ())
+                    if row.get("name") == "engineHealth"), {})
+                rate = equipment_mechanics.passive_effects(
+                    player.equipment_states)["engineHpLossPerSecond"]
+                _server_log(
+                    "GOVERNOR wear round=%d player=%d rate=%.3f speed=%.3f "
+                    "half_limit=%.3f engine_hp=%s max_hp=%s state=%s pulse=%.3f" % (
+                        self.round_id, player.player_id, rate, abs(player.speed),
+                        float((params.get("physics") or {}).get("speedFwd", 0)) * 0.5,
+                        current.get("hp", engine.get("max_hp")),
+                        engine.get("max_hp"), current.get("state", "normal"),
+                        player.rpm_damage_elapsed))
         return changed
 
     def _tick_player_fire(self, dt):

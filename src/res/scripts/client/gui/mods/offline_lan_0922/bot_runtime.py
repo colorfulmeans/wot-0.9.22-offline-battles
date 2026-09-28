@@ -7114,10 +7114,16 @@ class BotRuntime(object):
             sys.stdout.write(
                 '[Offline LAN 0.9.22] EDGE motion bot=%d alive=%s '
                 'position=%s pitch=%.5f roll=%.5f vertical=%.4f airborne=%s '
-                'contacts=%d plane=%s slide=(%.4f,%.4f) step=%.4f\n' % (
+                'contacts=%d rigid=%d springs=%s body=%s '
+                'plane=%s slide=(%.4f,%.4f) step=%.4f\n' % (
                     bot_id, state.get('alive', True), _position(state),
                     state['pitch'], state['roll'], state['vertical_speed'],
                     state['airborne'], solved['contact_count'],
+                    solved.get('rigid_contact_count', 0),
+                    tuple(None if value is None else round(value, 3)
+                          for value in ground),
+                    tuple(None if value is None else round(value, 3)
+                          for value in pseudo_ground),
                     current_plane, state.get('air_lateral_x', 0.0),
                     state.get('air_lateral_z', 0.0), step))
         return False

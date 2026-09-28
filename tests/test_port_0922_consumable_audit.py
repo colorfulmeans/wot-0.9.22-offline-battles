@@ -376,6 +376,28 @@ class GovernorWearTests(unittest.TestCase):
         self.assertEqual(0.25, self.player.rpm_damage_elapsed)
         self.assertEqual(100, self.player.health)
 
+    def test_kv5_engine_pool_needs_two_minutes_to_turn_yellow(self):
+        from effective_params_fixture import effective_params
+        params = effective_params()
+        params['equipment'] = [governor().contract]
+        # Installed #1513 M500 values, not the earlier 60 HP example.
+        params['critical']['devices'][0].update(max_hp=360, regen_hp=180)
+        params['critical']['activation_targets'] = []
+        self.player.effective_params = params
+        self.assertTrue(self.battle._install_player_equipments(self.player))
+        self.assertTrue(self.battle.submit_equipment_intent(1, intent(1)))
+        with mock.patch.object(server, '_server_log') as log:
+            for _ in range(120 * int(server.TICK_HZ)):
+                self.step(1.0 / server.TICK_HZ)
+            row = self.player.critical['devices'][0]
+            self.assertEqual(180, row['hp'])
+            self.assertEqual('critical', row['state'])
+            self.assertGreater(self.player.critical_revision, 0)
+            snapshot = self.battle._public_player(self.player)
+            self.assertEqual(row, snapshot['critical']['devices'][0])
+            self.assertTrue(any('engine_hp=180.0 max_hp=360.0' in str(call)
+                                for call in log.call_args_list))
+
 
 class EquipmentRequestOrderingTests(unittest.TestCase):
     def test_bad_target_is_a_terminal_rejection_not_a_sequence_hole(self):

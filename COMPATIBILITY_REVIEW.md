@@ -7787,3 +7787,65 @@ one-second wear, terminal-state sampling, environment deaths, repeat receipts
 after reopening the garage, and auto-resupply from stock or credits. All 146
 client modules compile under CPython 2.7.18. Real Windows switch highlighting,
 multiplayer message rendering and gameplay timing still need playtesting.
+
+## Report 031122: central environment notices and governor wear evidence
+
+The report contains three rounds on 37_caucasus using test-20260929-8599c30
+with one human in a KV-5. Unassisted environmental deaths have attacker ID
+zero. The exact #1513 BattleMessagesController classifies that as UNKNOWN_SELF,
+but the installed postmortem_panel.xml contains neither the corresponding
+environment UNKNOWN_SELF entries nor their generic base entries. Its central
+consumer silently drops the message after both lookups fail. Select the stock
+SELF_SUICIDE postfix for this presentation-only case: world collision,
+drowning, overturn, death zone and crew loss in a world collision. Preserve
+the arena event's zero attacker and all kill credit, and retain own-victim
+suppression in the right-hand feed. Assisted deaths retain native attribution.
+Fire, ammunition explosion and unknown shot causes keep their existing order.
+
+The exact installed Chinese ingame_gui.mo provides the wording. Current online
+survival/postmortem guides do not establish the historical Chinese strings.
+An independent CPython 2.7 audit executes the installed controller, postmortem
+code lookup, reason formatter and template renderer with installed XML/MO
+data. The four principal zero-attacker causes reproduce a missing message
+before the adapter correction and reach the central display boundary once
+after it, without changing the arena attacker or sending a right-side feed.
+The existing native 210 death combinations and four ally-hit combinations also
+pass. Native Flash rendering remains a Windows acceptance boundary.
+
+The installed KV-5 M500 has 360 engine module HP and 180 regeneration HP.
+At the current 1.5 HP per eligible second, a healthy engine requires 120
+seconds below half base forward speed with the governor active before it
+becomes yellow. The previous 60 HP example cannot establish KV-5 timing.
+A canonical equipment-install/activate/critical-tick/public-snapshot test at
+the real 30 Hz cadence reproduces a one-tick delay: per-tick decimal rounding
+leaves HP at 181.5 at nominal 120 seconds. Retain the floating accumulator and
+allow only 1e-9 boundary noise; the same test now reaches critical 180 HP.
+This small correction does not establish the cause of an indefinitely healthy
+engine in native play. The old report has no accepted-switch or engine-HP
+trace. Add accepted governor edges and five-second canonical wear records
+(rate, speed, threshold, HP, maximum, state and fractional pulse) for mounted
+governors, including inactive ones, to distinguish activation, eligibility and
+presentation without additional native queries.
+
+The first-round Bot 29 wreck briefly settles near (-17.15, 0.47, 111.06),
+with 11-13 reported contacts and approximately 0.48 radians roll, before
+falling to y=-13.88 at 03:01:57 and settling near -14.39. The third-round
+Bot 29 wreck falls from y=1.08 to -10.47 between 03:08:55 and 03:08:57.
+These are actual falls, but do not prove the earlier pause was physically
+correct. The old EDGE record lacks separate spring/body heights. Second-round
+live Bot 8 settles on a measured inclined plane near y=-6.06; this is distinct
+from the reported dead wrecks. No sampled BOT MOTION record reports a support
+or pose rollback. Preserve physical behavior and extend the existing EDGE
+record with rigid-contact count and already-computed spring/body heights,
+at its existing cadence. No extra collision query, braking change or
+unverified bridge coefficient is introduced.
+
+Validation: 1,841 tests pass across compatibility, entities, battle runtime,
+consumable audit, equipment mechanics, critical damage, postbattle, garage,
+server projectiles and combat lineage on Python 3.12.14. The new full-cadence
+KV-5 test failed before the accumulator correction and passes afterward.
+Native governor timing and bridge contact geometry still require a report
+from the instrumented Windows build; neither symptom is claimed fully fixed.
+All 146 client modules compile under CPython 2.7.18. Three existing bridge
+support/bank regression methods also pass with EDGE logging explicitly
+enabled, exercising zero-contact, spring-only and rigid-contact formatting.

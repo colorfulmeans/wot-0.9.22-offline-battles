@@ -239,10 +239,12 @@ def advance_critical(player, dt, now):
     speed = abs(float(getattr(player, 'speed', 0.0)))
     rpm_loss = 0.0
     if rpm_rate > 0.0 and base_speed > 0.0 and speed < base_speed * 0.5:
-        elapsed = round(float(getattr(player, 'rpm_damage_elapsed', 0.0)) +
-                        float(dt), 9)
-        seconds = int(elapsed)
-        player.rpm_damage_elapsed = elapsed - seconds
+        elapsed = float(getattr(player, 'rpm_damage_elapsed', 0.0)) + float(dt)
+        # The real server uses 1/30 s, unlike the decimal test intervals.
+        # Rounding each tick down delays a nominal whole-second boundary
+        # by one tick. Tolerate only floating-point noise at that boundary.
+        seconds = int(elapsed + 1.0e-9)
+        player.rpm_damage_elapsed = max(0.0, elapsed - seconds)
         rpm_loss = rpm_rate * seconds
     else:
         player.rpm_damage_elapsed = 0.0
