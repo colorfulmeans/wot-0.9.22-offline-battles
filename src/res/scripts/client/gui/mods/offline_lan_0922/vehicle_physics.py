@@ -80,12 +80,6 @@ COH_DECAY_BOUND = 0.5
 SLOPE_COH_DECAY = 0.25
 SLOPE_COH_DECAY_Y = 0.72
 # ---- offline-model constants (no exact native transition curve recoverable) ----
-# User retail observation confirms that releasing drive applies drivetrain
-# braking. Restore the existing offline calibration, not a claimed native
-# coefficient: the exact W-release curve still lives in unavailable C++ code.
-# This partial track-grip share fades near the static perch limit so a steep
-# descent remains gravity-driven. Explicit track locking retains full grip.
-COAST_BRAKE_SHARE = 0.65
 # Steering adds track-differential drag to the rolling resistance.
 STEER_RESIST_MULT = 1.6
 # Engine force F = P / max(|v|, ENGINE_MIN_V), capped by track cohesion.
@@ -201,7 +195,6 @@ _TUNABLE = {
 	'traverse_accel_time': 'ANG_ACCELERATION_TIME',
 	'traverse_speed_cost': 'SPEED_AFFECT_ROT_DECREASE',
 	'steer_resist_mult':   'STEER_RESIST_MULT',
-	'coast_brake_share':   'COAST_BRAKE_SHARE',
 	'slide_max':           'SLIDE_MAX',
 	'slide_drag':          'SLIDE_DRAG',
 	'slide_hold_tan':      'SLIDE_HOLD_TAN',
@@ -2231,16 +2224,14 @@ def brake_force(p, active, terrainIdx=0, slope_pitch=0.0):
 	(cos theta) while cohesion decays on steep ground. So a hull braking on a
 	slope past the grip limit CANNOT hold and slides - the same ~50 deg limit
 	as the lateral fall-line slip, kept consistent on purpose.
-	active=True: opposite-throttle / hold lock-up. active=False: the established
-	flat-ground drivetrain coast drag; longitudinal_step relieves that drag only
-	near the static perch tangent, where gravity owns the descent.'''
+	active=True uses the installed service brake, limited by track grip.
+	active=False is rolling resistance; releasing drive is not a brake command.'''
 	ny = math.cos(slope_pitch)
 	grip_decel = slope_cohesion(ny) * GRAVITY * (ny if ny > 0.1 else 0.1)
 	brake = p['brakeDecel'] if p['brakeDecel'] < grip_decel else grip_decel
 	if active:
 		return p['mass'] * brake
-	return (rolling_resist_force(p, terrainIdx, False) +
-		p['mass'] * COAST_BRAKE_SHARE * brake)
+	return rolling_resist_force(p, terrainIdx, False)
 
 
 def contact_push_decel(p, rolling, terrainIdx=0, normal_y=1.0):
@@ -2384,7 +2375,8 @@ def predict_contact_velocity(p, state, shape, sample_time, now, impulses):
 				forward = vx*sine+vz*cosine
 				right = vx*cosine-vz*sine
 				forward = longitudinal_step(p, forward, throttle,
-					bool(state.get('rotation_dir', 0)), pitch, step, airborne)
+					bool(state.get('rotation_dir', 0)), pitch, step, airborne,
+					service_brake=bool(state.get('service_brake', False)))
 				if not airborne:
 					right = _bleed(right, contact_push_decel(
 						p, bool(forward or throttle), normal_y=normal_y)[1]*step)
@@ -2414,9 +2406,22 @@ def _cap_grounded_speed(p, speed):
 	return max(-maximum, min(maximum, speed))
 
 
+def direction_brake(previous_command, active, command, speed):
+	'''Latch only an intentional change into the direction opposite travel.
+
+	A held throttle does not turn into a brake when a contact or gravity
+	reverses velocity. Release, a new direction, or reaching zero ends the
+	latch. The next slice may then accelerate in the requested direction.
+	'''
+	command = 1 if command > 0.0 else (-1 if command < 0.0 else 0)
+	previous = 1 if previous_command > 0.0 else (-1 if previous_command < 0.0 else 0)
+	return bool(command and command*speed < 0.0 and
+		(active or command != previous))
+
+
 @observed('physics.longitudinal')
 def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
-                      airborne=False, terrainIdx=0, handbrake=False):
+                      airborne=False, terrainIdx=0, handbrake=False, service_brake=False):
 	'''One integration step of forward (along-hull) speed. Returns the new v.
 	slope_pitch: fore/aft ground pitch (BigWorld: nose-up negative).
 
@@ -2430,6 +2435,14 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 		return v  # no track grip in the air; horizontal momentum kept as-is
 
 	grav_a = GRAVITY * math.sin(slope_pitch)      # signed accel along hull (+fwd downhill)
+	if service_brake and throttle*v < 0.0 and not handbrake:
+		# Brakes consume the installed brake force, not P/v from the engine.
+		# Stop at zero before engaging reverse drive; never brake in mid-air.
+		decel = brake_force(p, True, terrainIdx, slope_pitch)/p['mass']
+		nv = v + (grav_a - (decel if v > 0.0 else -decel))*dt
+		if v*nv <= 0.0:
+			return 0.0
+		return _cap_grounded_speed(p, nv)
 	if handbrake and not airborne:
 		# Locked tracks: full grip opposes any motion, and at a standstill the hull
 		# holds unless the slope beats the tracks outright. Grip-limited like every
@@ -2488,7 +2501,7 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 		# engine already opposes that motion above, with the installed power
 		# and traction limit. Adding automatic brakes here gave a weak engine
 		# almost full track holding force as soon as a stronger tank moved it.
-		# Explicit handbrake and released-drive braking retain their own laws.
+		# Direction changes and handbrake have explicit, separate intent.
 	else:
 		# Parked / coasting: static grip tries to hold against slope gravity.
 		if abs(v) < 0.02:
@@ -2498,17 +2511,8 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 				return 0.0                        # tracks hold - no creep on ordinary hills
 			accel = grav_a - (_hold if grav_a > 0.0 else -_hold)   # slides off a too-steep parked slope
 		else:
-			# Restore the established released-drive braking calibration.
-			# Its grip share fades only near the static perch limit; a steep
-			# downhill remains free to gain speed under gravity. Neither this
-			# drag nor its relief depends on crossing the powered speed limit.
-			motion_sign = 1.0 if v > 0.0 else -1.0
-			downhill_tangent = max(0.0, math.tan(slope_pitch) * motion_sign)
-			fade_start = 0.8 * SLIDE_HOLD_TAN
-			fade = min(1.0, max(0.0, (downhill_tangent - fade_start) /
-			                    (SLIDE_HOLD_TAN - fade_start)))
-			resist = rr + COAST_BRAKE_SHARE * (1.0 - fade) * grip
-			accel = grav_a - (resist if v > 0.0 else -resist)
+			# With no brake intent, use the descriptor's rolling resistance.
+			accel = grav_a - (rr if v > 0.0 else -rr)
 
 	# TRACK-SLIP DRAG: rolling UP a grade steeper than the tracks can pull, they
 	# slip and momentum bleeds far faster than gravity alone would take it.

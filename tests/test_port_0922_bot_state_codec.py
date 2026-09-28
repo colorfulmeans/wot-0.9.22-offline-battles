@@ -76,6 +76,12 @@ def _bot_state(**overrides):
 
 class BotStateCodecTest(unittest.TestCase):
 
+    def test_service_brake_intent_survives_both_wire_states(self):
+        for active in (True,False):
+            state = _bot_state(service_brake=active)
+            decoded = codec.decode_row(codec.encode_row(state), STATIC)
+            self.assertIs(active, decoded['service_brake'])
+
     def test_round_trip_preserves_every_contract_field(self):
         state = _bot_state()
         decoded = codec.decode_row(codec.encode_row(state), STATIC)

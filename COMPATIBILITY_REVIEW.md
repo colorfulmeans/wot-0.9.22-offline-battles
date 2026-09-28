@@ -7349,3 +7349,51 @@ has chance 0.48/draw 0.08289 and applies 6181.364 damage. These vehicles have
 internal contacts; this evidence does not support numeric overflow. The
 probability law, crew outcomes and existing visual-only turret policy remain
 unchanged.
+
+## Reports 220344 and 221207: posed departures and directional service braking
+
+Both reports identify test-20260928-96b43dc in the server, visible client and
+worker. Report 221207 uses AMX 13 57 on Prokhorovka with both speed limits at
+27.778 m/s. The user identifies W-to-S and S-to-W reversal as slow braking;
+the handbrake already stops promptly. The old throttle branch uses only
+power-limited reverse engine force while neutral adds a 65% track-grip brake.
+Neutral now retains descriptor rolling resistance and slope gravity. Explicit
+opposite direction changes latch the existing installed service brake until
+zero speed, then engage drive in the requested direction. Held throttle being
+back-driven by contact/gravity does not latch brakes. The Bot owner excludes
+its already-accounted external velocity when identifying its own reversal;
+resuming drive while pushed must not turn a weak engine into a parking lock.
+A flag carries brake intent through the compact state codec, normal/contained
+server publication, adoption and replica contact prediction. Input-edge logs
+record brake intent and before/after speed without per-frame log spam. Static
+hold, handbrake, airborne momentum and the directional 110% cap remain intact.
+This uses the existing copied brake law, not a claimed recovered retail curve.
+
+Report 220344 records dead T-44-122 at (46.33971,-3.46723,59.41939),
+pitch 1.40818, roll -0.06863. Its outward 0.090 m displacement was rejected
+by a native solid lane on the bridge/slope face. The passive sweep previously
+posed only Y, leaving flat XZ extents even for this nearly vertical hull.
+Passive lanes now apply the full existing BigWorld YPR transform, including
+the displaced destination perimeter and prepared collision-filter envelope.
+Departure containment uses the rigid inverse and the exact swept material
+interval; inward surfaces and later independent walls still block. A tipped
+body on an undrivable face no longer extrapolates its attitude as a roadway.
+Navigation hazards remain autonomous planning constraints; world, other hulls
+and arena bounds still constrain physical displacement. The conservative
+active-drive terrain lookahead remains separate from the posed passive sweep.
+
+The captured-plane regression fails on parent 96b43dc and passes here; its
+fixture explicitly uses the captured XZ extents and a test height band, not
+an invented reconstruction of the complete map. It includes a later blocking
+wall. Near-vertical inverse, transformed perimeter and upper-wall tests pass.
+Both 100 km/h direction changes, intervening neutral, airborne input, installed
+brake force, live local/worker paths, compact/server/replica publication and
+owner-reversed head-on contacts are covered. The 242 focused cases and the
+251 bridge/turret preservation cases pass (one environment skip in the former).
+The 1,480-case subsystem suite passes with its existing one environment skip
+and six named navigation exclusions. Exact #1513 inspection/ABI audit and all
+146 client source files compile under CPython 2.7.18. Existing unrelated full
+suite failures are reported separately; this is not an all-green CI claim.
+Detached ammo-rack turrets remain visual-only, as the user confirms markedly
+better frame pacing. No native game session was run for this change: continuous
+bridge/cliff departures and driving feel require the generated package test.

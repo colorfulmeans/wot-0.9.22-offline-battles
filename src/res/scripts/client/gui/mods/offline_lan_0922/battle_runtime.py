@@ -1851,6 +1851,8 @@ class BattleRuntime(object):
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
+        self._local_direction_command = 0.0
+        self._local_service_brake = False
         self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
@@ -2205,6 +2207,8 @@ class BattleRuntime(object):
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
+        self._local_direction_command = 0.0
+        self._local_service_brake = False
         self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
@@ -22537,6 +22541,8 @@ class BattleRuntime(object):
             self._local_turn_speed = 0.0
             self._local_drive_turn = 0.0
             self._local_drive_throttle = 0.0
+            self._local_direction_command = 0.0
+            self._local_service_brake = False
         self._commit_local_suspension_metadata(
             position, yaw, solved, ground, plane=current_plane,
             sample_pose=(previous_pitch, previous_roll))
@@ -22938,6 +22944,8 @@ class BattleRuntime(object):
             self._local_turn_speed = 0.0
             self._local_drive_turn = 0.0
             self._local_drive_throttle = 0.0
+            self._local_direction_command = 0.0
+            self._local_service_brake = False
             self._sender.forward = 0.0
             self._sender.turn = 0.0
             vehicle_filter = getattr(entity, 'filter', None)
@@ -23012,6 +23020,12 @@ class BattleRuntime(object):
         handbrake = ((bool(self._sender.handbrake) and not overturned) or
                      is_tracked or
                      siege_drive_locked or siege_braking)
+        previous_direction_command = self._local_direction_command
+        previous_service_brake = self._local_service_brake
+        self._local_service_brake = vehicle_physics.direction_brake(
+            self._local_direction_command, self._local_service_brake,
+            throttle, self._local_speed)
+        self._local_direction_command = throttle
         previous_speed = self._local_speed
         if siege_drive_locked and not self._local_airborne:
             # Freeze only powered longitudinal/traverse motion. Gravity,
@@ -23037,8 +23051,15 @@ class BattleRuntime(object):
                 drive_physics, self._local_speed,
                 throttle, turn != 0.0,
                 slope_pitch, dt, self._local_airborne, 0,
-                handbrake)
+                handbrake, self._local_service_brake)
 
+        if (previous_direction_command != throttle or
+                previous_service_brake != self._local_service_brake):
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] DRIVE input command=%.3f service_brake=%s '
+                'handbrake=%s speed=%.4f->%.4f pitch=%.5f dt=%.5f airborne=%s\n' %
+                (throttle, self._local_service_brake, handbrake, previous_speed,
+                 self._local_speed, slope_pitch, dt, self._local_airborne))
         drive_speed = self._local_speed
         primary_contact = None
         if abs(self._local_speed) > 0.0001 and dt > 0.0:
@@ -23290,6 +23311,8 @@ class BattleRuntime(object):
                 self._local_turn_speed = 0.0
                 self._local_drive_turn = 0.0
                 self._local_drive_throttle = 0.0
+                self._local_direction_command = 0.0
+                self._local_service_brake = False
                 self._local_push_x = 0.0
                 self._local_push_z = 0.0
                 self._local_motion_kinds = 'detached_turret'
@@ -28646,6 +28669,8 @@ class BattleRuntime(object):
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
+        self._local_direction_command = 0.0
+        self._local_service_brake = False
         self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0

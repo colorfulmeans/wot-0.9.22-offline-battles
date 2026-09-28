@@ -6242,6 +6242,7 @@ class BattleState:
             "push_z": _finite_float(raw.get("push_z")),
             "push_yaw": _finite_float(raw.get("push_yaw")),
             "airborne": bool(raw.get("airborne", False)),
+            "service_brake": bool(raw.get("service_brake", False)),
             "contact_push_acks": list(tank_contact_ledger.normalize(
                 raw.get("contact_push_acks", [])).values()),
             "movement_dir": (1 if movement > 0.01 else
@@ -6662,6 +6663,7 @@ class BattleState:
         result['push_z'] = raw.get('push_z', 0.0)
         result['push_yaw'] = raw.get('push_yaw', 0.0)
         result['airborne'] = bool(raw.get('airborne', False))
+        result['service_brake'] = bool(raw.get('service_brake', False))
         result['contact_push_acks'] = copy.deepcopy(raw.get('contact_push_acks', []))
         result.update({
             "id": int(identity["id"]),

@@ -3846,6 +3846,8 @@ class BotRuntime(object):
         # stale pre-handoff momentum is not server-canonical state.
         state['speed'] = _number(raw.get('speed'), 0.0)
         state['_contact_forward_speed'] = 0.0
+        state['service_brake'] = bool(raw.get('service_brake', False))
+        state['_direction_command'] = _number(raw.get('movement_dir'))
         movement = _number(raw.get('movement_dir'))
         rotation = _number(raw.get('rotation_dir'))
         state['movement_dir'] = (
@@ -12703,13 +12705,19 @@ class BotRuntime(object):
                 if supported_pitch is not None:
                     slope_pitch = supported_pitch
                 previous_speed = state['speed']
+                forced_speed = self._retained_contact_speed(
+                    previous_speed, state.get('_contact_forward_speed', 0.0))
+                state['service_brake'] = vehicle_physics.direction_brake(
+                    state.get('_direction_command', 0),
+                    state.get('service_brake', False), throttle,
+                    previous_speed - forced_speed)
+                state['_direction_command'] = throttle
                 speed = (0.0 if siege_motion_locked else
                     vehicle_physics.longitudinal_step(
                         params, previous_speed, throttle,
                         steer_dir != 0, slope_pitch, step,
-                        bool(state.get('airborne', False)), 0, False))
-                forced_speed = self._retained_contact_speed(
-                    previous_speed, state.get('_contact_forward_speed', 0.0))
+                        bool(state.get('airborne', False)), 0, False,
+                        state['service_brake']))
                 if forced_speed:
                     # Advance the combined velocity once. A counterfactual
                     # drive-only step identifies the surviving external share
@@ -12717,7 +12725,8 @@ class BotRuntime(object):
                     unforced_speed = vehicle_physics.longitudinal_step(
                         params, previous_speed - forced_speed, throttle,
                         steer_dir != 0, slope_pitch, step,
-                        bool(state.get('airborne', False)), 0, False)
+                        bool(state.get('airborne', False)), 0, False,
+                        state['service_brake'])
                     forced_speed = self._retained_contact_speed(
                         speed, speed - unforced_speed)
                 state['_contact_forward_speed'] = forced_speed

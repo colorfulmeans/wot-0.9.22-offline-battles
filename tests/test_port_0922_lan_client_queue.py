@@ -612,7 +612,7 @@ class LanClientQueueTests(unittest.TestCase):
             'movement_dir', 'rotation_dir', 'fire_seq', 'shell_index',
             'next_shell_index', 'ammo_remaining', 'ammo_reload_pending',
             'reload_time', 'reload_duration', 'clip', 'clip_size',
-            'world_pose', 'airborne', 'stun_end_server_time_ms',
+            'world_pose', 'airborne', 'service_brake', 'stun_end_server_time_ms',
             'health', 'alive', 'critical', 'combat_base_revision',
             'combat_seq', 'combat_fire_elapsed', 'combat_fire_timer',
             'death_reason', 'display_health', 'shot_yaw', 'shot_pitch',
