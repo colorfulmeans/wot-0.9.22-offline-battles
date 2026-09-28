@@ -6849,6 +6849,9 @@ No mixed-version wire mode is introduced; distribute all roles together.
 
 A wreck advances yaw only through the existing vehicle rotation sweep,
 arena boundary, detached-turret and native/catalog rotation guards. Its
+native rotation query includes static world geometry even before a structure
+has broken; the live motor's damaged-BSP-only shortcut cannot admit a rotating
+corpse corner into an ordinary rock or wall. Its
 vertical owner is now the existing suspension/ballistic integrator, including
 partial support, pitch/roll, airborne gravity and landing. It continues after
 horizontal momentum stops and consumes no ground-friction budget in flight.
@@ -6859,7 +6862,7 @@ injuries for live falling tanks, nor assign a new owner to human corpses.
 Bounded `WRECK motion` diagnostics expose actual mass, pose, yaw momentum,
 vertical speed and airborne state for the next native acceptance report.
 
-Validation: 1,471 focused checks plus 56 wreck/snapshot/mass/spawn checks pass with
+Validation: 1,471 focused checks plus 57 wreck/snapshot/mass/spawn checks pass with
 one environment-dependent skip. The six previously reproduced navigation
 failures remain excluded from that focused selection. New coverage includes
 visible offset contact through worker consumption, yaw ACK retries, powered

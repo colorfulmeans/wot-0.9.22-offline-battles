@@ -1,6 +1,7 @@
 """Report 143607: off-centre wreck impulses, cliff release and powered shoves."""
 import copy
 import math
+import types
 import unittest
 from unittest import mock
 
@@ -11,6 +12,21 @@ from test_port_0922_tank_contact_ledger import ledger, bot_state_codec
 
 
 class AngularContactTests(unittest.TestCase):
+    def test_wreck_rotation_checks_static_world_before_any_structure_breaks(self):
+        native=vt._runtime();battle=vt.BattleRuntime(native)
+        battle._avatar=native.bigworld.avatar
+        battle._bots=types.SimpleNamespace(states={11:dict(alive=False,pitch=0.,roll=0.)})
+        battle._destructibles=types.SimpleNamespace(
+            native_replacement_bsp_active=lambda:False,
+            _vehicle_body_bbox=lambda unused:((-1.7,-.4,-3.5),(1.7,1.8,3.2),None))
+        battle._destructible_pose_sweep=mock.Mock(return_value=dict(status='clear',requires_commit=False))
+        with mock.patch.object(vt.battle_runtime_module.world_collision,
+                               'check_horizontal_collision',return_value='hard') as probe:
+            self.assertFalse(battle._resolve_bot_rotation(11,(0.,0.,0.),0.,.08,
+                             vt._Descriptor(),.1,1.,0.))
+        self.assertTrue(probe.called)
+        self.assertEqual('world',battle._bot_motion_kinds[11])
+
     def test_a_powered_corner_delivers_wreck_torque_at_its_real_lever(self):
         a = _tank(1, 0., 0., mass=100575.)
         b = _tank(2, 2.99, 1., mass=23496.)

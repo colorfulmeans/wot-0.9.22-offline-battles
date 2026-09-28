@@ -19511,7 +19511,7 @@ class BattleRuntime(object):
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
             pitch=None, roll=None, record_local=True, pivot_offset=0.0,
-            contact_trace=None):
+            contact_trace=None, include_static=False):
         """Recast every rotating body slice against the live native BSP.
 
         The catalog owns each destructible's original shape.  Once a structure
@@ -19529,7 +19529,8 @@ class BattleRuntime(object):
         """
         active_reader = getattr(
             self._destructibles, 'native_replacement_bsp_active', None)
-        if not pivot_offset and callable(active_reader) and not active_reader():
+        if (not include_static and not pivot_offset and
+                callable(active_reader) and not active_reader()):
             # Before the first accepted retained replacement there is no
             # damaged BSP to find.  The ordinary catalog/baked guards own live
             # objects without paying for two native sweeps per slice.
@@ -19894,7 +19895,8 @@ class BattleRuntime(object):
         clear = self._native_world_rotation_is_clear(
             position, start_yaw, end_yaw, descriptor,
             pitch=pitch, roll=roll, record_local=False,
-            pivot_offset=pivot_offset, contact_trace=contact_trace)
+            pivot_offset=pivot_offset, contact_trace=contact_trace,
+            include_static=not bot_state.get('alive', True))
         if not clear:
             self._bot_motion_kinds[int(bot_id)] = 'world'
             bot_state['_rotation_contact_trace'] = contact_trace
