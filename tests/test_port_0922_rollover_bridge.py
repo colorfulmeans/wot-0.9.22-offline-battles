@@ -96,6 +96,68 @@ class RolloverBridgeTests(unittest.TestCase):
                         (position[0], position[1], position[2] + 3.0 * dt), 0.0, dt)
                 self.assertLess(position[1], 5.0)
 
+    def test_bot_and_wreck_keep_sparse_deck_then_release_over_its_side(self):
+        # Report 212552: T71/M41 remain partly below the deck, held by lower
+        # support while the motion sweep hits the deck above them. Exercise
+        # the worker adapter against finite rails/sleepers over a lower beam.
+        # The same fixture through the parent adapter sinks into that beam.
+        for alive in (True, False):
+            for dt in (1.0 / 30.0, 1.0 / 120.0):
+                with self.subTest(alive=alive, dt=dt):
+                    descriptor = fixtures._suspension_descriptor()
+                    descriptor.chassis.hitTester.bbox = (
+                        fixtures._Vector(-1.645, -0.8, -3.5),
+                        fixtures._Vector(1.645, 0.8, 3.5))
+                    params = vehicle_physics.derive_suspension_params(descriptor)
+                    def bridge(x, z, low, high, flat=None):
+                        layers = [-15.0]
+                        if abs(x) < 2.0:
+                            layers.append(4.6)
+                            if (abs(abs(x) - 0.72) < 0.045 or
+                                    (abs(x) < 1.3 and z % 0.65 < 0.16)):
+                                layers.append(5.24)
+                        for height in sorted(layers, reverse=True):
+                            if low <= height <= high:
+                                return height
+                        return None
+                    runtime = bot_runtime.BotRuntime(1,
+                        suspension_ground_probe=bridge)
+                    state = dict(id=11, x=0.0, y=5.24, z=0.0, yaw=0.0,
+                        speed=0.0, terrain_pitch=0.0, roll=0.0,
+                        vertical_speed=0.0, airborne=False, grounded_once=True,
+                        alive=alive, health=500 if alive else 0, max_health=500)
+                    state['_suspension_ground_plane'] = dict(center_x=0.,
+                        center_z=0., center_y=5.24, gradient_x=0., gradient_z=0.)
+                    for unused in range(int(4.0 / dt)):
+                        before = (state['x'], state['y'], state['z'])
+                        state['z'] += 2.0 * dt
+                        runtime._update_suspension_vertical_motion(
+                            state, dt, params, suspension_motion_pose=before)
+                        self.assertGreater(state['y'], 5.05)
+                        self.assertLess(abs(state['roll']), 0.12)
+                    # Imposed side displacement is the already accepted shove;
+                    # do not keep remembered deck contacts outside its bounds.
+                    falling = False
+                    for unused in range(int(4.0 / dt)):
+                        before = (state['x'], state['y'], state['z'])
+                        state['x'] += 3.0 * dt
+                        runtime._update_suspension_vertical_motion(
+                            state, dt, params, suspension_motion_pose=before)
+                        falling |= state['airborne']
+                    self.assertTrue(falling)
+                    self.assertLess(state['y'], 0.0)
+
+    def test_worker_downhill_query_does_not_skip_the_current_deck(self):
+        # Tilted mixed-layer contacts must not move the complete next query
+        # window below the deck before gravity has actually lowered the hull.
+        plane = dict(center_x=0., center_z=0., center_y=5.,
+                     gradient_x=-1., gradient_z=0.)
+        runtime = bot_runtime.BotRuntime(1)
+        self.assertEqual(5., runtime._suspension_probe_height_for_motion(
+            (2., 5., 0.), (0., 5., 0.), plane))
+        self.assertEqual(7., runtime._suspension_probe_height_for_motion(
+            (-2., 5., 0.), (0., 5., 0.), plane))
+
     def test_grounded_hull_contact_blocks_without_player_or_bot_hp_damage(self):
         battle, entity = self.battle()
         trace = dict(hit=(0, 1, 3), normal=(0, 0, -1), reason='upper_lane')

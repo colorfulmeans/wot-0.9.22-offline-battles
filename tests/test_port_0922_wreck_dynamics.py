@@ -273,6 +273,86 @@ class WreckOwnerTests(unittest.TestCase):
             self.assertLess(state['y'],-10.)
             self.assertFalse(worker._suspension_param_failures)
 
+    def test_worker_shove_crosses_finite_deck_edge_with_real_world_sweeps(self):
+        # Combine the authority lifecycle with actual translation sweeps, not
+        # an always-clear motion resolver. Both deck/side faces and an optional
+        # independent wall return finite segment intersections.
+        world = vt.battle_runtime_module.world_collision
+        for alive in (True, False):
+            for wall in (False, True):
+                descriptor = bt._suspension_descriptor()
+                def terrain(x, z):
+                    return 5. if x < 2. else -15.
+                def support(x, z, low, high, flat=None):
+                    y = terrain(x, z)
+                    return y if low <= y <= high else None
+                def collide(space, start, end, mask, *unused):
+                    delta = end-start
+                    hits = []
+                    if abs(delta.y) > 1.e-9:
+                        for height in (5., -15.):
+                            fraction = (height-start.y)/delta.y
+                            if 0. <= fraction <= 1.:
+                                point = start+delta.scale(fraction)
+                                if height < 0. or point.x < 2.:
+                                    hits.append((fraction, point, vt._Vector(0,1,0)))
+                    if abs(delta.x) > 1.e-9:
+                        fraction = (2.-start.x)/delta.x
+                        if 0. <= fraction <= 1.:
+                            point = start+delta.scale(fraction)
+                            if 4.5 <= point.y <= 5.:
+                                hits.append((fraction, point, vt._Vector(1,0,0)))
+                        if wall:
+                            fraction = (1.9-start.x)/delta.x
+                            if 0. <= fraction <= 1.:
+                                hits.append((fraction,start+delta.scale(fraction),vt._Vector(-1,0,0)))
+                    if hits:
+                        unused, point, normal = min(hits,key=lambda row:row[0])
+                        return point, normal, 108
+                    return None
+                native = types.SimpleNamespace(wg_collideSegment=collide)
+                worker = self.module.BotRuntime(1,
+                    descriptor_resolver=lambda unused:descriptor,
+                    adapter_factory=lambda *args,**kwargs:bt._FixedAdapter(
+                        dict(throttle=0.,turn=0.,fire_allowed=False)),
+                    direction_probe=lambda *args,**kwargs:dict(
+                        clear=False,collision=False,water=True,slope=0.),
+                    ground_probe=lambda x,z,hint:terrain(x,z),
+                    physics_ground_probe=lambda x,z,hint:terrain(x,z),
+                    suspension_ground_probe=support,
+                    spawn_resolver=bt._spawn_resolver,baked_graph=bt._flat_open_graph())
+                worker.battle_start(self.start);worker.states.pop(12)
+                state=worker.states[11]
+                state.update(x=0.,y=5.,z=0.,yaw=0.,speed=0.,alive=alive,
+                    health=500 if alive else 0,grounded_once=True,_contact_dynamics=True)
+                def resolve(bot_id, position, yaw, speed, desc, dt, now,
+                            commit_enabled=True, motion_yaw=None):
+                    return 'hard' if world.check_horizontal_collision(native,
+                        types.SimpleNamespace(Vector3=vt._Vector),1,vt._Vector(position),
+                        yaw,speed,desc,state.get('airborne',False),dt,
+                        motion_yaw=motion_yaw,pitch=state.get('terrain_pitch',0.),
+                        roll=state.get('roll',0.)) else 'clear'
+                worker.motion_resolver=resolve
+                receipts={}
+                player=dict(id=1,team=1,x=-50.,y=5.,z=0.,yaw=0.,speed=0.,alive=True,
+                    effective_params=bt._effective_params_snapshot(mass=100575.))
+                with mock.patch.object(world,'prepare_horizontal_collision_filter',return_value=None), \
+                        mock.patch.object(world,'_destroy_and_recast',return_value=False), \
+                        mock.patch.object(self.module.prebaked_navigation,'pose_is_safe',
+                            side_effect=lambda graph,point,**kw:point[0]<2.), \
+                        mock.patch('sys.stdout'):
+                    for tick in range(180):
+                        ledger.record(receipts,11,(state['mass']*.5,0.))
+                        player['tank_pushes']=list(receipts.values())
+                        worker._update_once(.05,(tick+1)*.05,[player])
+                with self.subTest(alive=alive,wall=wall):
+                    if wall:
+                        self.assertLess(state['x'],2.)
+                        self.assertGreater(state['y'],4.)
+                    else:
+                        self.assertGreater(state['x'],4.)
+                        self.assertLess(state['y'],0.)
+
     def test_real_replica_lifecycle_has_no_worker_cache_but_uses_mounted_mass(self):
         replica=self._runtime()
         replica.battle_start(dict(self.start,round_id=6,bot_authority_id=-1))

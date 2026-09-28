@@ -7295,3 +7295,57 @@ tests pass. Exact Chinese HD #1513 inspection, ABI audit and Python 2.7.18
 compile pass. No native API was added and no native game session was run.
 Native bridge departure, frame pacing and visual debris remain test-package
 acceptance items rather than certified runtime outcomes.
+
+### Report 212552: align worker bridge support with the player adapter
+
+Report ae6a8b89d74f runs test-20260928-28c2c0a in all three processes.
+M41 wreck 29 holds X/Z (3.86856, 96.95354) while its roll changes from about
+1.0 to 2.24 radians and its origin drops below the deck. T71 Bot 15 later
+stays at (5.83559, 0.31036, 99.74456), roll 0.5292, with eight contacts but
+no fitted plane. Its native translation trace hits upward deck material 108
+at y=0.97408. The report establishes a conflicting support/motion state, not
+an engine-power shortage. It does not contain every native support column,
+so a complete reconstruction of that bridge's collision mesh is not claimed.
+
+The worker was missing three existing player-adapter contracts: recovery of
+fresh support inside each posed continuous track footprint, rigid hull/turret
+contacts while tipping, and an upward-only predicted query-window shift.
+It could acquire the lower beam through a missing carrier, apply track springs
+after overturning, omit roof/side support, and move its next column window
+below a deck by extrapolating a mixed-layer plane. The worker now uses the
+same geometry helpers, posed turret yaw, angular/vertical sweep, rigid-contact
+freshness and near-inverted spring suppression as the player. No collision
+budget, mass, power, friction or damage coefficient is changed. Normal flat
+support still has 22 probes; only missing track patches and tipping add the
+existing geometry recovery work. Physical translation still passes world,
+vehicle, arena and detached-obstacle guards independently of navigation.
+
+Parent 28c2c0a reproduces the sparse-deck sink for both living/dead states at
+30 and 120 Hz, the below-deck query-window error, and the previously recorded
+overturned-roof failure (2.5402 versus 2.775 m). These now pass. A complete
+worker update/receipt lifecycle additionally pushes living and dead hulls over
+a finite deck using actual segment-based world sweeps; a separate wall still
+blocks the shove. The focused 251 cases pass. The 1,474-case subsystem set
+passes with its existing one environment skip and six named navigation
+exclusions. Exact installed #1513 inspection, ABI audit and all 146 client
+sources compiled under Python 2.7.18 pass. These are offline regressions;
+the reported native bridge and frame pacing still require package acceptance.
+
+The full installed roster was audited again with mesh topology verification:
+680 entries, 650 decoded Console layouts, eight authored reconstructions,
+22 unavailable layouts. The checked-in original bake evidence distinguishes
+19 unavailable source entries from three unregistered/no-interior entries
+(Nameless, Edelweiss and T23). Another 176 decoded entries list observation
+device and/or turret-rotator holes, including two incomplete crew rosters;
+these are not 176 missing ammo racks, and non-applicable fixed-gun components
+must not be labelled missing gameplay modules without checking the descriptor.
+A user-facing Chinese inventory, exact IDs and remediation notes accompany
+the test output; no guessed module geometry was added.
+
+This report also proves why high device damage alone does not force criticals:
+M41's HE ammo candidate has chance 0.27/draw 0.34806; T-44-122's AP ammo
+candidate has chance 0.30/draw 0.77299. Both are saved. T-43's engine candidate
+has chance 0.48/draw 0.08289 and applies 6181.364 damage. These vehicles have
+internal contacts; this evidence does not support numeric overflow. The
+probability law, crew outcomes and existing visual-only turret policy remain
+unchanged.
