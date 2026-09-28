@@ -392,6 +392,14 @@ def _offh_internal_layout(td):
 	try:
 		layout = _IHL.build_layout(td, log_build=False)
 		if not layout or not layout.get('valid'):
+			key = (_IHL.configuration_fingerprint(td),
+				tuple((layout or {}).get('errors', ())))
+			seen = globals().setdefault('_unavailable_layout_reports', set())
+			if key not in seen:
+				seen.add(key)
+				print('[Offline LAN 0.9.22] MODULE layout unavailable vehicle=%s errors=%s missing=%s' % (
+					_IHL.vehicle_type_name(td), (layout or {}).get('errors'),
+					(layout or {}).get('validation', {}).get('missing')))
 			return None
 		return layout
 	except Exception as _be:
@@ -1004,6 +1012,9 @@ def _apply_module_damage(target_mock, all_hits, start_pos, end_pos, dmg, _shell,
 	# (or explicitly retained authored profiles) supply interior contacts. A
 	# missing source must not fabricate a compartment hit.
 	_scored = all_hits
+	_real = None
+	_audit_saved = []
+	_audit_applied = []
 	if (internal_hits is not None or penetrated is not False) and bool(
 			_MDCFG.get('internal_module_damage', True)):
 		try:
@@ -1106,6 +1117,7 @@ def _apply_module_damage(target_mock, all_hits, start_pos, end_pos, dmg, _shell,
 			_chance = min(1.0, _device_damage.saving_throw(
 				h_mat, _name, by_explosion) + _deadeye_bonus)
 			if random.random() >= _chance:
+				_audit_saved.append(_name)
 				continue   # saving throw failed: no crit on this device
 			max_hp = _device_damage.device_max_hp(td, _name)
 			if max_hp is None:
@@ -1126,6 +1138,7 @@ def _apply_module_damage(target_mock, all_hits, start_pos, end_pos, dmg, _shell,
 			current_hp = _device_damage.damaged_hp(
 				previous_hp, _loss, _name in _dev_destroyed_set(target_mock))
 			target_mock.devices_hp[_name] = current_hp
+			_audit_applied.append((_name, round(float(_loss), 3)))
 			if _track_decision is not None:
 				# Bounded to one line per target, side and zone, so a Windows
 				# check can read all three zones without per-shot spam.
@@ -1216,6 +1229,14 @@ def _apply_module_damage(target_mock, all_hits, start_pos, end_pos, dmg, _shell,
 						_name + ' damaged')
 		if _blocked:
 			LOG_DEBUG('CRIT GATE: %d device hit(s) behind the stopping plate ignored (no penetration)' % _blocked)
+		# One compact witness for edited high-damage rounds, without enabling
+		# the old per-triangle/per-roll debug stream for every Bot shell.
+		if _shell_dmg >= 1000.0:
+			print('[Offline LAN 0.9.22] MODULE strike target=%s vehicle=%s shell=%s damage=%s roll=%.3f penetrated=%s interior=%s exit=%s stop=%s blocked=%s rolled=%s saved=%s applied=%s' % (
+				getattr(target_mock, 'id', '?'), getattr(getattr(td, 'type', None), 'name', '?'),
+				_shell_kind, _descriptor_value(_shell, 'damage', None), _shell_dmg,
+				penetrated, _real, _exit_d, _stop_d, _blocked,
+				sorted(_rolled_names), _audit_saved, _audit_applied))
 	finally:
 		if _own_burst:
 			_pending_voice = _OFFH_VOICE_BURST[0] or []

@@ -1227,7 +1227,9 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
         for direction in (-1.0, 1.0):
             for brake_kind in ('handbrake', 'opposite'):
                 speed = direction * 5.0
-                for unused in range(120):
+                # Opposite throttle uses installed engine force; it does not
+                # silently engage a full parking brake when externally pushed.
+                for unused in range(600):
                     speed = vehicle_physics.longitudinal_step(
                         self.params, speed,
                         -direction if brake_kind == 'opposite' else 0.0,

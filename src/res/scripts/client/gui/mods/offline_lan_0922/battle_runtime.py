@@ -1860,6 +1860,7 @@ class BattleRuntime(object):
         self._local_ram_contacts = frozenset()
         self._local_contact_pushes = {}
         self._local_contact_impulses = {}
+        self._contact_receipt_clocks = {}
         self._local_turret_pushes = {}
         self._collision_feedback = CollisionFeedback()
         self._local_contact_log_time = 0.0
@@ -2213,6 +2214,7 @@ class BattleRuntime(object):
         self._local_ram_contacts = frozenset()
         self._local_contact_pushes = {}
         self._local_contact_impulses = {}
+        self._contact_receipt_clocks = {}
         self._local_turret_pushes = {}
         self._collision_feedback = CollisionFeedback()
         self._local_contact_log_time = 0.0
@@ -20911,9 +20913,25 @@ class BattleRuntime(object):
             return None
         ack = next((row[1] for row in checkpoint.get('contact_push_acks', ())
                     if row[0] == self.client.player_id), 0)
+        # A checkpoint has consumed impulses generated earlier on the human
+        # client. Pending impulses will pay the same upstream transit time
+        # before the worker can integrate them. Omitting that interval treats
+        # the pending momentum as already present but without its intervening
+        # engine/ground reaction; a busy link then makes the peer appear to
+        # retreat faster than it really can, preventing further contact force.
+        # Measure only a newly observed ACK, never age a stationary ACK with
+        # later snapshots. This is a velocity predictor, not remote pose motion.
+        clocks = self.__dict__.setdefault('_contact_receipt_clocks', {})
+        receipt = next((row for row in self._local_contact_impulses.get(bot_id, ())
+                        if row[0] == ack), None)
+        if receipt is not None and clocks.get(bot_id, (0, 0))[0] < ack:
+            clocks[bot_id] = (ack, max(0, sample_time - receipt[1]))
+        transit = clocks.get(bot_id, (0, 0))[1]
         rows = [row for row in self._local_contact_impulses.get(bot_id, ())
                 if row[0] > ack]
         self._local_contact_impulses[bot_id] = rows
+        if not rows:
+            transit = 0
         # Compact replicas carry motion, not the worker's descriptor cache.
         # Use the same installed mass as the engine/ground law below.
         mass = float(params['mass'])
@@ -20922,7 +20940,7 @@ class BattleRuntime(object):
         impulses = [(row[1]/1000000.0, row[2]/mass, row[3]/mass,
                      row[4]/inertia if inertia else 0.0) for row in rows]
         return vehicle_physics.predict_contact_velocity(
-            params, checkpoint, shape, sample_time/1000000.0,
+            params, checkpoint, shape, (sample_time-transit)/1000000.0,
             now/1000000.0, impulses)
 
     def _contact_tanks(self, position, own_shape, dt=0.0, extra_reach=0.0):

@@ -1065,9 +1065,38 @@ class WorldCollisionTests(unittest.TestCase):
             for index, (start, end) in enumerate(calls[-12:]):
                 height = (0.6, 1.1, 1.6)[index % 3]
                 for point in (start, end):
-                    expected = ((point.x - dx) * pose[0] + height * pose[1] +
-                                (point.z - dz) * pose[2])
+                    # No support was returned: keep fixed-height departure.
+                    expected = ((point.x-dx) * pose[0] + height * pose[1] +
+                                (point.z-dz) * pose[2])
                     self.assertAlmostEqual(expected, point.y, places=9)
+
+    def test_passive_destination_follows_existing_bank_but_new_wall_blocks(self):
+        for pitch,roll in ((-.4,.35),(.4,-.35)):
+            pose=world_collision._hull_pose_y(pitch,roll)
+            for wall in (False,True):
+                def collide(space,start,end,mask,*unused):
+                    direction=end-start
+                    hits=[]
+                    # The existing supporting plane, not a future floor.
+                    denominator=direction.y-direction.x*pose[0]-direction.z*pose[2]
+                    if abs(denominator)>1.e-9:
+                        t=(start.x*pose[0]+start.z*pose[2]-start.y)/denominator
+                        if 0.<=t<=1.:
+                            hits.append((t,_Vector(-pose[0],1.,-pose[2])))
+                    if wall and abs(direction.x)>1.e-9:
+                        t=(1.7-start.x)/direction.x
+                        if 0.<=t<=1.:
+                            hits.append((t,_Vector(-1.,0.,0.)))
+                    if hits:
+                        t,normal=min(hits,key=lambda item:item[0])
+                        return start+direction.scale(t),normal,0
+                scene=types.SimpleNamespace(wg_collideSegment=collide,
+                    wg_getMatInfoNearPoint=_miss_mat_info_1513)
+                with self.subTest(pitch=pitch,roll=roll,wall=wall):
+                    self.assertEqual(wall,world_collision.check_horizontal_collision(
+                        scene,types.SimpleNamespace(Vector3=_Vector),1,_Vector(),
+                        0.,5.,None,False,.1,motion_yaw=math.pi/2,
+                        pitch=pitch,roll=roll))
 
     def test_diagonal_drivable_profile_samples_the_hit_corner_segment(self):
         descriptor = _Strict1513Component(

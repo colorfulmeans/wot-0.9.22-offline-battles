@@ -2753,7 +2753,8 @@ class BotRuntime(object):
         bot_id = int(bot_id)
         if (self._suspension_ground_probe is None and
                 (self._wreck_ground_probe is None or
-                 self.states.get(bot_id, {}).get('alive', True))):
+                 (self.states.get(bot_id, {}).get('alive', True) and
+                  not self.states.get(bot_id, {}).get('_contact_dynamics')))):
             return None
         if bot_id in self._suspension_params:
             return self._suspension_params[bot_id]
@@ -8298,6 +8299,13 @@ class BotRuntime(object):
                                      advance_forward=False):
         """Apply one resolver response through the canonical bot motion path."""
         delta_x, delta_z = result['delta_velocity']
+        if delta_x or delta_z:
+            # Once externally displaced, the hull needs real track support
+            # on a lip just like a wreck. The centre-only navigation placement
+            # can keep a live Bot perched or bury half of it in a cliff face.
+            # Reuse descriptor-derived springs and the existing bounded probe;
+            # do not enable this cost for the untouched autonomous roster.
+            state['_contact_dynamics'] = True
         yaw = state['yaw']
         speed = state['speed']
         forward_impulse = (delta_x * math.sin(yaw) +

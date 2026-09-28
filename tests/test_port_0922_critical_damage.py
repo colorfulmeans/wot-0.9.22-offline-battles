@@ -1130,7 +1130,7 @@ class CriticalDamageTests(unittest.TestCase):
         self.assertTrue(payload['ammo_rack_death'])
         self.assertEqual('ammo_rack', payload['events'][-1]['kind'])
 
-    def test_2000_module_damage_detonates_a_reached_rack_after_one_saving_throw(self):
+    def test_report_5000_module_damage_detonates_a_reached_rack_after_one_saving_throw(self):
         kinds = ('ARMOR_PIERCING', 'ARMOR_PIERCING_CR', 'HOLLOW_CHARGE',
                  'ARMOR_PIERCING_HE', 'HIGH_EXPLOSIVE')
         for kind in kinds:
@@ -1143,7 +1143,7 @@ class CriticalDamageTests(unittest.TestCase):
                             typeDescriptor=_descriptor(),
                             position=object(), matrix=object(),
                             getComponents=lambda: ())
-                        shell = {'kind': kind, 'damage': (100.0, 2000.0)}
+                        shell = {'kind': kind, 'damage': (100.0, 5000.0)}
                         # These are reached module contacts. Native and
                         # reconstructed multi-box contacts must not add rolls.
                         mat = _Material('ammoBayHealth', chance=0.27)

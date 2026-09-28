@@ -2483,22 +2483,12 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 			if abs(v) > 0.05:
 				_kin = SLIDE_KINETIC * GRAVITY * (_ny_c if _ny_c > 0.1 else 0.1)
 				accel += _kin if v < 0.0 else -_kin
-		else:
-			# Auto-brake: intentional reverse, CLAMPED so grip never overshoots v past 0
-			# in one tick (the raw +/-grip impulse limit-cycled ~1 km/h around v=0).
-			if (throttle > 0 and v < -0.1) or (throttle < 0 and v > 0.1):
-				_need = -v / dt - accel
-				braking = _need if abs(_need) < grip else (grip if _need > 0.0 else -grip)
-				# If drive already crosses zero in this slice, no extra brake
-				# is needed. A negative "brake" would cancel the remaining engine
-				# work and make the slower worker permanently stop at zero.
-				if braking * throttle < 0.0:
-					braking = 0.0
-				# Drive and automatic braking act through the same tracks. A
-				# reverse shove must not grant a second full ground-force budget
-				# on top of the engine (which let a lighter hull pin a heavy one).
-				traction = longitudinal_slope_grip(slope_pitch) * GRAVITY * max(0.1, _ny_c)
-				accel += max(-traction - _ef, min(traction - _ef, braking))
+		# Opposite velocity does not prove an intentional braking command:
+		# a collision or gravity can push a powered tank backwards. Its
+		# engine already opposes that motion above, with the installed power
+		# and traction limit. Adding automatic brakes here gave a weak engine
+		# almost full track holding force as soon as a stronger tank moved it.
+		# Explicit handbrake and released-drive braking retain their own laws.
 	else:
 		# Parked / coasting: static grip tries to hold against slope gravity.
 		if abs(v) < 0.02:

@@ -7107,3 +7107,63 @@ that all Bot/player asymmetry, loaded-map ledges or turret frame pacing and
 visible collision alignment are solved. Those remain native test-package
 acceptance items. Crew/module fall injury and playable offline replay remain
 open from the earlier requests.
+
+### Reports 184737 / 185906: reciprocal shove timing and incomplete interiors
+
+Both reports run test-20260928-3f9b29a on 37_caucasus. Human momentum reaches
+the worker, including the 28,000 kg live hull near the bank; it is not a
+missing transport receipt. Two reproducible defects remained. Opposite
+physical velocity automatically engaged additional braking even when the
+driver had never reversed input, letting a pushed weaker engine claim nearly
+full track holding force. Powered opposition now uses the installed engine
+and traction law; explicit handbrake and released-drive braking remain.
+Consequently reversing a moving tank with the drive key alone may brake more
+slowly than before. This applies equally to human and Bot integration.
+
+Contact velocity prediction also omitted upstream receipt latency: it added
+unacknowledged momentum without the corresponding engine/ground reaction
+interval. Newly observed ACKs measure that interval using the recorded local
+impulse time and checkpoint time. A repeated ACK never grows the estimate;
+with no pending impulses there is no extra reaction interval. This remains
+an approximate velocity prediction; actual remote poses, sweeps, mass and
+exactly-once cumulative momentum consumption remain worker-owned. Tests now
+delay both input and publication by 100-300 ms at 30/60/144 Hz, including
+swapped masses, opposing engines and a parked target. The formerly stationary
+head-on cases advance; a separate two-way delayed off-centre wreck test
+retains translation and rotation. This is not proof of native retail parity.
+
+The live Bot previously retained centre-only placement after a shove even
+though wrecks used descriptor-derived track support. Received contact now
+enables that existing support solver for the affected live hull as well.
+Untouched autonomous Bots keep their previous sampling cost; hydraulic
+exclusions and descriptor failure boundaries remain. A passive grounded
+world sweep follows a continuous supporting bank only after current/middle/
+destination ground samples prove it. Future lower floors, missing support,
+airborne motion, new walls, actual vehicle bodies and the arena boundary do
+not receive that exemption. This addresses the reported uphill-facing bank
+veto and centre-only cliff perch, not a claim that every loaded-map ledge or
+the additional native probe cost has been accepted in Windows.
+
+The user's profile 1 changes all three KV-5 107 mm rounds' device damage to
+5,000, a representable value, not an integer overflow. Internal layout cache
+keys previously ignored asynchronously loaded hit-tester bounds: an incomplete
+first query (e.g. missing gun bounds) could keep the entire interior invalid
+after the same descriptor finished loading. The cache now includes all four
+component bounds. A regression reproduces invalid-to-valid recovery and a
+reached-rack test exercises 5,000 damage across shell kinds and owners,
+retaining the single 27% saving throw. The reports do not contain per-shot
+interior evidence, so this is not proof that caching caused every reported
+miss. Compact unavailable-layout and high-device-damage strike witnesses now
+distinguish effective damage, missing geometry, unreached modules, exit/stop
+filters, saving throws and applied loss without restoring per-triangle logs.
+
+Validation: 304 targeted cases pass; the 1,474-case subsystem selection passes
+with one environment skip and the same six explicit navigation exclusions.
+The full 528-case Bot suite retains 26 failures and 14 errors; the 27-case
+gameplay gate retains seven failures and two errors, with both complete
+failure-identifier multisets matching the parent. All 146 client sources
+compile with CPython 2.7.18 and exact Chinese HD #1513 inspection/ABI audits
+pass. No native API was added. Native shove feel, bank departure and modified
+shell hit locations remain test-package acceptance items; no game session was
+run by the agent. Earlier outstanding replay/fall-injury work is not claimed
+fixed by this change.
