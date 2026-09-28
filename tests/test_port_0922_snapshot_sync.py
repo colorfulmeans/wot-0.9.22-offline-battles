@@ -40,6 +40,49 @@ class SnapshotSyncTests(unittest.TestCase):
         self.sync = self.module.SnapshotSync(1, self.callback.append,
                                               clock=lambda: self.now[0])
 
+    def test_rollover_seam_preserves_orientation_for_live_and_dead_replicas(self):
+        for kind in ('players', 'bots'):
+            for alive in (True, False):
+                for timed in (True, False):
+                    for sign in (-1.0, 1.0):
+                        with self.subTest(kind=kind, alive=alive, timed=timed, sign=sign):
+                            clock = [0.0]
+                            sync = self.module.SnapshotSync(1, clock=lambda: clock[0])
+                            initial = dict(player(7, alive=alive),
+                                           pitch=sign * (math.pi - 0.05),
+                                           roll=sign * (math.pi - 0.05))
+                            target = dict(initial, pitch=sign * (-math.pi + 0.05),
+                                          roll=sign * (-math.pi + 0.05))
+                            for tick, state in ((1, initial), (2, target)):
+                                clock[0] = (tick - 1) * 0.1
+                                message = dict(round_id=1, server_tick=tick)
+                                message[kind] = [state]
+                                if timed:
+                                    message.update(bot_state_revision=tick,
+                                                   motion_time_us=(tick - 1) * 100000,
+                                                   bot_state_time_us=(tick - 1) * 100000)
+                                    if kind == 'players':
+                                        state = dict(state, pose_time_us=(tick - 1) * 100000)
+                                        message[kind] = [state]
+                                sync.snapshot(message)
+                            seen = False
+                            for frame in range(11, 201):
+                                clock[0] = frame / 100.0
+                                for event in sync.advance(clock[0]):
+                                    pose = event['pose']
+                                    for axis in ('pitch', 'roll'):
+                                        # Every intermediate remains upside down:
+                                        # linear Euler interpolation went through 0.
+                                        self.assertLess(math.cos(pose[axis]), -0.998)
+                                        if abs(self.module._angle_delta(
+                                                initial[axis], pose[axis])) > 0.001:
+                                            seen = True
+                            self.assertTrue(seen)
+                            key = ('player:' if kind == 'players' else 'bot:') + '7'
+                            for axis in ('pitch', 'roll'):
+                                self.assertAlmostEqual(0.0, self.module._angle_delta(
+                                    target[axis], sync._entities[key]['current'][axis]), places=4)
+
     def test_manifest_creates_players_and_bots_once(self):
         message = {'round_id': 3, 'players': [player(1), player(2)],
                    'bots': [{'id': 7, 'vehicle': 'germany:PzI', 'team': 2}]}

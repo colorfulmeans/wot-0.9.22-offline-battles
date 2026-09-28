@@ -7566,3 +7566,14 @@ The additional 617-case Bot/physics run has 26 failures and 14 errors; rerunning
 all 35 affected methods with the parent server/codec/client modules reproduces
 the same failure/error counts. These pre-existing navigation, water and stale
 interface expectations are not presented as passing or repaired here.
+
+Final consumer audit also found that SnapshotSync blended pitch/roll linearly
+while yaw already used periodic deltas. Normalizing an overturn across +/-pi
+would otherwise turn it back through upright for one presentation segment.
+Apply the same shortest-angle delta to body attitude in timed interpolation,
+ordinary live chase, wreck chase and wreck-settlement error. Native remote
+matrix mirroring already treats all three axes periodically. A new regression
+fails in all 16 combinations of player/Bot, live/dead, timed/untimed and both
+seam directions before the change, then passes; gun articulation is unchanged.
+The final 1,198-case snapshot/battle/entity/protocol/codec selection passes with
+the same optional interpreter skip. All 146 client modules compile under 2.7.

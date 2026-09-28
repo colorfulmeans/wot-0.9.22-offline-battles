@@ -641,9 +641,8 @@ class SnapshotSync(object):
         delta_z = target['z'] - current['z']
         angle_error = max(
             [abs(_angle_delta(current[axis], target[axis]))
-             for axis in ('yaw', 'aim_yaw')] +
-            [abs(target[axis] - current[axis])
-             for axis in ('pitch', 'roll', 'gun_pitch')])
+             for axis in ('yaw', 'aim_yaw', 'pitch', 'roll')] +
+            [abs(target['gun_pitch'] - current['gun_pitch'])])
         if (delta_x * delta_x + delta_y * delta_y + delta_z * delta_z <=
                 WRECK_SETTLE_DISTANCE * WRECK_SETTLE_DISTANCE and
                 angle_error <= WRECK_SETTLE_ANGLE):
@@ -655,11 +654,9 @@ class SnapshotSync(object):
             current = dict(current)
             for axis in ('x', 'y', 'z'):
                 current[axis] += (target[axis] - current[axis]) * alpha
-            for axis in ('yaw', 'aim_yaw'):
+            for axis in ('yaw', 'aim_yaw', 'pitch', 'roll'):
                 current[axis] += _angle_delta(
                     current[axis], target[axis]) * alpha
-            for axis in ('pitch', 'roll'):
-                current[axis] += (target[axis] - current[axis]) * alpha
             current['gun_pitch'] += (
                 target['gun_pitch'] - current['gun_pitch']) * alpha
             record['current'] = current
@@ -769,12 +766,9 @@ class SnapshotSync(object):
                 for axis in ('x', 'y', 'z'):
                     desired[axis] += (
                         segment_target[axis] - previous[axis]) * progress
-                for axis in ('yaw', 'aim_yaw'):
+                for axis in ('yaw', 'aim_yaw', 'pitch', 'roll'):
                     desired[axis] += _angle_delta(
                         previous[axis], segment_target[axis]) * progress
-                for axis in ('pitch', 'roll'):
-                    desired[axis] += (
-                        segment_target[axis] - previous[axis]) * progress
                 desired['gun_pitch'] += (
                     segment_target['gun_pitch'] -
                     previous['gun_pitch']) * progress
@@ -837,12 +831,9 @@ class SnapshotSync(object):
                 current = dict(current)
                 for axis in ('x', 'y', 'z'):
                     current[axis] += (desired[axis] - current[axis]) * alpha
-                for axis in ('yaw', 'aim_yaw'):
+                for axis in ('yaw', 'aim_yaw', 'pitch', 'roll'):
                     current[axis] += _angle_delta(
                         current[axis], desired[axis]) * alpha
-                for axis in ('pitch', 'roll'):
-                    current[axis] += (
-                        desired[axis] - current[axis]) * alpha
                 current['gun_pitch'] += (
                     desired['gun_pitch'] - current['gun_pitch']) * alpha
                 snapped = False
