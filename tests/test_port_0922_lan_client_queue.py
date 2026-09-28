@@ -589,7 +589,7 @@ class LanClientQueueTests(unittest.TestCase):
         }
         for state in states:
             state.update(push_x=0.0, push_z=0.0,
-                         contact_push_acks=[[1, 2, 150.0, -75.0, .2, -.1]])
+                         contact_push_acks=[[1, 2, 150.0, -75.0, .2, -.1, 0.0]])
         unused_frozen, full_size = lan_client_module._freeze_outbound(
             full_message, [0])
 
@@ -608,7 +608,7 @@ class LanClientQueueTests(unittest.TestCase):
         # keeps the state it already admitted for them.
         expected = {
             'id', 'x', 'y', 'z', 'yaw', 'pitch', 'roll',
-            'aim_yaw', 'gun_pitch', 'speed', 'push_x', 'push_z', 'contact_push_acks',
+            'aim_yaw', 'gun_pitch', 'speed', 'push_x', 'push_z', 'push_yaw', 'contact_push_acks',
             'movement_dir', 'rotation_dir', 'fire_seq', 'shell_index',
             'next_shell_index', 'ammo_remaining', 'ammo_reload_pending',
             'reload_time', 'reload_duration', 'clip', 'clip_size',

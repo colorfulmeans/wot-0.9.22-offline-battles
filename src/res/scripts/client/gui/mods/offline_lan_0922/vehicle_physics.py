@@ -2397,7 +2397,17 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 			# in one tick (the raw +/-grip impulse limit-cycled ~1 km/h around v=0).
 			if (throttle > 0 and v < -0.1) or (throttle < 0 and v > 0.1):
 				_need = -v / dt - accel
-				accel += _need if abs(_need) < grip else (grip if _need > 0.0 else -grip)
+				braking = _need if abs(_need) < grip else (grip if _need > 0.0 else -grip)
+				# If drive already crosses zero in this slice, no extra brake
+				# is needed. A negative "brake" would cancel the remaining engine
+				# work and make the slower worker permanently stop at zero.
+				if braking * throttle < 0.0:
+					braking = 0.0
+				# Drive and automatic braking act through the same tracks. A
+				# reverse shove must not grant a second full ground-force budget
+				# on top of the engine (which let a lighter hull pin a heavy one).
+				traction = longitudinal_slope_grip(slope_pitch) * GRAVITY * max(0.1, _ny_c)
+				accel += max(-traction - _ef, min(traction - _ef, braking))
 	else:
 		# Parked / coasting: static grip tries to hold against slope gravity.
 		if abs(v) < 0.02:

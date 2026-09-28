@@ -9026,7 +9026,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         friendly_position = battle._resolve_local_tank_contacts(
             local, (0.0, 0.0, 0.0), 0.0, 0.1)
-        friendly_push = battle._local_push_z
+        friendly_push = battle._local_speed + battle._local_push_z
 
         state['team'] = 2
         battle._local_contact_pushes.clear()
@@ -9035,7 +9035,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._local_push_z = 0.0
         enemy_position = battle._resolve_local_tank_contacts(
             local, (0.0, 0.0, 0.0), 0.0, 0.1)
-        enemy_push = battle._local_push_z
+        enemy_push = battle._local_speed + battle._local_push_z
 
         self.assertLess(friendly_position[2], 0.0)
         self.assertLess(friendly_push, 0.0)

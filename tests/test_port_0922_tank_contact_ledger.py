@@ -38,7 +38,7 @@ class ContactLedgerTests(unittest.TestCase):
                     position = (0.,0.,0.)
                     # The old version treated this unaccepted request as
                     # space, even when a world collision held the receiver.
-                    battle._local_contact_pushes[11] = [11,1,0.,0.,0.,20.]
+                    battle._local_contact_pushes[11] = [11,1,0.,0.,0.,20., 0.0]
                     with mock.patch('sys.stdout'):
                         # A 200-ms worker/snapshot gap contains many render
                         # frames, but the displayed hull remains occupied.
@@ -99,18 +99,18 @@ class ContactLedgerTests(unittest.TestCase):
 
     def test_bot_velocity_and_acknowledgement_roundtrip_atomically(self):
         state = {'id': 11, 'speed': 3, 'push_x': 2.4, 'push_z': -1.3,
-                 'contact_push_acks': [[1, 8, 2.4, -1.3, .125, -.25]]}
+                 'contact_push_acks': [[1, 8, 2.4, -1.3, .125, -.25, 0.0]]}
         decoded = bot_state_codec.decode_row(bot_state_codec.encode_row(state), {})
         for key in ('speed', 'push_x', 'push_z', 'contact_push_acks'):
             self.assertEqual(state[key], decoded[key])
 
     def test_malformed_checkpoint_cannot_poison_a_round(self):
         for value in (None, [[11, 1, 0, 0]],
-                      [[11, 1, float('nan'), 0, 0, 0]], [[11, True, 0, 0, 0, 0]],
-                      [[11, 1, 0, 0, 0, 0], [11, 2, 0, 0, 0, 0]],
-                      [[11, 1, float('inf'), 0, 0, 0]],
-                      [[11, 1, 0, 0, float('nan'), 0]],
-                      [[11, 1, 0, 0, 0, float('inf')]]):
+                      [[11, 1, float('nan'), 0, 0, 0, 0.0]], [[11, True, 0, 0, 0, 0, 0.0]],
+                      [[11, 1, 0, 0, 0, 0, 0.0], [11, 2, 0, 0, 0, 0, 0.0]],
+                      [[11, 1, float('inf'), 0, 0, 0, 0.0]],
+                      [[11, 1, 0, 0, float('nan'), 0, 0.0]],
+                      [[11, 1, 0, 0, 0, float('inf'), 0.0]]):
             with self.assertRaises((ValueError, TypeError, OverflowError)):
                 ledger.normalize(value)
 
@@ -145,12 +145,12 @@ class WorkerContactLedgerTests(unittest.TestCase):
                 'mass':100575.,'shape':tank_collision.DEFAULT_SHAPE,'ram_profile':{},
                 'physics':runtime._physics_params_for(11)}
             raw=dict(id=1,team=1,x=0.,y=0.,z=-60.,yaw=0.,speed=0.,
-                     tank_pushes=[[11,2,0.,0.,0.,.5]])
+                     tank_pushes=[[11,2,0.,0.,0.,.5, 0.0]])
             runtime._resolve_tank_contacts([raw],1.,.1)
             self.assertAlmostEqual(0.,state['z'])
             runtime._resolve_tank_contacts([raw],1.1,.1)
             self.assertAlmostEqual(0.,state['z'])
-            self.assertEqual([[1,2,0.,0.,0.,.5]],state['contact_push_acks'])
+            self.assertEqual([[1,2,0.,0.,0.,.5, 0.0]],state['contact_push_acks'])
 
     def test_engine_and_mass_survive_visible_to_worker_contact(self):
         physics = self.module.vehicle_physics
@@ -185,6 +185,8 @@ class WorkerContactLedgerTests(unittest.TestCase):
                     # the light body and retain the heavy body's track hold.
                     raw = dict(id=1, team=1, x=100., y=0., z=100., yaw=0.,
                                speed=0., tank_pushes=list(sent.values()))
+                    runtime._consume_human_contact_pushes([raw], 1.)
+                    state['z'] += state['speed']*dt
                     runtime._resolve_tank_contacts([raw], 1., dt)
                     self.assertEqual(moves, state['z'] > 0.)
                     before = state['push_z']
@@ -200,14 +202,16 @@ class WorkerContactLedgerTests(unittest.TestCase):
             'mass': 100000, 'shape': tank_collision.DEFAULT_SHAPE, 'ram_profile': {},
             'physics': runtime._physics_params_for(11)}
         human = {'id': 1, 'x': 100, 'y': 0, 'z': 100, 'yaw': 0,
-                 'tank_pushes': [[11, 1, 0, 4 * state['mass'], 0, 0]], 'team': 1}
+                 'tank_pushes': [[11, 1, 0, 4 * state['mass'], 0, 0, 0.0]], 'team': 1}
+        runtime._consume_human_contact_pushes([human], 1.0)
+        state['z'] += state['speed']*.1
         runtime._resolve_tank_contacts([human], 1.0, .1)
         self.assertGreater(state['z'], .3)
-        self.assertEqual([[1, 1, 0., 4 * state['mass'], 0., 0.]], state['contact_push_acks'])
-        speed_after = state['push_z']
+        self.assertEqual([[1, 1, 0., 4 * state['mass'], 0., 0., 0.0]], state['contact_push_acks'])
+        speed_after = state['speed']
         runtime._resolve_tank_contacts([human], 1.1, .1)
-        self.assertLess(state['push_z'], speed_after)
-        self.assertEqual([[1, 1, 0., 4 * state['mass'], 0., 0.]], state['contact_push_acks'])
+        self.assertEqual(state['speed'], speed_after)
+        self.assertEqual([[1, 1, 0., 4 * state['mass'], 0., 0., 0.0]], state['contact_push_acks'])
 
 class ServerContactRelayTests(unittest.TestCase):
     def test_server_relays_cumulative_momentum_without_reset_on_replay(self):
@@ -227,8 +231,8 @@ class ServerContactRelayTests(unittest.TestCase):
                 'shell_index': 0, 'next_shell_index': 0,
                 'shell_change_pending': False,
                 'gun_checkpoint': _gun_checkpoint(), 'tank_pushes': rows})
-        latest = [11, 4, 150000, -50000, .2, -.3]
+        latest = [11, 4, 150000, -50000, .2, -.3, 0.0]
         self.assertTrue(send([latest]))
         self.assertEqual([latest], state._public_player(player)['tank_pushes'])
-        self.assertTrue(send([[11, 1, 30000, 0, .1, 0]]))
+        self.assertTrue(send([[11, 1, 30000, 0, .1, 0, 0.0]]))
         self.assertEqual([latest], state._public_player(player)['tank_pushes'])

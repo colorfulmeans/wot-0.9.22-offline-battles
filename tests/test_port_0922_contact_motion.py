@@ -34,7 +34,7 @@ class TranslationSweepTests(unittest.TestCase):
                             local,(0.,0.,position[2]+10./hz),0.,1./hz)
                         self.assertLessEqual(position[2],1.0101)
                 for row in battle._local_contact_pushes.values():
-                    self.assertEqual([0.,0.],row[4:])
+                    self.assertEqual([0.,0.],row[4:6])
 
     def test_a_clear_endpoint_cannot_skip_an_intervening_hull(self):
         for yaw in (0., .7, math.pi/2, -2.1):

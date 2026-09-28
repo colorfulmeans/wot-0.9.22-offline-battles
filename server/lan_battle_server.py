@@ -6240,6 +6240,7 @@ class BattleState:
                 _finite_float(raw.get("speed")), -80.0, 80.0), 4),
             "push_x": _finite_float(raw.get("push_x")),
             "push_z": _finite_float(raw.get("push_z")),
+            "push_yaw": _finite_float(raw.get("push_yaw")),
             "contact_push_acks": list(tank_contact_ledger.normalize(
                 raw.get("contact_push_acks", [])).values()),
             "movement_dir": (1 if movement > 0.01 else
@@ -6658,6 +6659,7 @@ class BattleState:
         # when an unrelated combat ledger is contained.
         result['push_x'] = raw.get('push_x', 0.0)
         result['push_z'] = raw.get('push_z', 0.0)
+        result['push_yaw'] = raw.get('push_yaw', 0.0)
         result['contact_push_acks'] = copy.deepcopy(raw.get('contact_push_acks', []))
         result.update({
             "id": int(identity["id"]),

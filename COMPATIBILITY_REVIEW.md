@@ -6798,3 +6798,82 @@ reproduced navigation failures remain excluded. All 146 client files
 compile under CPython 2.7.18. The correction adds no native API or physical
 coefficient; actual Windows repeat pushing remains the gameplay acceptance
 boundary for the test package.
+
+### September 28 passive wreck dynamics and head-on pushing (143607)
+
+Report `20260928-143607-cd4830c88085` runs `test-20260928-9f0485a` in
+all roles on `37_caucasus`. Repeated M41/T-43 corpse impulses are consumed,
+so the previous stale-ACK defect is not the cause of these new symptoms.
+The corpse integrator has no yaw response and explicitly rolls back a move
+whose support drops more than 0.6 m. This explains both non-rotating corpses
+and their refusal to leave an edge.
+
+At 14:33:15--19 the 100575-kg player KV-5 reports roughly 2.2 m/s while its
+position barely advances against friendly Bot 9, a 32000-kg SU-100M1 with
+382460 W. The worker records clear world/path probes; the later nearby
+170-ton Bot does not explain the earlier pair. Incoming human momentum was
+consumed after the worker's drive step, and a reverse shove was stored apart
+from the signed drive speed. Automatic braking also added a second traction
+budget to engine force; when engine force already crossed zero, its negative
+brake erased the remaining drive work for that slice. These are code defects,
+not evidence that the original vehicle masses should be multiplied.
+
+The worker now consumes cumulative human momentum before driving; the final
+contact pass sees the same ACK and cannot consume it twice. Both live owners
+put the complete longitudinal impulse into signed road speed. Engine power,
+installed mass, terrain resistance and the existing longitudinal grip curve
+remain the force inputs. Automatic braking shares that curve's ground-force
+budget with the engine and cannot apply a negative brake to cancel forward
+work after zero crossing. First-impact RAM proofs and the enemy 0.25 damage
+scale remain separate and unchanged.
+
+For passive Bot hulls the planar contact constraint now includes yaw inertia
+in its effective mass before choosing a normal/friction impulse. The impulse
+uses the common clipped footprint contact, so opposite offsets turn opposite
+ways, a centred hit produces no yaw, and rotation is not added as free energy
+after a translational solve. Motor corner contacts also transfer a bounded
+yaw impulse to a wreck. Original mass and mounted chassis dimensions define
+the uniform-box planar inertia, consistent with the existing copied rigid-hull
+trial. Uniform track loading projects the existing parked longitudinal and
+lateral Coulomb budgets into yaw resistance. This is an explicit planar
+approximation; neither native retail inertia nor full three-dimensional tank
+contact has been recovered or established by these tests.
+
+The matched client/server/worker ledger now has seven fields: actor, sequence,
+cumulative X/Z momentum, two retained inert position totals, and cumulative
+yaw momentum. `push_yaw` and its ACK travel in the same compact Bot row and
+server snapshot. The visible client predicts only the unseen angular share;
+the worker never reconstructs its lever from a later pose. Numeric validation,
+coalescing, duplicate/reordered messages and ACK quantisation are covered.
+No mixed-version wire mode is introduced; distribute all roles together.
+
+A wreck advances yaw only through the existing vehicle rotation sweep,
+arena boundary, detached-turret and native/catalog rotation guards. Its
+vertical owner is now the existing suspension/ballistic integrator, including
+partial support, pitch/roll, airborne gravity and landing. It continues after
+horizontal momentum stops and consumes no ground-friction budget in flight.
+The centre-column fallback requires opposing support across a hole; one
+remote supported end no longer holds a hull beyond a cliff. A corpse's landing
+cannot create another death/HP event. This does not implement module/crew
+injuries for live falling tanks, nor assign a new owner to human corpses.
+Bounded `WRECK motion` diagnostics expose actual mass, pose, yaw momentum,
+vertical speed and airborne state for the next native acceptance report.
+
+Validation: 1,471 focused checks plus 56 wreck/snapshot/mass/spawn checks pass with
+one environment-dependent skip. The six previously reproduced navigation
+failures remain excluded from that focused selection. New coverage includes
+visible offset contact through worker consumption, yaw ACK retries, powered
+corner torque, energy/momentum checks, world-blocked rotation, repeated
+shove/settle cycles, ten-spring edge departure, airborne momentum, and landing
+after horizontal motion stops. The head-on owner loop uses a 0.1-second worker
+cadence against 30/60/144-Hz visible motion and checks KV-5/SU-100M1 with both
+player/Bot assignments and a weaker-engine counterexample. Tests do not prove
+retail feel or equal native timing. Exact installed #1513 inspection, ABI
+audit and Python 2.7 source compilation pass; no new native method is added.
+The packaged Windows build still requires actual edge/rotation/head-on play
+acceptance. Existing unrelated gameplay/CI failures are not claimed repaired.
+The broader Bot run reproduced the previously recorded 26 failure occurrences
+and 14 errors, plus three differences resolved by preserving one-time spawn
+support and observing total signed collision velocity. Those three cases pass
+in the final focused rerun. The gameplay gate still has the same seven failures
+and two errors as the parent.

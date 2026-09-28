@@ -250,7 +250,7 @@ def encode_row(state):
     elif rotation < -0.01:
         flags |= F_TURNING_RIGHT
 
-    if any(name in state for name in ('push_x', 'push_z', 'contact_push_acks')):
+    if any(name in state for name in ('push_x', 'push_z', 'push_yaw', 'contact_push_acks')):
         flags |= F_HAS_CONTACT_MOMENTUM
 
     row = []
@@ -328,7 +328,8 @@ def encode_row(state):
                            _fixed(elapsed, SECONDS_SCALE))
     if flags & F_HAS_CONTACT_MOMENTUM:
         row.extend((_fixed(state.get('push_x', 0.0), SPEED_SCALE),
-                    _fixed(state.get('push_z', 0.0), SPEED_SCALE)))
+                    _fixed(state.get('push_z', 0.0), SPEED_SCALE),
+                    _fixed(state.get('push_yaw', 0.0), ANGLE_SCALE)))
         try:
             acknowledgements = tank_contact_ledger.normalize(
                 state.get('contact_push_acks', []))
@@ -340,7 +341,7 @@ def encode_row(state):
             row.extend((actor, entry[1], _fixed(entry[2], SPEED_SCALE),
                         _fixed(entry[3], SPEED_SCALE),
                         _fixed(entry[4], POSITION_SCALE),
-                        _fixed(entry[5], POSITION_SCALE)))
+                        _fixed(entry[5], POSITION_SCALE), _fixed(entry[6], SPEED_SCALE)))
     return row
 
 
@@ -475,6 +476,7 @@ def decode_row(row, static):
     if flags & F_HAS_CONTACT_MOMENTUM:
         result['push_x'] = _real(cursor.take(), SPEED_SCALE)
         result['push_z'] = _real(cursor.take(), SPEED_SCALE)
+        result['push_yaw'] = _real(cursor.take(), ANGLE_SCALE)
         count = cursor.take()
         if not 0 <= count <= tank_contact_ledger.MAX_ACTORS:
             raise BotStateCodecError('invalid contact acknowledgement count')
@@ -485,7 +487,8 @@ def decode_row(row, static):
                 _real(cursor.take(), SPEED_SCALE),
                 _real(cursor.take(), SPEED_SCALE),
                 _real(cursor.take(), POSITION_SCALE),
-                _real(cursor.take(), POSITION_SCALE)])
+                _real(cursor.take(), POSITION_SCALE),
+                _real(cursor.take(), SPEED_SCALE)])
         try:
             tank_contact_ledger.normalize(result['contact_push_acks'])
         except (ValueError, TypeError, OverflowError):

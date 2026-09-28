@@ -3668,6 +3668,7 @@ class BattleRuntime(object):
                 motion_resolver=self._resolve_bot_motion,
                 motion_report=self._report_bot_destructible_contact,
                 turret_motion_probe=self._turret_motion_is_clear,
+                wreck_rotation_probe=self._resolve_bot_rotation,
                 turret_hulls_provider=self._turret_navigation_hulls,
                 world_receipt_probe=self._direction_world_receipt,
                 water_depth_probe=self._water_depth,
@@ -20721,74 +20722,9 @@ class BattleRuntime(object):
         for event_seq in tuple(self._native_ram_contact_proofs):
             self._retry_native_ram_contact_proof(event_seq)
 
-    @staticmethod
-    def _ram_obb_vertices(body):
-        shape = body['shape']
-        yaw = float(body['yaw'])
-        sine = math.sin(yaw)
-        cosine = math.cos(yaw)
-        right_x, right_z = cosine, -sine
-        forward_x, forward_z = sine, cosine
-        center_x, center_z = float(body['x']), float(body['z'])
-        half_width, half_length = float(shape[0]), float(shape[1])
-        return [
-            (center_x + sx * half_width * right_x +
-             sz * half_length * forward_x,
-             center_z + sx * half_width * right_z +
-             sz * half_length * forward_z)
-            for sx, sz in ((-1.0, -1.0), (1.0, -1.0),
-                           (1.0, 1.0), (-1.0, 1.0))]
-
-    @classmethod
-    def _ram_obb_overlap_polygon(cls, body_a, body_b):
-        """Clip the mounted chassis footprints to their shared contact area."""
-        polygon = cls._ram_obb_vertices(body_a)
-        clip = cls._ram_obb_vertices(body_b)
-        for index in range(4):
-            start = clip[index]
-            end = clip[(index + 1) % 4]
-            edge_x, edge_z = end[0] - start[0], end[1] - start[1]
-
-            def inside(point):
-                return (edge_x * (point[1] - start[1]) -
-                        edge_z * (point[0] - start[0])) >= -1.0e-7
-
-            def intersection(first, second):
-                segment_x = second[0] - first[0]
-                segment_z = second[1] - first[1]
-                denominator = segment_x * edge_z - segment_z * edge_x
-                if abs(denominator) <= 1.0e-12:
-                    return second
-                ratio = ((start[0] - first[0]) * edge_z -
-                         (start[1] - first[1]) * edge_x) / denominator
-                return (first[0] + ratio * segment_x,
-                        first[1] + ratio * segment_z)
-
-            output = []
-            if not polygon:
-                return None
-            previous = polygon[-1]
-            previous_inside = inside(previous)
-            for current in polygon:
-                current_inside = inside(current)
-                if current_inside != previous_inside:
-                    output.append(intersection(previous, current))
-                if current_inside:
-                    output.append(current)
-                previous = current
-                previous_inside = current_inside
-            polygon = output
-        return polygon
-
-    @classmethod
-    def _ram_obb_overlap_point(cls, body_a, body_b):
-        """Return a point inside the exact convex overlap of two OBBs."""
-        polygon = cls._ram_obb_overlap_polygon(body_a, body_b)
-        if not polygon:
-            return None
-        count = float(len(polygon))
-        return (sum(point[0] for point in polygon) / count,
-                sum(point[1] for point in polygon) / count)
+    _ram_obb_vertices = staticmethod(tank_collision.obb_vertices)
+    _ram_obb_overlap_polygon = staticmethod(tank_collision.obb_overlap_polygon)
+    _ram_obb_overlap_point = staticmethod(tank_collision.obb_overlap_point)
 
     @classmethod
     def _ram_contact_xz_samples(cls, first, second, normal):
@@ -21038,6 +20974,7 @@ class BattleRuntime(object):
                 if player_effective is not None else
                 self._ram_profile(descriptor))
             physical_velocity = None
+            push_yaw = _number(physical_state.get('push_yaw'))
             if record.get('kind') == 'bot':
                 physical_yaw = _number(physical_state.get('yaw'))
                 physical_speed = (_number(physical_state.get('speed'))
@@ -21053,6 +20990,13 @@ class BattleRuntime(object):
                     _number(physical_state.get('push_x')) + pending[0],
                     math.cos(physical_yaw) * physical_speed +
                     _number(physical_state.get('push_z')) + pending[1])
+                inertia = tank_collision.wreck_yaw_inertia(dict(
+                    alive=alive, mass=_number(mass, 25000.0), shape=shape))
+                if inertia:
+                    push_yaw += tank_contact_ledger.pending_angular(
+                        self._local_contact_pushes, int(record['network_id']),
+                        physical_state.get('contact_push_acks'),
+                        int(getattr(self.client, 'player_id', 0)))/inertia
                 # Pending momentum is reciprocal; pending space is not.
                 # A worker can reject displacement against a rock or another
                 # hull. Use the actual presented body, never a requested pose.
@@ -21088,6 +21032,7 @@ class BattleRuntime(object):
                 # Historical armour receipts settle HP independently.
                 'impulse': True,
                 'physical_velocity': physical_velocity,
+                'push_yaw': push_yaw,
                 # Bot wreck momentum retains its real inverse mass. Their
                 # owner alone advances the pose. A dead human hull has no
                 # integrator in any process and stays world geometry.
@@ -21174,17 +21119,18 @@ class BattleRuntime(object):
         responses = dict((other['id'], solved[other['id']]['delta_velocity'])
                          for other in physical_others
                          if (solved[other['id']]['delta_velocity'] != (0.0, 0.0) or
-                             solved[other['id']]['correction'] != (0.0, 0.0)))
+                             solved[other['id']]['correction'] != (0.0, 0.0) or
+                             solved[other['id']]['delta_yaw'] != 0.0))
         traverse_bodies = tank_collision.post_contact_velocity_bodies(
             [own] + physical_others, solved)
         angular = tank_collision.traverse_impulses(
-            traverse_bodies, dt, anchor=own['id'])
+            traverse_bodies, dt, anchor=own['id'], angular_results=solved)
         contact['delta_velocity'] = tuple(
             contact['delta_velocity'][i] + angular[own['id']][i]
             for i in range(2))
         for other in physical_others:
             delta = angular[other['id']]
-            if delta != (0.0, 0.0):
+            if delta != (0.0, 0.0) or solved[other['id']]['delta_yaw']:
                 previous = responses.get(other['id'], (0.0, 0.0))
                 responses[other['id']] = tuple(previous[i]+delta[i] for i in range(2))
         contact['responses'] = sorted(responses.items())
@@ -21200,7 +21146,9 @@ class BattleRuntime(object):
             if other.get('kind') == 'bot':
                 tank_contact_ledger.record(
                     self._local_contact_pushes, other['network_id'],
-                    (delta[0] * other['mass'], delta[1] * other['mass']))
+                    (delta[0] * other['mass'], delta[1] * other['mass']),
+                    angular=(solved[other_id]['delta_yaw'] *
+                             tank_collision.wreck_yaw_inertia(other)))
         delta_x, delta_z = contact['delta_velocity']
         if ((delta_x or delta_z) and now >= self._local_contact_log_time):
             self._local_contact_log_time = now + 2.0
@@ -21212,13 +21160,8 @@ class BattleRuntime(object):
                      for o in physical_others]))
         forward_impulse = (delta_x * math.sin(yaw) +
                            delta_z * math.cos(yaw))
-        applied_forward = 0.0
-        if forward_impulse * self._local_speed < 0.0:
-            applied_forward = (
-                -self._local_speed if
-                abs(forward_impulse) >= abs(self._local_speed)
-                else forward_impulse)
-            self._local_speed += applied_forward
+        applied_forward = forward_impulse
+        self._local_speed += applied_forward
         push_x = (self._local_push_x + delta_x -
                   applied_forward * math.sin(yaw))
         push_z = (self._local_push_z + delta_z -

@@ -113,19 +113,19 @@ class ContactWireRepairTests(unittest.TestCase):
         state = cf._bot_state()
         old = cf.codec.encode_row(state)
         state.update(push_x=-1.25, push_z=2.5,
-                     contact_push_acks=[[3, 9, 220000.0, -45000.0, .2, -.4]])
+                     contact_push_acks=[[3, 9, 220000.0, -45000.0, .2, -.4, 0.0]])
         extended = cf.codec.encode_row(state)
         changed = [(a, b) for a, b in zip(old, extended) if a != b]
         self.assertEqual(1, len(changed))  # Only the optional presence bit.
         self.assertEqual(cf.codec.F_HAS_CONTACT_MOMENTUM, changed[0][0] ^ changed[0][1])
-        self.assertEqual(9, len(extended)-len(old))
+        self.assertEqual(11, len(extended)-len(old))
         decoded = cf.codec.decode_row(extended, cf.STATIC)
         for field in ('push_x', 'push_z', 'contact_push_acks'):
             self.assertEqual(state[field], decoded[field])
         self.assertEqual(extended, cf.codec.encode_row(decoded))
 
     def test_truncated_or_duplicate_acknowledgements_are_rejected(self):
-        state = cf._bot_state(contact_push_acks=[[3, 9, 220000.0, 0.0, .2, -.4]])
+        state = cf._bot_state(contact_push_acks=[[3, 9, 220000.0, 0.0, .2, -.4, 0.0]])
         row = cf.codec.encode_row(state)
         for end in range(1, 10):
             with self.subTest(end=end), self.assertRaises(cf.codec.BotStateCodecError):
@@ -135,7 +135,7 @@ class ContactWireRepairTests(unittest.TestCase):
             cf.codec.encode_row(state)
 
     def test_wire_projection_does_not_mutate_checkpoints(self):
-        state = cf._bot_state(contact_push_acks=[[3, 9, 220000.0, 0.0, .2, -.4]])
+        state = cf._bot_state(contact_push_acks=[[3, 9, 220000.0, 0.0, .2, -.4, 0.0]])
         before = copy.deepcopy(state)
         cf.codec.decode_row(cf.codec.encode_row(state), cf.STATIC)
         self.assertEqual(before, state)

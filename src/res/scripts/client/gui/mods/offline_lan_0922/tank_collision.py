@@ -613,13 +613,14 @@ def post_contact_velocity_bodies(tanks, results):
         try:
             body['vx'] = float(body.get('vx', 0.0)) + float(delta[0])
             body['vz'] = float(body.get('vz', 0.0)) + float(delta[1])
+            body['push_yaw'] = body.get('push_yaw', 0.0) + result.get('delta_yaw', 0.0)
         except (TypeError, ValueError, IndexError, OverflowError):
             raise RuntimeError('invalid solved contact velocity')
         updated.append(body)
     return updated
 
 
-def traverse_impulses(tanks, dt, anchor=None):
+def traverse_impulses(tanks, dt, anchor=None, angular_results=None):
     """Spend track torque at an occupied corner instead of a free yaw shove.
 
     The chassis remains a constrained planar box, not the retail cell body.
@@ -631,6 +632,7 @@ def traverse_impulses(tanks, dt, anchor=None):
     """
     bodies = sorted(tanks, key=lambda b: b['id'])
     result = dict((b['id'], (0.0, 0.0)) for b in bodies)
+    angular = dict((b['id'], 0.0) for b in bodies)
     if dt <= 0.0:
         return result
     for a in bodies:
@@ -670,9 +672,9 @@ def traverse_impulses(tanks, dt, anchor=None):
             # A face has two extreme corners. Only the one moving into the
             # peer loads the drive, and a corner moving away releases it.
             support = min(x*nx+z*nz for x, z in corners)
-            arms = [z*nx-x*nz for x, z in corners
+            arms = [(z*nx-x*nz, x, z) for x, z in corners
                     if x*nx+z*nz <= support+POSITION_SLOP]
-            arm = min(arms, key=lambda r: r*omega)
+            arm, corner_x, corner_z = min(arms, key=lambda r: r[0]*omega)
             if arm*omega >= -1e-9:
                 continue
             ia = 0.0 if a.get('immovable') else 1.0/a['mass']
@@ -683,9 +685,15 @@ def traverse_impulses(tanks, dt, anchor=None):
             bvx, bvz = result[b['id']]
             relative = ((a.get('vx', 0.0)+avx-b.get('vx', 0.0)-bvx)*nx +
                         (a.get('vz', 0.0)+avz-b.get('vz', 0.0)-bvz)*nz)
+            inertia = wreck_yaw_inertia(b)
+            inverse_i = 1.0/inertia if inertia else 0.0
+            peer_arm = ((a['z']+corner_z-b['z'])*nx -
+                        (a['x']+corner_x-b['x'])*nz)
+            relative -= (b.get('push_yaw', 0.0)+angular[b['id']])*peer_arm
             closing = max(0.0, -arm*omega-relative)
-            impulse = min(budget/abs(arm), closing/(ia+ib))
+            impulse = min(budget/abs(arm), closing/(ia+ib+peer_arm**2*inverse_i))
             budget -= impulse*abs(arm)
+            angular[b['id']] -= impulse*peer_arm*inverse_i
             for body, inverse, sign in ((a, ia, 1.0), (b, ib, -1.0)):
                 grip = body.get('contact_decel')
                 yaw = body['yaw']
@@ -700,6 +708,10 @@ def traverse_impulses(tanks, dt, anchor=None):
                 if not held:
                     result[body['id']] = (vx+nx*sign*impulse*inverse,
                                            vz+nz*sign*impulse*inverse)
+    if angular_results is not None:
+        for actor, delta in angular.items():
+            angular_results[actor]['delta_yaw'] = (
+                angular_results[actor].get('delta_yaw', 0.0)+delta)
     return result
 
 
@@ -938,6 +950,126 @@ def translation_fraction(body, movement, others):
     return fraction
 
 
+def obb_vertices(body):
+    shape = body['shape']
+    yaw = float(body['yaw'])
+    sine = math.sin(yaw)
+    cosine = math.cos(yaw)
+    right_x, right_z = cosine, -sine
+    forward_x, forward_z = sine, cosine
+    center_x, center_z = float(body['x']), float(body['z'])
+    half_width, half_length = float(shape[0]), float(shape[1])
+    return [
+        (center_x + sx * half_width * right_x +
+         sz * half_length * forward_x,
+         center_z + sx * half_width * right_z +
+         sz * half_length * forward_z)
+        for sx, sz in ((-1.0, -1.0), (1.0, -1.0),
+                       (1.0, 1.0), (-1.0, 1.0))]
+
+def obb_overlap_polygon(body_a, body_b):
+    """Clip the mounted chassis footprints to their shared contact area."""
+    polygon = obb_vertices(body_a)
+    clip = obb_vertices(body_b)
+    for index in range(4):
+        start = clip[index]
+        end = clip[(index + 1) % 4]
+        edge_x, edge_z = end[0] - start[0], end[1] - start[1]
+
+        def inside(point):
+            return (edge_x * (point[1] - start[1]) -
+                    edge_z * (point[0] - start[0])) >= -1.0e-7
+
+        def intersection(first, second):
+            segment_x = second[0] - first[0]
+            segment_z = second[1] - first[1]
+            denominator = segment_x * edge_z - segment_z * edge_x
+            if abs(denominator) <= 1.0e-12:
+                return second
+            ratio = ((start[0] - first[0]) * edge_z -
+                     (start[1] - first[1]) * edge_x) / denominator
+            return (first[0] + ratio * segment_x,
+                    first[1] + ratio * segment_z)
+
+        output = []
+        if not polygon:
+            return None
+        previous = polygon[-1]
+        previous_inside = inside(previous)
+        for current in polygon:
+            current_inside = inside(current)
+            if current_inside != previous_inside:
+                output.append(intersection(previous, current))
+            if current_inside:
+                output.append(current)
+            previous = current
+            previous_inside = current_inside
+        polygon = output
+    return polygon
+
+def obb_overlap_point(body_a, body_b):
+    """Return a point inside the exact convex overlap of two OBBs."""
+    polygon = obb_overlap_polygon(body_a, body_b)
+    if not polygon:
+        return None
+    count = float(len(polygon))
+    return (sum(point[0] for point in polygon) / count,
+            sum(point[1] for point in polygon) / count)
+
+
+def wreck_yaw_inertia(body):
+    """Uniform footprint inertia for the existing copied rigid-hull trial.
+
+    Use the original installed mass and mounted chassis footprint, never a
+    dead-body weight multiplier. This is a planar trial approximation, not a
+    recovered retail inertia tensor. Powered tracks retain their motor owner.
+    """
+    if body.get('alive', True) or body.get('immovable'):
+        return 0.0
+    shape = body.get('collision_shape') or _tank_shape(body)
+    return float(body['mass']) * (shape[0]**2 + shape[1]**2) / 3.0
+
+
+def _angular_pair_response(a, b, hit, ia, ib):
+    """Coupled linear/yaw e=0 impulse at the shared footprint contact.
+
+    Include rotational effective mass before choosing the impulse. Adding a
+    torque after a centre-of-mass solve would manufacture kinetic energy.
+    """
+    inertias = [wreck_yaw_inertia(body) for body in (a, b)]
+    inv_i = [1.0/value if value else 0.0 for value in inertias]
+    point = obb_overlap_point(a, b)
+    if point is None:
+        return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    arms = [(point[0]-body['x'], point[1]-body['z']) for body in (a,b)]
+    velocities = [[body['vx'], body['vz'], body.get('push_yaw', 0.0)] for body in (a,b)]
+    changes = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+    normal_impulse = 0.0
+    for axis, normal in (((hit[0],hit[1]), True), ((-hit[1],hit[0]), False)):
+        levers = [arm[1]*axis[0]-arm[0]*axis[1] for arm in arms]
+        relative = sum((1.0 if i == 0 else -1.0) *
+                       (v[0]*axis[0]+v[1]*axis[1]+v[2]*levers[i])
+                       for i,v in enumerate(velocities))
+        inverse = [ia,ib] if normal else [
+            0.0 if body.get('immovable') else 1.0/body['mass'] for body in (a,b)]
+        effective = sum(inverse)+sum(inv_i[i]*levers[i]**2 for i in (0,1))
+        if effective <= 0.0 or (normal and relative >= 0.0):
+            continue
+        impulse = -relative/effective
+        if normal:
+            normal_impulse = impulse
+        else:
+            impulse = max(-0.3*normal_impulse, min(0.3*normal_impulse, impulse))
+        for i in (0,1):
+            signed = impulse if i == 0 else -impulse
+            delta = (signed*axis[0]*inverse[i], signed*axis[1]*inverse[i],
+                     signed*levers[i]*inv_i[i])
+            for k in (0,1,2):
+                velocities[i][k] += delta[k]
+                changes[i][k] += delta[k]
+    return changes
+
+
 def resolve_pairs(tanks, dt, anchor=None):
     """Resolve an authority's simultaneous contacts once per unordered pair.
 
@@ -952,8 +1084,11 @@ def resolve_pairs(tanks, dt, anchor=None):
     """
     bodies = [dict(tank) for tank in sorted(tanks, key=lambda t: t['id'])]
     results = dict((b['id'], {'correction': (0.0, 0.0),
-                              'delta_velocity': (0.0, 0.0)}) for b in bodies)
+                              'delta_velocity': (0.0, 0.0),
+                              'delta_yaw': 0.0}) for b in bodies)
     shapes = dict((b['id'], _tank_shape(b)) for b in bodies)
+    for body in bodies:
+        body['shape'] = shapes[body['id']]
     radii = dict((key, math.hypot(*value[:2])) for key, value in shapes.items())
     pairs = []
     for index, a in enumerate(bodies):
@@ -963,7 +1098,8 @@ def resolve_pairs(tanks, dt, anchor=None):
             if a.get('kind') == b.get('kind') == 'player':
                 continue
             if not (a.get('alive', True) or b.get('alive', True) or
-                    a['vx'] or a['vz'] or b['vx'] or b['vz']):
+                    a['vx'] or a['vz'] or b['vx'] or b['vz'] or
+                    a.get('push_yaw') or b.get('push_yaw')):
                 continue
             shape_a, shape_b = shapes[a['id']], shapes[b['id']]
             reach = radii[a['id']]+radii[b['id']]+CONTACT_BROADPHASE_PADDING
@@ -987,6 +1123,8 @@ def resolve_pairs(tanks, dt, anchor=None):
             response = pair_response(hit, mobility_a, mobility_b,
                                      (a['vx'], a['vz']), (b['vx'], b['vz']),
                                      friction_inverse=(ia, ib))
+            angular = (_angular_pair_response(a, b, hit, mobility_a, mobility_b)
+                       if wreck_yaw_inertia(a) or wreck_yaw_inertia(b) else None)
             # A replica's pose is an obstacle until its owner actually moves
             # it. This constrains position only: reciprocal momentum still
             # uses both real masses and is delivered exactly once.
@@ -997,6 +1135,9 @@ def resolve_pairs(tanks, dt, anchor=None):
             apply_impulse = a.get('impulse', True) and b.get('impulse', True)
             for body, offset in ((a, 0), (b, 4)):
                 dx, dz, dvx, dvz = response[offset:offset+4]
+                dv_yaw = 0.0
+                if angular is not None:
+                    dvx, dvz, dv_yaw = angular[0 if offset == 0 else 1]
                 dx, dz = position_response[offset:offset+2]
                 result = results[body['id']]
                 result['correction'] = (result['correction'][0]+dx, result['correction'][1]+dz)
@@ -1007,6 +1148,8 @@ def resolve_pairs(tanks, dt, anchor=None):
                                                 result['delta_velocity'][1]+dvz)
                     body['vx'] += dvx
                     body['vz'] += dvz
+                    result['delta_yaw'] += dv_yaw
+                    body['push_yaw'] = body.get('push_yaw', 0.0) + dv_yaw
     return results
 
 

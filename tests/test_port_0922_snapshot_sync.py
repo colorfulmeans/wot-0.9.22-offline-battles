@@ -1249,11 +1249,11 @@ class SnapshotSyncTests(unittest.TestCase):
                                contact_push_acks=[])
                 sync.manifest({'round_id': 1, collection: [initial]})
                 dead = dict(initial, alive=False, push_z=5.0,
-                            contact_push_acks=[[1, 1, 0., 117480., 0., 0.]])
+                            contact_push_acks=[[1, 1, 0., 117480., 0., 0., 0.0]])
                 events = sync.snapshot({'round_id': 1, 'server_tick': 1, collection: [dead]})
                 self.assertEqual(['destroy'], [event['type'] for event in events])
                 stopped = dict(dead, push_z=0.0,
-                               contact_push_acks=[[1, 2, 0., 140976., 0., 0.]])
+                               contact_push_acks=[[1, 2, 0., 140976., 0., 0., 0.0]])
                 events = sync.snapshot({'round_id': 1, 'server_tick': 2, collection: [stopped]})
                 self.assertEqual(['update'], [event['type'] for event in events])
                 self.assertIsNone(events[0]['pose'])
@@ -1266,7 +1266,7 @@ class SnapshotSyncTests(unittest.TestCase):
 
     def test_wreck_state_comparison_does_not_alias_a_reused_ack_list(self):
         dead = dict(player(7, alive=False), push_z=0.0,
-                    contact_push_acks=[[1, 1, 0., 10., 0., 0.]])
+                    contact_push_acks=[[1, 1, 0., 10., 0., 0., 0.0]])
         self.sync.manifest({'round_id': 1, 'bots': [dead]})
         self.sync.snapshot({'round_id': 1, 'server_tick': 1, 'bots': [dead]})
         dead['contact_push_acks'][0][1] = 2

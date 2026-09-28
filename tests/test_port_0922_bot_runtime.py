@@ -15689,12 +15689,12 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertEqual(1, len([
             report for report in reports if report['type'] == 'bot_ram']))
-        # One e=0 response gives the stationary 25t bot half of the 16m/s
-        # normal velocity, followed by one slice of parked track resistance.
-        # The same-frame current detector must not apply that impulse twice.
-        expected_push = 8.0 - self.module.vehicle_physics.contact_push_decel(
-            runtime._physics_params_for(11), False)[0]*.04
-        self.assertAlmostEqual(expected_push, current['push_z'], places=5)
+        # The instantaneous e=0 response gives the stationary 25t bot half
+        # the 16m/s normal velocity. Its next drive slice owns longitudinal
+        # resistance; the contact owner must not spend a second brake budget.
+        # The same-frame current detector cannot apply this impulse twice.
+        physical_z = math.cos(current['yaw'])*current['speed']+current['push_z']
+        self.assertAlmostEqual(8.0, physical_z, places=5)
         self.assertNotEqual((0.0, 6.5), (current['x'], current['z']))
         self.assertEqual({11: 0.04, 12: 0.04},
                          runtime._contact_lease_elapsed)
@@ -21143,15 +21143,17 @@ class ShovedWreckTests(unittest.TestCase):
         self.assertGreater(state['z'], first)
         self.assertGreater(state['push_z'], 0.0)
 
-    def test_wreck_cannot_bridge_a_cliff_with_only_one_supported_end(self):
+    def test_wreck_falls_off_a_cliff_with_only_one_supported_end(self):
         runtime = self._runtime(ground=0.0)
         state = self._wreck(runtime)
         runtime._physics_ground_probe = (
             lambda x, z, hint: 0.0 if z < 0.0 else None)
-        self.assertFalse(runtime._apply_wreck_contact_response(
+        self.assertTrue(runtime._apply_wreck_contact_response(
             state, {'delta_velocity': (0.0, 4.0),
                     'correction': (0.0, 0.0)}, 0.1))
-        self.assertEqual(0.0, state['z'])
+        self.assertGreater(state['z'], 0.0)
+        self.assertTrue(state['airborne'])
+        self.assertLess(state['y'], 0.0)
 
     def test_a_wreck_is_never_shoved_through_static_geometry(self):
         runtime = self._runtime(ground=0.0, clear=False)
@@ -21187,7 +21189,7 @@ class ShovedWreckTests(unittest.TestCase):
         self.assertTrue(any(after['y'] < before['y'] for before, after in probes))
         self.assertEqual(0.15, probes[-1][1]['chassis']['pitch'])
 
-    def test_a_slide_off_a_cliff_lip_is_undone_instead_of_dropping(self):
+    def test_a_slide_off_a_cliff_lip_starts_a_ballistic_fall(self):
         runtime = self._runtime(ground=-40.0)
         state = self._wreck(runtime)
 
@@ -21195,10 +21197,11 @@ class ShovedWreckTests(unittest.TestCase):
             state, {'delta_velocity': (0.0, 2.0),
                     'correction': (0.0, 0.05)}, 0.1)
 
-        self.assertFalse(moved)
-        self.assertEqual(0.0, state['z'])
-        self.assertEqual(0.0, state['y'])
-        self.assertEqual(0.0, state['push_z'])
+        self.assertTrue(moved)
+        self.assertGreater(state['z'], 0.0)
+        self.assertLess(state['y'], 0.0)
+        self.assertGreater(state['y'], -40.0)
+        self.assertTrue(state['airborne'])
 
     def test_a_wreck_keeps_no_engine_and_bleeds_at_the_parked_hold(self):
         runtime = self._runtime(ground=0.0)
@@ -21396,7 +21399,7 @@ class HumanShovedWreckTests(unittest.TestCase):
                      alive=False, health=0, mass=25000.0,
                      grounded_once=True, push_x=0.0, push_z=0.0)
         player = self._player(9.0)
-        player['tank_pushes'] = [[11, 1, 0.0, 150000.0, 0.0, 0.0]]
+        player['tank_pushes'] = [[11, 1, 0.0, 150000.0, 0.0, 0.0, 0.0]]
         runtime._resolve_tank_contacts([player], 100.0, 1.0 / 30.0)
         for tick in range(60):
             runtime._resolve_tank_contacts([], 100.1 + tick / 30.0,
@@ -21404,7 +21407,7 @@ class HumanShovedWreckTests(unittest.TestCase):
         settled = wreck['z']
         self.assertEqual(0.0, wreck['push_z'])
         player['z'] = settled - 5.0
-        player['tank_pushes'] = [[11, 2, 0.0, 300000.0, 0.0, 0.0]]
+        player['tank_pushes'] = [[11, 2, 0.0, 300000.0, 0.0, 0.0, 0.0]]
         runtime._resolve_tank_contacts([player], 103.0, 1.0 / 30.0)
         self.assertGreater(wreck['z'], settled)
         self.assertGreater(wreck['push_z'], 0.0)
