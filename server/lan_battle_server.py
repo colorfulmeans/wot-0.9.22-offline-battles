@@ -6232,8 +6232,10 @@ class BattleState:
             "y": round(_clamp(_finite_float(raw.get("y")), -1000.0, 1000.0), 4),
             "z": round(_clamp(_finite_float(raw.get("z")), -2000.0, 2000.0), 4),
             "yaw": round(yaw, 5),
-            "pitch": round(_clamp(_finite_float(raw.get("pitch")), -math.pi, math.pi), 5),
-            "roll": round(_clamp(_finite_float(raw.get("roll")), -math.pi, math.pi), 5),
+            "pitch": round(bot_state_codec._wrapped_angle(
+                _finite_float(raw.get("pitch"))), 5),
+            "roll": round(bot_state_codec._wrapped_angle(
+                _finite_float(raw.get("roll"))), 5),
             "aim_yaw": round(_finite_float(raw.get("aim_yaw"), yaw), 5),
             "gun_pitch": round(_clamp(_finite_float(raw.get("gun_pitch")), -1.2, 1.2), 5),
             "speed": round(_clamp(
@@ -10910,8 +10912,8 @@ class BattleState:
             center_z = _bounded_float(raw_ram.get("z"), -2000.0, 2000.0)
             yaw = _bounded_float(
                 raw_ram.get("yaw"), -math.pi * 2.0, math.pi * 2.0)
-            pitch = _bounded_float(raw_ram.get("pitch", 0.0), -0.61, 0.61)
-            roll = _bounded_float(raw_ram.get("roll", 0.0), -0.61, 0.61)
+            pitch = _bounded_float(raw_ram.get("pitch", 0.0), -math.pi, math.pi)
+            roll = _bounded_float(raw_ram.get("roll", 0.0), -math.pi, math.pi)
             hit_x = _bounded_float(
                 raw_ram.get("contact_x"), -2000.0, 2000.0)
             hit_y = _bounded_float(
@@ -11248,8 +11250,8 @@ class BattleState:
         ("y", -1000.0, 1000.0),
         ("z", -2000.0, 2000.0),
         ("yaw", -math.pi * 2.0, math.pi * 2.0),
-        ("pitch", -0.61, 0.61),
-        ("roll", -0.61, 0.61),
+        ("pitch", -math.pi, math.pi),
+        ("roll", -math.pi, math.pi),
     )
 
     def _modern_input_envelope_valid(self, player, message,
@@ -11647,11 +11649,11 @@ class BattleState:
                     if "pitch" in message:
                         player.pitch = _clamp(
                             _finite_float(message.get("pitch"), player.pitch),
-                            -0.61, 0.61)
+                            -math.pi, math.pi)
                     if "roll" in message:
                         player.roll = _clamp(
                             _finite_float(message.get("roll"), player.roll),
-                            -0.61, 0.61)
+                            -math.pi, math.pi)
                     if reported_up_cosine is not None:
                         player.up_cosine = round(reported_up_cosine, 6)
                     player.client_position = True

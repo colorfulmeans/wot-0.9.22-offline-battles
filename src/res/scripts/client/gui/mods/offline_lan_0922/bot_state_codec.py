@@ -140,8 +140,6 @@ CLAMPS = {
     'x': (-2000.0, 2000.0),
     'y': (-1000.0, 1000.0),
     'z': (-2000.0, 2000.0),
-    'pitch': (-math.pi, math.pi),
-    'roll': (-math.pi, math.pi),
     'gun_pitch': (-1.2, 1.2),
     'speed': (-80.0, 80.0),
     'shot_pitch': (-1.2, 1.2),
@@ -176,7 +174,7 @@ def _real(units, scale):
 
 
 def _wrapped_angle(value):
-    """Normalise one shot angle exactly as the previous server contract did."""
+    """Preserve the orientation of periodic body and shot angles."""
     return ((float(value) + math.pi) % (2.0 * math.pi)) - math.pi
 
 
@@ -278,6 +276,8 @@ def encode_row(state):
             continue
         value = state.get(name, 0)
         try:
+            if name in ('pitch', 'roll'):
+                value = _wrapped_angle(value)
             if scale is None:
                 row.append(_exact(value))
             else:

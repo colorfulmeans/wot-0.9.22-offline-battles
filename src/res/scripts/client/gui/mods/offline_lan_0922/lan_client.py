@@ -106,7 +106,7 @@ MAX_PLAYER_RELOAD_SECONDS = 3600.0
 # client queues must already satisfy the same envelope.
 MAX_PLAYER_INPUT_SPEED = 200.0
 MAX_PLAYER_GUN_PITCH = 1.2
-MAX_PLAYER_INPUT_ATTITUDE = 0.61
+MAX_PLAYER_INPUT_ATTITUDE = math.pi
 PLAYER_INPUT_WORLD_BOUNDS = (2000.0, 1000.0, 2000.0)
 MAX_PLAYER_RAM_CONTACTS = 16
 MAX_PLAYER_DESTRUCTIBLE_CONTACTS = 16
@@ -399,12 +399,14 @@ def _valid_player_siege_contract(player):
 def _canonical_angle(value, default=0.0):
     """Return one mathematically equivalent angle inside [-pi, pi].
 
-    Yaw is periodic, so an accumulated turret plus hull sum is normalized
+    Body and turret angles are periodic, so an accumulated angle is normalized
     rather than clipped: clipping would silently point the reported gun
     somewhere the player is not aiming, while normalization reports the exact
     same orientation inside the server's ordered-input contract.
     """
     angle = _finite_float(value, default)
+    if -math.pi <= angle < math.pi:
+        return angle
     period = 2.0 * math.pi
     angle = math.fmod(angle + math.pi, period)
     if angle < 0.0:
@@ -2242,13 +2244,9 @@ class LANClient(object):
             message['x'], message['y'], message['z'] = coordinates
             message['yaw'] = _canonical_angle(yaw)
             if pitch is not None:
-                message['pitch'] = max(
-                    -MAX_PLAYER_INPUT_ATTITUDE,
-                    min(MAX_PLAYER_INPUT_ATTITUDE, _finite_float(pitch)))
+                message['pitch'] = _canonical_angle(pitch)
             if roll is not None:
-                message['roll'] = max(
-                    -MAX_PLAYER_INPUT_ATTITUDE,
-                    min(MAX_PLAYER_INPUT_ATTITUDE, _finite_float(roll)))
+                message['roll'] = _canonical_angle(roll)
             if up_cosine is not None:
                 if (isinstance(up_cosine, bool) or
                         not isinstance(up_cosine, integer_types + (float,))):

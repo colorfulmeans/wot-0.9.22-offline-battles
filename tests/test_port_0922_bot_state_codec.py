@@ -124,7 +124,7 @@ class BotStateCodecTest(unittest.TestCase):
         self.assertEqual(decoded['z'], -2000.0)
         self.assertEqual(decoded['gun_pitch'], 1.2)
         self.assertEqual(decoded['speed'], 80.0)
-        self.assertAlmostEqual(decoded['pitch'], -math.pi, places=5)
+        self.assertAlmostEqual(decoded['pitch'], 2 * math.pi - 5.0, places=5)
 
     def test_shot_angles_are_an_atomic_optional_pair(self):
         state = _bot_state()

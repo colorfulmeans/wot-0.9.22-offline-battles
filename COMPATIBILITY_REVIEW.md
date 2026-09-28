@@ -7502,3 +7502,67 @@ and Bot 15 has support rollback after a fall. Neither the apparent teleport nor
 every invisible blocker is isolated to one proved cause by these logs. This
 package changes release braking only; it does not claim another bridge fix or
 disable any native wall contact. Native driving feel remains a Windows test.
+
+## Reports 234547, 235110 and 235422: rollover replication and death messages
+
+All three sessions identify test-20260928-29d2fea. The user accepts the driving
+feel; this change preserves vehicle_physics.py and both braking adapters.
+In 235422 on 37_caucasus, Bot 29 (M41 Bulldog) actually leaves the deck: y=0.5641,
+roll=0.41632 at 23:53:35.942, y=-0.17095, roll=1.40432 at 23:53:36.253, and
+eventually y=-14.687445, pitch=-15.797617, roll=9.398418. No navigation rollback
+is reported in that fall. However, LANClient's shared runtime-row validator
+rejects pitch or roll above 0.61 radians and substitutes the complete old row,
+including position and health. The worker and visible client repeatedly log
+one retained row. The Bot encoder separately clips accumulated rotations to
+pi, which is not an equivalent orientation after a full turn.
+
+Normalize periodic Bot angles before fixed-point encoding and in the server's
+mapping publication path. Accept the full principal angle interval at the
+replica boundary. Human input, its server admission/update, and ram-contact
+pose validation now carry the same full interval; human angles are normalized
+instead of clipped. Keep the continuous suspension state, integration, contact
+queries, wall collisions and navigation rules unchanged. Regression coverage
+replays the report's falling/overturned attitudes through both publication
+forms, the server and replica validator, for live and dead Bots, plus human
+sender/server/replica round trips. This fixes a proven frozen-presentation
+cause; it does not establish that every bridge blocker or fall is correct.
+
+Exact #1513 scripts.pkg bytecode audit: ClientArena.__onVehicleKilled consumes
+(victim, attacker, equipment, reason), marks the roster dead and dispatches the
+arena event. PlayerAvatar.__onArenaVehicleKilled returns for its own vehicle
+after death info/camera handling. BattleMessagesController.showVehicleKilledMessage
+also returns for the currently observed vehicle after the player dies. Those
+guards intentionally omit PlayerMessages' right-side text. The LAN binding
+now supplements just these suppressed messages after the unchanged arena
+dispatch, using msgs_ctrl.__getKillInfo and onShowPlayerMessageByCode's exact
+five-argument event. It does not replay sounds or alter either vehicle ID.
+gui/player_messages_panel.xml has no SHOT_*_SELF template, so local victims use
+the existing allied-victim wording and real roster names. The PlayerMessages
+consumer and FadingMessages postfix lookup were audited as well. Guard-aware
+tests cover own death, suicide, an observed LAN ally, and ordinary remote death
+without duplicate text; existing death-edge/postmortem tests remain intact.
+The reports contain one localhost human, so a second LAN participant remains
+a native acceptance case rather than a reproduced session in this evidence.
+
+The displayed ping is not pure network RTT: LANClient.worker_ping_display uses
+the worker's rolling frame interval, while worker_rtt_ms is a separate value.
+In 234547's worst 30-second window, the worker has 122 frames / 30.114 seconds
+(4.05 FPS), mean gap 246.833 ms and mean execution 225.401 ms; the corresponding
+visible window is about 76 FPS. Bot vertical motion costs 10.119 seconds of that
+window, including ground-query work; its own Python cost is 6.436 seconds.
+Ground probes account for 127,130 logical calls and 3.693 seconds. Other large
+costs include the Bot update loop, visibility, driving and planning. Slow
+frames then execute multiple simulation slices to catch up. This identifies
+backend simulation pressure, not a measured 230 ms LAN hop or a proved graphics
+failure. No cadence, collision safety, physical constants or performance claim
+is changed by this patch; native profiling/optimization remains separate.
+
+Validation: 1,181 protocol/codec/entity/battle/direction/bridge tests pass with
+one unavailable-interpreter skip; 160 server/lineage/contact/snapshot tests pass.
+An independent CPython 2.7.18 run compiles all 146 client modules and matches
+Python 3.11 rollover wire rows exactly. Installed-client inspection passes.
+These are logic and ABI checks, not a claim of new native gameplay acceptance.
+The additional 617-case Bot/physics run has 26 failures and 14 errors; rerunning
+all 35 affected methods with the parent server/codec/client modules reproduces
+the same failure/error counts. These pre-existing navigation, water and stale
+interface expectations are not presented as passing or repaired here.

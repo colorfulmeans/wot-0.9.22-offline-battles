@@ -318,8 +318,35 @@ class BigWorldVehicleBinding(object):
     def arena_vehicle_killed(self, entity_id, attacker_id=0, reason=0):
         """Publish the exact uncompressed #1513 ClientArena kill tuple."""
         payload = (int(entity_id), int(attacker_id), 0, int(reason))
+        avatar = self._avatar
+        own = int(entity_id) == int(avatar.playerVehicleID)
+        controller = getattr(getattr(avatar, 'inputHandler', None), 'ctrl', None)
+        observed = (not getattr(avatar, 'isVehicleAlive', True) and
+                    int(entity_id) == getattr(controller, 'curVehicleID', None))
         self._avatar.updateArena(self._constants.ARENA_UPDATE.VEHICLE_KILLED,
                                  _pickle.dumps(payload))
+        if own or observed:
+            # #1513's Avatar skips the own-vehicle feed, and msgs_ctrl skips
+            # the observed vehicle after death. Keep their death/camera path,
+            # then publish only the omitted text through PlayerMessages.
+            messages = self._need(self._need(
+                self._need(avatar, 'guiSessionProvider'), 'shared'), 'messages')
+            kill_info = self._need(
+                messages, '_BattleMessagesController__getKillInfo')
+            code, postfix, unused_sound, unused_extra = kill_info(
+                avatar, *payload)
+            if own:
+                # player_messages_panel.xml has no SHOT_*_SELF templates.
+                # Use its allied-victim wording with the real roster IDs;
+                # neither the killer relation nor kill voice is changed.
+                attacker, target = postfix.split('_')
+                if target == 'SELF':
+                    target = 'ALLY'
+                if target == 'SUICIDE' and attacker == 'SELF':
+                    attacker = 'ALLY'
+                postfix = '%s_%s' % (attacker, target)
+            self._need(messages, 'onShowPlayerMessageByCode')(
+                code, postfix, int(entity_id), int(attacker_id), 0)
 
     def arena_vehicle_statistics(self, entity_id, frags):
         """Publish exact #1513 compressed ``(vehicleID, frags)`` stats."""
