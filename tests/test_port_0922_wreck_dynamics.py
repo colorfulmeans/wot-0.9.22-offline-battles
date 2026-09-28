@@ -88,6 +88,110 @@ class WreckOwnerTests(unittest.TestCase):
     _runtime = bt.ShovedWreckTests._runtime
     _wreck = bt.ShovedWreckTests._wreck
 
+    def test_sliding_track_friction_does_not_apply_a_second_full_yaw_brake(self):
+        p=self._runtime()._physics_params_for(11)
+        physics=self.module.vehicle_physics
+        shape=c.DEFAULT_SHAPE
+        inertia=(shape[0]**2+shape[1]**2)/3.
+        for sign in (-1.,1.):
+            vx,vz,omega=physics.wreck_contact_step(p,0.,5.,sign*.4,0.,shape,.1)
+            self.assertAlmostEqual(0.,vx)
+            self.assertGreater(sign*omega,0.)
+            self.assertLess(vx*vx+vz*vz+inertia*omega*omega,25.+inertia*.16)
+        self.assertEqual((0.,0.,0.),physics.wreck_contact_step(p,0.,0.,.4,0.,shape,.1))
+
+    def test_passive_shove_uses_world_collision_without_navigation_hazard_veto(self):
+        worker=self._runtime();worker.states.pop(12)
+        state=self._wreck(worker)
+        worker.direction_probe=mock.Mock(return_value=dict(clear=False,collision=False,water=True,slope=1.5))
+        worker.motion_resolver=mock.Mock(return_value='clear')
+        self.assertTrue(worker._apply_wreck_contact_response(
+            state,dict(delta_velocity=(0.,4.),correction=(0.,0.)),.1))
+        worker.direction_probe.assert_not_called()
+        before=state['z']
+        worker.motion_resolver.return_value='hard'
+        worker._apply_wreck_contact_response(state,dict(delta_velocity=(0.,4.),correction=(0.,0.)),.1)
+        self.assertEqual(before,state['z'])
+
+    def test_production_wreck_only_ground_probe_activates_after_death(self):
+        worker,state,unused=bt.BotRuntimeTests._suspension_case(self,lambda x,z:0.)
+        worker.states={state['id']:state}
+        worker._wreck_ground_probe=worker._suspension_ground_probe
+        worker._suspension_ground_probe=None
+        worker._suspension_params.clear()
+        self.assertIsNone(worker._suspension_params_for(state['id']))
+        state.update(alive=False,health=0,collision_shape=c.DEFAULT_SHAPE,mass=25000.)
+        self.assertIsNotNone(worker._suspension_params_for(state['id']))
+        worker._apply_wreck_contact_response(state,dict(delta_velocity=(0.,0.),correction=(0.,0.)),.02)
+        self.assertFalse(worker._suspension_param_failures)
+
+    def test_delayed_offset_push_turns_the_actual_worker_wreck(self):
+        worker=self._runtime();worker.states.pop(12)
+        state=self._wreck(worker)
+        state.update(mass=23496.,collision_shape=c.DEFAULT_SHAPE)
+        params=worker._physics_params_for(11);params['mass']=state['mass']
+        human_params=dict(params,mass=100575.,powerW=1200.*735.49875)
+        worker._player_collision_profile=lambda raw:dict(mass=100575.,shape=c.DEFAULT_SHAPE,
+                                                        ram_profile={},physics=human_params)
+        native=vt._runtime();battle=vt.BattleRuntime(native)
+        battle.client=vt._Client();battle._avatar=native.bigworld.avatar
+        battle._local_physics=human_params
+        battle._bots=types.SimpleNamespace(states={11:copy.deepcopy(state)},_physics_params_for=lambda unused:params)
+        local=vt._Vehicle(10,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':500})
+        native.bigworld.entities[11]=vt._Vehicle(11,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':0})
+        record=dict(engine_id=11,network_id=11,kind='bot',local=False,ready=True,
+                    tombstone=False,state=copy.deepcopy(state),presented_pose=copy.deepcopy(state))
+        battle._records={'bot:11':record}
+        battle._collision_shape=lambda unused:c.DEFAULT_SHAPE
+        battle._motion_is_clear=lambda *args,**kwargs:True
+        battle._baked_pose_safe=lambda *args:True
+        battle._poll_local_ram_contact_episodes=lambda *args:None
+        clock=[0.];battle._clock=lambda:clock[0]
+        battle._estimated_motion_time_us=lambda unused:int(clock[0]*1000000)
+        battle._remember_ram_bot_snapshot(dict(bot_state_revision=0,bot_state_time_us=0,bots=[copy.deepcopy(state)]))
+        position=(-4.99,0.,3.0);queue=[]
+        with mock.patch('sys.stdout'):
+            for tick in range(360):
+                clock[0]=(tick+1)/60.
+                battle._local_speed=self.module.vehicle_physics.longitudinal_step(
+                    human_params,battle._local_speed,1,False,0.,1./60.)
+                start=position
+                position=battle._resolve_local_tank_contacts(local,
+                    (position[0]+battle._local_speed/60.,position[1],position[2]),math.pi/2.,1./60.,start)
+                if tick%6==5:
+                    raw=dict(id=battle.client.player_id,team=1,x=position[0],y=position[1],z=position[2],
+                             yaw=math.pi/2.,speed=battle._local_speed,forward=1,
+                             tank_pushes=copy.deepcopy(list(battle._local_contact_pushes.values())))
+                    worker._resolve_tank_contacts([raw],clock[0],.1)
+                    wire=bot_state_codec.decode_row(bot_state_codec.encode_row(state),{})
+                    queue.append((clock[0]+.15,clock[0],tick+1,dict(state,**wire)))
+                while queue and queue[0][0]<=clock[0]+1.e-9:
+                    unused,stamp,revision,published=queue.pop(0)
+                    record.update(state=published,presented_pose=published)
+                    battle._bots.states[11]=published
+                    battle._remember_ram_bot_snapshot(dict(bot_state_revision=revision,
+                        bot_state_time_us=int(stamp*1000000),bots=[published]))
+        self.assertGreater(state['x'],1.)
+        self.assertGreater(abs(state['yaw']),.1)
+
+    def test_falling_turned_wreck_survives_the_wire(self):
+        state=dict(id=11,alive=False,pitch=1.08,roll=-1.661,airborne=True,
+                   push_x=2.,push_z=-3.,push_yaw=.4,reload_duration=5.,reload_time=0.)
+        decoded=bot_state_codec.decode_row(bot_state_codec.encode_row(state),{})
+        self.assertTrue(decoded['airborne'])
+        self.assertAlmostEqual(1.08,decoded['pitch'])
+        self.assertAlmostEqual(-1.661,decoded['roll'])
+        from test_port_0922_server_capture import BattleState
+        identity=dict(id=11,team=1,slot=0,name='Wreck',vehicle='ussr:R54_KV-5',max_health=1780)
+        for trusted in (False,True):
+            admitted=BattleState._sanitize_bot_state(decoded,identity,None,trusted=trusted)
+            self.assertTrue(admitted['airborne'])
+            self.assertAlmostEqual(1.08,admitted['pitch'])
+            self.assertAlmostEqual(-1.661,admitted['roll'])
+        p=self._runtime()._physics_params_for(11)
+        self.assertEqual((2.,-3.,.4),self.module.vehicle_physics.predict_contact_velocity(
+            p,decoded,c.DEFAULT_SHAPE,0.,.3,[]))
+
     def test_visible_offcentre_collision_reaches_worker_as_the_frozen_yaw_impulse(self):
         worker=self._runtime();worker.states.pop(12)
         state=self._wreck(worker)
@@ -195,7 +299,8 @@ class HeadOnOwnerTests(unittest.TestCase):
     tearDown = bt.ShovedWreckTests.tearDown
     _runtime = bt.ShovedWreckTests._runtime
 
-    def travel(self, human_mass, human_hp, bot_mass, bot_hp, hz):
+    def travel(self, human_mass, human_hp, bot_mass, bot_hp, hz,
+               delay=0.0, reverse=False, prediction=True):
         worker=self._runtime()
         worker.states.pop(12)
         state=worker.states[11]
@@ -210,6 +315,12 @@ class HeadOnOwnerTests(unittest.TestCase):
         native=vt._runtime();battle=vt.BattleRuntime(native)
         battle.client=vt._Client();battle._avatar=native.bigworld.avatar
         battle._local_physics=human_params
+        battle._bots=worker
+        clock=[0.0]
+        battle._clock=lambda:clock[0]
+        battle._estimated_motion_time_us=lambda unused:int(clock[0]*1000000)
+        battle._ram_bot_history_index={11:[(0,0)]}
+        battle._ram_bot_history={0:{11:copy.deepcopy(state)}}
         local=vt._Vehicle(10,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':500})
         battle._collision_shape=lambda unused:c.DEFAULT_SHAPE
         battle._motion_is_clear=lambda *args,**kw:True
@@ -220,22 +331,27 @@ class HeadOnOwnerTests(unittest.TestCase):
             pending=ledger.pending(battle._local_contact_pushes,11,published.get('contact_push_acks'),battle.client.player_id)
             peer=_tank(1000011,0.,published['z'],yaw=math.pi,mass=bot_mass,
                        vz=-published['speed']+published.get('push_z',0.)+pending[1]/bot_mass)
+            if prediction:
+                peer['vz']=battle._predict_bot_contact_velocity(11,published,c.DEFAULT_SHAPE)[1]
             peer.update(kind='bot',network_id=11,physical_velocity=(0.,peer['vz']),
                         contact_decel=self.module.vehicle_physics.contact_push_decel(params,True))
             return [peer]
         battle._contact_tanks=others
-        position=(0.,0.,0.);dt=1./hz;bank=0.
+        position=(0.,0.,0.);dt=1./hz;bank=0.;queue=[]
+        sign=-1 if reverse else 1
+        human_yaw=math.pi if reverse else 0.
         with mock.patch('sys.stdout'):
             for tick in range(hz*6):
+                clock[0]=(tick+1)*dt
                 battle._local_speed=self.module.vehicle_physics.longitudinal_step(
-                    human_params,battle._local_speed,1,False,0.,dt)
+                    human_params,battle._local_speed,sign,False,0.,dt)
                 start=position
                 position=battle._resolve_local_tank_contacts(local,
-                    (0.,0.,position[2]+battle._local_speed*dt),0.,dt,start_position=start)
+                    (0.,0.,position[2]+battle._local_speed*dt*sign),human_yaw,dt,start_position=start)
                 bank+=dt
                 if bank+1.e-9>=.1:
                     raw=dict(id=battle.client.player_id,team=1,x=0.,y=0.,z=position[2],
-                             yaw=0.,speed=battle._local_speed,forward=1,
+                             yaw=human_yaw,speed=battle._local_speed,forward=sign,
                              tank_pushes=copy.deepcopy(list(battle._local_contact_pushes.values())))
                     worker._consume_human_contact_pushes([raw],tick*dt)
                     state['speed']=self.module.vehicle_physics.longitudinal_step(
@@ -244,7 +360,12 @@ class HeadOnOwnerTests(unittest.TestCase):
                     state['z']-=state['speed']*bank
                     worker._guard_tank_translations([raw],{11:before})
                     worker._resolve_tank_contacts([raw],tick*dt,bank)
-                    published=copy.deepcopy(state);bank=0.
+                    queue.append((clock[0]+delay,int(clock[0]*1000000),tick+1,copy.deepcopy(state)))
+                    bank=0.
+                while queue and queue[0][0]<=clock[0]+1.e-9:
+                    unused,stamp,revision,published=queue.pop(0)
+                    battle._ram_bot_history_index={11:[(stamp,revision)]}
+                    battle._ram_bot_history={revision:{11:published}}
         return state['z']-6.99
 
     def test_kv5_outpushes_su100m1_with_either_player_owner(self):
@@ -257,6 +378,18 @@ class HeadOnOwnerTests(unittest.TestCase):
         strong=self.travel(100575.,1200.,32000.,520.,60)
         weak=self.travel(100575.,100.,32000.,520.,60)
         self.assertGreater(strong,weak)
+
+    def test_report_reverse_push_survives_publication_delay(self):
+        # 152755: KV-5 against T-54 first prototype, ~90 Hz visible / 10 Hz worker.
+        # Permanent pending velocity reproduces the zero-displacement deadlock.
+        self.assertAlmostEqual(0.,self.travel(100575.,1200.,35500.,760.,90,
+                                             delay=.1,reverse=True,prediction=False))
+        for hz in (30,90,144):
+            for delay in (.1,.2,.3):
+                with self.subTest(hz=hz,delay=delay):
+                    self.assertGreater(self.travel(100575.,1200.,35500.,760.,hz,
+                                                   delay,True),1.)
+        self.assertLess(self.travel(35500.,760.,100575.,1200.,90,.2),-1.)
 
 
 if __name__=='__main__':unittest.main()

@@ -11,6 +11,24 @@ import test_port_0922_battle_runtime as runtime_tests
 
 
 class BridgeTipRegressionTests(unittest.TestCase):
+    def test_tilted_track_patch_cannot_reach_back_to_a_departed_bridge_deck(self):
+        physics=runtime_tests.vehicle_physics
+        params=physics.derive_suspension_params(runtime_tests._suspension_descriptor())
+        for axis,pitch,roll in ((0,0.,math.pi/2),(1,math.pi/2,0.)):
+            reach=params['footprint_half_width' if axis==0 else 'footprint_half_length']
+            point=(reach*.75,0.) if axis==0 else (0.,reach*.75)
+            spring=dict(x=0.,footprint_front=reach,footprint_rear=reach)
+            queries=[]
+            def deck(x,z,low,high):
+                queries.append((x,z))
+                return 0. if (x,z)[axis]<=0. and low<=0.<=high else None
+            self.assertEqual(0.,physics.suspension_footprint_support(params,point,None,None,
+                0.,deck,point_height=0.,spring=spring,reference_height=0.))
+            queries[:]=[]
+            self.assertIsNone(physics.suspension_footprint_support(params,point,None,None,
+                0.,deck,point_height=0.,spring=spring,reference_height=0.,pitch=pitch,roll=roll))
+            self.assertTrue(all(abs(probe[axis]-point[axis])<1.e-9 for probe in queries))
+
     def test_missing_plane_releases_a_remembered_edge_column(self):
         physics = runtime_tests.vehicle_physics
         unused, memory = physics.retained_ground_contact((0, 0), 1, None, .5)

@@ -1016,7 +1016,8 @@ def suspension_pose_params(params, pitch, roll, pitch_velocity=0.0,
 
 
 def suspension_footprint_support(params, point, ground, memory, yaw, query,
-		support_gradient=None, point_height=None, spring=None, reference_height=None):
+		support_gradient=None, point_height=None, spring=None, reference_height=None,
+		pitch=0.0, roll=0.0):
 	'''Find fresh support across the continuous track, including rail entries.
 
 	The old recovery required a wheel to have already touched exactly the
@@ -1060,12 +1061,19 @@ def suspension_footprint_support(params, point, ground, memory, yaw, query,
 			side = max(-params['width'] * 0.5 - spring['x'],
 				min(params['width'] * 0.5 - spring['x'], side))
 		for forward in (0.0, -rear, front, -rear * 0.5, front * 0.5):
-			px = x + cosine * side + sine * forward
-			pz = z - sine * side + cosine * forward
+			# The contact patch belongs to the tilted track. Keeping it flat
+			# in world X/Z lets a near-vertical track reach back onto a bridge
+			# deck that is outside its actual footprint and reacquire support.
+			ox, oy, oz = suspension_point_offset(
+				{'x': side, 'y': 0.0, 'z': forward}, pitch, roll)
+			px = x + cosine * ox + sine * oz
+			pz = z - sine * ox + cosine * oz
 			delta = 0.0
 			if support_gradient is not None:
 				delta = support_gradient[0] * (px - x) + support_gradient[1] * (pz - z)
 			low, high = expected - 0.12 + delta, ceiling + delta
+			if point_height is not None:
+				high = min(high, float(point_height) + oy + rise)
 			if high < low:
 				continue
 			value = query(px, pz, low, high)
@@ -2305,6 +2313,89 @@ def contact_push_is_held(p, push_x, push_z, yaw, dt, rolling=False,
 	spends, so the predicate and the integration can never disagree.'''
 	return contact_push_step(
 		p, push_x, push_z, yaw, dt, rolling, terrainIdx, normal_y) == (0.0, 0.0)
+
+
+def wreck_contact_step(p, vx, vz, omega, yaw, shape, dt,
+		normal_y=1.0, airborne=False):
+	'''Solve translation and yaw against one shared passive track budget.
+
+	Use the existing uniform-track approximation: each track's two halves
+	carry equal load at their mean longitudinal arms. The old independent
+	linear bleed and full yaw brake spent the same ground friction twice.
+	Bounded contact impulses minimize kinetic energy, including each point's
+	linear/angular effective mass, without crossing a stopped contact for free.
+	'''
+	if airborne or dt <= 0.0:
+		return vx, vz, omega
+	width, length = shape[:2]
+	longitudinal, lateral = contact_push_decel(p, False, normal_y=normal_y)
+	inertia_per_mass = (width*width + length*length)/3.0
+	sine, cosine = math.sin(yaw), math.cos(yaw)
+	velocity = [vx*sine+vz*cosine, vx*cosine-vz*sine, omega]
+	rows = [(axis, lever, budget*dt/4.0) for x in (-width, width)
+		for z in (-length/2.0, length/2.0)
+		for axis, lever, budget in ((0, x, longitudinal), (1, -z, lateral))]
+	impulses = [0.0]*len(rows)
+	for unused in range(SERVER_PHYSICS_CONSTRAINT_ITERATIONS):
+		largest = 0.0
+		for index, (axis, lever, budget) in enumerate(rows):
+			slip = velocity[axis]+lever*velocity[2]
+			delta = -slip/(1.0+lever*lever/inertia_per_mass)
+			updated = max(-budget, min(budget, impulses[index]+delta))
+			delta = updated-impulses[index]
+			impulses[index] = updated
+			velocity[axis] += delta
+			velocity[2] += delta*lever/inertia_per_mass
+			largest = max(largest, abs(delta))
+		if largest < 1.0e-9:
+			break
+	velocity = [0.0 if abs(value) < 1.0e-9 else value for value in velocity]
+	return (velocity[0]*sine+velocity[1]*cosine,
+		velocity[0]*cosine-velocity[1]*sine, velocity[2])
+
+
+def predict_contact_velocity(p, state, shape, sample_time, now, impulses):
+	'''Replay unacknowledged impulses against a timestamped free velocity.
+
+	This predicts velocity only. The worker remains the sole remote pose owner,
+	and every actual displacement still uses its vehicle/world sweeps. Keeping
+	a pending impulse as permanent velocity until its ACK otherwise hides the
+	engine/ground reaction for the entire publication delay and stalls a shove.
+	Impulses are (time, delta_x, delta_z, delta_yaw) in acceptance order.
+	'''
+	yaw = float(state.get('yaw', 0.0))
+	sine, cosine = math.sin(yaw), math.cos(yaw)
+	alive = bool(state.get('alive', True))
+	airborne = bool(state.get('airborne', False))
+	speed = float(state.get('speed', 0.0)) if alive else 0.0
+	vx = sine*speed + float(state.get('push_x', 0.0))
+	vz = cosine*speed + float(state.get('push_z', 0.0))
+	omega = float(state.get('push_yaw', 0.0))
+	pitch, roll = float(state.get('pitch', 0.0)), float(state.get('roll', 0.0))
+	normal_y = math.cos(pitch)*math.cos(roll)
+	throttle = state.get('movement_dir', 0) if alive else 0
+	cursor = float(sample_time)
+	for stamp, dx, dz, dw in tuple(impulses) + ((now, 0.0, 0.0, 0.0),):
+		end = max(cursor, min(float(now), float(stamp)))
+		remaining = end-cursor
+		while remaining > 1.0e-9:
+			step = min(SERVER_PHYSICS_STEP, remaining)
+			if alive:
+				forward = vx*sine+vz*cosine
+				right = vx*cosine-vz*sine
+				forward = longitudinal_step(p, forward, throttle,
+					bool(state.get('rotation_dir', 0)), pitch, step, airborne)
+				if not airborne:
+					right = _bleed(right, contact_push_decel(
+						p, bool(forward or throttle), normal_y=normal_y)[1]*step)
+				vx, vz = forward*sine+right*cosine, forward*cosine-right*sine
+			elif not airborne:
+				vx, vz, omega = wreck_contact_step(
+					p, vx, vz, omega, yaw, shape, step, normal_y)
+			remaining -= step
+		vx, vz, omega = vx+dx, vz+dz, omega+dw
+		cursor = end
+	return vx, vz, omega
 
 
 def _grip_decel(p, slope_pitch):

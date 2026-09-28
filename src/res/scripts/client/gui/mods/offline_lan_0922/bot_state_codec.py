@@ -71,6 +71,7 @@ F_HAS_BURST = 1 << 14
 F_HAS_CLIP = 1 << 15
 F_HAS_SIEGE = 1 << 16
 F_HAS_CONTACT_MOMENTUM = 1 << 17
+F_AIRBORNE = 1 << 18
 
 # Groups the previous mapping contract could leave out entirely, which meant
 # "keep the state the server already admitted". A positional row always has the
@@ -138,8 +139,8 @@ CLAMPS = {
     'x': (-2000.0, 2000.0),
     'y': (-1000.0, 1000.0),
     'z': (-2000.0, 2000.0),
-    'pitch': (-0.61, 0.61),
-    'roll': (-0.61, 0.61),
+    'pitch': (-math.pi, math.pi),
+    'roll': (-math.pi, math.pi),
     'gun_pitch': (-1.2, 1.2),
     'speed': (-80.0, 80.0),
     'shot_pitch': (-1.2, 1.2),
@@ -220,6 +221,8 @@ def encode_row(state):
         flags |= F_ALIVE
     if state.get('world_pose', True):
         flags |= F_WORLD_POSE
+    if state.get('airborne', False):
+        flags |= F_AIRBORNE
     if state.get('ammo_reload_pending', False):
         flags |= F_AMMO_RELOAD_PENDING
     if state.get('burst_active', False):
@@ -385,6 +388,7 @@ def decode_row(row, static):
     flags = row[_SCALAR_INDEX['_flags']]
     result['alive'] = bool(flags & F_ALIVE)
     result['world_pose'] = bool(flags & F_WORLD_POSE)
+    result['airborne'] = bool(flags & F_AIRBORNE)
     result['ammo_reload_pending'] = bool(flags & F_AMMO_RELOAD_PENDING)
     result['burst_active'] = bool(flags & F_BURST_ACTIVE)
     result['movement_dir'] = (

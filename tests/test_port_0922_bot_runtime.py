@@ -15243,7 +15243,7 @@ class BotRuntimeTests(unittest.TestCase):
             1, descriptor_resolver=lambda unused: descriptor,
             adapter_factory=lambda *unused, **kwargs: _FixedAdapter(
                 self._stationary_command()),
-            direction_probe=lambda *unused: {'clear': False, 'slope': 0.0},
+            direction_probe=lambda *unused: {'clear': False, 'collision': True, 'slope': 0.0},
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver,

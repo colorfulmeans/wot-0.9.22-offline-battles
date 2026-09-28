@@ -6880,3 +6880,65 @@ and 14 errors, plus three differences resolved by preserving one-time spawn
 support and observing total signed collision velocity. Those three cases pass
 in the final focused rerun. The gameplay gate still has the same seven failures
 and two errors as the parent.
+
+### Report 152755: delayed pushing, passive wreck support and tilted track patches
+
+All three logs identify `test-20260928-91b5b9c` on `37_caucasus`.
+At 15:20:40-48 the 100575-kg KV-5 applies reverse input with about -2 m/s
+reported speed but almost no accepted travel against the 35500-kg T-54 first
+prototype. World probes are clear. The previous head-on test copied worker
+publications immediately; adding 100 ms of delivery delay reproduces zero
+progress. Pending contact momentum was treated as undamped velocity until
+its ACK, hiding the worker's intervening engine and ground reaction.
+
+The visible contact adapter now timestamps its accepted impulses on the
+existing motion clock, removes acknowledged entries, and replays the remaining
+impulses against the latest canonical velocity with the same drive/track laws.
+It predicts no positions and does not write Bot poses. The worker still applies
+each cumulative checkpoint once and remains the only remote motion owner.
+The delayed owner regression covers 30/90/144 Hz, 100/200/300 ms delivery,
+reverse KV-5 versus the report's T-54 prototype mass/power, reversed vehicle
+ownership, and the weaker-engine counterexample. These are synthetic adapter
+tests, not a native network recording or proof of retail calibration.
+
+The report also records rejected wreck nudges with a clear native sweep, and
+almost entirely zero yaw motion. Passive displacement no longer consults
+navigation slope/water avoidance after an exact world sweep; cliffs and deep
+water are not solid geometry. Vehicle, static-world and detached-turret guards
+remain. Wreck translation and yaw now spend one shared anisotropic friction
+budget instead of independent full linear and angular budgets. The existing
+uniform-track approximation is discretized at the mean arms of the two halves
+of each track; constrained impulses use the original mass/footprint inertia
+and cannot add kinetic energy. This is still an offline planar approximation.
+
+The earlier ten-spring wreck test did not match production wiring: production
+provided only the legacy centre support probe. The native bounded suspension
+column is now wired specifically for destroyed Bot hulls. Live Bot navigation
+retains its existing support owner. Active wrecks use ten-spring/body support,
+tip/fall after a push, and continue vertical motion after horizontal motion
+stops. Bot wire/server pose bounds now retain full wrapped pitch/roll instead
+of clipping them to 0.61 rad; an airborne flag survives publication so the
+contact predictor does not apply ground friction in flight.
+
+At 15:25:33.887 the player has pitch 1.082 rad and recovered bridge support
+at columns whose direct probe missed. The recovery patch previously stayed
+horizontal even when its track rotated. Patch X/Z and its height ceiling now
+follow the track pitch/roll, so a near-vertical patch cannot reach back across
+its old horizontal width. Existing inclined-plane transport and support
+memory rules remain; no artificial outward force or forced fall is added.
+
+Validation includes delayed live/wreck contacts through real visible/worker
+adapters and PYC wire roundtrips, original-mass push counterexamples, combined
+friction energy/direction, production wreck-probe activation, departed track
+footprints, finite-deck falling, native world vetoes, and snapshot lifecycle.
+The focused selection passes 1,472 checks (one environment skip; the same six
+previously reproduced navigation cases are excluded), plus 60 wreck/snapshot/
+mass checks. The gameplay gate still reproduces the parent's seven failures
+and two errors. Exact installed #1513 inspection, ABI audit and all 146 Python
+2.7 source compilations pass. No new native API is introduced. Actual bridge
+release, native wreck pose presentation and crowded delayed pushing require
+another #1513 gameplay acceptance run; the reduced suspension is not a full
+retail rigid-body solver. Module/crew fall injuries, replay recording and the
+other previously listed open work are not claimed repaired here.
+The complete 528-case Bot module run reproduces the 26 failure occurrences
+and 14 errors previously documented; its failure identifiers add no new case.

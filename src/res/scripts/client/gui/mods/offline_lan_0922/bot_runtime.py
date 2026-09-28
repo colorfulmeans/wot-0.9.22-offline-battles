@@ -1981,10 +1981,12 @@ class BotRuntime(object):
                  destructible_body_scan=None, control_seconds=None,
                  incoming_lane_probe=None, combat_diagnostics=None,
                  turret_motion_probe=None, turret_hulls_provider=None,
-                 artillery_status_probe=None, wreck_rotation_probe=None):
+                 artillery_status_probe=None, wreck_rotation_probe=None,
+                 wreck_ground_probe=None):
         self.local_player_id = local_player_id
         self.artillery_status_probe = artillery_status_probe
         self._wreck_rotation_probe = wreck_rotation_probe
+        self._wreck_ground_probe = wreck_ground_probe
         self._combat_diagnostics = combat_diagnostics
         self.descriptor_resolver = descriptor_resolver or (lambda unused: {})
         self.player_descriptor_resolver = player_descriptor_resolver
@@ -2749,7 +2751,9 @@ class BotRuntime(object):
     def _suspension_params_for(self, bot_id):
         """Return descriptor-derived data, disabling one unsupported Bot."""
         bot_id = int(bot_id)
-        if self._suspension_ground_probe is None:
+        if (self._suspension_ground_probe is None and
+                (self._wreck_ground_probe is None or
+                 self.states.get(bot_id, {}).get('alive', True))):
             return None
         if bot_id in self._suspension_params:
             return self._suspension_params[bot_id]
@@ -3833,7 +3837,7 @@ class BotRuntime(object):
         state['contact_push_acks'] = copy.deepcopy(raw.get('contact_push_acks', []))
         state['push_yaw'] = _number(raw.get('push_yaw'))
         state['vertical_speed'] = 0.0
-        state['airborne'] = False
+        state['airborne'] = bool(raw.get('airborne', False))
         self._reset_bot_suspension_state(state, reset_grounded=True)
         state['last_drive_pitch'] = 0.0
         self._turn_speeds[int(state['id'])] = 0.0
@@ -6045,7 +6049,8 @@ class BotRuntime(object):
         self._probe_totals[3] += 1
         probe_started = self._probe_started()
         try:
-            return self._suspension_ground_probe(
+            probe = self._suspension_ground_probe or self._wreck_ground_probe
+            return probe(
                 x, z, minimum_y, maximum_y, flat_maximum_y)
         finally:
             self._probe_finished(3, probe_started)
@@ -8271,7 +8276,8 @@ class BotRuntime(object):
 
     def _apply_tank_contact_response(self, state, result, step,
                                      advance_push=True,
-                                     apply_correction=True):
+                                     apply_correction=True,
+                                     apply_friction=True):
         """Apply one resolver response through the canonical bot motion path."""
         delta_x, delta_z = result['delta_velocity']
         yaw = state['yaw']
@@ -8284,7 +8290,7 @@ class BotRuntime(object):
                   applied_forward * math.sin(yaw))
         push_z = (state.get('push_z', 0.0) + delta_z -
                   applied_forward * math.cos(yaw))
-        if advance_push:
+        if advance_push and apply_friction:
             push_x, push_z = self._bleed_contact_push(state, push_x, push_z, step)
         correction_x, correction_z = (result['correction'] if
                                       apply_correction else (0.0, 0.0))
@@ -8331,11 +8337,19 @@ class BotRuntime(object):
                     state, position, contact_yaw, move_distance/sweep_step,
                     self._descriptors.get(int(state['id'])), sweep_step,
                     getattr(self, '_contact_now', 0.0), commit_enabled=False) != 'clear'
+                path_blocked = False
+            else:
+                # Passive momentum has no navigation goal. A cliff, steep
+                # slope or deep water may deter the driver, but is not a wall.
+                passive_probe = self._probe_direction(
+                    position, contact_yaw, contact_speed, None,
+                    separation_distance, corridor_half_width)
+                path_blocked = (bool(passive_probe.get('collision'))
+                                if isinstance(passive_probe, dict)
+                                else not bool(passive_probe))
             if (world_blocked or not self._turret_pose_is_clear(
                     state, position, yaw, candidate, yaw) or
-                    not self._clear(
-                        position, contact_yaw, contact_speed, None,
-                        separation_distance, corridor_half_width)):
+                    path_blocked):
                 # Requested separation is not proof of an accepted pose.
                 move_x = 0.0
                 move_z = 0.0
@@ -8380,29 +8394,6 @@ class BotRuntime(object):
             normal_y=(math.cos(_number(state.get('pitch'))) *
                       math.cos(_number(state.get('roll')))))
 
-    def _wreck_tracks_absorb(self, state, result, step):
-        """Return whether this wreck's tracks hold against the whole impulse.
-
-        The applied impulse divided by the slice is the acceleration the
-        contact is asking of the hull. Comparing it against the same parked
-        perch hold that keeps a stopped tank on a slope is exactly the
-        Coulomb static test, so a light hull leaning on a heavy wreck moves
-        nothing while a heavy one breaks it loose.
-        """
-        try:
-            params = self._physics_params_for(int(state['id']))
-        except (KeyError, TypeError, ValueError, OverflowError):
-            return False
-        if not params:
-            return False
-        return vehicle_physics.contact_push_is_held(
-            params,
-            state.get('push_x', 0.0) + result['delta_velocity'][0],
-            state.get('push_z', 0.0) + result['delta_velocity'][1],
-            _number(state.get('yaw')), step, rolling=False,
-            normal_y=(math.cos(_number(state.get('pitch'))) *
-                      math.cos(_number(state.get('roll')))))
-
     @staticmethod
     def _wreck_is_active(state):
         return bool(state.get('airborne') or any(abs(state.get(key, 0.0)) > 1.0e-9
@@ -8416,16 +8407,6 @@ class BotRuntime(object):
         inertia = tank_collision.wreck_yaw_inertia(state)
         if not omega or not inertia:
             return
-        params = self._physics_params_for(int(state['id']))
-        if params and not state.get('airborne', False):
-            grip = vehicle_physics.contact_push_decel(params, False,
-                normal_y=math.cos(state.get('pitch', 0.0))*math.cos(state.get('roll', 0.0)))
-            width, length = state['collision_shape'][:2]
-            # Uniform track loading, the same parked longitudinal/lateral
-            # Coulomb budgets as translation, acting at the footprint arms.
-            # Uniform pressure along each track: mean abs(z) is length/2.
-            torque = state['mass']*(grip[0]*width + grip[1]*length/2.0)
-            omega = vehicle_physics._bleed(omega, torque*step/inertia)
         old_yaw = state['yaw']
         position = _position(state)
         candidate = old_yaw + omega*step
@@ -8455,18 +8436,28 @@ class BotRuntime(object):
             return False
         before = _position(state)
         old_yaw = state['yaw']
-        held = (not state.get('airborne', False) and
-                self._wreck_tracks_absorb(state, result, step))
-        if held:
-            state['push_x'] = state['push_z'] = 0.0
-        else:
-            self._apply_tank_contact_response(state, result, step)
-        self._advance_wreck_yaw(state, result, step)
+        vx = state.get('push_x', 0.0) + result['delta_velocity'][0]
+        vz = state.get('push_z', 0.0) + result['delta_velocity'][1]
+        omega = state.get('push_yaw', 0.0) + result.get('delta_yaw', 0.0)
+        params = self._physics_params_for(int(state['id']))
+        if params:
+            vx, vz, omega = vehicle_physics.wreck_contact_step(
+                params, vx, vz, omega, old_yaw, state['collision_shape'], step,
+                math.cos(state.get('pitch', 0.0))*math.cos(state.get('roll', 0.0)),
+                state.get('airborne', False))
+        motion = dict(result, delta_velocity=(0.0, 0.0), delta_yaw=0.0)
+        state['push_x'], state['push_z'], state['push_yaw'] = vx, vz, omega
+        self._apply_tank_contact_response(state, motion, step,
+            apply_friction=False, apply_correction=bool(vx or vz or omega))
+        self._advance_wreck_yaw(state, motion, step)
         # Run even when translation/rotation stopped: a falling wreck has no
         # live drive tick to finish its flight or landing on its behalf.
         if self._update_vertical_motion(state, step, before, old_yaw):
             state['x'], state['y'], state['z'] = before
             state['yaw'], state['push_yaw'] = old_yaw, 0.0
+        for angle in ('pitch', 'terrain_pitch', 'roll'):
+            value = state.get(angle, 0.0)
+            state[angle] = math.atan2(math.sin(value), math.cos(value))
         moved = _position(state) != before or state['yaw'] != old_yaw
         now = getattr(self, '_contact_now', None)
         if moved and now is not None and now >= state.get('_wreck_motion_log_time', 0.0):
@@ -8996,7 +8987,7 @@ class BotRuntime(object):
                     self._wreck_is_active(state) or
                     state.get('push_x', 0.0) or state.get('push_z', 0.0) or
                     any(other.get('alive', True) or other['vx'] or
-                        other['vz'] for other in others)):
+                        other['vz'] or other.get('push_yaw') for other in others)):
                 # Nothing in reach can move this wreck and it carries no
                 # momentum of its own. Two settled wrecks left overlapping by
                 # their death poses must not re-solve each other every tick

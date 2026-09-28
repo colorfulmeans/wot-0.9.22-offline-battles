@@ -6232,8 +6232,8 @@ class BattleState:
             "y": round(_clamp(_finite_float(raw.get("y")), -1000.0, 1000.0), 4),
             "z": round(_clamp(_finite_float(raw.get("z")), -2000.0, 2000.0), 4),
             "yaw": round(yaw, 5),
-            "pitch": round(_clamp(_finite_float(raw.get("pitch")), -0.61, 0.61), 5),
-            "roll": round(_clamp(_finite_float(raw.get("roll")), -0.61, 0.61), 5),
+            "pitch": round(_clamp(_finite_float(raw.get("pitch")), -math.pi, math.pi), 5),
+            "roll": round(_clamp(_finite_float(raw.get("roll")), -math.pi, math.pi), 5),
             "aim_yaw": round(_finite_float(raw.get("aim_yaw"), yaw), 5),
             "gun_pitch": round(_clamp(_finite_float(raw.get("gun_pitch")), -1.2, 1.2), 5),
             "speed": round(_clamp(
@@ -6241,6 +6241,7 @@ class BattleState:
             "push_x": _finite_float(raw.get("push_x")),
             "push_z": _finite_float(raw.get("push_z")),
             "push_yaw": _finite_float(raw.get("push_yaw")),
+            "airborne": bool(raw.get("airborne", False)),
             "contact_push_acks": list(tank_contact_ledger.normalize(
                 raw.get("contact_push_acks", [])).values()),
             "movement_dir": (1 if movement > 0.01 else
@@ -6660,6 +6661,7 @@ class BattleState:
         result['push_x'] = raw.get('push_x', 0.0)
         result['push_z'] = raw.get('push_z', 0.0)
         result['push_yaw'] = raw.get('push_yaw', 0.0)
+        result['airborne'] = bool(raw.get('airborne', False))
         result['contact_push_acks'] = copy.deepcopy(raw.get('contact_push_acks', []))
         result.update({
             "id": int(identity["id"]),

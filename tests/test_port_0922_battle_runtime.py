@@ -12589,6 +12589,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             bot_runtime.WORKER_CONTROL_SECONDS,
             battle._bots._control_seconds)
         self.assertIsNone(battle._bots._suspension_ground_probe)
+        self.assertEqual(battle._suspension_ground_y, battle._bots._wreck_ground_probe)
 
     def test_player_identity_sync_rejects_arena_dp_mismatch(self):
         runtime = _runtime()

@@ -112,13 +112,13 @@ class BotStateCodecTest(unittest.TestCase):
 
     def test_out_of_contract_values_are_clamped_not_rejected(self):
         state = _bot_state(x=9000.0, z=-9000.0, gun_pitch=3.0, speed=500.0,
-                           pitch=-2.0)
+                           pitch=-5.0)
         decoded = codec.decode_row(codec.encode_row(state), STATIC)
         self.assertEqual(decoded['x'], 2000.0)
         self.assertEqual(decoded['z'], -2000.0)
         self.assertEqual(decoded['gun_pitch'], 1.2)
         self.assertEqual(decoded['speed'], 80.0)
-        self.assertEqual(decoded['pitch'], -0.61)
+        self.assertAlmostEqual(decoded['pitch'], -math.pi, places=5)
 
     def test_shot_angles_are_an_atomic_optional_pair(self):
         state = _bot_state()

@@ -1860,6 +1860,7 @@ class BattleRuntime(object):
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
         self._local_contact_pushes = {}
+        self._local_contact_impulses = {}
         self._local_turret_pushes = {}
         self._collision_feedback = CollisionFeedback()
         self._local_contact_log_time = 0.0
@@ -2212,6 +2213,7 @@ class BattleRuntime(object):
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
         self._local_contact_pushes = {}
+        self._local_contact_impulses = {}
         self._local_turret_pushes = {}
         self._collision_feedback = CollisionFeedback()
         self._local_contact_log_time = 0.0
@@ -3669,6 +3671,7 @@ class BattleRuntime(object):
                 motion_report=self._report_bot_destructible_contact,
                 turret_motion_probe=self._turret_motion_is_clear,
                 wreck_rotation_probe=self._resolve_bot_rotation,
+                wreck_ground_probe=self._suspension_ground_y,
                 turret_hulls_provider=self._turret_navigation_hulls,
                 world_receipt_probe=self._direction_world_receipt,
                 water_depth_probe=self._water_depth,
@@ -20886,6 +20889,33 @@ class BattleRuntime(object):
             (previous & (overlapping | closing_gaps)) | newly_armed)
         return bool(newly_armed)
 
+    def _predict_bot_contact_velocity(self, bot_id, state, shape):
+        """Use ACK-coherent momentum and its elapsed drive/ground reaction."""
+        timeline = self._ram_bot_history_index.get(bot_id)
+        now = self._estimated_motion_time_us(self._clock())
+        if not timeline or now is None or self._bots is None:
+            return None
+        sample_time, revision = timeline[-1]
+        checkpoint = self._ram_bot_history.get(revision, {}).get(bot_id)
+        if checkpoint is None or now < sample_time:
+            return None
+        params = self._bots._physics_params_for(bot_id)
+        if params is None:
+            return None
+        ack = next((row[1] for row in checkpoint.get('contact_push_acks', ())
+                    if row[0] == self.client.player_id), 0)
+        rows = [row for row in self._local_contact_impulses.get(bot_id, ())
+                if row[0] > ack]
+        self._local_contact_impulses[bot_id] = rows
+        mass = float(state['mass'])
+        inertia = tank_collision.wreck_yaw_inertia(dict(
+            alive=checkpoint.get('alive', True), mass=mass, shape=shape))
+        impulses = [(row[1]/1000000.0, row[2]/mass, row[3]/mass,
+                     row[4]/inertia if inertia else 0.0) for row in rows]
+        return vehicle_physics.predict_contact_velocity(
+            params, checkpoint, shape, sample_time/1000000.0,
+            now/1000000.0, impulses)
+
     def _contact_tanks(self, position, own_shape, dt=0.0, extra_reach=0.0):
         """Build only bodies that can contact this presented player pose.
 
@@ -20999,6 +21029,10 @@ class BattleRuntime(object):
                         self._local_contact_pushes, int(record['network_id']),
                         physical_state.get('contact_push_acks'),
                         int(getattr(self.client, 'player_id', 0)))/inertia
+                predicted = self._predict_bot_contact_velocity(
+                    int(record['network_id']), physical_state, shape)
+                if predicted is not None:
+                    physical_velocity, push_yaw = predicted[:2], predicted[2]
                 # Pending momentum is reciprocal; pending space is not.
                 # A worker can reject displacement against a rock or another
                 # hull. Use the actual presented body, never a requested pose.
@@ -21146,11 +21180,19 @@ class BattleRuntime(object):
                 'vehicle collision feedback', self._present_tank_collision,
                 (entity, own, physical, now), disable=False)
             if other.get('kind') == 'bot':
+                angular_momentum = (solved[other_id]['delta_yaw'] *
+                                    tank_collision.wreck_yaw_inertia(other))
                 tank_contact_ledger.record(
                     self._local_contact_pushes, other['network_id'],
                     (delta[0] * other['mass'], delta[1] * other['mass']),
-                    angular=(solved[other_id]['delta_yaw'] *
-                             tank_collision.wreck_yaw_inertia(other)))
+                    angular=angular_momentum)
+                stamp = self._estimated_motion_time_us(now)
+                if stamp is not None:
+                    self._local_contact_impulses.setdefault(
+                        other['network_id'], []).append((
+                            self._local_contact_pushes[other['network_id']][1],
+                            stamp, delta[0]*other['mass'], delta[1]*other['mass'],
+                            angular_momentum))
         delta_x, delta_z = contact['delta_velocity']
         if ((delta_x or delta_z) and now >= self._local_contact_log_time):
             self._local_contact_log_time = now + 2.0
@@ -21784,7 +21826,8 @@ class BattleRuntime(object):
                     prepared_filter=prepared_filter), support_gradient,
                 point_height=spring_height, spring=spring,
                 reference_height=vehicle_physics.suspension_plane_height(
-                    None if self._local_airborne else self._local_ground_plane, x, z))
+                    None if self._local_airborne else self._local_ground_plane, x, z),
+                pitch=self._local_pitch, roll=self._local_roll)
             value, memory[index] = vehicle_physics.retained_ground_contact(
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
