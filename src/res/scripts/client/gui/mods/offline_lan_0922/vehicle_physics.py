@@ -80,12 +80,11 @@ COH_DECAY_BOUND = 0.5
 SLOPE_COH_DECAY = 0.25
 SLOPE_COH_DECAY_Y = 0.72
 # ---- offline-model constants (no exact native transition curve recoverable) ----
-# User retail observation confirms that releasing drive applies drivetrain
-# braking. Restore the existing offline calibration, not a claimed native
-# coefficient: the exact W-release curve still lives in unavailable C++ code.
-# This partial track-grip share fades near the static perch limit so a steep
-# descent remains gravity-driven. Explicit track locking retains full grip.
-COAST_BRAKE_SHARE = 0.65
+# User-requested trial: total released-drive resistance is half the service
+# brake, including rolling drag (not half grip PLUS rolling drag). This is
+# offline calibration, not a recovered retail coefficient. Physical rolling
+# resistance is a floor; the added brake fades on steep descents as before.
+COAST_BRAKE_SHARE = 0.5
 # Steering adds track-differential drag to the rolling resistance.
 STEER_RESIST_MULT = 1.6
 # Engine force F = P / max(|v|, ENGINE_MIN_V), capped by track cohesion.
@@ -2231,15 +2230,16 @@ def brake_force(p, active, terrainIdx=0, slope_pitch=0.0):
 	(cos theta) while cohesion decays on steep ground. So a hull braking on a
 	slope past the grip limit CANNOT hold and slides - the same ~50 deg limit
 	as the lateral fall-line slip, kept consistent on purpose.
-	active=True: opposite-throttle / hold lock-up. active=False: the established
-	flat-ground drivetrain coast drag; longitudinal_step relieves that drag only
-	near the static perch tangent, where gravity owns the descent.'''
+	active=True: opposite-throttle / hold lock-up. active=False: the requested
+	partial service brake, with rolling resistance included and retained as a
+	floor. longitudinal_step relieves added braking near the static perch
+	tangent, where gravity owns the descent.'''
 	ny = math.cos(slope_pitch)
 	grip_decel = slope_cohesion(ny) * GRAVITY * (ny if ny > 0.1 else 0.1)
 	brake = p['brakeDecel'] if p['brakeDecel'] < grip_decel else grip_decel
 	if active:
 		return p['mass'] * brake
-	return (rolling_resist_force(p, terrainIdx, False) +
+	return max(rolling_resist_force(p, terrainIdx, False),
 		p['mass'] * COAST_BRAKE_SHARE * brake)
 
 
@@ -2520,16 +2520,16 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 				return 0.0                        # tracks hold - no creep on ordinary hills
 			accel = grav_a - (_hold if grav_a > 0.0 else -_hold)   # slides off a too-steep parked slope
 		else:
-			# Restore the established released-drive braking calibration.
-			# Its grip share fades only near the static perch limit; a steep
-			# downhill remains free to gain speed under gravity. Neither this
-			# drag nor its relief depends on crossing the powered speed limit.
+			# The requested share is TOTAL resistance, including rolling drag.
+			# Only the additional brake fades near the static perch limit;
+			# retain physical rolling drag and gravity-driven steep descents.
 			motion_sign = 1.0 if v > 0.0 else -1.0
 			downhill_tangent = max(0.0, math.tan(slope_pitch) * motion_sign)
 			fade_start = 0.8 * SLIDE_HOLD_TAN
 			fade = min(1.0, max(0.0, (downhill_tangent - fade_start) /
 			                    (SLIDE_HOLD_TAN - fade_start)))
-			resist = rr + COAST_BRAKE_SHARE * (1.0 - fade) * grip
+			target = COAST_BRAKE_SHARE * min(p['brakeDecel'], grip)
+			resist = rr + (1.0 - fade) * max(0.0, target - rr)
 			accel = grav_a - (resist if v > 0.0 else -resist)
 
 	# TRACK-SLIP DRAG: rolling UP a grade steeper than the tracks can pull, they

@@ -1243,14 +1243,50 @@ class VehiclePhysicsCoastTests(unittest.TestCase):
                     self.assertAlmostEqual(sign*9.7, vehicle_physics.longitudinal_step(
                         p, sign*10., -sign, False, 0., .1, service_brake=True))
 
-    def test_coasting_depends_on_terrain_in_both_directions(self):
+    def test_release_is_half_service_brake_including_rolling_resistance(self):
+        for mass in (21000., 100575.):
+            for brake in (3., vehicle_physics.COHESION * vehicle_physics.GRAVITY):
+                params = dict(self.params, mass=mass, brakeDecel=brake,
+                              speedFwd=100./3.6, speedBwd=100./3.6)
+                for sign in (-1., 1.):
+                    for terrain in range(3):
+                        for dt in (.01, .1):
+                            with self.subTest(mass=mass, brake=brake,
+                                              sign=sign, terrain=terrain, dt=dt):
+                                initial = sign * 100./3.6
+                                coast = vehicle_physics.longitudinal_step(
+                                    params, initial, 0., False, 0., dt, terrainIdx=terrain)
+                                active = vehicle_physics.longitudinal_step(
+                                    params, initial, -sign, False, 0., dt,
+                                    terrainIdx=terrain, service_brake=True)
+                                self.assertAlmostEqual(abs(initial - active) / 2.,
+                                                       abs(initial - coast))
+                                self.assertAlmostEqual(
+                                    vehicle_physics.brake_force(params, False, terrain),
+                                    abs(initial - coast) * mass / dt)
+
+    def test_coasting_retains_terrain_drag_after_steep_descent_brake_relief(self):
         for direction in (-1.0, 1.0):
             speeds = [abs(vehicle_physics.longitudinal_step(
-                self.params, direction * 2.5, 0.0, False, 0.0, 0.1,
+                self.params, direction * 2.5, 0.0, False,
+                direction * math.radians(28.), 0.1,
                 terrainIdx=terrain)) for terrain in range(3)]
             self.assertGreater(speeds[0], speeds[1])
             self.assertGreater(speeds[1], speeds[2])
             self.assertGreater(speeds[2], 0.0)
+
+    def test_release_never_cancels_physical_rolling_drag(self):
+        # A low installed brake cannot erase a larger terrain resistance.
+        params = dict(self.params, brakeDecel=.5)
+        for sign in (-1., 1.):
+            for terrain in range(3):
+                rolling = vehicle_physics.rolling_resist_force(params, terrain)
+                coast = vehicle_physics.longitudinal_step(
+                    params, sign*2.5, 0., False, 0., .1, terrainIdx=terrain)
+                self.assertAlmostEqual(rolling / params['mass'],
+                                       abs(sign*2.5 - coast) / .1)
+                self.assertAlmostEqual(rolling,
+                    vehicle_physics.brake_force(params, False, terrain))
 
     def test_release_brakes_ordinary_slopes_and_relaxes_on_steep_descents(self):
         # Restore the existing slope-dependent coast brake: ordinary descents

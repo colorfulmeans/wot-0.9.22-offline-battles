@@ -7456,3 +7456,49 @@ compilation of all 146 client modules pass. The reduced suspension model and
 loaded-map edge departure still require #1513 playtesting; the report does
 not prove that navigation avoidance is the blocker. Detached turrets remain
 visual-only, retaining the user-confirmed frame-pacing improvement.
+
+## Report 231925: user-selected half-strength release braking trial
+
+All three report processes identify test-20260928-c2f7507. On near-flat ground,
+KV-5 released drive decelerates at approximately 11.33 m/s^2; intentional
+opposite-direction braking and the handbrake retain approximately 15.94 m/s^2.
+The old 0.65 share was added to rolling resistance, making total release drag
+about 71% of the active brake for this 100,575 kg installation. It was never
+a recovered retail coefficient. Searches of official movement-physics notes
+and player discussions did not establish a numerical 0.9.22 coast/brake ratio:
+https://worldoftanks.com/en/news/general-news/public-test-improvements/
+https://worldoftanks.eu/en/news/general-news/public-test-physics-september/
+https://arstechnica.com/civis/threads/world-of-tanks-ask-about-invite-codes-before-signing-up.1112547/page-1314
+The official material describes release/turn behavior and sharp handbraking;
+the forum is qualitative experience, not a force measurement.
+
+The user explicitly requests a 50% trial when no reliable published ratio is
+available. Set total released-drive resistance to half the installed, grip-
+limited service brake, including rolling resistance rather than adding it a
+second time. Physical rolling resistance remains a floor. Preserve the existing
+steep-descent brake relief, gravity, parked hold, handbrake, intentional reversal
+latch, airborne momentum and contact pushing. Hence 50% describes flat-ground
+braking, not net acceleration on every slope or arbitrarily high rolling drag.
+At the ordinary full-grip limit the new release deceleration is 7.970625 m/s^2
+and the unchanged active brake is 15.94125 m/s^2. For the report's KV-5 these
+are about 801,645 N and 1,603,290 N, respectively. R/F still select native cruise
+presets; releasing a cruise key alone does not cancel an active preset.
+
+The 245 targeted direction/physics/bridge/world/wreck tests pass. Ratio coverage
+includes both directions, 100 km/h limits, masses, installed brake capacities,
+terrain and timestep; the real manual-input and cruise-cancellation paths are
+also exercised. A 1,800-case comparison with the parent matches unchanged drive,
+service braking, handbrake, airborne and static behavior exactly. Four siege
+subtest failures and the removed-traffic-symbol import error encountered in an
+additional selection reproduce unchanged on the parent; they are not claimed
+fixed by this trial.
+
+The bridge report contains real progressive falls: Bot 9 descends from y=0.644
+at 23:13:16.229 to y=-14.495 at 23:13:18.332 with intermediate airborne positions
+and increasing downward speed. This does not prove replica presentation is
+smooth. Worker frame pacing also remains poor in parts of this session (4.56
+frames/s in round 2 window 5). Collision/support queries still report blockers,
+and Bot 15 has support rollback after a fall. Neither the apparent teleport nor
+every invisible blocker is isolated to one proved cause by these logs. This
+package changes release braking only; it does not claim another bridge fix or
+disable any native wall contact. Native driving feel remains a Windows test.

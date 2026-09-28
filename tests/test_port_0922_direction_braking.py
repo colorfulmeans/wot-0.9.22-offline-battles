@@ -1,4 +1,4 @@
-"""Reports 220344/221207/224302: manual/cruise brakes and restored release drag."""
+"""Reports 220344/221207/224302/231925: manual/cruise and release brakes."""
 import unittest
 from unittest import mock
 
@@ -48,10 +48,11 @@ class LocalDirectionBrakeTests(unittest.TestCase):
                     self.assertFalse(battle._local_service_brake)
                     self.assertGreater(battle._local_speed*-sign, 0.)
 
-    def test_releasing_manual_or_cruise_brakes_restores_existing_coast_drag(self):
+    def test_releasing_manual_or_cruise_uses_half_service_brake(self):
         for sign in (-1., 1.):
             for kind, payload in (('move', {'flags': 0}), ('cruise', {'mode': 0})):
                 battle, entity = local_battle('sweden:S22_Strv_S1', 0, sign*8.)
+                battle._local_physics.update(speedFwd=100./3.6, speedBwd=100./3.6)
                 battle._sender.turn = 0.
                 battle._local_service_brake = True
                 battle._local_direction_command = -sign
@@ -59,12 +60,16 @@ class LocalDirectionBrakeTests(unittest.TestCase):
                 before = battle._local_speed
                 expected = physics.longitudinal_step(battle._local_physics,
                     before, 0., False, 0., .01)
+                active = physics.longitudinal_step(battle._local_physics,
+                    before, -sign, False, 0., .01, service_brake=True)
                 rolling = abs(before) - physics.rolling_resist_force(
                     battle._local_physics)/battle._local_physics['mass']*.01
                 with mock.patch('sys.stdout'):
                     battle._drive_local(.01)
                 self.assertFalse(battle._local_service_brake)
                 self.assertAlmostEqual(expected, battle._local_speed)
+                self.assertAlmostEqual(abs(before - active) / 2.,
+                                       abs(before - battle._local_speed))
                 self.assertLess(abs(battle._local_speed), rolling)
 
     def test_live_input_latches_both_direction_changes_until_stopped(self):
