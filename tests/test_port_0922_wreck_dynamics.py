@@ -88,6 +88,25 @@ class WreckOwnerTests(unittest.TestCase):
     _runtime = bt.ShovedWreckTests._runtime
     _wreck = bt.ShovedWreckTests._wreck
 
+    def test_wire_only_bot_state_uses_installed_mass_for_pending_momentum(self):
+        worker=self._runtime();worker.states.pop(12)
+        params=worker._physics_params_for(11)
+        params['mass']=35500.
+        native=vt._runtime();battle=vt.BattleRuntime(native)
+        battle.client=vt._Client();battle._bots=worker
+        battle._clock=lambda:1.
+        battle._estimated_motion_time_us=lambda unused:1000000
+        for alive in (True,False):
+            raw=dict(worker.states[11],alive=alive,airborne=True,
+                     speed=0.,yaw=0.,push_x=0.,push_z=0.,push_yaw=0.)
+            published=bot_state_codec.decode_row(bot_state_codec.encode_row(raw),{})
+            self.assertNotIn('mass',published)
+            battle._ram_bot_history_index={11:[(1000000,1)]}
+            battle._ram_bot_history={1:{11:published}}
+            battle._local_contact_impulses={11:[(1,1000000,71000.,-35500.,0.)]}
+            self.assertEqual((2.,-1.,0.),battle._predict_bot_contact_velocity(
+                11,published,c.DEFAULT_SHAPE))
+
     def test_sliding_track_friction_does_not_apply_a_second_full_yaw_brake(self):
         p=self._runtime()._physics_params_for(11)
         physics=self.module.vehicle_physics
@@ -164,7 +183,7 @@ class WreckOwnerTests(unittest.TestCase):
                              tank_pushes=copy.deepcopy(list(battle._local_contact_pushes.values())))
                     worker._resolve_tank_contacts([raw],clock[0],.1)
                     wire=bot_state_codec.decode_row(bot_state_codec.encode_row(state),{})
-                    queue.append((clock[0]+.15,clock[0],tick+1,dict(state,**wire)))
+                    queue.append((clock[0]+.15,clock[0],tick+1,wire))
                 while queue and queue[0][0]<=clock[0]+1.e-9:
                     unused,stamp,revision,published=queue.pop(0)
                     record.update(state=published,presented_pose=published)
@@ -292,6 +311,86 @@ class WreckOwnerTests(unittest.TestCase):
         self.assertTrue(departed)
         self.assertGreater(state['z'],-4.)
         self.assertLess(state['y'],0.)
+
+
+class ForcedHazardTests(unittest.TestCase):
+    setUp = bt.ShovedWreckTests.setUp
+    tearDown = bt.ShovedWreckTests.tearDown
+
+    def scenario(self, pushed=False, side=False, wall=False, water=False,
+                 reverse=False):
+        worker=self.module.BotRuntime(1,
+            descriptor_resolver=lambda unused:bt._combat_descriptor(),
+            adapter_factory=lambda *args,**kwargs:bt._FixedAdapter(dict(
+                throttle=1.,turn=0.,fire_allowed=False,movement_intent=True)),
+            direction_probe=lambda *args,**kwargs:dict(clear=False,collision=False,
+                water=True,slope=0.),
+            ground_probe=lambda *args:0.,
+            physics_ground_probe=lambda x,z,hint:0. if water or z<=1. else -100.,
+            spawn_resolver=bt._spawn_resolver,baked_graph=bt._flat_open_graph(),
+            motion_resolver=lambda *args,**kwargs:'hard' if wall else 'clear')
+        worker.battle_start(dict(self.start,bots=self.start['bots'][:1]))
+        state=worker.states[11]
+        state.update(x=0.,y=0.,z=0.,yaw=math.pi if reverse else math.pi/2 if side else 0.,speed=0.,
+                     grounded_once=True,push_x=0.,push_z=0.,movement_dir=0)
+        worker._planner_corridor_clear=lambda *args,**kwargs:False
+        worker._water_depth_probe=lambda position:20. if water and position[2]>1. else -1.
+        checkpoints={}
+        if pushed:ledger.record(checkpoints,11,(0.,state['mass']*8.))
+        player=dict(id=1,team=1,x=100.,y=0.,z=100.,yaw=0.,speed=0.,alive=True,
+                    effective_params=bt._effective_params_snapshot(mass=100575.),
+                    tank_pushes=list(checkpoints.values()))
+        # Keep a fatal baked cell after the edge even when native world is clear.
+        with mock.patch.object(self.module.prebaked_navigation,'pose_is_safe',
+                               side_effect=lambda graph,pose,**kwargs:pose[2]<=1.), \
+                mock.patch('sys.stdout'):
+            for tick in range(480):
+                worker.update(1./30.,tick/30.,[player])
+                if not state['alive']:break
+        return worker,state
+
+    def test_driver_avoids_hazard_but_external_shove_can_fall_and_die(self):
+        unused,unforced=self.scenario()
+        self.assertLessEqual(unforced['z'],1.)
+        self.assertTrue(unforced['alive'])
+        for side,reverse in ((False,False),(True,False),(False,True)):
+            with self.subTest(side=side,reverse=reverse):
+                unused,forced=self.scenario(pushed=True,side=side,reverse=reverse)
+                self.assertGreater(forced['z'],1.)
+                self.assertLess(forced['y'],-20.)
+                self.assertFalse(forced['alive'])
+
+    def test_external_shove_into_deep_water_drowns_but_world_wall_still_blocks(self):
+        unused,wet=self.scenario(pushed=True,water=True)
+        self.assertGreater(wet['z'],1.)
+        self.assertFalse(wet['alive'])
+        self.assertTrue(wet.get('_drowned'))
+        for side in (False,True):
+            unused,blocked=self.scenario(pushed=True,side=side,wall=True)
+            self.assertAlmostEqual(0.,blocked['z'])
+            self.assertTrue(blocked['alive'])
+
+    def test_braking_contact_is_not_relabelled_as_reverse_external_drive(self):
+        retain=self.module.BotRuntime._retained_contact_speed
+        self.assertEqual(0.,retain(1.,-4.))
+        self.assertEqual(0.,retain(-1.,4.))
+        self.assertEqual(-2.,retain(-2.,-7.))
+        self.assertEqual(2.,retain(2.,7.))
+        self.assertEqual(0.,retain(0.,7.))
+
+    def test_passive_shove_still_respects_the_arena_rectangle(self):
+        worker=bt.ShovedWreckTests._runtime(self)
+        worker.states.pop(12)
+        state=worker.states[11]
+        worker.baked_graph=dict(worker.baked_graph,bounds=(-20.,-20.,20.,5.))
+        worker.motion_resolver=lambda *args,**kwargs:'clear'
+        state.update(x=0.,y=0.,z=1.5,yaw=0.,speed=0.,half_length=3.5,
+                     half_width=1.7,grounded_once=True,push_x=0.,push_z=0.)
+        worker._apply_tank_contact_response(state,dict(
+            delta_velocity=(0.,8.),correction=(0.,0.)),.1,
+            advance_push=False,advance_forward=True)
+        self.assertEqual(1.5,state['z'])
+        self.assertEqual(0.,state['speed'])
 
 
 class HeadOnOwnerTests(unittest.TestCase):

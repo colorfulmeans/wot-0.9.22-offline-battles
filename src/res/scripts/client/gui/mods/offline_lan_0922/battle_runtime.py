@@ -20907,7 +20907,9 @@ class BattleRuntime(object):
         rows = [row for row in self._local_contact_impulses.get(bot_id, ())
                 if row[0] > ack]
         self._local_contact_impulses[bot_id] = rows
-        mass = float(state['mass'])
+        # Compact replicas carry motion, not the worker's descriptor cache.
+        # Use the same installed mass as the engine/ground law below.
+        mass = float(params['mass'])
         inertia = tank_collision.wreck_yaw_inertia(dict(
             alive=checkpoint.get('alive', True), mass=mass, shape=shape))
         impulses = [(row[1]/1000000.0, row[2]/mass, row[3]/mass,

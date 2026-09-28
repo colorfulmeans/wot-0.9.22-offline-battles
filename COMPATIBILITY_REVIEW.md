@@ -6942,3 +6942,53 @@ retail rigid-body solver. Module/crew fall injuries, replay recording and the
 other previously listed open work are not claimed repaired here.
 The complete 528-case Bot module run reproduces the 26 failure occurrences
 and 14 errors previously documented; its failure identifiers add no new case.
+
+### September 28 report 160951: compact mass and forced hazard entry
+
+Both rounds in report `20260928-160951-9ed1131f4b7e` run
+`test-20260928-caa555b` on `37_caucasus`. At 16:09:15 and 16:09:42 the
+visible client's local drive aborts with `KeyError: 'mass'` in
+`_predict_bot_contact_velocity`. The worker keeps running; the server's
+`player_left` death follows the client's exception and is not its cause.
+The preceding regression introduced a read from the compact motion mapping,
+which deliberately omits descriptor-derived mass. The predictor now uses the
+already loaded physics parameters for that Bot. Both live and dead compact
+rows are tested without adding worker-only fields back to decoded snapshots.
+The delayed visible-contact integration test previously did just that and
+masked this missing-field failure; its boundary now matches production.
+
+Passive displacement and autonomous hazard avoidance remain distinct. A live
+Bot's received longitudinal impulse is still part of its signed physical
+speed. Its surviving external share is identified by comparing the same
+combined and drive-only integration law, bounded by the actual signed speed;
+a braking collision cannot invent a reverse shove. When a navigation veto or
+unproved drive corridor withholds autonomous movement, that share advances
+through the existing passive native sweep instead of being deleted by AI
+safety damping. This adds no traction, mass bonus or second friction budget.
+
+The realised navigation hazard guard now runs after autonomous motion settles
+and before contact displacement. Native geometry, vehicle/turret sweeps and
+the authored arena rectangle still constrain passive travel. Rechecking the
+accepted contact endpoint with zero elapsed time also updates legacy vertical
+support, so a live Bot pushed beyond a ledge can become airborne without the
+navigation guard restoring it. Existing worker fall-HP and continuous drowning
+laws retain their terminal-event ownership; no new kill attribution, crew or
+module fall-injury law is introduced.
+
+Regression scenarios exercise the complete worker update and acknowledged
+human momentum: unforced Bots reject a fatal corridor, while longitudinal,
+reverse and lateral shoves can depart support and suffer a lethal landing.
+A deep-water shove reaches the existing drowning terminal state; a physical
+wall or arena boundary still blocks it. Additional checks distinguish braking
+from reverse forcing and retain delayed head-on, wreck-rotation and bridge
+regressions. The focused 1,472-case selection passes with one environment
+skip and the same six known navigation exclusions; 69 additional wreck,
+snapshot and mass checks pass. The gameplay gate retains its seven baseline
+failures and two errors. All 146 client sources compile under CPython 2.7.18,
+and the installed #1513 inspection and ABI audit pass. These checks establish
+the adapter and synthetic scenarios, not real-client loading or map physics
+acceptance; the replacement package still requires Windows gameplay testing.
+The broader 528-case Bot run has the same 26 baseline failures and 14 errors,
+plus one final map-boundary guard regression. Retaining that last rectangle
+guard with navigation hazards disabled resolves the new case; its final
+rerun is included in the 69 passing checks above.

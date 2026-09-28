@@ -3826,6 +3826,7 @@ class BotRuntime(object):
         # Resume from rest unless a later protocol explicitly supplies one;
         # stale pre-handoff momentum is not server-canonical state.
         state['speed'] = _number(raw.get('speed'), 0.0)
+        state['_contact_forward_speed'] = 0.0
         movement = _number(raw.get('movement_dir'))
         rotation = _number(raw.get('rotation_dir'))
         state['movement_dir'] = (
@@ -7258,14 +7259,15 @@ class BotRuntime(object):
 
     @timed('bot.pose_guard')
     def _guard_realised_pose(self, state, tick_pose, tick_was_safe,
-                             attempted_yaw, suspension_snapshot=None):
+                             attempted_yaw, suspension_snapshot=None,
+                             navigation_hazards=True):
         """Reject a new hazard or outward map-edge drift after all motion."""
         realised_pose = _position(state)
         moved_farther_outside = not self._baked_pose_progress_clear(
             state, tick_pose, state.get('yaw'),
             realised_pose, state.get('yaw'))
         if (not moved_farther_outside and
-                (not tick_was_safe or
+                (not navigation_hazards or not tick_was_safe or
                  prebaked_navigation.pose_is_safe(
                      self.baked_graph, realised_pose, shoulder_cells=0,
                      hazard_mask=prebaked_navigation.MOTION_FATAL_HAZARDS))):
@@ -8274,10 +8276,21 @@ class BotRuntime(object):
             fraction = tank_collision.translation_fraction(by_id[state['id']], move, bodies)
             state['x'], state['z'] = start[0]+move[0]*fraction, start[2]+move[1]*fraction
 
+    @staticmethod
+    def _retained_contact_speed(speed, forced):
+        """Keep only external momentum still travelling with the hull.
+
+        A collision which only brakes engine motion is not a reverse shove.
+        This partitions the existing velocity; it never adds energy or force.
+        """
+        return max(0.0, min(speed, forced)) if speed >= 0.0 else min(
+            0.0, max(speed, forced))
+
     def _apply_tank_contact_response(self, state, result, step,
                                      advance_push=True,
                                      apply_correction=True,
-                                     apply_friction=True):
+                                     apply_friction=True,
+                                     advance_forward=False):
         """Apply one resolver response through the canonical bot motion path."""
         delta_x, delta_z = result['delta_velocity']
         yaw = state['yaw']
@@ -8286,6 +8299,9 @@ class BotRuntime(object):
                            delta_z * math.cos(yaw))
         applied_forward = forward_impulse if state.get('alive', True) else 0.0
         state['speed'] = speed + applied_forward
+        state['_contact_forward_speed'] = self._retained_contact_speed(
+            state['speed'], state.get('_contact_forward_speed', 0.0) +
+            applied_forward)
         push_x = (state.get('push_x', 0.0) + delta_x -
                   applied_forward * math.sin(yaw))
         push_z = (state.get('push_z', 0.0) + delta_z -
@@ -8296,6 +8312,9 @@ class BotRuntime(object):
                                       apply_correction else (0.0, 0.0))
         move_x = correction_x + (push_x * step if advance_push else 0.0)
         move_z = correction_z + (push_z * step if advance_push else 0.0)
+        if advance_forward:
+            move_x += math.sin(yaw) * applied_forward * step
+            move_z += math.cos(yaw) * applied_forward * step
         requested_move = (move_x, move_z)
         world_blocked = False
         bodies = self._contact_motion_bodies(getattr(self, '_contact_players', ()))
@@ -8347,7 +8366,9 @@ class BotRuntime(object):
                 path_blocked = (bool(passive_probe.get('collision'))
                                 if isinstance(passive_probe, dict)
                                 else not bool(passive_probe))
-            if (world_blocked or not self._turret_pose_is_clear(
+            if (world_blocked or not self._baked_pose_progress_clear(
+                    state, position, yaw, candidate, yaw) or
+                    not self._turret_pose_is_clear(
                     state, position, yaw, candidate, yaw) or
                     path_blocked):
                 # Requested separation is not proof of an accepted pose.
@@ -8355,6 +8376,10 @@ class BotRuntime(object):
                 move_z = 0.0
                 push_x = 0.0
                 push_z = 0.0
+                if advance_forward:
+                    state['speed'] = speed
+                    state['_contact_forward_speed'] = self._retained_contact_speed(
+                        speed, state.get('_contact_forward_speed', 0.0) - applied_forward)
         now = getattr(self, '_contact_now', None)
         if (now is not None and requested_move != (move_x, move_z) and
                 now >= state.get('_contact_motion_log_time', 0.0)):
@@ -11588,6 +11613,7 @@ class BotRuntime(object):
         tick_poses = {}
         tick_suspension_states = {}
         tick_safe = {}
+        passive_forwards = {}
         attempted_yaws = {}
         siege_locked_poses = {}
         integrated = set()
@@ -12465,6 +12491,19 @@ class BotRuntime(object):
                         params, previous_speed, throttle,
                         steer_dir != 0, slope_pitch, step,
                         bool(state.get('airborne', False)), 0, False))
+                forced_speed = self._retained_contact_speed(
+                    previous_speed, state.get('_contact_forward_speed', 0.0))
+                if forced_speed:
+                    # Advance the combined velocity once. A counterfactual
+                    # drive-only step identifies the surviving external share
+                    # without charging another brake/friction budget to it.
+                    unforced_speed = vehicle_physics.longitudinal_step(
+                        params, previous_speed - forced_speed, throttle,
+                        steer_dir != 0, slope_pitch, step,
+                        bool(state.get('airborne', False)), 0, False)
+                    forced_speed = self._retained_contact_speed(
+                        speed, speed - unforced_speed)
+                state['_contact_forward_speed'] = forced_speed
                 state['last_drive_pitch'] = slope_pitch
                 trace = state.get('_motion_stall_pending')
                 if trace is not None:
@@ -12482,6 +12521,16 @@ class BotRuntime(object):
                 hard_contact = False
                 contact_position = position
                 contact_deflected = False
+                if (forced_speed and (not path_clear or pose_frozen) and
+                        not (isinstance(motion_probe, dict) and
+                             motion_probe.get('collision', False))):
+                    # Navigation may withhold the driver's travel, but cannot
+                    # erase a shove. Sweep that share after the drive guard,
+                    # through exactly the same passive world/vehicle gate as
+                    # lateral contact momentum. It still brakes physically.
+                    passive_forwards[state['id']] = forced_speed
+                    speed -= forced_speed
+                    state['_contact_forward_speed'] = 0.0
                 if not path_clear:
                     if (isinstance(motion_probe, dict) and
                           motion_probe.get('collision', False) and
@@ -12598,6 +12647,8 @@ class BotRuntime(object):
                     self.motion_report(
                         state['id'], motion_status, contact_v0, speed)
                 state['speed'] = speed
+                state['_contact_forward_speed'] = self._retained_contact_speed(
+                    speed, state.get('_contact_forward_speed', 0.0))
                 if state.get('siege_state') == siege_mechanics.ENABLED:
                     siege_limit = siege_mechanics.enabled_speed_limit(
                         state.get('vehicle', ''))
@@ -12872,6 +12923,7 @@ class BotRuntime(object):
         ordered_states = self._ordered_states()
         slope_candidates = []
         support_blocked_by_id = {}
+        pose_rollback_by_id = {}
         settled_poses = {}
         ballistic_ticks = {}
         for state in ordered_states:
@@ -12887,6 +12939,14 @@ class BotRuntime(object):
                 support_blocked_by_id[state['id']] = bool(support_blocked)
                 ballistic_ticks[state['id']] = bool(
                     was_airborne or state.get('airborne', False))
+                if (not support_blocked and not ballistic_ticks[state['id']]):
+                    # Only autonomous drive is subject to the navigation
+                    # hazard veto. Contact motion below has its own physical
+                    # world, arena, turret and vehicle constraints.
+                    pose_rollback_by_id[state['id']] = self._guard_realised_pose(
+                        state, tick_poses[state['id']], tick_safe[state['id']],
+                        attempted_yaw, tick_suspension_states.get(state['id'])
+                        if self._suspension_params.get(state['id']) is not None else None)
                 settled_poses[state['id']] = _position(state)
                 slope_candidates.append(state)
         if diagnostic is not None:
@@ -12897,6 +12957,18 @@ class BotRuntime(object):
         pending_ram_count = len(self._pending_ram_reports)
         if not self.native_motion:
             self._guard_tank_translations(players, tick_poses)
+            self._contact_players = players
+            self._contact_now = now
+            for bot_id, forced_speed in passive_forwards.items():
+                state = self.states[bot_id]
+                if not state.get('alive', True) or bot_id in siege_locked_poses:
+                    continue
+                yaw = state['yaw']
+                self._apply_tank_contact_response(state, {
+                    'delta_velocity': (math.sin(yaw)*forced_speed,
+                                       math.cos(yaw)*forced_speed),
+                    'correction': (0.0, 0.0)}, frame_step,
+                    advance_push=False, advance_forward=True)
         self._pending_ram_reports.extend(
             self._resolve_tank_contacts(players, now, frame_step))
         # A Siege transition is immobile for its complete starting slice.
@@ -12931,8 +13003,7 @@ class BotRuntime(object):
             moved_after_settle = (
                 abs(current[0] - settled[0]) > 0.000001 or
                 abs(current[2] - settled[2]) > 0.000001)
-            if (moved_after_settle and
-                    self._suspension_params_for(bot_id) is not None):
+            if moved_after_settle:
                 # Tank separation is usually absent. When it changes X/Z,
                 # sample the realised endpoint once and project constraints
                 # with zero elapsed time. If that endpoint is invalid, retain
@@ -12946,16 +13017,15 @@ class BotRuntime(object):
             trace = state.get('_motion_stall_pending')
             if trace is not None:
                 trace['after_contacts'] = current
-            pose_rollback = False
+            pose_rollback = pose_rollback_by_id.get(bot_id, False)
             if (not support_blocked_by_id.get(bot_id, False) and
                     not ballistic_ticks.get(bot_id, False) and
                     not state.get('airborne', False)):
+                # The final rectangle invariant still covers every writer;
+                # only driver hazards are excluded from this contact phase.
                 pose_rollback = self._guard_realised_pose(
-                    state, tick_poses[bot_id], tick_safe[bot_id],
-                    attempted_yaw,
-                    (tick_suspension_states.get(bot_id)
-                     if self._suspension_params.get(bot_id) is not None
-                     else None))
+                    state, settled, False, attempted_yaw,
+                    navigation_hazards=False) or pose_rollback
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),
                 pose_rollback, settled)
