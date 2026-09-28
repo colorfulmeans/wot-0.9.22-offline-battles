@@ -80,12 +80,11 @@ COH_DECAY_BOUND = 0.5
 SLOPE_COH_DECAY = 0.25
 SLOPE_COH_DECAY_Y = 0.72
 # ---- offline-model constants (no exact native transition curve recoverable) ----
-# User retail observation confirms that releasing drive applies drivetrain
-# braking. Restore the existing offline calibration, not a claimed native
-# coefficient: the exact W-release curve still lives in unavailable C++ code.
-# This partial track-grip share fades near the static perch limit so a steep
-# descent remains gravity-driven. Explicit track locking retains full grip.
-COAST_BRAKE_SHARE = 0.65
+# User-requested trial: total released-drive resistance is half the service
+# brake, including rolling drag (not half grip PLUS rolling drag). This is
+# offline calibration, not a recovered retail coefficient. Physical rolling
+# resistance is a floor; the added brake fades on steep descents as before.
+COAST_BRAKE_SHARE = 0.5
 # Steering adds track-differential drag to the rolling resistance.
 STEER_RESIST_MULT = 1.6
 # Engine force F = P / max(|v|, ENGINE_MIN_V), capped by track cohesion.
@@ -181,10 +180,10 @@ SLIDE_HOLD_TAN = 0.50   # 26.6 deg static perch; a powered hull can briefly clim
 # not climb - lower than the static hold so it does not hang mid-slope; it bleeds
 # down to the foot at a controlled speed. Lower = slides faster/further.
 SLIDE_KINETIC = 0.45
-# User-authorized approximation from a reported 45 km/h tank reaching slightly
-# above 60 km/h downhill. This is not a recovered universal retail constant.
+# User-requested downhill limit: at most 10% above the directional top speed.
+# This is an offline policy, not a recovered universal retail constant.
 # Gravity builds the surplus; this envelope only bounds its final speed.
-OVERSPEED_MAX_FACTOR = 1.35
+OVERSPEED_MAX_FACTOR = 1.10
 
 
 # ---- Live tuning: config.json "physics_tuning" can override these WITHOUT a
@@ -435,6 +434,33 @@ def descriptor_contact_params(td):
 	return {'mass': descriptor_mass(td),
 		'specificFriction': float(physics.get('specificFriction', _DEFAULTS['specificFriction'])),
 		'terrainResist': tuple(physics.get('terrainResistance', _DEFAULTS['terrainResist']))}
+
+
+def destructible_drive_speed_cap(descriptor, physics, speed,
+		travel_descriptor=None):
+	'''Read the existing powered-contact cap without changing actual motion.
+
+	The mounted travel gear remains available to push an exact soft contact in
+	Siege mode. Planning and contact use this same directional eligibility;
+	neither the other direction nor another vehicle supplies a lower limit.
+	'''
+	reverse = float(speed) < 0.0
+	try:
+		value = float(physics['speedBwd' if reverse else 'speedFwd'])
+		if travel_descriptor is None:
+			travel_descriptor = _value(descriptor, 'defaultVehicleDescr')
+		if travel_descriptor is not None and value > 0.0:
+			travel = float(_value(travel_descriptor, 'physics')[
+				'speedLimits'][1 if reverse else 0])
+			if math.isnan(travel) or math.isinf(travel) or travel < 0.0:
+				raise ValueError('invalid travel limit')
+			value = max(value, travel)
+	except (AttributeError, KeyError, IndexError, TypeError,
+			ValueError, OverflowError):
+		raise RuntimeError('destructible drive speed cap is unavailable')
+	if math.isnan(value) or math.isinf(value) or value < 0.0:
+		raise RuntimeError('destructible drive speed cap is invalid')
+	return -value if reverse else value
 
 
 @observed('physics.derive_params')
@@ -989,7 +1015,8 @@ def suspension_pose_params(params, pitch, roll, pitch_velocity=0.0,
 
 
 def suspension_footprint_support(params, point, ground, memory, yaw, query,
-		support_gradient=None, point_height=None, spring=None, reference_height=None):
+		support_gradient=None, point_height=None, spring=None, reference_height=None,
+		pitch=0.0, roll=0.0):
 	'''Find fresh support across the continuous track, including rail entries.
 
 	The old recovery required a wheel to have already touched exactly the
@@ -1033,12 +1060,19 @@ def suspension_footprint_support(params, point, ground, memory, yaw, query,
 			side = max(-params['width'] * 0.5 - spring['x'],
 				min(params['width'] * 0.5 - spring['x'], side))
 		for forward in (0.0, -rear, front, -rear * 0.5, front * 0.5):
-			px = x + cosine * side + sine * forward
-			pz = z - sine * side + cosine * forward
+			# The contact patch belongs to the tilted track. Keeping it flat
+			# in world X/Z lets a near-vertical track reach back onto a bridge
+			# deck that is outside its actual footprint and reacquire support.
+			ox, oy, oz = suspension_point_offset(
+				{'x': side, 'y': 0.0, 'z': forward}, pitch, roll)
+			px = x + cosine * ox + sine * oz
+			pz = z - sine * ox + cosine * oz
 			delta = 0.0
 			if support_gradient is not None:
 				delta = support_gradient[0] * (px - x) + support_gradient[1] * (pz - z)
 			low, high = expected - 0.12 + delta, ceiling + delta
+			if point_height is not None:
+				high = min(high, float(point_height) + oy + rise)
 			if high < low:
 				continue
 			value = query(px, pz, low, high)
@@ -1569,7 +1603,11 @@ def retained_ground_contact(point, ground, memory, maximum_distance,
 		if math.isnan(ground) or math.isinf(ground):
 			return None, None
 		return ground, (x, z, ground, x, z, 0.0, False)
-	if memory is None:
+	# A remembered column cannot supply support after the surrounding
+	# contacts no longer establish a terrain plane. This is especially
+	# important at ledges: rotation can otherwise repeatedly recover the
+	# same old deck height while that carrier is already outside the deck.
+	if memory is None or support_gradient is None:
 		return None, None
 	try:
 		origin_x = float(memory[0])
@@ -1697,6 +1735,39 @@ def _suspension_contact_keys(params, state, ground_heights,
 		elif contact.get('side') == 'right':
 			right.add(key)
 	return contacts, left, right
+
+
+def _suspension_has_stable_support(params, state, contact_keys):
+	'''Only sleep when actual contacts surround this reduced body's origin.
+
+	Small angular speed is not equilibrium on a ledge. In particular a row
+	of rigid contacts can generate an impulse below the per-frame sleep
+	threshold forever. Sleeping it each slice erases gravity's accumulated
+	tipping motion. Use the posed contact polygon, including rigid contacts,
+	not uncompressed spring probes or an old fitted ground plane.
+	'''
+	rotation = _suspension_rotation(state['pitch'], state['roll'])
+	points = set()
+	for kind, index in contact_keys:
+		point = params['springs' if kind == 'spring' else 'pseudo_contacts'][index]
+		x, unused_y, z = _suspension_point_offset(point, rotation)
+		points.add((x, z))
+	points = sorted(points)
+	if len(points) < 3:
+		return False
+
+	def cross(a, b, c):
+		return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])
+
+	lower, upper = [], []
+	for chain, ordered in ((lower, points), (upper, reversed(points))):
+		for point in ordered:
+			while len(chain) >= 2 and cross(chain[-2], chain[-1], point) <= 0.0:
+				chain.pop()
+			chain.append(point)
+	hull = lower[:-1] + upper[:-1]
+	return len(hull) >= 3 and all(cross(hull[index-1], point, (0.0, 0.0)) > 1.0e-10
+		for index, point in enumerate(hull))
 
 
 def suspension_limit_excess(params, state, ground_heights):
@@ -1840,7 +1911,14 @@ def _project_suspension_limits(params, state, ground_heights,
 
 def damper_suspension_step(params, state, ground_heights, dt,
 		pseudo_ground_heights=None, support_vertical_velocity=0.0):
-	'''Advance the contrib ten-spring heave/pitch/roll trial.'''
+	'''Advance the model-origin ten-spring heave/pitch/roll trial.
+
+	Both motion adapters own model-origin X/Z separately. Translating only
+	contact points and heave to a raised mass centre leaves that origin fixed
+	horizontally during rotation and creates repeated lift/recontact at edges.
+	Keep this reduced model coherent until a complete coupled translation,
+	velocity and world-contact solve can replace it.
+	'''
 	if not isinstance(state, dict):
 		raise ValueError('suspension state must be a dictionary')
 	if len(ground_heights) != len(params['springs']):
@@ -1971,10 +2049,21 @@ def damper_suspension_step(params, state, ground_heights, dt,
 		result['pitch'] += result['pitch_velocity'] * step
 		result['roll'] += result['roll_velocity'] * step
 		pre_projection_speed = result['vertical_velocity']
+		pre_projection_pitch_speed = result['pitch_velocity']
+		pre_projection_roll_speed = result['roll_velocity']
 		projected = _project_suspension_limits(
 			params, result, ground_heights, pseudo_ground_heights,
 			support_vertical_velocity, support_projection_offset, constraints)
 		if projected:
+			if step > 0.0:
+				# Hard contacts exert impulses too. Spring force alone cannot
+				# classify a rigid edge contact as static equilibrium.
+				vertical_acceleration += (
+					result['vertical_velocity'] - pre_projection_speed) / step
+				pitch_acceleration += (
+					result['pitch_velocity'] - pre_projection_pitch_speed) / step
+				roll_acceleration += (
+					result['roll_velocity'] - pre_projection_roll_speed) / step
 			if (not contact_transition_seen and
 					pre_projection_speed -
 					support_vertical_velocity < 0.0):
@@ -1996,7 +2085,8 @@ def damper_suspension_step(params, state, ground_heights, dt,
 			impact_speed = result['vertical_velocity']
 		contact_transition_seen = True
 	touched_keys.update(contact_keys)
-	if contact_count:
+	if (contact_count and total > 0.0 and
+			_suspension_has_stable_support(params, result, contact_keys)):
 		if (abs(vertical_acceleration) < FREEZE_ACCEL_EPSILON and
 				abs(result['vertical_velocity'] -
 					support_vertical_velocity) < FREEZE_VEL_EPSILON):
@@ -2140,15 +2230,16 @@ def brake_force(p, active, terrainIdx=0, slope_pitch=0.0):
 	(cos theta) while cohesion decays on steep ground. So a hull braking on a
 	slope past the grip limit CANNOT hold and slides - the same ~50 deg limit
 	as the lateral fall-line slip, kept consistent on purpose.
-	active=True: opposite-throttle / hold lock-up. active=False: the established
-	flat-ground drivetrain coast drag; longitudinal_step relieves that drag only
-	near the static perch tangent, where gravity owns the descent.'''
+	active=True: opposite-throttle / hold lock-up. active=False: the requested
+	partial service brake, with rolling resistance included and retained as a
+	floor. longitudinal_step relieves added braking near the static perch
+	tangent, where gravity owns the descent.'''
 	ny = math.cos(slope_pitch)
 	grip_decel = slope_cohesion(ny) * GRAVITY * (ny if ny > 0.1 else 0.1)
 	brake = p['brakeDecel'] if p['brakeDecel'] < grip_decel else grip_decel
 	if active:
 		return p['mass'] * brake
-	return (rolling_resist_force(p, terrainIdx, False) +
+	return max(rolling_resist_force(p, terrainIdx, False),
 		p['mass'] * COAST_BRAKE_SHARE * brake)
 
 
@@ -2224,6 +2315,90 @@ def contact_push_is_held(p, push_x, push_z, yaw, dt, rolling=False,
 		p, push_x, push_z, yaw, dt, rolling, terrainIdx, normal_y) == (0.0, 0.0)
 
 
+def wreck_contact_step(p, vx, vz, omega, yaw, shape, dt,
+		normal_y=1.0, airborne=False):
+	'''Solve translation and yaw against one shared passive track budget.
+
+	Use the existing uniform-track approximation: each track's two halves
+	carry equal load at their mean longitudinal arms. The old independent
+	linear bleed and full yaw brake spent the same ground friction twice.
+	Bounded contact impulses minimize kinetic energy, including each point's
+	linear/angular effective mass, without crossing a stopped contact for free.
+	'''
+	if airborne or dt <= 0.0:
+		return vx, vz, omega
+	width, length = shape[:2]
+	longitudinal, lateral = contact_push_decel(p, False, normal_y=normal_y)
+	inertia_per_mass = (width*width + length*length)/3.0
+	sine, cosine = math.sin(yaw), math.cos(yaw)
+	velocity = [vx*sine+vz*cosine, vx*cosine-vz*sine, omega]
+	rows = [(axis, lever, budget*dt/4.0) for x in (-width, width)
+		for z in (-length/2.0, length/2.0)
+		for axis, lever, budget in ((0, x, longitudinal), (1, -z, lateral))]
+	impulses = [0.0]*len(rows)
+	for unused in range(SERVER_PHYSICS_CONSTRAINT_ITERATIONS):
+		largest = 0.0
+		for index, (axis, lever, budget) in enumerate(rows):
+			slip = velocity[axis]+lever*velocity[2]
+			delta = -slip/(1.0+lever*lever/inertia_per_mass)
+			updated = max(-budget, min(budget, impulses[index]+delta))
+			delta = updated-impulses[index]
+			impulses[index] = updated
+			velocity[axis] += delta
+			velocity[2] += delta*lever/inertia_per_mass
+			largest = max(largest, abs(delta))
+		if largest < 1.0e-9:
+			break
+	velocity = [0.0 if abs(value) < 1.0e-9 else value for value in velocity]
+	return (velocity[0]*sine+velocity[1]*cosine,
+		velocity[0]*cosine-velocity[1]*sine, velocity[2])
+
+
+def predict_contact_velocity(p, state, shape, sample_time, now, impulses):
+	'''Replay unacknowledged impulses against a timestamped free velocity.
+
+	This predicts velocity only. The worker remains the sole remote pose owner,
+	and every actual displacement still uses its vehicle/world sweeps. Keeping
+	a pending impulse as permanent velocity until its ACK otherwise hides the
+	engine/ground reaction for the entire publication delay and stalls a shove.
+	Impulses are (time, delta_x, delta_z, delta_yaw) in acceptance order.
+	'''
+	yaw = float(state.get('yaw', 0.0))
+	sine, cosine = math.sin(yaw), math.cos(yaw)
+	alive = bool(state.get('alive', True))
+	airborne = bool(state.get('airborne', False))
+	speed = float(state.get('speed', 0.0)) if alive else 0.0
+	vx = sine*speed + float(state.get('push_x', 0.0))
+	vz = cosine*speed + float(state.get('push_z', 0.0))
+	omega = float(state.get('push_yaw', 0.0))
+	pitch, roll = float(state.get('pitch', 0.0)), float(state.get('roll', 0.0))
+	normal_y = math.cos(pitch)*math.cos(roll)
+	throttle = state.get('movement_dir', 0) if alive else 0
+	cursor = float(sample_time)
+	for stamp, dx, dz, dw in tuple(impulses) + ((now, 0.0, 0.0, 0.0),):
+		end = max(cursor, min(float(now), float(stamp)))
+		remaining = end-cursor
+		while remaining > 1.0e-9:
+			step = min(SERVER_PHYSICS_STEP, remaining)
+			if alive:
+				forward = vx*sine+vz*cosine
+				right = vx*cosine-vz*sine
+				forward = longitudinal_step(p, forward, throttle,
+					bool(state.get('rotation_dir', 0)), pitch, step, airborne,
+					service_brake=bool(state.get('service_brake', False)))
+				if not airborne:
+					right = _bleed(right, contact_push_decel(
+						p, bool(forward or throttle), normal_y=normal_y)[1]*step)
+				vx, vz = forward*sine+right*cosine, forward*cosine-right*sine
+			elif not airborne:
+				vx, vz, omega = wreck_contact_step(
+					p, vx, vz, omega, yaw, shape, step, normal_y)
+			remaining -= step
+		vx, vz, omega = vx+dx, vz+dz, omega+dw
+		cursor = end
+	return vx, vz, omega
+
+
 def _grip_decel(p, slope_pitch):
 	'''Max track hold as a deceleration (m/s^2): cohesion x normal-force,
 	both shrinking with slope. This is the single grip limit that caps drive
@@ -2240,9 +2415,22 @@ def _cap_grounded_speed(p, speed):
 	return max(-maximum, min(maximum, speed))
 
 
+def direction_brake(previous_command, active, command, speed):
+	'''Latch only an intentional change into the direction opposite travel.
+
+	A held throttle does not turn into a brake when a contact or gravity
+	reverses velocity. Release, a new direction, or reaching zero ends the
+	latch. The next slice may then accelerate in the requested direction.
+	'''
+	command = 1 if command > 0.0 else (-1 if command < 0.0 else 0)
+	previous = 1 if previous_command > 0.0 else (-1 if previous_command < 0.0 else 0)
+	return bool(command and command*speed < 0.0 and
+		(active or command != previous))
+
+
 @observed('physics.longitudinal')
 def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
-                      airborne=False, terrainIdx=0, handbrake=False):
+                      airborne=False, terrainIdx=0, handbrake=False, service_brake=False):
 	'''One integration step of forward (along-hull) speed. Returns the new v.
 	slope_pitch: fore/aft ground pitch (BigWorld: nose-up negative).
 
@@ -2256,6 +2444,14 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 		return v  # no track grip in the air; horizontal momentum kept as-is
 
 	grav_a = GRAVITY * math.sin(slope_pitch)      # signed accel along hull (+fwd downhill)
+	if service_brake and throttle*v < 0.0 and not handbrake:
+		# Brakes consume the installed brake force, not P/v from the engine.
+		# Stop at zero before engaging reverse drive; never brake in mid-air.
+		decel = brake_force(p, True, terrainIdx, slope_pitch)/p['mass']
+		nv = v + (grav_a - (decel if v > 0.0 else -decel))*dt
+		if v*nv <= 0.0:
+			return 0.0
+		return _cap_grounded_speed(p, nv)
 	if handbrake and not airborne:
 		# Locked tracks: full grip opposes any motion, and at a standstill the hull
 		# holds unless the slope beats the tracks outright. Grip-limited like every
@@ -2309,12 +2505,12 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 			if abs(v) > 0.05:
 				_kin = SLIDE_KINETIC * GRAVITY * (_ny_c if _ny_c > 0.1 else 0.1)
 				accel += _kin if v < 0.0 else -_kin
-		else:
-			# Auto-brake: intentional reverse, CLAMPED so grip never overshoots v past 0
-			# in one tick (the raw +/-grip impulse limit-cycled ~1 km/h around v=0).
-			if (throttle > 0 and v < -0.1) or (throttle < 0 and v > 0.1):
-				_need = -v / dt - accel
-				accel += _need if abs(_need) < grip else (grip if _need > 0.0 else -grip)
+		# Opposite velocity does not prove an intentional braking command:
+		# a collision or gravity can push a powered tank backwards. Its
+		# engine already opposes that motion above, with the installed power
+		# and traction limit. Adding automatic brakes here gave a weak engine
+		# almost full track holding force as soon as a stronger tank moved it.
+		# Direction changes and handbrake have explicit, separate intent.
 	else:
 		# Parked / coasting: static grip tries to hold against slope gravity.
 		if abs(v) < 0.02:
@@ -2324,16 +2520,16 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 				return 0.0                        # tracks hold - no creep on ordinary hills
 			accel = grav_a - (_hold if grav_a > 0.0 else -_hold)   # slides off a too-steep parked slope
 		else:
-			# Restore the established released-drive braking calibration.
-			# Its grip share fades only near the static perch limit; a steep
-			# downhill remains free to gain speed under gravity. Neither this
-			# drag nor its relief depends on crossing the powered speed limit.
+			# The requested share is TOTAL resistance, including rolling drag.
+			# Only the additional brake fades near the static perch limit;
+			# retain physical rolling drag and gravity-driven steep descents.
 			motion_sign = 1.0 if v > 0.0 else -1.0
 			downhill_tangent = max(0.0, math.tan(slope_pitch) * motion_sign)
 			fade_start = 0.8 * SLIDE_HOLD_TAN
 			fade = min(1.0, max(0.0, (downhill_tangent - fade_start) /
 			                    (SLIDE_HOLD_TAN - fade_start)))
-			resist = rr + COAST_BRAKE_SHARE * (1.0 - fade) * grip
+			target = COAST_BRAKE_SHARE * min(p['brakeDecel'], grip)
+			resist = rr + (1.0 - fade) * max(0.0, target - rr)
 			accel = grav_a - (resist if v > 0.0 else -resist)
 
 	# TRACK-SLIP DRAG: rolling UP a grade steeper than the tracks can pull, they
@@ -2648,6 +2844,25 @@ def world_contact_velocity(velocity, normal):
 	length = math.sqrt(sum(float(normal[i]) ** 2 for i in range(3)))
 	return tuple(float(velocity[i]) + closing * float(normal[i]) / length
 		for i in range(3))
+
+
+def horizontal_contact_normal(normal):
+	'''A horizontal hull sweep constrains X/Z; suspension owns Y support.
+
+	Look-ahead rays can meet the upward face of a bridge while the centre of
+	mass falls beside it. That witness cannot cancel gravity or land the hull.
+	Discard float32 noise on an otherwise horizontal face before normalizing.
+	'''
+	try:
+		x, y, z = (float(normal[i]) for i in range(3))
+	except (IndexError, TypeError, ValueError, OverflowError):
+		return (0.0, 0.0, 0.0)
+	if any(math.isnan(v) or math.isinf(v) for v in (x, y, z)):
+		return (0.0, 0.0, 0.0)
+	length = math.sqrt(x * x + z * z)
+	if length <= 1.0e-6 * max(1.0, abs(y)):
+		return (0.0, 0.0, 0.0)
+	return (x / length, 0.0, z / length)
 
 
 def overturn_level_from_up_cosine(up_cosine, warning_cosine=None,

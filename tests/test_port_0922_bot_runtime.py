@@ -119,6 +119,15 @@ def _load():
     module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module)
     return module
 
+class _StaticGridLifecycle(object):
+    """Motion-only graph fakes still receive frame-owned housekeeping."""
+    def prune_failed_edges(self, unused_now):
+        pass
+
+    def trim_caches(self):
+        pass
+
+
 class _Director(object):
     def __init__(self): self.registered = []
     def register_profile(self, *args): self.registered.append(args)
@@ -1970,6 +1979,37 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(motion_calls)
         self.assertTrue(all(params is installed for params in motion_calls))
 
+    def test_driver_turn_limit_matches_installed_and_stunned_traverse(self):
+        self.runtime.battle_start(self.start)
+        installed = self.runtime._physics_params[11]
+        state = self.runtime.states[11]
+        self.runtime._observe_bot_stun(state, {
+            'stun_end_server_time_ms': 10000,
+            'stun_factors': {'traverse': 0.6}}, 0)
+        original = self.module.vehicle_physics.traverse_step
+        motion_limits = []
+
+        def traverse(params, *args, **kwargs):
+            motion_limits.append(params['rotSpd'])
+            return original(params, *args, **kwargs)
+
+        self.module.vehicle_physics.traverse_step = traverse
+        try:
+            self.runtime.update(0.04, 1.0)
+            decision = self.adapters[0].calls[-1][0]
+            self.assertAlmostEqual(installed['rotSpd'] * 0.6,
+                                   decision['turn_speed_limit'])
+            self.assertTrue(motion_limits)
+            self.assertTrue(all(abs(limit - decision['turn_speed_limit']) <
+                                1.0e-9 for limit in motion_limits))
+            state['stun_end_server_time_ms'] = 0
+            self.runtime._decision_cache.clear()
+            self.runtime.update(0.04, 1.5)
+            self.assertEqual(installed['rotSpd'],
+                             self.adapters[0].calls[-1][0]['turn_speed_limit'])
+        finally:
+            self.module.vehicle_physics.traverse_step = original
+
     def test_probe_totals_count_only_real_query_seams_and_are_pull_only(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
@@ -2022,6 +2062,19 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(
             observation_times[1] - observation_times[0],
             self.module.OBSERVATION_SECONDS - 1.0e-6)
+
+    def test_observation_publishes_the_player_view_range_for_ht5(self):
+        self.runtime.battle_start(self.start)
+        player = _admit_player({
+            'id': 2, 'team': 1, 'alive': True,
+            'x': 0.0, 'y': 0.0, 'z': 0.0})
+        outgoing = self.runtime.update(.04, 1.0, players=[player])
+        observation = next(message for message in outgoing
+                           if message['type'] == 'bot_observation')
+        ranges = observation['player_vision_ranges']
+
+        self.assertEqual([2], [row['id'] for row in ranges])
+        self.assertGreater(ranges[0]['radius'], 0.0)
 
     def test_direction_probe_receives_speed_and_descriptor_contract(self):
         calls = []
@@ -2612,7 +2665,7 @@ class BotRuntimeTests(unittest.TestCase):
         direction_calls = []
         receipt_calls = []
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
@@ -2624,7 +2677,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             segment_has_motion_hazard = segment_has_baked_hazard
 
-            def segment_clear(self, unused_start, unused_end):
+            def segment_clear(self, unused_start, unused_end, native_capability=None):
                 return True
 
         def direction(position, yaw, speed, unused_descriptor):
@@ -2721,7 +2774,7 @@ class BotRuntimeTests(unittest.TestCase):
                     'clear': False, 'collision': True, 'slope': 0.0}
             return {'clear': True, 'collision': False, 'slope': 0.0}
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
             cell_size = 4.0
 
@@ -2735,7 +2788,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             segment_has_motion_hazard = segment_has_baked_hazard
 
-            def segment_clear(self, unused_start, unused_end):
+            def segment_clear(self, unused_start, unused_end, native_capability=None):
                 return True
 
         graph = _graph()
@@ -2989,7 +3042,7 @@ class BotRuntimeTests(unittest.TestCase):
         }
         adapter = _FixedAdapter(command)
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
@@ -3001,7 +3054,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             segment_has_motion_hazard = segment_has_baked_hazard
 
-            def segment_clear(self, start, end):
+            def segment_clear(self, start, end, native_capability=None):
                 graph_calls.append((start, end))
                 return True
 
@@ -3069,8 +3122,11 @@ class BotRuntimeTests(unittest.TestCase):
         adapter = _FixedAdapter(command)
         receipt_calls = []
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
+
+            def review_native_corridor(self, unused_start, unused_end):
+                return False
 
             def near_baked_navigation(self, unused_position, unused_radius):
                 return True
@@ -3119,7 +3175,7 @@ class BotRuntimeTests(unittest.TestCase):
         adapter = _FixedAdapter(command)
         calls = []
 
-        class NegativeGrid(object):
+        class NegativeGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
@@ -3248,6 +3304,46 @@ class BotRuntimeTests(unittest.TestCase):
             runtime._motion_probe_cache[11]['maximum_distance'])
         self.assertEqual(-1, state['movement_dir'])
         self.assertLess(state['z'], before_z)
+
+    def test_selected_waypoint_bounds_default_probe_but_not_recovery(self):
+        command = self._stationary_command()
+        requested = []
+        verdicts = []
+
+        class WaypointAdapter(_FixedAdapter):
+            def decide(self, state, clear):
+                state['navigation_probe_distance'] = 5.0
+                verdicts.append((clear(state['yaw']),
+                                 clear(state['yaw'], 12.0)))
+                return dict(self.command)
+
+        def wall(position, yaw, speed, descriptor, maximum_distance=None):
+            requested.append(maximum_distance)
+            blocked = maximum_distance is None or maximum_distance >= 8.0
+            return {'clear': not blocked, 'collision': blocked,
+                    'water': False, 'slope': 0.0}
+
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: WaypointAdapter(command),
+            direction_probe=wall, ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        runtime._planner_corridor_clear = lambda *args, **kwargs: None
+        runtime.update(0.04, 1.0)
+        self.assertEqual([(True, False)], verdicts)
+        self.assertEqual([5.0, 12.0], requested[:2])
+
+        # An ordinary bounded probe must still see the previously confirmed
+        # live blocker. Explicit recovery probes retain their separate sweep.
+        runtime.states[11]['traffic_obstacles'] = {99: 10.0}
+        runtime._decision_cache.clear()
+        with mock.patch.object(
+                runtime._traffic_coordinator._escape_probe,
+                '_reverse_blocked_by_vehicle', return_value=99):
+            runtime.update(0.04, 1.5)
+        self.assertEqual((False, False), verdicts[-1])
 
     def test_deferred_final_world_receipt_uses_generic_and_retries(self):
         command = {
@@ -4035,7 +4131,6 @@ class BotRuntimeTests(unittest.TestCase):
         contact_reports = []
         runtime.navigator.report_blocked_step = (
             lambda *args: contact_reports.append(args))
-        runtime.navigator.bot_states[11] = {}
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=attempted_yaw,
                      speed=4.0, grounded_once=True)
@@ -4050,10 +4145,10 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([(11, attempted_yaw, 5.0)],
                          adapter.driver.calls)
         self.assertEqual(1, len(contact_reports))
-        self.assertEqual((11, before_position, aim, 1.0),
+        realised_edge = (math.sin(attempted_yaw) * 4.0, 0.0,
+                         math.cos(attempted_yaw) * 4.0)
+        self.assertEqual((11, before_position, realised_edge, 1.0),
                          contact_reports[0])
-        self.assertIn(
-            'hard_contact_episode', runtime.navigator.bot_states[11])
         self.assertEqual(1, len(adapter.calls))
 
         status[0] = 'clear'
@@ -4064,22 +4159,6 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(2, len(adapter.calls))
         self.assertIn(11, runtime._decision_cache)
         self.assertIn(11, runtime._motion_probe_cache)
-        self.assertNotIn(
-            'hard_contact_episode', runtime.navigator.bot_states[11])
-
-        # ``crushed`` is equally conclusive: the obstacle no longer owns the
-        # swept corridor, so no pending hard-contact episode may survive it.
-        current_position = (state['x'], state['y'], state['z'])
-        runtime.navigator.report_hard_contact(
-            11, current_position, aim, state['yaw'], 1.06)
-        self.assertIn(
-            'hard_contact_episode', runtime.navigator.bot_states[11])
-        status[0] = 'crushed'
-        runtime.update(.04, 1.08)
-        self.assertNotIn(
-            'hard_contact_episode', runtime.navigator.bot_states[11])
-        self.assertIsNone(runtime.navigator.bot_states[11].get(
-            'blocked_step_tracker'))
 
     def test_repeated_runtime_hard_contacts_replan_despite_hull_yaw_wag(self):
         target = (0.0, 0.0, 200.0)
@@ -4119,6 +4198,125 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertIn(forward_edge, runtime.navigator.bot_failed_edges[11])
         self.assertTrue(
             nav_state['hard_contact_episode']['uses_navigation_target'])
+
+    def test_final_support_rollback_replans_after_clear_horizontal_sweeps(self):
+        """A prop deck rejected after integration must not reset its evidence."""
+        target = (0.0, 0.0, 40.0)
+        command = {
+            'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': False, 'target_id': None,
+            'fire_range': 0.0, 'combat_mode': 'route',
+            'aim_position': target, 'face_position': target,
+            'move_position': target, 'recovery_mode': 'drive',
+            'movement_intent': True,
+        }
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+            direction_probe=lambda *unused: {
+                'clear': True, 'collision': False, 'water': False,
+                'slope': 0.0},
+            motion_resolver=lambda *unused, **kwargs: 'clear',
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda x, z, hint: 1.4 if z > 0.0 else 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_flat_open_graph())
+        runtime.battle_start(self.start)
+        runtime.navigator.bot_states[11] = {}
+        state = runtime.states[11]
+        state.update(x=0.0, y=0.0, z=0.0, yaw=0.0, speed=0.0,
+                     grounded_once=True)
+        clear_contact = mock.Mock(wraps=runtime.navigator.clear_blocked_contact)
+        runtime.navigator.clear_blocked_contact = clear_contact
+        for index in range(12):
+            runtime.update(.1, 1.0 + index * .1)
+        self.assertEqual((0.0, 0.0, 0.0),
+                         (state['x'], state['y'], state['z']))
+        self.assertEqual(1, runtime.navigator.bot_states[11]['blocked_step_replans'])
+        clear_contact.assert_not_called()
+        # A genuinely opened route then accepts progress and ends the episode.
+        runtime._physics_ground_probe = lambda *unused: 0.0
+        runtime.update(.1, 2.3)
+        self.assertGreater(state['z'], 0.0)
+        clear_contact.assert_called_once_with(11)
+
+    def test_contact_shove_boundary_rollback_does_not_poison_the_drive_edge(self):
+        target = (0.0, 0.0, 40.0)
+        command = {
+            'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
+            'shell_index': 0, 'fire_allowed': False, 'target_id': None,
+            'fire_range': 0.0, 'combat_mode': 'route',
+            'aim_position': target, 'face_position': target,
+            'move_position': target, 'recovery_mode': 'drive',
+            'movement_intent': True,
+        }
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+            direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+            motion_resolver=lambda *unused, **kwargs: 'clear',
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_flat_open_graph())
+        runtime.battle_start(self.start)
+        runtime.navigator.bot_states[11] = {}
+        state = runtime.states[11]
+        state.update(x=0.0, y=0.0, z=0.0, yaw=0.0, speed=0.0,
+                     grounded_once=True)
+        forward_progress = []
+        def contact_correction(*unused):
+            # The real pose guard must reject this post-drive separation.
+            forward_progress.append(state['z'])
+            state['x'] = 65.0
+            return []
+        runtime._resolve_tank_contacts = contact_correction
+        report = mock.Mock(wraps=runtime.navigator.report_blocked_corridor)
+        runtime.navigator.report_blocked_corridor = report
+        for index in range(12):
+            runtime.update(.1, 1.0 + index * .1)
+        self.assertTrue(all(value > 0.0 for value in forward_progress))
+        self.assertEqual((0.0, 0.0, 0.0),
+                         (state['x'], state['y'], state['z']))
+        report.assert_not_called()
+        self.assertFalse(runtime.navigator.bot_failed_edges)
+
+    def test_settlement_hold_or_solver_failure_does_not_claim_a_physical_edge(self):
+        report = mock.Mock()
+        clear = mock.Mock()
+        runtime = self.module.BotRuntime(1)
+        runtime.navigator = types.SimpleNamespace(
+            report_blocked_corridor=report, clear_blocked_contact=clear)
+        state = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0}
+        motion = {'target': (0.0, 0.0, 40.0), 'intent': True,
+                  'world_clear': True}
+        # No physical-support marker: retired/invalid solver state is local,
+        # and a zero-distance sweep is neither a failure nor progress.
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.0, motion, True, False)
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.1, motion, False, False)
+        report.assert_not_called()
+        clear.assert_not_called()
+        # A post-contact shove can hit the boundary while the route is clear.
+        state['_navigation_support_blocked'] = True
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.15, motion, True, True,
+            contact_displaced=True)
+        report.assert_not_called()
+        clear.assert_not_called()
+        state['_navigation_support_blocked'] = True
+        motion['intent'] = False
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.2, motion, True, False)
+        report.assert_not_called()
+        self.assertNotIn('_navigation_support_blocked', state)
+        # A drive-stage rejection remains true if a later teammate shove
+        # separately alters the settled pose.
+        motion['intent'] = True
+        runtime._settled_navigation_feedback(
+            state, (0.0, 0.0, 0.0), 0.0, 1.3, motion, True, False,
+            contact_displaced=True, drive_support_blocked=True)
+        report.assert_called_once_with(
+            11, (0.0, 0.0, 0.0), motion['target'], 0.0, 1.3)
 
     def test_ensk_slope_veto_replans_despite_reported_hull_yaw_wag(self):
         """The 180228 non-contact slope grind keeps one semantic edge."""
@@ -4700,6 +4898,74 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertGreater(state['y'], -0.02)
         self.assertFalse(state['airborne'])
 
+    def test_bridge_above_unsupported_tipped_hull_cannot_cancel_fall(self):
+        # Report 004720: A-43 stopped at y=.149746, pitch=-.89176,
+        # roll=-1.28072 below the y=.9067 deck. The broad centre column
+        # can still see that upper deck when every posed support misses it.
+        for alive in (True, False):
+            with self.subTest(alive=alive):
+                runtime, state, unused = self._suspension_case(
+                    lambda x, z: -14.0)
+                centre = mock.Mock(return_value=0.9067)
+                runtime._physics_ground_probe = centre
+                state.update(y=0.149746, pitch=-0.89176,
+                             terrain_pitch=-0.89176, roll=-1.28072,
+                             alive=alive, vertical_speed=-1.1213)
+                initial_y = state['y']
+                for unused in range(5):
+                    before = (state['x'], state['y'], state['z'])
+                    self.assertFalse(runtime._update_vertical_motion(
+                        state, 0.1, before, state['yaw']))
+                self.assertTrue(state['airborne'])
+                self.assertLess(state['y'], initial_y - 1.0)
+                centre.assert_not_called()
+
+    def test_bridge_deck_under_tipped_hull_still_supports_it(self):
+        runtime, state, unused = self._suspension_case(lambda x, z: 0.0)
+        state.update(y=3.0, pitch=-0.3, terrain_pitch=-0.3, roll=-0.7,
+                     alive=False, vertical_speed=-2.0, airborne=True)
+        for unused in range(30):
+            runtime._update_vertical_motion(state, 0.1)
+        self.assertFalse(state['airborne'])
+        self.assertGreater(state['y'], -0.1)
+
+    def test_reported_t71_rigid_bank_contact_is_not_a_drive_step(self):
+        # Report 014503: replay the frozen pose and measured bank plane with
+        # the fixture descriptor. A real body contact corrects penetration;
+        # the old Bot-only step guard repeatedly restores the penetrating pose.
+        def bank(x, z):
+            height = (-5.156481838226318 - 0.7016571925659405 *
+                      (x + 21.361649722228698) + 1.2808723489468936 *
+                      (z - 113.22620269138464))
+            return height, 0.5649666308517438
+
+        for alive in (True, False):
+            with self.subTest(alive=alive):
+                runtime, state, unused = self._suspension_case(bank)
+                state.update(x=-21.34563180690458, y=-4.404955537105205,
+                             z=112.98689169656124, yaw=2.112926910639421,
+                             pitch=13.854776169322516,
+                             terrain_pitch=13.854776169322516,
+                             roll=-7.435818139362981, speed=0.0, alive=alive)
+                solver = self.module.vehicle_physics
+                solved = []
+                original = solver.damper_suspension_step
+
+                def capture(*args):
+                    result = original(*args)
+                    solved.append(result)
+                    return result
+
+                with mock.patch.object(solver, 'damper_suspension_step', capture):
+                    for unused in range(3):
+                        pose = state['x'], state['y'], state['z']
+                        self.assertFalse(runtime._update_vertical_motion(
+                            state, 0.1, pose, state['yaw']))
+                self.assertGreater(solved[0]['rigid_contact_count'], 0)
+                self.assertLess(solved[0]['max_limit_excess'], 1e-6)
+                self.assertNotEqual(solved[0]['height'], solved[-1]['height'])
+                self.assertAlmostEqual(state['y'], solved[-1]['height'])
+
     def test_bot_suspension_inclined_plane_does_not_invent_overturn(self):
         for angle in (35.0, 45.0, 55.0):
             with self.subTest(angle=angle):
@@ -4805,8 +5071,11 @@ class BotRuntimeTests(unittest.TestCase):
         self.runtime._physics_ground_probe = probe
 
         self.assertFalse(self.runtime._update_vertical_motion(state, 0.04))
+        self.assertFalse(self.runtime._update_vertical_motion(state, 0.04))
 
-        self.assertAlmostEqual(10.0, state['y'], places=6)
+        # Opposite banks differ by 5 cm. The chassis centre rests at their
+        # midpoint, after the bounded physical descent from its initial pose.
+        self.assertAlmostEqual(9.975, state['y'], places=6)
         self.assertFalse(state['airborne'])
 
     def test_bot_support_uses_wide_chassis_not_narrower_hull(self):
@@ -9010,7 +9279,7 @@ class BotRuntimeTests(unittest.TestCase):
                 }) or graph))(_graph()))
         runtime.battle_start(self.start)
 
-        class StaticGrid(object):
+        class StaticGrid(_StaticGridLifecycle):
             prebaked = True
 
             def near_baked_navigation(self, unused_position, unused_radius):
@@ -9022,7 +9291,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             segment_has_motion_hazard = segment_has_baked_hazard
 
-            def segment_clear(self, unused_start, unused_end):
+            def segment_clear(self, unused_start, unused_end, native_capability=None):
                 return True
 
         runtime.navigator.grid = StaticGrid()
@@ -9285,6 +9554,46 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, state['rotation_dir'])
         self.assertTrue(runtime.states[11]['hull_aiming'])
         self.assertEqual(0, state['fire_seq'])
+
+    def test_reported_retreat_turn_survives_visible_limited_gun_target(self):
+        for yaw, mode in ((-.7429965, 'withdraw'),
+                          (-1.1123639, 'low_health_retreat'),
+                          (-.3324339, 'low_health_retreat')):
+            with self.subTest(yaw=yaw, mode=mode):
+                # The report's planner wanted turn=+1 and throttle=0, while
+                # the visible target lay left of the SU-122-44's narrow arc.
+                command = {
+                    'target_yaw': 1.0, 'throttle': 0.0, 'turn': 1.0,
+                    'brake': True, 'shell_index': 0, 'fire_allowed': True,
+                    'target_id': self.module.HUMAN_TARGET_ID_BASE + 2,
+                    'fire_range': 500.0, 'combat_mode': mode,
+                    'aim_position': (-100.0, 0.5, 0.0),
+                    'face_position': (-100.0, 0.5, 0.0),
+                    'move_position': (100.0, 0.0, 0.0),
+                    'recovery_mode': 'drive', 'movement_intent': True,
+                }
+                runtime = self.module.BotRuntime(
+                    1, descriptor_resolver=lambda unused: _combat_descriptor(
+                        turret_yaw_limits=(-0.1, 0.1)),
+                    adapter_factory=lambda *unused, **kwargs: _FixedAdapter(command),
+                    direction_probe=lambda *unused: {'clear': True, 'slope': 0.0},
+                    visibility_probe=lambda *unused: True,
+                    ground_probe=lambda *unused: 0.0,
+                    physics_ground_probe=lambda *unused: 0.0,
+                    spawn_resolver=_spawn_resolver, baked_graph=_graph())
+                runtime.battle_start(self.start)
+                runtime.states[11].update(yaw=yaw, speed=0.0, grounded_once=True)
+
+                state = bot_state_rows.bots(runtime.update(.04, 1.0, players=[
+                    {'id': 2, 'team': 1, 'alive': True,
+                     'x': -100.0, 'y': 0.5, 'z': 0.0,
+                     'effective_params': _effective_params_snapshot()}
+                ])[0])[0]
+
+                self.assertEqual(1, state['rotation_dir'])
+                self.assertGreater(runtime.states[11]['yaw'], yaw)
+                self.assertFalse(runtime.states[11]['hull_aiming'])
+                self.assertEqual(0, state['fire_seq'])
 
     def test_no_target_gun_keeps_safe_bearing_and_rests_horizontally(self):
         runtime = self.module.BotRuntime(
@@ -15002,7 +15311,7 @@ class BotRuntimeTests(unittest.TestCase):
             1, descriptor_resolver=lambda unused: descriptor,
             adapter_factory=lambda *unused, **kwargs: _FixedAdapter(
                 self._stationary_command()),
-            direction_probe=lambda *unused: {'clear': False, 'slope': 0.0},
+            direction_probe=lambda *unused: {'clear': False, 'collision': True, 'slope': 0.0},
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver,
@@ -15448,12 +15757,12 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertEqual(1, len([
             report for report in reports if report['type'] == 'bot_ram']))
-        # One e=0 response gives the stationary 25t bot half of the 16m/s
-        # normal velocity, followed by one slice of parked track resistance.
-        # The same-frame current detector must not apply that impulse twice.
-        expected_push = 8.0 - self.module.vehicle_physics.contact_push_decel(
-            runtime._physics_params_for(11), False)[0]*.04
-        self.assertAlmostEqual(expected_push, current['push_z'], places=5)
+        # The instantaneous e=0 response gives the stationary 25t bot half
+        # the 16m/s normal velocity. Its next drive slice owns longitudinal
+        # resistance; the contact owner must not spend a second brake budget.
+        # The same-frame current detector cannot apply this impulse twice.
+        physical_z = math.cos(current['yaw'])*current['speed']+current['push_z']
+        self.assertAlmostEqual(8.0, physical_z, places=5)
         self.assertNotEqual((0.0, 6.5), (current['x'], current['z']))
         self.assertEqual({11: 0.04, 12: 0.04},
                          runtime._contact_lease_elapsed)
@@ -16546,6 +16855,160 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertIn('frozen=True', output.getvalue())
             self.assertIn('strategic_goal=(0.0, 0.0, 200.0)', output.getvalue())
 
+    def test_stall_diagnostic_keeps_airfield_vehicle_rotation_veto(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        # Object 244 / SU-122-44 at 10:34:23 in report b9961a81ef4a.
+        # The hulls are separated by 1.5 cm: no ram contact exists, but the
+        # requested positive turn would sweep the 244 into the SU.
+        position = (-289.4300268241864, -0.18000030517578125,
+                    -189.00718499809682)
+        shape = (1.4762719869613647, 3.2330679893493652,
+                 -0.0002899999963119626, 1.5830169916152954)
+        body = dict(id=11, position=position, yaw=2.267477282876282,
+                    shape=shape, velocity=(0.0, 0.0, 0.0))
+        peer = dict(id=27, position=(-287.86618096624073,
+                    -0.1799999475479126, -193.8230738600544),
+                    yaw=1.3779411960823191, alive=True,
+                    shape=(1.5697760581970215, 2.8677990436553955,
+                           0.003000000026077032, 2.170010983943939),
+                    velocity=(0.0, 0.0, 0.0))
+        order = {'throttle': 0.0, 'turn': 1.0, 'brake': True,
+                 'recovery_mode': 'drive', 'combat_mode': 'route',
+                 'movement_intent': True}
+        safety = self.runtime._traffic_coordinator.safe_controls(
+            body, order, [peer], 3.0, lambda: 0.0, 0.100006103515625)
+        self.assertEqual(0.0, safety['turn'])
+        self.assertEqual('vehicle_brake', safety['traffic_mode'])
+        state.update(x=position[0], y=position[1], z=position[2])
+        state['_motion_stall_log'] = (position, 0.0)
+        output = io.StringIO()
+        with redirect_stdout(output), mock.patch.object(
+                self.module.tank_collision, 'rotation_fraction',
+                side_effect=AssertionError('diagnostics must not re-probe')):
+            self.runtime._log_motion_stall(
+                state, order, 0.0, 0.0, True, {}, 3.0,
+                traffic_input=order, traffic_output=safety)
+            self.runtime._finish_motion_stall(state, False, False, position)
+        self.assertIn('traffic=vehicle_brake', output.getvalue())
+        row = json.loads(output.getvalue().split('[BOT MOTION] ', 1)[1])
+        self.assertEqual('vehicle_brake', row['traffic_mode'])
+        self.assertEqual(1.0, row['requested_turn'])
+        self.assertEqual([0.0, 1.0], row['controls']['before_traffic'])
+        self.assertEqual([0.0, 0.0], row['controls']['after_traffic'])
+        self.assertEqual([0.0, 0.0], row['controls']['motion'])
+        self.assertEqual([], row['contact_pairs'])
+        self.assertNotIn('traffic_mode', order)
+
+    def test_update_passes_control_stages_to_bounded_motion_diagnostic(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        state['_motion_stall_log'] = (
+            (state['x'], state['y'], state['z']), 0.0)
+        original_decide = self.runtime.adapter.decide
+
+        def decide(*args):
+            command = original_decide(*args)
+            command.update(turn=-0.4, fire_allowed=False)
+            return command
+
+        self.runtime.adapter.decide = decide
+
+        def brake(body, command, neighbours, now, distance, step):
+            return dict(command, throttle=0.0, turn=0.0, brake=True,
+                        traffic_mode='vehicle_brake', forward_blocked_by=27)
+
+        output = io.StringIO()
+        with redirect_stdout(output), mock.patch.object(
+                self.runtime._traffic_coordinator, 'safe_controls',
+                side_effect=brake):
+            self.runtime.update(0.04, 3.0)
+            self.runtime.update(0.04, 3.04)
+        self.assertEqual(1, output.getvalue().count('[BOT STALL]'))
+        line = next(line for line in output.getvalue().splitlines()
+                    if line.startswith('[BOT MOTION] '))
+        row = json.loads(line.split('[BOT MOTION] ', 1)[1])
+        self.assertEqual(1.0, row['requested_throttle'])
+        self.assertEqual([1.0, -0.4], row['controls']['planner'])
+        self.assertEqual([1.0, -0.4], row['controls']['before_traffic'])
+        self.assertEqual([0.0, 0.0], row['controls']['after_traffic'])
+        self.assertEqual([0.0, 0.0], row['controls']['motion'])
+        self.assertEqual(27, row['controls']['forward_blocked_by'])
+
+    def test_local_roaming_diagnostic_survives_half_metre_timer_resets(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        order = dict(throttle=1.0, turn=1.0, movement_intent=True,
+                     recovery_mode='drive', combat_mode='route')
+        output = io.StringIO()
+        with redirect_stdout(output), mock.patch.object(
+                self.runtime, '_probe_direction',
+                side_effect=AssertionError('diagnostics must not probe')):
+            for second in range(31):
+                # Every sampled chord is 0.90 m, so the old stationary-only
+                # timer reset indefinitely despite this route making circles.
+                state.update(x=3.0 * math.cos(second * 0.3),
+                             z=3.0 * math.sin(second * 0.3))
+                self.runtime._log_motion_stall(
+                    state, order, 1.0, 1.0, True, {}, float(second))
+                if '_motion_stall_pending' in state:
+                    self.runtime._finish_motion_stall(
+                        state, False, False, (state['x'], state['y'], state['z']))
+        rows = [json.loads(line.split('[BOT MOTION] ', 1)[1])
+                for line in output.getvalue().splitlines()
+                if line.startswith('[BOT MOTION] ')]
+        self.assertEqual(2, len(rows))
+        self.assertEqual([15.0, 30.0],
+                         [row['local_roaming']['elapsed'] for row in rows])
+        for row in rows:
+            self.assertEqual('local_roaming', row['motion_diagnostic'])
+            self.assertEqual([3.0, state['y'], 0.0], row['local_roaming']['anchor'])
+            self.assertLessEqual(row['local_roaming']['net_distance'], 6.0)
+            self.assertEqual('movement_reset_stationary_timer',
+                             row['local_roaming']['reason'])
+
+    def test_local_roaming_resets_when_leaving_pocket_or_route_intent(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        for scenario in ('straight', 'no_intent'):
+            with self.subTest(scenario=scenario):
+                state.pop('_motion_stall_log', None)
+                state.pop('_motion_roaming_log', None)
+                order = dict(throttle=1.0, turn=0.0,
+                             movement_intent=scenario != 'no_intent')
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    for second in range(46):
+                        if scenario == 'straight':
+                            state.update(x=float(second), z=0.0)
+                        else:
+                            state.update(x=3.0 * math.cos(second * 0.3),
+                                         z=3.0 * math.sin(second * 0.3))
+                        self.runtime._log_motion_stall(
+                            state, order, 1.0, 0.0, True, {}, float(second))
+                self.assertNotIn('[BOT STALL]', output.getvalue())
+                if scenario == 'straight':
+                    self.assertGreater(state['_motion_roaming_log'][0][0], 30.0)
+                else:
+                    self.assertNotIn('_motion_roaming_log', state)
+
+    def test_stationary_diagnostics_keep_three_seconds_without_roaming_duplicates(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        order = dict(throttle=1.0, turn=0.0, movement_intent=True)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            for second in range(31):
+                self.runtime._log_motion_stall(
+                    state, order, 0.0, 0.0, True, {}, float(second))
+        self.assertEqual(10, output.getvalue().count('[BOT STALL]'))
+        self.assertNotIn('motion=local_roaming', output.getvalue())
+
     def test_unavailable_motion_probe_holds_last_drive_command(self):
         command = {
             'target_yaw': 0.0, 'throttle': 1.0, 'turn': 0.0,
@@ -17386,12 +17849,12 @@ class BotRuntimeTests(unittest.TestCase):
                 return False
 
             @staticmethod
-            def dry_segment_clear(*unused):
+            def dry_segment_clear(*unused, **unused_keywords):
                 return True
 
         class Navigator(object):
             @staticmethod
-            def observe_direct_target(*unused):
+            def observe_direct_target(*unused, **unused_keywords):
                 return None
 
             grid = Grid()
@@ -17399,7 +17862,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             def next_target(self, bot_id, position, goal, path_key, now,
                             anchor, avoid, lookahead_distance=None,
-                            movement_intent=True):
+                            movement_intent=True, native_capability=None):
                 calls.append((bot_id, goal, path_key, anchor))
                 # The navigation result is deliberately unrelated to the
                 # macro goal. A post-A* translation would change this tuple.
@@ -17753,7 +18216,7 @@ class BotRuntimeTests(unittest.TestCase):
                 return False
 
             @staticmethod
-            def dry_segment_clear(*unused):
+            def dry_segment_clear(*unused, **unused_keywords):
                 return True
 
         runtime = self.module.BotRuntime(1)
@@ -17840,7 +18303,8 @@ class BotRuntimeTests(unittest.TestCase):
                     self.mode == 'fatal' and end[0] < -8.0 and
                     mask & module.BAKED_FATAL_HAZARDS)
 
-            def dry_segment_clear(self, unused_start, end, unused_now):
+            def dry_segment_clear(self, unused_start, end, unused_now,
+                                  native_capability=None):
                 return not (self.mode == 'segment' and end[0] < -8.0)
 
         route = {
@@ -17910,12 +18374,12 @@ class BotRuntimeTests(unittest.TestCase):
                 return False
 
             @staticmethod
-            def dry_segment_clear(*unused):
+            def dry_segment_clear(*unused, **unused_keywords):
                 return True
 
         class Navigator(object):
             @staticmethod
-            def observe_direct_target(*unused):
+            def observe_direct_target(*unused, **unused_keywords):
                 return None
 
             def __init__(self):
@@ -17924,7 +18388,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             def next_target(self, bot_id, position, goal, path_key, now,
                             anchor, avoid, lookahead_distance=None,
-                            movement_intent=True):
+                            movement_intent=True, native_capability=None):
                 calls.append((goal, path_key))
                 self.bot_states[bot_id] = {
                     'navigation_status': 'blocked',
@@ -18176,7 +18640,8 @@ class BotRuntimeTests(unittest.TestCase):
             def point_has_baked_hazard(*unused):
                 return False
 
-            def dry_segment_clear(self, unused_start, end, unused_now):
+            def dry_segment_clear(self, unused_start, end, unused_now,
+                                  native_capability=None):
                 return end[0] >= self.block_before_x
 
         grid = Grid()
@@ -18277,7 +18742,7 @@ class BotRuntimeTests(unittest.TestCase):
                 return False
 
             @staticmethod
-            def dry_segment_clear(*unused):
+            def dry_segment_clear(*unused, **unused_keywords):
                 return True
 
         checked = []
@@ -18415,13 +18880,14 @@ class BotRuntimeTests(unittest.TestCase):
         class Grid(object):
             allow_direct = False
 
-            def dry_segment_clear(self, start, goal, now):
+            def dry_segment_clear(self, start, goal, now,
+                                  native_capability=None):
                 calls.append(('direct', start, goal, now))
                 return self.allow_direct
 
         class Navigator(object):
             @staticmethod
-            def observe_direct_target(*unused):
+            def observe_direct_target(*unused, **unused_keywords):
                 return None
 
             def __init__(self):
@@ -18431,7 +18897,7 @@ class BotRuntimeTests(unittest.TestCase):
 
             def next_target(self, bot_id, position, goal, path_key, now,
                             anchor, avoid, lookahead_distance=None,
-                            movement_intent=True):
+                            movement_intent=True, native_capability=None):
                 calls.append(('planned', bot_id, path_key))
                 if self.grid.allow_direct and not self.penalized:
                     return tuple(goal)
@@ -18500,12 +18966,12 @@ class BotRuntimeTests(unittest.TestCase):
 
         class Navigator(object):
             @staticmethod
-            def observe_direct_target(*unused):
+            def observe_direct_target(*unused, **unused_keywords):
                 return None
 
             def next_target(self, bot_id, position, goal, path_key, now,
                             anchor, avoid, lookahead_distance=None,
-                            movement_intent=True):
+                            movement_intent=True, native_capability=None):
                 calls.append(path_key)
                 return goal
 
@@ -18844,13 +19310,18 @@ class BotRuntimeTests(unittest.TestCase):
             for order in defenders))
 
     def test_json_route_anchor_is_normalized_before_terrain_navigation(self):
+        # Keep the live hull inside the graph and outside the near-goal
+        # shortcut so this exercises the real navigator boundary. The tiny
+        # default graph's spawn at z=100 is outside its z=0-only corridor;
+        # using the old anchor as a private start used to hide that fixture.
+        live_start = (-24.0, 0.0, 0.0)
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
             ground_probe=lambda unused_x, unused_z, unused_hint: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             obstacle_probe=lambda *unused: False,
-            spawn_resolver=_spawn_resolver,
-            baked_graph=_graph(),
+            spawn_resolver=lambda unused_team, unused_slot: (live_start, 0.0),
+            baked_graph=_flat_open_graph(),
             direction_probe=lambda *unused: {
                 'clear': True, 'slope': 0.0})
         runtime.battle_start(self.start)
@@ -18873,12 +19344,17 @@ class BotRuntimeTests(unittest.TestCase):
             'bots': [],
         })
 
-        outgoing = runtime.update(0.04, 1.0)
+        with mock.patch.object(runtime.navigator, 'next_target',
+                               wraps=runtime.navigator.next_target) as navigate:
+            outgoing = runtime.update(0.04, 1.0)
 
         self.assertEqual('bot_state', outgoing[0]['type'])
+        navigate.assert_called_once()
+        self.assertEqual(live_start, navigate.call_args.args[1])
+        self.assertEqual((0.0, 0.0, 0.0), navigate.call_args.args[5])
+        self.assertTrue(runtime.navigator.paths)
         path = list(runtime.navigator.paths.values())[0]
-        self.assertEqual((0.0, 0.0, 0.0),
-                         path[0])
+        self.assertEqual(live_start, path[0])
         order = runtime._server_orders[11]
         self.assertEqual((6.0, 1.0, 0.0), order['aim_position'])
         self.assertEqual((7.0, 0.0, 0.0), order['face_position'])
@@ -20720,6 +21196,33 @@ class ShovedWreckTests(unittest.TestCase):
         self.assertGreater(state['z'], 0.0)
         self.assertEqual(0.0, state['y'])
 
+    def test_second_shove_bridges_an_empty_centre_column(self):
+        runtime = self._runtime(ground=0.0)
+        state = self._wreck(runtime)
+        runtime._physics_ground_probe = (
+            lambda x, z, hint: None if 0.30 < z < 1.50 else 0.0)
+        impulse = {'delta_velocity': (0.0, 4.0),
+                   'correction': (0.0, 0.0)}
+        self.assertTrue(runtime._apply_wreck_contact_response(
+            state, impulse, 0.1))
+        first = state['z']
+        self.assertTrue(runtime._apply_wreck_contact_response(
+            state, impulse, 0.1))
+        self.assertGreater(state['z'], first)
+        self.assertGreater(state['push_z'], 0.0)
+
+    def test_wreck_falls_off_a_cliff_with_only_one_supported_end(self):
+        runtime = self._runtime(ground=0.0)
+        state = self._wreck(runtime)
+        runtime._physics_ground_probe = (
+            lambda x, z, hint: 0.0 if z < 0.0 else None)
+        self.assertTrue(runtime._apply_wreck_contact_response(
+            state, {'delta_velocity': (0.0, 4.0),
+                    'correction': (0.0, 0.0)}, 0.1))
+        self.assertGreater(state['z'], 0.0)
+        self.assertTrue(state['airborne'])
+        self.assertLess(state['y'], 0.0)
+
     def test_a_wreck_is_never_shoved_through_static_geometry(self):
         runtime = self._runtime(ground=0.0, clear=False)
         state = self._wreck(runtime)
@@ -20754,7 +21257,7 @@ class ShovedWreckTests(unittest.TestCase):
         self.assertTrue(any(after['y'] < before['y'] for before, after in probes))
         self.assertEqual(0.15, probes[-1][1]['chassis']['pitch'])
 
-    def test_a_slide_off_a_cliff_lip_is_undone_instead_of_dropping(self):
+    def test_a_slide_off_a_cliff_lip_starts_a_ballistic_fall(self):
         runtime = self._runtime(ground=-40.0)
         state = self._wreck(runtime)
 
@@ -20762,10 +21265,11 @@ class ShovedWreckTests(unittest.TestCase):
             state, {'delta_velocity': (0.0, 2.0),
                     'correction': (0.0, 0.05)}, 0.1)
 
-        self.assertFalse(moved)
-        self.assertEqual(0.0, state['z'])
-        self.assertEqual(0.0, state['y'])
-        self.assertEqual(0.0, state['push_z'])
+        self.assertTrue(moved)
+        self.assertGreater(state['z'], 0.0)
+        self.assertLess(state['y'], 0.0)
+        self.assertGreater(state['y'], -40.0)
+        self.assertTrue(state['airborne'])
 
     def test_a_wreck_keeps_no_engine_and_bleeds_at_the_parked_hold(self):
         runtime = self._runtime(ground=0.0)
@@ -20955,6 +21459,30 @@ class HumanShovedWreckTests(unittest.TestCase):
         # separation the solver would have applied to any mass at all.
         self.assertGreater(wreck['push_z'], 0.0)
         self.assertGreater(wreck['z'], 0.0)
+
+    def test_a_second_player_impulse_moves_the_same_settled_wreck(self):
+        runtime = self._runtime()
+        wreck = runtime.states[11]
+        wreck.update(x=0.0, y=0.0, z=0.0, yaw=0.0, speed=0.0,
+                     alive=False, health=0, mass=25000.0,
+                     grounded_once=True, push_x=0.0, push_z=0.0)
+        player = self._player(9.0)
+        player['tank_pushes'] = [[11, 1, 0.0, 150000.0, 0.0, 0.0, 0.0]]
+        runtime._resolve_tank_contacts([player], 100.0, 1.0 / 30.0)
+        for tick in range(60):
+            runtime._resolve_tank_contacts([], 100.1 + tick / 30.0,
+                                            1.0 / 30.0)
+        settled = wreck['z']
+        self.assertEqual(0.0, wreck['push_z'])
+        player['z'] = settled - 5.0
+        player['tank_pushes'] = [[11, 2, 0.0, 300000.0, 0.0, 0.0, 0.0]]
+        runtime._resolve_tank_contacts([player], 103.0, 1.0 / 30.0)
+        self.assertGreater(wreck['z'], settled)
+        self.assertGreater(wreck['push_z'], 0.0)
+        # A duplicate cumulative checkpoint cannot shove twice.
+        before_push = wreck['push_z']
+        runtime._resolve_tank_contacts([player], 103.0, 0.0)
+        self.assertAlmostEqual(before_push, wreck['push_z'])
 
     def test_a_creeping_player_cannot_break_the_tracks_loose(self):
         runtime = self._runtime()

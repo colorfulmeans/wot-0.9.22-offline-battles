@@ -19,6 +19,7 @@ if _CLIENT_SCRIPT_ROOT not in sys.path:
     sys.path.insert(0, _CLIENT_SCRIPT_ROOT)
 
 from gui.mods.offline_lan_0922 import bot_gunnery
+from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
 from gui.mods.offline_lan_0922.ai.cover import (
     normalize_candidate,
     score_candidates,
@@ -188,6 +189,8 @@ class BotPlanner(object):
     """Server-side route, focus-fire, and last-contact order coordinator."""
 
     def __init__(self):
+        self.tactics = bot_tactics.empty()
+        self.tactics_map = ''
         self.revision = 0
         self._round_id = 0
         self._contacts = {1: {}, 2: {}}
@@ -348,8 +351,10 @@ class BotPlanner(object):
                 }
                 if "radio_recipients" in raw:
                     self._contacts[observing_team][contact_key]["radio_bot_until"] = {
-                        row["id"]: now + row["time_left"]
-                        for row in raw["radio_recipients"] if row["kind"] == "bot"}
+                        _integer(row.get("id")): _number(now) + max(
+                            0.0, min(10.0, _number(row.get("time_left"))))
+                        for row in raw["radio_recipients"]
+                        if isinstance(row, dict) and row.get("kind") == "bot"}
                 accepted += 1
                 if accepted_visibility is not None:
                     accepted_contact = {
@@ -370,6 +375,9 @@ class BotPlanner(object):
                     if threatened is not None:
                         accepted_contact["threatened_bot_ids"] = list(
                             threatened)
+                    # Preserve the validated recipient schema even with the
+                    # historical tactical policy. Do not turn radio leases
+                    # back into a team-wide or self-spot-only presentation.
                     if "radio_recipients" in raw:
                         accepted_contact["radio_recipients"] = [
                             dict(row) for row in raw["radio_recipients"]]
@@ -378,7 +386,7 @@ class BotPlanner(object):
                 previous["visible"] = False
                 previous["shootable_by_bot_ids"] = []
                 previous["threatened_bot_ids"] = []
-                if "radio_recipients" in raw:
+                if "radio_recipients" in raw or "radio_bot_until" in previous:
                     previous["radio_bot_until"] = {}
                 accepted += 1
                 if accepted_visibility is not None:
@@ -699,7 +707,7 @@ class BotPlanner(object):
                      defense=None, team_orders=None):
         known_targets = self.known_targets(bot_states, players)
         contacts = self._prune_contacts(known_targets, now)
-        bots = self._alive_bots(manifest, bot_states)
+        bots = self._alive_bots(manifest, bot_states, self.tactics)
         self._prune_tactical_state(bots, known_targets, now)
         defenders = self._update_base_defense(
             bots, contacts, defense, now)
@@ -724,30 +732,28 @@ class BotPlanner(object):
                 team, team_bots, contacts[team], assignments,
                 defenders.get(team, {}), defense)
             for bot in team_bots:
-                bot_contacts = self._contacts_for_bot(contacts[team], bot["id"])
                 commanded_focus = self._team_order_focus(
-                    team_order_by_bot.get(bot["id"]), bot, bot_contacts)
+                    team_order_by_bot.get(bot["id"]), bot,
+                    self._contacts_for_bot(bot, contacts[team], now))
                 if (commanded_focus is not None and
                         bot["id"] not in defenders.get(team, {})):
                     assignments[bot["id"]] = commanded_focus
             assignments = self._mark_flank_suppressors(
                 assignments, team_bots)
             for index, bot in enumerate(team_bots):
-                bot_contacts = self._contacts_for_bot(contacts[team], bot["id"])
-                focus = assignments.get(bot["id"])
-                if focus is not None and not self._contact_for_bot(focus, bot["id"]):
-                    focus = None
                 order = self._order_for(
-                    bot, index, len(team_bots), focus,
-                    bot_contacts, now,
+                    bot, index, len(team_bots), assignments.get(bot["id"]),
+                    self._contacts_for_bot(bot, contacts[team], now), now,
                     defenders.get(team, {}).get(bot["id"]), team_axis,
                     team_bots, capture_targets[team],
-                    not bool(bot_contacts) and bot["id"] in capture_ids)
+                    not self._contacts_for_bot(bot, contacts[team], now) and
+                    bot["id"] in capture_ids)
                 route_point = order.pop("_route_position")
                 turnback_point = order.pop("_turnback_position")
                 self._apply_team_order(
                     order, bot, team_order_by_bot.get(bot["id"]),
                     players, defense, route_point, turnback_point)
+                self._apply_authored_route_order(order, bot, route_point)
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
         payload = {"orders": orders}
@@ -894,6 +900,19 @@ class BotPlanner(object):
                     known_targets.get(state.get("target")) is None):
                 del self._combat_states[bot_id]
 
+    @staticmethod
+    def _contact_known_to(contact, bot_id, now=None):
+        """Missing metadata is legacy input; an explicit empty lease is not."""
+        if "radio_bot_until" not in contact:
+            return True
+        until = contact["radio_bot_until"].get(bot_id)
+        return until is not None and (now is None or until > _number(now))
+
+    @classmethod
+    def _contacts_for_bot(cls, bot, contacts, now=None):
+        return [contact for contact in contacts
+                if cls._contact_known_to(contact, bot["id"], now)]
+
     def _prune_contacts(self, known_targets, now):
         result = {1: [], 2: []}
         for team in (1, 2):
@@ -903,31 +922,20 @@ class BotPlanner(object):
                 if target is None or not target.get("alive") or _number(now) - contact["last_seen"] > CONTACT_TTL_SECONDS:
                     stale.append(target_key)
                 else:
-                    current = dict(contact)
-                    if "radio_bot_until" in current:
-                        recipients = {identity for identity, until in
-                                      current["radio_bot_until"].items()
-                                      if until > now}
-                        current["radio_bot_ids"] = recipients
-                        current["shootable_by_bot_ids"] = [
-                            identity for identity in current["shootable_by_bot_ids"]
-                            if identity in recipients]
-                    result[team].append(current)
+                    if "radio_bot_until" in contact:
+                        contact["radio_bot_until"] = {
+                            identity: until for identity, until in
+                            contact["radio_bot_until"].items() if until > _number(now)}
+                        contact["shootable_by_bot_ids"] = [identity for identity in
+                            contact.get("shootable_by_bot_ids", ())
+                            if identity in contact["radio_bot_until"]]
+                    result[team].append(dict(contact))
             for target_key in stale:
                 del self._contacts[team][target_key]
         return result
 
     @staticmethod
-    def _contact_for_bot(contact, bot_id):
-        return ("radio_bot_ids" not in contact or
-                bot_id in contact["radio_bot_ids"])
-
-    @staticmethod
-    def _contacts_for_bot(contacts, bot_id):
-        return [row for row in contacts if BotPlanner._contact_for_bot(row, bot_id)]
-
-    @staticmethod
-    def _alive_bots(manifest, bot_states):
+    def _alive_bots(manifest, bot_states, tactics=None):
         states = {_integer(value.get("id")): value for value in (bot_states or [])}
         result = []
         for raw in manifest or []:
@@ -940,6 +948,8 @@ class BotPlanner(object):
                 "team": _integer(raw.get("team")),
                 "slot": _integer(raw.get("slot")),
                 "rating": _bot_rating(raw),
+                "spg_initial": spg_positions.canonical_plan(
+                    raw.get("spg_initial"), vehicle=raw.get("vehicle"), team=raw.get("team"), tactics=tactics),
                 "profile": raw.get("profile") if isinstance(raw.get("profile"), dict) else {},
                 "route": raw.get("route") if isinstance(raw.get("route"), dict) else {},
                 "state": state,
@@ -1114,7 +1124,8 @@ class BotPlanner(object):
                     responders, key=lambda bot_id:
                     self._defense_retention_key(
                         live[bot_id], responders[bot_id]["point"],
-                        contacts.get(team, ()), contributor_keys))
+                        self._contacts_for_bot(live[bot_id], contacts.get(team, ()), now),
+                        contributor_keys))
                 keep = set(ranked[:reserve_limit])
                 for bot_id in list(responders):
                     if bot_id not in keep:
@@ -1165,7 +1176,8 @@ class BotPlanner(object):
                         responders, key=lambda bot_id:
                         self._defense_retention_key(
                             live[bot_id], responders[bot_id]["point"],
-                            contacts.get(team, ()), contributor_keys))
+                            self._contacts_for_bot(live[bot_id], contacts.get(team, ()), now),
+                        contributor_keys))
                     keep = set(ranked[:keep_limit])
                     for bot_id in list(responders):
                         if bot_id not in keep:
@@ -1208,8 +1220,8 @@ class BotPlanner(object):
                                     bot["state"].get("z"))),
                             value["id"]))
                         key = self._defense_eta(
-                            bot, selected["point"], contacts.get(team, ()),
-                            deadline)
+                            bot, selected["point"], self._contacts_for_bot(
+                                bot, contacts.get(team, ()), now), deadline)
                         candidates.append((key, bot["id"], selected))
                     for unused_key, bot_id, selected in sorted(
                             candidates)[:missing]:
@@ -1343,12 +1355,9 @@ class BotPlanner(object):
         if route_index < staging_index:
             return False
         if route_index > staging_index:
-            # A Bot can finish the lane while a contact is still known, or
-            # join an already advanced lane after a route rebalance. The last
-            # anchor is often a spawn connector rather than the real flag.
-            # Once the staging gate is passed, losing that contact must hand
-            # movement to the exact capture circle even outside the old gate's
-            # arrival radius.
+            # The route cursor has already passed the screen. Losing enemy
+            # contact here must hand over to BattleState's actual circle,
+            # not require driving back within the old staging radius.
             return True
         point = waypoints[staging_index]
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
@@ -1374,7 +1383,7 @@ class BotPlanner(object):
             bx = _number(bot["state"].get("x"))
             bz = _number(bot["state"].get("z"))
             choices = []
-            for contact in contacts:
+            for contact in self._contacts_for_bot(bot, contacts):
                 key = (str(contact.get("target_kind") or ""),
                        _integer(contact.get("id")))
                 if (key not in contributor_keys or
@@ -1485,10 +1494,9 @@ class BotPlanner(object):
         roles = profile.get("roles") if isinstance(profile.get("roles"), dict) else {}
         desired = max(40.0, _number(profile.get("desired_range"), 180.0))
         if str(profile.get("class_tag") or "") == "SPG":
-            # The authority client puts an SPG id in shootable_by_bot_ids only
-            # after a pitch-valid, obstacle-free ballistic path is complete.
-            # Do not discard that stronger proof through the old 560 m direct
-            # fire envelope.
+            # Artillery may track received contacts beyond the ordinary
+            # direct-fire envelope. Tracking never substitutes for the
+            # worker's pitch-valid, obstacle-free launch proof.
             return max(
                 desired,
                 min(2500.0, _number(profile.get("fire_range"), 1250.0)))
@@ -1842,10 +1850,17 @@ class BotPlanner(object):
                 (capability, self._capable(bot, capability, occasion))
                 for capability in bot_gunnery.TARGET_CAPABILITIES)
             tactics[bot["id"]] = reads
-            for contact in contacts:
+            for contact in self._contacts_for_bot(bot, contacts, now):
+                # A curved artillery lane is tied to the physical muzzle
+                # pose. Requiring that lane before selecting a target creates
+                # a cycle: acquire -> turn hull -> invalidate lane -> lose the
+                # two-second lease -> face the base -> acquire again. Tracking
+                # received enemy intelligence is not permission to skip the
+                # worker's independent ballistic and exact launch checks.
+                artillery = str(bot.get("profile", {}).get("class_tag") or "") == "SPG"
                 if (not contact.get("visible") or
-                        bot["id"] not in contact.get(
-                            "shootable_by_bot_ids", ())):
+                        (not artillery and bot["id"] not in contact.get(
+                            "shootable_by_bot_ids", ()))):
                     continue
                 distance = math.hypot(
                     contact["position"]["x"] - bx,
@@ -1880,7 +1895,9 @@ class BotPlanner(object):
                     contact["id"], distance)
                 candidate = (
                     sort_key, bot, contact, distance,
-                    self._weapon_ready(bot))
+                    self._weapon_ready(bot) and
+                    (not artillery or bot["id"] in contact.get(
+                        "shootable_by_bot_ids", ())))
                 candidates.append(candidate)
                 by_bot.setdefault(bot["id"], []).append(candidate)
 
@@ -1901,22 +1918,12 @@ class BotPlanner(object):
                 cover_state = self._cover_states.get(bot["id"])
                 cover_target = (cover_state.get("target")
                                 if isinstance(cover_state, dict) else None)
-                artillery_tracking = (
-                    str(bot.get("profile", {}).get("class_tag") or "") == "SPG")
                 if (isinstance(previous, dict) and
                         (_number(now) < _number(previous.get("until")) or
-                         cover_target == previous.get("target") or
-                         artillery_tracking)):
-                    # SPGs stay at their rear anchor while a high arc is
-                    # checked and the hull/gun are laid. Dropping an already
-                    # acquired visible target after two seconds resets that
-                    # progress. This is aim retention only: no current lane
-                    # means no fire or focus reservation. A newly shootable
-                    # alternative still wins above, and visibility/range and
-                    # recoverable-weapon checks below still release the hold.
+                         cover_target == previous.get("target"))):
                     bx = _number(bot["state"].get("x"))
                     bz = _number(bot["state"].get("z"))
-                    for contact in contacts:
+                    for contact in self._contacts_for_bot(bot, contacts, now):
                         key = (contact.get("target_kind"), contact["id"])
                         if (key != previous.get("target") or
                                 not contact.get("visible")):
@@ -2102,13 +2109,18 @@ class BotPlanner(object):
         return own, enemy
 
     def _artillery_anchor(self, bot, team_axis):
-        """Choose a stable rear staging point from this SPG's safe route.
+        """Prefer the canonical sourced initial plan; otherwise keep legacy.
 
-        The server has graph-validated macro points but no static visibility or
-        shell-arc probe. Select only by distance from the own base and progress
-        on the own/enemy axis; ``hold`` annotations are deliberately not treated
-        as proof that a point is an artillery position.
+        The authority resolves community areas against the loaded #1513 graph
+        before publishing the manifest. A missing plan explicitly keeps the
+        old rear-route fallback; neither path proves a clear firing arc.
         """
+        initial = spg_positions.canonical_plan(bot.get("spg_initial"), tactics=self.tactics)
+        if initial is not None:
+            # This point was selected inside a sourced area by the authority's
+            # actual #1513 graph. It is independent of ordinary route catalogues.
+            return {"point": dict(initial["point"]), "face": dict(initial["face"]),
+                    "index": 0, "parking_radius": initial["radius"]}
         route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
         waypoints = route.get("waypoints")
         route_signature = (
@@ -2199,28 +2211,12 @@ class BotPlanner(object):
     def _rebalance_routes(self, team, bots, contacts, now,
                           protected_ids=()):
         """Move at most one adaptable tank toward a pressured route every 4s."""
-        catalog = self._route_catalog(bots)
-        # A route change is an intelligence-driven order too. Filtering only
-        # the final firing target still let disconnected tanks chase a red
-        # dot on another flank through this team-wide pressure calculation.
-        contact_routes = [(contact, self._nearest_route(contact, catalog))
-                          for contact in contacts]
-        pressures = {}
-        radio_routes = {}
+        protected_ids = set(protected_ids)
         for bot in bots:
-            pressure = dict((route_id, 0.0) for route_id in catalog)
-            scoped = set()
-            for contact, route_id in contact_routes:
-                if (route_id is None or
-                        not self._contact_for_bot(contact, bot["id"])):
-                    continue
-                health_fraction = (_number(contact.get("health"), 1.0) /
-                                   max(1.0, _number(contact.get("max_health"), 1.0)))
-                pressure[route_id] += max(0.3, health_fraction)
-                if "radio_bot_ids" in contact:
-                    scoped.add(route_id)
-            pressures[bot["id"]] = pressure
-            radio_routes[bot["id"]] = scoped
+            authored = bot_tactics.route_config(self.tactics, self.tactics_map, (bot.get('route') or {}).get('id'))
+            if authored is not None and authored['policy'] == 'fixed':
+                protected_ids.add(bot['id'])
+        catalog = self._route_catalog(bots)
         for bot in bots:
             route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
             route_id = str(route.get("id") or "")
@@ -2229,15 +2225,15 @@ class BotPlanner(object):
             assigned_id = (str(assigned_route.get("id") or "")
                            if isinstance(assigned_route, dict) else "")
             assigned_until = _number(assigned.get("until")) if isinstance(assigned, dict) else 0.0
-            # Expired radio knowledge cannot retain or renew the old enemy-
-            # driven movement lease, even before the next 4s planning tick.
-            radio_lost = bool(isinstance(assigned, dict) and
-                              assigned.get("radio_scoped") and
-                              pressures[bot["id"]].get(assigned_id, 0.0) <= 0.0)
-            if (assigned_id not in catalog or
+            knowledge_lost = bool(
+                isinstance(assigned, dict) and assigned.get("radio_scoped") and
+                not any(self._nearest_route(contact, catalog) == assigned_id
+                        for contact in self._contacts_for_bot(bot, contacts, now)))
+            if knowledge_lost:
+                self._next_route_rebalance[team] = 0.0
+            if (knowledge_lost or assigned_id not in catalog or
                     assigned_route != catalog.get(assigned_id) or
-                    (assigned_until > 0.0 and assigned_until <= _number(now)) or
-                    radio_lost):
+                    (assigned_until > 0.0 and assigned_until <= _number(now))):
                 if route_id in catalog:
                     self._route_assignments[bot["id"]] = {
                         "route": catalog[route_id], "until": 0.0,
@@ -2250,8 +2246,18 @@ class BotPlanner(object):
         if _number(now) < _number(self._next_route_rebalance.get(team)):
             return
         self._next_route_rebalance[team] = _number(now) + ROUTE_REBALANCE_SECONDS
-        if not any(value > 0.0 for pressure in pressures.values()
-                   for value in pressure.values()):
+        pressure = dict((route_id, 0.0) for route_id in catalog)
+        for contact in contacts:
+            if not any(self._contact_known_to(contact, bot["id"], now)
+                       for bot in bots):
+                continue
+            route_id = self._nearest_route(contact, catalog)
+            if route_id is None:
+                continue
+            health_fraction = (_number(contact.get("health"), 1.0) /
+                               max(1.0, _number(contact.get("max_health"), 1.0)))
+            pressure[route_id] += max(0.3, health_fraction)
+        if not pressure or max(pressure.values()) <= 0.0:
             return
         # SPGs stage behind a lane and do not provide its front-line coverage.
         # Counting them here made a road look defended while also preventing
@@ -2261,7 +2267,7 @@ class BotPlanner(object):
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
                 continue
             if not self._route_line_contributor(
-                    bot, self._contacts_for_bot(contacts, bot["id"])):
+                    bot, self._contacts_for_bot(bot, contacts, now)):
                 continue
             assignment = self._route_assignments.get(bot["id"], {})
             route = assignment.get("route") if isinstance(assignment, dict) else None
@@ -2270,39 +2276,38 @@ class BotPlanner(object):
             route_id = str(route.get("id") or "")
             if route_id in counts:
                 counts[route_id] += 1
+        target_route = max(sorted(catalog), key=lambda route_id:
+                           pressure[route_id] - counts[route_id] * 0.45)
+        if pressure[target_route] - counts[target_route] * 0.45 <= 0.0:
+            return
+        target_record = catalog[target_route]
         # Re-evaluation happens before a temporary assignment expires. Renew
         # the same pressured route in place so its waypoint index survives;
         # only a real route change clears progress below.
-        targets = {}
         for bot in bots:
-            pressure = pressures[bot["id"]]
-            target_route = max(sorted(catalog), key=lambda route_id:
-                               pressure[route_id] - counts[route_id] * 0.45)
-            urgency = pressure[target_route] - counts[target_route] * 0.45
-            if urgency <= 0.0:
+            if not any(self._nearest_route(contact, catalog) == target_route
+                       for contact in self._contacts_for_bot(bot, contacts, now)):
                 continue
-            targets[bot["id"]] = (target_route, urgency)
             assignment = self._route_assignments.get(bot["id"])
             route = assignment.get("route") if isinstance(assignment, dict) else None
             if (isinstance(route, dict) and
                     str(route.get("id") or "") == target_route and
                     _number(assignment.get("until")) > 0.0):
                 assignment["until"] = _number(now) + ROUTE_LEASE_SECONDS
-                assignment["radio_scoped"] = (
-                    target_route in radio_routes[bot["id"]])
+        if ("capacity" in target_record and
+                counts[target_route] >= max(
+                    1, _integer(target_record.get("capacity"), 1))):
+            return
         candidates = []
         for bot in bots:
-            target = targets.get(bot["id"])
-            if target is None:
-                continue
-            target_route, urgency = target
-            target_record = catalog[target_route]
-            pressure = pressures[bot["id"]]
-            if ("capacity" in target_record and
-                    counts[target_route] >= max(
-                        1, _integer(target_record.get("capacity"), 1))):
+            received = self._contacts_for_bot(bot, contacts, now)
+            if not any(self._nearest_route(contact, catalog) == target_route
+                       for contact in received):
                 continue
             if bot["id"] in protected_ids:
+                continue
+            target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, target_route)
+            if target_authored is not None and not bot_tactics.matches(target_authored, bot):
                 continue
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
                 continue
@@ -2342,14 +2347,15 @@ class BotPlanner(object):
                      _number(roles.get("brawler")) * 0.65 -
                      pressure.get(current_id, 0.0) * 0.7 +
                      class_affinity * 1.8 + role_affinity * 1.2)
-            candidates.append((urgency, score, -bot["id"], target_route, bot))
+            candidates.append((score, -bot["id"], bot))
         if not candidates:
             return
-        unused_urgency, unused_score, unused_id, target_route, donor = max(candidates)
+        donor = max(candidates)[2]
         self._route_assignments[donor["id"]] = {
             "route": catalog[target_route],
             "until": _number(now) + ROUTE_LEASE_SECONDS,
-            "radio_scoped": target_route in radio_routes[donor["id"]],
+            "radio_scoped": any("radio_bot_until" in contact
+                                for contact in contacts),
         }
         self._route_states.pop(donor["id"], None)
 
@@ -2368,8 +2374,10 @@ class BotPlanner(object):
                      "z": round(direction * 18.0, 3)}
             return route_id, 0, point, point, False
         route_id = str(route.get("id") or "uploaded_route")
+        authored = bot_tactics.route_config(
+            self.tactics, self.tactics_map, route_id)
         route_limit = len(waypoints) - 1
-        if stop_before_objective and len(waypoints) > 1:
+        if stop_before_objective and len(waypoints) > 1 and authored is None:
             route_limit -= 1
         state = self._route_states.get(bot["id"])
         if state is None or state.get("route_id") != route_id:
@@ -2415,6 +2423,9 @@ class BotPlanner(object):
                     if abs(delta) <= 1.75:
                         break
                     index += 1
+            # User point zero is an instruction, not a baked base connector.
+            if authored is not None:
+                index = 0
             state = {"index": index, "route_id": route_id,
                      "join_index": index,
                      "join_anchor": {"x": bx,
@@ -2431,9 +2442,22 @@ class BotPlanner(object):
         # Consume every already-reached adjacent gate in this one 1 Hz global
         # tactics pass; otherwise a short next segment makes LocalDriver stop
         # at it until the following planner tick.
-        while (index < route_limit and
-               _route_point_reached(
-                   bx, bz, waypoints, index, route_limit)):
+        state["holding"] = False
+        while _route_point_reached(bx, bz, waypoints, index, route_limit):
+            authored_point = (authored['points'][index]
+                              if authored is not None else ())
+            seconds = authored_point[3] if len(authored_point) > 3 else 0.0
+            if seconds:
+                # A timed parking instruction must be reached physically;
+                # passing a macro gate's forward corridor is insufficient.
+                if math.hypot(point['x'] - bx, point['z'] - bz) > ROUTE_ARRIVAL_RADIUS:
+                    break
+                arrived = state.setdefault("arrived", {}).setdefault(index, now)
+                if seconds < 0 or now - arrived < seconds:
+                    state["holding"] = True
+                    break
+            if index >= route_limit:
+                break
             index += 1
             state["index"] = index
             point = _point(waypoints[index])
@@ -2444,6 +2468,21 @@ class BotPlanner(object):
         else:
             anchor = _point(waypoints[max(0, index - 1)])
         return route_id, index, point, anchor, route_join
+
+    def _apply_authored_route_order(self, order, bot, route_point):
+        """Apply explicit parking/travel instructions without suppressing aim."""
+        authored = bot_tactics.route_config(
+            self.tactics, self.tactics_map, order.get('route_id'))
+        if authored is None:
+            return
+        scripted = (bot['profile'].get('class_tag') == 'SPG' or
+                    any(len(point) > 3 for point in authored['points']))
+        if not scripted:
+            return
+        holding = (self._route_states.get(bot['id']) or {}).get('holding', False)
+        order['move_position'] = dict(route_point)
+        order['combat_mode'] = 'hold' if holding else 'route'
+        order['throttle_override'] = 0.0 if holding else None
 
     def _retreat_point(self, bot, route_anchor):
         """Return the previous graph-validated route point when available."""
@@ -2872,7 +2911,7 @@ class BotPlanner(object):
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         distance = math.hypot(point["x"] - _number(state.get("x")),
                               point["z"] - _number(state.get("z")))
-        arrived = distance <= 15.0
+        arrived = distance <= anchor.get("parking_radius", 15.0)
         order["combat_mode"] = (
             "artillery_hold" if arrived else "artillery_deploy")
         order["move_position"] = dict(point)
@@ -3034,11 +3073,13 @@ class BotPlanner(object):
             return order
         if str(profile.get("class_tag") or "") == "SPG":
             if focus is not None:
-                observers = focus.get("shootable_by_bot_ids")
+                # This flag admits an attempt, not an unchecked launch. The
+                # worker still requires a current family solution, alignment,
+                # ammunition, exact native arc proof and friendly clearance.
+                # An expired advisory must not cancel that pending proof.
                 self._set_target(
                     order, bot, focus, profile, personality,
-                    bool(focus.get("visible") and
-                         bot["id"] in (observers or ())))
+                    bool(focus.get("visible")))
             self._apply_artillery_order(order, bot, team_axis)
             return order
 

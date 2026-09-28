@@ -31,11 +31,29 @@ def _positive(value, default):
     return value if value > 0.0 else float(default)
 
 
+def mounted_shot_order(shots, shell_order):
+    """Put mounted garage slots before unmounted descriptor defaults."""
+    shots = tuple(shots or ())
+    if not shell_order:
+        return shots
+    positions = {}
+    for position, compact_descr in enumerate(shell_order):
+        try:
+            positions.setdefault(int(compact_descr), position)
+        except (TypeError, ValueError):
+            continue
+    return tuple(sorted(shots, key=lambda shot: positions.get(
+        _field(_field(shot, 'shell', {}), 'compactDescr'), len(positions))))
+
+
 class GunState(object):
 
-    def __init__(self, descriptor, loadout_modifiers=None, ammo_layout=None):
+    def __init__(self, descriptor, loadout_modifiers=None, ammo_layout=None,
+                 shell_order=None):
         gun = descriptor.gun
-        self.shots = tuple(_field(gun, 'shots', ()) or ())
+        self.shell_order = tuple(shell_order or ())
+        self.shots = mounted_shot_order(
+            _field(gun, 'shots', ()), self.shell_order)
         self.base_dispersion = _positive(
             _field(gun, 'shotDispersionAngle', 0.1), 0.1)
         factors = _field(gun, 'shotDispersionFactors', {}) or {}
@@ -73,6 +91,10 @@ class GunState(object):
         try:
             selected = int(getattr(descriptor, 'activeGunShotIndex', 0))
         except (TypeError, ValueError):
+            selected = 0
+        # The descriptor's active index addresses the original XML order;
+        # after a garage slot swap, the first mounted slot is selected.
+        if self.shell_order:
             selected = 0
         self.shot_index = max(0, min(selected, max(0, len(self.shots) - 1)))
         if not self.ammo or self.ammo[self.shot_index] <= 0:
@@ -129,7 +151,8 @@ class GunState(object):
         active descriptor.
         """
         gun = descriptor.gun
-        shots = tuple(_field(gun, 'shots', ()) or ())
+        shots = mounted_shot_order(
+            _field(gun, 'shots', ()), self.shell_order)
         if (self._shot_compact_descrs(shots) !=
                 self._shot_compact_descrs(self.shots)):
             raise RuntimeError(

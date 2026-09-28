@@ -717,6 +717,7 @@ class _NativeRemoteState(object):
     def attach(self, entity):
         self.entity = entity
         entity._offlineNativeRemote = True
+        entity.targetCaps = []
         entity._offlineNativeMarkerVisible = bool(getattr(
             entity, '_offlineNativeMarkerVisible', True))
         entity._offlineNativeDrawVisible = bool(getattr(
@@ -768,11 +769,9 @@ class _NativeRemoteState(object):
                 # after every relink without touching marker registration.
                 set_draw_visibility(self.entity, bool(getattr(
                     self.entity, '_offlineNativeDrawVisible', True)))
-                is_alive = getattr(self.entity, 'isAlive', None)
-                alive = (bool(is_alive()) if callable(is_alive)
-                         else bool(is_alive))
-                self.entity.targetCaps = ([1] if alive and bool(getattr(
-                    self.entity, '_spot_visible', True)) else [])
+                # The runtime owns cursor selection using the current pose.
+                # A refreshed model must not restore the native picker.
+                self.entity.targetCaps = []
 
         changed = getattr(appearance, 'onModelChanged', None)
         if changed is not None:

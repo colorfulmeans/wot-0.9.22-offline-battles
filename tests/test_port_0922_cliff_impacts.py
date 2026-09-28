@@ -156,6 +156,54 @@ class CliffAndImpactTests(unittest.TestCase):
                 self.assertLess(battle._local_vertical_speed, -5.0)
                 self.assertFalse(battle._local_support_rise_blocked)
 
+    def test_bridge_lookahead_cannot_reset_gravity_on_repeated_air_contacts(self):
+        # 021934: the upper hull ray hits the bridge at y=0.8602448 while
+        # the unsupported body centre is already below it (y=0.5155965).
+        normal = (-1.771251589843814e-8, 1.0, -2.6763425253761852e-8)
+        for dt in (1.0 / 30.0, 1.0 / 120.0):
+            with self.subTest(dt=dt):
+                battle, entity = self.battle()
+                battle._runtime.bigworld.entities[10] = entity
+                battle._server = types.SimpleNamespace(vehicle_id=10)
+                battle._sender = types.SimpleNamespace(
+                    forward=0.0, turn=0.0, handbrake=False,
+                    send_current=lambda: True)
+                battle._local_descriptor = entity.typeDescriptor
+                battle._local_position = (-3.2659, 0.5155965, 116.7048)
+                battle._attach_local_presentation()
+                battle._local_fall_armed = True
+                battle._local_airborne = True
+                battle._local_speed = 6.7629
+                battle._local_vertical_speed = -0.135
+                battle._suspension_ground_y = mock.Mock(return_value=None)
+                battle._resolve_local_tank_contacts = lambda e, pos, *args: pos
+
+                def bridge(*args, **kwargs):
+                    battle._local_motion_soft_block = False
+                    battle._local_world_collision_trace = dict(
+                        hit=(-2.1971, 0.8602448, 116.1028), normal=normal,
+                        reason='solid_lane')
+                    return False
+
+                battle._motion_is_clear = bridge
+                for unused in range(round(1.0 / dt)):
+                    battle._drive_local_step(dt)
+                self.assertLess(battle._local_position[1], -4.0)
+                self.assertLess(battle._local_vertical_speed, -9.0)
+                self.assertTrue(battle._local_airborne)
+                self.assertEqual([], battle._pending_landing_impacts)
+
+    def test_sideways_air_contact_keeps_fall_speed_and_stops_into_wall(self):
+        battle, entity = self.battle()
+        battle._local_airborne = True
+        battle._local_vertical_speed = -20.0
+        battle._local_world_collision_trace = dict(
+            hit=(1, 1, 1), normal=(-0.8, 0.6, 0), reason='solid_lane')
+        self.assertEqual((0.0, 4.0),
+            battle._settle_airborne_lateral_contact(entity, 3.0, 4.0))
+        self.assertEqual(-20.0, battle._local_vertical_speed)
+        self.assertEqual([], battle._pending_landing_impacts)
+
     def test_bot_world_contact_changes_hp_and_consumes_only_realised_witness(self):
         runtime = bot_runtime.BotRuntime(1)
         state = dict(id=11, yaw=0.0, vertical_speed=0.0, airborne=True,
@@ -165,6 +213,16 @@ class CliffAndImpactTests(unittest.TestCase):
         self.assertEqual(vehicle_physics.fall_damage(500, 20), damage)
         self.assertEqual(500 - damage, state['health'])
         self.assertEqual(0, runtime._apply_world_contact_impact(state, 20, 11))
+
+    def test_bot_bridge_lookahead_does_not_turn_downward_speed_into_hp_loss(self):
+        runtime = bot_runtime.BotRuntime(1)
+        state = dict(id=11, yaw=0.0, vertical_speed=-20.0, airborne=True,
+                     health=500, max_health=500, alive=True,
+                     _world_contact_trace=dict(hit=(0, 1, 3), normal=(0, 1, 0)))
+        self.assertEqual(0, runtime._apply_world_contact_impact(state, 20, 10))
+        self.assertEqual(500, state['health'])
+        self.assertEqual(-20.0, state['vertical_speed'])
+        self.assertNotIn('_world_contact_trace', state)
 
 
 if __name__ == '__main__':

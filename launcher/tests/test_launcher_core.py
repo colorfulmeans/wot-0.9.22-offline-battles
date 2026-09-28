@@ -716,6 +716,13 @@ class ClientInstallTest(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.work, True)
+        # Maintenance tests must never discover the developer's real saves.
+        # The fallback-path cases deliberately run without APPDATA; tests of
+        # external saves provide their own temporary APPDATA explicitly.
+        environment = mock.patch.dict(os.environ, {
+            "APPDATA": "", "LOCALAPPDATA": os.path.join(self.work, "local")})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.game = os.path.join(self.work, "game")
         self.payload = os.path.join(self.work, "payload")
         os.makedirs(self.game)
@@ -955,6 +962,32 @@ class ClientInstallTest(unittest.TestCase):
 
         self.assertEqual(saved_config, self._read(
             "mods/configs/offline_lan_0922/config.json"))
+
+    def test_updates_and_startup_repair_preserve_all_external_save_slots(self):
+        self._stage_0_9_22(json.dumps({"enabled": True}))
+        self._make_0_9_22_target()
+        app_data = os.path.join(self.work, "app-data")
+        relative_root = "Wargaming.net/WorldOfTanks/offline_lan_0922"
+        saved_files = {}
+        for slot in ("default", "career-2"):
+            for name in ("garage_state.json", "account_state.json",
+                         "postbattle_state.json", "garage_state.backup1.json"):
+                content = "player-owned-%s-%s" % (slot, name)
+                path = self._write(app_data, "%s/saves/%s/%s" % (
+                    relative_root, slot, name), content)
+                saved_files[path] = content
+        legacy = self._write(
+            app_data, relative_root + "/garage_state.json", "legacy-progress")
+        saved_files[legacy] = "legacy-progress"
+        with mock.patch.dict(os.environ, {"APPDATA": app_data}):
+            core.install_client_mod(self.game, core.PORT_0_9_22, self.payload)
+            core.install_client_mod(
+                self.game, core.PORT_0_9_22, self.payload, force=True)
+            core.repair_0_9_22_startup(
+                self.game, self.payload, is_running=lambda: False)
+        for path, expected in saved_files.items():
+            with open(path) as stream:
+                self.assertEqual(expected, stream.read(), path)
 
     def test_startup_repair_keeps_a_valid_config(self):
         default_config = json.dumps({"enabled": True})

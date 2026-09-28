@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v0.9.2
+wot-0.9.22-offline-battles v0.9.6
 ================================
 
 The launcher prepares one battle before the game starts. It installs the mod,
@@ -46,7 +46,7 @@ with the supported vehicle catalogue and researched modules; a new-account
 save starts with starter vehicles. Purchases use the displayed currency and
 price. Change modules, optional devices, consumables, shells, camouflage and
 crew skills; the garage is saved after each change and the battle uses what
-you fitted. UPDATE_NOTES.md lists the complete changes since v0.8.4.
+you fitted. Release notes are on the GitHub v0.9.6 release page.
 
 The Tools tab also edits vehicle data directly. A vehicle data profile is a
 named set of Packed XML field changes (health, damage, penetration, armour,
@@ -456,3 +456,60 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+
+
+Version 0.9.6
+Improvements since v0.9.5 focus on reciprocal player/Bot collision, repeated
+wreck pushing and rotation, bridge support, downhill speed and braking.
+Direct HE effects, physical gun origins, burst fire, garage supplies,
+squad messages, environment death notices and the governor are repaired.
+Ammo-rack turret debris is visual-only to reduce severe collision stalls.
+See the complete English notes and unresolved module Word inventory on GitHub.
+Use the same package for every LAN participant. Keep your existing save slots.
+
+Version 0.9.5
+Changes since v0.9.4 include matchmaking and artillery repairs, an initial
+Ruinberg/Steppes SPG position library, the launcher Bot tactics editor, contact
+and wreck pushing fixes, HE feedback, wreck reticle occlusion, capture circle
+radii, HT-5 view range, shell order, premium consumables, exchange and crew.
+LT-5 logic remains at the PR #40 baseline. The original v0.7.7 Bot driving and
+41 navigation maps remain. See the GitHub v0.9.5 release for complete notes.
+All LAN participants must use this version of the launcher, client and server.
+Extract the whole ZIP to a new empty folder; do not mix _internal directories.
+
+Version 0.9.4
+Selected Bot source: a3e4c5937789d9dd63fde6902783d5027ec7c6f3
+Upstream v0.7.7 Bot behavior and original maps; original mutual yielding retained.
+Radio visibility and battle-start compatibility fixes are retained.
+The no-yield comparison is not included. Shared physics and non-Bot game systems
+remain from the selected build; this is not the complete upstream game.
+Extract the whole ZIP to a new empty folder; do not mix _internal directories.
+
+
+Bot tactics editor - v0.9.5
+-----------------------------------------
+Tools -> Bot tactics opens the behavior and map editor. The existing Exact
+lineup tab still controls specific vehicles. In Bot tactics, save a named draft
+or apply it for the host's next battle. Changes during a battle affect only a
+later battle. Joining another host uses that host's settings.
+
+On the map tab, choose a map and team (the actual base coordinates are shown).
+Copy a read-only built-in route or draw a new route. Click to add points, drag
+to move them, Shift-click to insert, Delete to remove; mark hold points when
+needed. Configure class/slot eligibility, capacity, weight and preferred/fixed
+route policy. Fixed is a strategic lane lock, not permission to cross walls.
+
+SPG positions are allowed parking circles with a heading and priority. They
+are not spawn teleports or guaranteed firing solutions. The worker selects
+reachable vehicle-sized parking space and still validates every real shot.
+The first community library covers Ruinberg and Steppes; manual authoring is
+available on all 41 maps. Dynamic switching among library positions is not
+part of this version.
+
+Profiles are stored under %LOCALAPPDATA%\WoTOfflineBattles\bot_tactics.
+Named saves, imports and default resets are drafts until Apply is selected.
+The previous active file is retained as a .bak. Updating tactics thereafter
+does not require rebuilding the EXE. Invalid or incompatible data is reported,
+not silently activated. Original map images are read from your game package;
+when unavailable the editor labels its navigation-grid background explicitly.
+A map check is baked-geometry evidence only, not original-client gameplay.

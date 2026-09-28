@@ -1,5 +1,50 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## September 24 exchange confirmation and elite-notification audit
+
+Report `20260924-003508-5e4675963357` runs the v0.9.4 original-Bot077
+payload, identity `colorfulmeans-v094-bot077-original-35874200209-1`.
+The published Windows artifact was inspected: its garage/request producers
+match the a3e4c593 behavioral baseline. This is not a stale full-set sender.
+
+The exact #1513 Python resource contracts establish that
+`ExchangeXpMeta.submit` enumerates `FULLY_ELITE` catalog vehicles, excluding
+the research parent but not zero-XP/unowned entries. `Vehicle` treats an empty
+`unlocksDescrs` as elite without an account elite flag. The offline conversion
+loop wrote `vehicleXP[cd] = 0` for every empty candidate encountered before
+its positive-XP source. `data.stats` includes XP-history keys among its elite
+candidates. Consequently those new zero keys become new incremental elite
+entries; native `Account._update` raises one elite event per entry. A synthetic
+128-empty-candidate case reproduces the pollution and popup-producing delta.
+
+The correction skips zero debits, preserving genuine positive/sold-vehicle
+experience, existing zero history, source de-duplication, gold charging, and
+real research transitions. It does not suppress elite dialogs or clear saved
+research. A conversion followed by 65,600-XP research now produces only the
+research parent's genuine elite notification, never the empty catalog entries.
+
+The credit screenshot has 9,833,700 gold, a 400 rate, a 6,090,000-credit
+shortfall and a correct 15,225-gold default. The unbounded maximum product is
+3,933,480,000, exceeding signed 32-bit range. The exact Python meta publishes
+`maxGoldValue = actualGold`. A presentation-only wrapper on the shared
+`_ExchangeDialogMeta.makeVO` caps the maximum at floor(INT32_MAX / live rate)
+without rewriting the wallet, rate, needed/default amount, or transaction.
+It also bounds the same shared XP/restore control when applicable; ordinary
+values, including the reported 2,624-gold XP dialog, remain identical.
+
+Evidence limit: the original #1513 SWF was not supplied. The public 1.13 AS3
+ConfirmExchangeBlock confirms the maxGold * rate dataflow but is not #1513
+and uses Number for convertGold. Therefore the signed-overflow rendering
+explanation is a strong screenshot-bound hypothesis, not recovered #1513
+Flash proof. The range guard is covered by VO and explicit int32-model tests;
+only a Windows retest can confirm that the credit field now displays/accepts
+values. Do not describe that model as a native UI reproduction.
+
+The adapter uses the existing pre-lobby service installation and rollback.
+No Bot, map, penetration, movement, crew-requalification, price or research
+rules are changed by this patch. PR #32 remains independently applicable.
+
+
 This review is pinned to the Chinese HD client whose `version.xml` reports
 `v.0.9.22.0.1 #1513`. The executable is 32-bit x86. Packaged client modules use
 CPython 2.7 bytecode magic `03 f3 0d 0a`; the embedded build identifies itself
@@ -5651,3 +5696,2197 @@ Regression geometry uses the shipped `31_airfield` small village house's boxes,
 with controlled placement, health and native query responses. It proves the
 Python approach/driver boundary, including forward commands at 60/15/5 Hz,
 not the user's exact unlogged position or native Windows #1513 gameplay.
+
+### Post-0.9.3 Airfield navigation and directive purchases
+
+The `20260921-225339-7e2477662ca8` and
+`20260921-234319-c7cf068c7df3` reports both identify semantic version 0.9.3,
+build `colorfulmeans-35611837404-1`. The published ZIP's navigation source
+matches the current release tree after Windows newline normalization; this
+follow-up is not based on an assumed older installation.
+
+In the Airfield report, 379 of 412 motion samples have pending navigation and
+403 have clear world-motion checks. Six recorded stationary positions lie in
+cells without a baked height. The baked corridor can snap its start to a
+nearby supported cell, but its native-review gate previously checked the
+original unsupported cell and rejected the candidate before consulting live
+ground and collision evidence. Report-position regressions reproduce this
+failure even with a clear native corridor.
+
+Reviewed boundary joins now check the actual world-space start and proposed
+endpoint through the existing live support, slope and obstacle probes.
+Missing support, real walls and excessive slopes remain vetoes. No map
+coordinates or physical collision laws are changed. The regression's live
+query responses are controlled fixtures; they do not establish that every
+native obstacle at those positions is passable.
+
+A separate deterministic lifecycle regression shows that queued searches can
+stop progressing while every Bot reuses a cached/direct movement decision.
+The authority control refresh now advances the existing navigation queue once
+per frame. The original elapsed-time credit and same-frame idempotence remain
+in force; this does not increase its search budget. The report itself records
+ongoing search work, so this independent defect is not claimed as the sole
+cause of its stationary vehicles. Bounded motion diagnostics now include the
+actual grid cell, available baked height, pending age and search progress.
+
+The second report identifies CMD 308 and `BattleBooster<intCD:27131>` rejected
+by the ordinary-equipment slot validator. The six-field command width is
+already audited above, but the report does not retain the slot field's value.
+The repair therefore uses the installed descriptor's `equipmentType` to select
+the unique directive slot in the existing four-slot representation. Ordinary
+consumables retain their requested slot and all requests retain slot bounds
+and descriptor validation. It does not claim a newly audited GUI-local index.
+
+Buying and mounting one item also previously replaced the entire desired
+consumable layout with the currently loaded items. That erased unrelated
+consumed items' resupply targets and signed currency choices. Only the chosen
+slot's desired layout now changes. Transaction, inventory publication and
+save/restart regressions cover direct purchases, existing stock, replacement,
+unmounting, insufficient bonds and invalid requests; failed transactions
+retain the original balances, stock, fitting and layout.
+
+### Shared spotting: verified behavior and historical limits
+
+The official [Spotting and Concealment support article](https://wargaming.net/support/en/products/wot/article/10222/)
+confirms that allied position sharing requires radio contact. It does not
+specify assistance attribution at shell launch versus impact. Search-index
+excerpts of the Wargaming-hosted [Battle Mechanics Wiki](https://wiki.wargaming.net/en/Battle_Mechanics)
+describe splitting spotting XP between spotters when the shooter cannot spot
+the target itself; its full article was blocked by a verification page during
+this review. That excerpt is not evidence for the exact historical HP or
+integer-rounding algorithm.
+
+Existing server regressions confirm that 240 damage is shared as 120/120
+between two direct spotters, a single spotter receives the entire assistance,
+and a shooter spotting its own target grants no radio assistance to others.
+For 241 damage, the current stable-order 121/120 split is an offline accounting
+choice, not a recovered official rounding contract. Existing in-flight shell
+and assisted-kill behavior remains unchanged.
+
+No spotting behavior is changed by this follow-up. A proposed per-shooter
+radio filter was not retained because a newer observation after the shooter's
+death removed its radio relationships before an in-flight shell hit; public
+sources did not resolve the correct historical attribution time. Other
+unverified boundaries are shared initial-discovery counts, assistance during
+retained visibility without direct observation, and simultaneous tracking and
+spotting assistance. The existing implementation must not be described as a
+complete reconstruction of the 0.9.22 proprietary reward rules.
+
+### September 22 report follow-up: hydraulics, navigation, missions and sight
+
+The five supplied September 21/22 reports identify the released 0.9.3 payload,
+`colorfulmeans-35611837404-1`. They do not contain the post-release Airfield and
+directive repairs described above. This candidate includes those repairs and
+the continuous, native-proven occupied-cell egress from the parallel Airfield
+follow-up; it does not change the release version.
+
+The `040924` traceback reaches `_drive_local_step` before the first hydraulic
+ground sample. `_local_legacy_support_sample` now belongs to the constructor,
+start and stop lifecycle. The first frame has no prior support; a new round
+cannot reuse the previous map's support. Regressions set the descriptor's real
+`isPitchHullAimingAvailable` guard and exercise all four retained Swedish TD
+descriptors in both travel and siege modes.
+
+The Highway report repeatedly rolls T71 back at a hull height near -11.103 m
+while the sampled centre support is near -5.151 m. The Bot physical callback
+was using the broad placement column, which could select the overhead bridge.
+It now uses the existing near-body support column shared with player physics.
+This changes support-layer selection, not allowed climbing grades or collision
+clearance. Physical support and final-pose rejection must also reach the
+navigator: a clear horizontal sweep cannot clear a blocked-contact episode
+before the full pose has been accepted. Missing baked occupied cells retain
+bounded native support, slope, hazard and collision proof before joining an
+existing graph cell; no vehicle is snapped or teleported onto a route.
+
+The LT-12 report explicitly rejects `damageAssistedRadioWhileInvisible`; the
+HT-12 report rejects `compareWithMaxHealth`. Radio-assistance evidence now
+freezes each awarded share and whether the observer is visible to the enemy
+at that event. The mission evaluator uses this history for LT-12 and the
+frozen battle-start maximum health for HT-12. It does not substitute total
+assistance or remaining HP. LT-12's first-campaign secondary condition also
+requires matching seasonal camouflage as well as a camouflage net; fitting
+evidence is taken from the battle loadout. Historical receipts missing the
+necessary evidence remain unknown rather than retroactively inventing it.
+
+Some accepted destructible removals leave their original compiled BSP skin
+under a different item slot from the repaired live WGDE instance. Movement
+already had bounded ownership checks for this case; spotting previously used
+only the destruction ledger callback. Sight rays now use the same proved
+original-skin recast, retaining their existing 0x80 skip mask. Movement keeps
+0x50. Intact surfaces, unidentified geometry and replacement/backing walls
+remain blockers. This does not assert that every small prop is transparent or
+that shell collision and spotting have identical rules.
+
+The apparent obstacle-width report is not resolved by globally shrinking
+collision geometry. Catalog contacts use compiled collision bounds, not a
+triangle-level narrow phase; the supplied evidence does not identify a safe
+per-model correction. Rate-limited `CATALOG CONTACT` and `SIGHT CONTACT`
+records now include the actual hull sweep or sight ray, object identity and
+bounds, and native surface evidence where available. They distinguish a
+catalog-box contact from a native surface and do not alter destruction state.
+
+The focused fixtures establish Python lifecycle, accounting and collision
+filtering behavior. Native #1513 entry into battle, bridge/wreck driving,
+obstacle outlines, spotting and frame pacing still require Windows gameplay.
+
+### September 22 Airfield follow-up: moving fallback targets
+
+Report `20260922-104150-b9961a81ef4a` runs the delivered candidate
+`colorfulmeans-35678689450-1`, not the earlier release. Its first round is
+Airfield; the later Himmelsdorf round reuses Bot IDs and must be analyzed
+separately. The reported pair is Object 244 (18) and SU-122-44 (27).
+
+The shipped Airfield graph and the SU's recorded start reproduce its exact
+first fallback endpoint, `(-287.264106, -0.18, -188.348202)`, under a stated
+flat, clear native-query fixture. After a failed search the endpoint was
+reselected on every decision: moving the hull 0.2 m also moved the endpoint
+0.2 m, keeping the short target 2.08 m away and allowing its direction to
+change at cell boundaries. Pending searches already retained a usable target;
+the failed-search branch did not. Local fallback endpoints now belong to the
+route and recovery intent that selected them and remain fixed until arrival
+or invalidation. Current geometry, hazards and Bot-specific edge penalties
+still constrain reuse. A new strategic intent, normal path or recovery must
+not inherit an unrelated fallback.
+
+The 10:34:23 Object 244 sample has no physical contact pair, but replaying the
+two recorded hull boxes through the production traffic guard rejects its
+requested positive rotation. The old stall record printed the planner's
+`traffic=none`, hiding this later `vehicle_brake` verdict. Diagnostics now
+retain the already computed controls before and after the traffic guard,
+the final motion controls and the actual traffic mode. Recording this adds
+no native queries and retains the existing per-hull cadence.
+
+Moving in a small circle previously reset the stationary log after each
+0.5 m displacement, so a long loop could leave almost no motion evidence.
+An additional movement-intent diagnostic samples at most once per 15 seconds
+while the hull remains within a 12 m local region. Straight departure resets
+that region, tactical holds do not arm it, and stationary reports retain their
+existing three-second cadence. This observer does not change driving.
+
+The report also records a live-worker window at 8.30 FPS. Sampled navigation
+fallback work is only part of its cost; physical motion queries dominate the
+slow frames. This change is not a demonstrated frame-rate repair. Positive
+native answers can precede chunk streaming, so failed-search retries retain
+their existing geometry revalidation. The report-position fixtures establish
+target ownership and traffic attribution. A continuous two-Bot fixture with
+real A* can leave the area after delayed planning; forcing A* to fail forever
+still exposes local minima in the short fallback. Thus this repairs the
+reproduced moving-target defect, not every cause of circling. Only a new
+exact-client Windows playtest can establish that both vehicles leave the
+native scene reliably.
+
+### September 22 Airfield follow-up: circling at spawn
+
+Report `20260922-113632-50a443198d84` runs the next delivered candidate,
+`colorfulmeans-35681498572-1`. All three rounds are Airfield; Bot IDs repeat
+between them. Of 68 local-motion observations, 67 have no traffic restriction,
+all have clear or crushed world motion, and none records a support/pose
+rollback or contact pair. The new evidence therefore cannot be explained only
+by mutual vehicle avoidance. Local-motion observations establish slow local
+progress, not necessarily a closed circle.
+
+Two Object 730 samples retain the same nearby target while driving and
+turning continuously. Their recorded movement, speed and timestep reproduce
+26 degrees/second hull traverse. The target's arrival disk lies inside the
+current turning circle, so full throttle can orbit it. LocalDriver now uses
+the installed traverse limit, including stun, to recognize this geometry and
+brake through alignment until the forward ray intersects the arrival disk.
+No vehicle coefficients change. Hold, reverse, recovery, a changed target or
+unavailable physics clear the alignment state. Ordinary steering probes are
+bounded by the selected waypoint plus the leading hull and decision travel;
+explicit recovery probes and remembered live-vehicle blockers retain their
+own checks. The realised motion gate remains authoritative.
+
+A recovery search used to survive the two-metre displacement that ended its
+recovery, then consume search credit alongside the replacement route search.
+That private job now retires with its recovery. A pending A* search also
+exposes already admitted dry parent edges as a stable prefix, allowing a
+validated detour before the complete route is available. The prefix belongs
+to its search and request, checks the unsnapped current position and penalties,
+and is retired on cancellation, completion or invalidation. Reaching another
+temporary greedy waypoint no longer continually resets strategic no-progress
+detection. An arrived short fallback point anchors the next leg, rather than
+re-centering every leg on a hull still inside the same eroded cell; the actual
+hull-to-new-target connector must pass the complete safety checks. Search
+limits and native-query budgets are unchanged.
+
+Shared native navigation previously rejected intact crushable props while
+the driving probe admitted them using the stock kinetic gate. A shared edge
+now requires the stock proof for every distinct physical profile in the
+complete roster, including both siege modes and both directional speed caps.
+It reuses one unique live-object identity check and an exact material-filtered
+recast, retaining unknown objects and backing walls. This is a conservative
+common planning capability: a slow or incomplete profile can keep the edge
+blocked for everyone, and actual motion still owns impact and destruction.
+Roster or descriptor changes invalidate dependent navigation proofs. A spent
+recast budget defers the search edge until the next frame without caching a
+false wall or repeatedly probing that same edge in one frame.
+
+The LAN poll also discarded a sparse `bot_orders` section when a later lean
+snapshot arrived in the same batch. The server had already marked the section
+sent, so the worker could keep an old reached waypoint until a later resend.
+Coalescing now carries the newest complete order section into the latest
+physical snapshot within the same round, authority and map. Explicit empty
+orders, revision ordering, event boundaries and bounded overflow are covered.
+The report has no complete order-delivery trace; this independently reproduced
+loss is not asserted to be the only cause of its delayed target updates.
+
+Regression coverage includes recorded-pose driving, slow and fast traverse,
+left/right targets, track-centred pivots, real blocked corridors requiring an
+initial detour, deferred geometry, retained backing walls and the actual LAN
+poll/overflow path. These establish local control and lifecycle behavior.
+The report's 8.35 FPS window is still dominated by physical motion queries;
+this change does not establish a frame-rate repair or native Airfield gameplay
+acceptance. Exact #1513 Windows driving remains the acceptance boundary.
+
+### September 22 Airfield follow-up: remaining local turn loops
+
+Report `20260922-122105-7421ade854f4` runs `colorfulmeans-35685281060-1`.
+The user confirms more Bots now leave spawn, while a few keep turning locally.
+The report supports both observations: T71 and Achilles travel hundreds of
+metres, while Panther II (7), M36 (9) and SU-122-44 (27) repeatedly receive
+nearby changing targets. Of the 152 motion diagnostics, 138 are world-clear
+and 12 record successful crushing; no support/pose rollback or baked veto is
+recorded. These are stall-triggered samples, not a representative estimate of
+the proportion of all vehicles that stop.
+
+The history does not support reverting the entire AI to 0.9.0. The Airfield
+bake and its reader are unchanged since that release. `d3fbfa5d` added native
+review of contact regions, and `d6038e00` extended the triggers for that review.
+Those changes make pending and failed searches more consequential.
+`17ce88f6` made a requested stop apply the copied brake, while `40d1b5ef`
+introduced traversal-aware near-target alignment and consumption of pending
+A* prefixes. Isolating the driver against 32 fixed-target samples from the
+new report makes the current driver reach all 32; older drivers do worse in
+the same controlled physics fixture. This does not reconstruct old native
+gameplay; it supports preserving the effective alignment repair while fixing
+the navigation targets.
+
+Two navigation ownership errors are independently reproducible. A private
+route-join retry still used the old spawn anchor after its vehicle had moved.
+Consuming the retry's early prefix therefore sent the vehicle back toward
+spawn: a hull at z=20 targeting z=100 received z=4 after two search steps from
+the old z=0 anchor. Private jobs now start from the actual vehicle position
+when created or retried; existing usable paths are still reused. Shared route
+geometry retains its authored anchor, but its unfinished exploration is not a
+vehicle movement command. A private exploration tree that has not reached a
+moving hull must likewise not pull it back to the tree's trailing endpoint.
+
+The second error treated each new pending prefix as a new progress episode.
+Ordinary failed-search retries could occur before the existing twelve-second
+no-progress interval, repeatedly renewing it without actual departure. A
+closed-room fixture remained stationary for sixty seconds through seven
+failed attempts with no macro recovery. Temporary prefix/fallback progress
+now belongs to the strategic request and measures actual entry into new
+navigation cells. Repeated exploration of the already visited local area
+cannot renew the interval or keep issuing a local turn loop; a newly proved
+exit or a completed path can immediately resume travel. Healthy A* work is
+retained rather than canceled by another short escape lease.
+
+A separate real-callback fixture proves that deferred native review retired
+an otherwise complete cached route and queued a new search. Normal destruction
+events and failed-search retries can invalidate native receipts, so this is
+not limited to manually clearing a cache. Unknown review now retains the
+route object and holds its current index/target without creating another job;
+fresh proof resumes that route, while a definite stock-physics rejection
+still retires it. This does not authorize motion through an unproved edge.
+The report lacks per-event deferred-review evidence, so this independent
+defect is not asserted to explain every recorded turn loop.
+
+The closed-loop regression uses the report's three vehicle mobility samples,
+the real adapter/driver and copied physics at five and fifteen control frames
+per second. A fixed U-shaped wall blocks both planning probes and integrated
+hull motion. Three genuinely bounded A* failures precede ordinary search
+capacity; the wall never opens or changes. All six runs with the preceding
+navigation fail to reach the goal within 120 seconds; the repaired navigation
+leaves the mouth and reaches the goal in all six, without crossing the wall.
+The wall and unreported speed limits are controlled fixtures, not a recreation
+of every native Airfield contact.
+
+The new report's two steady windows are about fourteen worker FPS, compared
+with about eight in the preceding report. Different rosters and scenes prevent
+treating that as a controlled benchmark. It does not support a global budget
+starvation explanation: completed searches increase and the pending count
+falls. The remaining native driving and frame-pacing boundary is unchanged.
+
+### September 22 Airfield follow-up: reached slope points and obstacle ownership
+
+Report `20260922-133334-f5eb61b94d18` identifies the installed and bundled
+`colorfulmeans-35688896773-1` payload. It contains one Airfield round and
+854 stall-triggered motion samples. Twenty-five samples record successful
+crushing and twelve record hard contact; none records a support rollback,
+pose rollback or baked motion veto. These samples do not measure the fleet's
+overall stop rate. Multiple vehicles travel hundreds of metres, while several
+others remain local or return after initially leaving.
+
+E25 (25) repeatedly receives a point it has already reached. At the recorded
+position `(-142.690, -13.463, -125.663)`, its next issued point
+`(-142, -13.353, -126)` is only 0.768 metres away. The following baked edge is
+dry and climbs at a grade of about 0.171. The pending-prefix follower still
+applied an unreached-corner alignment check to this consumed point. The
+complete-path follower already handles that arrival correctly. Using its
+adjacent-edge arrival rule for pending prefixes allows the next checked leg;
+unfinished searches must still not grant a shallow-water ford or skip an
+unreached climbing turn.
+
+Panther II (7) and M36 (9) have a separate pattern: repeated failed searches
+and the temporary-loop hold, with the held target equal to the hull position.
+Their requested target and the E25 target remain connected to the recorded
+positions in the actual baked graph, including its existing shoreline
+hazards. Real A* on that graph finds paths within the normal expansion limit
+when no additional native obstruction is injected. A disconnected baked
+island is therefore not the explanation; live obstacle classification matters.
+
+The shared stock-crushability intersection can turn a vehicle's own soft
+obstacle into a navigation wall. Controlled real-callback fixtures reproduce
+both a forward-capable vehicle rejected by its lower reverse cap and a heavier
+vehicle rejected after a lighter vehicle joins the room. The fixture material
+health and speed values are explicit controls, not measurements of an object
+in this report. The report alone does not identify each failed native edge.
+
+Native planning now receives the consuming vehicle's immutable mass and
+directional powered-contact cap. The existing mounted travel-mode cap is
+shared with the local direction probe and final contact gate; actual impact,
+health, scale and destruction still use the existing stock laws. Native edge,
+segment and route receipts carry that capability, while baked topology and
+ground samples remain shared. Resumable A* captures its capability rather than
+reading a mutable current-vehicle field. A lighter teammate cannot invalidate
+the heavier vehicle's permission, and a heavier teammate cannot grant a light
+vehicle permission it lacks. Unidentified surfaces and solid geometry behind
+a crushable object still block travel; deferred proof remains deferred.
+
+The existing room-wide search credits, native recast budget and bounded
+receipt caches still limit work. Distinct kinetic capabilities can require
+additional cold proofs, so these bounds do not establish unchanged native
+search latency or frame rate with a full room. Capability changes also retire
+the affected vehicle's old private work when its new request takes the direct
+path; a new round invalidates the previous world's native receipts even when
+the map and vehicle capabilities are unchanged.
+
+The existing stalled-motion diagnostics retain the last native refusal from
+the actual search query, including its edge, capability, available catalog
+identity/model and classification reason. Recording this evidence performs no
+additional native collision queries. It is needed to distinguish a stock
+kinetic rejection, unidentified backing geometry and unfinished proof in a
+subsequent native report.
+
+Tiger (17) and Lorraine (6) also repeat a recovery direction that final motion
+has rejected as hard. The realised-motion feedback records the failed yaw,
+but the driver's recovery branches can select it again after a longer probe
+reports clear. This is a mismatch between final contact evidence and recovery
+selection; the report does not identify every hard native surface as terrain.
+
+Recovery now consults the existing finite failed-heading memory before
+straight reverse, forward escape and swept angled reverse. A translation
+failure does not itself forbid an in-place pivot, and all existing hull,
+terrain and vehicle checks still apply. A fixed analytic alley reproduces the
+low-surface planner/final-sweep disagreement through the real world-collision,
+runtime feedback, adapter, driver and copied-physics loop. At five and ten
+control frames per second, the old driver stays at its initial position for
+45 seconds and repeats 75 and 146 hard contacts. The repaired driver receives
+one initial hard contact, leaves through the open front and reaches the goal.
+A closed front, expired failure memory and failed angled recovery also have
+regressions. This analytic scene proves the feedback contract, not the exact
+native BSP of the reported Airfield slope.
+
+Final review also reproduced a directional planning mismatch: a normal route
+candidate behind the current hull used the reverse kinetic cap even though
+the driver first pivots and then drives forward. Local probes now receive
+explicit drive intent. Forward candidates retain the forward cap at every
+heading; straight/angled recovery and contact escapes request their actual
+drive direction. Per-decision probe receipts include that direction. The
+real stock-material callback regression accepts the forward route through a
+crushable house and still rejects backing through it when reverse capability
+is insufficient. Three-argument probe failures execute only once.
+
+The reached-waypoint regression uses both recorded E25 stopping poses, the
+actual Airfield A* graph and reported E25 mobility inputs. The old pending
+follower keeps the consumed point; the repaired follower proceeds up the next
+dry leg with actual copied-physics motion. These controlled regressions do
+not establish full-fleet native gameplay or frame-pacing acceptance.
+
+### September 22 Airfield: destructible-free planning and bounded wait recovery
+
+Reports `20260922-153100-624e3253cb0c` and
+`20260922-154804-361a82ba99c6` use build `colorfulmeans-35697098489-1`.
+SU-122-44 id 27 waits at spawn while native rays report ambiguous prop
+identity. The logged clay-stove hits overlap clay-fence boxes in the shipped
+Airfield catalog. SP I C id 29 waits in cell (67, 70), whose baked height is
+absent and hazard is the dry terrain-edge bit. Its stationary yaw converges
+to the distant strategic goal, approximately 160 degrees away from its
+recorded first detour waypoint. The initial powered turn into that position
+is not captured; the logs do prove the later wait/facing conflict.
+
+Following the requested route policy, confirmed original destructible skins
+no longer determine permanent route obstruction using vehicle mass, speed,
+crew or gear. Planning registers exact catalog identities, permits overlapping
+members, and recasts the complete segment with only their original materials
+filtered. Unknown surfaces, indestructible backing walls and solid replacement
+geometry remain visible. Per-vehicle physical crushing, contact admission and
+final motion receipts remain separate. Planning also samples terrain beneath
+confirmed destructible roofs. A single immutable planning-policy key lets all
+vehicles reuse the same static edge proofs without changing the actual hull
+width or the live vehicle collision checks.
+
+A pending route no longer rotates the hull toward a distant face target.
+When local physical blockage or an unsupported baked start establishes a
+reason to recover, a four-second staggered wait may attempt a bounded straight
+backout. The complete rear corridor and nearby vehicles must pass their
+checks. Completion or a blocked rear requests one local replan; cached
+commands cannot repeatedly restart it. Ordinary queued A* work alone does not
+claim a collision. Physical failed-edge evidence survives replanning, while
+other vehicles retain their shared routes and searches.
+
+A missing baked start now always needs a live support, grade and obstacle
+proof before joining a nearby safe cell, regardless of whether a previous
+hard contact requested native review. Neither a coarse snap nor a missing
+height alone grants that motion. These are general planner/driver changes,
+not Airfield coordinate exceptions or difficulty changes.
+
+Tests use the recorded prop geometry and SP I C position together with
+controlled native probe responses. They cover overlapping originals, backing
+walls, replacement geometry, deferred budgets, shared route policy, wait
+heading, rear traffic, bounded recovery and per-vehicle replan ownership.
+Windows native gameplay remains the acceptance boundary for the reported
+initial collision and complete spawn departure.
+
+The crowded-departure regression also exposed two recovery state problems.
+A short navigation wait must preserve the driver's accumulated progress and
+held avoidance/recovery state rather than repeatedly restarting them. A hull
+boxed in by vehicles ahead and behind must publish both proved blockers;
+otherwise the finite friendly-reposition system can request movement only
+from a rear vehicle whose own rear is occupied. The same existing bounded,
+collision-checked reposition mechanism handles the added forward request.
+The departure monitor now separates ordinary recovery episodes by their
+existing recovery count. Consecutive blocked commands can straddle two
+independent manoeuvres; combining them incorrectly reports one oversized
+lease. The two-second per-episode bound and the independent sixty-second
+whole-roster departure and original-slot occupancy assertions remain.
+
+### September 22 mission and terrain follow-up
+
+Reports `20260922-154331-fce52b57beab` and
+`20260922-160746-63a9c9a7de48` identify builds
+`colorfulmeans-35520243588-1` (0.9.2) and
+`colorfulmeans-35611837404-1` (0.9.3), respectively. The latter records HT12's
+unsupported `compareWithMaxHealth` condition. LT12's hidden assistance and
+loadout evidence, and the maximum-health comparisons needed by HT12 and TD8,
+are already implemented in `3e4f3052`. The new audit checks the actual #1513
+definitions for all four operations instead of treating the old report as a
+failure of every later change.
+
+TD7 and TD9 do expose missing current conditions. TD7's `whileFullHealth`
+requires hull HP at the kill, not remaining HP at battle end or a damage
+total. Mission-event version 5 freezes that state for each enemy kill. Both
+halves of a ram and all effects of one shell settle before the health fact is
+finalized, so self-splash and reciprocal ram damage cannot depend on target
+iteration order. Fire kills use health when the victim dies. Old or incomplete
+event histories do not acquire guessed full-health evidence.
+
+TD9's `inBattleMaxPiercingSeries` requires consecutive admitted shots. The
+server assigns per-shooter ordinals at launch and merges only verified
+penetration intervals. Delayed impacts cannot turn arrival order into a false
+series; misses, bounces and expired projectiles leave gaps. Direct penetration
+of a living enemy qualifies, while splash, friendly hits and wrecks do not.
+The maximum is transported with the existing durable battle receipt; missing
+legacy evidence remains missing.
+
+The Live Oaks report also identifies a player movement problem independent
+of Bot difficulty. From 16:07:01 through 16:07:28 the WT E 100 remains around
+`(-396.713, 1.898, 356.690)`, with forward and reverse attempts stopped by
+different faces of building item 102 in chunk 31618, material 111. Ground is
+flat and the reported support veto is false. The existing diagonal slide
+path sweeps four corner trajectories and a centre lane; a building corner
+can enter the middle of a long hull side without crossing those rays.
+Destination perimeter lanes close that reproducible gap, using translated
+body pose and the existing terrain, upper-wall and destructible rules.
+
+An already intersecting near-vertical wall may release only when the actual
+translation reduces penetration, the hull centre remains on the wall's
+outside, and the returned point lies in the original occupied body. Recasting
+continues through every later surface. This does not grant inward motion,
+an exit through the far side of a building, or permission to ignore a second
+wall. The extra perimeter queries are limited to nonzero cross-heading
+translations. They do not turn the sparse native-ray model into a complete
+continuous volume sweep for arbitrary thin features.
+
+The ordinary Bot support path has a separate gradual-descent defect. A
+controlled 3-metre-wide chassis crossing a 1.4-metre-wide, 1-metre-deep V
+trench can descend about 0.143 metres each step. Every step stays below the
+old 0.8-metre support-check trigger, so seven steps sink the centre almost a
+metre while both track supports remain at the bank height. This reproduces
+the defect on the pre-change HEAD; it is not a reconstruction of every native
+triangle in the Stalingrad screenshot.
+
+Paired support is now checked after one centimetre of accumulated centre
+descent. Accumulation prevents smaller high-frame-rate steps bypassing the
+same check. The existing admissible support-height range still excludes a
+nearby roof and a one-sided cliff. Symmetric endpoints support the centre at
+their mean height rather than the higher endpoint; the result can arrest a
+drop but cannot lift a tank to a different surface. Level ground retains one
+column query, and a triggered descent uses at most five. The change does not
+enable the full spring solver for every Bot or teleport a deeply sunk hull.
+
+Focused regressions cover actual mission definitions and durable settlement,
+shot order and interrupted series, wall corners and outward-only release,
+and longitudinal/lateral shallow trenches at 15, 24 and 60 Hz. The native
+Live Oaks vehicle is already wedged against two faces: this prevention and
+conservative release fix does not prove that exact saved pose can leave.
+Windows gameplay still has to establish that new entries into these reported
+locations remain clear and that the full fleet's native frame rate is usable.
+
+### September 27 priority follow-up on the 0.9.5 release line
+
+The requested downhill policy is a maximum of 110% of the descriptor's
+directional speed limit. The existing ground overspeed limiter now uses
+1.10 instead of 1.35; propulsion, airborne gravity and reverse-limit selection
+keep their existing owners. A 45 km/h forward limit therefore caps at
+49.5 km/h. This is an explicit product choice, not a retail coefficient claim.
+
+Cursor focus previously had two writers: the current-pose ray in the offline
+runtime and the engine picker enabled by native `Vehicle.targetCaps`. Report
+`20260927-151657` contains differing native TARGETING and offline TARGET
+vehicle IDs. In #1513, `PlayerAvatar.vehicle_onEnterWorld` enables target caps;
+`targetFocus` then independently calls `drawEdge` and `setTargetInFocus`.
+Offline vehicle entry, visual startup, visibility updates and model relinks
+now keep those caps empty. The offline ray is the sole cursor owner. It
+requires an actual component hit before scenery, retained wreck geometry or
+a landed turret; a candidate cone alone cannot acquire an outline. A ray
+through empty space within a wreck's bounding box may reach an exposed part
+of the live vehicle. Once acquired, the stock Highlighter draws the full
+outline and still owns removal during model replacement and teardown.
+
+The same acquisition and removal publish `avatar.target` and
+`BattleFeedbackAdaptor.setTargetInFocus(vehicleID, isInFocus)`. The exact
+`TargetDistancePlugin` consumes that feedback to start/stop its distance
+tracking. This addresses the competing target source behind the distance
+report as well as the outline. It does not establish native rendering or
+distance acceptance without a Windows battle.
+
+The offers page now checks the live Scaleform component registration rather
+than treating its saved rollback setting as proof that the replacement is
+still installed. Stock lobby package registration after a battle can replace
+that controller. Rebinding restores the offers controller while preserving
+one original setting for reversible cleanup; tests repeat this across three
+lobby registrations.
+
+Direct HE impacts choose `armorHit` when actual HP damage is positive and
+`armorResisted` otherwise. Damaging direct impacts also play the existing
+bound explosion path. The exact #1513 `shot_effects.xml` binds HE `armorHit`
+to its HE impact particles and penetration-impact sound, and `armorResisted`
+to the non-penetration impact sound. Physical shot results and crew-voice
+feedback remain unchanged. Tests separately assert impact effects and the
+unchanged voice flags, including damaging non-penetration and zero-damage
+direct hits.
+
+The default unlocked save was located in the launcher's default slot. The
+September 27 visible-client log records `OtherModuleInstaller` rejecting
+`BattleBooster` 27387 in `ModuleTypeValidator` before an Account request can
+be sent. Exact #1513 `getInstallerProcessor` does not branch on GUI item type
+`BATTLE_BOOSTER`; both direct consumers in `items_actions.actions` import
+that factory by name. The narrow offline wrapper patches both references
+and routes only that type through
+`VehicleBattleBoosterLayoutProcessor(vehicle, booster, layout, skipConfirm)`.
+`EquipmentLayoutHelper(vehicle, None, (cd, 1))` preserves regular consumables;
+`(0, 0)` and a `None` booster remove the directive through the same native
+four-slot `Inventory.setAndFillLayouts` request. Other module fitting and
+the native confirmation/response path are retained. Cleanup restores both
+factory references and is idempotent.
+
+New unlocked saves seed 1,000,000 bonds in both the client and launcher.
+Career saves still seed zero. Existing balances, including missing legacy
+bond fields (zero), remain intact; depleted saves are not silently refilled.
+Regression coverage verifies directive removal at zero bonds and reinstalling
+existing inventory without another charge.
+
+Validation on this change includes the battle runtime, physics, garage,
+offline services UI, economy, compatibility and launcher save-ledger suites.
+All 146 client sources compile with CPython 2.7.18. The exact installed CH
+#1513 ABI audit passes, including the new fitting/layout/focus signatures.
+The separate gameplay-followup suite has seven failures and two errors in
+both this change and an unmodified archive of its release-branch parent;
+these are existing Bot aiming/target-retention failures, not a passing CI
+claim. Native Windows gameplay, effects audio, repeated battle-to-lobby
+transitions and real directive fitting still need acceptance.
+
+Read-only checks requested alongside this batch made no mission changes.
+The four exact LT-14 definitions require solo radio assistance of
+1500/2500/5000/6000, with survival for honours; the current evaluator passes
+at those thresholds and awards main-only completion after death. This proves
+the condition path with supplied receipts, not a reported player's actual
+spotting attribution or installed version. Per the user's scope correction,
+all 0.8.4 reports are invalid evidence for this task. Report `20260927-024817`
+is excluded; no current-version ping conclusion or change is derived from it.
+
+### September 28 roster, route editor, projectile and spotting follow-up
+
+The existing retired-vehicle list was not consumed by the Bot lineup paths.
+The launcher profile normalizer, server catalog and client automatic roster
+now exclude Aufkl. Panther, WT E 100, SU-122-54, Object 263B and Object 430B.
+Exact slot overrides drop only their retired vehicle selection, retaining
+their crew/difficulty choice. Human garage eligibility remains separate and
+still accepts these stock-loadable vehicles. A retired human vehicle cannot
+become the substitute for an unloadable Bot descriptor.
+
+Accelerated crew XP now selects the lowest-total-XP trainable crew member,
+with vehicle-slot order breaking ties. Exact #1513
+`Tankman.getSkillsToLearn` combines common skills and the crew member's
+combined vehicle roles. `TankmanDescr.skillLevel` returns None for an
+unlearned skill and the level for a learned skill. Fully trained members are
+excluded from the additional accelerated award; if all members are complete,
+vehicle XP is retained. Ordinary crew XP and the existing Mentor calculation
+are unchanged. The new exact calls are included in the ABI audit.
+
+SPG rear placement permutes the existing fifteen validated spawn poses on
+each team. Rear depth is measured away from the opposing spawn centroid,
+independent of slot numbering. Human and Bot SPGs share one complete roster
+mapping; displaced vehicles receive the vacated slots. No new coordinates,
+spawn spacing, steering or collision coefficients are introduced. Tests cover
+three SPGs on both sides, reversed slot numbering, human/Bot parity and reset
+between battles. Congestion on Ensk, Lakeville and Mitterrand still requires
+native departure acceptance.
+
+The route editor defaults to heavy-tank routes and can display one class or
+all classes. Switching the filter clears the selection, not saved routes.
+SPGs can receive authored routes as well as parking zones. Double-clicking a
+waypoint sets wait seconds: zero passes through, a positive value starts at
+physical arrival, and -1 holds indefinitely. The optional fourth point field
+stays in the canonical tactics profile; the existing manifest retains its
+three-field geometry. The server prevents forward-corridor shortcuts from
+skipping a parking instruction, preserves the opening authored waypoint and
+advances after its wait. Scripted movement overrides tactical movement while
+retaining aim/fire decisions. The worker's initial-SPG-position adapter only
+handles its ordinary artillery modes, so it does not restore an old parking
+goal over an authored route. Actual Tk tests cover filtering, persistence and
+condition editing; server-order tests cover arrival, timed departure,
+permanent hold and SPG movement.
+
+Bot direct and SPG physical launch origins previously used HP_gunFire, which
+may lie beyond a wall while the hull stays outside. Both now use the same
+descriptor gun-pivot transform as player shot geometry. SPG planning, final
+arc proof and the frozen launch receipt share that origin. Muzzle cosmetics
+retain their native node, and submerged-barrel and started-entity guards
+remain. A regression places the cosmetic muzzle beyond a wall and verifies
+that the first physical projectile chord stops at the wall before its target.
+
+Exact `items/vehicles.pyc:VehicleDescriptor.__updateAttributes` constructs
+`visibilityCheckPoints`, `observerPosOnChassis` and `observerPosOnTurret`
+only in its IS_CELLAPP branch. Reading that field on a client descriptor
+therefore fell back to one fixed-height ray even after six-point support was
+introduced. The adapter now reproduces the original six-point construction
+from the loaded hull/turret collision bounding boxes. The fixed chassis port
+is above the hull centre; the second port follows the turret's gun pivot.
+Rear-mounted turrets do not move the first port to the back. Target front,
+rear, sides, top and gun-pivot checkpoints share the original hull/turret
+transforms. Tests use client-shaped descriptors without the cell-only field,
+including a rear turret, exposed ridge target and client/worker parity. The
+existing phased visible-client check is bounded by three targets times six
+blocked rays per update; native full-room query cost remains unmeasured.
+
+Outstanding items are not claimed fixed by this change. Native BattleReplay
+recording still has no offline lifecycle/stream integration. The human fire
+intent path still commits one shell per intent despite the existing Bot burst
+clock. Map route/collision work and the remaining physical-contact reports
+need separate implementation and native evidence. In particular, Ghost
+Town's baked route endpoints are (-2, +/-350), while its exact WTCP standard
+capture centres and `objective_bases` agree at approximately (290.979,
+-100.311) and (-291.095, 100.010); this discrepancy is retained as a route
+investigation, not silently resolved by moving native capture circles.
+Report 232418 is a valid 0.9.5 Himmelsdorf session. Report 215741 is also
+0.9.5, but contains startup logs without the reported collision or a server
+log, so it cannot calibrate mass transfer or ram damage. No physics formula,
+LT-14 condition or ping behavior is changed here.
+
+### September 28 Prague, bridge gravity and player burst follow-up
+
+Reports 021030 and 021934 both identify `test-20260928-cabd5a4` on the
+supported #1513 client. Prague records repeated hard movement refusals near
+(55, 13, 100), including a stopped planner whose movement intent remains
+active. Previously those refusals could not retire the baked-clear corridor:
+the 4 m graph remained authoritative for the next search and shortcut.
+Actual hard contacts and blocked planner collision samples now request native
+terrain and hull-width checks in a bounded local region. A* edges and path
+smoothing share that check; affected paths and in-flight searches are retired.
+Repeated reports reuse the marked region and measured segment results.
+Traffic holds and unavailable probes do not invent static obstacles. The
+regression proves a fresh route around a measured wall; the supplied Prague
+coordinates still need an in-client departure check.
+
+The bridge report gives an unsupported body at y=0.5155965 and a forward
+upper-hull hit at y=0.8602448, with an almost exactly upward normal. Projecting
+the full velocity onto that forward contact erased downward speed each frame.
+Horizontal sweeps now constrain only horizontal velocity; suspension remains
+the owner of vertical support and landing. Float32 noise in an upward normal
+cannot create a horizontal collision normal. Repeated 30/120 Hz fixture
+contacts preserve gravity without phantom fall damage. The Bot legacy path
+also uses reachable support instead of pulling a hull down to a nearby lower
+floor, and consumes the actual airborne wall witness for impact HP before
+alternative-direction probes replace it. This changes no ram coefficient,
+mass transfer formula or fall-damage coefficient.
+
+One human trigger now schedules the loaded descriptor burst through the
+existing worker fire-intent channel. Every physical round still needs its
+own canonical acknowledgement before consuming ammunition. The next round
+uses the current native gun ray; duplicate clicks cannot start overlapping
+groups. Partial clips, late acknowledgements, gun destruction, queued reloads
+and round generation changes are covered. Exact `Vehicle.showShooting`
+requires the Avatar's initial shot-wait token. The first acknowledgement
+starts one native effect group for the full burst; later acknowledgements do
+not replay that group. Cancellation stops its remaining effects. Existing
+`ShowShooting.__doShot` owns the native afterShotInBurst/afterShot transition.
+Physical projectiles remain owned by the hidden worker.
+
+Capture staging incorrectly required proximity to the penultimate waypoint
+even after the route cursor passed it. Losing enemy contact then left a Bot
+at the route endpoint instead of handing over to the exact capture circle.
+Passing that waypoint now satisfies staging. This addresses the confirmed
+route-to-circle handover defect relevant to Ghost Town without moving bases
+or bypassing authored waypoint waits.
+
+Validation: 1,011 runtime/burst/gravity/contact-review checks and 318 server-AI,
+capture, tank-contact, world-collision and vehicle-physics checks pass. The
+pinned client inspection and Python 2.7 ABI audit pass. Broader Bot/navigation
+suites retain pre-existing failures; their failure identities are compared
+with the previous source, not represented as a green full suite. Native
+rendering, Prague doorway navigation, bridge falls and one-click bursts still
+require #1513 gameplay acceptance.
+
+Remaining requested work is explicit: playable offline replay recording has
+no native recorded-stream lifecycle yet; fall module/crew injuries have no
+implemented canonical rule. The available client contracts do not establish
+the official server's injury-selection law. The other reported map air walls,
+repeated wreck pushing and light/heavy contact observations are not claimed
+fixed by these changes. Report 232418's final Python exception is tutorial
+teardown, not proof of an air-wall cause; 215741 contains no battle contact
+trace. LT-14's reviewed conditions remain unchanged.
+
+### September 28 intermittent KV-5 contact and bridge support follow-up
+
+The centre-of-mass integration and its validation conclusion in this section
+are superseded by report 040026 below. The ram-contact changes remain active.
+
+Reports 031859 and 032344 both identify `test-20260928-e249724` and the
+supported Chinese #1513 client. The user clarified that the missing damage
+is on enemies hit by KV-5, including T26E5; some contacts hurt them and others
+do not. The first report records an unsupported proof at 03:18:05 against
+Bot 20, despite separately finding 180 mm and 80 mm plates, while later
+contacts in the same battle successfully damage enemies. This is not evidence
+for increasing the global ram coefficient.
+
+The contact sampler now searches the intersection of both mounted hull height
+bounds in addition to the wider track-to-roof contact envelope. A thin shared
+hull band can lie between every old sample. Bounds only place rays: both
+native hit testers must still return structural plates on the same ray, and
+the receipt stays inside the shared contact envelope. Different heights are
+never combined and no primary/minimum armour fallback is introduced. A
+terminally unproved contact no longer consumes the overlap episode; a later
+contact can submit its own current pose and pre-separation velocity. The
+presentation timestamp is frozen with the matrices, so a next-frame retry
+cannot attach old geometry to a newer Bot snapshot. Tilted contact broad phase
+uses both bodies' pitch and roll. Enemy RAM scaling remains 0.25.
+
+Report 032344 shows one supported track column at bridge height 1.109309,
+the other unsupported, and a rolled body near (4.94, 0.56, 111.79). This differs
+from the earlier unsupported-body/downward-speed cancellation. Inspection
+found the reduced suspension solving torque about the ground-level model
+origin. Exact `physics_shared.initVehiclePhysicsClient` instead places its
+centre of mass at mounted hull midpoint plus the hull-height-scaled power
+curve. The native curve uses enginePower/weight knots 9.5/13/21 and shifts
+-0.15/-0.2/-0.3. These constants, function signatures and consumers are now
+audited against the pinned PYC. The suspension integrates translated contact
+points and heave about that centre, then returns the model-origin pose and
+velocity. Cached points are refreshed when tipping adds rigid hull/turret
+contacts. The reduced three-axis model still is not native six-axis physics;
+this corrects a provable torque-origin defect but does not establish that all
+reported bridge sticking is resolved in game.
+
+Tests cover a narrow shared hull band, failed proof retirement, immutable
+contact time, tilted supported mass tipping, no gravity-induced rotation in
+free fall, curve control points and rigid-contact cache refresh. Existing
+ballistic checks now measure the physical centre rather than a rotating model
+origin; slope checks allow the spring-travel-bounded load transfer instead of
+requiring a perfectly uncompressed hull attitude. 1,335 focused runtime,
+suspension, contact, server-AI, capture and collision checks pass. The broader
+Bot run has the same 26 pre-existing failures and 14 errors after updating
+the two centre-of-mass expectations and rerunning those checks. All 146 client
+sources compile under CPython 2.7.18; exact-client inspection and ABI audit
+pass. Actual KV-5/T26E5 contact and bridge departure still need #1513 playtesting.
+
+The requested investigations have explicit limits. Falling still changes
+canonical vehicle HP without a module/crew injury operation. Searching the
+exact client PYC finds projectile/explosion saving throws, not an official
+falling injury-selection/damage law, so no invented probability or HP ratio
+is installed. Offline replay also remains unimplemented: stock BattleReplay
+auto-recording belongs to Account/native replay-controller lifecycle, whereas
+this port's offline entity and LAN event stream has no recording/playback
+adapter. Enabling the stock option alone does not supply that missing path.
+No empty or non-playable file is presented as a replay fix.
+
+The Stratford report 173316 ends on `34_redshire`, on the older 0.9.5 build
+`colorfulmeans-36137978481-1`. Its final witnesses include (125.94767, 4.58314,
+-144.74382), material 73/flags 0/item 8/chunk 32893, and a later material 73/
+flags 131/item 203 contact. The first slot is excluded/quarantined after a
+layout repair; nearby destroyed fences do not contain the witness in their
+recorded component bounds. The evidence does not establish a safe owner or
+filter extent. No blanket material, chunk or excluded-slot collision bypass
+is added, and this map is not claimed fixed by this patch.
+
+### September 28 bridge regression from report 040026
+
+Report `20260928-040026-f99b63f0ab92` confirms `test-20260928-041eab2`
+in launcher, visible client, hidden worker and server. Its battle is KV-5 on
+`37_caucasus`; the user observes repeated tipping without leaving the bridge.
+There is no continuous pose/support record for that idle bridge interval:
+the previous diagnostics required drive throttle or a blocked steering input.
+The report must not be interpreted as successful bridge acceptance. The
+unrelated tutorial weakref exception occurs on exit, after this gameplay.
+
+The preceding patch translated contact points, height and vertical velocity
+to a raised mass centre, but both motion adapters still retained model-origin
+X/Z. Rotation therefore changed the horizontal centre position without the
+corresponding translation/velocity/world-contact integration. Correct native
+mass-centre constants do not validate that incomplete reduced solver. Remove
+the translation wrapper and restore the coherent model-origin suspension for
+both player and Bot paths, including the previous ballistic and slope test
+contracts. Keep the exact-client ABI evidence as research, not as an active
+mass-centre integration claim. No extra torque, angular clamp or forced fall
+has been introduced. KV-5 armour sampling, repeat-contact retries, timestamp
+freezing and the 0.25 RAM coefficient are unchanged.
+
+A new finite-deck test uses the real player ground-sampling and integration
+adapter, real missing columns, an initially non-penetrating tipped body and
+zero input/angular velocity. Eight mirrored cases at 25/60 Hz run for ten
+seconds. All eight fail on 041eab2: the body repeatedly rises and rocks above
+the deck. After removing the incomplete transform, they fall or settle and
+the final two-second motion converges. This is a synthetic regression, not a
+replay of the reported bridge mesh. It does not prove that every older
+side-support or ledge-hanging defect is fixed.
+
+Idle tipping now emits pose, angular rates, support plane and existing wheel
+probe evidence at the established two-second diagnostic cadence. It reuses
+the rigid-contact tipping threshold and cached samples without additional
+native collision queries. Upright idle vehicles remain silent. Coverage
+checks pitch and roll, the cadence, and absence of extra world probes.
+
+Validation: 1,334 focused runtime, bridge, suspension, ram-contact, Bot slope
+and cliff, server-AI, capture and collision checks pass. All 146 client files
+compile with CPython 2.7.18; pinned #1513 inspection and ABI audit pass. The
+existing unrelated broader-suite failures are not represented as green.
+Actual bridge departure and absence of repeated flipping on the exact client
+remain unverified until Windows gameplay acceptance. This patch withdraws
+the regressing mass-centre change; it is not a claim of native six-axis parity
+or completion of the original bridge-sticking report.
+
+### September 28 bridge hang and reciprocal separation (044826)
+
+The positional-checkpoint conclusion below was contradicted by report
+115952 and is superseded by the following section. Its synthetic tests
+assumed the worker accepted every requested displacement.
+
+Report `20260928-044826-c53da28eff15` confirms `test-20260928-7bc3842`
+on #1513. At the `37_caucasus` bridge, KV-5 repeatedly has one missing track
+column, no fitted support plane, roll around 0.55-0.65 and zero angular
+velocity. The reduced solver's sleep test ignored rigid-contact impulses and
+allowed a one-sided body to sleep. Its ground-memory helper also continued
+supplying old deck heights without a current plane. Those retained columns
+could alternately arrest the falling body as it rotated outside the deck.
+
+Sleep now requires an actual contact polygon surrounding the reduced body's
+origin and includes hard-projection impulses in the acceleration test.
+Missing columns are retained only with a proved terrain gradient; a known
+flat gradient still covers bounded query holes. Both adapters use these shared
+laws. No raised-centre transform, artificial tipping torque or forced fall
+timer is added. The eight earlier overturn regressions still pass. Twenty-four
+additional mirrored finite-edge cases at 25/60/100/144 Hz now fall below the
+deck; twenty-two failed on the parent. These use synthetic geometry through
+the player adapter, not a reconstruction of the native bridge mesh.
+
+The report already carries correct masses (KV-5 100575 kg, the early light
+contact 31370 kg, HWK-12 12495 kg). There are two independent physical response
+defects. Visible contact summed independently solved impulses for multiple
+neighbours, unlike the worker's sequential solver. It now uses that same
+solver restricted to player-owned pairs, preserving one reciprocal momentum
+budget; Bot/Bot pairs remain worker-owned.
+
+More importantly, the contact ledger transported momentum but not reciprocal
+positional separation. Between worker updates, each render frame moved the
+player again against the unchanged remote pose. A one-metre overlap against
+31370 kg should move the 100575-kg player by 0.23537 m after the existing slop.
+Across a 200-ms update gap, the parent instead moved it 0.71475/0.94414/0.98924 m
+at 25/60/144 Hz. The new tests retain the mass share at every rate, including
+the 12495-kg peer and an ACK arriving before render interpolation catches up.
+
+The cumulative checkpoint now carries `[actor, sequence, momentumX,
+momentumZ, separationX, separationZ]`. Server relay and compact Bot encoding
+preserve both totals; worker ACKs travel with the canonical pose/velocity.
+Unacknowledged separation shifts only the physical prediction. Historical
+presented poses still supply armour/HP evidence, while physical contact uses
+the coherent current pose plus pending response. The worker applies unseen
+separation through its existing world-collision guard once, and does not
+separately solve that human pair again. Retries and coalescing cannot replay
+it; a blocked separation remains blocked. Momentum and positional correction
+are separate quantities, so separation never creates ram damage or velocity.
+The launcher must install the matching client/server/worker bundle together.
+
+Validation: 1,442 focused tests run, one environment-dependent test skipped,
+with no failures. The focused selection excludes six unchanged navigation
+failures reproduced on the parent; the existing hydraulic Bot slope failure
+was also observed and is outside this selection. New coverage includes
+reciprocal separation under snapshot delay, codec/queue/relay round trips,
+worker world blockers, retry/coalescing, crowd momentum, and installed mass
+plus engine-power inputs through actual worker receipt application. All 146
+client files compile under CPython 2.7.18; #1513 inspection and ABI audit pass.
+Actual bridge geometry, KV-5/light-tank pushing feel and Windows timing still
+require gameplay acceptance; automated results do not establish retail parity.
+
+### September 28 occupied-space regression (115952)
+
+Report `20260928-115952-c7d54bb27c55` consistently identifies
+`test-20260928-50c1e6a` across launcher, server and both clients. The first
+`37_caucasus` round uses KV-5, 100575 kg. The reported player/Bot/wreck
+penetration contradicts the previous positional-ledger acceptance claim.
+Logs include separation-only worker checkpoints increasing while the
+transferred velocity is zero; they do not prove that the requested space
+was cleared. Three-body contact and native obstruction were absent from
+the earlier delayed-pose regression.
+
+The visible adapter previously added all unacknowledged positional requests
+to a canonical Bot pose, even while its renderer still displayed the old
+hull. The worker could reject those requests and acknowledge them anyway.
+Its contact displacement used planning rays rather than the injected native
+hull-motion resolver, and checked no intervening vehicles. Finally, current
+human checkpoints disabled the complete worker pair instead of only the
+already-delivered impulse.
+
+Physical momentum still uses descriptor mass, engine-derived drive velocity,
+track hold, and the cumulative receipt/ACK path. Position is constrained
+separately: the remote body occupies its presented/accepted pose until its
+owner moves it. The visible client sends no positional requests, and the
+worker consumes momentum without teleporting for the final two retained
+wire fields. A current player remains a positional obstacle on the worker;
+the checkpoint disables only duplicate impulse application. No second
+writer of Bot presentation or authority is introduced.
+
+A four-axis swept OBB interval test now bounds drive, residual shove and
+separation travel against other hulls, including wrecks. It permits escape
+from existing overlap and tangential travel, uses the existing one-centimetre
+contact slop, and cannot skip a vehicle merely because its endpoint is clear.
+Both integrators retain incoming velocity for the mass-weighted impact solve.
+Worker contact motion also calls the existing passive native hull resolver
+with the actual descriptor, hull attitude, movement direction and exact
+distance, without active-drive crush. Existing world, detached-turret and
+terrain guards remain in place. Bounded diagnostics record requested and
+accepted contact moves and whether native geometry rejected them.
+
+Four regression scenarios reproduce nine failing cases on the old runtime:
+unaccepted separation at two mass ratios and three render rates, a wreck
+crossing another vehicle, native obstruction missed by planning rays, and a
+live player omitted from worker separation. They pass after the change.
+Additional coverage checks one second of player driving into live/wreck
+bodies at 25/60/144 Hz, opposing drive endpoints, repeated wreck/Bot pushes
+against a wall, oblique/long sweeps, vertical separation, escape directions,
+and unchanged reciprocal mass-weighted momentum.
+
+Bridge evidence is improved but does not establish retail parity. At
+11:51:36 the native contact is a real vertical side face (normal Y=0), and
+by 11:51:38 the player is airborne at Y=-4.234 with vertical speed -8.654.
+At 11:57:47 the one-sided support is still rotating (roll velocity 1.24767),
+and by 11:57:49 the vehicle is airborne at Y=-6.787 with vertical speed
+-12.642. The samples show departure rather than indefinite attachment.
+Two-second diagnostics cannot determine whether the brief visible side
+contact has the exact retail duration. This follow-up does not change
+suspension, gravity, support retention or tipping coefficients.
+
+Validation runs 1,464 focused checks with one environment-dependent skip
+and no failures, excluding the same six previously reproduced navigation
+failures. The complete 528-test Bot module remains red (26 failures and
+14 errors); the existing gameplay gate remains at seven failures and two
+errors. Full-suite success is not claimed. All 146 client files compile
+under CPython 2.7.18, and the exact installed #1513 inspection and ABI audit
+pass. Actual crowded KV-5 pushing, native map obstruction and presentation
+timing remain Windows gameplay acceptance boundaries for the test package.
+
+### September 28 first-impact chassis-corner armour (131321)
+
+Report `20260928-131321-61e174bddd87` identifies `test-20260928-79cafb7`
+in all roles. In the first `37_caucasus` round the 100575-kg KV-5 transfers
+momentum to the 23496-kg enemy M41 Bulldog at 13:04:55, with incoming
+horizontal velocity `(9.4165, -5.8926)`. No RAM HP receipt accompanies it.
+The visible client reports an unsupported contact while independently seeing
+180-mm and 31.8-mm plates. The first accepted ram is at 13:05:06.830 and
+reaches the worker/server at 13:05:07. The earlier spawn contacts are friendly
+and correctly have no ram HP damage. The old failure message did not separate
+a missing historical revision from a missing same-ray plate pair, so it alone
+cannot prove which condition rejected that exact frame.
+
+The exact installed #1513 `Hull.primitives_processed` meshes and packed XML
+mounts reproduce a geometry defect at the reported contact location. Sweeping
+the solid chassis envelopes to their existing 0.01-m slop gives a very narrow
+corner patch. Across M41 yaw samples 0.414683, 0.44 and 0.4719746 (bracketing
+the nearby logged target/actual attitudes), the old normal-only pair search
+finds KV-5 `armor_3` and M41 `armor_2` independently but no common sample. A
+contact-to-interior query recovers those structural materials at the same
+point and height. These are offline triangle intersections with captured
+nearby poses, not a native replay of the missing exact frame.
+
+Both visible receipts and worker-owned armour queries now finish the entire
+original contact-normal search first. Only if it finds no pair do they query
+missing plates from the same contact sample toward each body's centre. Each
+existing native hit tester still supplies the first positive structural
+material, with its ray terminating at the centre plane. Missing geometry,
+separated height bands and far-side queries fail closed; no primary/thinnest
+armour value is substituted. The original contact normal, incoming velocity,
+historical timestamp, receipt identity and worker HP authority are unchanged.
+This geometric contact-envelope adapter is not a claim about the official
+server's unpublished ram material-selection implementation.
+
+The correction preserves solid hull/wreck sweeps, actual mass response,
+enemy RAM scale 0.25, friendly damage disablement and bridge suspension.
+Bounded failure diagnostics now distinguish history, normal and geometry
+and include whether a pair was found, contact point and historical identity.
+
+Validation: both new first-contact/receipt regressions fail on the parent's
+unchanged pair search and pass here. Six new tests use finite structural-box
+ray intersections to cover corner plates, centre-plane termination, immutable
+pre-impact speed/normal, no duplicate receipt, original-pair priority,
+disjoint heights and missing geometry. All 1,470 selected checks pass with
+one environment-dependent skip, excluding the same six previously reproduced
+navigation failures. All 146 client files compile under CPython 2.7.18; exact
+#1513 inspection and ABI audit pass. Existing full-suite failures are not
+claimed fixed. Actual Windows KV-5 first-impact HP/timing still requires the
+user's gameplay acceptance of the matching test package.
+
+### September 28 repeat wreck pushing (134227)
+
+Report `20260928-134227-c7b301f7839c` runs `test-20260928-faedc54` in
+all roles. KV-5 remains 100575 kg and M41 Bulldog remains 23496 kg. The
+first enemy contact at 13:40:59 produces 382 RAM damage; M41 dies on the
+next impact at 13:41:07. Later visible contact diagnostics still assign
+that wreck `(3.5360, -5.5498)` horizontal velocity at 13:41:35, despite the
+reported stationary obstruction. This is not a lost-mass conversion.
+
+`SnapshotSync._upsert` emitted the first dead state, then accepted only pose
+targets for subsequent wreck snapshots. Its render chase therefore moved
+the corpse while the visible battle record retained the death-frame
+`push_x`, `push_z` and `contact_push_acks`. A visible non-authority's Bot
+runtime has no simulated Bot states, so `_contact_tanks` reads exactly that
+stale record. Spent impulses then remain pending and stopped wrecks appear
+to keep moving away, suppressing later reciprocal contact impulses.
+
+The dead-state branch now emits a state-only update when the canonical
+state changes. Velocity and acknowledgements advance together, including
+an acknowledgement at an unchanged position when geometry rejected motion.
+The render chase remains the only displayed-pose writer. Identical settled
+states emit nothing, nested ledgers are copied for comparison, destruction
+is not reissued, and snapshot sequence/round fences remain unchanged. The
+same state transport covers retained Bot and human corpses; it does not
+assign a new pose authority to human wrecks or change their existing
+immovable-owner policy. The reported Bot corpse retains original descriptor
+mass, existing track resistance, world guards and the worker integrator.
+
+Three new snapshot tests and a visible-to-worker repeated-shove test produce
+five failures on the unchanged parent. All pass after the fix. The integrated
+case sends three consecutive shove/settle/ack cycles for 23496-kg and
+100575-kg wrecks, verifies original mass, repeatable displacement, stopped
+velocity, one-time momentum consumption and no RAM HP on corpses. A lighter
+wreck travels farther under the same incoming KV-5 speed. Existing heavy,
+equal-mass, medium and light engine/mass pushing checks also pass.
+
+Validation runs 1,471 focused checks plus 42 snapshot/mass checks, one
+environment-dependent skip and no failures. The same six previously
+reproduced navigation failures remain excluded. All 146 client files
+compile under CPython 2.7.18. The correction adds no native API or physical
+coefficient; actual Windows repeat pushing remains the gameplay acceptance
+boundary for the test package.
+
+### September 28 passive wreck dynamics and head-on pushing (143607)
+
+Report `20260928-143607-cd4830c88085` runs `test-20260928-9f0485a` in
+all roles on `37_caucasus`. Repeated M41/T-43 corpse impulses are consumed,
+so the previous stale-ACK defect is not the cause of these new symptoms.
+The corpse integrator has no yaw response and explicitly rolls back a move
+whose support drops more than 0.6 m. This explains both non-rotating corpses
+and their refusal to leave an edge.
+
+At 14:33:15--19 the 100575-kg player KV-5 reports roughly 2.2 m/s while its
+position barely advances against friendly Bot 9, a 32000-kg SU-100M1 with
+382460 W. The worker records clear world/path probes; the later nearby
+170-ton Bot does not explain the earlier pair. Incoming human momentum was
+consumed after the worker's drive step, and a reverse shove was stored apart
+from the signed drive speed. Automatic braking also added a second traction
+budget to engine force; when engine force already crossed zero, its negative
+brake erased the remaining drive work for that slice. These are code defects,
+not evidence that the original vehicle masses should be multiplied.
+
+The worker now consumes cumulative human momentum before driving; the final
+contact pass sees the same ACK and cannot consume it twice. Both live owners
+put the complete longitudinal impulse into signed road speed. Engine power,
+installed mass, terrain resistance and the existing longitudinal grip curve
+remain the force inputs. Automatic braking shares that curve's ground-force
+budget with the engine and cannot apply a negative brake to cancel forward
+work after zero crossing. First-impact RAM proofs and the enemy 0.25 damage
+scale remain separate and unchanged.
+
+For passive Bot hulls the planar contact constraint now includes yaw inertia
+in its effective mass before choosing a normal/friction impulse. The impulse
+uses the common clipped footprint contact, so opposite offsets turn opposite
+ways, a centred hit produces no yaw, and rotation is not added as free energy
+after a translational solve. Motor corner contacts also transfer a bounded
+yaw impulse to a wreck. Original mass and mounted chassis dimensions define
+the uniform-box planar inertia, consistent with the existing copied rigid-hull
+trial. Uniform track loading projects the existing parked longitudinal and
+lateral Coulomb budgets into yaw resistance. This is an explicit planar
+approximation; neither native retail inertia nor full three-dimensional tank
+contact has been recovered or established by these tests.
+
+The matched client/server/worker ledger now has seven fields: actor, sequence,
+cumulative X/Z momentum, two retained inert position totals, and cumulative
+yaw momentum. `push_yaw` and its ACK travel in the same compact Bot row and
+server snapshot. The visible client predicts only the unseen angular share;
+the worker never reconstructs its lever from a later pose. Numeric validation,
+coalescing, duplicate/reordered messages and ACK quantisation are covered.
+No mixed-version wire mode is introduced; distribute all roles together.
+
+A wreck advances yaw only through the existing vehicle rotation sweep,
+arena boundary, detached-turret and native/catalog rotation guards. Its
+native rotation query includes static world geometry even before a structure
+has broken; the live motor's damaged-BSP-only shortcut cannot admit a rotating
+corpse corner into an ordinary rock or wall. Its
+vertical owner is now the existing suspension/ballistic integrator, including
+partial support, pitch/roll, airborne gravity and landing. It continues after
+horizontal momentum stops and consumes no ground-friction budget in flight.
+The centre-column fallback requires opposing support across a hole; one
+remote supported end no longer holds a hull beyond a cliff. A corpse's landing
+cannot create another death/HP event. This does not implement module/crew
+injuries for live falling tanks, nor assign a new owner to human corpses.
+Bounded `WRECK motion` diagnostics expose actual mass, pose, yaw momentum,
+vertical speed and airborne state for the next native acceptance report.
+
+Validation: 1,471 focused checks plus 57 wreck/snapshot/mass/spawn checks pass with
+one environment-dependent skip. The six previously reproduced navigation
+failures remain excluded from that focused selection. New coverage includes
+visible offset contact through worker consumption, yaw ACK retries, powered
+corner torque, energy/momentum checks, world-blocked rotation, repeated
+shove/settle cycles, ten-spring edge departure, airborne momentum, and landing
+after horizontal motion stops. The head-on owner loop uses a 0.1-second worker
+cadence against 30/60/144-Hz visible motion and checks KV-5/SU-100M1 with both
+player/Bot assignments and a weaker-engine counterexample. Tests do not prove
+retail feel or equal native timing. Exact installed #1513 inspection, ABI
+audit and Python 2.7 source compilation pass; no new native method is added.
+The packaged Windows build still requires actual edge/rotation/head-on play
+acceptance. Existing unrelated gameplay/CI failures are not claimed repaired.
+The broader Bot run reproduced the previously recorded 26 failure occurrences
+and 14 errors, plus three differences resolved by preserving one-time spawn
+support and observing total signed collision velocity. Those three cases pass
+in the final focused rerun. The gameplay gate still has the same seven failures
+and two errors as the parent.
+
+### Report 152755: delayed pushing, passive wreck support and tilted track patches
+
+All three logs identify `test-20260928-91b5b9c` on `37_caucasus`.
+At 15:20:40-48 the 100575-kg KV-5 applies reverse input with about -2 m/s
+reported speed but almost no accepted travel against the 35500-kg T-54 first
+prototype. World probes are clear. The previous head-on test copied worker
+publications immediately; adding 100 ms of delivery delay reproduces zero
+progress. Pending contact momentum was treated as undamped velocity until
+its ACK, hiding the worker's intervening engine and ground reaction.
+
+The visible contact adapter now timestamps its accepted impulses on the
+existing motion clock, removes acknowledged entries, and replays the remaining
+impulses against the latest canonical velocity with the same drive/track laws.
+It predicts no positions and does not write Bot poses. The worker still applies
+each cumulative checkpoint once and remains the only remote motion owner.
+The delayed owner regression covers 30/90/144 Hz, 100/200/300 ms delivery,
+reverse KV-5 versus the report's T-54 prototype mass/power, reversed vehicle
+ownership, and the weaker-engine counterexample. These are synthetic adapter
+tests, not a native network recording or proof of retail calibration.
+
+The report also records rejected wreck nudges with a clear native sweep, and
+almost entirely zero yaw motion. Passive displacement no longer consults
+navigation slope/water avoidance after an exact world sweep; cliffs and deep
+water are not solid geometry. Vehicle, static-world and detached-turret guards
+remain. Wreck translation and yaw now spend one shared anisotropic friction
+budget instead of independent full linear and angular budgets. The existing
+uniform-track approximation is discretized at the mean arms of the two halves
+of each track; constrained impulses use the original mass/footprint inertia
+and cannot add kinetic energy. This is still an offline planar approximation.
+
+The earlier ten-spring wreck test did not match production wiring: production
+provided only the legacy centre support probe. The native bounded suspension
+column is now wired specifically for destroyed Bot hulls. Live Bot navigation
+retains its existing support owner. Active wrecks use ten-spring/body support,
+tip/fall after a push, and continue vertical motion after horizontal motion
+stops. Bot wire/server pose bounds now retain full wrapped pitch/roll instead
+of clipping them to 0.61 rad; an airborne flag survives publication so the
+contact predictor does not apply ground friction in flight.
+
+At 15:25:33.887 the player has pitch 1.082 rad and recovered bridge support
+at columns whose direct probe missed. The recovery patch previously stayed
+horizontal even when its track rotated. Patch X/Z and its height ceiling now
+follow the track pitch/roll, so a near-vertical patch cannot reach back across
+its old horizontal width. Existing inclined-plane transport and support
+memory rules remain; no artificial outward force or forced fall is added.
+
+Validation includes delayed live/wreck contacts through real visible/worker
+adapters and PYC wire roundtrips, original-mass push counterexamples, combined
+friction energy/direction, production wreck-probe activation, departed track
+footprints, finite-deck falling, native world vetoes, and snapshot lifecycle.
+The focused selection passes 1,472 checks (one environment skip; the same six
+previously reproduced navigation cases are excluded), plus 60 wreck/snapshot/
+mass checks. The gameplay gate still reproduces the parent's seven failures
+and two errors. Exact installed #1513 inspection, ABI audit and all 146 Python
+2.7 source compilations pass. No new native API is introduced. Actual bridge
+release, native wreck pose presentation and crowded delayed pushing require
+another #1513 gameplay acceptance run; the reduced suspension is not a full
+retail rigid-body solver. Module/crew fall injuries, replay recording and the
+other previously listed open work are not claimed repaired here.
+The complete 528-case Bot module run reproduces the 26 failure occurrences
+and 14 errors previously documented; its failure identifiers add no new case.
+
+### September 28 report 160951: compact mass and forced hazard entry
+
+Both rounds in report `20260928-160951-9ed1131f4b7e` run
+`test-20260928-caa555b` on `37_caucasus`. At 16:09:15 and 16:09:42 the
+visible client's local drive aborts with `KeyError: 'mass'` in
+`_predict_bot_contact_velocity`. The worker keeps running; the server's
+`player_left` death follows the client's exception and is not its cause.
+The preceding regression introduced a read from the compact motion mapping,
+which deliberately omits descriptor-derived mass. The predictor now uses the
+already loaded physics parameters for that Bot. Both live and dead compact
+rows are tested without adding worker-only fields back to decoded snapshots.
+The delayed visible-contact integration test previously did just that and
+masked this missing-field failure; its boundary now matches production.
+
+Passive displacement and autonomous hazard avoidance remain distinct. A live
+Bot's received longitudinal impulse is still part of its signed physical
+speed. Its surviving external share is identified by comparing the same
+combined and drive-only integration law, bounded by the actual signed speed;
+a braking collision cannot invent a reverse shove. When a navigation veto or
+unproved drive corridor withholds autonomous movement, that share advances
+through the existing passive native sweep instead of being deleted by AI
+safety damping. This adds no traction, mass bonus or second friction budget.
+
+The realised navigation hazard guard now runs after autonomous motion settles
+and before contact displacement. Native geometry, vehicle/turret sweeps and
+the authored arena rectangle still constrain passive travel. Rechecking the
+accepted contact endpoint with zero elapsed time also updates legacy vertical
+support, so a live Bot pushed beyond a ledge can become airborne without the
+navigation guard restoring it. Existing worker fall-HP and continuous drowning
+laws retain their terminal-event ownership; no new kill attribution, crew or
+module fall-injury law is introduced.
+
+Regression scenarios exercise the complete worker update and acknowledged
+human momentum: unforced Bots reject a fatal corridor, while longitudinal,
+reverse and lateral shoves can depart support and suffer a lethal landing.
+A deep-water shove reaches the existing drowning terminal state; a physical
+wall or arena boundary still blocks it. Additional checks distinguish braking
+from reverse forcing and retain delayed head-on, wreck-rotation and bridge
+regressions. The focused 1,472-case selection passes with one environment
+skip and the same six known navigation exclusions; 69 additional wreck,
+snapshot and mass checks pass. The gameplay gate retains its seven baseline
+failures and two errors. All 146 client sources compile under CPython 2.7.18,
+and the installed #1513 inspection and ABI audit pass. These checks establish
+the adapter and synthetic scenarios, not real-client loading or map physics
+acceptance; the replacement package still requires Windows gameplay testing.
+The broader 528-case Bot run has the same 26 baseline failures and 14 errors,
+plus one final map-boundary guard regression. Retaining that last rectangle
+guard with navigation hazards disabled resolves the new case; its final
+rerun is included in the 69 passing checks above.
+
+### September 28 report 164103: oblique pushing and occupied bridge faces
+
+Report `20260928-164103-4bfcb01dfef0` runs `test-20260928-78a74fe`
+on `37_caucasus`. The worker receives repeated momentum for wreck 29
+(23,380 kg), but records accepted displacement `(0, 0)` with
+`vehicle_fraction=1` and `native_world=True`. After the initial motion it
+stays near `(-19.76053, 0.496, 112.73646)`. This proves a world-motion veto,
+not missing momentum or a globally missing wreck yaw field. The same report
+has a 100,575 kg KV-5 against the 34,080 kg STA-1. Logged mass and engine
+power are present; their presence alone does not prove correct native pushing.
+
+Contact integration previously clipped engine travel before adding the
+forward/lateral impulse components. At oblique contact, separately constraining
+those components can reject a legal combined displacement. Visible and worker
+owners now re-sweep their complete post-contact travel. The vehicle constraint
+retains an unblocked tangent after first contact, re-sweeping each projected
+segment against every nearby hull. Remote replicas remain position-fixed;
+their physical mass and reciprocal momentum still belong to their owner.
+No player multiplier, extra engine force, mass change or friction coefficient
+change is introduced. First-impact armour and ram HP remain separate.
+
+A passive wreck can pivot away from a corner while its centre moves towards
+the pusher. Its translation and yaw now have a combined swept-pose admission
+path. The complete trajectory must pass vehicle, arena, detached-turret,
+catalog and native-world checks before either pose component commits. The
+native adapter sweeps each enclosing angular slice along its centre travel;
+a missing rotation adapter falls back to the existing guarded path. The
+original installed mass and footprint inertia continue to determine response.
+
+The native departing-face predicate also required the hull centre to have
+already crossed an exposed bridge side. A partly overhanging track can occupy
+that face while the centre is still over the deck, making departure impossible.
+Departure now requires a native face inside the original mounted chassis/hull
+volume and non-increasing penetration, without that centre-side requirement.
+An already occupied upward support face may admit tangential movement. Later
+hits can reuse only a witnessed coincident plane; new walls, inward travel and
+ceilings still block. The exact installed bridge mesh
+`env043_CaucasusBridge_part1.primitives_processed` contains the side/top
+geometry in the reported area. An offline raycast using an approximate hull
+clears some tested attitudes but still blocks others; it is not an exact
+native reproduction or proof that all bridge-edge traps are solved. Rejected
+contact diagnostics now include the authoritative pose and world trace.
+
+Validation adds oblique tangent/corner constraints, the visible post-impulse
+travel invariant, coupled wreck yaw, native translated-slice call arguments,
+atomic world vetoes and partly overhanging finite-deck departure with a backing
+wall. The 1,473-case subsystem selection passes with one environment skip and
+the same six known navigation exclusions; 74 wreck/snapshot/mass checks pass.
+The complete 528-case Bot module has the same 26 failure occurrences and 14
+errors as the prior baseline, and the 27-case gameplay gate retains seven
+failures and two errors. All 146 client sources compile under CPython 2.7.18;
+the installed #1513 inspection and ABI audit pass. No native API is added.
+Actual delayed pushing, native bridge departure and wreck presentation still
+require Windows gameplay acceptance of the replacement package.
+
+### September 28 report 180736: owner recovery, passive rays and turret debt
+
+The coherent three-round `20260928-180736-67aa6cf49729` session runs
+`test-20260928-9232d11` on `37_caucasus`. The player masses are 100,575 kg
+and 35,500 kg. The light contact peer logged in the third round is
+`Ch16_WZ_131` at 21,100 kg; the second round also records `GB52_A45` at
+55,883 kg. These contacts do not prove a native reproduction of the user's
+specific 59-16/AT 15A examples. The user confirms improved wreck turning.
+
+Replica pose ownership previously zeroed its inverse mass for penetration
+recovery, assigning the complete positional correction to the local actor
+even when its physical mass was much larger. The private constraint roster
+now solves both physical shares, publishes only the owned correction and
+retains the peer's actual occupied pose for every subsequent motion sweep.
+Inverse mass, existing track hold and reciprocal impulses are unchanged;
+no player-only force or altered engine/friction constants are introduced.
+Recovery of a pre-existing overlap converges without opening unaccepted
+remote space. First-impact ram HP inputs remain separate.
+
+Wreck 29's native veto around 18:04:39 includes a ray from
+`(71.34747, -5.06367, 83.68707)` to `(71.06791, -8.22347, 86.97670)`;
+its endpoint had been lowered to future ground at -8.82347. A passive
+fixed-attitude translation must not bend down to that future terrain:
+the chord can hit a cliff below the body and prevent departure. Explicit
+passive sweeps now retain the occupied body's pitch/roll height. Autonomous
+terrain look-ahead, inward/new wall rejection and the arena rectangle remain.
+Received live longitudinal travel always follows the autonomous pose guard,
+including when a clear forecast reaches a fatal baked cell or a distant
+planning collision does not intersect the short physical displacement.
+
+At 18:02:44 Bot 22 loses a 5,640 kg turret. Recorded simulation debt grows
+from 196 ms to 19,634 ms by 18:03:07; this is real worker lag, not just a
+render interpolation symptom. The planner constructed angular vehicle sweeps
+before discarding dynamic turret rows. Filtering those rows first removes
+that unused work while leaving the canonical body contact solver active.
+A 1,200-query synthetic comparison removes 2,400 discarded component sweeps
+(321 ms to 4.9 ms in this local run). This is not a native frame-rate claim.
+The body solver also stops repeating unchanged blocked recovery, skips empty
+Bot responses and continues iterating when either body's velocity or geometry
+actually changes. Substeps, world queries, time debt and safety budget remain.
+
+The 271-case targeted run passes; the additional landed-turret pipeline check
+passes in its seven-case module. It verifies visible reciprocal momentum,
+canonical displacement and exactly-once receipt handling, not native visual
+mesh alignment. The 1,473-case subsystem selection passes with one environment
+skip and six known navigation exclusions. The full 528-case Bot run retains
+26 failures and 14 errors; the 27-case gameplay gate retains seven failures
+and two errors. Both failure-identifier lists match the parent baseline.
+All 146 sources compile under CPython 2.7.18;
+the installed #1513 inspection and ABI audit pass. No native API is added.
+
+An extra two-way publication-delay experiment still shows timing-sensitive
+head-on pushing. It uses simplified common descriptors and cannot certify
+the named vehicle matchups or retail parity. These repairs address proven
+positional, navigation and redundant-work defects; they do not establish
+that all Bot/player asymmetry, loaded-map ledges or turret frame pacing and
+visible collision alignment are solved. Those remain native test-package
+acceptance items. Crew/module fall injury and playable offline replay remain
+open from the earlier requests.
+
+### Reports 184737 / 185906: reciprocal shove timing and incomplete interiors
+
+Both reports run test-20260928-3f9b29a on 37_caucasus. Human momentum reaches
+the worker, including the 28,000 kg live hull near the bank; it is not a
+missing transport receipt. Two reproducible defects remained. Opposite
+physical velocity automatically engaged additional braking even when the
+driver had never reversed input, letting a pushed weaker engine claim nearly
+full track holding force. Powered opposition now uses the installed engine
+and traction law; explicit handbrake and released-drive braking remain.
+Consequently reversing a moving tank with the drive key alone may brake more
+slowly than before. This applies equally to human and Bot integration.
+
+Contact velocity prediction also omitted upstream receipt latency: it added
+unacknowledged momentum without the corresponding engine/ground reaction
+interval. Newly observed ACKs measure that interval using the recorded local
+impulse time and checkpoint time. A repeated ACK never grows the estimate;
+with no pending impulses there is no extra reaction interval. This remains
+an approximate velocity prediction; actual remote poses, sweeps, mass and
+exactly-once cumulative momentum consumption remain worker-owned. Tests now
+delay both input and publication by 100-300 ms at 30/60/144 Hz, including
+swapped masses, opposing engines and a parked target. The formerly stationary
+head-on cases advance; a separate two-way delayed off-centre wreck test
+retains translation and rotation. This is not proof of native retail parity.
+
+The live Bot previously retained centre-only placement after a shove even
+though wrecks used descriptor-derived track support. Received contact now
+enables that existing support solver for the affected live hull as well.
+Untouched autonomous Bots keep their previous sampling cost; hydraulic
+exclusions and descriptor failure boundaries remain. A passive grounded
+world sweep follows a continuous supporting bank only after current/middle/
+destination ground samples prove it. Future lower floors, missing support,
+airborne motion, new walls, actual vehicle bodies and the arena boundary do
+not receive that exemption. This addresses the reported uphill-facing bank
+veto and centre-only cliff perch, not a claim that every loaded-map ledge or
+the additional native probe cost has been accepted in Windows.
+
+The user's profile 1 changes all three KV-5 107 mm rounds' device damage to
+5,000, a representable value, not an integer overflow. Internal layout cache
+keys previously ignored asynchronously loaded hit-tester bounds: an incomplete
+first query (e.g. missing gun bounds) could keep the entire interior invalid
+after the same descriptor finished loading. The cache now includes all four
+component bounds. A regression reproduces invalid-to-valid recovery and a
+reached-rack test exercises 5,000 damage across shell kinds and owners,
+retaining the single 27% saving throw. The reports do not contain per-shot
+interior evidence, so this is not proof that caching caused every reported
+miss. Compact unavailable-layout and high-device-damage strike witnesses now
+distinguish effective damage, missing geometry, unreached modules, exit/stop
+filters, saving throws and applied loss without restoring per-triangle logs.
+
+Validation: 304 targeted cases pass; the 1,474-case subsystem selection passes
+with one environment skip and the same six explicit navigation exclusions.
+The full 528-case Bot suite retains 26 failures and 14 errors; the 27-case
+gameplay gate retains seven failures and two errors, with both complete
+failure-identifier multisets matching the parent. All 146 client sources
+compile with CPython 2.7.18 and exact Chinese HD #1513 inspection/ABI audits
+pass. No native API was added. Native shove feel, bank departure and modified
+shell hit locations remain test-package acceptance items; no game session was
+run by the agent. Earlier outstanding replay/fall-injury work is not claimed
+fixed by this change.
+
+### Report 194317: replica prediction used an empty authority cache
+
+The report identifies test-20260928-254db07 in all three processes. The visible
+client is deliberately not Bot authority: battle_start returns before creating
+states, descriptors or physics caches. Contact velocity prediction nevertheless
+called _physics_params_for on that non-authority runtime. Its missing descriptor
+silently derived the 5,730 kg / 45 hp defaults. Pending momentum was divided by
+that mass instead of the installed Bot mass, exaggerating the predicted escape
+velocity and suppressing subsequent reciprocal pushes. The previous coupled
+tests shared the worker object, concealing this lifecycle defect.
+
+The replica now derives parameters from the presented entity's installed
+descriptor, published rating and round tactics through the same crew/physics
+adapter as the worker. A per-record descriptor/rating/slot cache avoids repeated
+native crew evaluation. Prediction, ground reaction and powered traverse share
+those parameters; a compact first-contact witness records mass and power.
+The replica creates no authority state, changes no vehicle coefficients and
+still treats only the displayed hull as occupied space. The worker retains
+canonical momentum, swept movement and HP ownership.
+
+The regression starts an actual non-authority round with empty caches and makes
+any authority-cache lookup fail. A 35,500 kg vehicle receiving (71,000, -35,500)
+momentum yields (2, -1) m/s for both live and dead wire states. Coupled tests now
+use separate owners, the real contact-body adapter and worker update_once rather
+than a shared cache or an abbreviated force loop. At 150 ms delay in each
+direction, reinstating the old default cache reproduces zero KV-5/AT-15A head-on
+travel; the corrected six-second synthetic scenario advances 8.88 m. Swapped
+owners, weaker engines, reverse input and 30/60/144 Hz remain covered. Both a
+live and a dead hull can be pushed beyond a supported ledge into a 30 m drop
+with the existing ten-spring support solver. These are regression scenarios,
+not measured native vehicle performance or retail calibration.
+
+The report also records real native bridge-side vetoes. Wreck 19 eventually
+falls from about 0.85 to -14.90 m, while live Bot 6 remains blocked near the
+bridge. The source change above repairs deficient sustained push, but native
+loaded-map bridge departure is not certified by the synthetic ledge test.
+New-wall and occupied-hull guards remain intact; no unproved bridge-normal
+exception ships in this change.
+
+High-damage strike witnesses show the configured 5,000 device damage arriving,
+including applied engine and surveying-device losses. Five reached ammoBay
+candidates were all rejected by the existing single 27% damage-chance roll;
+there is no evidence of overflow or universally disabled rack damage. A larger
+device-damage number changes loss after a successful roll, not hit geometry or
+the roll probability. Tests still cover success and rejection with that value.
+The report also proves unavailable internal layouts for R98_T44_85M,
+J30_Edelweiss and R121_KV4_KTT. The read-only catalog audit finds 650 decoded
+console meshes, eight reconstructed profiles and 22 unavailable vehicle layouts.
+Those missing interiors are a real unresolved coverage limitation; generic
+invented boxes or another vehicle's layout were not substituted.
+
+Validation: 313 focused cases pass. The 1,474-case subsystem selection passes
+with one environment skip and the same six documented navigation exclusions.
+All 146 client sources compile under CPython 2.7.18, and exact Chinese HD #1513
+inspection and ABI audit pass. Existing test doubles were updated to supply
+explicit contact parameters; the new lifecycle regression uses the real replica.
+No native API was added and no native game session was run. Earlier replay,
+fall-injury and missing-layout work is not claimed fixed here.
+
+### Report 203327: bank slip, visual debris and module outcomes
+
+All three processes identify test-20260928-1e4501d on 37_caucasus. Contact
+parameter witnesses now agree with the mounted masses (WZ-120-1G 36,000 kg,
+M41 23,496 kg). WZ-120-1G Bot 11 reaches the lower level, but the sparse old
+motion witnesses cannot prove a continuous rendered descent. M41 wreck 29
+stops around (-27.217, -1.84, 113.370); its preceding native bank normal is
+(-0.30123034, 0.861268997, -0.40923822).
+
+The worker's suspension path omitted the visible player's existing passive
+side-slip integration. It could settle height and attitude on a steep bank
+without ever advancing down it. Worker live hulls now apply the same lateral
+slide law; passive wrecks have no drivetrain-owned forward gravity and use
+the complete fall line. Motion still passes actual vehicle, world and arena
+bounds guards. The autonomous hazard check uses the driven endpoint before
+passive slip, so gravity is not reclassified as a forbidden driving command.
+Both owners retain already accepted horizontal slide momentum when partial
+edge support cannot fit a plane. Timed integration and zero-time contact
+projection remain separate; only the former advances slip. Rollback includes
+the slide/carry state. Active slope-bound wrecks continue ticking after the
+pusher separates. Bounded EDGE witnesses now record worker descent and support.
+
+Tests use the report bank normal, a finite bank and a lower floor, then the
+real worker battle_start/update_once lifecycle with independently installed
+descriptors. Live and dead hulls slide off and fall; a wall or another hull
+still blocks them. Separate tests cover the final driver-hazard boundary,
+combined contact resweep and zero-time projection. These synthetic scenes do
+not certify the loaded native bridge mesh or visible snapshot interpolation.
+
+The captured worst post-explosion frame spends 196.5 ms in navigation search,
+109.2 ms in vertical integration and 15.5 ms in turret update. The worker is
+already slow before the explosion. Turret rigid-body debt subsequently grows
+beyond 12 seconds, explaining delayed flight independently of GPU rendering.
+Gameplay now uses a frozen, worker-authored visual flight with stock models
+and explosion/touchdown effects. Detached debris temporarily registers no
+vehicle, shell, reticle or navigation obstacle and does not run the continuing
+rigid-body solver. It cannot be pushed or used as cover. The single bounded
+world arc still stops at scenery; this is a deliberate temporary performance
+tradeoff, not a claim that all native lag has disappeared. Existing rigid-body
+code and its independent law tests are retained for later measured work.
+
+Navigation no longer probes edges that cannot improve an A* candidate, shares
+unknown exact-segment failures only within the current callback (retrying
+streamed geometry next callback), evicts one receipt instead of clearing all
+4,096 entries, and changes wreck path revisions only when occupied graph edges
+change. No search, projectile or collision safety budget was reduced.
+
+The high-damage report has no unavailable-layout witness. Jagdpanther Bot 24
+receives a penetrated, reached ammoBay hit with 5,962.514 rolled device damage;
+the successful existing saving throw destroys its rack. E75 has two reached
+ammoBay candidates rejected by the saving throw, another penetrated ray with
+no interior contact, and separate non-penetrations. Tortoise mostly receives
+non-penetrations; two external track hits apply device loss. These are not
+overflow symptoms. Earlier missing per-vehicle interior meshes remain a real
+limitation (650 decoded, eight reconstructed, 22 unavailable in the catalog
+audit); no guessed interior geometry was added. High-damage diagnostics now
+include the actual probability/draw, attacker and crew outcome, without an
+extra RNG call or any change to hit probability, HP or voice selection.
+
+Validation: 1,474 subsystem cases pass with one environment skip and the six
+previously recorded navigation exclusions. The focused selection has one
+pre-existing overturned-roof assertion, reproduced from parent 1e4501d with
+the identical 2.5402 versus 2.775 m result. Navigation/replan/route selection
+retains the parent's eight missing-adapter errors; the three new navigation
+tests pass. Exact Chinese HD #1513 inspection, ABI audit and Python 2.7.18
+compile pass. No native API was added and no native game session was run.
+Native bridge departure, frame pacing and visual debris remain test-package
+acceptance items rather than certified runtime outcomes.
+
+### Report 212552: align worker bridge support with the player adapter
+
+Report ae6a8b89d74f runs test-20260928-28c2c0a in all three processes.
+M41 wreck 29 holds X/Z (3.86856, 96.95354) while its roll changes from about
+1.0 to 2.24 radians and its origin drops below the deck. T71 Bot 15 later
+stays at (5.83559, 0.31036, 99.74456), roll 0.5292, with eight contacts but
+no fitted plane. Its native translation trace hits upward deck material 108
+at y=0.97408. The report establishes a conflicting support/motion state, not
+an engine-power shortage. It does not contain every native support column,
+so a complete reconstruction of that bridge's collision mesh is not claimed.
+
+The worker was missing three existing player-adapter contracts: recovery of
+fresh support inside each posed continuous track footprint, rigid hull/turret
+contacts while tipping, and an upward-only predicted query-window shift.
+It could acquire the lower beam through a missing carrier, apply track springs
+after overturning, omit roof/side support, and move its next column window
+below a deck by extrapolating a mixed-layer plane. The worker now uses the
+same geometry helpers, posed turret yaw, angular/vertical sweep, rigid-contact
+freshness and near-inverted spring suppression as the player. No collision
+budget, mass, power, friction or damage coefficient is changed. Normal flat
+support still has 22 probes; only missing track patches and tipping add the
+existing geometry recovery work. Physical translation still passes world,
+vehicle, arena and detached-obstacle guards independently of navigation.
+
+Parent 28c2c0a reproduces the sparse-deck sink for both living/dead states at
+30 and 120 Hz, the below-deck query-window error, and the previously recorded
+overturned-roof failure (2.5402 versus 2.775 m). These now pass. A complete
+worker update/receipt lifecycle additionally pushes living and dead hulls over
+a finite deck using actual segment-based world sweeps; a separate wall still
+blocks the shove. The focused 251 cases pass. The 1,474-case subsystem set
+passes with its existing one environment skip and six named navigation
+exclusions. Exact installed #1513 inspection, ABI audit and all 146 client
+sources compiled under Python 2.7.18 pass. These are offline regressions;
+the reported native bridge and frame pacing still require package acceptance.
+
+The full installed roster was audited again with mesh topology verification:
+680 entries, 650 decoded Console layouts, eight authored reconstructions,
+22 unavailable layouts. The checked-in original bake evidence distinguishes
+19 unavailable source entries from three unregistered/no-interior entries
+(Nameless, Edelweiss and T23). Another 176 decoded entries list observation
+device and/or turret-rotator holes, including two incomplete crew rosters;
+these are not 176 missing ammo racks, and non-applicable fixed-gun components
+must not be labelled missing gameplay modules without checking the descriptor.
+A user-facing Chinese inventory, exact IDs and remediation notes accompany
+the test output; no guessed module geometry was added.
+
+This report also proves why high device damage alone does not force criticals:
+M41's HE ammo candidate has chance 0.27/draw 0.34806; T-44-122's AP ammo
+candidate has chance 0.30/draw 0.77299. Both are saved. T-43's engine candidate
+has chance 0.48/draw 0.08289 and applies 6181.364 damage. These vehicles have
+internal contacts; this evidence does not support numeric overflow. The
+probability law, crew outcomes and existing visual-only turret policy remain
+unchanged.
+
+## Reports 220344 and 221207: posed departures and directional service braking
+
+Both reports identify test-20260928-96b43dc in the server, visible client and
+worker. Report 221207 uses AMX 13 57 on Prokhorovka with both speed limits at
+27.778 m/s. The user identifies W-to-S and S-to-W reversal as slow braking;
+the handbrake already stops promptly. The old throttle branch uses only
+power-limited reverse engine force while neutral adds a 65% track-grip brake.
+Neutral now retains descriptor rolling resistance and slope gravity. Explicit
+opposite direction changes latch the existing installed service brake until
+zero speed, then engage drive in the requested direction. Held throttle being
+back-driven by contact/gravity does not latch brakes. The Bot owner excludes
+its already-accounted external velocity when identifying its own reversal;
+resuming drive while pushed must not turn a weak engine into a parking lock.
+A flag carries brake intent through the compact state codec, normal/contained
+server publication, adoption and replica contact prediction. Input-edge logs
+record brake intent and before/after speed without per-frame log spam. Static
+hold, handbrake, airborne momentum and the directional 110% cap remain intact.
+This uses the existing copied brake law, not a claimed recovered retail curve.
+
+Report 220344 records dead T-44-122 at (46.33971,-3.46723,59.41939),
+pitch 1.40818, roll -0.06863. Its outward 0.090 m displacement was rejected
+by a native solid lane on the bridge/slope face. The passive sweep previously
+posed only Y, leaving flat XZ extents even for this nearly vertical hull.
+Passive lanes now apply the full existing BigWorld YPR transform, including
+the displaced destination perimeter and prepared collision-filter envelope.
+Departure containment uses the rigid inverse and the exact swept material
+interval; inward surfaces and later independent walls still block. A tipped
+body on an undrivable face no longer extrapolates its attitude as a roadway.
+Navigation hazards remain autonomous planning constraints; world, other hulls
+and arena bounds still constrain physical displacement. The conservative
+active-drive terrain lookahead remains separate from the posed passive sweep.
+
+The captured-plane regression fails on parent 96b43dc and passes here; its
+fixture explicitly uses the captured XZ extents and a test height band, not
+an invented reconstruction of the complete map. It includes a later blocking
+wall. Near-vertical inverse, transformed perimeter and upper-wall tests pass.
+Both 100 km/h direction changes, intervening neutral, airborne input, installed
+brake force, live local/worker paths, compact/server/replica publication and
+owner-reversed head-on contacts are covered. The 242 focused cases and the
+251 bridge/turret preservation cases pass (one environment skip in the former).
+The 1,480-case subsystem suite passes with its existing one environment skip
+and six named navigation exclusions. Exact #1513 inspection/ABI audit and all
+146 client source files compile under CPython 2.7.18. Existing unrelated full
+suite failures are reported separately; this is not an all-green CI claim.
+Detached ammo-rack turrets remain visual-only, as the user confirms markedly
+better frame pacing. No native game session was run for this change: continuous
+bridge/cliff departures and driving feel require the generated package test.
+
+## Report 224302: restore release braking and requery the known deck
+
+This report identifies test-20260928-64c2cd4 in all three processes. The user
+explicitly rejects the removal of automatic deceleration: released drive was
+already correct; only intentional forward/reverse braking needed repair.
+Restore the exact 96b43dc neutral law, its existing 0.65 grip share, tuning key,
+and steep-descent relief. A 1,134-case comparison against that commit matches
+exactly across both directions, terrain, steering, timestep and slope. This
+supersedes the preceding section's rolling-resistance-only neutral behavior.
+No new coast coefficient or retail stopping-distance claim is introduced.
+
+Keep the intentional service-brake latch. The report already shows it active:
+at 22:38:59.223 forward speed 28.9342 becomes 28.8043 m/s under command -1;
+at 22:42:34.130 reverse speed -2.3011 becomes -2.0582 under command +1.
+These observations establish the deployed path, not numerical retail parity.
+The restored neutral law and full service brake are tested through the real
+input sender, including manual movement flags, both native cruise flags and
+the cruise mailbox, with both speed limits tuned to 100 km/h. Braking stops at
+zero before opposite drive begins. Releasing either input clears the latch
+and recovers the previous neutral drag. A held input pushed backward still
+cannot acquire an automatic parking lock.
+
+The exact installed #1513 Avatar.pyc was inspected under CPython 2.7.18:
+handleKey changes __cruiseControlMode by one or selects the end mode on a
+double press, updates the stock panel, and issues moveVehicle only when no
+manual W/S command is held. makeVehicleMovementCommandByKeys emits FORWARD
+or BACKWARD plus CRUISE_CONTROL25/50; moveVehicle forwards those flags to
+base.vehicle_moveWith. R/F therefore retain stock cruise-preset semantics;
+an actual opposite-direction command engages the same service brake as W/S.
+No raw-key override replaces stock input/HUD ownership. Official controls and
+the 2015 physics-test article confirm cruise controls and distinct braking
+behavior, but do not expose the retail C++ brake curve:
+https://worldoftanks.eu/en/content/guide/newcomers-guide/game_controls/
+https://worldoftanks.eu/en/news/general-news/public-test-new-physics-2015/
+
+The bridge issue remains observed, not accepted as fixed. Bot 19 is at
+(32.239887,0.393629,92.344363), roll -0.37283, while its solid sweep hits
+upward support at y=0.909833. Bot 15 later receives an inward vertical-face
+hit after its origin has descended below the bridge. Those hits must not be
+blindly ignored. A reproducible support-query defect is corrected: the shared
+flat support ceiling was allowed by the layer filter but did not raise a low
+carrier's actual ray start, so it could see only the lower beam after tilting.
+Both motion owners now widen that ray up to the previous proved support plane,
+capped by the existing legal carrier envelope. Fresh native geometry must
+still provide the height; the old plane alone creates no contact. Airborne
+queries and unrelated roofs retain their existing limits.
+
+A finite layered-deck regression fails on 64c2cd4 for both sides and owners,
+then passes with this change; the synthetic chassis is explicitly not a full
+reconstruction of the report's native mesh/descriptor. Missing deck columns
+and an unrelated roof cannot become support. The 243 targeted cases and 252
+bridge/turret preservation cases pass. The 1,480-case subsystem selection
+passes with its existing one environment skip and six named navigation
+exclusions. Exact installed-client inspection/ABI audit and Python 2.7.18
+compilation of all 146 client modules pass. The reduced suspension model and
+loaded-map edge departure still require #1513 playtesting; the report does
+not prove that navigation avoidance is the blocker. Detached turrets remain
+visual-only, retaining the user-confirmed frame-pacing improvement.
+
+## Report 231925: user-selected half-strength release braking trial
+
+All three report processes identify test-20260928-c2f7507. On near-flat ground,
+KV-5 released drive decelerates at approximately 11.33 m/s^2; intentional
+opposite-direction braking and the handbrake retain approximately 15.94 m/s^2.
+The old 0.65 share was added to rolling resistance, making total release drag
+about 71% of the active brake for this 100,575 kg installation. It was never
+a recovered retail coefficient. Searches of official movement-physics notes
+and player discussions did not establish a numerical 0.9.22 coast/brake ratio:
+https://worldoftanks.com/en/news/general-news/public-test-improvements/
+https://worldoftanks.eu/en/news/general-news/public-test-physics-september/
+https://arstechnica.com/civis/threads/world-of-tanks-ask-about-invite-codes-before-signing-up.1112547/page-1314
+The official material describes release/turn behavior and sharp handbraking;
+the forum is qualitative experience, not a force measurement.
+
+The user explicitly requests a 50% trial when no reliable published ratio is
+available. Set total released-drive resistance to half the installed, grip-
+limited service brake, including rolling resistance rather than adding it a
+second time. Physical rolling resistance remains a floor. Preserve the existing
+steep-descent brake relief, gravity, parked hold, handbrake, intentional reversal
+latch, airborne momentum and contact pushing. Hence 50% describes flat-ground
+braking, not net acceleration on every slope or arbitrarily high rolling drag.
+At the ordinary full-grip limit the new release deceleration is 7.970625 m/s^2
+and the unchanged active brake is 15.94125 m/s^2. For the report's KV-5 these
+are about 801,645 N and 1,603,290 N, respectively. R/F still select native cruise
+presets; releasing a cruise key alone does not cancel an active preset.
+
+The 245 targeted direction/physics/bridge/world/wreck tests pass. Ratio coverage
+includes both directions, 100 km/h limits, masses, installed brake capacities,
+terrain and timestep; the real manual-input and cruise-cancellation paths are
+also exercised. A 1,800-case comparison with the parent matches unchanged drive,
+service braking, handbrake, airborne and static behavior exactly. Four siege
+subtest failures and the removed-traffic-symbol import error encountered in an
+additional selection reproduce unchanged on the parent; they are not claimed
+fixed by this trial.
+
+The bridge report contains real progressive falls: Bot 9 descends from y=0.644
+at 23:13:16.229 to y=-14.495 at 23:13:18.332 with intermediate airborne positions
+and increasing downward speed. This does not prove replica presentation is
+smooth. Worker frame pacing also remains poor in parts of this session (4.56
+frames/s in round 2 window 5). Collision/support queries still report blockers,
+and Bot 15 has support rollback after a fall. Neither the apparent teleport nor
+every invisible blocker is isolated to one proved cause by these logs. This
+package changes release braking only; it does not claim another bridge fix or
+disable any native wall contact. Native driving feel remains a Windows test.
+
+## Reports 234547, 235110 and 235422: rollover replication and death messages
+
+All three sessions identify test-20260928-29d2fea. The user accepts the driving
+feel; this change preserves vehicle_physics.py and both braking adapters.
+In 235422 on 37_caucasus, Bot 29 (M41 Bulldog) actually leaves the deck: y=0.5641,
+roll=0.41632 at 23:53:35.942, y=-0.17095, roll=1.40432 at 23:53:36.253, and
+eventually y=-14.687445, pitch=-15.797617, roll=9.398418. No navigation rollback
+is reported in that fall. However, LANClient's shared runtime-row validator
+rejects pitch or roll above 0.61 radians and substitutes the complete old row,
+including position and health. The worker and visible client repeatedly log
+one retained row. The Bot encoder separately clips accumulated rotations to
+pi, which is not an equivalent orientation after a full turn.
+
+Normalize periodic Bot angles before fixed-point encoding and in the server's
+mapping publication path. Accept the full principal angle interval at the
+replica boundary. Human input, its server admission/update, and ram-contact
+pose validation now carry the same full interval; human angles are normalized
+instead of clipped. Keep the continuous suspension state, integration, contact
+queries, wall collisions and navigation rules unchanged. Regression coverage
+replays the report's falling/overturned attitudes through both publication
+forms, the server and replica validator, for live and dead Bots, plus human
+sender/server/replica round trips. This fixes a proven frozen-presentation
+cause; it does not establish that every bridge blocker or fall is correct.
+
+Exact #1513 scripts.pkg bytecode audit: ClientArena.__onVehicleKilled consumes
+(victim, attacker, equipment, reason), marks the roster dead and dispatches the
+arena event. PlayerAvatar.__onArenaVehicleKilled returns for its own vehicle
+after death info/camera handling. BattleMessagesController.showVehicleKilledMessage
+also returns for the currently observed vehicle after the player dies. Those
+guards intentionally omit PlayerMessages' right-side text. The LAN binding
+now supplements just these suppressed messages after the unchanged arena
+dispatch, using msgs_ctrl.__getKillInfo and onShowPlayerMessageByCode's exact
+five-argument event. It does not replay sounds or alter either vehicle ID.
+gui/player_messages_panel.xml has no SHOT_*_SELF template, so local victims use
+the existing allied-victim wording and real roster names. The PlayerMessages
+consumer and FadingMessages postfix lookup were audited as well. Guard-aware
+tests cover own death, suicide, an observed LAN ally, and ordinary remote death
+without duplicate text; existing death-edge/postmortem tests remain intact.
+The reports contain one localhost human, so a second LAN participant remains
+a native acceptance case rather than a reproduced session in this evidence.
+
+The displayed ping is not pure network RTT: LANClient.worker_ping_display uses
+the worker's rolling frame interval, while worker_rtt_ms is a separate value.
+In 234547's worst 30-second window, the worker has 122 frames / 30.114 seconds
+(4.05 FPS), mean gap 246.833 ms and mean execution 225.401 ms; the corresponding
+visible window is about 76 FPS. Bot vertical motion costs 10.119 seconds of that
+window, including ground-query work; its own Python cost is 6.436 seconds.
+Ground probes account for 127,130 logical calls and 3.693 seconds. Other large
+costs include the Bot update loop, visibility, driving and planning. Slow
+frames then execute multiple simulation slices to catch up. This identifies
+backend simulation pressure, not a measured 230 ms LAN hop or a proved graphics
+failure. No cadence, collision safety, physical constants or performance claim
+is changed by this patch; native profiling/optimization remains separate.
+
+Validation: 1,181 protocol/codec/entity/battle/direction/bridge tests pass with
+one unavailable-interpreter skip; 160 server/lineage/contact/snapshot tests pass.
+An independent CPython 2.7.18 run compiles all 146 client modules and matches
+Python 3.12.14 rollover wire rows exactly. Installed-client inspection passes.
+These are logic and ABI checks, not a claim of new native gameplay acceptance.
+The additional 617-case Bot/physics run has 26 failures and 14 errors; rerunning
+all 35 affected methods with the parent server/codec/client modules reproduces
+the same failure/error counts. These pre-existing navigation, water and stale
+interface expectations are not presented as passing or repaired here.
+
+Final consumer audit also found that SnapshotSync blended pitch/roll linearly
+while yaw already used periodic deltas. Normalizing an overturn across +/-pi
+would otherwise turn it back through upright for one presentation segment.
+Apply the same shortest-angle delta to body attitude in timed interpolation,
+ordinary live chase, wreck chase and wreck-settlement error. Native remote
+matrix mirroring already treats all three axes periodically. A new regression
+fails in all 16 combinations of player/Bot, live/dead, timed/untimed and both
+seam directions before the change, then passes; gun articulation is unchanged.
+The final 1,198-case snapshot/battle/entity/protocol/codec selection passes with
+the same optional interpreter skip. All 146 client modules compile under 2.7.
+
+## Report 004720: squad presentation, own death cause and bridge-side suspension
+
+The report identifies test-20260929-5bd525e on 37_caucasus (Victory Gate).
+In round 2, Bot 22 (A-43) tips below the bridge and then remains at
+(23.32924, 0.149746, 83.84564), pitch=-0.891759 and roll=-1.280716, including
+after destruction. Its last progressing sample had downward speed -1.1213.
+Nearby contact queries see the upper deck at y=0.9067 with an upward normal.
+This is not the already-fixed replica angle guard. After every posed track
+and hull support sample misses, the worker's extra broad centre ray can still
+hit that upper deck. The hidden-raised-support guard then restores the old
+pose and cancels gravity, even without horizontal movement. Remove that
+unsupported rollback and its now-unused probe; retain actual posed supports,
+supported step/rise rejection, invalid-pose rejection and world wall sweeps.
+A regression using the report's attitude/height and an overhead-deck return
+fails on b07cad8 for both live and dead vehicles, then falls continuously with
+this patch. A real deck below the hull still catches it. The fixture uses a
+test descriptor, not native A-43 geometry; Windows bridge acceptance remains
+required. No braking coefficients or accepted driving feel change.
+
+Public PC guides and the supplied screenshots establish the intended visual
+context, but do not specify the old #1513 own-death message contract. The
+installed #1513 scripts.pkg, player_messages_panel.xml, postmortem_panel.xml
+and Chinese ingame_gui.mo were therefore audited directly. Client inspection
+confirms the exact supported x86 build. Native FadingMessages.__formatEntitiesEx
+colors each attacker/target name using isSquadMan and the native squad color.
+ArenaDataProvider.getPlayerGuiProps feeds both VehicleMarkerPlugin and
+ArenaVehiclesPlugin; squad status also reaches the roster presentation flags.
+Both local and remote humans now publish the team's nonzero prebattleID in
+publicInfo and the stock 18-field arena roster (index 10) when at least two
+humans share that team. Bots and solo humans keep zero; opposing teams never
+share an ID. This is a LAN presentation group, not a fabricated WG unit.
+The native squad finders read SQUAD_RANGE_TO_SHOW at call time and otherwise
+discard groups outside 2-3 members. During offline compatibility installation,
+extend that presentation range to the room's 30-human limit; restore the
+original object on rollback/fini. Native green/red message bodies remain
+intact, with only actual squad participants using the native gold color.
+
+PlayerAvatar's own-kill branch sends DEATH_INFO, which only the special summary
+postmortem panel consumes. The regular PostmortemPanel instead listens to the
+five-argument onShowVehicleMessageByCode event from server damage info. Supply
+that missing vehicle-only event after the existing arena death dispatch,
+without replaying the paired player-message event or voice. Preserve shot,
+fire, ammo-rack explosion and unknown cause codes. The Chinese shot resource
+means "Tank destroyed by this player:"; an unknown killer uses "Your tank was
+destroyed". The right-side own/observed-vehicle supplement requested earlier
+remains an offline addition using stock allied-victim templates: #1513 itself
+intentionally suppresses that ordinary own-kill line. Do not describe this
+addition as stock retail behavior. Guard-aware tests cover the own/observed
+split and cause selection. Local/remote entity tests check squad identity at
+the actual producer boundary as well as group sizes and round team changes.
+
+Validation on Python 3.12.14: the 1,198-case compatibility/entity/battle suite
+passes. All 146 client modules compile with independent CPython 2.7.18.
+The 270-case selected Bot/support/fall/physics/wreck/world suite has 3 failures
+and 1 error. Re-executing the affected methods against b07cad8 reproduces all
+four existing diagnostics (slot-height expectation, both directions of legacy
+downhill contact, and a stale TerrainNavigator.clear_blocked_contact fixture).
+The two new unsupported-fall subcases fail only on the parent; the below-hull
+support control passes on both. These results do not establish native LAN UI
+rendering, all bridge positions, or improved frame time. The reported worker
+performance issue remains separate; no collision safety was removed for speed.
+
+## Report 014503: environmental death feed and T71 bank contact
+
+The session uses test-20260929-e5bd274 on 37_caucasus, with one local KV-5
+player. The player's recorded death is a reciprocal ram at 01:44:34. The log
+does not independently demonstrate a second LAN human or a fatal environment
+event, so the reported missing categories were traced through their producers
+and exact installed consumers rather than claimed as captured render evidence.
+Server environment admission retains attacker zero and reason 3/5/7 for
+world collision/drowning/overturn; the common health edge dispatches each
+death once. These authority, HP, credit and replay-deduplication paths remain
+unchanged.
+
+Reinspection confirms Chinese HD #1513 x86. The installed msgs_ctrl
+__getKillInfo produces UNKNOWN_ALLY/UNKNOWN_ENEMY for attacker zero, while
+player_messages_panel.xml contains no such collision/drowning/overturn
+variants. FadingMessages.showMessage checks the extended key then the base
+key and returns without displaying anything when both are absent. Its
+unassisted SUICIDE variants instead name the victim, with red/purple for an
+ally and green for an enemy. Select those display variants without replacing
+either arena ID or assigning self-kill credit. Ordinary SHOT_UNKNOWN keys
+exist in XML but their Chinese ingame_gui.mo translations are absent: render
+the installed neutral SHOT_SELF_ENEMY victim text with the UNKNOWN entry's
+team colors, restoring the instance template in finally after the synchronous
+native formatter returns. Do not label an unknown shot killer as suicide.
+
+PlayerMessages.showMessage now has a scoped offline adapter. Personal SELF
+templates omit the local name and select the native whole-line self style;
+named-ally templates retain the victim-relative red/green body. The adapter
+colors only complete personal or squad name/vehicle fields using the native
+color manager's squad RGBA and _EXTRA_COLOR_FORMAT, including a solo local
+player. Other names keep native formatting. Preformatted fields are removed
+from the remaining native extra list to avoid nested color tags. The stock
+PlayerMessages event consumer, FadingMessages formatter/render dispatch and
+actual Chinese XML/MO templates were audited. This adapter adds no message
+event, sound, voice, damage or kill-credit changes. Installation is idempotent;
+teardown restores either the original owned method or inherited lookup, using
+the class dictionary to avoid Python 2 unbound-method identity mistakes.
+
+An independent CPython 2.7 audit executes the actual installed __getKillInfo,
+PlayerMessages consumer and all three FadingMessages display/format methods.
+The native no-adapter baseline drops three unknown-attacker environmental
+deaths. With the adapter, 210 combinations of seven supported attack reasons,
+five personal/squad/ally/enemy participants and six killer identities each
+produce one localized message with the expected team body and personal/squad
+name colors. This reaches the mocked Flash dispatch, not native rendering.
+Pure-data tests cover the missing-template guard, no double wrapping, unchanged
+non-death messages, neutral unknown-shot text and restoration on errors, plus
+compatibility install/reinstall/fini for owned and inherited methods.
+
+T71 (Bot 15, usa:A103_T71E1) initially falls from y=0.763 at 01:42:08.070,
+with subsequent bank contacts. At 01:42:12.513 the measured support plane has
+normal (0.396413, 0.564967, -0.723650), gradient (-0.701657, 1.280872) and ten
+samples; a following world query also hits the actual steep bank. Such
+contact can legitimately rotate the hull. However, by 01:42:15.819 the Bot
+remains exactly at (-21.345632, -4.404956, 112.986892), pitch=13.854776 and
+roll=-7.435818, repeatedly reporting support_rollback through 01:42:43.309.
+The Bot's anti-step guard incorrectly classifies model-origin correction from
+a rigid hull/turret contact as a driven step. The player adapter already
+excludes rigid_contact_count from this guard; apply that same exclusion to
+live/dead Bots. Real spring-supported steps, invalid solver jumps and world
+collision sweeps retain their guards. No physical coefficient changes.
+
+A report-pose/bank-plane regression with the fixture descriptor reproduces
+the frozen rollback for live and dead vehicles on e5bd274. Its solver produces
+one rigid contact and zero limit excess, but the old adapter discards it every
+time; the new adapter accepts the correction and continues integrating. This
+proves the guard defect, not exact T71 geometry or all visual behavior during
+the preceding tumble. Native same-position bridge acceptance remains needed.
+
+Validation: all 1,203 compatibility/entity/battle cases pass on Python 3.12.14;
+all 146 client modules compile with CPython 2.7.18. The selected 271-case
+Bot/support/fall/physics/wreck/world suite retains three failures and one error.
+The affected methods reproduce identically against e5bd274 (slot-height
+expectation, two legacy downhill subcases and stale clear_blocked_contact
+fixture). The two new rigid-bank subcases fail on that parent and pass after
+the fix. The accepted braking calibration, native physical contacts and
+existing performance limitations remain unchanged.
+
+## Report 021924: personal/squad messages and the governor switch
+
+The report identifies test-20260929-a614d83, including 37_caucasus, with one
+local human. The user's clarification supersedes the previous personal-feed
+presentation: own deaths use the central PostmortemPanel only, own enemy kills
+retain native SELF templates and their whole-line self color, and only other
+LAN squad members receive gold name/vehicle fields inside team-colored text.
+Remove the extra own-death PlayerMessages event while preserving its reviewed
+five-argument VehicleMessage event. Suppress an own-victim feed at the scoped
+formatter too. The observed-teammate supplement and missing environmental
+templates remain. No credit, sound, voice or physical behavior changes.
+
+The exact installed BattleMessagesController.showAllyHitMessage emits
+ALLY_HIT with an entity argument and an extra (entity, vehicleID) tuple, not
+the death handler's target field. Extend squad-only formatting to that native
+shape. An ordinary ally retains the native red message; a LAN squad ally has
+a gold name/vehicle, including when the stock formatter would prefer its
+team-killer color. Preserve all non-squad fields and avoid double wrapping.
+The independent CPython 2.7 execution audit covers the actual controller,
+PlayerMessages and FadingMessages methods, Chinese XML/MO resources, 210 death
+combinations and four friendly-hit/squad/team-killer combinations. Own deaths
+are intentionally absent; all other expected lines reach the Flash boundary.
+
+Reinspection of Chinese HD #1513 confirms the removedRpmLimiter descriptor:
+item ID 12, trigger tag, 1.1 engine-power factor and 1.5 engine HP lost per
+second. The previous active echo (quantity=1, PREPARING, time=0) is incorrect.
+Native _EquipmentItem.isAvailableToUse requires READY; _TriggerItem uses zero
+remaining time to generate the activate flag (65536 + ID), and nonzero time
+to generate the deactivate ID. EquipmentsController treats PREPARING as a
+targeted combat item and deactivates it when another item is used. Echo an
+active governor as (1, READY, -1), preserving native indefinite activation,
+availability and the next off command. Deduplication includes the indefinite
+activity bit without republishing every cooldown tick. Actual installed
+canActivate/activate/deactivate/getActivationCode and controller methods pass
+five alternating states and unrelated-item isolation; the old echo reproduces
+the failures. These checks do not claim native Flash rendering acceptance.
+
+The user supplied this first-hand 2024 experiment:
+https://www.reddit.com/r/WorldofTanks/comments/1b1go9f/how_the_speed_governor_works_in_wot/
+Apply its below-half-base-forward-speed gate and one-second wear pulses to
+the authoritative human critical-state path, using the accepted physics speed
+and the descriptor's rate. Absolute reverse speed uses the same forward
+threshold. Off or cruising states discard an incomplete pulse, as does an
+accepted switch edge; new rounds and new equipment installations reset it.
+Late ticks preserve complete elapsed seconds. The 60 HP example describes
+engine module durability, not horsepower: 30 HP are lost in 20 seconds.
+The 1.1/1.5 values are pinned-client evidence; the speed/pulse rule is the
+user's supplied modern experimental reference, not recovered #1513 server
+code. Do not infer an exception for health-boosting equipment from the disputed
+comment alone; the existing module health profile remains authoritative.
+
+Official WG descriptions call the governor permanent and never consumed,
+including https://worldoftanks.eu/uk/news/specials/weekly-offers-4-february2022/ .
+Further historical searches did not verify the user's active-at-death loss
+exception. Implement it as the explicitly requested offline settlement rule,
+not a certified retail fact: sample the canonical switch on the first actual
+player death and charge one item only when active. Activation, survival,
+inactive death and a live departure do not charge it. Existing receipt
+deduplication and depot-first auto-resupply own the subsequent inventory
+change. No visible replica becomes an inventory or combat authority.
+
+Validation: 1,839 tests pass across compatibility, entities, battle runtime,
+consumable audit, equipment mechanics, critical damage, postbattle, garage,
+server projectiles and combat lineage on Python 3.12.14. Coverage includes
+toggle retries, native command flags, power factors, speed boundaries,
+one-second wear, terminal-state sampling, environment deaths, repeat receipts
+after reopening the garage, and auto-resupply from stock or credits. All 146
+client modules compile under CPython 2.7.18. Real Windows switch highlighting,
+multiplayer message rendering and gameplay timing still need playtesting.
+
+## Report 031122: central environment notices and governor wear evidence
+
+The report contains three rounds on 37_caucasus using test-20260929-8599c30
+with one human in a KV-5. Unassisted environmental deaths have attacker ID
+zero. The exact #1513 BattleMessagesController classifies that as UNKNOWN_SELF,
+but the installed postmortem_panel.xml contains neither the corresponding
+environment UNKNOWN_SELF entries nor their generic base entries. Its central
+consumer silently drops the message after both lookups fail. Select the stock
+SELF_SUICIDE postfix for this presentation-only case: world collision,
+drowning, overturn, death zone and crew loss in a world collision. Preserve
+the arena event's zero attacker and all kill credit, and retain own-victim
+suppression in the right-hand feed. Assisted deaths retain native attribution.
+Fire, ammunition explosion and unknown shot causes keep their existing order.
+
+The exact installed Chinese ingame_gui.mo provides the wording. Current online
+survival/postmortem guides do not establish the historical Chinese strings.
+An independent CPython 2.7 audit executes the installed controller, postmortem
+code lookup, reason formatter and template renderer with installed XML/MO
+data. The four principal zero-attacker causes reproduce a missing message
+before the adapter correction and reach the central display boundary once
+after it, without changing the arena attacker or sending a right-side feed.
+The existing native 210 death combinations and four ally-hit combinations also
+pass. Native Flash rendering remains a Windows acceptance boundary.
+
+The installed KV-5 M500 has 360 engine module HP and 180 regeneration HP.
+At the current 1.5 HP per eligible second, a healthy engine requires 120
+seconds below half base forward speed with the governor active before it
+becomes yellow. The previous 60 HP example cannot establish KV-5 timing.
+A canonical equipment-install/activate/critical-tick/public-snapshot test at
+the real 30 Hz cadence reproduces a one-tick delay: per-tick decimal rounding
+leaves HP at 181.5 at nominal 120 seconds. Retain the floating accumulator and
+allow only 1e-9 boundary noise; the same test now reaches critical 180 HP.
+This small correction does not establish the cause of an indefinitely healthy
+engine in native play. The old report has no accepted-switch or engine-HP
+trace. Add accepted governor edges and five-second canonical wear records
+(rate, speed, threshold, HP, maximum, state and fractional pulse) for mounted
+governors, including inactive ones, to distinguish activation, eligibility and
+presentation without additional native queries.
+
+The first-round Bot 29 wreck briefly settles near (-17.15, 0.47, 111.06),
+with 11-13 reported contacts and approximately 0.48 radians roll, before
+falling to y=-13.88 at 03:01:57 and settling near -14.39. The third-round
+Bot 29 wreck falls from y=1.08 to -10.47 between 03:08:55 and 03:08:57.
+These are actual falls, but do not prove the earlier pause was physically
+correct. The old EDGE record lacks separate spring/body heights. Second-round
+live Bot 8 settles on a measured inclined plane near y=-6.06; this is distinct
+from the reported dead wrecks. No sampled BOT MOTION record reports a support
+or pose rollback. Preserve physical behavior and extend the existing EDGE
+record with rigid-contact count and already-computed spring/body heights,
+at its existing cadence. No extra collision query, braking change or
+unverified bridge coefficient is introduced.
+
+Validation: 1,841 tests pass across compatibility, entities, battle runtime,
+consumable audit, equipment mechanics, critical damage, postbattle, garage,
+server projectiles and combat lineage on Python 3.12.14. The new full-cadence
+KV-5 test failed before the accumulator correction and passes afterward.
+Native governor timing and bridge contact geometry still require a report
+from the instrumented Windows build; neither symptom is claimed fully fixed.
+All 146 client modules compile under CPython 2.7.18. Three existing bridge
+support/bank regression methods also pass with EDGE logging explicitly
+enabled, exercising zero-contact, spring-only and rigid-contact formatting.
+
+## v0.9.6: confirmed governor wear and safe shutdown
+
+Report 035714 uses e3d430e and records MT-25 engine HP reaching 129.5/260
+and critical state at 03:53:05; high-speed intervals leave HP unchanged.
+The KV-5 interval reaches 264/360, above its 180 HP yellow threshold.
+Remove the temporary governor diagnostics without changing its accepted
+switch, wear, power, settlement or resupply behavior.
+
+The report's game.fini fails at tutorialLoaderFini after gui_personality.fini
+has destroyed the Scaleform app. Exact #1513 ApplicationEffect accesses a
+dead weak proxy; SetTriggerEffect.stop already supports a None layout.
+At mod fini, arm a one-shot wrapper on game's cached tutorial finalizer.
+Only during that finalizer, the native layout accessor maps ReferenceError
+to None. Keep every effect's cleanup and restore both wrappers in finally.
+Do not load GUI modules during partial startup or swallow other exceptions.
+An independent Python 2.7 audit executes the installed accessor, trigger
+stop and stopAll code: it reproduces the stock failure and completes cleanup
+with the adapter, including live-layout trigger clearing and hook restoration.
+The retained late sound guard then remains available for SoundGroups.destroy.
+183 compatibility tests pass and all 146 client files compile under Python 2.7.
+
+The native starter also waited ten seconds after both its Job and tracked
+players were empty. Every descendant belongs to that Job: a live replacement
+keeps its process count nonzero; an empty Job has no parent left to start
+another descendant. Exit at the empty-Job boundary. Preserve stop events,
+process tracking, exit codes and bounded crash-monitor handling. Rebuild the
+x86 GUI executable with LLVM-MinGW 20260922 (MSVCRT), with warnings as errors.
+Real Windows tests with a controlled native client reproduce the old delay
+in both normal and handoff cases; the rebuilt starter completes in 0-0.1 s
+after the final child exits and keeps a live replacement running after its
+parent exits. The 24 starter tests pass. These are process-lifetime tests,
+not a claim of a measured full #1513 game shutdown speedup.
+
+Maintenance tests previously inherited the host APPDATA and could reach real
+saves. Pin their default environment to the test's temporary/fallback paths;
+external-save cases explicitly supply a temporary APPDATA. A regression
+exercises normal install, forced reinstall and startup repair against default
+and named external slots, including legacy state and rotated backups. The
+746 launcher tests pass (14 platform/environment skips). Product reset stays
+behind its separate confirmation and is not invoked by installation or repair.

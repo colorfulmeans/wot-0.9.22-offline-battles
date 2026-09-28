@@ -8,6 +8,18 @@ from gui.mods.offline_lan_0922 import rigid_turret
 
 
 class TurretRuntimeContactTests(unittest.TestCase):
+    def test_visual_arc_never_enters_worker_solver_or_obstacle_registry(self):
+        runtime, battle = self.setup_body()
+        battle._worker_mode = True
+        battle._detached_turret_rows['bot:17'] = row()
+        battle._turret_server_time_ms = lambda unused: 10000
+        battle._detached_turret_obstacles = mock.Mock()
+        battle._advance_turret_support = mock.Mock()
+        battle._advance_detached_turrets(10.)
+        battle._advance_turret_support.assert_not_called()
+        battle._detached_turret_obstacles.add.assert_not_called()
+        self.assertEqual({}, battle._turret_bodies)
+
     def setup_body(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
@@ -90,6 +102,32 @@ class TurretRuntimeContactTests(unittest.TestCase):
         self.assertEqual(1080, battle._turret_sim_times['bot:17'])
         battle._advance_turret_support(1080)
         self.assertAlmostEqual(.08, battle._turret_bodies['bot:17'].position[0])
+
+    def test_landed_visible_contact_moves_the_canonical_body_once(self):
+        runtime, battle = self.setup_body()
+        td = runtime.bigworld.entities[117].typeDescriptor
+        body = rigid_turret.Body(rigid_turret.geometry.turret_components(td),
+            dict(position=(0., 1., 0.), attitude=(0., 0., 0.), grounded=True))
+        battle._detached_turret_rows['bot:17'] = rigid_turret.revision(row(), body, 1000)
+        self.assertTrue(battle._detached_turret_rows['bot:17']['flight']['landed'])
+        battle._local_physics = {'mass': 50000.}
+        battle._local_speed = 5.
+        battle._motion_is_clear = lambda *args, **kwargs: True
+        battle._resolve_local_turret_contacts(runtime.bigworld.entities[101],
+                                              (-1.4, 1., 0.), math.pi/2, .04)
+        checkpoint = battle._local_turret_pushes['bot:17'][:]
+        self.assertGreater(checkpoint[2], 0.)
+        player = dict(id=1, x=-1.4, y=1., z=0., yaw=math.pi/2,
+                      speed=battle._local_speed, alive=True, turret_pushes=[checkpoint])
+        battle._authority_players = lambda: [player]
+        with mock.patch('gui.mods.offline_lan_0922.battle_runtime._PROFILE_CLOCK', return_value=0.):
+            battle._advance_turret_support(1040)
+            moved = battle._turret_bodies['bot:17']
+            self.assertGreater(moved.position[0], 0.)
+            self.assertEqual([['player:1']+checkpoint[1:]], moved.acks)
+            first = moved.frame()
+            battle._advance_turret_support(1040)
+            self.assertEqual(first, moved.frame())
 
     def test_late_callback_preserves_debt_without_starving_other_bodies(self):
         runtime, battle = self.setup_body()

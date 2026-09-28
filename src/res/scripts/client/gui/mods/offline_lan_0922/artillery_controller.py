@@ -169,6 +169,7 @@ class ArtilleryController(object):
             self.queue._discard_job(previous)
             self.queue._discard_waiting(previous)
             self.queue.results.pop(previous, None)
+            self.queue.details.pop(previous, None)
         if key is None:
             self._planning_keys.pop(slot, None)
         else:
@@ -325,6 +326,7 @@ class ArtilleryController(object):
             self.launch_queue._discard_job(previous)
             self.launch_queue._discard_waiting(previous)
             self.launch_queue.results.pop(previous, None)
+            self.launch_queue.details.pop(previous, None)
             self._launch_receipts.pop(previous, None)
         if key is None:
             self._launch_keys.pop(slot, None)
@@ -481,6 +483,26 @@ class ArtilleryController(object):
             planning_used += self.queue.advance(
                 now, remaining, probe)
         return launch_used + planning_used
+
+    def status(self, source, target, shell_index, now):
+        """Expose why one SPG is waiting using already sampled evidence."""
+        output = {'planning': {'state': 'no_target'},
+                  'launch': {'state': 'missing'}}
+        if isinstance(source, dict):
+            launch_key = self._launch_keys.get(int(source.get('id', 0)))
+            if launch_key in self._launch_receipts:
+                output['launch'] = {'state': 'clear'}
+            elif launch_key is not None:
+                output['launch'] = self.launch_queue.status(launch_key, now)
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            return output
+        slot = self._planning_slot(source, target, shell_index)
+        key = self._settled_planning_key(slot, self._key(source, target, shell_index))
+        if self._planning_keys.get(slot) != key:
+            output['planning'] = {'state': 'pose_changed'}
+        else:
+            output['planning'] = self.queue.status(key, now)
+        return output
 
     def diagnostics(self):
         result = self.queue.diagnostics()

@@ -57,6 +57,20 @@ def _descriptor(max_ammo=100, clip=(3, 1.0)):
 
 class GunMechanicsParityTests(unittest.TestCase):
 
+    def test_garage_shell_slots_drive_index_counts_and_siege_refresh(self):
+        descriptor = _descriptor(clip=(1, 1.0))
+        state = GunState(
+            descriptor, ammo_layout={1: 20, 2: 10, 3: 5},
+            shell_order=(3, 1, 2))
+
+        self.assertEqual([3, 1, 2], [shot.shell.compactDescr
+                                     for shot in state.shots])
+        self.assertEqual([5, 20, 10], state.ammo)
+        self.assertEqual(0, state.shot_index)
+        self.assertFalse(state.adopt_descriptor(_descriptor(clip=(1, 1.0))))
+        self.assertEqual([3, 1, 2], [shot.shell.compactDescr
+                                     for shot in state.shots])
+
     def test_siege_descriptor_refresh_preserves_live_ammo_and_reload(self):
         state = GunState(
             _descriptor(clip=(1, 1.0)),

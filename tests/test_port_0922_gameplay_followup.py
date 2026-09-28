@@ -273,6 +273,35 @@ class AimProgressTests(unittest.TestCase):
         self.assertEqual((-1.0, -1.0, False), driver.combat_hull_aim(
             0.0, 1.0, -.1, .1, -1.0, -1.0, 'reverse_turn', True))
 
+    def test_reported_su122_retreat_keeps_route_turn_over_gun_aim(self):
+        # Airfield 17:52:41/46/50: SU-122-44 wanted a right route pivot,
+        # but the visible target made hull aiming replace it with a left turn.
+        for yaw, mode in ((-.7429965, 'withdraw'),
+                          (-1.1123639, 'low_health_retreat'),
+                          (-.3324339, 'low_health_retreat')):
+            self.assertEqual((1.0, 0.0, False), driver.combat_hull_aim(
+                yaw, yaw - 1.0, -.1, .1, 1.0, 0.0, 'drive', True,
+                combat_mode=mode, movement_intent=True))
+        for mode in ('route', 'advance', 'advance_contact', 'flank',
+                     'take_cover', 'friendly_lane_reposition'):
+            self.assertEqual((.4, 1.0, False), driver.combat_hull_aim(
+                0., -1., -.1, .1, .4, 1., 'drive', True,
+                combat_mode=mode, movement_intent=True))
+
+    def test_navigation_wait_and_backout_keep_control_with_visible_target(self):
+        for recovery, turn, throttle in (
+                ('nav_wait', 0., 0.), ('physical_hold', 0., 0.),
+                ('reverse_turn', -1., -.72)):
+            self.assertEqual((turn, throttle, False), driver.combat_hull_aim(
+                0., 1., -.1, .1, turn, throttle, recovery, True,
+                combat_mode='engage', movement_intent=True))
+        self.assertEqual((0., 0., False), driver.combat_hull_aim(
+            0., 1., -.1, .1, 0., 0., 'arrived', True,
+            combat_mode='route', movement_intent=True))
+        self.assertEqual((1., 0., True), driver.combat_hull_aim(
+            0., 1., -.1, .1, 0., 0., 'arrived', True,
+            combat_mode='cover_hold', movement_intent=False))
+
     def test_artillery_planning_survives_continuous_gun_slew(self):
         controller = ArtilleryController()
         descriptor = bot_fixture._combat_descriptor()

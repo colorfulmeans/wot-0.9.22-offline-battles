@@ -24,6 +24,7 @@ from gui.mods.offline_lan_0922.lan_client import (
 from gui.mods.offline_lan_0922.authority_worker import (
     AuthorityWorkerLANClient)
 from gui.mods.offline_lan_0922.snapshot_sync import SnapshotSync
+from gui.mods.offline_lan_0922 import bot_state_codec
 from lan_battle_server import (
     BattleState, CLIENT_BUILD_0922, Player,
     PLAYER_FIRE_INTENT_CAPABILITY, PLAYER_INPUT_FAULT_CLASSES,
@@ -692,7 +693,7 @@ class LanProtocolTests(unittest.TestCase):
                     for row in state._vehicle_statistics_payload())
         self.assertEqual({
             'actor_kind', 'actor_id', 'team', 'shots_fired', 'shots_hit',
-            'shots_penetrated', 'damage_dealt', 'damage_received',
+            'shots_penetrated', 'max_piercing_series', 'damage_dealt', 'damage_received',
             'damage_blocked', 'damage_assisted_track',
             'damage_assisted_radio', 'damage_assisted_stun',
             'kills', 'spotted',
@@ -722,6 +723,7 @@ class LanProtocolTests(unittest.TestCase):
         self.assertEqual(240, rows[1]['damage_assisted_radio'])
         self.assertEqual(240, rows[3]['damage_dealt'])
         self.assertEqual(240, rows[2]['damage_received'])
+        self.assertEqual(0, rows[1]['max_piercing_series'])
         self.assertEqual(1, rows[3]['critical_hits'])
         self.assertEqual(1, rows[3]['team_crits'])
         self.assertEqual(list(rows.values()), json.loads(json.dumps(list(rows.values()))))
@@ -1517,10 +1519,55 @@ class ShippingClientInputContractTests(unittest.TestCase):
                 ('x', float('nan')), ('z', float('inf')),
                 ('yaw', float('-inf')), ('speed', 1000.0),
                 ('x', 5000.0), ('gun_pitch', 3.0),
-                ('pitch', 1.5)):
+                ('pitch', math.pi + 0.01)):
             with self.subTest(field=field, value=value):
                 self.assertIsNone(_canonical_runtime_vehicle_row(
                     _snapshot_player(**{field: value})))
+
+    def test_reported_bridge_fall_updates_pose_and_health_for_bots_and_wrecks(self):
+        # 235422 / M41 Bulldog: accepted near deck, then frozen by the old
+        # 0.61-radian replica bound while authority continued to y=-14.6874.
+        samples = ((0.5641, 0.01827, 0.41632),
+                   (-0.17095, -0.07127, 1.40432),
+                   (-6.35, -0.45779, 1.482),
+                   (-8.79958, -3.70434, 2.17220),
+                   (-8.02788, -9.28007, 3.55465),
+                   (-14.687445, -15.797617, 9.398418))
+        identity = dict(id=29, team=2, slot=29, name='M41', max_health=1500)
+        for alive in (True, False):
+            self.client.last_snapshot = {'bots': [dict(id=29, y=0.5641)]}
+            for height, pitch, roll in samples:
+                source = dict(id=29, y=height, pitch=pitch, roll=roll,
+                              reload_time=0.0, reload_duration=5.0,
+                              health=1500 if alive else 0, alive=alive)
+                decoded = bot_state_codec.decode_row(
+                    bot_state_codec.encode_row(source), {})
+                for raw, trusted in ((source, False), (decoded, True)):
+                    published = BattleState._sanitize_bot_state(
+                        raw, identity, None, trusted=trusted)
+                    rows, retained = self.client._canonical_runtime_rows(
+                        [published], 'bots')
+                    self.assertEqual(0, retained)
+                    self.assertEqual(1, len(rows))
+                    self.assertAlmostEqual(height, rows[0]['y'], delta=0.000051)
+                    self.assertEqual(source['health'], rows[0]['health'])
+                    for key in ('pitch', 'roll'):
+                        self.assertAlmostEqual(math.sin(source[key]),
+                                               math.sin(rows[0][key]), places=5)
+                        self.assertAlmostEqual(math.cos(source[key]),
+                                               math.cos(rows[0][key]), places=5)
+
+    def test_human_rollover_pose_survives_sender_server_and_replica(self):
+        for pitch, roll in ((1.5, -1.5), (0.0, math.pi),
+                            (-15.797617, 9.398418)):
+            self.assertTrue(self._send(pitch=pitch, roll=roll))
+            self.assertTrue(self.state.update_input(1, self.sent[-1]))
+            public = self.state._public_player(self.player)
+            row = _canonical_runtime_vehicle_row(public)
+            self.assertIsNotNone(row)
+            for key, value in (('pitch', pitch), ('roll', roll)):
+                self.assertAlmostEqual(math.sin(value), math.sin(row[key]), places=5)
+                self.assertAlmostEqual(math.cos(value), math.cos(row[key]), places=5)
 
     def test_runtime_vehicle_numbers_are_canonicalized_once(self):
         source = {

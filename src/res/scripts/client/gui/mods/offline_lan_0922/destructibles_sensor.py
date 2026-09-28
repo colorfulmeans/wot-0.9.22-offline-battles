@@ -5,7 +5,8 @@ The three sensor bodies below are dedented copies from ``offline_battle.py``.
 Only their former closure dependencies are supplied at module scope.
 """
 
-from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
+from gui.mods.offline_lan_0922.collision_flags import (
+	VEHICLE_SKIP_FLAGS, SIGHT_SKIP_FLAGS)
 
 from gui.mods.offline_lan_0922.worker_diagnostics import (
     observed, observed_call, observed_ray,
@@ -1612,6 +1613,7 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_isolation_logs',
 			'g_offh_destr_isolation_log_capped',
 			'g_offh_destr_diagnostics', 'g_offh_destr_diag_last_static',
+			'g_offh_destr_contact_diagnostic_times',
 			'g_offh_destr_spatial_revision',
 			'g_offh_destr_spatial_global_generation',
 			'g_offh_destr_spatial_cell_generations',
@@ -3792,7 +3794,7 @@ def _synthetic_mat_info(candidate, math_module):
 
 def _catalog_candidate_on_ray_1513(
 		contact_pt, segment_start, segment_end, prefer_destroyed=False,
-		excluded_keys=()):
+		excluded_keys=(), allow_overlaps=False):
 	"""Resolve one exact registered OBB on the current native ray.
 
 	Point containment deliberately has a 7.5 cm tolerance for compiled BSP
@@ -3838,6 +3840,11 @@ def _catalog_candidate_on_ray_1513(
 			entry = (candidate, entry_distance, exit_distance)
 			if not any(value[0] == candidate for value in candidates):
 				candidates.append(entry)
+	if allow_overlaps:
+		# Planning can filter all proved original identities and requery the
+		# ENTIRE segment.  It need not guess which overlapping OBB owns the
+		# nearest native hit.  Physical contact retains the unique-hit rule.
+		return tuple(value[0] for value in candidates) or None
 	if len(candidates) == 1:
 		return candidates[0][0]
 	if len(candidates) > 1 and prefer_destroyed:
@@ -3884,7 +3891,7 @@ def _catalog_retains_collision_1513(candidate):
 
 def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
 		segment_end, recast_budget=None, prefer_destroyed=False,
-		excluded_keys=()):
+		excluded_keys=(), allow_overlaps=False):
 	"""Name a far-probe hit without waiting for a moving hull's registry scan.
 
 	A stationary Bot can see a prop before proximity scanning registers it.
@@ -3893,13 +3900,17 @@ def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
 	recast budget, so a cold chunk cannot create an unbounded planning spike.
 	"""
 	candidate = _catalog_candidate_on_ray_1513(
-		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys)
-	if candidate is not None:
+		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys,
+		allow_overlaps=allow_overlaps)
+	if candidate is not None and not allow_overlaps:
 		return candidate
 	catalog = _destructible_catalog or {}
 	baked_instances = catalog.get('baked_instances', {})
 	if not baked_instances:
-		return None
+		return candidate
+	# In planning mode an already registered OBB is only part of the overlap
+	# set.  A retained building base can surround a cold fragile's actual hit;
+	# hydrate the other matching items before concluding that the ray is hard.
 	margin = _CATALOG_POINT_EPSILON
 	identities = set()
 	for key in _baked_bin_keys_for_bounds_1513(
@@ -3935,7 +3946,62 @@ def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
 	if pending:
 		return 'deferred'
 	return _catalog_candidate_on_ray_1513(
-		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys)
+		hit_point, segment_start, segment_end, prefer_destroyed, excluded_keys,
+		allow_overlaps=allow_overlaps)
+
+
+def prepare_navigation_collision_filter(start, end):
+	"""Ignore original destructible materials in the FIRST planning query.
+
+	The pinned #1513 callback supplies (material, flags, item, chunk). Its
+	71--85 materials belong to original destructibles; 86 is an exclusive
+	sentinel and 87--100 are damaged replacements. This contract is sufficient
+	for route planning:
+	no catalog lookup, streamed identity, kinetic test or per-object recast
+	is needed. Native traversal keeps searching the entire segment for real
+	terrain, hard scenery and replacement geometry, even inside a prop.
+
+	Physical hull/suspension/destruction queries retain their existing exact
+	identity and kinetic rules. This callback cannot authorize crushing.
+	"""
+	def keep_surface(*surface):
+		if (len(surface) != 4 or
+				not all(type(value) in _INTEGER_TYPES for value in surface)):
+			return True
+		if _DESTRUCTIBLE_MAT_KIND_MIN_1513 <= surface[0] < _STRUCTURE_MAT_KIND_MAX_1513:
+			return False
+		return True
+	return keep_surface
+
+
+def _planning_clear_destructible_surfaces_1513(spaceID, segment_start,
+		segment_end, collision, recast_budget=None, trace=None,
+		query_name='native.destructible.ray'):
+	"""Compatibility requery for a caller which already took an unfiltered ray.
+
+	Runtime navigation installs the planning filter on its first native ray.
+	Other read-only callers get one full-segment query, independent of the
+	number of props and of the physical recast budget. Never identify the
+	nearest hit from callback ordering or skip a geometric interval.
+	"""
+	import BigWorld
+	remaining = None
+	if collision is not None:
+		remaining = observed_ray(query_name, BigWorld.wg_collideSegment,
+			spaceID, segment_start, segment_end, VEHICLE_SKIP_FLAGS,
+			prepare_navigation_collision_filter(segment_start, segment_end))
+	if trace is not None:
+		trace.update(classification='clear' if remaining is None else 'hard',
+			reason='native_corridor_clear' if remaining is None else 'native_hard_geometry')
+		if remaining is not None:
+			try:
+				trace['hit'] = tuple(float(getattr(remaining[0], axis))
+					for axis in ('x', 'y', 'z'))
+				trace['normal'] = tuple(float(getattr(remaining[1], axis))
+					for axis in ('x', 'y', 'z'))
+			except (AttributeError, IndexError, TypeError, ValueError):
+				pass
+	return remaining
 
 
 def _soft_static_original_filter_1513(excluded_keys):
@@ -3952,7 +4018,8 @@ def _soft_static_original_filter_1513(excluded_keys):
 
 
 def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
-		collision, maximum_y, vel, td, kinetic_speed=None, recast_budget=None):
+		collision, maximum_y, vel, td, kinetic_speed=None, recast_budget=None,
+		ignore_destructibles=False):
 	"""Recheck an unreachable crushable roof without changing physical support.
 
 	Only the approach probe uses this: a roof above its existing climb envelope
@@ -3960,7 +4027,13 @@ def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
 	filter each exact crushable original material, then test the real ground
 	below. Reachable decks, unproved roofs and non-crushable geometry retain
 	the original result; the later hull contact still owns destruction.
+	With ``ignore_destructibles`` the planner removes original destructible
+	materials, including low roofs, without requiring a catalog or identity.
 	"""
+	if ignore_destructibles:
+		return _planning_clear_destructible_surfaces_1513(
+			spaceID, segment_start, segment_end, collision, recast_budget,
+			query_name='native.destructible.planning_ground')
 	if _destructible_catalog is None or td is None:
 		return collision
 	import BigWorld
@@ -4003,7 +4076,8 @@ def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
 def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 		collision, vel, td, recast_budget=None,
 		require_pending_first=False, allow_kinetic_first=False,
-		kinetic_speed=None):
+		kinetic_speed=None, planning_crushable=None, trace=None,
+		ignore_destructibles=False):
 	"""Classify a far static ray without destroying anything.
 
 	A bot direction probe may look 15--20 metres ahead.  It may regard a
@@ -4015,18 +4089,41 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 	native recast budget instead returns ``'deferred'`` so the caller can avoid
 	caching a false hard wall.
 	"""
-	if (_destructible_catalog is None or collision is None or td is None):
-		return False
+	if ignore_destructibles and not require_pending_first:
+		remaining = _planning_clear_destructible_surfaces_1513(
+			spaceID, segment_start, segment_end, collision, recast_budget, trace)
+		return remaining is None
+	# A planning consumer can supply frozen stock kinetic inputs. Identity and
+	# recast evidence still belong to this exact native ray, not to a model-wide
+	# exemption. Diagnostics only copy values already obtained by these queries.
+	def finish(result, classification, reason, hit=None):
+		if trace is not None:
+			trace['classification'] = classification
+			trace['reason'] = reason
+			if hit is not None:
+				try:
+					trace['hit'] = tuple(float(getattr(hit[0], axis))
+						for axis in ('x', 'y', 'z'))
+					trace['normal'] = tuple(float(getattr(hit[1], axis))
+						for axis in ('x', 'y', 'z'))
+				except (AttributeError, IndexError, TypeError, ValueError):
+					pass
+		return result
+	if trace is not None:
+		trace['objects'] = []
+	if (_destructible_catalog is None or collision is None or
+			(td is None and not callable(planning_crushable))):
+		return finish(False, 'unknown', 'catalog_or_capability_unavailable', collision)
 	import BigWorld
 	import Math
 	try:
 		direction = segment_end - segment_start
 		remaining = direction.length
 		if remaining <= 1.0e-6:
-			return False
+			return finish(False, 'unknown', 'invalid_segment', collision)
 		direction.normalise()
 	except (AttributeError, TypeError, ValueError):
-		return False
+		return finish(False, 'unknown', 'invalid_segment', collision)
 
 	current_start = segment_start
 	current_hit = collision
@@ -4038,15 +4135,23 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 		try:
 			hit_point = current_hit[0]
 		except (TypeError, IndexError):
-			return 'pending_hard' if pending_contact else False
+			return finish('pending_hard' if pending_contact else False,
+				'unknown', 'invalid_native_hit')
 		candidate = _planning_catalog_candidate_1513(
 			spaceID, hit_point, current_start, segment_end, recast_budget,
 			prefer_destroyed=(require_pending_first and candidate_index == 0),
 			excluded_keys=excluded_keys)
 		if candidate == 'deferred':
-			return 'pending_hard' if pending_contact else 'deferred'
+			return finish('pending_hard' if pending_contact else 'deferred',
+				'deferred', 'identity_proof_deferred', current_hit)
 		if candidate is None:
-			return 'pending_hard' if pending_contact else False
+			return finish('pending_hard' if pending_contact else False,
+				'unknown', ('unidentified_backing_surface' if excluded_keys else
+				'contact_identity_unproved'), current_hit)
+		if trace is not None:
+			trace['objects'].append({
+				'identity': tuple(candidate[:3]), 'model': candidate[3],
+				'kind': candidate[4], 'scale': candidate[5]})
 		# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True as soon as the
 		# chunk controller reports the item broken, whatever the vehicle speed and
 		# whatever the hide callback still draws.  A broken skin therefore never
@@ -4055,8 +4160,12 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			authority.is_destroyed(candidate[0], candidate[1], candidate[2]))
 		mat_info = _synthetic_mat_info(candidate + ((
 			float(hit_point.x), float(hit_point.y), float(hit_point.z)),), Math)
-		current_crushable = broken or _stock_crushable_1513(
-			mat_info, vel, td, candidate[5])
+		if callable(planning_crushable):
+			current_crushable = broken or planning_crushable(
+				mat_info, candidate[5])
+		else:
+			current_crushable = broken or _stock_crushable_1513(
+				mat_info, vel, td, candidate[5])
 		if require_pending_first and candidate_index == 0:
 			if broken:
 				pending_contact = True
@@ -4073,7 +4182,7 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 				kinetic_contact = True
 				current_crushable = True
 			else:
-				return False
+				return finish(False, 'hard', 'stock_kinetic_reject', current_hit)
 		elif (allow_kinetic_first and
 				kinetic_speed is not None and not current_crushable and
 				_stock_crushable_1513(
@@ -4081,7 +4190,8 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			kinetic_contact = True
 			current_crushable = True
 		if not current_crushable:
-			return 'pending_hard' if pending_contact else False
+			return finish('pending_hard' if pending_contact else False,
+				'hard', 'stock_kinetic_reject', current_hit)
 		# A box is identity evidence, not proof that its interior is empty.
 		# Exact native keys are unique across the space, so one filtered query
 		# can inspect BOTH the interior and the rest of the original segment.
@@ -4089,15 +4199,18 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 		excluded_keys.add(candidate[:3])
 		if recast_budget is not None:
 			if not recast_budget or int(recast_budget[0]) <= 0:
-				return 'pending_hard' if pending_contact else 'deferred'
+				return finish('pending_hard' if pending_contact else 'deferred',
+					'deferred', 'recast_budget', current_hit)
 			recast_budget[0] = int(recast_budget[0]) - 1
 		current_hit = observed_ray(
 			'native.destructible.ray', BigWorld.wg_collideSegment,
 			spaceID, current_start, segment_end, VEHICLE_SKIP_FLAGS,
 			_soft_static_original_filter_1513(excluded_keys))
 		if current_hit is None:
-			return 'kinetic' if kinetic_contact else True
-	return 'pending_hard' if pending_contact else False
+			return finish('kinetic' if kinetic_contact else True,
+				'soft', 'proved_original_materials_only')
+	return finish('pending_hard' if pending_contact else False,
+		'unknown', 'surface_layer_limit', current_hit)
 
 
 def _motion_travel_reach(vel, dt):
@@ -4618,7 +4731,8 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 
 
 def collide_motion_segment(space_id, start, end, collision_filter,
-		native_collide, ray_label='native.motion.ray', evidence=None):
+		native_collide, ray_label='native.motion.ray', evidence=None,
+		skip_flags=VEHICLE_SKIP_FLAGS):
 	"""Recast compiled original skins inside their accepted object/module.
 
 	#1513 can return a merged, PROJECTILENOCOLLIDE BSP with anonymous item
@@ -4632,7 +4746,7 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 	geometry inside the original module's box. All intervals share one budget.
 	"""
 	if collision_filter is None or _destructible_catalog is None:
-		args = (space_id, start, end, VEHICLE_SKIP_FLAGS)
+		args = (space_id, start, end, skip_flags)
 		if collision_filter is not None:
 			args += (collision_filter,)
 		return observed_ray(ray_label, native_collide, *args)
@@ -4641,7 +4755,7 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 		excluded_aliases = frozenset(surface[:2] for surface in excluded)
 		if collision_filter is None:
 			return (observed_ray(ray_label, native_collide,
-				space_id, a, b, VEHICLE_SKIP_FLAGS), candidates)
+				space_id, a, b, skip_flags), candidates)
 		def keep(*hit):
 			accepted = collision_filter(*hit)
 			alias = _anonymous_original_surface_1513(hit)
@@ -4651,7 +4765,7 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 				candidates.add(tuple(hit))
 			return accepted
 		hit = observed_ray(ray_label, native_collide,
-			space_id, a, b, VEHICLE_SKIP_FLAGS, keep)
+			space_id, a, b, skip_flags, keep)
 		if evidence is not None:
 			evidence.setdefault('queries', []).append({
 				'start': (a.x, a.y, a.z), 'end': (b.x, b.y, b.z),
@@ -4695,6 +4809,19 @@ def collide_motion_segment(space_id, start, end, collision_filter,
 		globals()['g_offh_destr_ground_skips'] = globals().get(
 			'g_offh_destr_ground_skips', 0) + 1
 	return None
+
+
+def collide_sight_segment(space_id, start, end, collision_filter,
+		native_collide):
+	"""Release only proved broken original skins on a static spotting ray.
+
+	The live WGDE slot can differ from the original BSP slot after chunk
+	layout repair. A plain ledger callback therefore leaves some destroyed
+	fences opaque. Reuse bounded ownership proof while retaining the sight
+	mask and every intact, replacement, or unidentified surface.
+	"""
+	return collide_motion_segment(space_id, start, end, collision_filter,
+		native_collide, 'native.sight.ray', skip_flags=SIGHT_SKIP_FLAGS)
 
 
 def sight_collision_filter():
@@ -5038,6 +5165,22 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		'kinetic' if kinetic else
 		'crushed' if crushed else
 		'approach' if approach else 'clear')
+	if blocked and _contact_diagnostic_due_1513('CATALOG CONTACT', now):
+		try:
+			owners = []
+			for identity in sorted(grouped)[:8]:
+				instance = instances.get(identity, {})
+				owners.append({'identity': identity,
+					'filename': instance.get('filename'),
+					'kind': instance.get('kind'),
+					'boxes': instance.get('boxes', ())})
+			_write_contact_diagnostic_1513('CATALOG CONTACT', {
+				'space': spaceID, 'vehicle_sweep': vehicle_box,
+				'owners': owners, 'owners_omitted': max(0, len(grouped) - 8),
+				'unidentified': bool(unidentified), 'status': status,
+				'geometry': 'compiled collision bounds; not triangle surfaces'})
+		except Exception:
+			pass
 	return _catalog_motion_result(
 		status, exact_token, accepted_now,
 		used_kinetic_speed, return_status, return_detail, contact_kinds,
@@ -7537,7 +7680,8 @@ def _native_contact_slot_evidence_1513(space_id, surface):
 	return result
 
 
-def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
+def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt,
+		skip_flags=VEHICLE_SKIP_FLAGS):
 	"""Resolve a stalled ray's actual surfaces without changing destruction.
 
 	The ordinary callback log is a set of traversal candidates, NOT a nearest
@@ -7547,12 +7691,17 @@ def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 	"""
 	import BigWorld
 	import Math
-	evidence = {'surface_columns': 'material,flags,item,chunk'}
-	keep = horizontal_collision_filter(segment_start, segment_end)
+	evidence = {'surface_columns': 'material,flags,item,chunk',
+		'skip_flags': skip_flags}
+	ray_label = ('native.sight.diagnostic' if skip_flags == SIGHT_SKIP_FLAGS
+		else 'native.motion.diagnostic')
+	keep = (sight_collision_filter() if skip_flags == SIGHT_SKIP_FLAGS else
+		horizontal_collision_filter(segment_start, segment_end))
 	if keep is None:
 		keep = lambda *unused: True
 	result = collide_motion_segment(spaceID, segment_start, segment_end, keep,
-		BigWorld.wg_collideSegment, 'native.motion.diagnostic', evidence=evidence)
+		BigWorld.wg_collideSegment, ray_label, evidence=evidence,
+		skip_flags=skip_flags)
 	evidence['replay_clear'] = result is None
 	if result is not None:
 		evidence['replay_contact_distance'] = (result[0] - hit_pt).length
@@ -7566,9 +7715,9 @@ def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 				alias = _anonymous_original_surface_1513(key)
 				return (tuple(surface) == key if alias is None else
 					_anonymous_original_surface_1513(surface) == alias)
-			hit = observed_ray('native.motion.diagnostic',
+			hit = observed_ray(ray_label,
 				BigWorld.wg_collideSegment, spaceID, a, b,
-				VEHICLE_SKIP_FLAGS, only_surface)
+				skip_flags, only_surface)
 			witness = {'key': key, 'hit': None}
 			if hit is not None:
 				slot = _native_contact_slot_evidence_1513(spaceID, key)
@@ -7611,6 +7760,61 @@ def native_contact_evidence(spaceID, segment_start, segment_end, hit_pt):
 			'isolated': _destructible_isolated_1513(*identity)})
 	evidence['nearby_owners'] = owners
 	return evidence
+
+
+def _contact_diagnostic_due_1513(category, now=None):
+	"""Capture ordinary reports without enabling per-object debug logging.
+
+	These two contact records are needed with the default debug_logging=False.
+	One timestamp per fixed category bounds native replay work across all
+	vehicles and sight rays in this process, including when debug is enabled.
+	"""
+	if now is None:
+		now = _diagnostic_time_1513()
+	now = float(now)
+	times = globals().setdefault('g_offh_destr_contact_diagnostic_times', {})
+	previous = times.get(category)
+	if previous is not None and previous <= now < previous + 5.0:
+		return False
+	times[category] = now
+	return True
+
+
+def _write_contact_diagnostic_1513(category, payload):
+	try:
+		import json
+		import sys
+		writer = _diagnostic_writer or sys.stdout.write
+		writer('[Offline LAN 0.9.22] %s %s\n' % (
+			category, json.dumps(payload)))
+	except Exception:
+		pass
+
+
+def report_sight_contact(spaceID, start, end, hit):
+	"""Record the actual blocked ray; never decide spotting from diagnostics."""
+	if not _contact_diagnostic_due_1513('SIGHT CONTACT'):
+		return
+	try:
+		payload = {
+			'space': spaceID, 'ray_start': (start.x, start.y, start.z),
+			'ray_end': (end.x, end.y, end.z),
+			'hit': (hit[0].x, hit[0].y, hit[0].z),
+			'normal': (hit[1].x, hit[1].y, hit[1].z),
+		}
+		try:
+			payload['native_contact_evidence'] = native_contact_evidence(
+				spaceID, start, end, hit[0], skip_flags=SIGHT_SKIP_FLAGS)
+		except Exception as error:
+			payload['native_contact_error'] = str(error)[:160]
+		try:
+			payload['material_probes'] = static_contact_evidence(
+				spaceID, start, hit[0], hit[1])
+		except Exception as error:
+			payload['material_probe_error'] = str(error)[:160]
+		_write_contact_diagnostic_1513('SIGHT CONTACT', payload)
+	except Exception as error:
+		_write_contact_diagnostic_1513('SIGHT CONTACT', {'error': str(error)[:160]})
 
 
 def _try_destroy_solid_hit(spaceID, segment_start, hit_pt, surf_normal,

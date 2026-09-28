@@ -32,7 +32,7 @@ from gui.mods.offline_lan_0922.entities.avatar_server import AvatarServerBridge
 from gui.mods.offline_lan_0922.entities.bigworld_binding import \
     BigWorldVehicleBinding
 from gui.mods.offline_lan_0922.entities.detached_turret import (
-    DetachedTurretObstacles, DetachedTurretPresentation, freeze_obstacle_plan)
+    DetachedTurretObstacles, DetachedTurretPresentation, freeze_visual_plan)
 from gui.mods.offline_lan_0922 import turret_obstacle_schema, tank_contact_ledger
 from gui.mods.offline_lan_0922 import rigid_turret, turret_contact_ledger
 from gui.mods.offline_lan_0922.collision_feedback import CollisionFeedback
@@ -58,9 +58,9 @@ from gui.mods.offline_lan_0922.siege_hud import PersistentSiegeHints
 from gui.mods.offline_lan_0922.spawn_planner import SpawnPlanner
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.worker_diagnostics import (
-    WorkerCombatDiagnostics, timed, call as timed_call)
+    WorkerCombatDiagnostics, timed, call as timed_call, observed_ray)
 from gui.mods.offline_lan_0922 import (
-    ballistics, combat_rules, critical_damage, descriptor_donation,
+    ballistics, burst_mechanics, combat_rules, critical_damage, descriptor_donation,
     destructibles_compat, device_damage, effective_params,
     equipment_mechanics, gun_mechanics, hull_aiming,
     lan_client as lan_protocol,
@@ -1178,7 +1178,8 @@ def _destructible_rotation_interval_bbox(bbox, half_angle, pivot_offset=0.0):
 
 
 def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
-                                pitch=0.0, roll=0.0, previous_contacts=None):
+                                pitch=0.0, roll=0.0, previous_contacts=None,
+                                translation=(0.0, 0.0)):
     """Permit only reduced penetration of a face already inside this body.
 
     A replacement can appear inside an occupied hull. Probing its enclosing
@@ -1194,7 +1195,7 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
 
     def departing(collision):
         point, normal = collision[:2]
-        if abs(normal.y) > 0.2 or abs(pose_y[1]) < 0.1:
+        if normal.y < -0.2 or abs(pose_y[1]) < 0.1:
             return False
         dx, dy, dz = (point.x - position[0], point.y - position[1],
                       point.z - position[2])
@@ -1202,12 +1203,8 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
         y = (dy - x * pose_y[0] - z * pose_y[2]) / pose_y[1]
         inside = all(low[i] - 0.001 <= value <= high[i] + 0.001
                      for i, value in enumerate((x, y, z)))
-        plane = dx * normal.x + dy * normal.y + dz * normal.z
-        # Use the exposed face. A backface enclosing the centre is not
-        # evidence for a safe escape from this side of the object.
-        if plane >= 0.0:
-            return False
         before, after, swept = [], [], []
+        plane_travel = translation[0]*normal.x + translation[1]*normal.z
         for cx in (low[0], high[0]):
             for cy in (low[1], high[1]):
                 for cz in (low[2], high[2]):
@@ -1217,10 +1214,12 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
                                         cy * pose_y[1] + cz * pose_y[2])
                     before.append(a * cosine + b * sine + height)
                     after.append(a * math.cos(end_yaw) +
-                                 b * math.sin(end_yaw) + height)
+                                 b * math.sin(end_yaw) + height + plane_travel)
                     swept.append(_trig_interval_extrema(
-                        a, b, start_yaw, end_yaw)[0] + height)
-        improves = (min(after) > min(before) + 1.0e-8 and
+                        a, b, start_yaw, end_yaw)[0] + height + min(0.0, plane_travel))
+        support_slide = (world_collision._drivable_surface(collision) and
+                         min(after) >= min(before) - 1.0e-8)
+        improves = ((min(after) > min(before) + 1.0e-8 or support_slide) and
                     min(swept) >= min(before) - 1.0e-8)
         if not improves or inside:
             return improves
@@ -1852,6 +1851,8 @@ class BattleRuntime(object):
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
+        self._local_direction_command = 0.0
+        self._local_service_brake = False
         self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
@@ -1860,6 +1861,8 @@ class BattleRuntime(object):
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
         self._local_contact_pushes = {}
+        self._local_contact_impulses = {}
+        self._contact_receipt_clocks = {}
         self._local_turret_pushes = {}
         self._collision_feedback = CollisionFeedback()
         self._local_contact_log_time = 0.0
@@ -1953,6 +1956,9 @@ class BattleRuntime(object):
         self._local_downhill = (0.0, 0.0, 0.0)
         self._local_slope_tangent = 0.0
         self._local_ground_plane = None
+        # Hydraulic diagnostics read the preceding support before the first
+        # drive step samples terrain. No support exists in a fresh round.
+        self._local_legacy_support_sample = None
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
@@ -1965,6 +1971,7 @@ class BattleRuntime(object):
         self._player_fire_launch_pending = {}
         self._fire_timeline = collections.OrderedDict()
         self._local_fire_intent = None
+        self._local_player_burst = None
         self._fire_intent_reject_round = None
         self._fire_intent_reject_counts = {}
         self._ammo_signature = None
@@ -2200,6 +2207,8 @@ class BattleRuntime(object):
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
+        self._local_direction_command = 0.0
+        self._local_service_brake = False
         self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
@@ -2208,6 +2217,8 @@ class BattleRuntime(object):
         self._local_ram_cooldowns = {}
         self._local_ram_contacts = frozenset()
         self._local_contact_pushes = {}
+        self._local_contact_impulses = {}
+        self._contact_receipt_clocks = {}
         self._local_turret_pushes = {}
         self._collision_feedback = CollisionFeedback()
         self._local_contact_log_time = 0.0
@@ -2295,6 +2306,7 @@ class BattleRuntime(object):
         self._local_downhill = (0.0, 0.0, 0.0)
         self._local_slope_tangent = 0.0
         self._local_ground_plane = None
+        self._local_legacy_support_sample = None
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
@@ -2307,6 +2319,7 @@ class BattleRuntime(object):
         self._player_fire_launch_pending = {}
         self._fire_timeline = collections.OrderedDict()
         self._local_fire_intent = None
+        self._local_player_burst = None
         self._fire_intent_reject_round = None
         self._fire_intent_reject_counts = {}
         self._ammo_signature = None
@@ -3386,9 +3399,6 @@ class BattleRuntime(object):
             builder = EntityPropertyBuilder(
                 BigWorldVehicleBinding.PROPERTY_NAMES)
             self._sender = _LANInputSender(self)
-            position, yaw = self._state_world_pose(local)
-            self._local_position = position
-            self._local_yaw = yaw
             self._local_descriptor = descriptor
             # Resolve the complete line-up while BattleLoading is still up.
             # Every unique destroyed-model prerequisite is submitted now in
@@ -3400,6 +3410,10 @@ class BattleRuntime(object):
                     not lineup_ready:
                 raise RuntimeError(
                     'the configured Bot roster is not available in this client')
+            self._prepare_spawn_assignments()
+            position, yaw = self._state_world_pose(local)
+            self._local_position = position
+            self._local_yaw = yaw
             prewarm_enabled = getattr(
                 self._remote_factory, 'prewarm_wrecks_enabled', None)
             if callable(prewarm_enabled) and prewarm_enabled():
@@ -3432,6 +3446,8 @@ class BattleRuntime(object):
                 local.get('name', self._config.get('name', 'Player')))
             properties['publicInfo']['marksOnGun'] = _marks_on_gun(
                 local.get('marks_on_gun'))
+            properties['publicInfo']['prebattleID'] = self._lan_prebattle_id(
+                local, 'player')
             properties['health'] = max(1, min(
                 int(local.get('health', descriptor.maxHealth)),
                 int(descriptor.maxHealth)))
@@ -3600,7 +3616,8 @@ class BattleRuntime(object):
                     self._on_control_mode_changed)
                 self._gun_state = gun_mechanics.GunState(
                     descriptor, self._local_loadout(descriptor),
-                    ammo_layout=self._local_ammo_layout())
+                    ammo_layout=self._local_ammo_layout(),
+                    shell_order=self._garage_loadout_snapshot()['shell_order'])
                 self._log_local_ammo(self._gun_state)
                 self._log_effective_parameters(descriptor)
                 self._gun_last_tick = self._clock()
@@ -3646,21 +3663,25 @@ class BattleRuntime(object):
                 artillery_friendly_lane_probe=(
                     self._bot_artillery_friendly_lane),
                 artillery_launch_cancel=self._bot_artillery_cancel,
+                artillery_status_probe=self._bot_artillery_status,
                 spawn_resolver=self._formation_pose,
                 ground_probe=self._navigation_ground,
-                physics_ground_probe=self._ground_y,
+                # Use the player's near-body support layer for Bot height
+                # and attitude. The wider placement query can acquire an
+                # overhead bridge and turn every clear step into a rollback.
+                physics_ground_probe=self._support_column,
                 obstacle_probe=self._navigation_obstacle,
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
                 cover_probe=self._sample_bot_cover,
                 motion_resolver=self._resolve_bot_motion,
-                rotation_resolver=self._resolve_bot_rotation,
                 motion_report=self._report_bot_destructible_contact,
                 turret_motion_probe=self._turret_motion_is_clear,
+                wreck_rotation_probe=self._resolve_bot_rotation,
+                wreck_ground_probe=self._suspension_ground_y,
                 turret_hulls_provider=self._turret_navigation_hulls,
                 world_receipt_probe=self._direction_world_receipt,
                 water_depth_probe=self._water_depth,
-                water_hull_pose=self._bot_water_hull_pose,
                 ram_contact_probe=self._bot_ram_contact_armor,
                 bot_equipment_resolver=(
                     self._default_bot_equipment_contracts),
@@ -3787,6 +3808,15 @@ class BattleRuntime(object):
         if callable(abandon):
             abandon()
         return True
+
+    def _lan_prebattle_id(self, state, kind):
+        """Same-team LAN humans share the native squad presentation identity."""
+        if kind != 'player':
+            return 0
+        team = int(state.get('team', 0))
+        members = [row for row in (self._start_message or {}).get('players', ())
+                   if int(row.get('team', 0)) == team]
+        return team if team in (1, 2) and len(members) >= 2 else 0
 
     def _local_state(self):
         for value in self._start_message.get('players') or ():
@@ -4789,23 +4819,8 @@ class BattleRuntime(object):
         belong to the active descriptor. Ordinary vehicles retain their
         effective cap, and an unavailable drive limit is never fabricated.
         """
-        reverse = float(speed) < 0.0
-        try:
-            value = float(physics['speedBwd' if reverse else 'speedFwd'])
-            if travel_descriptor is None:
-                travel_descriptor = _field(descriptor, 'defaultVehicleDescr')
-            if travel_descriptor is not None and value > 0.0:
-                travel = float(_field(travel_descriptor, 'physics')[
-                    'speedLimits'][1 if reverse else 0])
-                if math.isnan(travel) or math.isinf(travel) or travel < 0.0:
-                    raise ValueError('invalid travel limit')
-                value = max(value, travel)
-        except (AttributeError, KeyError, IndexError, TypeError,
-                ValueError, OverflowError):
-            raise RuntimeError('destructible drive speed cap is unavailable')
-        if math.isnan(value) or math.isinf(value) or value < 0.0:
-            raise RuntimeError('destructible drive speed cap is invalid')
-        return -value if reverse else value
+        return vehicle_physics.destructible_drive_speed_cap(
+            descriptor, physics, speed, travel_descriptor)
 
     def _bot_destructible_travel_descriptor(self, bot_id):
         pair = getattr(self._bots, '_descriptor_pairs', {}).get(int(bot_id))
@@ -4916,6 +4931,11 @@ class BattleRuntime(object):
         offered = []
         for name in ([vehicle_name] + list(self._prepared_vehicle_names) +
                      [self._config.get('vehicle')]):
+            # Retired tanks remain legal as the explicitly requested human
+            # vehicle, but must never become another slot's load substitute.
+            if (name != vehicle_name and
+                    name in vehicle_configuration.RETIRED_BOT_VEHICLES):
+                continue
             if name and name not in offered:
                 offered.append(name)
                 yield name
@@ -4939,7 +4959,8 @@ class BattleRuntime(object):
     @staticmethod
     def _vehicle_excluded(entry):
         name = _field(entry, 'name')
-        if vehicle_blacklist.is_unusable(name):
+        if (vehicle_blacklist.is_unusable(name) or
+                name in vehicle_configuration.RETIRED_BOT_VEHICLES):
             return True
         return not vehicle_configuration.is_standard_battle_vehicle(entry)
 
@@ -5094,10 +5115,9 @@ class BattleRuntime(object):
                 int(candidate['level']) for candidate in candidates))
             match_tiers = list(bot_planner.bot_match_tiers(
                 tier, tier_mode, lineup_random.random(),
-                lineup_random.random(), available_tiers,
-                required_tiers=[profile['level']
-                                for profiles in humans_by_team.values()
-                                for profile in profiles]))
+                lineup_random.random(), available_tiers, required_tiers=[
+                    profile['level'] for profiles in humans_by_team.values()
+                    for profile in profiles]))
             for profiles in humans_by_team.values():
                 for profile in profiles:
                     if profile['level'] not in match_tiers:
@@ -5192,11 +5212,36 @@ class BattleRuntime(object):
                 return False
             self._bot_vehicle_assignments = assignments
             return True
-        except Exception:
-            # The local tank remains a valid descriptor fallback. The complete
-            # roster table itself is a #1513 retail API and is ABI-audited.
+        except Exception as error:
+            # Keep the actual preparation error instead of misreporting an
+            # adapter failure as a missing vehicle in the client's catalog.
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] Bot roster preparation failed: %s: %s\n' %
+                (type(error).__name__, error))
             self._bot_vehicle_assignments = {}
             return False
+
+    def _prepare_spawn_assignments(self):
+        """Use the same complete lineup for visible and worker spawn poses."""
+        classes = {}
+        for kind in ('players', 'bots'):
+            for row in self._start_message.get(kind) or ():
+                if not isinstance(row, dict) or int(row.get('id', 0)) <= 0:
+                    continue
+                key = (int(row.get('team', 1)), int(row.get('slot', 0)))
+                name = (self._bot_vehicle_assignments.get(key)
+                        if kind == 'bots' else row.get('vehicle'))
+                if not name:
+                    continue
+                descriptor = self._resolve_descriptor(name)
+                tags = _field(descriptor.type, 'tags', ()) or ()
+                if 'SPG' in tags:
+                    classes[key] = 'SPG'
+        self._spawn_slot_assignments = {}
+        self._spawn_cache.clear()
+        if self._spawn_planner is not None:
+            self._spawn_slot_assignments = (
+                self._spawn_planner.assign_artillery_rear(classes))
 
     def _formation_pose(self, team, slot):
         key = (int(team), int(slot))
@@ -5208,7 +5253,9 @@ class BattleRuntime(object):
                 self._arena_type,
                 tactical_maps.get_tactical_map(self._config['map']),
                 self._navigation_graph)
-        result = self._spawn_planner.pose(key[0], key[1])
+        physical_slot = getattr(self, '_spawn_slot_assignments', {}).get(
+            key, key[1])
+        result = self._spawn_planner.pose(key[0], physical_slot)
         self._spawn_cache[key] = result
         return result
 
@@ -5438,16 +5485,43 @@ class BattleRuntime(object):
             start_y = next_y
         return None
 
+    def _navigation_collision_filter(self, start, end):
+        """Prepare planning geometry independently of physical crush permission."""
+        prepare = getattr(self._destructibles,
+                          'prepare_navigation_collision_filter', None)
+        return prepare(start, end) if callable(prepare) else None
+
+    def _collide_navigation(self, start, end, trace=None):
+        """Query native route geometry without a physical broken-skin recast."""
+        collision_filter = self._navigation_collision_filter(start, end)
+        if trace is not None:
+            collision_filter = world_collision._trace_collision_filter(
+                collision_filter, trace)
+        args = (self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS)
+        if collision_filter is not None:
+            args += (collision_filter,)
+        return observed_ray('native.navigation.ray',
+                            self._runtime.bigworld.wg_collideSegment, *args)
+
+    @staticmethod
+    def _record_navigation_hit(trace, start, end, hit):
+        """An incomplete diagnostic must never change a collision verdict."""
+        trace.update(ray_start=_xyz(start), ray_end=_xyz(end))
+        for index, name in ((0, 'hit'), (1, 'normal')):
+            try:
+                trace[name] = _xyz(hit[index])
+            except (AttributeError, IndexError, TypeError, ValueError):
+                pass
+
     def _navigation_ground(self, x, z, hint_y=0.0):
         """Copy the 0.8.2 same-layer graph probe, including ford depth."""
         probe_top = float(hint_y) + 8.0
         probe_bottom = float(hint_y) - 18.0
-        ground_filter = self._ground_filter(x, z)
         for unused_layer in range(3):
             try:
-                hit = self._collide_down(
-                    self._vector((x, probe_top, z)),
-                    self._vector((x, probe_bottom, z)), ground_filter)
+                ground_start = self._vector((x, probe_top, z))
+                ground_end = self._vector((x, probe_bottom, z))
+                hit = self._collide_navigation(ground_start, ground_end)
                 if hit is None:
                     return None
                 height = float(hit[0].y)
@@ -5547,7 +5621,7 @@ class BattleRuntime(object):
 
     def _direction_probe(self, position, yaw, speed=0.0,
                          descriptor=None, maximum_distance=None,
-                         corridor_half_width=None):
+                         corridor_half_width=None, native_capability=None):
         """Probe the admitted chassis corridor at two heights and distances."""
         if corridor_half_width is None:
             # Passive contact callers have no active-drive descriptor. They
@@ -5598,16 +5672,6 @@ class BattleRuntime(object):
         # needs it to distinguish climbing from descending; taking ``abs``
         # here made every clear descent behave like an uphill pull.
         maximum_slope = 0.0
-        signed_speed = float(speed or 0.0)
-        planned_impact_speed = abs(signed_speed)
-        deferred = False
-        planning_params = None
-        if descriptor is not None:
-            try:
-                planning_params = vehicle_physics.derive_params(descriptor)
-            except (AttributeError, KeyError, TypeError, ValueError):
-                raise RuntimeError(
-                    'bot destructible planning speed is unavailable')
         for height, distance in (
                 (0.7, near_distance), (1.5, far_distance)):
             nx = x + sine * distance
@@ -5621,29 +5685,13 @@ class BattleRuntime(object):
             if run > 0.0:
                 probe_up = max(4.5, run * 0.52)
                 probe_down = max(5.0, run * 0.45)
+                ground_trace = {}
                 try:
                     ground_start = self._vector((nx, previous_y + probe_up, nz))
                     ground_end = self._vector((nx, previous_y - probe_down, nz))
-                    ground = self._collide_down(
-                        ground_start, ground_end, self._ground_filter(nx, nz))
-                    support_probe = getattr(
-                        self._destructibles, 'planning_support_below_soft_roof', None)
-                    if (ground is not None and planning_params is not None and
-                            float(ground[0].y) > previous_y + run * 0.48 and
-                            callable(support_probe)):
-                        # A far endpoint can lie on a crushable house roof.
-                        # Recheck only an exact original soft material, not a
-                        # terrain height or arbitrary overhead structure.
-                        ground = support_probe(
-                            self._avatar.spaceID, ground_start, ground_end,
-                            ground, previous_y + run * 0.48,
-                            planned_impact_speed, descriptor,
-                            kinetic_speed=float(planning_params[
-                                'speedBwd' if signed_speed < 0.0 else 'speedFwd']),
-                            recast_budget=self._soft_static_recast_budget)
-                        if ground == 'deferred':
-                            return {'clear': False, 'collision': False,
-                                    'water': False, 'slope': 0.0, 'deferred': True}
+                    ground = (self._collide_navigation(ground_start, ground_end, ground_trace)
+                              if descriptor is not None else self._collide_down(
+                                  ground_start, ground_end, self._ground_filter(nx, nz)))
                 except Exception:
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': 99.0}
@@ -5665,8 +5713,12 @@ class BattleRuntime(object):
                 if abs(slope) > abs(maximum_slope):
                     maximum_slope = slope
                 if delta > run * 0.48 or delta < -run * 0.38:
+                    self._record_navigation_hit(
+                        ground_trace, ground_start, ground_end, ground)
+                    ground_trace['previous_y'] = previous_y
                     return {'clear': False, 'collision': False,
-                            'water': False, 'slope': slope}
+                            'water': False, 'slope': slope,
+                            'reason': 'planning_grade', 'native_trace': ground_trace}
             for offset in (-corridor_half_width, 0.0, corridor_half_width):
                 ray_start = self._vector((
                     x + lateral_x * offset, y + height,
@@ -5674,83 +5726,28 @@ class BattleRuntime(object):
                 ray_end = self._vector((
                     nx + lateral_x * offset, next_y + height,
                     nz + lateral_z * offset))
+                collision_trace = {}
                 try:
-                    collision = self._runtime.bigworld.wg_collideSegment(
-                        self._avatar.spaceID, ray_start, ray_end,
-                        VEHICLE_SKIP_FLAGS)
+                    collision = (
+                        self._collide_navigation(ray_start, ray_end, collision_trace)
+                        if descriptor is not None else
+                        self._runtime.bigworld.wg_collideSegment(
+                            self._avatar.spaceID, ray_start, ray_end,
+                            VEHICLE_SKIP_FLAGS))
                 except Exception:
-                    collision = True
-                if collision is not None:
-                    ray_impact_speed = planned_impact_speed
-                    if planning_params is not None:
-                        try:
-                            hull_bbox = self._destructibles._vehicle_hull_bbox(
-                                descriptor)
-                            minimum, maximum = hull_bbox[:2]
-                            reversing = signed_speed < 0.0
-                            hull_reach = max(
-                                0.0,
-                                (-float(minimum[2]) if reversing else
-                                 float(maximum[2])))
-                            hit_distance = max(
-                                0.0,
-                                (collision[0] - ray_start).length - hull_reach)
-                            # Use the current copied traction law to estimate
-                            # only the speed reachable before this far hit. The
-                            # actual hull contact still owns the retail gate.
-                            drive_sign = -1.0 if reversing else 1.0
-                            acceleration = abs(
-                                vehicle_physics.engine_force(
-                                    planning_params,
-                                    drive_sign * max(
-                                        planned_impact_speed, 0.1),
-                                    drive_sign, 0.0)) / max(
-                                        planning_params['mass'], 1.0)
-                            speed_limit = float(planning_params[
-                                'speedBwd' if reversing else 'speedFwd'])
-                            ray_impact_speed = min(
-                                speed_limit,
-                                math.sqrt(planned_impact_speed ** 2 +
-                                          2.0 * acceleration * hit_distance))
-                        except (AttributeError, KeyError, TypeError,
-                                ValueError, ZeroDivisionError, RuntimeError):
-                            return {'clear': False, 'collision': True,
-                                    'water': False, 'slope': slope}
-                    if descriptor is not None and self._destructibles is not None:
-                        kinetic_speed = None
-                        if planning_params is not None:
-                            kinetic_speed = float(planning_params[
-                                'speedBwd' if signed_speed < 0.0 else
-                                'speedFwd'])
-                        soft_status = (
-                            self._destructibles._catalog_soft_static_path(
-                                self._avatar.spaceID, ray_start, ray_end,
-                                collision, ray_impact_speed, descriptor,
-                                recast_budget=
-                                self._soft_static_recast_budget,
-                                allow_kinetic_first=True,
-                                kinetic_speed=kinetic_speed))
-                        if soft_status is True:
-                            continue
-                        if soft_status == 'kinetic':
-                            # Planning may approach a contact that this vehicle can
-                            # crush at its directional speed cap. The commit-side
-                            # native ray and exact hull contact still own destruction.
-                            continue
-                        if soft_status == 'deferred':
-                            # Budget exhaustion is not evidence of a wall. Keep
-                            # checking the remaining lanes so any directly
-                            # proved backing wall can still win this sample.
-                            deferred = True
-                            continue
                     return {'clear': False, 'collision': True,
-                            'water': False, 'slope': slope}
+                            'water': False, 'slope': slope,
+                            'reason': 'planning_probe_failed', 'probe_failed': True}
+                if collision is not None:
+                    self._record_navigation_hit(
+                        collision_trace, ray_start, ray_end, collision)
+                    return {'clear': False, 'collision': True,
+                            'water': False, 'slope': slope,
+                            'reason': 'planning_collision', 'native_trace': collision_trace}
             previous_y = next_y
             previous_distance = distance
         result = {'clear': True, 'collision': False,
                   'water': False, 'slope': maximum_slope}
-        if deferred:
-            result['deferred'] = True
         return result
 
     def _direction_world_receipt(self, position, travel_yaw, signed_speed,
@@ -5829,14 +5826,19 @@ class BattleRuntime(object):
             'direction': (-1 if signed_speed < 0.0 else 1),
         }
 
-    def _navigation_obstacle(self, start, end, half_width):
-        """Exact 0.8.2 coarse graph sweep through the #1513 collision API."""
+    def _navigation_obstacle(self, start, end, half_width,
+                             native_capability=None, trace=None):
+        """Ignore original destructible materials; retain native hard geometry."""
         dx = float(end[0]) - float(start[0])
         dz = float(end[2]) - float(start[2])
         length = math.sqrt(dx * dx + dz * dz)
         if length < 0.1:
             return False
         lateral_x, lateral_z = dz / length, -dx / length
+        if trace is not None:
+            trace.update(capability=native_capability,
+                         segment=(tuple(start), tuple(end)),
+                         half_width=float(half_width))
         for offset in (-float(half_width), 0.0, float(half_width)):
             for height in (0.9, 1.6):
                 ray_start = self._vector((
@@ -5847,19 +5849,18 @@ class BattleRuntime(object):
                     float(end[0]) + lateral_x * offset,
                     float(end[1]) + height,
                     float(end[2]) + lateral_z * offset))
-                prepare = getattr(self._destructibles,
-                                  'prepare_horizontal_collision_filter', None)
-                collide = getattr(self._destructibles,
-                                  'collide_motion_segment', None)
-                native = self._runtime.bigworld.wg_collideSegment
-                if callable(prepare) and callable(collide):
-                    hit = collide(self._avatar.spaceID, ray_start, ray_end,
-                                  prepare(ray_start, ray_end), native)
-                else:
-                    hit = native(self._avatar.spaceID, ray_start, ray_end,
-                                 VEHICLE_SKIP_FLAGS)
+                # The initial traversal removes every original soft surface;
+                # no catalog registration or physical recast can postpone it.
+                hit = self._collide_navigation(ray_start, ray_end, trace)
                 if hit is not None:
+                    if trace is not None:
+                        trace.update(
+                            ray_start=_xyz(ray_start), ray_end=_xyz(ray_end),
+                            hit=_xyz(hit[0]), normal=_xyz(hit[1]))
+                        trace.update(classification='hard', reason='native_hard_geometry')
                     return True
+        if trace is not None:
+            trace.update(classification='clear', reason='native_corridor_clear')
         return False
 
     def _water_depth(self, point):
@@ -7772,6 +7773,15 @@ class BattleRuntime(object):
                     break
         self._equipment_state = states
         self._equipment_revision = revision
+        result = local.get('equipment_intent_result') or {}
+        sequence = int(result.get('intent_seq', 0) or 0)
+        if (sequence > getattr(self, '_equipment_result_logged_seq', 0) and
+                not result.get('accepted', False)):
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] equipment rejected seq=%d reason=%s\n' %
+                (sequence, result.get('reason', 'unknown')))
+        self._equipment_result_logged_seq = max(
+            sequence, getattr(self, '_equipment_result_logged_seq', 0))
         if repairkit_activated:
             # The server commits the kit's critical repair and this ledger
             # edge under one lock.  Stop suppressing that canonical critical
@@ -7828,10 +7838,13 @@ class BattleRuntime(object):
         booster_slots = getattr(
             vehicle_equipment, 'battleBoosterConsumables', None)
         shells = None if item is None else {}
+        shell_order = []
         if shells is not None:
             for shell in (getattr(item, 'shells', None) or ()):
                 try:
-                    shells[int(shell.intCD)] = max(0, int(shell.count))
+                    compact_descr = int(shell.intCD)
+                    shells[compact_descr] = max(0, int(shell.count))
+                    shell_order.append(compact_descr)
                 except (AttributeError, TypeError, ValueError):
                     continue
         equipment_ids = None
@@ -7846,6 +7859,7 @@ class BattleRuntime(object):
         crew = tuple(getattr(item, 'crew', None) or ())
         self._garage_loadout = {
             'shells': shells,
+            'shell_order': tuple(shell_order),
             'equipment_ids': equipment_ids,
             'equipments': (() if consumables is None else
                            tuple(consumables.getInstalledItems())),
@@ -8165,10 +8179,11 @@ class BattleRuntime(object):
             return 0, int(stages.EXHAUSTED), 0
         if (equipment.contract.get('kind') == 'rpm_limiter' and
                 equipment.active):
-            # #1513's trigger item interprets PREPARING with zero remaining
-            # time as the toggled-on state and sends the raw equipment id to
-            # deactivate it on the next click.
-            return 1, int(stages.PREPARING), 0
+            # #1513's trigger stays READY for native availability and toggles.
+            # A negative time denotes indefinite activity: getActivationCode
+            # then sends the raw ID (off), while zero sends 65536 + ID (on).
+            # PREPARING instead belongs to targeted combat-equipment setup.
+            return 1, int(stages.READY), -1
         remaining = float(equipment.ready_at) - float(now)
         if remaining > 0.0:
             return 1, int(stages.COOLDOWN), int(math.ceil(remaining))
@@ -8191,7 +8206,9 @@ class BattleRuntime(object):
         for equipment in self._equipment_state:
             compact = equipment.contract['compactDescr']
             quantity, stage, remaining = self._equipment_echo(equipment, now)
-            state = (quantity, stage)
+            # Indefinite trigger activity changes without changing READY.
+            # Keep that edge, but do not re-echo a kit's ticking cooldown.
+            state = (quantity, stage, remaining < 0)
             signature.append((compact, state))
             if previous.get(compact) == state:
                 continue
@@ -8244,14 +8261,14 @@ class BattleRuntime(object):
         record = self._records.get('player:%s' % self.client.player_id)
         if record is None or self._server is None:
             return False
-        entity = self._server_entity(self._server.vehicle_id)
-        if entity is None or entity.typeDescriptor is None:
-            return False
         equipment_kind = equipment.contract['kind']
         repair_all = bool(equipment.contract.get('repairAll', False))
         selected = None
         if (not repair_all and
                 equipment_kind in ('repairkit', 'medkit')):
+            entity = self._server_entity(self._server.vehicle_id)
+            if entity is None or entity.typeDescriptor is None:
+                return False
             selected = self._critical_name_from_extra_index(
                 entity.typeDescriptor, extra_index)
         if (equipment_kind == 'medkit' and selected is not None and
@@ -8506,7 +8523,8 @@ class BattleRuntime(object):
         if state is None:
             state = gun_mechanics.GunState(
                 descriptor, self._local_loadout(descriptor),
-                ammo_layout=self._local_ammo_layout())
+                ammo_layout=self._local_ammo_layout(),
+                shell_order=self._garage_loadout_snapshot()['shell_order'])
             self._gun_state = state
         now = self._clock() if now is None else float(now)
         if self._gun_last_tick is None:
@@ -8760,7 +8778,7 @@ class BattleRuntime(object):
             if self._gun_state is None:
                 return False
             state = self._gun_state
-            pending_fire = self._local_fire_intent
+            pending_fire = self._local_player_burst or self._local_fire_intent
             if isinstance(pending_fire, dict):
                 if state.clip_size <= 1 or not state.shots:
                     return False
@@ -8776,6 +8794,10 @@ class BattleRuntime(object):
             shell = _field(shot, 'shell', {})
             if int(_field(shell, 'compactDescr', 0)) != int(value):
                 continue
+            if self._local_player_burst is not None:
+                self._defer_gun_setting(
+                    self._local_player_burst, state, code, index)
+                return True
             if code == current_shells:
                 pending_fire = self._local_fire_intent
                 if isinstance(pending_fire, dict):
@@ -9558,6 +9580,10 @@ class BattleRuntime(object):
                 '[Offline LAN 0.9.22] FIRE INTENT rejected intent=%d '
                 'reason=%s repeats=%d\n' % (sequence, reason, seen + 1))
         self._local_fire_intent = None
+        burst = self._cancel_local_player_burst()
+        if burst and burst.get('deferred_gun_settings'):
+            pending.update({key: burst[key] for key in (
+                'deferred_gun_settings', 'deferred_gun_pending_index')})
         self._cancel_native_shot_wait()
         if pending.get('deferred_gun_settings') and self._gun_state is not None:
             state = self._gun_state
@@ -10423,10 +10449,6 @@ class BattleRuntime(object):
         if kind == 'tree':
             foliage_changed = self._activate_fallen_tree_foliage(
                 chunk_id, item_index)
-        grid = getattr(getattr(self._bots, 'navigator', None), 'grid', None)
-        invalidate = getattr(grid, 'invalidate_native_review', None)
-        if callable(invalidate):
-            invalidate()
         if already_destroyed:
             return foliage_changed
         if kind != 'tree' and callable(note_destroyed):
@@ -10957,16 +10979,16 @@ class BattleRuntime(object):
         self._run_optional_feature(
             'vehicle hit impulse', self._present_hit_impulse,
             (event, target_record, effects_descr, direction))
-        # Retail presents an HE near-miss through
-        # Vehicle.showDamageFromExplosion/armorSplashHit. HE direct impacts
-        # use the explosion group whenever HP damage was dealt, independently
-        # of physical penetration. Keep the protocol result for statistics.
+        # Direct HE feedback follows actual HP loss: a damaging blast uses
+        # the shell's explosion effect even when armour resisted penetration.
+        # Keep the physical result and crew-voice flags unchanged.
         damage_factor = self._hit_damage_factor(event, target_record)
         if event.get('splash', False):
             return self._present_splash_hit(
                 target_record, effects_descr, effects_index, impact_position,
                 direction, damage_factor)
-        if combat_rules.is_he(shot):
+        is_he = combat_rules.is_he(shot)
+        if is_he:
             effect_group = 'armorHit' if damage > 0 else 'armorResisted'
         else:
             effect_group = ('armorRicochet', 'armorResisted', 'armorHit')[
@@ -11003,6 +11025,10 @@ class BattleRuntime(object):
             self._warn_optional_failure(
                 'projectile impact presentation', error)
             return False
+        if is_he and damage > 0:
+            self._present_splash_hit(
+                target_record, effects_descr, effects_index,
+                impact_position, direction, damage_factor)
         return True
 
     _DECAL_REPORT_LIMIT = 32
@@ -11288,8 +11314,16 @@ class BattleRuntime(object):
                 if flags_type is None:
                     raise RuntimeError(
                         '#1513 VEHICLE_HIT_FLAGS are unavailable')
-                explosion = bool(event.get('splash'))
-                direct_he = False
+                shot_result = max(
+                    0, min(int(event.get('shot_result', 2)), 2))
+                direct_he = (not event.get('splash') and shell_type == int(
+                    self._runtime.constants.SHELL_TYPES_INDICES[
+                        'HIGH_EXPLOSIVE']))
+                # A resisted HE hit can still remove HP through its blast.
+                # Use the explosion voice flags for that damage while leaving
+                # the canonical projectile penetration result untouched.
+                explosion = bool(event.get('splash')) or (
+                    direct_he and shot_result != 2 and damage > 0)
                 if explosion:
                     flags = int(flags_type.ATTACK_IS_EXTERNAL_EXPLOSION)
                     if damage > 0:
@@ -11306,19 +11340,8 @@ class BattleRuntime(object):
                         flags_type.GUN_DAMAGED_BY_EXPLOSION)
                 else:
                     flags = int(flags_type.ATTACK_IS_DIRECT_PROJECTILE)
-                    shot_result = max(
-                        0, min(int(event.get('shot_result', 2)), 2))
-                    direct_he = shell_type == int(
-                        self._runtime.constants.SHELL_TYPES_INDICES[
-                            'HIGH_EXPLOSIVE'])
-                    if direct_he:
-                        # #1513 chooses commander voices from these flags,
-                        # independently of the canonical penetration result.
-                        # Every HE/HESH direct HP hit gets the normal damage
-                        # voice, including a non-penetrating explosion. The
-                        # fired shell owns this rule, never the vehicle class
-                        # or the round currently selected after firing.
-                        shot_result = 2 if damage > 0 else 1
+                    if direct_he and shot_result != 2:
+                        shot_result = 1
                     if shot_result == 2:
                         flags |= int(
                             flags_type.
@@ -12209,10 +12232,27 @@ class BattleRuntime(object):
             reload_factor = self._local_stat_factor(entity, 'reload')
             if pending.get('deferred_gun_settings'):
                 gun.pending_index = pending['deferred_gun_pending_index']
-            if (shell_index != gun.shot_index or
-                    not gun.commit_fire(reload_factor)):
+            if shell_index != gun.shot_index:
+                raise RuntimeError('canonical local shot changed ammunition')
+            burst = pending.get('player_burst')
+            if burst is not None:
+                if burst is not self._local_player_burst:
+                    raise RuntimeError('canonical shot lost its burst owner')
+                if burst['committed'] == 0 and not gun.begin_burst(burst['count']):
+                    raise RuntimeError('canonical player burst is not ready')
+                final_round = burst['committed'] + 1 == burst['count']
+                committed = gun.commit_burst_round(final_round, reload_factor)
+            else:
+                final_round = True
+                committed = gun.commit_fire(reload_factor)
+            if not committed:
                 raise RuntimeError(
                     'canonical local shot violates presented gun state')
+            if burst is not None:
+                burst['committed'] += 1
+                if final_round:
+                    self._local_player_burst = None
+                    self._apply_deferred_gun_settings(gun, burst)
             self._apply_deferred_gun_settings(gun, pending)
             # commit_fire applies the factor to a normal empty-magazine cycle.
             # A deferred shell change or partial reload replaces that duration
@@ -12369,6 +12409,15 @@ class BattleRuntime(object):
         if update_state:
             record['shot_penalty_until'] = (
                 self._clock() + spotting.SHOT_CAMOUFLAGE_SECONDS)
+        # #1513 Vehicle.showShooting requires the initial Avatar wait token.
+        # One native call starts the descriptor burst's effects and applies
+        # afterShotInBurst until its last round; tail intents do not create
+        # additional native trigger handshakes or repeat that effect group.
+        local_burst_presentation = None
+        if record.get('local') and isinstance(self._local_fire_intent, dict):
+            burst = self._local_fire_intent.get('player_burst')
+            if burst is not None:
+                local_burst_presentation = (burst['committed'], burst['count'])
         self._accept_player_fire_commit(event, record)
         if self._worker_mode:
             return True
@@ -12429,6 +12478,8 @@ class BattleRuntime(object):
                         ('_offlineLANCanonicalTracerOwned', True)):
                     setattr(entity, name, value)
                     transient_names.append(name)
+            if local_burst_presentation is not None:
+                burst_index = local_burst_presentation[0]
             if burst_index == 0:
                 # One native call owns the grouped muzzle effect and local
                 # waiting-for-shot handshake.  Later physical rounds already
@@ -12446,6 +12497,8 @@ class BattleRuntime(object):
                 except (TypeError, ValueError, OverflowError):
                     burst_count = 1
                 burst_count = max(1, burst_count)
+                if local_burst_presentation is not None:
+                    burst_count = local_burst_presentation[1]
                 if (visual_admitted and self._optional_feature_enabled(
                         'shot muzzle presentation') and
                         self._shot_muzzle_drawn(record)):
@@ -17179,6 +17232,7 @@ class BattleRuntime(object):
                 self._local_frame_stages = stages if profiling else None
                 try:
                     self._drive_local(dt)
+                    self._advance_local_player_burst()
                 finally:
                     self._local_frame_stages = None
             if profiling:
@@ -17614,19 +17668,10 @@ class BattleRuntime(object):
         return start, direction
 
     def _wreck_blocks_target_outline(self, start, end, target_depth):
-        """Suppress an outline behind a nearer retained wreck's full bounds.
-
-        #1513 Vehicle.onEnterWorld sets targetFullBounds. Public BigWorld
-        2.0.1 picker source motivates checking the whole compound envelope,
-        but it is not evidence for the shipped #1513 native implementation.
-        This local selection rule uses descriptor bounds and segment-entry
-        order; it is not the public engine's entity-origin zDistance score.
-        Exact Windows picker parity remains unverified.
-        """
+        """Only solid wreck geometry blocks a visible part under the cursor."""
         ray = (_xyz(start), _xyz(end))
         for record in self._records.values():
-            if (record.get('local') or record.get('tombstone') or
-                    not record.get('ready')):
+            if record.get('tombstone') or not record.get('ready'):
                 continue
             vehicle = self._server_entity(record.get('engine_id'))
             if (vehicle is None or
@@ -17644,11 +17689,13 @@ class BattleRuntime(object):
             matrix = getattr(vehicle, 'matrix', None)
             if matrix is None:
                 continue
-            distance = shot_geometry.segment_box_entry_distance(
-                start, end, vehicle_target_bounds_at_matrix(
-                    vehicle, matrix, self._runtime.math))
-            if (distance is not None and
-                    distance + _SHOT_OCCLUSION_EPSILON < target_depth):
+            if record.get('native_remote') or record.get('local'):
+                collisions = collide_vehicle_at_matrix(
+                    vehicle, matrix, start, end, self._runtime.math)
+            else:
+                collisions = vehicle.collideSegmentExt(start, end)
+            if any(float(hit.dist) + _SHOT_OCCLUSION_EPSILON < target_depth
+                   for hit in (collisions or ())):
                 return True
         return False
 
@@ -17690,7 +17737,6 @@ class BattleRuntime(object):
             return
         start, direction = self._mouse_targeting_ray()
         end = start + direction.scale(TARGET_MAX_DISTANCE)
-        selection_angle = TARGET_SELECTION_FOV_DEGREES * 0.5
         deselection_angle = TARGET_DESELECTION_FOV_DEGREES * 0.5
         held_id = self._outlined_engine_id
         held_seen = False
@@ -17756,9 +17802,6 @@ class BattleRuntime(object):
                         if collisions:
                             depth = min(
                                 float(item.dist) for item in collisions)
-                    elif bearing - self._target_angular_radius(
-                        vehicle, distance, tight=True) <= selection_angle:
-                        depth = distance
             if depth is None:
                 if held:
                     held_reason = 'is not under the cursor'
@@ -17858,7 +17901,21 @@ class BattleRuntime(object):
             raise RuntimeError(
                 '#1513 target-lock candidate boundary is unavailable')
         set_candidate(vehicle)
+        self._publish_cursor_focus(vehicle)
         self.monitor_vehicle_damaged_devices(chosen)
+
+    def _publish_cursor_focus(self, vehicle):
+        """Give the stock distance HUD the same occluded target as the edge.
+
+        #1513 PlayerAvatar.targetFocus/targetBlur publish these two fields.
+        Native target caps stay empty because the engine picker cannot see
+        our replicated pose or retained-wreck query.
+        """
+        if self._avatar is None:
+            return
+        self._avatar.target = vehicle
+        self._avatar.guiSessionProvider.shared.feedback.setTargetInFocus(
+            int(vehicle.id) if vehicle is not None else 0, vehicle is not None)
 
     def _refresh_native_target_outline(self):
         """Restore a held native outline after stock model replacement.
@@ -18001,11 +18058,16 @@ class BattleRuntime(object):
     def _report_local_motion_stall(self, start, end, dt, throttle, path,
                                    before=None, drive=None, pitch=None,
                                    contact=None, entity=None):
-        """Record bounded pose evidence when powered travel cannot advance."""
+        """Record bounded stalled travel and unpowered tipping evidence."""
         blocked_turn = (abs(self._local_drive_turn) > 0.01 and
                         abs(self._local_turn_speed) <= 1.0e-8 and
                         self._local_motion_status == 'hard')
-        if dt <= 0.0 or (abs(throttle) <= 0.01 and not blocked_turn):
+        # The bridge report lost all poses after the user released controls.
+        # Use the same tipping boundary as rigid suspension contacts, without
+        # issuing any new world query or changing the simulation cadence.
+        idle_tilt = (abs(throttle) <= 0.01 and not blocked_turn and
+                     math.cos(self._local_pitch) * math.cos(self._local_roll) < 0.9)
+        if dt <= 0.0 or (abs(throttle) <= 0.01 and not blocked_turn and not idle_tilt):
             return False
         dx, dz = end[0] - start[0], end[2] - start[2]
         stalled = dx * dx + dz * dz <= (0.2 * dt) ** 2
@@ -18013,7 +18075,7 @@ class BattleRuntime(object):
         losing_speed = (before is not None and throttle * before > 0.0 and
                         abs(self._local_speed) + 0.1 < abs(before))
         now = self._clock()
-        if not (stalled or contact_limited or losing_speed):
+        if not (stalled or contact_limited or losing_speed or idle_tilt):
             return self._report_local_prop_support(end, now)
         if now < getattr(self, '_next_local_stall_report', 0.0):
             return False
@@ -18023,13 +18085,25 @@ class BattleRuntime(object):
             'pos=(%.3f,%.3f,%.3f) yaw=%.3f pitch=%.3f roll=%.3f '
             'throttle=%.2f speed=%.3f vertical=%.3f '
             'path=%s world=%s kinds=%s support_blocked=%s airborne=%s\n' % (
-                'STALL' if stalled else 'SLOWDOWN',
+                'TILT' if idle_tilt else ('STALL' if stalled else 'SLOWDOWN'),
                 end[0], end[1], end[2], self._local_yaw,
                 self._local_pitch, self._local_roll, throttle,
                 self._local_speed, self._local_vertical_speed,
                 path or 'still', self._local_motion_status,
                 self._local_motion_kinds, self._local_support_rise_blocked,
                 self._local_airborne))
+        if idle_tilt:
+            sys.stdout.write('[Offline LAN 0.9.22] LOCAL TILT SUPPORT %s\n' %
+                json.dumps({
+                    'pitch_velocity': self._local_suspension_pitch_velocity,
+                    'roll_velocity': self._local_suspension_roll_velocity,
+                    'plane': self._local_ground_plane,
+                    'spring_columns':
+                        'x,z,minimum,maximum,direct,support,flat_maximum,layers',
+                    'spring_layer_columns': 'height,normal_y,verdict',
+                    'spring_probes': self._local_suspension_probe_trace,
+                }))
+            return True
         trace = contact or getattr(self, '_local_world_collision_trace', None)
         if before is not None:
             physics = self._local_physics or {}
@@ -18414,6 +18488,7 @@ class BattleRuntime(object):
             raise RuntimeError(
                 '#1513 target-lock candidate boundary is unavailable')
         set_candidate(None)
+        self._publish_cursor_focus(None)
         if entity is None:
             raise RuntimeError(
                 'outlined vehicle %s lost its entity before edge removal' %
@@ -19457,7 +19532,8 @@ class BattleRuntime(object):
 
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
-            pitch=None, roll=None, record_local=True, pivot_offset=0.0):
+            pitch=None, roll=None, record_local=True, pivot_offset=0.0,
+            contact_trace=None, include_static=False, translation=(0.0, 0.0)):
         """Recast every rotating body slice against the live native BSP.
 
         The catalog owns each destructible's original shape.  Once a structure
@@ -19475,7 +19551,8 @@ class BattleRuntime(object):
         """
         active_reader = getattr(
             self._destructibles, 'native_replacement_bsp_active', None)
-        if not pivot_offset and callable(active_reader) and not active_reader():
+        if (not include_static and not pivot_offset and
+                callable(active_reader) and not active_reader()):
             # Before the first accepted retained replacement there is no
             # damaged BSP to find.  The ordinary catalog/baked guards own live
             # objects without paying for two native sweeps per slice.
@@ -19504,10 +19581,13 @@ class BattleRuntime(object):
         if not 1 <= steps <= DESTRUCTIBLE_POSE_MAX_SWEEP_STEPS:
             raise RuntimeError(
                 'native world rotation sweep exceeds its bound')
-        sweep_bbox = (_destructible_posed_bbox(bbox, pitch, roll)
-                      if pivot_offset else bbox)
-        sweep_pitch = 0.0 if pivot_offset else pitch
-        sweep_roll = 0.0 if pivot_offset else roll
+        # Unlike the catalog box test, native lanes read only bbox X/Z and
+        # pose their fixed 0.6/1.1/1.6 m heights themselves. Baking Y into the
+        # box and zeroing pitch/roll discards that pose entirely, putting a
+        # raised track's collision rays through the slope below its body.
+        sweep_bbox = bbox
+        sweep_pitch = pitch
+        sweep_roll = roll
         previous_contacts = []
         previous_checked = [False]
 
@@ -19538,25 +19618,35 @@ class BattleRuntime(object):
                 sweep_bbox, abs(yaw_delta) * 0.5 / float(steps), pivot_offset)
             slice_position = vehicle_physics.track_pivot_position(
                 position, start_yaw, slice_yaw, pivot_offset)
+            slice_position = (slice_position[0]+translation[0]*lower,
+                              slice_position[1], slice_position[2]+translation[1]*lower)
+            slice_travel = (translation[0]/steps, translation[1]/steps)
+            travel_length = math.hypot(*slice_travel)
             sweep_descriptor = _destructible_world_sweep_descriptor(
                 descriptor, interval_bbox)
             departing = None if pivot_offset else _rotation_departing_contact(
-                position, bbox, float(start_yaw) + yaw_delta * lower,
+                slice_position if travel_length else position,
+                bbox, float(start_yaw) + yaw_delta * lower,
                 float(start_yaw) + yaw_delta * upper, pitch, roll,
-                read_previous_contacts)
-            for probe_speed in (1.0e-6, -1.0e-6):
+                read_previous_contacts, slice_travel)
+            for probe_speed in ((travel_length,) if travel_length else (1.0e-6, -1.0e-6)):
                 trace = {}
                 world_status = world_collision.check_horizontal_collision(
                     self._runtime.bigworld, self._runtime.math,
                     self._avatar.spaceID, self._vector(slice_position),
-                    slice_yaw, probe_speed, sweep_descriptor, False, 0.0,
+                    slice_yaw, probe_speed, sweep_descriptor, False, 1.0 if travel_length else 0.0,
                     True, False, None, commit_enabled=False,
                     pitch=sweep_pitch, roll=sweep_roll,
-                    trace=trace, exact_footprint=True,
+                    trace=trace, exact_footprint=not travel_length,
+                    motion_yaw=math.atan2(*slice_travel) if travel_length else None,
                     departing_contact=departing)
                 if isinstance(world_status, bool):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status != 'clear':
+                    if contact_trace is not None:
+                        contact_trace.update(trace)
+                        contact_trace.update(pivot_offset=pivot_offset,
+                            start_yaw=start_yaw, end_yaw=end_yaw)
                     if record_local:
                         self._local_world_collision_trace = trace
                         self._local_motion_kinds = 'world'
@@ -19775,11 +19865,14 @@ class BattleRuntime(object):
 
     def _resolve_bot_rotation(
             self, bot_id, position, start_yaw, end_yaw, descriptor, dt, now,
-            rotation_speed_cap, pivot_offset=0.0):
+            rotation_speed_cap, pivot_offset=0.0, translation=(0.0, 0.0)):
         """Keep a Bot's complete pivot outside live and damaged structures."""
         end_position = vehicle_physics.track_pivot_position(
             position, start_yaw, end_yaw, pivot_offset)
+        end_position = (end_position[0]+translation[0], end_position[1],
+                        end_position[2]+translation[1])
         bot_state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
+        bot_state.pop('_rotation_contact_trace', None)
         pitch = _number(bot_state.get(
             'terrain_pitch', bot_state.get('pitch')))
         roll = _number(bot_state.get('roll'))
@@ -19828,12 +19921,15 @@ class BattleRuntime(object):
                 detail.get('kinds', '-'))
         if status not in ('clear', 'crushed', 'approach'):
             return False
+        contact_trace = {}
         clear = self._native_world_rotation_is_clear(
             position, start_yaw, end_yaw, descriptor,
             pitch=pitch, roll=roll, record_local=False,
-            pivot_offset=pivot_offset)
+            pivot_offset=pivot_offset, contact_trace=contact_trace,
+            include_static=not bot_state.get('alive', True), translation=translation)
         if not clear:
             self._bot_motion_kinds[int(bot_id)] = 'world'
+            bot_state['_rotation_contact_trace'] = contact_trace
         return clear
 
     def _resolve_bot_motion(self, bot_id, position, yaw, speed,
@@ -20093,7 +20189,7 @@ class BattleRuntime(object):
                 damage_factor = float(getattr(
                     material, 'vehicleDamageFactor'))
             except (AttributeError, TypeError, ValueError, OverflowError):
-                return None
+                continue
             if (math.isnan(armor) or math.isinf(armor) or armor <= 0.0 or
                     math.isnan(damage_factor) or math.isinf(damage_factor)):
                 continue
@@ -20101,6 +20197,124 @@ class BattleRuntime(object):
                 continue
             return {'armor': armor, 'screened': False}
         return None
+
+    def _native_ram_contact_plate_pair(self, proof):
+        """Find shared structural armour inside the actual contact area.
+
+        Never substitutes primaryArmor or mixes plates sampled at different
+        heights. Prefer the contact-normal rays, then resolve a chassis corner
+        toward each body's interior without changing the impact normal.
+        """
+        return self._ram_plate_pair_from_probe(
+            proof, self._native_ram_vehicle_armor)
+
+    def _ram_plate_pair_from_probe(self, proof, armor_probe):
+        contact_normal = proof.get('contact_normal')
+        if contact_normal is None:
+            return None, None, None
+        hit = proof['hit_point']
+        heights = tank_collision.ram_contact_sample_heights(
+            hit[1], proof.get('contact_y_span'))
+        # The shared structural band may be much thinner than the chassis
+        # contact envelope (KV-5 against a lower hull, for example). Sampling
+        # only fractions of that envelope can miss every common hull plate.
+        # Preserve the actual observation first, then sample the mounted hull
+        # overlap before trying the wider body envelope.
+        spans = []
+        for prefix in ('local', 'bot'):
+            vehicle = proof[prefix + '_vehicle']
+            matrix = proof[prefix + '_matrix']
+            descriptor = getattr(vehicle, 'typeDescriptor', None)
+            if descriptor is None:
+                break
+            try:
+                spans.append(tank_collision.ram_hull_vertical_interval(
+                    descriptor, _xyz(matrix.translation)[1],
+                    float(matrix.pitch), float(matrix.roll)))
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                break
+        if len(spans) == 2:
+            low, high = max(span[0] for span in spans), min(
+                span[1] for span in spans)
+            contact_span = proof.get('contact_y_span')
+            if contact_span is not None:
+                low, high = max(low, contact_span[0]), min(high, contact_span[1])
+            if high > low:
+                structural = tank_collision.ram_contact_sample_heights(
+                    (low + high) * 0.5, (low, high))
+                heights = heights[:1] + structural + heights[1:]
+        seen_player = None
+        seen_bot = None
+        unresolved = []
+        points = [(hit[0], hit[2])]
+        for x, z in proof.get('contact_xz_candidates', ()):
+            if all((x-px)**2 + (z-pz)**2 > 1.0e-6
+                   for px, pz in points):
+                points.append((x, z))
+        for x, z in points:
+            for sample_y in heights:
+                sample = self._vector((x, sample_y, z))
+                player_plate = armor_probe(
+                    proof['local_vehicle'], proof['local_matrix'], sample,
+                    contact_normal)
+                bot_plate = armor_probe(
+                    proof['bot_vehicle'], proof['bot_matrix'], sample,
+                    (-contact_normal[0], -contact_normal[1]))
+                if player_plate is not None:
+                    seen_player = player_plate
+                if bot_plate is not None:
+                    seen_bot = bot_plate
+                if player_plate is not None and bot_plate is not None:
+                    return (player_plate, bot_plate, float(sample_y), x, z), seen_player, seen_bot
+                unresolved.append((x, sample_y, z, player_plate, bot_plate))
+        # The solid chassis envelope can touch at a corner outside a tapered
+        # hull. A parallel normal ray there may miss structure even though
+        # the contact has already transferred momentum. Resolve only missing
+        # plates from that SAME point/height toward the corresponding body
+        # centre. Native hit testers still choose the first structural plate
+        # and stop at its centre plane; no primary/minimum armour is guessed.
+        # Finish the original search first so existing valid pairs keep their
+        # plates. This changes material lookup, never the kinetic normal.
+        for x, sample_y, z, player_plate, bot_plate in unresolved:
+            sample = self._vector((x, sample_y, z))
+            plates = [player_plate, bot_plate]
+            for index, prefix in enumerate(('local', 'bot')):
+                if plates[index] is not None:
+                    continue
+                normal = (contact_normal if index == 0 else
+                          (-contact_normal[0], -contact_normal[1]))
+                matrix = proof[prefix + '_matrix']
+                inward = self._ram_corner_probe_direction(matrix, sample, normal)
+                if inward is not None:
+                    plates[index] = armor_probe(
+                        proof[prefix + '_vehicle'], matrix, sample, inward)
+            player_plate, bot_plate = plates
+            if player_plate is not None:
+                seen_player = player_plate
+            if bot_plate is not None:
+                seen_bot = bot_plate
+            if player_plate is not None and bot_plate is not None:
+                return (player_plate, bot_plate, float(sample_y), x, z), seen_player, seen_bot
+        return None, seen_player, seen_bot
+
+    @staticmethod
+    def _ram_corner_probe_direction(matrix, point, contact_normal):
+        """Address the near-side structure behind a solid chassis corner."""
+        try:
+            center = _xyz(matrix.translation)
+            point = _xyz(point)
+            dx, dz = center[0]-point[0], center[2]-point[2]
+            length = math.hypot(dx, dz)
+            if (math.isnan(length) or math.isinf(length) or length <= 1.0e-6):
+                return None
+            nx, nz = dx/length, dz/length
+            alignment = nx*contact_normal[0] + nz*contact_normal[1]
+            # Do not cross the contacted side or repeat the same empty ray.
+            if alignment <= 0.0 or alignment >= 1.0-1.0e-9:
+                return None
+            return nx, nz
+        except (AttributeError, IndexError, TypeError, ValueError, RuntimeError):
+            return None
 
     def _ram_contact_armor_status(self, first, second, contact):
         """Classify one native contact probe without folding transient state."""
@@ -20146,28 +20360,39 @@ class BattleRuntime(object):
             float(second['y']) + float(second['shape'][3]))
         if high <= low:
             return 'invalid', None
-        hit_point = self._vector((
-            overlap_point[0], (low + high) * 0.5, overlap_point[1]))
-        plates = []
-        for index, (body, vehicle, record) in enumerate(zip(
-                (first, second), vehicles, records)):
+        hit_point = (overlap_point[0], (low + high) * 0.5,
+                     overlap_point[1])
+        matrices = []
+        for body, vehicle, record in zip(
+                (first, second), vehicles, records):
             ground_matrix = self._ram_pose_matrix(
                 (body['x'], body['y'], body['z']), body['yaw'],
                 _number(body.get('pitch')), _number(body.get('roll')))
             matrix, chassis_matrix = self._projectile_vehicle_matrices(
                 record, vehicle, ground_matrix=ground_matrix)
-            inward_normal = (contact_normal if index == 0 else
-                              (-contact_normal[0], -contact_normal[1]))
-            plate = self._native_ram_vehicle_armor(
-                vehicle, matrix, hit_point, inward_normal,
-                chassis_matrix=chassis_matrix)
-            if plate is None:
-                # At this point both exact entities and their contact geometry
-                # are ready. None now means the native ray found no supported
-                # contact layer, rather than an asynchronous startup failure.
-                return 'unavailable', None
-            plates.append(float(plate['armor']))
-        return 'available', tuple(plates)
+            matrices.append((matrix, chassis_matrix))
+        proof = {
+            'hit_point': hit_point,
+            'contact_normal': contact_normal,
+            'contact_y_span': (low, high),
+            'contact_xz_candidates': self._ram_contact_xz_samples(
+                first, second, contact_normal),
+            'local_vehicle': vehicles[0], 'bot_vehicle': vehicles[1],
+            'local_matrix': matrices[0][0], 'bot_matrix': matrices[1][0],
+        }
+        # Use the worker's component transforms for each sampled ray.
+        probe = self._native_ram_vehicle_armor
+        def worker_armor(vehicle, matrix, point, normal):
+            index = 0 if vehicle is vehicles[0] else 1
+            return probe(vehicle, matrix, point, normal,
+                         chassis_matrix=matrices[index][1])
+        # Share the same bounded point search as player/Bot contact proofs.
+        matched, unused_first, unused_second = self._ram_plate_pair_from_probe(
+            proof, worker_armor)
+        if matched is None:
+            return 'unavailable', None
+        return 'available', (float(matched[0]['armor']),
+                             float(matched[1]['armor']))
 
     def _bot_ram_contact_armor(self, first, second, contact):
         """Probe both real #1513 hit testers at one worker-owned contact."""
@@ -20301,7 +20526,7 @@ class BattleRuntime(object):
                                  hit_point, player_velocity, bot_velocity,
                                  contact_time_us, own_pose=None,
                                  bot_pose=None, player_ram_profile=None,
-                                 contact_normal=None):
+                                 contact_normal=None, contact_y_span=None):
         """Queue one immutable contact episode without applying HP locally."""
         if len(self._native_ram_contact_proofs) >= 16:
             return False
@@ -20325,6 +20550,22 @@ class BattleRuntime(object):
             own_pose[3], own_pose[4], own_pose[5])[:3]
         bot_pose = tuple(bot_pose[:3]) + vehicle_physics.canonical_body_rotation(
             bot_pose[3], bot_pose[4], bot_pose[5])[:3]
+        if contact_y_span is None:
+            try:
+                player_shape = self._collision_shape(
+                    local_vehicle.typeDescriptor)
+                bot_shape = self._collision_shape(bot_vehicle.typeDescriptor)
+                player_low, player_high = tank_collision.vertical_interval(
+                    own_pose[1], player_shape, own_pose[4], own_pose[5])
+                bot_low, bot_high = tank_collision.vertical_interval(
+                    bot_pose[1], bot_shape, bot_pose[4], bot_pose[5])
+                contact_low = max(player_low, bot_low)
+                contact_high = min(player_high, bot_high)
+                contact_y_span = (
+                    (float(contact_low), float(contact_high))
+                    if contact_high > contact_low else None)
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                contact_y_span = None
         if player_ram_profile is None:
             player_ram_profile = self._ram_profile(
                 local_vehicle.typeDescriptor, local=True)
@@ -20345,6 +20586,7 @@ class BattleRuntime(object):
         proof = {
             'bot_id': bot_id,
             'record': record,
+            'presentation_time_us': record.get('presentation_time_us'),
             'local_vehicle': local_vehicle,
             'bot_vehicle': bot_vehicle,
             'hit_point': _xyz(hit_point),
@@ -20357,6 +20599,13 @@ class BattleRuntime(object):
             'bot_matrix': self._ram_pose_matrix(
                 bot_pose[:3], bot_pose[3], bot_pose[4], bot_pose[5]),
             'contact_normal': contact_normal,
+            'contact_y_span': contact_y_span,
+            'contact_xz_candidates': self._ram_contact_xz_samples(
+                {'x': own_pose[0], 'z': own_pose[2], 'yaw': own_pose[3],
+                 'shape': self._collision_shape(local_vehicle.typeDescriptor)},
+                {'x': bot_pose[0], 'z': bot_pose[2], 'yaw': bot_pose[3],
+                 'shape': self._collision_shape(bot_vehicle.typeDescriptor)},
+                contact_normal),
             'contact_spall_player': player_spall,
             'contact_bonus_player': player_bonus,
             'vx': float(player_velocity[0]),
@@ -20423,37 +20672,48 @@ class BattleRuntime(object):
         bot_id = proof['bot_id']
         proof['attempts'] += 1
         record = proof['record']
-        presentation_time_us = record.get('presentation_time_us')
+        presentation_time_us = proof['presentation_time_us']
         revision = self._ram_bot_revision_at(bot_id, presentation_time_us)
         local_matrix = proof['local_matrix']
         bot_matrix = proof['bot_matrix']
         contact_normal = proof.get('contact_normal')
+        matched = None
         if contact_normal is None:
             player_plate = bot_plate = None
         else:
-            player_plate = self._native_ram_vehicle_armor(
-                proof['local_vehicle'], local_matrix, proof['hit_point'],
-                contact_normal)
-            bot_plate = self._native_ram_vehicle_armor(
-                proof['bot_vehicle'], bot_matrix, proof['hit_point'],
-                (-contact_normal[0], -contact_normal[1]))
+            matched, player_plate, bot_plate = (
+                self._native_ram_contact_plate_pair(proof))
+            if matched is not None:
+                player_plate, bot_plate = matched[:2]
         if (revision is None or presentation_time_us is None or
-                player_plate is None or bot_plate is None):
+                matched is None):
             if proof['attempts'] < 2:
                 return False
             self._native_ram_contact_proofs.pop(event_seq, None)
-            signature = (bot_id, player_plate is None, bot_plate is None)
+            # No HP receipt was admitted. An unsuccessful geometry probe is
+            # not a paid collision episode: a later real contact must be able
+            # to prove its own current pose and pre-separation velocity.
+            self._local_ram_episode_contacts = frozenset(
+                value for value in self._local_ram_episode_contacts
+                if value != bot_id)
+            reason = ('history' if revision is None or presentation_time_us is None
+                      else 'normal' if contact_normal is None else 'geometry')
+            signature = (bot_id, reason, player_plate is None, bot_plate is None)
             if signature not in self._native_ram_contact_failures:
                 self._native_ram_contact_failures.add(signature)
                 sys.stdout.write(
                     '[Offline LAN 0.9.22] RAM native contact unsupported '
-                    'bot_id=%d player_plate=%s bot_plate=%s\n' % (
-                        bot_id, player_plate, bot_plate))
+                    'bot_id=%d reason=%s player_plate=%s bot_plate=%s '
+                    'paired=%s hit=%s normal=%s presentation=%s revision=%s\n' % (
+                        bot_id, reason, player_plate, bot_plate,
+                        matched is not None, proof.get('hit_point'),
+                        contact_normal, presentation_time_us, revision))
             return False
         if len(self._local_ram_receipts) >= 16:
             return False
         self._local_ram_seq += 1
-        hit = proof['hit_point']
+        sample_y = matched[2]
+        hit = (matched[3], sample_y, matched[4])
         player_armor = player_plate['armor']
         bot_armor = bot_plate['armor']
         receipt = {
@@ -20494,68 +20754,32 @@ class BattleRuntime(object):
         for event_seq in tuple(self._native_ram_contact_proofs):
             self._retry_native_ram_contact_proof(event_seq)
 
-    @staticmethod
-    def _ram_obb_vertices(body):
-        shape = body['shape']
-        yaw = float(body['yaw'])
-        sine = math.sin(yaw)
-        cosine = math.cos(yaw)
-        right_x, right_z = cosine, -sine
-        forward_x, forward_z = sine, cosine
-        center_x, center_z = float(body['x']), float(body['z'])
-        half_width, half_length = float(shape[0]), float(shape[1])
-        return [
-            (center_x + sx * half_width * right_x +
-             sz * half_length * forward_x,
-             center_z + sx * half_width * right_z +
-             sz * half_length * forward_z)
-            for sx, sz in ((-1.0, -1.0), (1.0, -1.0),
-                           (1.0, 1.0), (-1.0, 1.0))]
+    _ram_obb_vertices = staticmethod(tank_collision.obb_vertices)
+    _ram_obb_overlap_polygon = staticmethod(tank_collision.obb_overlap_polygon)
+    _ram_obb_overlap_point = staticmethod(tank_collision.obb_overlap_point)
 
     @classmethod
-    def _ram_obb_overlap_point(cls, body_a, body_b):
-        """Return a point inside the exact convex overlap of two OBBs."""
-        polygon = cls._ram_obb_vertices(body_a)
-        clip = cls._ram_obb_vertices(body_b)
-        for index in range(4):
-            start = clip[index]
-            end = clip[(index + 1) % 4]
-            edge_x, edge_z = end[0] - start[0], end[1] - start[1]
+    def _ram_contact_xz_samples(cls, first, second, normal):
+        """Sample the real shared area along its tangential contact width.
 
-            def inside(point):
-                return (edge_x * (point[1] - start[1]) -
-                        edge_z * (point[0] - start[0])) >= -1.0e-7
-
-            def intersection(first, second):
-                segment_x = second[0] - first[0]
-                segment_z = second[1] - first[1]
-                denominator = segment_x * edge_z - segment_z * edge_x
-                if abs(denominator) <= 1.0e-12:
-                    return second
-                ratio = ((start[0] - first[0]) * edge_z -
-                         (start[1] - first[1]) * edge_x) / denominator
-                return (first[0] + ratio * segment_x,
-                        first[1] + ratio * segment_z)
-
-            output = []
-            if not polygon:
-                return None
-            previous = polygon[-1]
-            previous_inside = inside(previous)
-            for current in polygon:
-                current_inside = inside(current)
-                if current_inside != previous_inside:
-                    output.append(intersection(previous, current))
-                if current_inside:
-                    output.append(current)
-                previous = current
-                previous_inside = current_inside
-            polygon = output
+        Chassis contact often falls on a track or an empty gap at the centre.
+        Every alternative stays strictly within both mounted footprints; the
+        native hit testers still determine the armour of each vehicle there.
+        """
+        if normal is None:
+            return ()
+        polygon = cls._ram_obb_overlap_polygon(first, second)
         if not polygon:
-            return None
+            return ()
         count = float(len(polygon))
-        return (sum(point[0] for point in polygon) / count,
-                sum(point[1] for point in polygon) / count)
+        center = (sum(point[0] for point in polygon) / count,
+                  sum(point[1] for point in polygon) / count)
+        tangent = (-normal[1], normal[0])
+        sides = (min(polygon, key=lambda p: p[0]*tangent[0]+p[1]*tangent[1]),
+                 max(polygon, key=lambda p: p[0]*tangent[0]+p[1]*tangent[1]))
+        return (center,) + tuple(
+            (center[0]*0.5+side[0]*0.5,
+             center[1]*0.5+side[1]*0.5) for side in sides)
 
     def _poll_local_ram_contact_episodes(self, entity, own, others):
         """Turn exact OBB compression episodes into immutable RAM proofs.
@@ -20613,7 +20837,9 @@ class BattleRuntime(object):
                     center_distance_squared)
             vertical = tank_collision.vertical_overlap(
                 own.get('y'), own['shape'],
-                other.get('y'), other['shape'])
+                other.get('y'), other['shape'],
+                pitch_a=own.get('pitch', 0.0), roll_a=own.get('roll', 0.0),
+                pitch_b=other.get('pitch', 0.0), roll_b=other.get('roll', 0.0))
             contact = (tank_collision.obb_contact(
                 own['x'], own['z'], own['yaw'], own['shape'],
                 other['x'], other['z'], other['yaw'], other['shape'])
@@ -20638,12 +20864,23 @@ class BattleRuntime(object):
             overlap_point = self._ram_obb_overlap_point(own, other)
             if overlap_point is None:
                 continue
+            # Preserve the historical presentation midpoint as the first
+            # observed damage height.  Separately derive a pitched/rolled
+            # shared vertical span for structural fallbacks.
             low = max(
                 float(own['y']) + float(own['shape'][2]),
                 float(other['y']) + float(other['shape'][2]))
             high = min(
                 float(own['y']) + float(own['shape'][3]),
                 float(other['y']) + float(other['shape'][3]))
+            own_contact_low, own_contact_high = tank_collision.vertical_interval(
+                own['y'], own['shape'],
+                own.get('pitch', 0.0), own.get('roll', 0.0))
+            other_contact_low, other_contact_high = tank_collision.vertical_interval(
+                other['y'], other['shape'],
+                other.get('pitch', 0.0), other.get('roll', 0.0))
+            contact_low = max(own_contact_low, other_contact_low)
+            contact_high = min(own_contact_high, other_contact_high)
             if relative_normal >= 0.0 or bot_id in previous:
                 continue
             hit_point = self._vector((
@@ -20666,7 +20903,8 @@ class BattleRuntime(object):
                           _number(other.get('pitch')),
                           _number(other.get('roll'))),
                 player_ram_profile=own['ram_profile'],
-                contact_normal=impact_contact[:2])
+                contact_normal=impact_contact[:2],
+                contact_y_span=(contact_low, contact_high))
             # Queue admission, including one next-frame plate retry, owns the
             # episode. A sustained overlap must never generate another HP
             # proposal merely because rendering/polling continues.
@@ -20677,6 +20915,50 @@ class BattleRuntime(object):
         self._local_ram_episode_contacts = frozenset(
             (previous & (overlapping | closing_gaps)) | newly_armed)
         return bool(newly_armed)
+
+    def _predict_bot_contact_velocity(self, bot_id, state, shape, params):
+        """Use ACK-coherent momentum and its elapsed drive/ground reaction."""
+        timeline = self._ram_bot_history_index.get(bot_id)
+        now = self._estimated_motion_time_us(self._clock())
+        if not timeline or now is None or self._bots is None:
+            return None
+        sample_time, revision = timeline[-1]
+        checkpoint = self._ram_bot_history.get(revision, {}).get(bot_id)
+        if checkpoint is None or now < sample_time:
+            return None
+        if params is None:
+            return None
+        ack = next((row[1] for row in checkpoint.get('contact_push_acks', ())
+                    if row[0] == self.client.player_id), 0)
+        # A checkpoint has consumed impulses generated earlier on the human
+        # client. Pending impulses will pay the same upstream transit time
+        # before the worker can integrate them. Omitting that interval treats
+        # the pending momentum as already present but without its intervening
+        # engine/ground reaction; a busy link then makes the peer appear to
+        # retreat faster than it really can, preventing further contact force.
+        # Measure only a newly observed ACK, never age a stationary ACK with
+        # later snapshots. This is a velocity predictor, not remote pose motion.
+        clocks = self.__dict__.setdefault('_contact_receipt_clocks', {})
+        receipt = next((row for row in self._local_contact_impulses.get(bot_id, ())
+                        if row[0] == ack), None)
+        if receipt is not None and clocks.get(bot_id, (0, 0))[0] < ack:
+            clocks[bot_id] = (ack, max(0, sample_time - receipt[1]))
+        transit = clocks.get(bot_id, (0, 0))[1]
+        rows = [row for row in self._local_contact_impulses.get(bot_id, ())
+                if row[0] > ack]
+        self._local_contact_impulses[bot_id] = rows
+        if not rows:
+            transit = 0
+        # Compact replicas carry motion, not the worker's descriptor cache.
+        # Use the same installed mass as the engine/ground law below.
+        mass = float(params['mass'])
+        inertia = tank_collision.wreck_yaw_inertia(dict(
+            alive=checkpoint.get('alive', True), mass=mass, shape=shape))
+        impulses = [(row[1]/1000000.0, row[2]/mass, row[3]/mass,
+                     row[4]/inertia if inertia else 0.0) for row in rows]
+        return vehicle_physics.predict_contact_velocity(
+            params, checkpoint, shape, (sample_time-transit)/1000000.0,
+            now/1000000.0, impulses)
 
     def _contact_tanks(self, position, own_shape, dt=0.0, extra_reach=0.0):
         """Build only bodies that can contact this presented player pose.
@@ -20711,17 +20993,28 @@ class BattleRuntime(object):
                 record.get('kind') == 'bot' and
                 record.get('network_id') in self._local_ram_episode_contacts)
             if not active_episode:
-                if not tank_collision.vertical_overlap(
+                presented_overlap = tank_collision.vertical_overlap(
                         position[1], own_shape, y, shape,
                         pitch_a=self._local_pitch, roll_a=self._local_roll,
                         pitch_b=_number(pose.get('pitch', state.get('pitch'))),
-                        roll_b=_number(pose.get('roll', state.get('roll')))):
+                        roll_b=_number(pose.get('roll', state.get('roll'))))
+                canonical_overlap = (record.get('kind') == 'bot' and
+                    tank_collision.vertical_overlap(
+                        position[1], own_shape, _number(state.get('y')), shape,
+                        pitch_a=self._local_pitch, roll_a=self._local_roll,
+                        pitch_b=_number(state.get('pitch')),
+                        roll_b=_number(state.get('roll'))))
+                if not presented_overlap and not canonical_overlap:
                     continue
                 radius = math.sqrt(shape[0] * shape[0] + shape[1] * shape[1])
                 reach = (own_radius + radius + max(0.0, extra_reach) +
                          tank_collision.CONTACT_BROADPHASE_PADDING)
                 dx, dz = position[0] - x, position[2] - z
-                if dx * dx + dz * dz > reach * reach:
+                canonical_dx = position[0] - _number(state.get('x'))
+                canonical_dz = position[2] - _number(state.get('z'))
+                if (dx * dx + dz * dz > reach * reach and
+                        (not canonical_overlap or
+                         canonical_dx * canonical_dx + canonical_dz * canonical_dz > reach * reach)):
                     continue
             physical_state = state
             if isinstance(presented_pose, dict):
@@ -20757,7 +21050,21 @@ class BattleRuntime(object):
                 if player_effective is not None else
                 self._ram_profile(descriptor))
             physical_velocity = None
+            bot_contact_params = None
+            push_yaw = _number(physical_state.get('push_yaw'))
             if record.get('kind') == 'bot':
+                parameter_key = (descriptor, state.get('skill_rating'), state.get('skill'),
+                                 state.get('team'), state.get('slot'))
+                cached = record.get('_contact_parameters')
+                if cached is None or cached[0] != parameter_key:
+                    bot_contact_params = (self._bots.replica_contact_params(state, descriptor)
+                                          if self._bots is not None else None)
+                    record['_contact_parameters'] = (parameter_key, bot_contact_params)
+                    if bot_contact_params is not None:
+                        sys.stdout.write('[Offline LAN 0.9.22] CONTACT parameters bot=%d mass=%.3f powerW=%.3f source=presented_descriptor\n' % (
+                            int(record['network_id']), bot_contact_params['mass'], bot_contact_params['powerW']))
+                else:
+                    bot_contact_params = cached[1]
                 physical_yaw = _number(physical_state.get('yaw'))
                 physical_speed = (_number(physical_state.get('speed'))
                                   if alive else 0.0)
@@ -20772,17 +21079,30 @@ class BattleRuntime(object):
                     _number(physical_state.get('push_x')) + pending[0],
                     math.cos(physical_yaw) * physical_speed +
                     _number(physical_state.get('push_z')) + pending[1])
+                inertia = tank_collision.wreck_yaw_inertia(dict(
+                    alive=alive, mass=_number(mass, 25000.0), shape=shape))
+                if inertia:
+                    push_yaw += tank_contact_ledger.pending_angular(
+                        self._local_contact_pushes, int(record['network_id']),
+                        physical_state.get('contact_push_acks'),
+                        int(getattr(self.client, 'player_id', 0)))/inertia
+                predicted = self._predict_bot_contact_velocity(
+                    int(record['network_id']), physical_state, shape, bot_contact_params)
+                if predicted is not None:
+                    physical_velocity, push_yaw = predicted[:2], predicted[2]
+                # Pending momentum is reciprocal; pending space is not.
+                # A worker can reject displacement against a rock or another
+                # hull. Use the actual presented body, never a requested pose.
             params = (player_effective['physics'] if player_effective is not None else
-                      (vehicle_physics.descriptor_contact_params(descriptor) if descriptor is not None else None))
+                      bot_contact_params)
             grip = (vehicle_physics.contact_push_decel(
                 params, bool(alive and (speed or state.get('movement_dir') or state.get('forward'))),
                 normal_y=math.cos(_number(state.get('pitch')))*math.cos(_number(state.get('roll'))))
                     if params else None)
             traverse = (0.0, 0.0)
             motor_turn = state.get('rotation_dir', state.get('turn', 0)) if alive else 0
-            if descriptor is not None and motor_turn and dt > 0.0:
-                drive_params = (player_effective['physics'] if player_effective is not None
-                                else vehicle_physics.derive_params(descriptor))
+            if params is not None and motor_turn and dt > 0.0:
+                drive_params = params
                 traverse = vehicle_physics.contact_traverse(
                     drive_params, shape[0], speed, motor_turn, dt,
                     state.get('movement_dir', state.get('forward', 0)), _number(state.get('pitch')))
@@ -20804,9 +21124,9 @@ class BattleRuntime(object):
                 # Historical armour receipts settle HP independently.
                 'impulse': True,
                 'physical_velocity': physical_velocity,
-                # A Bot wreck is shoved by the authority worker, so it keeps a
-                # real inverse mass here and the local hull only takes its own
-                # share of the separation.  A dead human hull has no
+                'push_yaw': push_yaw,
+                # Bot wreck momentum retains its real inverse mass. Their
+                # owner alone advances the pose. A dead human hull has no
                 # integrator in any process and stays world geometry.
                 'immovable': not alive and record.get('kind') != 'bot',
                 'x': x, 'y': y, 'z': z,
@@ -20825,8 +21145,12 @@ class BattleRuntime(object):
             })
         return result
 
-    def _resolve_local_tank_contacts(self, entity, position, yaw, dt):
+    def _resolve_local_tank_contacts(self, entity, position, yaw, dt,
+                                     start_position=None):
         """Apply chassis OBB separation without pushing a tank into walls."""
+        if start_position is None:
+            start_position = getattr(self, '_local_contact_start_position', None)
+        self._local_contact_start_position = None
         self._retry_native_ram_contact_proofs()
         own_mass = _number(
             (self._local_physics or {}).get('mass'), 25000.0)
@@ -20848,7 +21172,18 @@ class BattleRuntime(object):
             'vy': self._local_vertical_speed,
             'vz': math.cos(yaw) * self._local_speed + self._local_push_z,
         }
-        others = self._contact_tanks(position, own['shape'], dt)
+        travel = ((position[0]-start_position[0], position[2]-start_position[2])
+                  if start_position is not None else (0.0, 0.0))
+        others = self._contact_tanks(
+            position, own['shape'], dt, extra_reach=math.hypot(*travel))
+        drive_fraction = 1.0
+        if start_position is not None:
+            start_body = dict(own, x=start_position[0], z=start_position[2])
+            fraction = tank_collision.translation_fraction(start_body, travel, others)
+            drive_fraction = fraction
+            position = (start_position[0]+travel[0]*fraction, position[1],
+                        start_position[2]+travel[1]*fraction)
+            own['x'], own['z'] = position[0], position[2]
         if self._local_physics is not None:
             own['traverse_speed'], own['traverse_torque'] = vehicle_physics.contact_traverse(
                 self._local_physics, own['shape'][0], self._local_speed,
@@ -20859,6 +21194,7 @@ class BattleRuntime(object):
         physical_others = []
         for other in others:
             physical = dict(other)
+            physical['position_fixed'] = True
             if physical.get('physical_velocity') is not None:
                 physical['vx'], physical['vz'] = physical['physical_velocity']
             physical_others.append(physical)
@@ -20866,13 +21202,29 @@ class BattleRuntime(object):
             own, physical_others, now=now,
             ram_cooldowns=self._local_ram_cooldowns,
             active_ram_contacts=self._local_ram_contacts, dt=dt)
-        angular = tank_collision.traverse_impulses([own]+physical_others, dt, anchor=own['id'])
-        contact['delta_velocity'] = tuple(contact['delta_velocity'][i]+angular[own['id']][i]
-                                          for i in range(2))
-        responses = dict(contact.get('responses', ()))
+        # Damage keeps the frozen first-impact inputs above. Physical
+        # response must share the worker's sequential solve: independently
+        # summing several contacts spends the player's momentum repeatedly
+        # in a crowded spawn, and can even create kinetic energy.
+        solved = tank_collision.resolve_pairs(
+            [own] + physical_others, dt, anchor=own['id'])
+        contact['correction'] = solved[own['id']]['correction']
+        contact['delta_velocity'] = solved[own['id']]['delta_velocity']
+        responses = dict((other['id'], solved[other['id']]['delta_velocity'])
+                         for other in physical_others
+                         if (solved[other['id']]['delta_velocity'] != (0.0, 0.0) or
+                             solved[other['id']]['correction'] != (0.0, 0.0) or
+                             solved[other['id']]['delta_yaw'] != 0.0))
+        traverse_bodies = tank_collision.post_contact_velocity_bodies(
+            [own] + physical_others, solved)
+        angular = tank_collision.traverse_impulses(
+            traverse_bodies, dt, anchor=own['id'], angular_results=solved)
+        contact['delta_velocity'] = tuple(
+            contact['delta_velocity'][i] + angular[own['id']][i]
+            for i in range(2))
         for other in physical_others:
             delta = angular[other['id']]
-            if delta != (0.0, 0.0):
+            if delta != (0.0, 0.0) or solved[other['id']]['delta_yaw']:
                 previous = responses.get(other['id'], (0.0, 0.0))
                 responses[other['id']] = tuple(previous[i]+delta[i] for i in range(2))
         contact['responses'] = sorted(responses.items())
@@ -20886,9 +21238,19 @@ class BattleRuntime(object):
                 'vehicle collision feedback', self._present_tank_collision,
                 (entity, own, physical, now), disable=False)
             if other.get('kind') == 'bot':
+                angular_momentum = (solved[other_id]['delta_yaw'] *
+                                    tank_collision.wreck_yaw_inertia(other))
                 tank_contact_ledger.record(
                     self._local_contact_pushes, other['network_id'],
-                    (delta[0] * other['mass'], delta[1] * other['mass']))
+                    (delta[0] * other['mass'], delta[1] * other['mass']),
+                    angular=angular_momentum)
+                stamp = self._estimated_motion_time_us(now)
+                if stamp is not None:
+                    self._local_contact_impulses.setdefault(
+                        other['network_id'], []).append((
+                            self._local_contact_pushes[other['network_id']][1],
+                            stamp, delta[0]*other['mass'], delta[1]*other['mass'],
+                            angular_momentum))
         delta_x, delta_z = contact['delta_velocity']
         if ((delta_x or delta_z) and now >= self._local_contact_log_time):
             self._local_contact_log_time = now + 2.0
@@ -20900,13 +21262,8 @@ class BattleRuntime(object):
                      for o in physical_others]))
         forward_impulse = (delta_x * math.sin(yaw) +
                            delta_z * math.cos(yaw))
-        applied_forward = 0.0
-        if forward_impulse * self._local_speed < 0.0:
-            applied_forward = (
-                -self._local_speed if
-                abs(forward_impulse) >= abs(self._local_speed)
-                else forward_impulse)
-            self._local_speed += applied_forward
+        applied_forward = forward_impulse
+        self._local_speed += applied_forward
         push_x = (self._local_push_x + delta_x -
                   applied_forward * math.sin(yaw))
         push_z = (self._local_push_z + delta_z -
@@ -20919,6 +21276,18 @@ class BattleRuntime(object):
         correction_x, correction_z = contact['correction']
         move_x = correction_x + push_x * dt
         move_z = correction_z + push_z * dt
+        guarded_position = position
+        if (start_position is not None and
+                (drive_fraction < 1.0 or delta_x or delta_z or push_x or push_z)):
+            # The first sweep finds the contact for the impulse solver. It
+            # must not separately consume the drive displacement: a diagonal
+            # response may only be legal when its forward and lateral parts
+            # move together. Re-sweep the complete post-contact translation.
+            position = (start_position[0], position[1], start_position[2])
+            own['x'], own['z'] = position[0], position[2]
+            move_x += travel[0] + math.sin(yaw) * applied_forward * dt
+            move_z += travel[1] + math.cos(yaw) * applied_forward * dt
+        move_x, move_z = tank_collision.slide_translation(own, (move_x, move_z), others)
         distance = math.sqrt(move_x * move_x + move_z * move_z)
         if distance > 0.0001:
             contact_yaw = math.atan2(move_x, move_z)
@@ -20934,6 +21303,7 @@ class BattleRuntime(object):
                      not arena_recovery)):
                 push_x = 0.0
                 push_z = 0.0
+                position = guarded_position
             else:
                 position = candidate
         self._local_push_x, self._local_push_z = push_x, push_z
@@ -21512,6 +21882,14 @@ class BattleRuntime(object):
                 vehicle_physics.CONTACT_PENETRATION)
             flat_maximum_y = (spring_maximum_y if flat_limit is None else
                               max(spring_maximum_y, flat_limit))
+            reference_height = vehicle_physics.suspension_plane_height(
+                None if self._local_airborne else
+                self._local_ground_plane, x, z)
+            if flat_limit is not None and reference_height is not None:
+                # Match the worker: permission to use the known deck must
+                # also put the native ray start above that deck.
+                maximum_y = max(maximum_y, min(flat_limit,
+                    reference_height + vehicle_physics.CONTACT_PENETRATION))
             value = self._suspension_ground_y(
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=flat_maximum_y,
@@ -21524,8 +21902,8 @@ class BattleRuntime(object):
                     px, pz, low, high, flat_maximum_y=high,
                     prepared_filter=prepared_filter), support_gradient,
                 point_height=spring_height, spring=spring,
-                reference_height=vehicle_physics.suspension_plane_height(
-                    None if self._local_airborne else self._local_ground_plane, x, z))
+                reference_height=reference_height,
+                pitch=self._local_pitch, roll=self._local_roll)
             value, memory[index] = vehicle_physics.retained_ground_contact(
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
@@ -21756,7 +22134,9 @@ class BattleRuntime(object):
             return 0.0
         velocity = (math.sin(yaw) * speed, self._local_vertical_speed,
                     math.cos(yaw) * speed)
-        impact = vehicle_physics.world_impact_speed(velocity, trace.get('normal'))
+        impact = vehicle_physics.world_impact_speed(
+            velocity, vehicle_physics.horizontal_contact_normal(
+                trace.get('normal')))
         now = self._clock()
         if (impact > vehicle_physics.FALL_SAFE_SPEED and
                 now - getattr(self, '_last_world_impact_time', -1.0e30) >= 0.25):
@@ -22182,6 +22562,8 @@ class BattleRuntime(object):
             self._local_turn_speed = 0.0
             self._local_drive_turn = 0.0
             self._local_drive_throttle = 0.0
+            self._local_direction_command = 0.0
+            self._local_service_brake = False
         self._commit_local_suspension_metadata(
             position, yaw, solved, ground, plane=current_plane,
             sample_pose=(previous_pitch, previous_roll))
@@ -22237,14 +22619,16 @@ class BattleRuntime(object):
             return 0.0, 0.0
         velocity = vehicle_physics.world_contact_velocity(
             (lateral_x, self._local_vertical_speed, lateral_z),
-            trace['normal'])
+            vehicle_physics.horizontal_contact_normal(trace['normal']))
         self._local_vertical_speed = velocity[1]
         return velocity[0], velocity[2]
 
     def _apply_suspension_slope_slide(
             self, position, yaw, dt, entity=None):
         """Advance slope-driven X/Z after the ram endpoint is settled."""
-        if self._local_airborne:
+        if self._local_airborne or self._local_ground_plane is None:
+            # Partial edge support can lose its fitted plane before the last
+            # contact separates. Preserve momentum through that transition.
             self._local_slide_speed = 0.0
             lateral_x, lateral_z = self._local_air_lateral
             if abs(lateral_x) <= 0.0001 and abs(lateral_z) <= 0.0001:
@@ -22581,6 +22965,8 @@ class BattleRuntime(object):
             self._local_turn_speed = 0.0
             self._local_drive_turn = 0.0
             self._local_drive_throttle = 0.0
+            self._local_direction_command = 0.0
+            self._local_service_brake = False
             self._sender.forward = 0.0
             self._sender.turn = 0.0
             vehicle_filter = getattr(entity, 'filter', None)
@@ -22655,6 +23041,12 @@ class BattleRuntime(object):
         handbrake = ((bool(self._sender.handbrake) and not overturned) or
                      is_tracked or
                      siege_drive_locked or siege_braking)
+        previous_direction_command = self._local_direction_command
+        previous_service_brake = self._local_service_brake
+        self._local_service_brake = vehicle_physics.direction_brake(
+            self._local_direction_command, self._local_service_brake,
+            throttle, self._local_speed)
+        self._local_direction_command = throttle
         previous_speed = self._local_speed
         if siege_drive_locked and not self._local_airborne:
             # Freeze only powered longitudinal/traverse motion. Gravity,
@@ -22680,8 +23072,15 @@ class BattleRuntime(object):
                 drive_physics, self._local_speed,
                 throttle, turn != 0.0,
                 slope_pitch, dt, self._local_airborne, 0,
-                handbrake)
+                handbrake, self._local_service_brake)
 
+        if (previous_direction_command != throttle or
+                previous_service_brake != self._local_service_brake):
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] DRIVE input command=%.3f service_brake=%s '
+                'handbrake=%s speed=%.4f->%.4f pitch=%.5f dt=%.5f airborne=%s\n' %
+                (throttle, self._local_service_brake, handbrake, previous_speed,
+                 self._local_speed, slope_pitch, dt, self._local_airborne))
         drive_speed = self._local_speed
         primary_contact = None
         if abs(self._local_speed) > 0.0001 and dt > 0.0:
@@ -22765,7 +23164,8 @@ class BattleRuntime(object):
                             (sine * self._local_speed,
                              self._local_vertical_speed,
                              cosine * self._local_speed),
-                            primary_contact['normal'])
+                            vehicle_physics.horizontal_contact_normal(
+                                primary_contact['normal']))
                         self._local_speed = velocity[0] * sine + velocity[2] * cosine
                         self._local_vertical_speed = velocity[1]
                         self._local_air_lateral = (
@@ -22868,6 +23268,7 @@ class BattleRuntime(object):
             not self._local_suspension_disabled)
         support_blocked = bool(self._local_support_rise_blocked)
         ram_resolved = False
+        self._local_contact_start_position = tick_pose
         slide_moved = False
         if suspension_active:
             # Current-tick suspension now owns Y/pitch/roll before secondary
@@ -22931,6 +23332,8 @@ class BattleRuntime(object):
                 self._local_turn_speed = 0.0
                 self._local_drive_turn = 0.0
                 self._local_drive_throttle = 0.0
+                self._local_direction_command = 0.0
+                self._local_service_brake = False
                 self._local_push_x = 0.0
                 self._local_push_z = 0.0
                 self._local_motion_kinds = 'detached_turret'
@@ -23381,16 +23784,24 @@ class BattleRuntime(object):
             target_position[1] + spotting.TARGET_CHECK_HEIGHT,
             target_position[2]))
         broken_filter = self._sight_collision_filter()
-        if broken_filter is None:
+        collide_sight = getattr(self._destructibles, 'collide_sight_segment', None)
+        if callable(collide_sight):
+            hit = collide_sight(self._avatar.spaceID, start, end,
+                broken_filter, self._runtime.bigworld.wg_collideSegment)
+        elif broken_filter is None:
             hit = self._runtime.bigworld.wg_collideSegment(
                 self._avatar.spaceID, start, end, 128)
         else:
             hit = self._runtime.bigworld.wg_collideSegment(
                 self._avatar.spaceID, start, end, 128, broken_filter)
-        return bool(
+        clear = bool(
             hit is None or
             (hit[0] - start).length + spotting.SIGHT_END_TOLERANCE >=
             (end - start).length)
+        report = getattr(self._destructibles, 'report_sight_contact', None)
+        if not clear and callable(report):
+            report(self._avatar.spaceID, start, end, hit)
+        return clear
 
     @staticmethod
     def _spot_entity_pose(position, entity=None, state=None):
@@ -23418,18 +23829,26 @@ class BattleRuntime(object):
             phase=int(max(0, self._turret_server_time_ms()) / 2000))
         ends = spotting.vehicle_check_points(target_descriptor, target)
         broken_filter = self._sight_collision_filter()
+        collide_sight = getattr(self._destructibles, 'collide_sight_segment', None)
+        report = getattr(self._destructibles, 'report_sight_contact', None)
         best_cover = None
         for start_point in starts:
             start = self._vector(start_point)
             for end_point in ends:
                 end = self._vector(end_point)
-                args = (self._avatar.spaceID, start, end, 128)
-                if broken_filter is not None:
-                    args += (broken_filter,)
-                hit = self._runtime.bigworld.wg_collideSegment(*args)
+                if callable(collide_sight):
+                    hit = collide_sight(self._avatar.spaceID, start, end,
+                        broken_filter, self._runtime.bigworld.wg_collideSegment)
+                else:
+                    args = (self._avatar.spaceID, start, end, 128)
+                    if broken_filter is not None:
+                        args += (broken_filter,)
+                    hit = self._runtime.bigworld.wg_collideSegment(*args)
                 if (hit is not None and
                         (hit[0] - start).length + spotting.SIGHT_END_TOLERANCE <
                         (end - start).length):
+                    if callable(report):
+                        report(self._avatar.spaceID, start, end, hit)
                     continue
                 cover = self._foliage_camouflage_bonus(
                     source_position, target_position, fired_recently,
@@ -23898,15 +24317,20 @@ class BattleRuntime(object):
             source, path, splash_radius)
 
     def _bot_direct_launch_origin(
-            self, source, unused_descriptor, unused_shell_index,
+            self, source, descriptor, unused_shell_index,
             unused_fire_seq, unused_shot_yaw, unused_shot_pitch,
             unused_flight_time):
-        """Freeze one direct shell at its exact logical/native muzzle pose."""
+        """Freeze the physical shell at the gun pivot, before any wall.
+
+        HP_gunFire remains the cosmetic flash/tracer origin. The pivot is the
+        same #1513 transform that player gun rotation uses for a shot, so a
+        barrel through cover cannot spawn a physical shell beyond that cover.
+        """
         try:
             source_id = int(source.get('id'))
         except (AttributeError, TypeError, ValueError, OverflowError):
             return None
-        barrel = self._bot_barrel_point(source, unused_descriptor)
+        barrel = self._bot_barrel_point(source, descriptor)
         if barrel is None or self._barrel_under_water(barrel):
             return None
         source_record = self._records.get('bot:%s' % source_id)
@@ -23917,31 +24341,24 @@ class BattleRuntime(object):
                 not getattr(source_entity, 'isStarted', False)):
             return None
         try:
-            gun_node = source_entity.model.node('HP_gunFire')
-            native = _xyz(self._runtime.math.Matrix(gun_node).translation)
-        except Exception:
-            return None
-        presented = source_record.get('projectile_collision_pose')
-        if isinstance(presented, dict):
-            logical_pose = self._projectile_plain_pose((
+            pose = self._projectile_plain_pose((
                 _number(source.get('x')), _number(source.get('y')),
                 _number(source.get('z'))), source)
-            names = ('x', 'y', 'z', 'yaw', 'pitch', 'roll',
-                     'turret_yaw', 'gun_pitch')
-            if any(abs(_number(logical_pose.get(name)) -
-                       _number(presented.get(name))) > 1.0e-7
-                   for name in names):
-                # A stalled callback can simulate several physical edges before
-                # the hidden native compound is presented.  The pure #1513
-                # barrel transform binds each edge to its own logical pose;
-                # the native node remains the exact path for an aligned pose.
-                return tuple(barrel)
-        return native
+            origin, unused_direction = shot_geometry.shot_origin_and_direction(
+                descriptor, (pose['x'], pose['y'], pose['z']),
+                pose['yaw'], pose['pitch'], pose['roll'],
+                pose['turret_yaw'], pose['gun_pitch'])
+        except Exception:
+            return None
+        return origin
 
     def _bot_artillery_planning_origin(self, source, descriptor):
-        """Read the same native muzzle used by the final SPG proof."""
+        """Use the same gun pivot for SPG planning and launch proof."""
         return self._bot_direct_launch_origin(
             source, descriptor, 0, 0, 0.0, 0.0, 0.0)
+
+    def _bot_artillery_status(self, source, target, shell_index, now):
+        return self._artillery.status(source, target, shell_index, now)
 
     def _bot_ballistic_solution(self, source, target, descriptor,
                                 shell_index, now):
@@ -23954,7 +24371,7 @@ class BattleRuntime(object):
     def _bot_artillery_launch(
             self, source, target, descriptor, shell_index, fire_seq,
             shot_yaw, shot_pitch, flight_time, now):
-        """Prove the exact dispersed SPG path from the live muzzle node."""
+        """Prove the exact dispersed SPG path from its physical gun pivot."""
         if (self._artillery is None or not isinstance(source, dict) or
                 not isinstance(target, dict)):
             return None
@@ -23969,15 +24386,10 @@ class BattleRuntime(object):
         if (entity is None or not getattr(entity, 'isStarted', False) or
                 getattr(entity, 'typeDescriptor', None) is None):
             return None
-        try:
-            gun_node = entity.model.node('HP_gunFire')
-            origin = _xyz(self._runtime.math.Matrix(gun_node).translation)
-        except Exception:
-            # A logical pose is not a muzzle proof.  SPGs wait until the
-            # native model exposes the exact launch transform.
-            return None
-        barrel = self._bot_barrel_point(source, descriptor)
-        if barrel is None or self._barrel_under_water(barrel):
+        origin = self._bot_direct_launch_origin(
+            source, descriptor, shell_index, fire_seq,
+            shot_yaw, shot_pitch, flight_time)
+        if origin is None:
             return None
         ready, receipt = self._artillery.request_launch(
             source, target, descriptor, int(shell_index), int(fire_seq),
@@ -24871,6 +25283,8 @@ class BattleRuntime(object):
         # garage owner and always receive the stock empty descriptor.
         properties['publicInfo']['outfit'] = self._remote_outfit(
             state, event.get('kind'))
+        properties['publicInfo']['prebattleID'] = self._lan_prebattle_id(
+            state, event.get('kind'))
         # A Bot has no account and therefore no marks; only a human's own
         # server-published count decals a replica's gun barrel.
         properties['publicInfo']['marksOnGun'] = (
@@ -25015,7 +25429,7 @@ class BattleRuntime(object):
                 elif record.get('native_remote'):
                     vehicle._offlineNativeDrawVisible = initially_visible
                     set_draw_visibility(vehicle, initially_visible)
-                    vehicle.targetCaps = [1] if initially_visible else []
+                    vehicle.targetCaps = []
                     # The compatibility enter-world gate may already have
                     # stopped an enemy marker before this asynchronous ready
                     # boundary.
@@ -25507,7 +25921,7 @@ class BattleRuntime(object):
             if record.get('native_remote'):
                 vehicle._offlineNativeDrawVisible = draw_vehicle
                 set_draw_visibility(vehicle, draw_vehicle)
-                vehicle.targetCaps = [1] if visible and alive else []
+                vehicle.targetCaps = []
                 # Closing the draw pass is itself the track-presentation
                 # edge. Waiting for another pose update is insufficient:
                 # unchanged speed/yaw is deduplicated and could leave the
@@ -26652,7 +27066,7 @@ class BattleRuntime(object):
             'turret-obstacle-v1',
             (self._start_message or {}).get('round_id'), key)
         plan = self._run_optional_feature(
-            'detached turret flight', freeze_obstacle_plan,
+            'detached turret flight', freeze_visual_plan,
             (entity, pose, seed, self._collide_detached_turret), disable=False)
         if not isinstance(plan, dict):
             return False
@@ -26879,7 +27293,8 @@ class BattleRuntime(object):
         server_ms = self._turret_server_time_ms(now)
         if server_ms < 0:
             return 0
-        if self._worker_mode and self._detached_turret_rows:
+        if self._worker_mode and any('body' in row['flight']
+                for row in self._detached_turret_rows.values()):
             self._advance_turret_support(server_ms)
         for key, row in self._detached_turret_rows.items():
             record = self._records.get(key)
@@ -26888,7 +27303,9 @@ class BattleRuntime(object):
             entity = self._server_entity(record['engine_id'])
             if entity is None:
                 continue
-            if not row['flight']['landed'] and 'body' not in row['flight']:
+            # Visual-only debris owns no ray, hull, navigation or vehicle
+            # contact geometry, including after its frozen arc has landed.
+            if 'body' not in row['flight']:
                 self._detached_turret_geometry.add(key)
             if key not in self._detached_turret_geometry:
                 descriptor = getattr(entity, 'typeDescriptor', None)
@@ -27434,7 +27851,56 @@ class BattleRuntime(object):
             'reload=%.3f\n' % (str(reason), remaining))
         return False
 
-    def shoot(self, aim_yaw, gun_pitch):
+    def _cancel_local_player_burst(self, apply_settings=False):
+        burst = self._local_player_burst
+        self._local_player_burst = None
+        if burst is not None and self._gun_state is not None:
+            gun = self._gun_state
+            gun.cancel_burst()
+            if burst['committed'] > 0 and self._server is not None:
+                entity = self._server_entity(self._server.vehicle_id)
+                extras = getattr(getattr(entity, 'typeDescriptor', None),
+                                 'extrasDict', {})
+                extra = extras.get('shoot')
+                if extra is not None:
+                    self._run_optional_feature(
+                        'shot muzzle retirement', extra.stopFor, args=(entity,))
+            if apply_settings:
+                edge = self._advance_local_gun_edge(gun)
+                entity = edge[0] if edge is not None else None
+                if burst.get('deferred_gun_settings'):
+                    gun.pending_index = burst['deferred_gun_pending_index']
+                    self._apply_deferred_gun_settings(gun, burst)
+                self._apply_current_reload_factor(gun, entity)
+                self._publish_ammo_state(gun, force=True)
+                self._publish_reload_event(
+                    gun.reload_time, gun.reload_duration, force=True)
+                if self._sender is not None:
+                    self._sender.send_current()
+        return burst
+
+    def _advance_local_player_burst(self):
+        """Keep a released trigger's tail on the existing worker fire path."""
+        burst = self._local_player_burst
+        if burst is None or self._local_fire_intent is not None:
+            return False
+        if burst['generation'] != self._generation:
+            self._cancel_local_player_burst()
+            return False
+        due = burst['started_at'] + burst['committed'] * burst['interval']
+        if self._clock() + 1.0e-9 < due:
+            return False
+        # shoot freezes a fresh native gun ray for every real subshot. Its
+        # worker acknowledgement remains the only ammunition debit.
+        if not self.shoot(0.0, 0.0, player_burst=burst):
+            self._cancel_local_player_burst(apply_settings=True)
+            return False
+        return True
+
+    def shoot(self, aim_yaw, gun_pitch, player_burst=None):
+        if (self._local_player_burst is not None and
+                player_burst is not self._local_player_burst):
+            return False
         if (self.state != 'running' or not self._battle_live or
                 self._battle_result is not None or
                 self._drown_level == 2 or self._overturn_level == 2):
@@ -27462,7 +27928,13 @@ class BattleRuntime(object):
         now = self._clock()
         # Close the 100 ms HUD/state race at the exact trigger edge.
         state = self._advance_local_gun_to(entity, now)
-        if not state.can_fire(self._battle_live):
+        continuing_burst = bool(
+            player_burst is not None and
+            player_burst is self._local_player_burst and
+            state._burst_remaining > 0 and state.reload_time <= 0.0 and
+            state.clip > 0 and state.shot_index == player_burst['shell_index'] and
+            state.ammo[state.shot_index] > 0)
+        if not continuing_burst and not state.can_fire(self._battle_live):
             return self._reject_local_fire('gun_not_ready')
         if isinstance(self._local_fire_intent, dict):
             return self._reject_local_fire('intent_pending')
@@ -27516,12 +27988,24 @@ class BattleRuntime(object):
             shells_before_shot)
         if not intent_seq:
             return self._reject_local_fire('intent_send_failed')
+        if player_burst is None:
+            count, interval = burst_mechanics.planned_count(
+                entity.typeDescriptor.gun, state.ammo[shell_index], state.clip)
+            if count > 1:
+                player_burst = {
+                    'count': count, 'interval': interval, 'committed': 0,
+                    'started_at': float(now), 'shell_index': shell_index,
+                    'generation': self._generation,
+                }
+                self._local_player_burst = player_burst
         self._local_fire_intent = {
             'intent_seq': int(intent_seq),
             'input_seq': int(getattr(self.client, '_input_seq', 0)),
             'sent_at': float(now),
             'sent_wall': trigger_wall,
         }
+        if player_burst is not None:
+            self._local_fire_intent['player_burst'] = player_burst
         sys.stdout.write(
             '[Offline LAN 0.9.22] FIRE TRIGGER intent=%d input=%d '
             'shell=%d\n' % (
@@ -28208,6 +28692,8 @@ class BattleRuntime(object):
         self._local_turn_speed = 0.0
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
+        self._local_direction_command = 0.0
+        self._local_service_brake = False
         self._local_siege_braking = None
         self._local_siege_pending = None
         self._local_siege_edge_reports = 0
@@ -28262,6 +28748,7 @@ class BattleRuntime(object):
         self._local_downhill = (0.0, 0.0, 0.0)
         self._local_slope_tangent = 0.0
         self._local_ground_plane = None
+        self._local_legacy_support_sample = None
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
@@ -28283,6 +28770,7 @@ class BattleRuntime(object):
         self._player_fire_launch_pending = {}
         self._fire_timeline = collections.OrderedDict()
         self._local_fire_intent = None
+        self._local_player_burst = None
         self._fire_intent_reject_round = None
         self._fire_intent_reject_counts = {}
         self._ammo_signature = None

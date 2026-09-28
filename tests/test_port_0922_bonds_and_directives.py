@@ -141,8 +141,10 @@ class BondsAndDirectivesTests(unittest.TestCase):
         self.assertEqual([0, 0, 0, 11003], state.snapshot()['vehicles'][0]['eqs'])
 
     def test_every_directive_can_be_bought_mounted_and_resupplied(self):
-        # Exact 0.9.22 catalogue names/prices; exercise both native UI flows:
-        # depot purchase followed by install, and a fourth-slot layout fill.
+        # Exact 0.9.22 catalogue names/prices with a shared booster descriptor;
+        # exercise depot purchase/install, layout fill, and CMD 308's direct
+        # purchase using a UI slot-zero fixture for the slot-mismatch class;
+        # the report did not capture the actual slot index.
         directives = {
             'aimingStabilizerBattleBooster': 10, 'camouflageBattleBooster': 12,
             'coatedOpticsBattleBooster': 8, 'enhancedAimDrivesBattleBooster': 10,
@@ -153,7 +155,7 @@ class BondsAndDirectivesTests(unittest.TestCase):
             'smoothTurretBattleBooster': 10, 'toolboxBattleBooster': 6,
             'virtuosoBattleBooster': 8}
         for name, price in sorted(directives.items()):
-            for entrance in ('depot', 'layout'):
+            for entrance in ('depot', 'layout', 'buy_and_equip'):
                 with self.subTest(name=name, entrance=entrance):
                     requests, commands, garage = _request_modules()
                     vehicles, tankmen = _modules()
@@ -170,8 +172,13 @@ class BondsAndDirectivesTests(unittest.TestCase):
                         bought = requests._buy_item(context, (0, 11003, 2, 0))
                         self.assertEqual(commands.RES_SUCCESS, bought.result_id)
                         self.assertEqual(2, state.snapshot()['inventoryItems'][11][11003])
-                    layout = [0, 9, 0, 1, 8, 0, 0, 0, 0, 0, 0, 11003, 1]
-                    mounted = requests._set_and_fill_layouts(context, (layout,))
+                    if entrance == 'buy_and_equip':
+                        mounted = requests.dispatch(
+                            commands.CMD_BUY_AND_EQUIP_ITEM, context,
+                            ([0, 11003, 9, 0, 0, 0],))
+                    else:
+                        layout = [0, 9, 0, 1, 8, 0, 0, 0, 0, 0, 0, 11003, 1]
+                        mounted = requests._set_and_fill_layouts(context, (layout,))
                     self.assertEqual(commands.RES_SUCCESS, mounted.result_id)
                     self.assertEqual([0, 0, 0, 11003], state.snapshot()['vehicles'][0]['eqs'])
                     state.settle_battle_consumables(50001, [11003])

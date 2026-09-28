@@ -85,6 +85,7 @@ class _MiscStatus(object):
 
 
 class _Constants(object):
+    ATTACK_REASON_INDICES = {'shot': 0, 'fire': 1}
     ARENA_UPDATE = _ArenaUpdate
     ARENA_PERIOD = _ArenaPeriod
     VEHICLE_PHYSICS_MODE = _PhysicsMode
@@ -118,6 +119,7 @@ class _EntityFilter(object):
 
 class _Entity(object):
     typeDescriptor = _EntityDescriptor()
+    health = 0
 
     def __init__(self):
         self.teleports = []
@@ -196,7 +198,13 @@ class _Avatar(object):
             self.visual_starts.append((proxy, immediate)),
             stopVehicleVisual=lambda entity_id, is_player:
             self.visual_stops.append((entity_id, is_player)),
-            shared=types.SimpleNamespace(viewPoints=self.view_points))
+            shared=types.SimpleNamespace(
+                viewPoints=self.view_points,
+                messages=types.SimpleNamespace(
+                    _BattleMessagesController__getKillInfo=lambda *args:
+                        ('DEATH_FROM_SHOT', 'ENEMY_SELF', None, None),
+                    onShowPlayerMessageByCode=mock.Mock(),
+                    onShowVehicleMessageByCode=mock.Mock())))
         self.consistentMatrices = _ConsistentMatrices()
 
     def updateArena(self, update_type, payload):
@@ -244,6 +252,107 @@ class _VehicleDescr(object):
 
 
 class BigWorldBindingTests(unittest.TestCase):
+    def test_own_and_observed_deaths_reach_feed_without_duplicate_messages(self):
+        module = _binding_module()
+        for own, observed, suicide in ((True, False, False),
+                                       (True, False, True),
+                                       (False, True, False),
+                                       (False, False, False)):
+            with self.subTest(own=own, observed=observed, suicide=suicide):
+                avatar = _Avatar()
+                avatar.playerVehicleID = 91
+                avatar.isVehicleAlive = not (own or observed)
+                target = 91 if own else 92
+                attacker = target if suicide else 23
+                avatar.inputHandler = types.SimpleNamespace(ctrl=
+                    types.SimpleNamespace(curVehicleID=target if observed else 91))
+                messages = avatar.guiSessionProvider.shared.messages
+                postfix = ('SELF_SUICIDE' if suicide else
+                           ('ENEMY_SELF' if own else 'ENEMY_ALLY'))
+                messages._BattleMessagesController__getKillInfo = mock.Mock(
+                    return_value=('DEATH_FROM_SHOT', postfix, None, None))
+
+                def stock_update(kind, data):
+                    avatar.updates.append((kind, data))
+                    victim, killer, equipment, reason = pickle.loads(data)
+                    # Exact Avatar and msgs_ctrl independently suppress own
+                    # and observed kills before PlayerMessages receives them.
+                    if victim == avatar.playerVehicleID:
+                        return
+                    if (not avatar.isVehicleAlive and
+                            victim == avatar.inputHandler.ctrl.curVehicleID):
+                        return
+                    messages.onShowPlayerMessageByCode(
+                        'DEATH_FROM_SHOT', 'ENEMY_ALLY', victim, killer, equipment)
+
+                avatar.updateArena = stock_update
+                binding = module.BigWorldVehicleBinding(
+                    _BigWorld(), avatar, _Constants, _VehicleDescr,
+                    lambda yaw, pitch, limits: 321,
+                    outfit_provider=lambda descriptor: '')
+                binding.arena_vehicle_killed(target, attacker, 0)
+                if own:
+                    messages.onShowPlayerMessageByCode.assert_not_called()
+                else:
+                    messages.onShowPlayerMessageByCode.assert_called_once_with(
+                        'DEATH_FROM_SHOT', 'ENEMY_ALLY', target, attacker, 0)
+                self.assertEqual((target, attacker, 0, 0),
+                                 pickle.loads(avatar.updates[0][1]))
+                if own:
+                    messages.onShowVehicleMessageByCode.assert_called_once_with(
+                        'DEATH_FROM_SHOT', postfix, attacker, None, 0)
+                else:
+                    messages.onShowVehicleMessageByCode.assert_not_called()
+
+    def test_own_death_panel_preserves_fire_explosion_and_unknown_causes(self):
+        module = _binding_module()
+        for reason, health, attacker, expected in (
+                (1, 0, 23, 'DEATH_FROM_FIRE'),
+                (0, -1, 23, 'DEATH_FROM_DEVICE_EXPLOSION_AT_SHOT'),
+                (1, -1, 23, 'DEATH_FROM_DEVICE_EXPLOSION_AT_FIRE'),
+                (0, 0, 0, 'DEATH_UNKNOWN')):
+            with self.subTest(reason=reason, health=health, attacker=attacker):
+                avatar, bigworld = _Avatar(), _BigWorld()
+                avatar.playerVehicleID = 91
+                bigworld.entity_value.health = health
+                messages = avatar.guiSessionProvider.shared.messages
+                messages._BattleMessagesController__getKillInfo = mock.Mock(
+                    return_value=('DEATH_FROM_SHOT', 'ENEMY_SELF', None, None))
+                binding = module.BigWorldVehicleBinding(
+                    bigworld, avatar, _Constants, _VehicleDescr,
+                    lambda yaw, pitch, limits: 321,
+                    outfit_provider=lambda descriptor: '')
+                binding.arena_vehicle_killed(91, attacker, reason)
+                messages.onShowVehicleMessageByCode.assert_called_once_with(
+                    expected, 'ENEMY_SELF', attacker, None, 0)
+
+    def test_unassisted_environment_death_selects_native_central_template(self):
+        module = _binding_module()
+        for reason, code in ((3, 'WORLD_COLLISION'), (5, 'DROWNING'),
+                             (7, 'OVERTURN'), (4, 'DEATH_ZONE'),
+                             (3, 'INACTIVE_CREW_AT_WORLD_COLLISION')):
+            for attacker in (0, 23):
+                with self.subTest(code=code, attacker=attacker):
+                    avatar, bigworld = _Avatar(), _BigWorld()
+                    avatar.playerVehicleID = 91
+                    bigworld.entity_value.health = 0
+                    messages = avatar.guiSessionProvider.shared.messages
+                    postfix = 'UNKNOWN_SELF' if not attacker else 'ENEMY_SELF'
+                    key = 'DEATH_FROM_' + code
+                    messages._BattleMessagesController__getKillInfo = mock.Mock(
+                        return_value=(key, postfix, None, None))
+                    binding = module.BigWorldVehicleBinding(
+                        bigworld, avatar, _Constants, _VehicleDescr,
+                        lambda yaw, pitch, limits: 321,
+                        outfit_provider=lambda descriptor: '')
+                    binding.arena_vehicle_killed(91, attacker, reason)
+                    messages.onShowVehicleMessageByCode.assert_called_once_with(
+                        key, 'SELF_SUICIDE' if not attacker else 'ENEMY_SELF',
+                        attacker, None, 0)
+                    messages.onShowPlayerMessageByCode.assert_not_called()
+                    self.assertEqual((91, attacker, 0, reason),
+                                     pickle.loads(avatar.updates[0][1]))
+
     def test_siege_state_drives_exact_vehicle_callback_once_per_edge(self):
         module = _binding_module()
         bigworld = _BigWorld()

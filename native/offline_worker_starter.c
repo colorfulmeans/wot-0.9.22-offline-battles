@@ -40,7 +40,6 @@
  * report says why the worker never became ready. */
 #define WORKER_READY_TIMEOUT_MS 60000
 #define WORKER_READY_POLL_MS 50
-#define PLAYER_HANDOFF_GRACE_MS 10000
 #define PLAYER_HANDOFF_POLL_MS 100
 #define MAX_GAME_PROCESS_IDS 32
 #define BW_RES_PATH_ENV L"BW_RES_PATH"
@@ -1109,7 +1108,6 @@ static int launch_player(const WCHAR *game_path, BOOL paired_worker,
 	JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
 	HANDLE player_job = 0;
 	DWORD exit_code = 1;
-	DWORD quiet_ms = 0;
 	DWORD wait_state;
 	PlayerProcessTracker tracker;
 	BOOL completed_normally = FALSE;
@@ -1232,12 +1230,12 @@ static int launch_player(const WCHAR *game_path, BOOL paired_worker,
 		}
 		if (accounting.ActiveProcesses == 0 &&
 				active_tracked_player_count(&tracker) == 0) {
-			quiet_ms += PLAYER_HANDOFF_POLL_MS;
-			if (quiet_ms >= PLAYER_HANDOFF_GRACE_MS) {
-				break;
-			}
-		} else {
-			quiet_ms = 0;
+			/* The job contains the initial client and every descendant.
+			 * A live replacement keeps ActiveProcesses nonzero, even after
+			 * its parent exits. Once both owners report no live process,
+			 * there is no remaining parent that can launch a replacement.
+			 * Do not add a fixed ten-second delay to every normal exit. */
+			break;
 		}
 		if (process.hProcess == 0) {
 			Sleep(PLAYER_HANDOFF_POLL_MS);

@@ -205,6 +205,7 @@ class CrossMapRailingCollisionTests(unittest.TestCase):
         self.broken = set()
         authority = types.SimpleNamespace(
             is_destroyed=lambda *key: key in self.broken,
+            destroyed_identities=lambda: set(key[:2] for key in self.broken),
             destroyed_keys=lambda chunk: set(key[1:] for key in self.broken
                                              if key[0] == chunk))
         patch = mock.patch.object(sensor, '_get_destr_authority', return_value=authority)
@@ -457,6 +458,7 @@ class NativeFenceFollowupTests(unittest.TestCase):
                     return sensor.collide_motion_segment(1, a, b, keep, query)
                 # The log proves a completed live-layout repair for 32635.
                 self.assertIs(point, cast([(point, key)])[0])
+
                 sensor._destructible_catalog['layout_generations'][32635] = 1
                 if not any(box['contains_hit'] for owner in
                         row['native_contact_evidence']['nearby_owners']
@@ -476,6 +478,92 @@ class NativeFenceFollowupTests(unittest.TestCase):
                 self.broken.clear()
                 self.assertIs(point, cast([(point, key)])[0])
 
+
+    def test_spotting_recasts_remapped_broken_original_without_changing_mask(self):
+        row = json.loads((ROOT / 'tests/fixtures/murovanka_143656_contacts.json').read_text())[0]
+        self.install_report(row, '11_murovanka')
+        sensor._destructible_catalog['layout_generations'][32635] = 1
+        a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
+        key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
+        self.assertEqual(0, key[1])
+        direction = b - a
+        direction.normalise()
+        b = b + direction.scale(.1)
+        keep = sensor.sight_collision_filter()
+        surfaces = [(point, key)]
+        masks = []
+
+        def native(space, start, end, flags, callback=None):
+            masks.append(flags)
+            result = CompiledCollisionTests.native([
+                value for value in surfaces if not value[1][1] & flags])(
+                    space, start, end, flags, callback)
+            return None if result is None else (result[0], V(row['normal']))
+
+        # The old one-pass callback still sees the original BSP's stale slot.
+        self.assertIs(point, native(1, a, b, 128, keep)[0])
+        self.assertIsNone(sensor.collide_sight_segment(1, a, b, keep, native))
+        wall = point + direction.scale(.01)
+        for material in (88, 111):
+            surfaces.append((wall, (material, 0, 50000, 32635)))
+            self.assertIs(wall, sensor.collide_sight_segment(
+                1, a, b, keep, native)[0])
+            surfaces.pop()
+        self.broken.clear()
+        self.assertIs(point, sensor.collide_sight_segment(
+            1, a, b, keep, native)[0])
+        self.assertEqual({128}, set(masks))
+
+    def test_sight_mask_keeps_vehicle_only_faces_out_of_spotting(self):
+        a, b, point = V(0, 1, 0), V(5, 1, 0), V(2, 1, 0)
+        key = (111, 128, 50000, 32635)
+        calls = []
+
+        def native(space, start, end, flags, callback=None):
+            calls.append(flags)
+            return CompiledCollisionTests.native([
+                (point, key)] if not key[1] & flags else [])(
+                    space, start, end, flags, callback)
+
+        self.assertIsNone(sensor.collide_sight_segment(1, a, b, None, native))
+        self.assertIs(point, sensor.collide_motion_segment(
+            1, a, b, None, native)[0])
+        self.assertEqual([128, 80], calls)
+
+    def test_default_sight_diagnostic_is_rate_limited_and_preserves_obstacle_state(self):
+        identity, instance, (a, b, point) = self.paris()
+        key = (111, 0, 50000, identity[0])
+        queries = []
+        clock = [10.0]
+        native = CompiledCollisionTests.native([(point, key)])
+        def query(*args):
+            queries.append(args)
+            return native(*args)
+        messages = []
+        broken_before = set(self.broken)
+        with mock.patch.dict(sensor.__dict__, {
+                '_DIAGNOSTICS_ENABLED': False,
+                '_diagnostic_writer': messages.append,
+                'g_offh_destr_contact_diagnostic_times': {}}), \
+                mock.patch.object(sensor, 'static_contact_evidence', return_value=[]), \
+                mock.patch.dict('sys.modules', {
+                    'BigWorld': types.SimpleNamespace(wg_collideSegment=query,
+                                                      time=lambda: clock[0]),
+                    'Math': types.SimpleNamespace(Vector3=V)}):
+            sensor.report_sight_contact(1, a, b, (point, V(1, 0, 0)))
+            count = len(queries)
+            sensor.report_sight_contact(1, a, b, (point, V(1, 0, 0)))
+            self.assertEqual(count, len(queries))
+            self.assertEqual(1, len(messages))
+            payload = json.loads(messages[0].split('SIGHT CONTACT ', 1)[1])
+            self.assertEqual(128, payload['native_contact_evidence']['skip_flags'])
+            witnesses = payload['native_contact_evidence']['surface_witnesses']
+            self.assertEqual([list(key)], [value['key'] for value in witnesses])
+            self.assertEqual([point.x, point.y, point.z], payload['hit'])
+            clock[0] += 5.0
+            sensor.report_sight_contact(1, a, b, (point, V(1, 0, 0)))
+            self.assertEqual(2, len(messages))
+        self.assertEqual(broken_before, self.broken)
     def test_westfield_remapped_stone_fence_bevels_clear_only_in_broken_bounds(self):
         rows = json.loads((ROOT / 'tests/fixtures/westfield_114133_contacts.json').read_text())
         self.assertEqual(11, len(rows))

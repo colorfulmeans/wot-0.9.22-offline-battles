@@ -11,7 +11,7 @@ CLIENT_SCRIPTS = (
     ROOT / 'src' / 'res' / 'scripts' / 'client')
 sys.path.insert(0, str(CLIENT_SCRIPTS))
 
-from gui.mods.offline_lan_0922 import destructibles_sensor, world_collision
+from gui.mods.offline_lan_0922 import destructibles_sensor, world_collision, tank_collision
 
 
 class _Vector(object):
@@ -778,13 +778,13 @@ class WorldCollisionTests(unittest.TestCase):
         lower_rays = [
             (start, end) for start, end in horizontal_calls
             if abs(start.y - 0.6) < 0.001]
-        self.assertEqual(3, len(lower_rays))
-        for start, end in lower_rays:
+        self.assertEqual(7, len(lower_rays))
+        for start, end in lower_rays[:3]:
             self.assertAlmostEqual(1.6 + 5.0 * 0.04, end.x)
             self.assertGreater(end.x, start.x)
             self.assertAlmostEqual(start.z, end.z)
         lanes = sorted((start.z, start.x)
-                       for start, unused_end in lower_rays)
+                       for start, unused_end in lower_rays[:3])
         for (actual_z, actual_x), (expected_z, expected_x) in zip(
                 lanes, ((-4.0, -1.6), (0.0, -0.5), (6.0, -1.6))):
             self.assertAlmostEqual(expected_z, actual_z)
@@ -841,7 +841,7 @@ class WorldCollisionTests(unittest.TestCase):
                 if distance_squared > 1.0e-10:
                     return None
                 return (_Vector(nearest_x, start.y, nearest_z),
-                        _Vector(0.0, 0.0, -1.0), 0)
+                        _Vector(-motion_x, 0.0, -motion_z), 0)
 
             bigworld = types.ModuleType('BigWorld')
             bigworld.wg_collideSegment = collide
@@ -880,11 +880,11 @@ class WorldCollisionTests(unittest.TestCase):
                         bigworld, math_module, 1, _Vector(), 0.0, velocity,
                         descriptor, False, 0.04,
                         motion_yaw=motion_yaw))
-                self.assertEqual(15, len(horizontal_calls))
+                self.assertEqual(27, len(horizontal_calls))
                 lower_rays = [
                     (start, end) for start, end in horizontal_calls
                     if abs(start.y - 0.6) < 0.001]
-                self.assertEqual(5, len(lower_rays))
+                self.assertEqual(9, len(lower_rays))
                 motion_x = math.sin(motion_yaw)
                 motion_z = math.cos(motion_yaw)
                 for corner_x, corner_z in (
@@ -908,6 +908,247 @@ class WorldCollisionTests(unittest.TestCase):
                             (nearest_x - target_x) ** 2 +
                             (nearest_z - target_z) ** 2)
                     self.assertLess(min(distances), 1.0e-10)
+
+    def test_diagonal_slide_cannot_insert_long_side_into_house_corner(self):
+        # A finite house corner enters the middle of the side, clear of all
+        # four corner paths and the centre lane (Live Oaks report mechanism).
+        descriptor = _Strict1513Component(hull=_Strict1513Component(
+            hitTester=_Strict1513Component(bbox=(
+                (-1.5, -1.0, -4.0), (1.5, 2.0, 4.0), None))))
+        for mirror in (-1.0, 1.0):
+            for speed, dt in ((1.0, 0.02), (5.0, 0.04), (10.0, 0.1)):
+                motion = mirror * math.pi / 4.0
+                wall_x = mirror * (1.5 + speed * dt * 0.25)
+                def collide(space, start, end, mask, *unused):
+                    hits = []
+                    for axis, plane, normal in (
+                            ('x', wall_x, _Vector(-mirror, 0, 0)),
+                            ('z', 2.5, _Vector(0, 0, -1)),
+                            ('z', 3.5, _Vector(0, 0, 1))):
+                        delta = getattr(end, axis) - getattr(start, axis)
+                        if abs(delta) < 1e-9:
+                            continue
+                        fraction = (plane - getattr(start, axis)) / delta
+                        if not 0.0 <= fraction <= 1.0:
+                            continue
+                        point = start + (end - start).scale(fraction)
+                        if (mirror * point.x >= mirror * wall_x - 1e-8 and
+                                2.5 - 1e-8 <= point.z <= 3.5 + 1e-8 and
+                                0.0 <= point.y <= 3.0):
+                            hits.append((fraction, point, normal))
+                    if hits:
+                        unused, point, normal = min(hits, key=lambda row: row[0])
+                        return point, normal, 0
+                    return None
+                scene = types.SimpleNamespace(wg_collideSegment=collide,
+                    wg_getMatInfoNearPoint=_miss_mat_info_1513)
+                with self.subTest(mirror=mirror, speed=speed, dt=dt), \
+                        mock.patch.object(world_collision,
+                                          '_destroy_and_recast', return_value=False):
+                    self.assertTrue(world_collision.check_horizontal_collision(
+                        scene, types.SimpleNamespace(Vector3=_Vector),
+                        1, _Vector(), 0.0, speed, descriptor, False, dt,
+                        motion_yaw=motion))
+
+    def test_existing_wall_allows_only_outward_translation_and_keeps_backing_wall(self):
+        descriptor = _Strict1513Component(hull=_Strict1513Component(
+            hitTester=_Strict1513Component(bbox=(
+                (-1.5, -1.0, -3.0), (1.5, 2.0, 3.0), None))))
+        for direction, backing, expected in ((1, False, True),
+                                             (-1, False, False),
+                                             (-1, True, True)):
+            def collide(space, start, end, mask, *unused):
+                planes = [(2.7, -1.0)]
+                if backing:
+                    planes.append((-3.01, 1.0))
+                hits = []
+                for z, nz in planes:
+                    delta = end.z - start.z
+                    if abs(delta) < 1e-9:
+                        continue
+                    fraction = (z - start.z) / delta
+                    if 0.0 <= fraction <= 1.0:
+                        hits.append((fraction,
+                            start + (end - start).scale(fraction), _Vector(0, 0, nz)))
+                if hits:
+                    unused, point, normal = min(hits, key=lambda row: row[0])
+                    return point, normal, 0
+                return None
+            scene = types.SimpleNamespace(wg_collideSegment=collide,
+                wg_getMatInfoNearPoint=_miss_mat_info_1513)
+            with self.subTest(direction=direction, backing=backing), \
+                    mock.patch.object(world_collision, '_destroy_and_recast', return_value=False):
+                self.assertEqual(expected, world_collision.check_horizontal_collision(
+                    scene, types.SimpleNamespace(Vector3=_Vector),
+                    1, _Vector(), 0.0, direction * 2.0, descriptor, False, 0.04,
+                    motion_yaw=0.0 if direction > 0 else math.pi))
+
+    def test_departing_wall_retains_inward_corner_and_unwitnessed_face(self):
+        departing = world_collision._translation_departing_contact(
+            _Vector(), 0.0, (-1.5, 1.5, 3.0, 3.0),
+            (0.0, 1.0, 0.0), -0.4, 0.1)
+        self.assertTrue(departing((_Vector(1.4, 0.6, 0), _Vector(-1, 0, 0))))
+        self.assertFalse(departing((_Vector(0, 0.6, 2.9), _Vector(0, 0, -1))))
+        # A new face beyond the old body has no existing-overlap proof.
+        self.assertFalse(departing((_Vector(1.6, 0.6, 0), _Vector(-1, 0, 0))))
+        # 164103: the centre can still be on the bridge while the occupied
+        # track overlaps its edge. Outward motion reduces that overlap too.
+        self.assertTrue(departing((_Vector(-1.4, 0.6, 0), _Vector(-1, 0, 0))))
+        scene = types.SimpleNamespace(wg_collideSegment=mock.Mock(side_effect=(
+            (_Vector(1.4, 0.6, 0), _Vector(-1, 0, 0), 0),
+            (_Vector(0, 0.6, 2.9), _Vector(0, 0, -1), 0))))
+        with mock.patch.dict(sys.modules, {'BigWorld': scene}):
+            hit = world_collision._collide_horizontal(
+                1, _Vector(1.5, 0.6, -0.1), _Vector(-0.1, 0.6, 3.0),
+                collision_filter=None, departing_contact=departing)
+        self.assertEqual(2, scene.wg_collideSegment.call_count)
+        self.assertEqual(-1.0, hit[1].z)
+
+    def test_partly_overhanging_hull_can_leave_finite_deck_but_not_cross_new_wall(self):
+        descriptor = _Strict1513Component(hull=_Strict1513Component(
+            hitTester=_Strict1513Component(bbox=((-1.5, 0., -3.), (1.5, 2., 3.)))))
+        for backing in (False, True):
+            def collide(space, start, end, mask, *unused):
+                hits = []
+                for axis, at, normal in (('x', 0., _Vector(1, 0, 0)),
+                                         ('y', 1.1093, _Vector(0, 1, 0))):
+                    delta = getattr(end, axis)-getattr(start, axis)
+                    if abs(delta) < 1.e-9:
+                        continue
+                    fraction = (at-getattr(start, axis))/delta
+                    if not 0. <= fraction <= 1.:
+                        continue
+                    point = start+(end-start).scale(fraction)
+                    if ((axis == 'x' and .86 <= point.y <= 1.1093) or
+                            (axis == 'y' and point.x <= 0.)):
+                        hits.append((fraction, point, normal))
+                if backing and end.x != start.x:
+                    fraction = (1.25-start.x)/(end.x-start.x)
+                    if 0. <= fraction <= 1.:
+                        hits.append((fraction, start+(end-start).scale(fraction), _Vector(-1,0,0)))
+                if hits:
+                    unused, point, normal = min(hits, key=lambda row: row[0])
+                    return point, normal, 108
+            scene = types.SimpleNamespace(wg_collideSegment=collide)
+            with self.subTest(backing=backing), mock.patch.object(
+                    world_collision, 'prepare_horizontal_collision_filter', return_value=None), \
+                    mock.patch.object(world_collision, '_destroy_and_recast', return_value=False):
+                self.assertEqual(backing, world_collision.check_horizontal_collision(
+                    scene, types.SimpleNamespace(Vector3=_Vector), 1,
+                    _Vector(-.3,.496,0), 0., 1., descriptor, False, .1,
+                    motion_yaw=math.pi/2))
+
+    def test_report_220344_tipped_wreck_leaves_captured_slope_but_new_wall_blocks(self):
+        # Reconstruct the reported contact plane, not the complete native map.
+        # The fixture uses reported XZ extents and an explicit test height band.
+        pos = _Vector(46.33971018558614, -3.4672313399091683, 59.41938802097502)
+        yaw, pitch, roll = -1.1881872481349414, 1.4081798960594112, -.06862924167805902
+        point = _Vector(46.809696197509766, -2.9630253314971924, 59.474853515625)
+        normal = _Vector(-.8810939192771912, .4491722583770752, .14804676175117493)
+        descriptor = _Strict1513Component(hull=_Strict1513Component(
+            hitTester=_Strict1513Component(bbox=((-1.603322982788086,0.,-3.0845940113067627),
+                                               (1.603322982788086,2.,2.787184953689575)))))
+        for wall in (False, True):
+            def collide(space, start, end, *unused):
+                planes = [(point, normal)]
+                if wall:
+                    planes.append((_Vector(45.,0.,0.), _Vector(1.,0.,0.)))
+                hits = []
+                delta = end-start
+                for p, n in planes:
+                    denom = delta.x*n.x+delta.y*n.y+delta.z*n.z
+                    if abs(denom) < 1.e-9:
+                        continue
+                    t = ((p.x-start.x)*n.x+(p.y-start.y)*n.y+(p.z-start.z)*n.z)/denom
+                    if 0. <= t <= 1.:
+                        hits.append((t,start+delta.scale(t),n))
+                if hits:
+                    unused, p, n = min(hits,key=lambda row:row[0])
+                    return p,n,111
+            scene = types.SimpleNamespace(wg_collideSegment=collide)
+            with self.subTest(wall=wall), mock.patch.object(world_collision,
+                    'prepare_horizontal_collision_filter', return_value=None), mock.patch.object(
+                    world_collision, '_destroy_and_recast', return_value=False):
+                self.assertEqual(wall, world_collision.check_horizontal_collision(
+                    scene, types.SimpleNamespace(Vector3=_Vector),1,pos,yaw,.8711459,
+                    descriptor,False,.104,motion_yaw=-1.6882693547013807,
+                    pitch=pitch,roll=roll))
+
+    def test_near_vertical_departure_uses_rigid_inverse_and_outward_sweep(self):
+        for pitch in (math.pi/2, -math.pi/2):
+            axes = tank_collision.pose_axes(.7,pitch,.25)
+            # A material point on a corner leaves an already overlapped wall.
+            local = (1.5,.6,3.)
+            start = _Vector(*[sum(local[j]*axes[j][i] for j in range(3)) for i in range(3)])
+            dx,dz = .12,-.08
+            hit = start+_Vector(dx*.5,0.,dz*.5)
+            release = world_collision._translation_departing_contact(
+                _Vector(),.7,(-1.5,1.5,3.,3.),world_collision._hull_pose_y(pitch,.25),
+                dx,dz,(0.,2.),pose_axes=axes)
+            self.assertTrue(release((hit,_Vector(dx,0.,dz))))
+            self.assertFalse(release((hit,_Vector(-dx,0.,-dz))))
+
+    def test_translated_perimeter_retains_body_pitch_and_roll(self):
+        descriptor = _Strict1513Component(hull=_Strict1513Component(
+            hitTester=_Strict1513Component(bbox=(
+                (-1.5, -1.0, -4.0), (1.5, 2.0, 4.0), None))))
+        for pitch, roll in ((0.3, -0.2), (-0.3, 0.2)):
+            calls = []
+            def collide(space, start, end, mask, *unused):
+                if not _vertical_ray(start, end):
+                    calls.append((start, end))
+                return None
+            scene = types.SimpleNamespace(wg_collideSegment=collide,
+                wg_getMatInfoNearPoint=_miss_mat_info_1513)
+            # 180736: a lower floor was used to bend a passive hull ray
+            # into a cliff below the occupied body. Its future ground must
+            # not change this fixed-attitude translation, in either tilt.
+            with mock.patch.object(world_collision, '_lane_ground_ahead',
+                                   return_value=-8.82347) as future_ground:
+                self.assertFalse(world_collision.check_horizontal_collision(
+                    scene, types.SimpleNamespace(Vector3=_Vector),
+                    1, _Vector(), 0.0, 5.0, descriptor, False, 0.1,
+                    motion_yaw=0.55, pitch=pitch, roll=roll))
+                self.assertEqual(0, future_ground.call_count)
+            axes = tank_collision.pose_axes(0., pitch, roll)
+            dx, dz = math.sin(0.55) * 0.5, math.cos(0.55) * 0.5
+            for index, (start, end) in enumerate(calls[-12:]):
+                height = (0.6, 1.1, 1.6)[index % 3]
+                for point in (start, end):
+                    # No support was returned: keep fixed-height departure.
+                    local = [axis[0]*(point.x-dx) + axis[1]*point.y +
+                             axis[2]*(point.z-dz) for axis in axes]
+                    self.assertAlmostEqual(height, local[1], places=9)
+                    self.assertLessEqual(abs(local[0]), 1.5+1.e-9)
+                    self.assertLessEqual(abs(local[2]), 4.+1.e-9)
+
+    def test_passive_destination_follows_existing_bank_but_new_wall_blocks(self):
+        for pitch,roll in ((-.4,.35),(.4,-.35)):
+            pose=world_collision._hull_pose_y(pitch,roll)
+            for wall in (False,True):
+                def collide(space,start,end,mask,*unused):
+                    direction=end-start
+                    hits=[]
+                    # The existing supporting plane, not a future floor.
+                    denominator=direction.y-direction.x*pose[0]-direction.z*pose[2]
+                    if abs(denominator)>1.e-9:
+                        t=(start.x*pose[0]+start.z*pose[2]-start.y)/denominator
+                        if 0.<=t<=1.:
+                            hits.append((t,_Vector(-pose[0],1.,-pose[2])))
+                    if wall and abs(direction.x)>1.e-9:
+                        t=(1.7-start.x)/direction.x
+                        if 0.<=t<=1.:
+                            hits.append((t,_Vector(-1.,0.,0.)))
+                    if hits:
+                        t,normal=min(hits,key=lambda item:item[0])
+                        return start+direction.scale(t),normal,0
+                scene=types.SimpleNamespace(wg_collideSegment=collide,
+                    wg_getMatInfoNearPoint=_miss_mat_info_1513)
+                with self.subTest(pitch=pitch,roll=roll,wall=wall):
+                    self.assertEqual(wall,world_collision.check_horizontal_collision(
+                        scene,types.SimpleNamespace(Vector3=_Vector),1,_Vector(),
+                        0.,5.,None,False,.1,motion_yaw=math.pi/2,
+                        pitch=pitch,roll=roll))
 
     def test_diagonal_drivable_profile_samples_the_hit_corner_segment(self):
         descriptor = _Strict1513Component(

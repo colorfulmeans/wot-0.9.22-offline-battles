@@ -106,6 +106,39 @@ class RigidTurretTests(unittest.TestCase):
             physics.advance(value, .04, vehicles, floor)
         self.assertEqual(0, contact.call_count)
         self.assertAlmostEqual(.04, value.com[0])
+
+    def test_blocked_correction_does_not_repeat_an_unchanged_contact(self):
+        value = body()
+        vehicle = dict(boxes=geometry.vehicle_support_boxes(
+            descriptor(), pose(x=-1.4), attached=False),
+            mass=50000., velocity=(0., 0., 0.))
+        for human in (False, True):
+            vehicle['human'] = human
+            apply = mock.Mock()
+            with mock.patch.object(physics, 'scenery_step'), \
+                    mock.patch.object(physics, 'translate', return_value=physics.ZERO), \
+                    mock.patch.object(physics, 'vehicle_contact',
+                                      wraps=physics.vehicle_contact) as contacts:
+                physics.advance(value, physics.STEP, [vehicle], floor, apply)
+            self.assertEqual(1, contacts.call_count)
+            self.assertEqual(0 if human else 1, apply.call_count)
+            self.assertEqual((0., 0., 0.), value.velocity)
+
+    def test_vehicle_recovery_still_rechecks_contact_when_turret_is_blocked(self):
+        value = body()
+        vehicle = dict(boxes=geometry.vehicle_support_boxes(
+            descriptor(), pose(x=-1.4), attached=False),
+            mass=50000., velocity=(0., 0., 0.))
+        def recover(peer, hit, step):
+            peer['boxes'] = tuple((physics.add(center, (-.01, 0., 0.)), axes)
+                                  for center, axes in peer['boxes'])
+        with mock.patch.object(physics, 'scenery_step'), \
+                mock.patch.object(physics, 'translate', return_value=physics.ZERO), \
+                mock.patch.object(physics, 'vehicle_contact',
+                                  wraps=physics.vehicle_contact) as contacts:
+            physics.advance(value, physics.STEP, [vehicle], floor, recover)
+        self.assertGreater(contacts.call_count, 1)
+
     def test_mass_and_inertia_use_both_actual_components(self):
         props = physics.properties(components())
         self.assertEqual(5000, props['mass'])
@@ -302,8 +335,11 @@ class RigidTurretLifecycleTests(unittest.TestCase):
         accepted = physics.revision(row(), value, 4000)
         obstacles = geometry.DetachedTurretObstacles(_Math())
         self.assertTrue(obstacles.add('bot:17', accepted, descriptor()))
-        for x in (-.01, .01):
-            self.assertFalse(obstacles.sweep_blocks(pose(), pose(x=x), descriptor(), 4000))
+        with mock.patch.object(geometry, '_component_sweeps',
+                               wraps=geometry._component_sweeps) as sweeps:
+            for x in (-.01, .01):
+                self.assertFalse(obstacles.sweep_blocks(pose(), pose(x=x), descriptor(), 4000))
+            self.assertEqual(0, sweeps.call_count)
         self.assertEqual([], list(obstacles.navigation_hulls(4000)))
         newer = physics.revision(accepted, value, 4040)
         self.assertTrue(obstacles.add('bot:17', newer, descriptor()))

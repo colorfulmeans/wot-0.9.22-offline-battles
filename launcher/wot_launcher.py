@@ -17,6 +17,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import bot_lineup_profiles
     import bot_lineup_ui
+    import bot_tactics_store
     import core
     import error_reports
     import i18n
@@ -29,7 +30,7 @@ if __package__ in (None, ""):
     import vehicle_overlays
 else:
     from . import (
-        bot_lineup_profiles, bot_lineup_ui, core, error_reports, gold_shop,
+        bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
         save_personal_missions, personal_missions_ui)
 
@@ -47,7 +48,7 @@ _SHOP_HELP = (
     "next game startup. Owned or queued vehicles cannot be added twice. "
     "Close the game before adding vehicles.")
 
-LAUNCHER_VERSION = "0.9.3"
+LAUNCHER_VERSION = "0.9.6"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
@@ -56,6 +57,10 @@ _CHINESE = {
         "DirectX 9 June 2010 运行库和 Visual C++ x86 运行库。"
         "仅凭退出码无法确定具体缺失哪个 DLL。",
     "Language": "语言",
+    "Bot tactics": "Bot 战术",
+    "Edit behavior, routes and artillery positions...": "编辑行为参数、进攻路线与火炮炮位…",
+    "Tactics are saved outside the application folder. Applied changes take effect when the host starts the next battle; the current battle is unchanged. Joining another host uses that host's settings.":
+        "战术配置独立保存，不随替换程序丢失。应用后在房主下一次开局时生效，当前战斗不变。加入他人房间时以房主配置为准。",
     "Game client": "游戏客户端",
     "Game folder": "游戏目录",
     "Browse...": "浏览…",
@@ -788,10 +793,16 @@ class LauncherWindow(object):
         self.close_save_dialog_button.pack(anchor="e", padx=12, pady=(0, 12))
         self.vehicle_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
         self.bot_lineup_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
+        self.bot_tactics_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
+        self.bot_tactics_button = tk.Button(self.bot_tactics_panel, text="", command=self._open_bot_tactics_editor)
+        self.bot_tactics_button.pack(fill="x", pady=6)
+        self.bot_tactics_help = tk.Label(self.bot_tactics_panel, text="", justify="left", wraplength=620)
+        self.bot_tactics_help.pack(fill="x", pady=8)
         self.repair_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
         self.tools_tabs.add(self.save_panel, text="")
         self.tools_tabs.add(self.vehicle_panel, text="")
         self.tools_tabs.add(self.bot_lineup_panel, text="")
+        self.tools_tabs.add(self.bot_tactics_panel, text="")
         self.tools_tabs.add(self.repair_panel, text="")
 
         self._save_slot_records = []
@@ -1111,6 +1122,9 @@ class LauncherWindow(object):
             self.vehicle_panel, text=self._t("Vehicle modifier"))
         self.tools_tabs.tab(
             self.bot_lineup_panel, text=self._t("Exact lineup"))
+        self.tools_tabs.tab(self.bot_tactics_panel, text=self._t("Bot tactics"))
+        self.bot_tactics_button.config(text=self._t("Edit behavior, routes and artillery positions..."))
+        self.bot_tactics_help.config(text=self._t("Tactics are saved outside the application folder. Applied changes take effect when the host starts the next battle; the current battle is unchanged. Joining another host uses that host's settings."))
         self.tools_tabs.tab(self.repair_panel, text=self._t("Repair"))
         self.vehicle_profile_label.config(text=self._t("Vehicle data profile"))
         self.new_profile_button.config(text=self._t("New profile..."))
@@ -1141,6 +1155,12 @@ class LauncherWindow(object):
         self.language = i18n.resolve_language(self.language_preference)
         self._apply_language()
         self._save_settings()
+        editors = []
+        for editor in getattr(self, '_bot_tactics_editors', ()):
+            if editor.root.winfo_exists():
+                editor.set_language(self.language)
+                editors.append(editor)
+        self._bot_tactics_editors = editors
 
     def _sync_mode_tab(self):
         panel = (self.single_panel if self.mode.get() == core.MODE_SINGLE
@@ -2442,6 +2462,31 @@ class LauncherWindow(object):
         self._save_settings()
         return self._open_bot_lineup_editor()
 
+    def _open_bot_tactics_editor(self):
+        # Draft editing is safe while a game runs: only the next host start
+        # reads active.json, not the current battle or simulation tick.
+        if self._maintenance_busy:
+            self._log("Wait for the current launcher operation to finish.")
+            return False
+        try:
+            if __package__ in (None, ""):
+                import bot_tactics_ui
+            else:
+                from . import bot_tactics_ui
+            status = self._refresh_client()
+            editor = bot_tactics_ui.open_editor(self.root, status.get("path", ""),
+                                               language=self.language, log=self._log)
+            editors = [value for value in getattr(self, '_bot_tactics_editors', ())
+                       if value.root.winfo_exists()]
+            editors.append(editor)
+            self._bot_tactics_editors = editors
+            return True
+        except Exception as error:
+            self._log("Bot tactics editor: %s" % error)
+            from tkinter import messagebox
+            messagebox.showerror("Bot tactics", str(error), parent=self.root)
+            return False
+
     def _open_bot_lineup_editor(self):
         if self._busy or self._maintenance_busy:
             self._log("Wait for the current launcher operation to finish.")
@@ -3082,6 +3127,18 @@ class LauncherWindow(object):
                     "compatible server already uses port %d. Close it "
                     "first." % core.DEFAULT_SERVER_PORT)
                 return False
+            custom_tactics = False
+            try:
+                store = bot_tactics_store.Store()
+                if store.active_path.exists():
+                    active = store.active()
+                    custom_tactics = bool(active['behavior'] or active['maps'])
+            except Exception as error:
+                self._log("Bot tactics: %s" % error)
+                return False
+            if custom_tactics:
+                self._log("Custom Bot tactics require a launcher-owned server; stop the external server first.")
+                return False
             if bot_lineup or bot_excluded_vehicles:
                 self._log(
                     "The exact Bot lineup or vehicle exclusions need a "
@@ -3102,6 +3159,11 @@ class LauncherWindow(object):
             port_version, game_root, loopback_only=loopback_only,
             bot_lineup=bot_lineup,
             bot_excluded_vehicles=bot_excluded_vehicles)
+        try:
+            environment["WOT_0922_BOT_TACTICS_PATH"] = bot_tactics_store.Store().ensure_active()
+        except Exception as error:
+            self._log("Bot tactics: %s" % error)
+            return False
         server_log_path = core.server_log_path()
         report_session = self._active_report_session
         if report_session is not None:
@@ -3566,6 +3628,15 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if core.SERVE_FLAG in argv:
         return _serve(argv)
+    if '--verify-bot-editor' in argv:
+        index = argv.index('--verify-bot-editor')
+        if index + 1 >= len(argv):
+            return 2
+        if __package__ in (None, ''):
+            import bot_tactics_smoke
+        else:
+            from . import bot_tactics_smoke
+        return bot_tactics_smoke.run(argv[index + 1])
     import tkinter
     from tkinter import filedialog, ttk
 

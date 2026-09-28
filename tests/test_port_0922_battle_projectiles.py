@@ -1245,6 +1245,34 @@ class BattleProjectileTests(unittest.TestCase):
                     self.assertIsNone(data['target_key'])
                     self.assertEqual((9.8, 1.0, 0.0), data['impact'])
 
+    def test_bot_barrel_through_wall_cannot_spawn_shell_on_the_far_side(self):
+        battle, world, unused_target, state = self._vehicle_chord_battle('bot')
+        source = battle._server_entity(41)
+        descriptor = types.SimpleNamespace(
+            gun=source.typeDescriptor.gun,
+            chassis=types.SimpleNamespace(hullPosition=(0, 0, 0)),
+            hull=types.SimpleNamespace(turretPositions=((0, 0, 0),)),
+            turret=types.SimpleNamespace(gunPosition=(0, 1, 0)))
+        source.typeDescriptor = descriptor
+        source.isStarted = True
+        source.model = types.SimpleNamespace(node=lambda unused:
+            types.SimpleNamespace(translation=_Vector((6, 1, 0))))
+        battle._runtime.math.Matrix = lambda node: node
+        battle._bot_barrel_point = lambda *args: (6, 1, 0)
+        battle._barrel_under_water = lambda unused: False
+        world.wall_x = 4.0
+        origin = battle._bot_direct_launch_origin(
+            {'id': 7, 'yaw': math.pi / 2}, descriptor, 0, 1, 0, 0, 0)
+        self.assertEqual((0, 1, 0), origin)
+        # The physical manager's first chord must encounter the wall even
+        # though the cosmetic muzzle is already on its far side.
+        terminal = battle._projectile_chord(
+            state, origin, (12, 1, 0), 0, 0.1)
+        data = battle._projectile_terminal_data[state['key']]
+        self.assertAlmostEqual(1.0 / 3.0, terminal['fraction'])
+        self.assertIsNone(data['target_key'])
+        self.assertEqual((4, 1, 0), data['impact'])
+
     def test_destructible_terminal_splashes_only_for_he(self):
         for shooter_kind in ('player', 'bot'):
             for shell_kind in ('HIGH_EXPLOSIVE', 'HOLLOW_CHARGE'):
@@ -1495,14 +1523,18 @@ class BattleProjectileTests(unittest.TestCase):
         self.assertFalse(battle._reconcile_bot_authority(2))
         battle._artillery.reset.assert_called_once_with()
 
-    def test_artillery_final_probe_uses_exact_native_muzzle(self):
+    def test_artillery_final_probe_uses_pivot_even_when_muzzle_is_past_wall(self):
         battle, unused_bigworld = _battle()
         battle._bot_barrel_point = mock.Mock(
             return_value=(3.0, 4.0, 5.0))
         battle._barrel_under_water = mock.Mock(return_value=False)
         muzzle = _Vector((3.0, 4.0, 5.0))
+        descriptor = types.SimpleNamespace(
+            chassis=types.SimpleNamespace(hullPosition=(0, 0, 0)),
+            hull=types.SimpleNamespace(turretPositions=((0, 0, 0),)),
+            turret=types.SimpleNamespace(gunPosition=(0, 1, 0)))
         source = types.SimpleNamespace(
-            isStarted=True, typeDescriptor=object(),
+            isStarted=True, typeDescriptor=descriptor,
             model=types.SimpleNamespace(node=lambda unused: types.SimpleNamespace(
                 translation=muzzle)))
         battle._records['bot:11'] = {'engine_id': 77}
@@ -1514,12 +1546,13 @@ class BattleProjectileTests(unittest.TestCase):
             request_launch=mock.Mock(return_value=(True, receipt)))
 
         result = battle._bot_artillery_launch(
-            {'id': 11}, {'kind': 'player', 'network_id': 7}, object(),
+            {'id': 11, 'x': 3, 'y': 3, 'z': 1},
+            {'kind': 'player', 'network_id': 7}, descriptor,
             0, 4, 0.25, 0.15, 2.0, 10.0)
 
         self.assertIs(receipt, result)
         args = battle._artillery.request_launch.call_args[0]
-        self.assertEqual((3.0, 4.0, 5.0), args[5])
+        self.assertEqual((3.0, 4.0, 1.0), args[5])
         self.assertEqual((4, 0.25, 0.15, 2.0, 10.0), args[4:5] + args[6:])
 
     def test_artillery_cancel_discards_the_controller_launch_slot(self):
@@ -1556,7 +1589,7 @@ class BattleProjectileTests(unittest.TestCase):
         }, 1))
         self.assertEqual([], battle.client.launches)
 
-    def test_direct_launch_reuses_muzzle_frozen_before_pose_update(self):
+    def test_direct_launch_reuses_pivot_frozen_before_pose_update(self):
         battle, unused_bigworld = _battle()
         battle._bot_barrel_point = mock.Mock(
             return_value=(4.0, 5.0, 6.0))
@@ -1584,8 +1617,13 @@ class BattleProjectileTests(unittest.TestCase):
         battle._server_entity = lambda entity_id: (
             source if entity_id == 77 else None)
         battle._runtime.math.Matrix = lambda node: node
+        descriptor.chassis = types.SimpleNamespace(hullPosition=(0, 0, 0))
+        descriptor.hull = types.SimpleNamespace(turretPositions=((0, 0, 0),))
+        descriptor.turret = types.SimpleNamespace(gunPosition=(0, 1, 0))
         frozen_origin = battle._bot_direct_launch_origin(
-            {'id': 11}, descriptor, 0, 1, 0.0, 0.0, 0.5)
+            {'id': 11, 'x': 4, 'y': 4, 'z': 2},
+            descriptor, 0, 1, 0.0, 0.0, 0.5)
+        self.assertEqual((4.0, 5.0, 2.0), frozen_origin)
         launch = {
             'fire_seq': 1, 'shell_index': 0,
             'shot_yaw': 0.0, 'shot_pitch': 0.0,

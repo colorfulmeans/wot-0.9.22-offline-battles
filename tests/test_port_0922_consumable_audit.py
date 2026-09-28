@@ -96,7 +96,7 @@ def garage_snapshot(items, spare=0):
 
 
 class ConsumableSettlementTests(unittest.TestCase):
-    def test_governor_toggles_never_remove_the_item(self):
+    def test_governor_toggles_do_not_consume_an_item_when_surviving(self):
         for turns in (0, 1, 2, 3):
             with self.subTest(turns=turns):
                 mounted = governor()
@@ -114,6 +114,73 @@ class ConsumableSettlementTests(unittest.TestCase):
                 garage = GarageState(garage_snapshot([mounted]))
                 self.assertEqual([], garage.settle_battle_consumables(42, receipt['equipment_used']))
                 self.assertEqual(mounted.contract['compactDescr'], garage.snapshot()['vehicles'][0]['eqs'][0])
+
+    def test_governor_death_charge_uses_final_switch_and_settles_only_once(self):
+        for mode in ('regular', 'training'):
+            for turns in (0, 1, 2, 3):
+                for reason in (3, 7):
+                    with self.subTest(mode=mode, turns=turns, reason=reason):
+                        mounted = governor()
+                        battle, player = battle_state([mounted], mode)
+                        for index in range(turns):
+                            active = index % 2 == 0
+                            self.assertTrue(battle.submit_equipment_intent(1,
+                                intent(index + 1, extra=int(active), active=active)))
+                        self.assertTrue(battle._commit_player_environment_damage(
+                            player, player.health, reason))
+                        expected = [mounted.contract['compactDescr']] if turns % 2 else []
+                        # Death and retries cannot change the sampled switch.
+                        self.assertTrue(battle.submit_equipment_intent(1,
+                            intent(turns + 1, extra=0, active=False)))
+                        self.assertEqual('vehicle_not_alive',
+                            player.equipment_intent_result['reason'])
+                        battle._record_vehicle_end('player', 1)
+                        receipt = finish(battle)
+                        self.assertEqual(expected, receipt['equipment_used'])
+                        snapshot = garage_snapshot([mounted], spare=1)
+                        with tempfile.TemporaryDirectory() as directory:
+                            path = str(Path(directory) / 'garage.json')
+                            store = GarageStore(path)
+                            kwargs = dict(training=True, equipment_used=expected)
+                            result = store.apply_battle_crew_xp(
+                                snapshot, receipt['receipt_id'], 42, 0, 0, **kwargs)
+                            self.assertTrue(result['applied'])
+                            self.assertEqual([], result['refused'])
+                            self.assertEqual(0 if expected else mounted.contract['compactDescr'],
+                                snapshot['vehicles'][0]['eqs'][0])
+                            before = copy.deepcopy(snapshot)
+                            self.assertFalse(GarageStore(path).apply_battle_crew_xp(
+                                snapshot, receipt['receipt_id'], 42, 0, 0, **kwargs)['applied'])
+                            self.assertEqual(before, snapshot)
+
+    def test_live_departure_is_not_an_active_governor_death(self):
+        battle, player = battle_state()
+        self.assertTrue(battle.submit_equipment_intent(1, intent(1)))
+        # The live-departure path freezes lifetime before clearing the actor.
+        battle._record_vehicle_end('player', 1)
+        player.alive = False
+        battle._record_vehicle_end('player', 1)
+        self.assertEqual([], finish(battle)['equipment_used'])
+
+    def test_destroyed_active_governor_resupplies_from_stock_before_purchase(self):
+        for spare in (0, 1):
+            with self.subTest(spare=spare):
+                mounted = governor()
+                battle, player = battle_state([mounted])
+                self.assertTrue(battle.submit_equipment_intent(1, intent(1)))
+                self.assertTrue(battle._commit_player_environment_damage(player, 100, 3))
+                receipt = finish(battle)
+                snapshot = garage_snapshot([mounted], spare=spare)
+                cd = mounted.contract['compactDescr']
+                snapshot['vehicles'][0]['settings'] = 4
+                snapshot['shopItemPrices'] = {cd: {'credits': 3000}}
+                descriptors = types.SimpleNamespace(getItemByCompactDescr=lambda cd:
+                    types.SimpleNamespace(equipmentType=0))
+                garage = GarageState(snapshot, vehicles_module=descriptors)
+                self.assertEqual([cd], garage.settle_battle_consumables(42, receipt['equipment_used']))
+                costs = _settle_automatically(garage, 1, (1, 2, 4), GarageError)
+                self.assertEqual(3000 if spare == 0 else 0, costs['equipment_credits'])
+                self.assertEqual(cd, garage.snapshot()['vehicles'][0]['eqs'][0])
 
     def test_passive_supplies_are_consumed_without_activation_in_both_modes(self):
         for mode in ('regular', 'training'):
@@ -193,7 +260,7 @@ class ConsumableSettlementTests(unittest.TestCase):
         self.assertTrue(battle._finish_battle(0, 'worker_disconnected', record_receipts=False))
         self.assertEqual({}, battle.result_receipts)
 
-    def test_auto_resupply_uses_depot_first_and_never_buys_a_governor(self):
+    def test_auto_resupply_uses_depot_first_and_keeps_a_surviving_governor(self):
         for spare in (0, 1):
             with self.subTest(spare=spare):
                 mounted = [food(), fuel(), governor()]
@@ -245,6 +312,88 @@ class ConsumableSettlementTests(unittest.TestCase):
                 replay = active_store.apply_battle_crew_xp(snapshot, receipt['receipt_id'], 42, 0, 0, **kwargs)
                 self.assertFalse(replay['applied'])
                 self.assertEqual(before, snapshot)
+
+
+class GovernorWearTests(unittest.TestCase):
+    def setUp(self):
+        self.battle, self.player = battle_state()
+        self.player.effective_params['physics'] = {'speedFwd': 20.0, 'speedBwd': 5.0}
+        self.player.effective_params['critical']['devices'][0].update(max_hp=60, regen_hp=30)
+        self.assertTrue(self.battle.submit_equipment_intent(1, intent(1)))
+
+    def hp(self):
+        rows = self.player.critical.get('devices') or []
+        return next((row['hp'] for row in rows if row['name'] == 'engineHealth'), 60.0)
+
+    def step(self, dt):
+        self.battle.tick += int(round(dt * server.TICK_HZ))
+        self.battle._tick_player_critical(dt)
+
+    def test_rate_uses_one_second_pulses_and_matches_twenty_second_example(self):
+        for _ in range(3):
+            self.step(0.25)
+            self.assertEqual(60.0, self.hp())
+        self.step(0.25)
+        self.assertEqual(58.5, self.hp())
+        for _ in range(190):
+            self.step(0.1)
+        self.assertEqual(30.0, self.hp())
+
+    def test_only_speed_magnitude_below_half_base_forward_limit_wears_engine(self):
+        for speed in (10.0, 12.0, 20.0, -10.0, -12.0):
+            with self.subTest(speed=speed):
+                self.player.speed = speed
+                self.step(2.0)
+                self.assertEqual(60.0, self.hp())
+        for speed in (9.99, -9.99, 0.0):
+            with self.subTest(speed=speed):
+                before = self.hp()
+                self.player.speed = speed
+                self.step(1.0)
+                self.assertEqual(before - 1.5, self.hp())
+
+    def test_disabled_and_cruising_do_not_carry_old_partial_wear(self):
+        self.step(0.75)
+        self.assertTrue(self.battle.submit_equipment_intent(1,
+            intent(2, extra=0, active=False)))
+        self.assertEqual(0.0, self.player.rpm_damage_elapsed)
+        self.step(5.0)
+        self.assertEqual(60.0, self.hp())
+        self.assertTrue(self.battle.submit_equipment_intent(1, intent(3)))
+        self.step(0.75)
+        self.assertEqual(60.0, self.hp())
+        self.player.speed = 10.0
+        self.step(0.1)
+        self.player.speed = 0.0
+        self.step(0.75)
+        self.assertEqual(60.0, self.hp())
+        self.step(0.25)
+        self.assertEqual(58.5, self.hp())
+
+    def test_late_tick_preserves_complete_seconds_without_hull_damage(self):
+        self.step(2.25)
+        self.assertEqual(57.0, self.hp())
+        self.assertEqual(0.25, self.player.rpm_damage_elapsed)
+        self.assertEqual(100, self.player.health)
+
+    def test_kv5_engine_pool_needs_two_minutes_to_turn_yellow(self):
+        from effective_params_fixture import effective_params
+        params = effective_params()
+        params['equipment'] = [governor().contract]
+        # Installed #1513 M500 values, not the earlier 60 HP example.
+        params['critical']['devices'][0].update(max_hp=360, regen_hp=180)
+        params['critical']['activation_targets'] = []
+        self.player.effective_params = params
+        self.assertTrue(self.battle._install_player_equipments(self.player))
+        self.assertTrue(self.battle.submit_equipment_intent(1, intent(1)))
+        for _ in range(120 * int(server.TICK_HZ)):
+            self.step(1.0 / server.TICK_HZ)
+        row = self.player.critical['devices'][0]
+        self.assertEqual(180, row['hp'])
+        self.assertEqual('critical', row['state'])
+        self.assertGreater(self.player.critical_revision, 0)
+        snapshot = self.battle._public_player(self.player)
+        self.assertEqual(row, snapshot['critical']['devices'][0])
 
 
 class EquipmentRequestOrderingTests(unittest.TestCase):

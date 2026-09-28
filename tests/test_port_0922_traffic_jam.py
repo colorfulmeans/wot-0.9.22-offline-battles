@@ -8,7 +8,7 @@ from test_port_0922_traffic import body, command
 from gui.mods.offline_lan_0922.ai.traffic import (
     TrafficCoordinator, PARKED_JAM_SECONDS, PARKED_YIELD_SECONDS,
 )
-from gui.mods.offline_lan_0922.ai.driver import combat_hull_aim
+from gui.mods.offline_lan_0922.ai.driver import LocalDriver, combat_hull_aim
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922 import vehicle_physics
 
@@ -96,6 +96,43 @@ class ParkedTrafficTests(unittest.TestCase):
             self.assertEqual('friendly_yield', self.tick(now, order=route)['traffic_mode'])
         for now in (PARKED_YIELD_SECONDS, 8., 12.):
             self.assertEqual(route, self.tick(now, order=route))
+
+    def test_boxed_driver_requests_both_proved_vehicle_exits(self):
+        driver = LocalDriver(stuck_seconds=0.4)
+        neighbours = (body(29, 0., 8., speed=0.),
+                      body(19, 0., -8., speed=0.))
+        for frame in range(20):
+            order = driver.drive(
+                25, 9, (0., 0., 0.), 0., 0., .1, (40., 0., 0.),
+                neighbours, lambda *args: True,
+                pose_clear=lambda yaw: False)
+            if order.get('reverse_blocked_by') is not None:
+                break
+        self.assertEqual('blocked', order['recovery_mode'])
+        self.assertEqual((29, 19), (order.get('forward_blocked_by'),
+                                   order.get('reverse_blocked_by')))
+        self.assertEqual((0., 0.), (order['throttle'], order['turn']))
+
+    def test_forward_request_survives_safe_hold_and_expires_after_separation(self):
+        self.parked['position'] = (0., 0., 8.)
+        rear = body(19, 0., -8., speed=0.)
+        self.move.update(throttle=0., brake=True, recovery_mode='blocked',
+                         forward_blocked_by=29, reverse_blocked_by=19)
+        peers = [self.parked, rear]
+        self.traffic.adjust(25, self.mover, self.move, peers, 0., lambda *args: True)
+        safe = self.traffic.safe_controls(self.mover, self.move, peers, 0., lambda: 0.)
+        self.assertEqual((0., 0.), (safe['throttle'], safe['turn']))
+        self.assertEqual(29, self.traffic._orders[25][1]['forward_blocked_by'])
+        route = dict(command(), movement_intent=True)
+        yielding = self.traffic.adjust(29, self.parked, route, [self.mover, rear],
+                                       .1, lambda *args: True)
+        self.assertEqual('friendly_yield', yielding['recovery_mode'])
+        self.assertGreater(yielding['throttle'], 0.)
+        self.parked['position'] = (0., 0., 30.)
+        self.traffic.safe_controls(self.mover, self.move, peers, .2, lambda: 0.)
+        self.assertNotIn('forward_blocked_by', self.traffic._orders[25][1])
+        self.assertEqual(route, self.traffic.adjust(
+            29, self.parked, route, [self.mover, rear], .2, lambda *args: True))
 
     def test_route_pair_without_proved_reverse_request_keeps_its_own_controls(self):
         route = dict(command(), movement_intent=True)
@@ -220,16 +257,17 @@ class ParkedTrafficTests(unittest.TestCase):
         self.move.update(recovery_mode='arrived', throttle=0.)
         self.assertEqual(hold(self.parked), self.tick(4.1))
 
-    def test_adapter_keeps_the_identity_of_the_blocked_reverse_corridor(self):
+    def test_adapter_keeps_both_blocked_corridor_identities(self):
         adapter = BotAdapter('test', 1)
         state = dict(id=25, team=1, slot=0, position=(0., 0., 0.),
                      yaw=0., speed=0., dt=.1, neighbours=[])
         strategic = dict(move_position=(0., 0., 40.), combat_mode='route')
         with mock.patch.object(adapter.driver, 'drive', return_value=dict(
                 throttle=0., turn=0., target_yaw=0., recovery_mode='blocked',
-                reverse_blocked_by=29)):
+                reverse_blocked_by=29, forward_blocked_by=19)):
             result = adapter.decide_with_order(state, strategic, lambda *args: True)
         self.assertEqual(29, result['reverse_blocked_by'])
+        self.assertEqual(19, result['forward_blocked_by'])
 
 
 class RuntimeTrafficJamTests(unittest.TestCase):

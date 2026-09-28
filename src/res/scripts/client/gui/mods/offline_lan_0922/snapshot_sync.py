@@ -2,6 +2,7 @@ from __future__ import print_function
 
 """Engine-free translation of LAN v5 snapshots into entity lifecycle data."""
 
+import copy
 import math
 
 
@@ -396,6 +397,7 @@ class SnapshotSync(object):
         if not alive:
             if not record['dead']:
                 record['dead'] = True
+                record['wreck_state'] = copy.deepcopy(state)
                 record['wreck_settled'] = True
                 if pose is not None:
                     record['current'] = dict(pose)
@@ -411,6 +413,17 @@ class SnapshotSync(object):
                 record['target'] = dict(pose)
                 record['target_time'] = now
                 record['timed_prediction'] = False
+            # A dead hull still has canonical velocity, mass and contact
+            # acknowledgements. Pose-only chase left its consumer at the
+            # death checkpoint: already-spent momentum then looked pending
+            # forever and suppressed the next shove. Advance state atomically
+            # while advance() remains the sole writer of its displayed pose.
+            # Copy the nested ledgers for comparison; callers may reuse them.
+            if state != record.get('wreck_state'):
+                record['wreck_state'] = copy.deepcopy(state)
+                self._emit({'type': 'update', 'entity': key, 'kind': kind,
+                            'id': state['id'], 'state': _copy_state(state),
+                            'pose': None, 'remote': True}, output)
             return
         if record['dead']:
             return
@@ -628,9 +641,8 @@ class SnapshotSync(object):
         delta_z = target['z'] - current['z']
         angle_error = max(
             [abs(_angle_delta(current[axis], target[axis]))
-             for axis in ('yaw', 'aim_yaw')] +
-            [abs(target[axis] - current[axis])
-             for axis in ('pitch', 'roll', 'gun_pitch')])
+             for axis in ('yaw', 'aim_yaw', 'pitch', 'roll')] +
+            [abs(target['gun_pitch'] - current['gun_pitch'])])
         if (delta_x * delta_x + delta_y * delta_y + delta_z * delta_z <=
                 WRECK_SETTLE_DISTANCE * WRECK_SETTLE_DISTANCE and
                 angle_error <= WRECK_SETTLE_ANGLE):
@@ -642,11 +654,9 @@ class SnapshotSync(object):
             current = dict(current)
             for axis in ('x', 'y', 'z'):
                 current[axis] += (target[axis] - current[axis]) * alpha
-            for axis in ('yaw', 'aim_yaw'):
+            for axis in ('yaw', 'aim_yaw', 'pitch', 'roll'):
                 current[axis] += _angle_delta(
                     current[axis], target[axis]) * alpha
-            for axis in ('pitch', 'roll'):
-                current[axis] += (target[axis] - current[axis]) * alpha
             current['gun_pitch'] += (
                 target['gun_pitch'] - current['gun_pitch']) * alpha
             record['current'] = current
@@ -756,12 +766,9 @@ class SnapshotSync(object):
                 for axis in ('x', 'y', 'z'):
                     desired[axis] += (
                         segment_target[axis] - previous[axis]) * progress
-                for axis in ('yaw', 'aim_yaw'):
+                for axis in ('yaw', 'aim_yaw', 'pitch', 'roll'):
                     desired[axis] += _angle_delta(
                         previous[axis], segment_target[axis]) * progress
-                for axis in ('pitch', 'roll'):
-                    desired[axis] += (
-                        segment_target[axis] - previous[axis]) * progress
                 desired['gun_pitch'] += (
                     segment_target['gun_pitch'] -
                     previous['gun_pitch']) * progress
@@ -824,12 +831,9 @@ class SnapshotSync(object):
                 current = dict(current)
                 for axis in ('x', 'y', 'z'):
                     current[axis] += (desired[axis] - current[axis]) * alpha
-                for axis in ('yaw', 'aim_yaw'):
+                for axis in ('yaw', 'aim_yaw', 'pitch', 'roll'):
                     current[axis] += _angle_delta(
                         current[axis], desired[axis]) * alpha
-                for axis in ('pitch', 'roll'):
-                    current[axis] += (
-                        desired[axis] - current[axis]) * alpha
                 current['gun_pitch'] += (
                     desired['gun_pitch'] - current['gun_pitch']) * alpha
                 snapped = False

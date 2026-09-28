@@ -647,16 +647,22 @@ class GarageState(object):
         for slot, compact_descr in enumerate(values):
             if not compact_descr:
                 continue
-            try:
-                descriptor = self._vehicles_module().getItemByCompactDescr(
-                    compact_descr)
-            except Exception as error:
-                raise GarageError('equipment descriptor is unavailable: %s' % error)
-            kind = getattr(descriptor, 'equipmentType', EQUIPMENT_TYPE_REGULAR)
+            kind = self._equipment_type(compact_descr)
             expected = (EQUIPMENT_TYPE_BOOSTERS if slot == 3 else
                         EQUIPMENT_TYPE_REGULAR)
             if kind != expected:
-                raise GarageError('equipment does not fit this slot')
+                raise GarageError(
+                    'equipment does not fit this slot: item=%d kind=%s '
+                    'slot=%d expected=%s' % (
+                        compact_descr, kind, slot, expected))
+
+    def _equipment_type(self, compact_descr):
+        try:
+            descriptor = self._vehicles_module().getItemByCompactDescr(
+                compact_descr)
+        except Exception as error:
+            raise GarageError('equipment descriptor is unavailable: %s' % error)
+        return getattr(descriptor, 'equipmentType', EQUIPMENT_TYPE_REGULAR)
 
     def _consumables_to_buy(self, record, values):
         """Return what a consumable layout must buy, and the stock it read."""
@@ -1219,9 +1225,23 @@ class GarageState(object):
                 index = _int(slot_index)
                 if not 0 <= index < EQUIPMENT_PAYLOAD_SLOT_COUNT:
                     raise GarageError('a vehicle has four equipment slots')
+                # CMD 308 buys one item; its slot field must not place a
+                # directive in the regular-consumable array. The descriptor
+                # identifies the only directive slot in our flattened
+                # getConsumablesIntCDs representation, independently of the
+                # fitting UI's slot numbering.
+                if self._equipment_type(compact_descr) == EQUIPMENT_TYPE_BOOSTERS:
+                    index = EQUIPMENT_SLOT_COUNT
                 slots += [0] * (EQUIPMENT_PAYLOAD_SLOT_COUNT - len(slots))
+                saved_layout = list(record.get('eqsLayout') or slots)
+                saved_layout += slots[len(saved_layout):]
                 slots[index] = compact_descr
                 record = self.equip_equipments(vehicle_inventory_id, slots)
+                # Buying one item changes only that slot's resupply target.
+                # Other consumed supplies and their signed currency choices
+                # remain in the desired layout even when no longer mounted.
+                saved_layout[index] = compact_descr
+                record['eqsLayout'] = saved_layout
             else:
                 record = self.install_component(
                     vehicle_inventory_id, compact_descr, gun_compact_descr,
@@ -1497,9 +1517,9 @@ class GarageState(object):
 
         Every crew member receives battle XP scaled by the vehicle's own
         ``crewXpFactor``. On an elite vehicle with accelerated training
-        enabled, the least experienced crew member receives one additional
-        equal award. Both the vehicle setting and its current research
-        completion are required.
+        enabled, the least experienced member who can still train receives
+        one additional equal award. Ties follow the vehicle's crew order.
+        If every member is fully trained, keep the XP on the vehicle.
         """
         amount = _int(battle_xp)
         if amount < 0:
@@ -1535,8 +1555,24 @@ class GarageState(object):
             accelerated = False
         accelerated = bool(descriptors and accelerated and self._is_elite(
             vehicle_type_compact_descr))
-        weakest = (min(descriptors, key=lambda row: (row[2], row[0]))
-                   if descriptors else None)
+        trainable = []
+        if accelerated:
+            roles = self._crew_roles(record)
+            for row in descriptors:
+                slot, unused_id, unused_xp, descriptor = row
+                # Match #1513 Tankman.availableSkills(useCombinedRoles=True):
+                # a commander who also loads may still learn loader skills.
+                available = set(tankmen.COMMON_SKILLS)
+                for role in roles[slot]:
+                    available.update(tankmen.SKILLS_BY_ROLES.get(role, ()))
+                maximum = tankmen.MAX_SKILL_LEVEL
+                if (descriptor.roleLevel < maximum or any(
+                        (descriptor.skillLevel(skill) or 0) < maximum
+                        for skill in available)):
+                    trainable.append(row)
+        accelerated = bool(accelerated and trainable)
+        weakest = (min(trainable, key=lambda row: (row[2], row[0]))
+                   if trainable else None)
         try:
             # The shipped helper owns Mentor's factor, including Brothers in
             # Arms and food. Evaluate the starting crew and carried equipment
@@ -2506,6 +2542,10 @@ class GarageState(object):
         # The transaction also rolls back the wallet and both seats if a
         # later ownership update fails.
         try:
+            # Requalification includes a lossless skill reset at no extra
+            # price. Delegate to the native descriptor so its free-skill
+            # prefix, rank and XP accounting are retained (#1513).
+            descriptor.dropSkills(1.0, False)
             descriptor.role = role
             descriptor.vehicleTypeID = _int(vehicle_type_id)
             serialized = descriptor.makeCompactDescr()
@@ -2830,6 +2870,12 @@ class GarageState(object):
             if remaining <= 0:
                 break
             taken = min(remaining, max(0, _int(vehicle_xp.get(key, 0))))
+            if not taken:
+                # #1513's automatic exchanger submits the fully-elite catalog,
+                # including unowned/hidden vehicles with no experience. A
+                # zero debit must not create XP history: stats() would then
+                # advertise those new keys as newly elite account vehicles.
+                continue
             vehicle_xp[key] = _int(vehicle_xp.get(key, 0)) - taken
             remaining -= taken
         wallet = self._wallet()
@@ -3035,10 +3081,17 @@ class GarageState(object):
         from gui.mods.offline_lan_0922.account_rpc import economy
 
         wallet = self._snapshot.get('wallet')
-        wallet = wallet if isinstance(wallet, dict) else {}
+        defaults = economy.SANDBOX_WALLET.copy()
+        if isinstance(wallet, dict):
+            # A persisted pre-bonds wallet did not own bonds. The new
+            # sandbox seed applies only when creating an account, never as
+            # an implicit grant during a crew/fitting transaction.
+            defaults['crystal'] = 0
+        else:
+            wallet = {}
         return dict(
             (name, max(0, _int(
-                wallet.get(name, economy.SANDBOX_WALLET[name]))))
+                wallet.get(name, defaults[name]))))
             for name in ('credits', 'gold', 'freeXP', 'crystal'))
 
     def _wallet(self):

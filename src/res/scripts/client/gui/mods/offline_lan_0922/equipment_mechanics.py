@@ -356,16 +356,19 @@ def _projection(value):
     return value
 
 
-def consumed_in_battle(value, activated=False):
+def consumed_in_battle(value, activated=False, destroyed=False):
     """Whether this supported regular item contributes one settlement charge.
 
     Food and fuel apply for the entire battle without an activation request.
     Repair/medical kits and extinguishers cost one item only when used, even
-    if their battle charge is reusable. The governor is a permanent switch,
-    not a consumable. Unknown passive kinds must not acquire an invented bill.
+    if their battle charge is reusable. The requested offline governor rule
+    charges only an active switch at destruction, never activation alone.
+    Unknown passive kinds must not acquire an invented bill.
     This policy does not change remaining uses, cooldown or passive effects.
     """
     kind = str(_value(_projection(value), 'kind', '') or '')
+    if kind == 'rpm_limiter':
+        return bool(destroyed and _value(value, 'active', False))
     return (kind in ('stimulator', 'fuel') or
             bool(activated and kind in ('repairkit', 'medkit', 'extinguisher')))
 

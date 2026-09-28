@@ -403,6 +403,66 @@ def _ram_profile(tank):
     return spall, bonus
 
 
+def ram_hull_vertical_interval(descriptor, y, pitch=0.0, roll=0.0):
+    """Bound the mounted hull, rather than the track-to-roof body envelope.
+
+    These bounds only select rays. Each accepted plate still requires a
+    structural material from the exact native hit tester on that same ray.
+    """
+    hull = _value(descriptor, 'hull')
+    chassis = _value(descriptor, 'chassis')
+    bounds = _bbox(hull)
+    origin = _value(chassis, 'hullPosition')
+    if origin is None:
+        raise RuntimeError('#1513 chassis hull position is unavailable')
+    sp, cp = math.sin(pitch), math.cos(pitch)
+    sr, cr = math.sin(roll), math.cos(roll)
+    heights = []
+    for ix in (0, 1):
+        for iy in (0, 1):
+            for iz in (0, 1):
+                x = _coord(bounds[ix], 0) + _coord(origin, 0)
+                local_y = _coord(bounds[iy], 1) + _coord(origin, 1)
+                z = _coord(bounds[iz], 2) + _coord(origin, 2)
+                heights.append(float(y) + cp * (sr*x + cr*local_y) - sp*z)
+    return min(heights), max(heights)
+
+
+def ram_contact_sample_heights(hit_y, span):
+    """Return stable structural-probe heights inside one real contact span.
+
+    #1513 ramming damage is applied at a point inside the total contact area.
+    A synthetic OBB overlap has no native Y coordinate, so its single chassis
+    midpoint can land on track-only or empty material.  Keep the observed Y
+    first, then test nearby interior heights; callers still require both real
+    native hit testers to return structural armour at the same height.
+    """
+    try:
+        hit_y = float(hit_y)
+    except (TypeError, ValueError, OverflowError):
+        return ()
+    if not _finite(hit_y):
+        return ()
+    if not isinstance(span, (list, tuple)) or len(span) != 2:
+        return (hit_y,)
+    try:
+        low, high = float(span[0]), float(span[1])
+    except (TypeError, ValueError, OverflowError):
+        return (hit_y,)
+    if not (_finite(low) and _finite(high)) or high <= low:
+        return (hit_y,)
+    observed = max(low, min(high, hit_y))
+    raw = [observed]
+    for fraction in (0.5, 1.0 / 3.0, 2.0 / 3.0, 0.2, 0.8):
+        raw.append(low + (high - low) * fraction)
+    raw[1:] = sorted(raw[1:], key=lambda value: abs(value - observed))
+    result = []
+    for value in raw:
+        if not result or all(abs(value - old) > 1.0e-4 for old in result):
+            result.append(value)
+    return tuple(result)
+
+
 def _contact_ram_inputs(tank, contact_armor=None):
     """Return per-contact armour plus descriptor/crew ram modifiers.
 
@@ -468,20 +528,23 @@ def _obb_overlap(x_a, z_a, yaw_a, shape_a,
 
 
 def rotation_fraction(position, yaw, candidate_yaw, shape, others,
-                      pivot_offset=0.0):
+                      pivot_offset=0.0, translation=(0.0, 0.0)):
     """Project kinematic traverse onto the first legal chassis contact.
 
-    Translation and its mass/track-force response run separately. Traverse
-    cannot bypass that response by turning a corner into the other hull and
-    asking positional separation to move it for free. Existing overlap may
-    decrease; neither player nor Bot identity changes this geometry rule.
+    Powered traverse uses zero translation. A passive wreck can supply its
+    simultaneous centre travel so the complete rigid pose is constrained.
+    Traverse cannot bypass the mass/track-force response by turning a corner
+    into the other hull and asking positional separation to move it for free.
+    Existing overlap may decrease; neither player nor Bot identity changes
+    this geometry rule.
     Sample the whole swept angle at less than half the existing penetration
     slop per corner, then refine the first blocked interval. End poses alone
     miss a hull swept through during a late callback.
     """
     delta = (candidate_yaw-yaw+math.pi) % (2.0*math.pi)-math.pi
     radius = math.hypot(shape[0], shape[1])
-    travel = abs(delta)*(radius+abs(pivot_offset))
+    linear_travel = math.hypot(*translation)
+    travel = abs(delta)*(radius+abs(pivot_offset)) + linear_travel
     if travel <= 1e-9:
         return 1.0
     samples = max(1, int(math.ceil(travel/(POSITION_SLOP*0.5))))
@@ -492,15 +555,15 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others,
             where = (other['x'], other.get('y', 0.0), other['z'])
         other_shape = _tank_shape(other)
         reach = (radius+math.hypot(other_shape[0], other_shape[1]) +
-                 abs(pivot_offset)*abs(delta))
+                 abs(pivot_offset)*abs(delta) + linear_travel)
         if ((position[0]-where[0])**2+(position[2]-where[2])**2 > reach*reach or
                 not vertical_overlap(position[1], shape, where[1], other_shape)):
             continue
         other_yaw = other.get('yaw', 0.0)
         def depth(at):
             angle = yaw+delta*at
-            px = position[0]+pivot_offset*(math.cos(yaw)-math.cos(angle))
-            pz = position[2]+pivot_offset*(math.sin(angle)-math.sin(yaw))
+            px = position[0]+pivot_offset*(math.cos(yaw)-math.cos(angle))+translation[0]*at
+            pz = position[2]+pivot_offset*(math.sin(angle)-math.sin(yaw))+translation[1]*at
             hit = _obb_overlap(px, pz, angle, shape,
                               where[0], where[2], other_yaw, other_shape)
             return hit[2]
@@ -514,7 +577,7 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others,
                      math.hypot(position[0]-where[0], position[2]-where[2]))
         def first_blocked(lo, hi, dl, dh):
             span = (hi-lo)*fraction/float(samples)
-            if max(dl, dh)+lipschitz*abs(delta)*span*.5 <= allowed+1e-9:
+            if max(dl, dh)+(lipschitz*abs(delta)+linear_travel)*span*.5 <= allowed+1e-9:
                 return None
             if hi-lo == 1:
                 return (lo, hi) if dh > allowed+1e-9 else None
@@ -535,7 +598,32 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others,
     return fraction
 
 
-def traverse_impulses(tanks, dt, anchor=None):
+def post_contact_velocity_bodies(tanks, results):
+    """Return frozen bodies after the already-solved normal contact impulse.
+
+    Traverse torque is a second constraint in the same physics slice.  Feeding
+    it pre-contact velocities makes the same closing speed available twice and
+    lets a small steering twitch add a second collision impulse.  Only velocity
+    is carried forward here; geometric separation remains owned by the normal
+    solver and its world-collision gate.
+    """
+    updated = []
+    results = results or {}
+    for tank in tanks or ():
+        body = dict(tank)
+        result = results.get(body.get('id'), {}) or {}
+        delta = result.get('delta_velocity', (0.0, 0.0))
+        try:
+            body['vx'] = float(body.get('vx', 0.0)) + float(delta[0])
+            body['vz'] = float(body.get('vz', 0.0)) + float(delta[1])
+            body['push_yaw'] = body.get('push_yaw', 0.0) + result.get('delta_yaw', 0.0)
+        except (TypeError, ValueError, IndexError, OverflowError):
+            raise RuntimeError('invalid solved contact velocity')
+        updated.append(body)
+    return updated
+
+
+def traverse_impulses(tanks, dt, anchor=None, angular_results=None):
     """Spend track torque at an occupied corner instead of a free yaw shove.
 
     The chassis remains a constrained planar box, not the retail cell body.
@@ -547,6 +635,7 @@ def traverse_impulses(tanks, dt, anchor=None):
     """
     bodies = sorted(tanks, key=lambda b: b['id'])
     result = dict((b['id'], (0.0, 0.0)) for b in bodies)
+    angular = dict((b['id'], 0.0) for b in bodies)
     if dt <= 0.0:
         return result
     for a in bodies:
@@ -586,9 +675,9 @@ def traverse_impulses(tanks, dt, anchor=None):
             # A face has two extreme corners. Only the one moving into the
             # peer loads the drive, and a corner moving away releases it.
             support = min(x*nx+z*nz for x, z in corners)
-            arms = [z*nx-x*nz for x, z in corners
+            arms = [(z*nx-x*nz, x, z) for x, z in corners
                     if x*nx+z*nz <= support+POSITION_SLOP]
-            arm = min(arms, key=lambda r: r*omega)
+            arm, corner_x, corner_z = min(arms, key=lambda r: r[0]*omega)
             if arm*omega >= -1e-9:
                 continue
             ia = 0.0 if a.get('immovable') else 1.0/a['mass']
@@ -599,9 +688,15 @@ def traverse_impulses(tanks, dt, anchor=None):
             bvx, bvz = result[b['id']]
             relative = ((a.get('vx', 0.0)+avx-b.get('vx', 0.0)-bvx)*nx +
                         (a.get('vz', 0.0)+avz-b.get('vz', 0.0)-bvz)*nz)
+            inertia = wreck_yaw_inertia(b)
+            inverse_i = 1.0/inertia if inertia else 0.0
+            peer_arm = ((a['z']+corner_z-b['z'])*nx -
+                        (a['x']+corner_x-b['x'])*nz)
+            relative -= (b.get('push_yaw', 0.0)+angular[b['id']])*peer_arm
             closing = max(0.0, -arm*omega-relative)
-            impulse = min(budget/abs(arm), closing/(ia+ib))
+            impulse = min(budget/abs(arm), closing/(ia+ib+peer_arm**2*inverse_i))
             budget -= impulse*abs(arm)
+            angular[b['id']] -= impulse*peer_arm*inverse_i
             for body, inverse, sign in ((a, ia, 1.0), (b, ib, -1.0)):
                 grip = body.get('contact_decel')
                 yaw = body['yaw']
@@ -616,6 +711,10 @@ def traverse_impulses(tanks, dt, anchor=None):
                 if not held:
                     result[body['id']] = (vx+nx*sign*impulse*inverse,
                                            vz+nz*sign*impulse*inverse)
+    if angular_results is not None:
+        for actor, delta in angular.items():
+            angular_results[actor]['delta_yaw'] = (
+                angular_results[actor].get('delta_yaw', 0.0)+delta)
     return result
 
 
@@ -795,7 +894,230 @@ def grounded_inverse_masses(contact, first, second, inverse_a, inverse_b, dt):
     return inverse_a, inverse_b
 
 
-def resolve_pairs(tanks, dt):
+def translation_fraction(body, movement, others):
+    """Sweep one translated OBB, retaining only the existing contact slop.
+
+    An endpoint test can miss an entire intervening hull. Intersect the four
+    SAT time intervals instead. Existing overlap may escape or slide, but
+    cannot deepen or pass through the neighbour's centre plane.
+    """
+    mx, mz = movement
+    if abs(mx) + abs(mz) <= 1.0e-12:
+        return 1.0
+    shape = _tank_shape(body)
+    axes = _axes(body['yaw'])
+    body_radius = math.hypot(*shape[:2])
+    fraction = 1.0
+    for other in others:
+        if body['id'] == other['id']:
+            continue
+        peer_shape = _tank_shape(other)
+        reach = body_radius + math.hypot(*peer_shape[:2])
+        if (other['x'] < body['x']+min(0.0, mx)-reach or
+                other['x'] > body['x']+max(0.0, mx)+reach or
+                other['z'] < body['z']+min(0.0, mz)-reach or
+                other['z'] > body['z']+max(0.0, mz)+reach):
+            continue
+        if not vertical_overlap(
+                body.get('y'), shape, other.get('y'), peer_shape,
+                pitch_a=body.get('pitch', 0.0), roll_a=body.get('roll', 0.0),
+                pitch_b=other.get('pitch', 0.0), roll_b=other.get('roll', 0.0)):
+            continue
+        dx, dz = body['x']-other['x'], body['z']-other['z']
+        contact = _obb_overlap(body['x'], body['z'], body['yaw'], shape,
+                               other['x'], other['z'], other['yaw'], peer_shape)
+        contact = _owner_oriented_contact(contact, dx, dz, body['id'], other['id'])
+        if contact[2] >= POSITION_SLOP - 1.0e-9:
+            if mx*contact[0] + mz*contact[1] < -1.0e-9:
+                fraction = 0.0
+            continue
+        peer_axes = _axes(other['yaw'])
+        entry, leave = 0.0, 1.0
+        for nx, nz in axes + peer_axes:
+            axis_radius = sum(s[i]*abs(nx*a[i][0]+nz*a[i][1])
+                         for s, a in ((shape, axes), (peer_shape, peer_axes))
+                         for i in (0, 1)) - POSITION_SLOP
+            offset, travel = dx*nx + dz*nz, mx*nx + mz*nz
+            if abs(travel) <= 1.0e-12:
+                if abs(offset) >= axis_radius:
+                    entry = 2.0
+                    break
+                continue
+            first, last = sorted(((-axis_radius-offset)/travel,
+                                  (axis_radius-offset)/travel))
+            entry, leave = max(entry, first), min(leave, last)
+            if entry > leave:
+                break
+        if entry <= leave and leave >= 0.0:
+            fraction = min(fraction, max(0.0, entry))
+    return fraction
+
+
+def slide_translation(body, movement, others):
+    """Retain tangential travel when another owned hull blocks the normal.
+
+    Replica positions stay solid until their owner moves them. Truncating
+    the entire vector at first contact also cancels the unconstrained tangent
+    and wedges oblique pushes. Project only the entering remainder, re-sweep
+    every projected segment, and leave momentum to the reciprocal solver.
+    """
+    current = dict(body)
+    remaining = tuple(movement)
+    total = [0.0, 0.0]
+    for unused in range(4):
+        fraction = translation_fraction(current, remaining, others)
+        accepted = (remaining[0]*fraction, remaining[1]*fraction)
+        for i, key in enumerate(('x', 'z')):
+            current[key] += accepted[i]
+            total[i] += accepted[i]
+        if fraction >= 1.0:
+            break
+        remaining = (remaining[0]*(1.0-fraction), remaining[1]*(1.0-fraction))
+        changed = False
+        for other in others:
+            if current['id'] == other['id'] or not vertical_overlap(
+                    current.get('y'), _tank_shape(current), other.get('y'),
+                    _tank_shape(other), pitch_a=current.get('pitch', 0.0),
+                    roll_a=current.get('roll', 0.0), pitch_b=other.get('pitch', 0.0),
+                    roll_b=other.get('roll', 0.0)):
+                continue
+            contact = _obb_overlap(current['x'], current['z'], current['yaw'],
+                _tank_shape(current), other['x'], other['z'], other['yaw'], _tank_shape(other))
+            contact = _owner_oriented_contact(contact, current['x']-other['x'],
+                current['z']-other['z'], current['id'], other['id'])
+            if contact[2] < POSITION_SLOP-1.0e-7:
+                continue
+            entering = remaining[0]*contact[0]+remaining[1]*contact[1]
+            if entering < -1.0e-9:
+                remaining = (remaining[0]-entering*contact[0],
+                             remaining[1]-entering*contact[1])
+                changed = True
+        if not changed or math.hypot(*remaining) <= 1.0e-9:
+            break
+    return tuple(total)
+
+
+def obb_vertices(body):
+    shape = body['shape']
+    yaw = float(body['yaw'])
+    sine = math.sin(yaw)
+    cosine = math.cos(yaw)
+    right_x, right_z = cosine, -sine
+    forward_x, forward_z = sine, cosine
+    center_x, center_z = float(body['x']), float(body['z'])
+    half_width, half_length = float(shape[0]), float(shape[1])
+    return [
+        (center_x + sx * half_width * right_x +
+         sz * half_length * forward_x,
+         center_z + sx * half_width * right_z +
+         sz * half_length * forward_z)
+        for sx, sz in ((-1.0, -1.0), (1.0, -1.0),
+                       (1.0, 1.0), (-1.0, 1.0))]
+
+def obb_overlap_polygon(body_a, body_b):
+    """Clip the mounted chassis footprints to their shared contact area."""
+    polygon = obb_vertices(body_a)
+    clip = obb_vertices(body_b)
+    for index in range(4):
+        start = clip[index]
+        end = clip[(index + 1) % 4]
+        edge_x, edge_z = end[0] - start[0], end[1] - start[1]
+
+        def inside(point):
+            return (edge_x * (point[1] - start[1]) -
+                    edge_z * (point[0] - start[0])) >= -1.0e-7
+
+        def intersection(first, second):
+            segment_x = second[0] - first[0]
+            segment_z = second[1] - first[1]
+            denominator = segment_x * edge_z - segment_z * edge_x
+            if abs(denominator) <= 1.0e-12:
+                return second
+            ratio = ((start[0] - first[0]) * edge_z -
+                     (start[1] - first[1]) * edge_x) / denominator
+            return (first[0] + ratio * segment_x,
+                    first[1] + ratio * segment_z)
+
+        output = []
+        if not polygon:
+            return None
+        previous = polygon[-1]
+        previous_inside = inside(previous)
+        for current in polygon:
+            current_inside = inside(current)
+            if current_inside != previous_inside:
+                output.append(intersection(previous, current))
+            if current_inside:
+                output.append(current)
+            previous = current
+            previous_inside = current_inside
+        polygon = output
+    return polygon
+
+def obb_overlap_point(body_a, body_b):
+    """Return a point inside the exact convex overlap of two OBBs."""
+    polygon = obb_overlap_polygon(body_a, body_b)
+    if not polygon:
+        return None
+    count = float(len(polygon))
+    return (sum(point[0] for point in polygon) / count,
+            sum(point[1] for point in polygon) / count)
+
+
+def wreck_yaw_inertia(body):
+    """Uniform footprint inertia for the existing copied rigid-hull trial.
+
+    Use the original installed mass and mounted chassis footprint, never a
+    dead-body weight multiplier. This is a planar trial approximation, not a
+    recovered retail inertia tensor. Powered tracks retain their motor owner.
+    """
+    if body.get('alive', True) or body.get('immovable'):
+        return 0.0
+    shape = body.get('collision_shape') or _tank_shape(body)
+    return float(body['mass']) * (shape[0]**2 + shape[1]**2) / 3.0
+
+
+def _angular_pair_response(a, b, hit, ia, ib):
+    """Coupled linear/yaw e=0 impulse at the shared footprint contact.
+
+    Include rotational effective mass before choosing the impulse. Adding a
+    torque after a centre-of-mass solve would manufacture kinetic energy.
+    """
+    inertias = [wreck_yaw_inertia(body) for body in (a, b)]
+    inv_i = [1.0/value if value else 0.0 for value in inertias]
+    point = obb_overlap_point(a, b)
+    if point is None:
+        return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    arms = [(point[0]-body['x'], point[1]-body['z']) for body in (a,b)]
+    velocities = [[body['vx'], body['vz'], body.get('push_yaw', 0.0)] for body in (a,b)]
+    changes = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+    normal_impulse = 0.0
+    for axis, normal in (((hit[0],hit[1]), True), ((-hit[1],hit[0]), False)):
+        levers = [arm[1]*axis[0]-arm[0]*axis[1] for arm in arms]
+        relative = sum((1.0 if i == 0 else -1.0) *
+                       (v[0]*axis[0]+v[1]*axis[1]+v[2]*levers[i])
+                       for i,v in enumerate(velocities))
+        inverse = [ia,ib] if normal else [
+            0.0 if body.get('immovable') else 1.0/body['mass'] for body in (a,b)]
+        effective = sum(inverse)+sum(inv_i[i]*levers[i]**2 for i in (0,1))
+        if effective <= 0.0 or (normal and relative >= 0.0):
+            continue
+        impulse = -relative/effective
+        if normal:
+            normal_impulse = impulse
+        else:
+            impulse = max(-0.3*normal_impulse, min(0.3*normal_impulse, impulse))
+        for i in (0,1):
+            signed = impulse if i == 0 else -impulse
+            delta = (signed*axis[0]*inverse[i], signed*axis[1]*inverse[i],
+                     signed*levers[i]*inv_i[i])
+            for k in (0,1,2):
+                velocities[i][k] += delta[k]
+                changes[i][k] += delta[k]
+    return changes
+
+
+def resolve_pairs(tanks, dt, anchor=None):
     """Resolve an authority's simultaneous contacts once per unordered pair.
 
     Each later constraint sees the velocities already changed by earlier
@@ -803,19 +1125,28 @@ def resolve_pairs(tanks, dt):
     can cancel the same momentum several times in a crowded spawn and lets
     each side apply a different hull-friction impulse. This shared sweep is
     reciprocal and dissipative for every integrated pair.
+
+    A visible player owns only pairs containing its anchor. Bot/Bot pairs
+    remain with the worker; both owners still use the same sequential solve.
     """
     bodies = [dict(tank) for tank in sorted(tanks, key=lambda t: t['id'])]
     results = dict((b['id'], {'correction': (0.0, 0.0),
-                              'delta_velocity': (0.0, 0.0)}) for b in bodies)
+                              'delta_velocity': (0.0, 0.0),
+                              'delta_yaw': 0.0}) for b in bodies)
     shapes = dict((b['id'], _tank_shape(b)) for b in bodies)
+    for body in bodies:
+        body['shape'] = shapes[body['id']]
     radii = dict((key, math.hypot(*value[:2])) for key, value in shapes.items())
     pairs = []
     for index, a in enumerate(bodies):
         for b in bodies[index+1:]:
+            if anchor is not None and anchor not in (a['id'], b['id']):
+                continue
             if a.get('kind') == b.get('kind') == 'player':
                 continue
             if not (a.get('alive', True) or b.get('alive', True) or
-                    a['vx'] or a['vz'] or b['vx'] or b['vz']):
+                    a['vx'] or a['vz'] or b['vx'] or b['vz'] or
+                    a.get('push_yaw') or b.get('push_yaw')):
                 continue
             shape_a, shape_b = shapes[a['id']], shapes[b['id']]
             reach = radii[a['id']]+radii[b['id']]+CONTACT_BROADPHASE_PADDING
@@ -839,11 +1170,26 @@ def resolve_pairs(tanks, dt):
             response = pair_response(hit, mobility_a, mobility_b,
                                      (a['vx'], a['vz']), (b['vx'], b['vz']),
                                      friction_inverse=(ia, ib))
+            angular = (_angular_pair_response(a, b, hit, mobility_a, mobility_b)
+                       if wreck_yaw_inertia(a) or wreck_yaw_inertia(b) else None)
+            # Ownership does not make the peer infinitely heavy. Solve the
+            # positional shares with the same physical mobilities in this
+            # private constraint roster, then publish only the owned share.
+            # The caller still sweeps against the actual remote pose; no
+            # speculative remote travel can open a passage through it.
+            position_response = pair_response(
+                hit, mobility_a, mobility_b,
+                (0.0, 0.0), (0.0, 0.0))
             apply_impulse = a.get('impulse', True) and b.get('impulse', True)
             for body, offset in ((a, 0), (b, 4)):
                 dx, dz, dvx, dvz = response[offset:offset+4]
+                dv_yaw = 0.0
+                if angular is not None:
+                    dvx, dvz, dv_yaw = angular[0 if offset == 0 else 1]
+                dx, dz = position_response[offset:offset+2]
                 result = results[body['id']]
-                result['correction'] = (result['correction'][0]+dx, result['correction'][1]+dz)
+                if not body.get('position_fixed'):
+                    result['correction'] = (result['correction'][0]+dx, result['correction'][1]+dz)
                 body['x'] += dx
                 body['z'] += dz
                 if apply_impulse:
@@ -851,6 +1197,8 @@ def resolve_pairs(tanks, dt):
                                                 result['delta_velocity'][1]+dvz)
                     body['vx'] += dvx
                     body['vz'] += dvz
+                    result['delta_yaw'] += dv_yaw
+                    body['push_yaw'] = body.get('push_yaw', 0.0) + dv_yaw
     return results
 
 

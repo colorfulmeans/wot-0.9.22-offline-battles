@@ -139,10 +139,31 @@ class BotDestructibleApproachTests(unittest.TestCase):
             self.assertTrue(result['clear'], result)
             self.assertEqual(0.0, result['slope'])
 
-    def test_uncrushable_house_does_not_become_ground_or_clear_space(self):
+    def test_confirmed_house_is_ignored_without_consulting_drive_capability(self):
         with self.scene(registered=True, health=1000000.0) as f:
-            result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertFalse(result['clear'], result)
+            physics = runtime_fixture.battle_runtime_module.vehicle_physics
+            with mock.patch.object(physics, 'derive_params',
+                                   side_effect=AssertionError('no planning physics')), \
+                    mock.patch.object(sensor, '_stock_crushable_1513',
+                                      side_effect=AssertionError('no planning crush law')):
+                result = f.battle._direction_probe(
+                    (0, 0, 0), 0, 0, f.descriptor, 4.0)
+                self.assertTrue(result['clear'], result)
+                self.assertEqual(0.0, result['slope'])
+
+    def test_planning_clearance_cannot_authorize_an_uncrushable_motion_receipt(self):
+        with self.scene(registered=True, health=1000000.0) as f:
+            self.assertTrue(f.battle._direction_probe(
+                (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
+            self.assertFalse(f.battle._direction_world_receipt(
+                (0, 0, 0), 0, 0, f.descriptor, 4.0))
+
+    def test_navigation_support_filters_soft_roof_but_physical_support_keeps_it(self):
+        with self.scene(registered=True, health=1000000.0) as f:
+            top = f.battle._ground_y(0.0, 4.0, 0.0)
+            self.assertGreater(top, 0.0)
+            self.assertEqual(0.0, f.battle._navigation_ground(0.0, 4.0, 0.0))
+            self.assertEqual(top, f.battle._ground_y(0.0, 4.0, 0.0))
 
     def test_real_backing_wall_survives_soft_house_filtering(self):
         with self.scene(registered=True, backing_z=3.0) as f:
@@ -156,51 +177,67 @@ class BotDestructibleApproachTests(unittest.TestCase):
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
             self.assertFalse(result['clear'], result)
 
-    def test_budget_exhaustion_defers_without_registering_a_false_wall(self):
+    def test_exhausted_contact_budget_does_not_stop_planning_through_a_cold_prop(self):
         with self.scene() as f:
             f.battle._soft_static_recast_budget[:] = [0]
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertTrue(result.get('deferred'), result)
+            self.assertTrue(result['clear'], result)
+            self.assertFalse(result.get('deferred'), result)
             self.assertFalse(result['collision'], result)
             f.bigworld.wg_getDestructibleMatrix.assert_not_called()
+            self.assertEqual([0], f.battle._soft_static_recast_budget)
             f.battle._soft_static_recast_budget[:] = [24]
             self.assertTrue(f.battle._direction_probe(
                 (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
-            matrix_calls = f.bigworld.wg_getDestructibleMatrix.call_count
-            f.battle._soft_static_recast_budget[:] = [24]
-            self.assertTrue(f.battle._direction_probe(
-                (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
-            self.assertEqual(matrix_calls, f.bigworld.wg_getDestructibleMatrix.call_count)
+            f.bigworld.wg_getDestructibleMatrix.assert_not_called()
+            self.assertEqual([24], f.battle._soft_static_recast_budget)
 
-    def test_registration_and_recasts_share_the_same_frame_budget(self):
+    def test_planning_does_not_spend_the_physical_contact_registration_budget(self):
         with self.scene() as f:
             f.battle._soft_static_recast_budget[:] = [1]
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertTrue(result.get('deferred'), result)
+            self.assertTrue(result['clear'], result)
+            self.assertFalse(result.get('deferred'), result)
             self.assertFalse(result['collision'], result)
-            self.assertEqual([0], f.battle._soft_static_recast_budget)
-            self.assertIn((22, 0), sensor.g_offh_destr_instances)
-            f.battle._soft_static_recast_budget[:] = [24]
-            self.assertTrue(f.battle._direction_probe(
-                (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
+            self.assertEqual([1], f.battle._soft_static_recast_budget)
+            self.assertNotIn((22, 0), getattr(sensor, 'g_offh_destr_instances', {}))
+            f.bigworld.wg_getDestructibleMatrix.assert_not_called()
 
-    def test_missing_live_manager_defers_until_streamed_not_until_bot_moves(self):
+    def test_planning_does_not_wait_for_a_matching_live_manager(self):
         with self.scene() as f:
             manager = sys.modules['AreaDestructibles'].g_destructiblesManager
             manager.space_id = 99
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertTrue(result.get('deferred'), result)
+            self.assertTrue(result['clear'], result)
+            self.assertFalse(result.get('deferred'), result)
             self.assertNotIn((22, 0), getattr(sensor, 'g_offh_destr_instances', {}))
             manager.space_id = 1
             self.assertTrue(f.battle._direction_probe(
                 (0, 0, 0), 0, 0, f.descriptor, 4.0)['clear'])
+            f.bigworld.wg_getDestructibleMatrix.assert_not_called()
 
-    def test_baked_bounds_cannot_override_a_different_native_placement(self):
+    def test_native_original_surface_plans_clear_despite_a_stale_catalog_placement(self):
         with self.scene() as f:
             f.bigworld.wg_getDestructibleMatrix.return_value = _ItemMatrix(_Vector(80, 0, 5))
             result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
-            self.assertFalse(result['clear'], result)
+            self.assertTrue(result['clear'], result)
+            f.bigworld.wg_getDestructibleMatrix.assert_not_called()
             self.assertNotIn((22, 0), getattr(sensor, 'g_offh_destr_instances', {}))
+            # The physical receipt still needs its own exact identity proof.
+            self.assertFalse(f.battle._direction_world_receipt(
+                (0, 0, 0), 0, 0, f.descriptor, 4.0))
+
+    def test_navigation_and_approach_ignore_native_props_without_any_catalog(self):
+        with self.scene() as f:
+            with mock.patch.object(sensor, '_destructible_catalog', None), \
+                    mock.patch.object(sensor, '_stream_baked_shot_instance_1513',
+                                      side_effect=AssertionError('planning hydrated catalog')):
+                f.battle._soft_static_recast_budget[:] = [0]
+                self.assertEqual(0.0, f.battle._navigation_ground(0.0, 4.0, 0.0))
+                result = f.battle._direction_probe((0, 0, 0), 0, 0, f.descriptor, 4.0)
+                self.assertTrue(result['clear'], result)
+                self.assertEqual(0.0, result['slope'])
+                self.assertEqual([0], f.battle._soft_static_recast_budget)
 
     def test_approach_still_requires_real_support_and_acceptable_grade(self):
         for support_y in (None, -4.0, 2.0):
@@ -236,14 +273,12 @@ class BotDestructibleApproachTests(unittest.TestCase):
                 kinetic_speed=20.0, recast_budget=[24]))
             self.assertEqual(before, len(f.rays))
 
-    def test_reverse_approach_uses_the_installed_reverse_not_forward_limit(self):
-        # The structure can be approached at the forward limit but not at the
-        # lower reverse limit. Geometry must not bypass that existing gate.
+    def test_reverse_and_forward_planning_ignore_the_same_confirmed_structure(self):
         with self.scene(health=30.0, speed_cap=10.0) as f:
             forward = f.battle._direction_probe((0, 0, 0), 0, 0.0, f.descriptor, 4.0)
             reverse = f.battle._direction_probe((0, 0, 0), 0, -0.01, f.descriptor, 4.0)
             self.assertTrue(forward['clear'], forward)
-            self.assertFalse(reverse['clear'], reverse)
+            self.assertTrue(reverse['clear'], reverse)
 
     def test_real_driver_requests_forward_motion_before_contact_at_low_fps(self):
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver
