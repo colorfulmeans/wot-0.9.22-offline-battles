@@ -336,6 +336,21 @@ class BigWorldVehicleBinding(object):
             code, postfix, unused_sound, unused_extra = kill_info(
                 avatar, *payload)
             if own:
+                # Arena's DEATH_INFO does not feed the regular #1513
+                # PostmortemPanel. Its separate server damage-info event
+                # supplies the native cause/killer text (without extra voice).
+                death_code = code
+                reasons = self._need(self._constants, 'ATTACK_REASON_INDICES')
+                fire = int(reason) == reasons['fire']
+                if fire:
+                    death_code = 'DEATH_FROM_FIRE'
+                if self._authority_entity_or_fail(entity_id).health < 0:
+                    death_code = ('DEATH_FROM_DEVICE_EXPLOSION_AT_FIRE' if fire
+                                  else 'DEATH_FROM_DEVICE_EXPLOSION_AT_SHOT')
+                elif not attacker_id and code == 'DEATH_FROM_SHOT' and not fire:
+                    death_code = 'DEATH_UNKNOWN'
+                self._need(messages, 'onShowVehicleMessageByCode')(
+                    death_code, postfix, int(attacker_id), None, 0)
                 # player_messages_panel.xml has no SHOT_*_SELF templates.
                 # Use its allied-victim wording with the real roster IDs;
                 # neither the killer relation nor kill voice is changed.

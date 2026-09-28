@@ -3446,6 +3446,8 @@ class BattleRuntime(object):
                 local.get('name', self._config.get('name', 'Player')))
             properties['publicInfo']['marksOnGun'] = _marks_on_gun(
                 local.get('marks_on_gun'))
+            properties['publicInfo']['prebattleID'] = self._lan_prebattle_id(
+                local, 'player')
             properties['health'] = max(1, min(
                 int(local.get('health', descriptor.maxHealth)),
                 int(descriptor.maxHealth)))
@@ -3806,6 +3808,15 @@ class BattleRuntime(object):
         if callable(abandon):
             abandon()
         return True
+
+    def _lan_prebattle_id(self, state, kind):
+        """Same-team LAN humans share the native squad presentation identity."""
+        if kind != 'player':
+            return 0
+        team = int(state.get('team', 0))
+        members = [row for row in (self._start_message or {}).get('players', ())
+                   if int(row.get('team', 0)) == team]
+        return team if team in (1, 2) and len(members) >= 2 else 0
 
     def _local_state(self):
         for value in self._start_message.get('players') or ():
@@ -25268,6 +25279,8 @@ class BattleRuntime(object):
         # remote human receives its own validated LAN outfit; bots have no
         # garage owner and always receive the stock empty descriptor.
         properties['publicInfo']['outfit'] = self._remote_outfit(
+            state, event.get('kind'))
+        properties['publicInfo']['prebattleID'] = self._lan_prebattle_id(
             state, event.get('kind'))
         # A Bot has no account and therefore no marks; only a human's own
         # server-published count decals a replica's gun barrel.

@@ -7577,3 +7577,65 @@ fails in all 16 combinations of player/Bot, live/dead, timed/untimed and both
 seam directions before the change, then passes; gun articulation is unchanged.
 The final 1,198-case snapshot/battle/entity/protocol/codec selection passes with
 the same optional interpreter skip. All 146 client modules compile under 2.7.
+
+## Report 004720: squad presentation, own death cause and bridge-side suspension
+
+The report identifies test-20260929-5bd525e on 37_caucasus (Victory Gate).
+In round 2, Bot 22 (A-43) tips below the bridge and then remains at
+(23.32924, 0.149746, 83.84564), pitch=-0.891759 and roll=-1.280716, including
+after destruction. Its last progressing sample had downward speed -1.1213.
+Nearby contact queries see the upper deck at y=0.9067 with an upward normal.
+This is not the already-fixed replica angle guard. After every posed track
+and hull support sample misses, the worker's extra broad centre ray can still
+hit that upper deck. The hidden-raised-support guard then restores the old
+pose and cancels gravity, even without horizontal movement. Remove that
+unsupported rollback and its now-unused probe; retain actual posed supports,
+supported step/rise rejection, invalid-pose rejection and world wall sweeps.
+A regression using the report's attitude/height and an overhead-deck return
+fails on b07cad8 for both live and dead vehicles, then falls continuously with
+this patch. A real deck below the hull still catches it. The fixture uses a
+test descriptor, not native A-43 geometry; Windows bridge acceptance remains
+required. No braking coefficients or accepted driving feel change.
+
+Public PC guides and the supplied screenshots establish the intended visual
+context, but do not specify the old #1513 own-death message contract. The
+installed #1513 scripts.pkg, player_messages_panel.xml, postmortem_panel.xml
+and Chinese ingame_gui.mo were therefore audited directly. Client inspection
+confirms the exact supported x86 build. Native FadingMessages.__formatEntitiesEx
+colors each attacker/target name using isSquadMan and the native squad color.
+ArenaDataProvider.getPlayerGuiProps feeds both VehicleMarkerPlugin and
+ArenaVehiclesPlugin; squad status also reaches the roster presentation flags.
+Both local and remote humans now publish the team's nonzero prebattleID in
+publicInfo and the stock 18-field arena roster (index 10) when at least two
+humans share that team. Bots and solo humans keep zero; opposing teams never
+share an ID. This is a LAN presentation group, not a fabricated WG unit.
+The native squad finders read SQUAD_RANGE_TO_SHOW at call time and otherwise
+discard groups outside 2-3 members. During offline compatibility installation,
+extend that presentation range to the room's 30-human limit; restore the
+original object on rollback/fini. Native green/red message bodies remain
+intact, with only actual squad participants using the native gold color.
+
+PlayerAvatar's own-kill branch sends DEATH_INFO, which only the special summary
+postmortem panel consumes. The regular PostmortemPanel instead listens to the
+five-argument onShowVehicleMessageByCode event from server damage info. Supply
+that missing vehicle-only event after the existing arena death dispatch,
+without replaying the paired player-message event or voice. Preserve shot,
+fire, ammo-rack explosion and unknown cause codes. The Chinese shot resource
+means "Tank destroyed by this player:"; an unknown killer uses "Your tank was
+destroyed". The right-side own/observed-vehicle supplement requested earlier
+remains an offline addition using stock allied-victim templates: #1513 itself
+intentionally suppresses that ordinary own-kill line. Do not describe this
+addition as stock retail behavior. Guard-aware tests cover the own/observed
+split and cause selection. Local/remote entity tests check squad identity at
+the actual producer boundary as well as group sizes and round team changes.
+
+Validation on Python 3.12.14: the 1,198-case compatibility/entity/battle suite
+passes. All 146 client modules compile with independent CPython 2.7.18.
+The 270-case selected Bot/support/fall/physics/wreck/world suite has 3 failures
+and 1 error. Re-executing the affected methods against b07cad8 reproduces all
+four existing diagnostics (slot-height expectation, both directions of legacy
+downhill contact, and a stale TerrainNavigator.clear_blocked_contact fixture).
+The two new unsupported-fall subcases fail only on the parent; the below-hull
+support control passes on both. These results do not establish native LAN UI
+rendering, all bridge positions, or improved frame time. The reported worker
+performance issue remains separate; no collision safety was removed for speed.

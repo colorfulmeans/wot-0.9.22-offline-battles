@@ -6304,26 +6304,6 @@ class BotRuntime(object):
         return self._suspension_path_supports_plane(
             previous_plane, motion_pose, position)
 
-    def _hidden_suspension_support_is_raised(self, state):
-        """Detect an upper layer outside the bounded suspension travel."""
-        if not callable(self._physics_ground_probe):
-            return False
-        position = _position(state)
-        self._probe_totals[3] += 1
-        probe_started = self._probe_started()
-        try:
-            support = self._physics_ground_probe(
-                position[0], position[2], position[1])
-        finally:
-            self._probe_finished(3, probe_started)
-        if support is None:
-            return False
-        support = float(support)
-        if math.isnan(support) or math.isinf(support):
-            raise RuntimeError('bot centre support is non-finite')
-        return self._suspension_rise_exceeds_base(
-            position[1], support)
-
     def _ground_probe_at(self, x, z, hint):
         """Run one accounted physics ground column."""
         self._probe_totals[3] += 1
@@ -6958,9 +6938,6 @@ class BotRuntime(object):
             params, ground, position, _number(state.get('yaw')),
             _number(state.get('terrain_pitch', state.get('pitch'))),
             _number(state.get('roll')))
-        no_sampled_support = bool(
-            all(value is None for value in ground) and
-            all(value is None for value in pseudo_ground))
         if (not grounded_before and
                 all(value is None for value in ground) and
                 all(value is None for value in pseudo_ground)):
@@ -7044,10 +7021,11 @@ class BotRuntime(object):
             raised_support = not self._suspension_rise_has_continuous_support(
                 previous_plane, current_plane, motion_pose,
                 position, solved['height'])
-        hidden_raised_support = bool(
-            grounded_before and no_sampled_support and
-            self._hidden_suspension_support_is_raised(state))
-        if invalid_pose or raised_support or hidden_raised_support:
+        # A centre ray above a tipped hull may hit the bridge it just left.
+        # Only the posed contact samples can support it. Re-querying the
+        # centre when all of them miss repeatedly cancels gravity beneath
+        # the deck, even without horizontal movement (report 004720).
+        if invalid_pose or raised_support:
             self._restore_bot_suspension_state(
                 state, suspension_snapshot)
             if tick_pose is not None:

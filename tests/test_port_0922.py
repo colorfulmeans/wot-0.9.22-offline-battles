@@ -1782,6 +1782,22 @@ class OfflineCompatibilityTests(unittest.TestCase):
         compatibility.fini()
         self.assertIs(original, runtime.bigworld.__class__.serverTime)
 
+    def test_lan_squad_range_covers_room_and_restores_native_setting(self):
+        module = _load_port_source('compat')
+        runtime, unused = self._runtime()
+        original = range(2, 4)
+        runtime.arena_info_settings = types.SimpleNamespace(
+            SQUAD_RANGE_TO_SHOW=original)
+        compatibility = module.OfflineCompatibility(runtime)
+        compatibility.install()
+        compatibility.install()
+        try:
+            self.assertEqual(tuple(range(2, 31)),
+                runtime.arena_info_settings.SQUAD_RANGE_TO_SHOW)
+        finally:
+            compatibility.fini()
+        self.assertIs(original, runtime.arena_info_settings.SQUAD_RANGE_TO_SHOW)
+
     def test_offline_current_shell_change_defers_stock_optimistic_update(self):
         compatibility_module = _load_port_source('compat')
         runtime, unused_operations = self._runtime()

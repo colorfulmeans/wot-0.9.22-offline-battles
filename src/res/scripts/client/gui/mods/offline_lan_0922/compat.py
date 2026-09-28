@@ -336,6 +336,7 @@ def _load_runtime():
     from gui.Scaleform.daapi.view.battle.shared.markers2d import settings as \
         VehicleMarkerSettings
     from gui.prb_control.dispatcher import g_prbLoader
+    from gui.battle_control.arena_info import settings as ArenaInfoSettings
     from helpers import dependency
     from predefined_hosts import g_preDefinedHosts
     from skeletons.connection_mgr import IConnectionManager
@@ -351,6 +352,7 @@ def _load_runtime():
     runtime.avatar_input_handler = AvatarInputHandler
     runtime.avatar_getter = avatar_getter
     runtime.ammo_controller_type = AmmoController
+    runtime.arena_info_settings = ArenaInfoSettings
     runtime.control_modes = ControlModes
     runtime.avatar_position_control = AvatarPositionControl
     runtime.acceleration_smoother_type = AccelerationSmoother
@@ -710,6 +712,8 @@ class OfflineCompatibility(object):
         self._target_lock_input_pending = False
         self._target_lock_input_avatar = None
         self._target_focus_clear_attempted = False
+        self._original_squad_range = None
+        self._lan_squad_range = tuple(range(2, 31))
 
     def install(self):
         if self._installed:
@@ -2600,6 +2604,12 @@ class OfflineCompatibility(object):
 
         try:
             self._install_host()
+            squad_settings = getattr(runtime, 'arena_info_settings', None)
+            if squad_settings is not None:
+                self._original_squad_range = squad_settings.SQUAD_RANGE_TO_SHOW
+                # Native finders otherwise discard a LAN team with 4+ humans.
+                # This affects presentation only; no WG unit is fabricated.
+                squad_settings.SQUAD_RANGE_TO_SHOW = self._lan_squad_range
             account_type.__init__ = account_init
             account_type.__getattribute__ = account_getattribute
             if self._original_account_become_player is not None:
@@ -2697,6 +2707,11 @@ class OfflineCompatibility(object):
 
     def _rollback_install(self):
         runtime = self._runtime
+        squad_settings = getattr(runtime, 'arena_info_settings', None)
+        if (squad_settings is not None and
+                squad_settings.SQUAD_RANGE_TO_SHOW is self._lan_squad_range):
+            squad_settings.SQUAD_RANGE_TO_SHOW = self._original_squad_range
+        self._original_squad_range = None
         account_type = runtime.account_module.PlayerAccount
         avatar_type = runtime.avatar_module.PlayerAvatar
         ammo_controller_type = getattr(

@@ -12315,7 +12315,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'players': [{
                 'id': 1, 'team': 1, 'slot': 0, 'name': 'Player',
                 'vehicle': 'ussr:R11_MS-1', 'health': 500,
-                'marks_on_gun': 3}],
+                'marks_on_gun': 3}, {
+                'id': 2, 'team': 1, 'slot': 1, 'name': 'Squadmate',
+                'vehicle': 'ussr:R11_MS-1', 'health': 500}],
             'bots': []}
 
         self.assertTrue(battle.start({
@@ -12324,6 +12326,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         entity = runtime.bigworld.pending_entities[battle._server.vehicle_id]
         self.assertEqual(3, entity.publicInfo['marksOnGun'])
+        self.assertEqual(1, entity.publicInfo['prebattleID'])
 
     def test_player_vehicle_clamps_an_out_of_range_gun_mark_count(self):
         """``dossiers2.custom.records`` caps the marksOnGun record at three."""
@@ -30878,6 +30881,8 @@ class BattleRuntimeContractTests(unittest.TestCase):
         """
         runtime = _runtime()
         battle = BattleRuntime(runtime)
+        battle._start_message = {'players': [
+            {'id': 7, 'team': 2}, {'id': 8, 'team': 2}]}
         battle._avatar = runtime.bigworld.avatar
         battle._config = {
             'map': '01_karelia',
@@ -30906,11 +30911,30 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         properties = battle._records['player:7']['properties']
         self.assertEqual(2, properties['publicInfo']['marksOnGun'])
+        self.assertEqual(2, properties['publicInfo']['prebattleID'])
+
+    def test_lan_squad_identity_uses_humans_and_round_team_only(self):
+        battle = BattleRuntime(_runtime())
+        for count in (1, 2, 3, 4, 15):
+            with self.subTest(count=count):
+                battle._start_message = {'players': [
+                    {'id': index + 1, 'team': 1} for index in range(count)] +
+                    [{'id': 20, 'team': 2}]}
+                for index in range(count):
+                    self.assertEqual(1 if count >= 2 else 0,
+                        battle._lan_prebattle_id({'team': 1}, 'player'))
+                self.assertEqual(0, battle._lan_prebattle_id({'team': 2}, 'player'))
+                self.assertEqual(0, battle._lan_prebattle_id({'team': 1}, 'bot'))
+        battle._start_message = {'players': [
+            {'id': 1, 'team': 2}, {'id': 2, 'team': 2}]}
+        self.assertEqual(2, battle._lan_prebattle_id({'team': 2}, 'player'))
 
     def test_bot_replica_never_carries_gun_marks(self):
         """A Bot has no account and therefore no Marks of Excellence."""
         runtime = _runtime()
         battle = BattleRuntime(runtime)
+        battle._start_message = {'players': [
+            {'id': 7, 'team': 2}, {'id': 8, 'team': 2}]}
         battle._avatar = runtime.bigworld.avatar
         battle._config = {
             'map': '01_karelia',
@@ -30939,6 +30963,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         properties = battle._records['bot:3']['properties']
         self.assertEqual(0, properties['publicInfo']['marksOnGun'])
+        self.assertEqual(0, properties['publicInfo']['prebattleID'])
 
     def test_terminal_result_notifies_native_hud_once_with_finish_reason(self):
         runtime = _runtime()

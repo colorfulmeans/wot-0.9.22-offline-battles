@@ -4898,6 +4898,37 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertGreater(state['y'], -0.02)
         self.assertFalse(state['airborne'])
 
+    def test_bridge_above_unsupported_tipped_hull_cannot_cancel_fall(self):
+        # Report 004720: A-43 stopped at y=.149746, pitch=-.89176,
+        # roll=-1.28072 below the y=.9067 deck. The broad centre column
+        # can still see that upper deck when every posed support misses it.
+        for alive in (True, False):
+            with self.subTest(alive=alive):
+                runtime, state, unused = self._suspension_case(
+                    lambda x, z: -14.0)
+                centre = mock.Mock(return_value=0.9067)
+                runtime._physics_ground_probe = centre
+                state.update(y=0.149746, pitch=-0.89176,
+                             terrain_pitch=-0.89176, roll=-1.28072,
+                             alive=alive, vertical_speed=-1.1213)
+                initial_y = state['y']
+                for unused in range(5):
+                    before = (state['x'], state['y'], state['z'])
+                    self.assertFalse(runtime._update_vertical_motion(
+                        state, 0.1, before, state['yaw']))
+                self.assertTrue(state['airborne'])
+                self.assertLess(state['y'], initial_y - 1.0)
+                centre.assert_not_called()
+
+    def test_bridge_deck_under_tipped_hull_still_supports_it(self):
+        runtime, state, unused = self._suspension_case(lambda x, z: 0.0)
+        state.update(y=3.0, pitch=-0.3, terrain_pitch=-0.3, roll=-0.7,
+                     alive=False, vertical_speed=-2.0, airborne=True)
+        for unused in range(30):
+            runtime._update_vertical_motion(state, 0.1)
+        self.assertFalse(state['airborne'])
+        self.assertGreater(state['y'], -0.1)
+
     def test_bot_suspension_inclined_plane_does_not_invent_overturn(self):
         for angle in (35.0, 45.0, 55.0):
             with self.subTest(angle=angle):
