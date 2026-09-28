@@ -32,7 +32,7 @@ from gui.mods.offline_lan_0922.entities.avatar_server import AvatarServerBridge
 from gui.mods.offline_lan_0922.entities.bigworld_binding import \
     BigWorldVehicleBinding
 from gui.mods.offline_lan_0922.entities.detached_turret import (
-    DetachedTurretObstacles, DetachedTurretPresentation, freeze_obstacle_plan)
+    DetachedTurretObstacles, DetachedTurretPresentation, freeze_visual_plan)
 from gui.mods.offline_lan_0922 import turret_obstacle_schema, tank_contact_ledger
 from gui.mods.offline_lan_0922 import rigid_turret, turret_contact_ledger
 from gui.mods.offline_lan_0922.collision_feedback import CollisionFeedback
@@ -22599,7 +22599,9 @@ class BattleRuntime(object):
     def _apply_suspension_slope_slide(
             self, position, yaw, dt, entity=None):
         """Advance slope-driven X/Z after the ram endpoint is settled."""
-        if self._local_airborne:
+        if self._local_airborne or self._local_ground_plane is None:
+            # Partial edge support can lose its fitted plane before the last
+            # contact separates. Preserve momentum through that transition.
             self._local_slide_speed = 0.0
             lateral_x, lateral_z = self._local_air_lateral
             if abs(lateral_x) <= 0.0001 and abs(lateral_z) <= 0.0001:
@@ -27018,7 +27020,7 @@ class BattleRuntime(object):
             'turret-obstacle-v1',
             (self._start_message or {}).get('round_id'), key)
         plan = self._run_optional_feature(
-            'detached turret flight', freeze_obstacle_plan,
+            'detached turret flight', freeze_visual_plan,
             (entity, pose, seed, self._collide_detached_turret), disable=False)
         if not isinstance(plan, dict):
             return False
@@ -27245,7 +27247,8 @@ class BattleRuntime(object):
         server_ms = self._turret_server_time_ms(now)
         if server_ms < 0:
             return 0
-        if self._worker_mode and self._detached_turret_rows:
+        if self._worker_mode and any('body' in row['flight']
+                for row in self._detached_turret_rows.values()):
             self._advance_turret_support(server_ms)
         for key, row in self._detached_turret_rows.items():
             record = self._records.get(key)
@@ -27254,7 +27257,9 @@ class BattleRuntime(object):
             entity = self._server_entity(record['engine_id'])
             if entity is None:
                 continue
-            if not row['flight']['landed'] and 'body' not in row['flight']:
+            # Visual-only debris owns no ray, hull, navigation or vehicle
+            # contact geometry, including after its frozen arc has landed.
+            if 'body' not in row['flight']:
                 self._detached_turret_geometry.add(key)
             if key not in self._detached_turret_geometry:
                 descriptor = getattr(entity, 'typeDescriptor', None)

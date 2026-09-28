@@ -7226,3 +7226,72 @@ inspection and ABI audit pass. Existing test doubles were updated to supply
 explicit contact parameters; the new lifecycle regression uses the real replica.
 No native API was added and no native game session was run. Earlier replay,
 fall-injury and missing-layout work is not claimed fixed here.
+
+### Report 203327: bank slip, visual debris and module outcomes
+
+All three processes identify test-20260928-1e4501d on 37_caucasus. Contact
+parameter witnesses now agree with the mounted masses (WZ-120-1G 36,000 kg,
+M41 23,496 kg). WZ-120-1G Bot 11 reaches the lower level, but the sparse old
+motion witnesses cannot prove a continuous rendered descent. M41 wreck 29
+stops around (-27.217, -1.84, 113.370); its preceding native bank normal is
+(-0.30123034, 0.861268997, -0.40923822).
+
+The worker's suspension path omitted the visible player's existing passive
+side-slip integration. It could settle height and attitude on a steep bank
+without ever advancing down it. Worker live hulls now apply the same lateral
+slide law; passive wrecks have no drivetrain-owned forward gravity and use
+the complete fall line. Motion still passes actual vehicle, world and arena
+bounds guards. The autonomous hazard check uses the driven endpoint before
+passive slip, so gravity is not reclassified as a forbidden driving command.
+Both owners retain already accepted horizontal slide momentum when partial
+edge support cannot fit a plane. Timed integration and zero-time contact
+projection remain separate; only the former advances slip. Rollback includes
+the slide/carry state. Active slope-bound wrecks continue ticking after the
+pusher separates. Bounded EDGE witnesses now record worker descent and support.
+
+Tests use the report bank normal, a finite bank and a lower floor, then the
+real worker battle_start/update_once lifecycle with independently installed
+descriptors. Live and dead hulls slide off and fall; a wall or another hull
+still blocks them. Separate tests cover the final driver-hazard boundary,
+combined contact resweep and zero-time projection. These synthetic scenes do
+not certify the loaded native bridge mesh or visible snapshot interpolation.
+
+The captured worst post-explosion frame spends 196.5 ms in navigation search,
+109.2 ms in vertical integration and 15.5 ms in turret update. The worker is
+already slow before the explosion. Turret rigid-body debt subsequently grows
+beyond 12 seconds, explaining delayed flight independently of GPU rendering.
+Gameplay now uses a frozen, worker-authored visual flight with stock models
+and explosion/touchdown effects. Detached debris temporarily registers no
+vehicle, shell, reticle or navigation obstacle and does not run the continuing
+rigid-body solver. It cannot be pushed or used as cover. The single bounded
+world arc still stops at scenery; this is a deliberate temporary performance
+tradeoff, not a claim that all native lag has disappeared. Existing rigid-body
+code and its independent law tests are retained for later measured work.
+
+Navigation no longer probes edges that cannot improve an A* candidate, shares
+unknown exact-segment failures only within the current callback (retrying
+streamed geometry next callback), evicts one receipt instead of clearing all
+4,096 entries, and changes wreck path revisions only when occupied graph edges
+change. No search, projectile or collision safety budget was reduced.
+
+The high-damage report has no unavailable-layout witness. Jagdpanther Bot 24
+receives a penetrated, reached ammoBay hit with 5,962.514 rolled device damage;
+the successful existing saving throw destroys its rack. E75 has two reached
+ammoBay candidates rejected by the saving throw, another penetrated ray with
+no interior contact, and separate non-penetrations. Tortoise mostly receives
+non-penetrations; two external track hits apply device loss. These are not
+overflow symptoms. Earlier missing per-vehicle interior meshes remain a real
+limitation (650 decoded, eight reconstructed, 22 unavailable in the catalog
+audit); no guessed interior geometry was added. High-damage diagnostics now
+include the actual probability/draw, attacker and crew outcome, without an
+extra RNG call or any change to hit probability, HP or voice selection.
+
+Validation: 1,474 subsystem cases pass with one environment skip and the six
+previously recorded navigation exclusions. The focused selection has one
+pre-existing overturned-roof assertion, reproduced from parent 1e4501d with
+the identical 2.5402 versus 2.775 m result. Navigation/replan/route selection
+retains the parent's eight missing-adapter errors; the three new navigation
+tests pass. Exact Chinese HD #1513 inspection, ABI audit and Python 2.7.18
+compile pass. No native API was added and no native game session was run.
+Native bridge departure, frame pacing and visual debris remain test-package
+acceptance items rather than certified runtime outcomes.

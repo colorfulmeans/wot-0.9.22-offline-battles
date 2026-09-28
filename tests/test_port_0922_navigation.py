@@ -15,6 +15,41 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 
 
 class ClimbApproachNavigationTests(unittest.TestCase):
+    def test_unknown_native_edge_is_shared_only_until_next_worker_frame(self):
+        calls = []
+        loaded = [False]
+        def ground(x,z,hint):
+            calls.append((x,z,hint))
+            return 0. if loaded[0] else None
+        nav = TerrainNavigator(ground, obstacle_probe=lambda *unused: False)
+        start,end = (0.,0.,0.),(4.,0.,0.)
+        nav.begin_frame(.1)
+        for unused in range(29):
+            self.assertFalse(nav.grid._native_segment_clear(start,end))
+        self.assertEqual(1,len(calls))
+        nav.end_frame()
+        loaded[0] = True
+        nav.begin_frame(.1)
+        self.assertTrue(nav.grid._native_segment_clear(start,end))
+        self.assertGreater(len(calls),1)
+        nav.end_frame()
+
+    def test_native_cache_capacity_does_not_discard_all_other_bot_receipts(self):
+        grid = TerrainGrid(lambda *unused: 0., obstacle_probe=lambda *unused: False)
+        grid._native_review_cache.update((('receipt',i),True) for i in range(4096))
+        self.assertTrue(grid._native_segment_clear((0.,0.,0.),(4.,0.,0.)))
+        self.assertEqual(4096,len(grid._native_review_cache))
+        self.assertEqual(4095,sum(key[0]=='receipt' for key in grid._native_review_cache))
+
+    def test_pushed_wreck_retires_paths_only_when_occupied_edges_change(self):
+        grid = TerrainGrid(lambda *unused: 0., cell_size=10.)
+        self.assertTrue(grid.set_static_hulls([(11,0.,0.,0.,2.,1.)]))
+        revision = grid.static_hull_revision
+        self.assertFalse(grid.set_static_hulls([(11,.02,0.,.002,2.,1.)]))
+        self.assertEqual(revision,grid.static_hull_revision)
+        self.assertTrue(grid.set_static_hulls([(11,20.,0.,.002,2.,1.)]))
+        self.assertEqual(revision+1,grid.static_hull_revision)
+
     @staticmethod
     def _fjord_route(native_capability=None):
         graph = json.loads((PORT_ROOT / 'navgraphs' / '33_fjord.json').read_text())

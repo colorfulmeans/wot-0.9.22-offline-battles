@@ -161,6 +161,118 @@ class WreckOwnerTests(unittest.TestCase):
     _runtime = bt.ShovedWreckTests._runtime
     _wreck = bt.ShovedWreckTests._wreck
 
+    def test_report_bank_releases_live_and_dead_hulls_without_drive_input(self):
+        # 203327 M41: the native bank normal is an upward 30.5-degree face.
+        # Player suspension has side-slip; the worker previously only changed
+        # height/attitude and could perch here indefinitely after a shove.
+        nx, ny, nz = -.30123034, .861268997, -.40923822
+        gx, gz = -nx/ny, -nz/ny
+        for alive in (True, False):
+            worker,state,unused=bt.BotRuntimeTests._suspension_case(
+                self, lambda x,z: gx*x+gz*z if x > -3. else -30.)
+            state.update(alive=alive,speed=0.,movement_dir=0,yaw=-1.244333,
+                         collision_shape=c.DEFAULT_SHAPE,mass=23496.,
+                         _contact_dynamics=True)
+            state['_suspension_ground_plane']=dict(gradient_x=gx,gradient_z=gz)
+            worker.states={11:state}
+            worker.motion_resolver=mock.Mock(return_value='clear')
+            self.assertTrue(worker._wreck_is_active(state))
+            with mock.patch('sys.stdout'):
+                for tick in range(180):
+                    before=(state['x'],state['y'],state['z'])
+                    self.assertFalse(worker._update_vertical_motion(state,.05,before,state['yaw']))
+            self.assertLess(state['x'],-3.)
+            self.assertLess(state['y'],-10.)
+            self.assertFalse(worker._suspension_param_failures)
+            self.assertTrue(worker.motion_resolver.called)
+
+    def test_passive_slide_cannot_cross_world_wall_or_other_vehicle(self):
+        for obstacle in ('wall','vehicle'):
+            worker=self._runtime();worker.states.pop(12)
+            state=self._wreck(worker)
+            state.update(x=0.,y=0.,z=0.,yaw=0.,slide_speed=3.,
+                         _suspension_ground_plane=dict(gradient_x=1.,gradient_z=0.))
+            worker.motion_resolver=mock.Mock(return_value='hard' if obstacle=='wall' else 'clear')
+            worker._contact_motion_bodies=lambda unused: (
+                [_tank(2,-2.*state['collision_shape'][0]+.01,0.)] if obstacle=='vehicle' else [])
+            worker._apply_suspension_slope_slide(state,.1)
+            self.assertEqual((0.,0.),(state['x'],state['z']))
+            self.assertEqual(0.,state['slide_speed'])
+
+    def test_slide_carries_through_air_but_zero_time_projection_cannot_move_it_twice(self):
+        worker=self._runtime();worker.states.pop(12)
+        state=self._wreck(worker)
+        state.update(airborne=True,air_lateral_x=2.,air_lateral_z=-1.)
+        worker.motion_resolver=mock.Mock(return_value='clear')
+        before=(state['x'],state['z'])
+        worker._apply_suspension_slope_slide(state,.1)
+        self.assertAlmostEqual(before[0]+.2,state['x'])
+        self.assertAlmostEqual(before[1]-.1,state['z'])
+        after=(state['x'],state['z'])
+        worker._apply_suspension_slope_slide(state,0.)
+        self.assertEqual(after,(state['x'],state['z']))
+
+    def test_live_slide_survives_the_later_combined_drive_contact_resweep(self):
+        worker=self._runtime();worker.states.pop(12)
+        state=worker.states[11]
+        state.update(alive=True,x=0.,y=0.,z=.1,yaw=0.,speed=1.,
+                     airborne=True,air_lateral_x=2.,air_lateral_z=0.,
+                     _contact_drive_sweep=((0.,0.,0.),(0.,.1)))
+        worker.motion_resolver=mock.Mock(return_value='clear')
+        worker._apply_suspension_slope_slide(state,.1)
+        self.assertEqual((.2,.1),state['_contact_drive_sweep'][1])
+        worker._apply_tank_contact_response(state,dict(
+            delta_velocity=(0.,0.),correction=(0.,0.)),.1)
+        self.assertAlmostEqual(.2,state['x'])
+        self.assertAlmostEqual(.1,state['z'])
+
+    def test_driver_hazard_guard_does_not_reclassify_passive_slide_as_drive(self):
+        worker=self._runtime();worker.states.pop(12)
+        state=worker.states[11]
+        state.update(x=-2.,y=-1.,z=0.,yaw=0.)
+        safe=lambda graph,point,**kwargs: point[0]>=0.
+        with mock.patch.object(self.module.prebaked_navigation,'pose_is_safe',side_effect=safe):
+            self.assertFalse(worker._guard_realised_pose(state,(1.,0.,0.),True,0.,
+                                                        navigation_pose=(.1,0.,0.)))
+            self.assertEqual(-2.,state['x'])
+            self.assertTrue(worker._guard_realised_pose(state,(1.,0.,0.),True,0.,
+                                                       navigation_pose=(-.1,0.,0.)))
+            self.assertEqual(1.,state['x'])
+
+    def test_authority_update_advances_bank_slide_for_live_and_dead_states(self):
+        gx,gz=.30123034/.861268997,.40923822/.861268997
+        for alive in (True,False):
+            support,initial,unused=bt.BotRuntimeTests._suspension_case(
+                self,lambda x,z: gx*x+gz*z if x>-3. else -30.)
+            worker=self.module.BotRuntime(1,
+                descriptor_resolver=lambda unused:support._descriptors[11],
+                adapter_factory=lambda *args,**kwargs:bt._FixedAdapter(
+                    dict(throttle=0.,turn=0.,fire_allowed=False)),
+                direction_probe=lambda *args,**kwargs:dict(
+                    clear=True,collision=False,water=False,slope=0.),
+                ground_probe=support._physics_ground_probe,
+                physics_ground_probe=support._physics_ground_probe,
+                suspension_ground_probe=support._suspension_ground_probe,
+                spawn_resolver=bt._spawn_resolver,baked_graph=bt._flat_open_graph())
+            worker.battle_start(self.start);worker.states.pop(12)
+            state=worker.states[11]
+            state.update(initial)
+            state.update(alive=alive,health=500 if alive else 0,speed=0.,movement_dir=0,
+                         yaw=-1.244333,_contact_dynamics=True)
+            state['_suspension_ground_plane']=dict(gradient_x=gx,gradient_z=gz)
+            worker.motion_resolver=lambda *args,**kwargs:'clear'
+            # A driver must avoid x<0; accepted passive motion must survive
+            # the same final authority guard that normally enforces it.
+            with mock.patch.object(self.module.prebaked_navigation,'pose_is_safe',
+                    side_effect=lambda graph,point,**kw:point[0]>=0.), \
+                    mock.patch('sys.stdout'):
+                for tick in range(180):worker._update_once(.05,(tick+1)*.05,[])
+            self.assertLess(state['x'],-3.,repr({k:state.get(k) for k in (
+                'alive','airborne','x','y','z','slide_speed','_suspension_ground_plane',
+                'movement_dir','_motion_stall_pending')}))
+            self.assertLess(state['y'],-10.)
+            self.assertFalse(worker._suspension_param_failures)
+
     def test_real_replica_lifecycle_has_no_worker_cache_but_uses_mounted_mass(self):
         replica=self._runtime()
         replica.battle_start(dict(self.start,round_id=6,bot_authority_id=-1))

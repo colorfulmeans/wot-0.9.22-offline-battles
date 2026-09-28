@@ -65,6 +65,28 @@ def pose(x=0, y=1, z=0, yaw=0, pitch=0, roll=0):
 
 
 class TurretObstacleTests(unittest.TestCase):
+    def test_visual_flight_keeps_one_frozen_arc_without_rigid_time_debt(self):
+        vehicle = _Vehicle()
+        vehicle.typeDescriptor = descriptor()
+        queries = []
+        def floor(start, end):
+            queries.append((start, end))
+            if start[1] >= 0. and end[1] <= 0.:
+                t = start[1]/(start[1]-end[1])
+                return tuple(start[i]+t*(end[i]-start[i]) for i in range(3))
+            return None
+        proposed = detached_turret.freeze_visual_plan(vehicle, _POSE, 555, floor)
+        self.assertNotIn('body', proposed['flight'])
+        self.assertTrue(proposed['flight']['landed'])
+        self.assertLess(len(queries), 250)
+        from gui.mods.offline_lan_0922 import turret_detachment, turret_obstacle_schema
+        self.assertIsNotNone(turret_obstacle_schema.normalize_proposal(
+            dict(proposed, actor_kind='bot', actor_id=17)))
+        args = (proposed['flight'], proposed['attitude'], proposed['spin'])
+        after = turret_detachment.pose_at(*(args+(30.,)))
+        self.assertEqual(after, turret_detachment.pose_at(*(args+(60.,))))
+        self.assertEqual(tuple(proposed['flight']['rest']), after[0])
+
     def obstacle(self, accepted=None, td=None):
         obstacles = detached_turret.DetachedTurretObstacles(_Math())
         self.assertTrue(obstacles.add('bot:17', accepted or row(), td or descriptor()))

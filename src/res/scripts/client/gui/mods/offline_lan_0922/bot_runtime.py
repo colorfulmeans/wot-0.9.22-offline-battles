@@ -228,7 +228,7 @@ _BOT_SUSPENSION_STATE_FIELDS = (
     'suspension_roll_velocity', 'left_flying', 'right_flying',
     'ground_height', '_spring_ground_memory', '_pseudo_ground_memory',
     '_suspension_ground_plane', '_suspension_support_vertical_speed',
-    '_suspension_support_gradient',
+    '_suspension_support_gradient', 'slide_speed', 'air_lateral_x', 'air_lateral_z',
 )
 
 # Route groups lease these lateral lanes without moving an existing member.
@@ -7067,6 +7067,22 @@ class BotRuntime(object):
         elif not before_airborne and state['airborne']:
             self._turn_speeds[bot_id] = 0.0
             state['rotation_dir'] = 0
+        now = getattr(self, '_contact_now', None)
+        if (now is not None and (state.get('_contact_dynamics') or
+                not state.get('alive', True)) and
+                (before_airborne or state['airborne'] or
+                 abs(state['pitch']) > 0.35 or abs(state['roll']) > 0.35) and
+                now >= state.get('_edge_pose_log_time', 0.0)):
+            state['_edge_pose_log_time'] = now + 0.25
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] EDGE motion bot=%d alive=%s '
+                'position=%s pitch=%.5f roll=%.5f vertical=%.4f airborne=%s '
+                'contacts=%d plane=%s slide=(%.4f,%.4f) step=%.4f\n' % (
+                    bot_id, state.get('alive', True), _position(state),
+                    state['pitch'], state['roll'], state['vertical_speed'],
+                    state['airborne'], solved['contact_count'],
+                    current_plane, state.get('air_lateral_x', 0.0),
+                    state.get('air_lateral_z', 0.0), step))
         return False
 
     @timed('bot.vertical')
@@ -7109,6 +7125,48 @@ class BotRuntime(object):
             self._apply_bot_landing_impact(state, impact_speed, normal_impact)
         return blocked
 
+    def _apply_suspension_slope_slide(self, state, step):
+        """Give worker hulls the same passive side-slip as the visible hull.
+
+        Navigation may reject a cliff as a driving destination; it must not
+        hold a shoved hull against gravity. This still uses the native world
+        sweep and vehicle separation, before the one timed vertical solve.
+        """
+        if step <= 0.0:
+            return
+        if (state.get('airborne', False) or
+                not state.get('_suspension_ground_plane')):
+            # One remaining track/rigid point can support height without
+            # proving a ground plane. Losing that plane at a lip is not an
+            # impulse that cancels already accepted horizontal momentum.
+            state['slide_speed'] = 0.0
+            vx, vz = state.get('air_lateral_x', 0.0), state.get('air_lateral_z', 0.0)
+        else:
+            plane = state.get('_suspension_ground_plane') or {}
+            gx, gz = plane.get('gradient_x', 0.0), plane.get('gradient_z', 0.0)
+            tangent = math.hypot(gx, gz)
+            speed = vehicle_physics.suspension_slope_slide_speed(
+                state.get('slide_speed', 0.0), tangent, step)
+            state['slide_speed'] = speed
+            dx, dz = (-gx/tangent, -gz/tangent) if tangent > 0.001 else (0.0, 0.0)
+            if state.get('alive', True):
+                # Forward gravity is already owned by longitudinal_step.
+                right_x, right_z = math.cos(state['yaw']), -math.sin(state['yaw'])
+                projection = dx*right_x + dz*right_z
+                dx, dz = right_x*projection, right_z*projection
+            vx, vz = dx*speed, dz*speed
+        state['air_lateral_x'], state['air_lateral_z'] = vx, vz
+        if math.hypot(vx, vz) <= 0.0001:
+            return
+        before = _position(state)
+        self._apply_tank_contact_response(state, {
+            'delta_velocity': (0.0, 0.0), 'correction': (vx*step, vz*step),
+        }, step, advance_push=False, advance_forward=True)
+        if (abs(state['x']-before[0]-vx*step) > 1.0e-8 or
+                abs(state['z']-before[2]-vz*step) > 1.0e-8):
+            state['slide_speed'] = 0.0
+            state['air_lateral_x'] = state['air_lateral_z'] = 0.0
+
     def _integrate_vertical_motion(self, state, step, tick_pose=None,
                                    attempted_yaw=None,
                                    suspension_motion_pose=None):
@@ -7119,10 +7177,23 @@ class BotRuntime(object):
             trace['suspension'] = params is not None
         if params is not None:
             suspension_snapshot = self._snapshot_bot_suspension_state(state)
+            before_slide = _position(state)
             try:
-                return self._update_suspension_vertical_motion(
+                self._apply_suspension_slope_slide(state, step)
+                blocked = self._update_suspension_vertical_motion(
                     state, step, params, tick_pose, attempted_yaw,
-                    suspension_motion_pose)
+                    suspension_motion_pose if suspension_motion_pose is not None
+                    else (tick_pose if tick_pose is not None else before_slide))
+                if blocked:
+                    for name in ('slide_speed', 'air_lateral_x', 'air_lateral_z'):
+                        present, value = suspension_snapshot[name]
+                        if present:
+                            state[name] = value
+                        else:
+                            state.pop(name, None)
+                    if tick_pose is None:
+                        state['x'], state['y'], state['z'] = before_slide
+                return blocked
             except (AttributeError, IndexError, KeyError, RuntimeError,
                     TypeError, ValueError, OverflowError,
                     ZeroDivisionError) as error:
@@ -7134,8 +7205,8 @@ class BotRuntime(object):
                 self._report_suspension_trial('retired: %s' % (error,))
                 self._restore_bot_suspension_state(
                     state, suspension_snapshot)
-                if tick_pose is not None:
-                    state['x'], state['y'], state['z'] = tick_pose
+                state['x'], state['y'], state['z'] = (
+                    tick_pose if tick_pose is not None else before_slide)
                 self._reset_bot_suspension_state(state)
                 state['speed'] = 0.0
                 state['movement_dir'] = 0
@@ -7279,7 +7350,7 @@ class BotRuntime(object):
     @timed('bot.pose_guard')
     def _guard_realised_pose(self, state, tick_pose, tick_was_safe,
                              attempted_yaw, suspension_snapshot=None,
-                             navigation_hazards=True):
+                             navigation_hazards=True, navigation_pose=None):
         """Reject a new hazard or outward map-edge drift after all motion."""
         realised_pose = _position(state)
         moved_farther_outside = not self._baked_pose_progress_clear(
@@ -7288,7 +7359,8 @@ class BotRuntime(object):
         if (not moved_farther_outside and
                 (not navigation_hazards or not tick_was_safe or
                  prebaked_navigation.pose_is_safe(
-                     self.baked_graph, realised_pose, shoulder_cells=0,
+                     self.baked_graph, navigation_pose if navigation_pose is not None
+                     else realised_pose, shoulder_cells=0,
                      hazard_mask=prebaked_navigation.MOTION_FATAL_HAZARDS))):
             return False
         state['x'], state['y'], state['z'] = tick_pose
@@ -8467,8 +8539,12 @@ class BotRuntime(object):
 
     @staticmethod
     def _wreck_is_active(state):
-        return bool(state.get('airborne') or any(abs(state.get(key, 0.0)) > 1.0e-9
+        plane = state.get('_suspension_ground_plane') or {}
+        tangent = math.hypot(plane.get('gradient_x', 0.0), plane.get('gradient_z', 0.0))
+        sliding = vehicle_physics.suspension_slope_slide_speed(0.0, tangent, 0.01) > 0.0
+        return bool(sliding or state.get('airborne') or any(abs(state.get(key, 0.0)) > 1.0e-9
                     for key in ('vertical_speed', 'push_yaw',
+                                'slide_speed', 'air_lateral_x', 'air_lateral_z',
                                 'suspension_pitch_velocity',
                                 'suspension_roll_velocity')))
 
@@ -13026,6 +13102,7 @@ class BotRuntime(object):
                 attempted_yaw = attempted_yaws.get(
                     state['id'], state.get('yaw', 0.0))
                 was_airborne = bool(state.get('airborne', False))
+                driven_pose = _position(state)
                 support_blocked = self._update_vertical_motion(
                     state, frame_step,
                     tick_poses[state['id']], attempted_yaw)
@@ -13039,7 +13116,8 @@ class BotRuntime(object):
                     pose_rollback_by_id[state['id']] = self._guard_realised_pose(
                         state, tick_poses[state['id']], tick_safe[state['id']],
                         attempted_yaw, tick_suspension_states.get(state['id'])
-                        if self._suspension_params.get(state['id']) is not None else None)
+                        if self._suspension_params.get(state['id']) is not None else None,
+                        navigation_pose=driven_pose)
                 settled_poses[state['id']] = _position(state)
                 slope_candidates.append(state)
         if diagnostic is not None:

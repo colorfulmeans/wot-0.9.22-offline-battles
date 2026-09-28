@@ -1174,6 +1174,25 @@ class CriticalDamageTests(unittest.TestCase):
                             self.assertFalse((payload or {}).get('ammo_rack_death'))
                             self.assertEqual([], delta['devices'])
 
+    def test_high_damage_crew_witness_explains_saved_and_proposed_without_extra_roll(self):
+        for draw, expected in ((.1,'proposed'),(.9,'saved')):
+            vehicle = types.SimpleNamespace(id=999,health=500,typeDescriptor=_descriptor(),
+                position=object(),matrix=object(),getComponents=lambda: ())
+            hit = (1.,1.,_Material('commanderHealth',chance=.33),None)
+            with mock.patch.dict(sys.modules,{'BigWorld':self.bigworld,'Math':self.math}), \
+                    mock.patch('random.uniform',return_value=5000.), \
+                    mock.patch('random.random',return_value=draw) as chance, \
+                    mock.patch('builtins.print') as output:
+                critical_damage.propose_direct(vehicle,(hit,),object(),object(),100,
+                    {'kind':'ARMOR_PIERCING','damage':(100.,5000.)},
+                    attacker_id=2,penetrated=True,with_delta=True)
+            chance.assert_called_once()
+            witness = next(call.args[0] for call in output.call_args_list
+                           if 'MODULE strike' in str(call.args[0]))
+            self.assertIn("crew=[('commanderHealth', '%s')]" % expected,witness)
+            self.assertIn("chances=[('commanderHealth', 0.33, %s)]" % draw,witness)
+            self.assertIn('attacker=2',witness)
+
     def test_proposal_records_module_operation_before_stale_hp_clamp(self):
         vehicle = types.SimpleNamespace(
             id=1, health=500, typeDescriptor=_descriptor(),

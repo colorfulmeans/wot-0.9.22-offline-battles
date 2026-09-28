@@ -18,10 +18,12 @@ switches to ``turret_touchdown_*`` / ``flamingOnGround`` when
 the vehicle's own marks and damage decals.
 
 The vehicle's detachment flag removes the source turret/gun collision on
-all peers. Worker-published compound-body revisions own its pose, momentum and
-contacts, while the stock client entity owns the models and effects. Revisions
-reuse that entity; touchdown is keyed by impact serial. The visual remains
-outside local native dynamic collision so it cannot compete with the worker.
+all peers. Gameplay currently publishes one visual-only world arc: report
+203327 demonstrated severe compound-body time debt. Vehicle pushing and
+detached-debris obstacle registration are temporarily disabled. The retained
+body implementation below remains covered independently, while the stock
+client entity owns the models and effects. The visual remains outside local
+native dynamic collision so it cannot compete with the worker.
 Stock ProjectileAwareEntities membership remains intact for cleanup.
 Continuous crushing HP is not implemented by this presentation adapter.
 """
@@ -583,6 +585,29 @@ def detachment_plan(entity, pose):
         'attitude': (yaw + turret_yaw, pitch, roll),
         'clearance': _turret_clearance(turret),
     }
+
+
+def freeze_visual_plan(entity, pose, seed, collide):
+    """Temporary visual debris: one world arc, no vehicle contact solver.
+
+    Report 203327 accumulated over twelve seconds of rigid-body debt. Keep
+    the accepted launch and stock effects on the shared clock while that
+    solver is disabled in gameplay. This arc never registers an obstacle.
+    """
+    plan = detachment_plan(entity, pose)
+    if plan is None:
+        return None
+    try:
+        components = turret_components(plan['descriptor'])
+        if any(DetachedTurretPresentation._exploded_model(component) is None
+               for unused_name, component, unused_offset, unused_bounds in components):
+            return None
+        impulse = turret_detachment.launch_impulse(seed)
+        flight = turret_detachment.resolve_flight(
+            plan['launch'], impulse['velocity'], collide, plan['clearance'])
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        return None
+    return {'flight': flight, 'attitude': plan['attitude'], 'spin': impulse['spin']}
 
 
 def freeze_obstacle_plan(entity, pose, seed, collide):

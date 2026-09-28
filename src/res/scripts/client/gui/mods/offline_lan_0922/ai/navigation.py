@@ -161,6 +161,7 @@ class TerrainGrid(object):
 		self._native_review_cells = set()
 		self._native_review_seeds = set()
 		self._native_review_cache = {}
+		self._native_review_pending = None
 
 	def _install_baked_graph(self, graph):
 		if (graph.get('format') != BAKED_FORMAT_NAME or
@@ -432,9 +433,8 @@ class TerrainGrid(object):
 	def set_static_hulls(self, hulls):
 		"""Publish the destroyed hulls that now occupy baked navigation cells.
 
-		A wreck is exact new static geometry, not traffic: it never moves
-		again, so no plan through it can succeed and no amount of waiting
-		clears it. Marking the graph edges it occupies routes later searches
+		A wreck is physical geometry that can be pushed. Marking the graph
+		edges it currently occupies routes later searches
 		around it, refuses the direct shortcut, and drops the cached paths that
 		used to run through it. Only the cells the hull box really overlaps are
 		marked, so a wide road keeps every column the wreck does not occupy.
@@ -449,7 +449,6 @@ class TerrainGrid(object):
 		if key == self._static_hull_key:
 			return False
 		self._static_hull_key = key
-		self.static_hull_revision += 1
 		edges = {}
 		half_extent = self.cell_size * 0.5
 		for unused_id, x, z, yaw, half_length, half_width in key:
@@ -476,6 +475,11 @@ class TerrainGrid(object):
 								(cell_x, cell_z),
 								(cell_x + step_x, cell_z + step_z))))] = (
 									STATIC_HULL_EDGE_PENALTY)
+		# A shove changes the exact pose every tick, often without changing
+		# any occupied graph edge. Only changed planning geometry retires paths.
+		if edges == self._static_hull_edges:
+			return False
+		self.static_hull_revision += 1
 		self._static_hull_edges = edges
 		return True
 
@@ -763,6 +767,10 @@ class TerrainGrid(object):
 		key = (self._point_key(start), self._point_key(end))
 		if key in self._native_review_cache:
 			return self._native_review_cache[key]
+		pending = self._native_review_pending
+		exact_key = (tuple(start), tuple(end))
+		if pending is not None and exact_key in pending:
+			return False
 		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
 		previous = None
 		first = None
@@ -775,6 +783,8 @@ class TerrainGrid(object):
 				hint = previous[1] if previous is not None else start[1]
 				y = self.ground_probe(x, z, hint)
 				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
+					if pending is not None:
+						pending.add(exact_key)
 					return False
 				point = (x, float(y), z)
 				if previous is not None and abs(point[1] - previous[1]) > (
@@ -788,9 +798,11 @@ class TerrainGrid(object):
 			if clear:
 				clear = not self.obstacle_probe(first, previous, 2.15)
 		except Exception:
+			if pending is not None:
+				pending.add(exact_key)
 			return False
 		if len(self._native_review_cache) >= 4096:
-			self._native_review_cache.clear()
+			self._native_review_cache.pop(next(iter(self._native_review_cache)))
 		self._native_review_cache[key] = bool(clear)
 		return bool(clear)
 
@@ -1138,11 +1150,6 @@ class TerrainGrid(object):
 				if self.prebaked:
 					(next_cell, next_y, run, slope_cost,
 					 plain_penalty, clearance_penalty, edge_key) = edge
-					start_point = self.point_for(current, current_y)
-					end_point = self.point_for(next_cell, next_y)
-					if (self._needs_native_review(start_point, end_point) and
-							not self._native_segment_clear(start_point, end_point)):
-						continue
 					terrain_penalty = (clearance_penalty if prefer_clearance else
 					                   plain_penalty)
 				else:
@@ -1188,6 +1195,14 @@ class TerrainGrid(object):
 				new_cost = (cost_so_far[current] + run + slope_cost +
 				            terrain_penalty + failed_penalty + local_penalty)
 				if next_cell not in cost_so_far or new_cost < cost_so_far[next_cell]:
+					# An edge that cannot improve this search cannot enter its
+					# result. Spend native queries only on admissible relaxations.
+					if self.prebaked:
+						start_point = self.point_for(current, current_y)
+						end_point = self.point_for(next_cell, next_y)
+						if (self._needs_native_review(start_point, end_point) and
+								not self._native_segment_clear(start_point, end_point)):
+							continue
 					cost_so_far[next_cell] = new_cost
 					came_from[next_cell] = current
 					heights[next_cell] = next_y
@@ -1875,11 +1890,15 @@ class TerrainNavigator(object):
 		"""
 		self.search_frame_serial += 1
 		self.search_frame_open = True
+		# Unknown/unloaded native columns are retried next callback, but all
+		# Bots in this callback share the same failed exact-segment receipt.
+		self.grid._native_review_pending = set()
 		self._accrue_search_credit(elapsed)
 
 	def end_frame(self):
 		"""Close an explicit render-frame work budget."""
 		self.search_frame_open = False
+		self.grid._native_review_pending = None
 
 	def _begin_automatic_frame(self, now):
 		"""Keep direct TerrainNavigator users deterministic without a runtime."""
@@ -1894,6 +1913,7 @@ class TerrainNavigator(object):
 		           max(0.0, now - self.search_auto_time))
 		self.search_auto_time = now
 		self.search_frame_serial += 1
+		self.grid._native_review_pending = set()
 		self._accrue_search_credit(elapsed)
 
 	@observed('nav.search_batch')

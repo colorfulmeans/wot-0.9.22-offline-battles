@@ -8,6 +8,18 @@ from gui.mods.offline_lan_0922 import rigid_turret
 
 
 class TurretRuntimeContactTests(unittest.TestCase):
+    def test_visual_arc_never_enters_worker_solver_or_obstacle_registry(self):
+        runtime, battle = self.setup_body()
+        battle._worker_mode = True
+        battle._detached_turret_rows['bot:17'] = row()
+        battle._turret_server_time_ms = lambda unused: 10000
+        battle._detached_turret_obstacles = mock.Mock()
+        battle._advance_turret_support = mock.Mock()
+        battle._advance_detached_turrets(10.)
+        battle._advance_turret_support.assert_not_called()
+        battle._detached_turret_obstacles.add.assert_not_called()
+        self.assertEqual({}, battle._turret_bodies)
+
     def setup_body(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)

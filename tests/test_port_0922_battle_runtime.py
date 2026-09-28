@@ -6568,7 +6568,7 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         battle._reconcile_detached_turret_snapshot({
             'round_id': 7, 'detached_turrets': [row]})
         battle._advance_detached_turrets(10.0)
-        battle._detached_turret_obstacles.add.assert_called_once()
+        battle._detached_turret_obstacles.add.assert_not_called()
         battle._detached_turrets.prepare_canonical.assert_not_called()
         self.assertFalse(vehicle.isTurretDetached)
         battle._apply_health(record, self._ammo_bay_death_state())
@@ -6623,7 +6623,7 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         battle._detached_turret_obstacles.add.assert_not_called()
         record['ready'] = True
         battle._advance_detached_turrets(10.6)
-        battle._detached_turret_obstacles.add.assert_called_once()
+        battle._detached_turret_obstacles.add.assert_not_called()
         turrets.prepare_canonical.assert_not_called()
         battle._turret_obstacle_in_view.return_value = True
         battle._advance_detached_turrets(10.9)
@@ -6642,7 +6642,7 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         battle._worker_mode = True
         row = self._canonical_turret_row()
         plan = {key: row[key] for key in ('flight', 'attitude', 'spin')}
-        with mock.patch.object(battle_runtime_module, 'freeze_obstacle_plan',
+        with mock.patch.object(battle_runtime_module, 'freeze_visual_plan',
                                return_value=plan) as freeze:
             battle._apply_health(record, self._ammo_bay_death_state())
             battle._apply_health(record, self._ammo_bay_death_state())
@@ -6657,7 +6657,7 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
             'round_id': 7, 'detached_turrets': [row]})
         battle._advance_detached_turrets(10.1)
         self.assertEqual({}, battle._detached_turret_proposals)
-        battle._detached_turret_obstacles.add.assert_called_once()
+        battle._detached_turret_obstacles.add.assert_not_called()
         battle._detached_turrets.prepare_canonical.assert_not_called()
         battle._detached_turrets.launch_canonical.assert_not_called()
 
@@ -6671,7 +6671,7 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         record['state'].update(self._ammo_bay_death_state())
         vehicle.onHealthChanged = mock.Mock(wraps=vehicle.onHealthChanged)
         with mock.patch.object(
-                battle_runtime_module, 'freeze_obstacle_plan',
+                battle_runtime_module, 'freeze_visual_plan',
                 side_effect=[RuntimeError('world query unavailable'), plan]) as freeze:
             battle._apply_health(record, self._ammo_bay_death_state())
             self.assertTrue(vehicle.isTurretDetached)
