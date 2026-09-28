@@ -8232,6 +8232,44 @@ class BotRuntime(object):
             'ram_contact_seq': int(seq),
         }
 
+    @staticmethod
+    def _contact_motion_body(state, body_id=None, shape=None):
+        body = dict((key, state.get(key, 0.0))
+                    for key in ('id', 'x', 'y', 'z', 'yaw', 'pitch', 'roll'))
+        if body_id is not None:
+            body['id'] = body_id
+        body['shape'] = shape or state.get('collision_shape')
+        return body
+
+    def _contact_motion_bodies(self, players=()):
+        bodies = [self._contact_motion_body(state)
+                  for state in self._ordered_states()]
+        for raw in players or ():
+            if not isinstance(raw, dict) or raw.get('id') is None:
+                continue
+            profile = self._player_collision_profile(raw)
+            bodies.append(self._contact_motion_body(
+                raw, HUMAN_TARGET_ID_BASE+int(raw['id']), profile['shape']))
+        return bodies
+
+    def _guard_tank_translations(self, players, tick_poses):
+        # Sweep against the same pre-drive roster so an earlier actor cannot
+        # tunnel past another before that actor gets its turn. Final contact
+        # constraints then use the accepted endpoints and incoming velocities.
+        bodies = self._contact_motion_bodies(players)
+        for body in bodies:
+            start = tick_poses.get(body['id'])
+            if start is not None:
+                body['x'], body['z'] = start[0], start[2]
+        by_id = dict((body['id'], body) for body in bodies)
+        for state in self._ordered_states():
+            start = tick_poses.get(state['id'])
+            if start is None:
+                continue
+            move = (state['x']-start[0], state['z']-start[2])
+            fraction = tank_collision.translation_fraction(by_id[state['id']], move, bodies)
+            state['x'], state['z'] = start[0]+move[0]*fraction, start[2]+move[1]*fraction
+
     def _apply_tank_contact_response(self, state, result, step,
                                      advance_push=True,
                                      apply_correction=True):
@@ -8257,6 +8295,12 @@ class BotRuntime(object):
                                       apply_correction else (0.0, 0.0))
         move_x = correction_x + (push_x * step if advance_push else 0.0)
         move_z = correction_z + (push_z * step if advance_push else 0.0)
+        requested_move = (move_x, move_z)
+        world_blocked = False
+        bodies = self._contact_motion_bodies(getattr(self, '_contact_players', ()))
+        fraction = tank_collision.translation_fraction(
+            self._contact_motion_body(state), (move_x, move_z), bodies)
+        move_x, move_z = move_x*fraction, move_z*fraction
         move_distance = math.sqrt(move_x * move_x + move_z * move_z)
         if move_distance > 0.0001:
             contact_yaw = math.atan2(move_x, move_z)
@@ -8286,17 +8330,31 @@ class BotRuntime(object):
             position = _position(state)
             candidate = (position[0] + move_x, position[1],
                          position[2] + move_z)
-            if (not self._turret_pose_is_clear(
+            if callable(self.motion_resolver):
+                sweep_step = max(float(step), 1.0 / 120.0)
+                world_blocked = self._passive_motion_status(
+                    state, position, contact_yaw, move_distance/sweep_step,
+                    self._descriptors.get(int(state['id'])), sweep_step,
+                    getattr(self, '_contact_now', 0.0), commit_enabled=False) != 'clear'
+            if (world_blocked or not self._turret_pose_is_clear(
                     state, position, yaw, candidate, yaw) or
                     not self._clear(
                         position, contact_yaw, contact_speed, None,
                         separation_distance, corridor_half_width)):
-                # Tank separation is not permission to cross static world
-                # geometry. Let the other hull keep its inverse-mass share.
+                # Requested separation is not proof of an accepted pose.
                 move_x = 0.0
                 move_z = 0.0
                 push_x = 0.0
                 push_z = 0.0
+        now = getattr(self, '_contact_now', None)
+        if (now is not None and requested_move != (move_x, move_z) and
+                now >= state.get('_contact_motion_log_time', 0.0)):
+            state['_contact_motion_log_time'] = now + 2.0
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] CONTACT move bot=%d alive=%s '
+                'requested=%s accepted=%s vehicle_fraction=%.6f native_world=%s\n' % (
+                    state['id'], state.get('alive', True), requested_move,
+                    (move_x, move_z), fraction, world_blocked))
         state['x'] += move_x
         state['z'] += move_z
         if not advance_push:
@@ -8715,6 +8773,8 @@ class BotRuntime(object):
         """Apply reciprocal chassis OBB response and report rams."""
         if self.native_motion:
             return []
+        self._contact_players = players or ()
+        self._contact_now = now
         # Apply the reciprocal share of the visible client's exact contact
         # even when its post-separation pose no longer overlaps this Bot.
         # Armour proof and damage receipts never gate physical momentum.
@@ -8736,12 +8796,11 @@ class BotRuntime(object):
                 if previous is not None and row[1] <= previous[1]:
                     continue
                 momentum = tank_contact_ledger.unseen(row, previous)
-                separation = tank_contact_ledger.unseen(row, previous, separation=True)
                 mass = max(float(state['mass']), 1.0)
                 delta = (momentum[0] / mass, momentum[1] / mass)
                 self._apply_tank_contact_response(
-                    state, {'delta_velocity': delta, 'correction': separation},
-                    0.0, advance_push=False, apply_correction=True)
+                    state, {'delta_velocity': delta, 'correction': (0.0, 0.0)},
+                    0.0, advance_push=False, apply_correction=False)
                 if previous is not None:
                     acknowledgements.remove(previous)
                 acknowledgements.append([player_id] + row[1:])
@@ -8809,7 +8868,7 @@ class BotRuntime(object):
                 # from the post-separation player pose. Bare law-test callers
                 # without that transport still resolve an ordinary pair.
                 'impulse': 'tank_pushes' not in raw,
-                'separation': not alive or 'tank_pushes' not in raw,
+                'position_fixed': not alive or 'tank_pushes' in raw,
                 # A dead human hull has no integrator at all: the visible
                 # client stops its drive step on death and this worker never
                 # owned the player pose.  Keep it as world geometry instead of
@@ -12823,6 +12882,8 @@ class BotRuntime(object):
         # settled Y/pitch/roll, not the previous suspension pose. Resolve the
         # complete roster only after every live body reaches that boundary.
         pending_ram_count = len(self._pending_ram_reports)
+        if not self.native_motion:
+            self._guard_tank_translations(players, tick_poses)
         self._pending_ram_reports.extend(
             self._resolve_tank_contacts(players, now, frame_step))
         # A Siege transition is immobile for its complete starting slice.

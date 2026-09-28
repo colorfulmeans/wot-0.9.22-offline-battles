@@ -4,9 +4,10 @@ Each visible human reports the opposite momentum of its contact impulse.
 The worker divides the unseen momentum by its canonical Bot mass.
 Cumulative checkpoints survive input/snapshot coalescing; retries are no-ops.
 The acknowledgement travels with the Bot velocity it produced, so prediction
-subtracts exactly the already-integrated share. Separation has the same owner:
-without its reciprocal checkpoint each render frame moves the player again
-against the same unchanged remote pose, effectively discarding the mass ratio.
+subtracts exactly the already-integrated share. The final two wire fields are
+retained but no longer generate or predict displacement: only an owner's
+accepted pose can clear occupied space. Acknowledgement means consumed input,
+not proof that static geometry permitted a positional request.
 """
 import math
 

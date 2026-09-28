@@ -20984,7 +20984,6 @@ class BattleRuntime(object):
                 if player_effective is not None else
                 self._ram_profile(descriptor))
             physical_velocity = None
-            physical_pose = None
             if record.get('kind') == 'bot':
                 physical_yaw = _number(physical_state.get('yaw'))
                 physical_speed = (_number(physical_state.get('speed'))
@@ -21000,17 +20999,9 @@ class BattleRuntime(object):
                     _number(physical_state.get('push_x')) + pending[0],
                     math.cos(physical_yaw) * physical_speed +
                     _number(physical_state.get('push_z')) + pending[1])
-                separation = tank_contact_ledger.pending(
-                    self._local_contact_pushes, int(record['network_id']),
-                    physical_state.get('contact_push_acks'),
-                    int(getattr(self.client, 'player_id', 0)), separation=True)
-                # Pose and acknowledgement must come from the same canonical
-                # sample. Render interpolation may still show an older pose;
-                # using it here replays an already acknowledged separation.
-                physical_pose = dict((key, _number(physical_state.get(key)))
-                                     for key in ('x', 'y', 'z', 'yaw', 'pitch', 'roll'))
-                physical_pose['x'] += separation[0]
-                physical_pose['z'] += separation[1]
+                # Pending momentum is reciprocal; pending space is not.
+                # A worker can reject displacement against a rock or another
+                # hull. Use the actual presented body, never a requested pose.
             params = (player_effective['physics'] if player_effective is not None else
                       (vehicle_physics.descriptor_contact_params(descriptor) if descriptor is not None else None))
             grip = (vehicle_physics.contact_push_decel(
@@ -21043,10 +21034,8 @@ class BattleRuntime(object):
                 # Historical armour receipts settle HP independently.
                 'impulse': True,
                 'physical_velocity': physical_velocity,
-                'physical_pose': physical_pose,
-                # A Bot wreck is shoved by the authority worker, so it keeps a
-                # real inverse mass here and the local hull only takes its own
-                # share of the separation.  A dead human hull has no
+                # Bot wreck momentum retains its real inverse mass. Their
+                # owner alone advances the pose. A dead human hull has no
                 # integrator in any process and stays world geometry.
                 'immovable': not alive and record.get('kind') != 'bot',
                 'x': x, 'y': y, 'z': z,
@@ -21065,8 +21054,12 @@ class BattleRuntime(object):
             })
         return result
 
-    def _resolve_local_tank_contacts(self, entity, position, yaw, dt):
+    def _resolve_local_tank_contacts(self, entity, position, yaw, dt,
+                                     start_position=None):
         """Apply chassis OBB separation without pushing a tank into walls."""
+        if start_position is None:
+            start_position = getattr(self, '_local_contact_start_position', None)
+        self._local_contact_start_position = None
         self._retry_native_ram_contact_proofs()
         own_mass = _number(
             (self._local_physics or {}).get('mass'), 25000.0)
@@ -21088,7 +21081,16 @@ class BattleRuntime(object):
             'vy': self._local_vertical_speed,
             'vz': math.cos(yaw) * self._local_speed + self._local_push_z,
         }
-        others = self._contact_tanks(position, own['shape'], dt)
+        travel = ((position[0]-start_position[0], position[2]-start_position[2])
+                  if start_position is not None else (0.0, 0.0))
+        others = self._contact_tanks(
+            position, own['shape'], dt, extra_reach=math.hypot(*travel))
+        if start_position is not None:
+            start_body = dict(own, x=start_position[0], z=start_position[2])
+            fraction = tank_collision.translation_fraction(start_body, travel, others)
+            position = (start_position[0]+travel[0]*fraction, position[1],
+                        start_position[2]+travel[1]*fraction)
+            own['x'], own['z'] = position[0], position[2]
         if self._local_physics is not None:
             own['traverse_speed'], own['traverse_torque'] = vehicle_physics.contact_traverse(
                 self._local_physics, own['shape'][0], self._local_speed,
@@ -21099,10 +21101,9 @@ class BattleRuntime(object):
         physical_others = []
         for other in others:
             physical = dict(other)
+            physical['position_fixed'] = True
             if physical.get('physical_velocity') is not None:
                 physical['vx'], physical['vz'] = physical['physical_velocity']
-            if physical.get('physical_pose') is not None:
-                physical.update(physical['physical_pose'])
             physical_others.append(physical)
         contact = tank_collision.resolve_tank(
             own, physical_others, now=now,
@@ -21145,8 +21146,7 @@ class BattleRuntime(object):
             if other.get('kind') == 'bot':
                 tank_contact_ledger.record(
                     self._local_contact_pushes, other['network_id'],
-                    (delta[0] * other['mass'], delta[1] * other['mass']),
-                    separation=solved[other_id]['correction'])
+                    (delta[0] * other['mass'], delta[1] * other['mass']))
         delta_x, delta_z = contact['delta_velocity']
         if ((delta_x or delta_z) and now >= self._local_contact_log_time):
             self._local_contact_log_time = now + 2.0
@@ -21177,6 +21177,8 @@ class BattleRuntime(object):
         correction_x, correction_z = contact['correction']
         move_x = correction_x + push_x * dt
         move_z = correction_z + push_z * dt
+        fraction = tank_collision.translation_fraction(own, (move_x, move_z), others)
+        move_x, move_z = move_x*fraction, move_z*fraction
         distance = math.sqrt(move_x * move_x + move_z * move_z)
         if distance > 0.0001:
             contact_yaw = math.atan2(move_x, move_z)
@@ -23129,6 +23131,7 @@ class BattleRuntime(object):
             not self._local_suspension_disabled)
         support_blocked = bool(self._local_support_rise_blocked)
         ram_resolved = False
+        self._local_contact_start_position = tick_pose
         slide_moved = False
         if suspension_active:
             # Current-tick suspension now owns Y/pitch/roll before secondary

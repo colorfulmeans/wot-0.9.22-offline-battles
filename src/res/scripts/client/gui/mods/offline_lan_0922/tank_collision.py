@@ -879,6 +879,65 @@ def grounded_inverse_masses(contact, first, second, inverse_a, inverse_b, dt):
     return inverse_a, inverse_b
 
 
+def translation_fraction(body, movement, others):
+    """Sweep one translated OBB, retaining only the existing contact slop.
+
+    An endpoint test can miss an entire intervening hull. Intersect the four
+    SAT time intervals instead. Existing overlap may escape or slide, but
+    cannot deepen or pass through the neighbour's centre plane.
+    """
+    mx, mz = movement
+    if abs(mx) + abs(mz) <= 1.0e-12:
+        return 1.0
+    shape = _tank_shape(body)
+    axes = _axes(body['yaw'])
+    body_radius = math.hypot(*shape[:2])
+    fraction = 1.0
+    for other in others:
+        if body['id'] == other['id']:
+            continue
+        peer_shape = _tank_shape(other)
+        reach = body_radius + math.hypot(*peer_shape[:2])
+        if (other['x'] < body['x']+min(0.0, mx)-reach or
+                other['x'] > body['x']+max(0.0, mx)+reach or
+                other['z'] < body['z']+min(0.0, mz)-reach or
+                other['z'] > body['z']+max(0.0, mz)+reach):
+            continue
+        if not vertical_overlap(
+                body.get('y'), shape, other.get('y'), peer_shape,
+                pitch_a=body.get('pitch', 0.0), roll_a=body.get('roll', 0.0),
+                pitch_b=other.get('pitch', 0.0), roll_b=other.get('roll', 0.0)):
+            continue
+        dx, dz = body['x']-other['x'], body['z']-other['z']
+        contact = _obb_overlap(body['x'], body['z'], body['yaw'], shape,
+                               other['x'], other['z'], other['yaw'], peer_shape)
+        contact = _owner_oriented_contact(contact, dx, dz, body['id'], other['id'])
+        if contact[2] >= POSITION_SLOP - 1.0e-9:
+            if mx*contact[0] + mz*contact[1] < -1.0e-9:
+                fraction = 0.0
+            continue
+        peer_axes = _axes(other['yaw'])
+        entry, leave = 0.0, 1.0
+        for nx, nz in axes + peer_axes:
+            axis_radius = sum(s[i]*abs(nx*a[i][0]+nz*a[i][1])
+                         for s, a in ((shape, axes), (peer_shape, peer_axes))
+                         for i in (0, 1)) - POSITION_SLOP
+            offset, travel = dx*nx + dz*nz, mx*nx + mz*nz
+            if abs(travel) <= 1.0e-12:
+                if abs(offset) >= axis_radius:
+                    entry = 2.0
+                    break
+                continue
+            first, last = sorted(((-axis_radius-offset)/travel,
+                                  (axis_radius-offset)/travel))
+            entry, leave = max(entry, first), min(leave, last)
+            if entry > leave:
+                break
+        if entry <= leave and leave >= 0.0:
+            fraction = min(fraction, max(0.0, entry))
+    return fraction
+
+
 def resolve_pairs(tanks, dt, anchor=None):
     """Resolve an authority's simultaneous contacts once per unordered pair.
 
@@ -900,10 +959,6 @@ def resolve_pairs(tanks, dt, anchor=None):
     for index, a in enumerate(bodies):
         for b in bodies[index+1:]:
             if anchor is not None and anchor not in (a['id'], b['id']):
-                continue
-            # Current human checkpoints own both reciprocal shares. Re-solving
-            # their post-response pose here would separate the same pair twice.
-            if not a.get('separation', True) or not b.get('separation', True):
                 continue
             if a.get('kind') == b.get('kind') == 'player':
                 continue
@@ -932,9 +987,17 @@ def resolve_pairs(tanks, dt, anchor=None):
             response = pair_response(hit, mobility_a, mobility_b,
                                      (a['vx'], a['vz']), (b['vx'], b['vz']),
                                      friction_inverse=(ia, ib))
+            # A replica's pose is an obstacle until its owner actually moves
+            # it. This constrains position only: reciprocal momentum still
+            # uses both real masses and is delivered exactly once.
+            position_response = pair_response(
+                hit, 0.0 if a.get('position_fixed') else mobility_a,
+                0.0 if b.get('position_fixed') else mobility_b,
+                (0.0, 0.0), (0.0, 0.0))
             apply_impulse = a.get('impulse', True) and b.get('impulse', True)
             for body, offset in ((a, 0), (b, 4)):
                 dx, dz, dvx, dvz = response[offset:offset+4]
+                dx, dz = position_response[offset:offset+2]
                 result = results[body['id']]
                 result['correction'] = (result['correction'][0]+dx, result['correction'][1]+dz)
                 body['x'] += dx

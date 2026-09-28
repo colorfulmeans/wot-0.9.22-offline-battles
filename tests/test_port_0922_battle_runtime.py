@@ -8016,9 +8016,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             local, (0.0, 0.0, 0.0), 0.0, 0.1)
         receipt = battle.local_ram_contact()
 
-        # The historical visible contact still proves damage, but the
-        # canonical Bot has already left. Do not repeat its physical shove.
-        self.assertEqual(0.0, corrected[2])
+        # Damage preserves the observed pre-response pose. A newer canonical
+        # sample cannot make the still-presented hull permeable meanwhile.
+        self.assertLessEqual(corrected[2], -0.4899)
         self.assertEqual((11, 37), (
             receipt['bot_id'], receipt['bot_state_revision']))
         self.assertEqual(123000, receipt['presentation_time_us'])
@@ -8033,7 +8033,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual((0.21, -0.13), (
             receipt['pitch'], receipt['roll']))
         self.assertGreater(receipt['vz'], 0.0)
-        self.assertEqual(10.0, battle._local_speed)
+        self.assertEqual(5.0, battle._local_speed)
         player_inward = battle._native_ram_vehicle_armor.call_args_list[
             0].args[3]
         bot_inward = battle._native_ram_vehicle_armor.call_args_list[

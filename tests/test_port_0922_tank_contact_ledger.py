@@ -9,7 +9,7 @@ import test_port_0922_bot_runtime as bot_tests
 
 
 class ContactLedgerTests(unittest.TestCase):
-    def test_late_bot_pose_cannot_repeat_the_players_mass_share(self):
+    def test_pending_separation_cannot_open_space_inside_a_presented_bot(self):
         import types
         from unittest import mock
         import test_port_0922_battle_runtime as t
@@ -36,20 +36,21 @@ class ContactLedgerTests(unittest.TestCase):
                     battle._baked_pose_safe = lambda *args: True
                     battle._poll_local_ram_contact_episodes = lambda *args: None
                     position = (0.,0.,0.)
+                    # The old version treated this unaccepted request as
+                    # space, even when a world collision held the receiver.
+                    battle._local_contact_pushes[11] = [11,1,0.,0.,0.,20.]
                     with mock.patch('sys.stdout'):
                         # A 200-ms worker/snapshot gap contains many render
-                        # frames. The same overlap gets only one mass split.
+                        # frames, but the displayed hull remains occupied.
                         for unused in range(int(.2*hz)):
                             position = battle._resolve_local_tank_contacts(local,position,0.,1./hz)
-                        expected = -.99*bot_mass/(100575.+bot_mass)
-                        self.assertAlmostEqual(expected,position[2],places=5)
+                        self.assertLessEqual(position[2], -.9899)
                         checkpoint = battle._local_contact_pushes[11]
-                        # The adapter already ignores sub-0.1-mm moves.
-                        self.assertAlmostEqual(-position[2]*100575./bot_mass,checkpoint[5],places=4)
-                        state['z'] += checkpoint[5]
+                        self.assertEqual(20.,checkpoint[5])
+                        state['z'] += 20.
                         state['contact_push_acks'] = [[battle.client.player_id]+checkpoint[1:]]
                         # ACK and canonical pose arrive before the renderer
-                        # catches up. An old displayed pose cannot replay it.
+                        # catches up. They do not clear its occupied space.
                         after = battle._resolve_local_tank_contacts(local,position,0.,1./hz)
                     self.assertAlmostEqual(position[2],after[2],places=5)
 
@@ -133,7 +134,7 @@ class WorkerContactLedgerTests(unittest.TestCase):
         runtime._resolve_tank_contacts([raw],1.,.1)
         self.assertGreater(state['z'],0.)
 
-    def test_worker_applies_separation_once_and_still_respects_world_geometry(self):
+    def test_worker_does_not_teleport_for_a_remote_separation_checkpoint(self):
         for clear in (True,False):
             runtime = self._runtime()
             runtime.states.pop(12)
@@ -143,12 +144,12 @@ class WorkerContactLedgerTests(unittest.TestCase):
             runtime._player_collision_profile = lambda raw: {
                 'mass':100575.,'shape':tank_collision.DEFAULT_SHAPE,'ram_profile':{},
                 'physics':runtime._physics_params_for(11)}
-            raw=dict(id=1,team=1,x=0.,y=0.,z=-6.,yaw=0.,speed=0.,
+            raw=dict(id=1,team=1,x=0.,y=0.,z=-60.,yaw=0.,speed=0.,
                      tank_pushes=[[11,2,0.,0.,0.,.5]])
             runtime._resolve_tank_contacts([raw],1.,.1)
-            self.assertAlmostEqual(.5 if clear else 0.,state['z'])
+            self.assertAlmostEqual(0.,state['z'])
             runtime._resolve_tank_contacts([raw],1.1,.1)
-            self.assertAlmostEqual(.5 if clear else 0.,state['z'])
+            self.assertAlmostEqual(0.,state['z'])
             self.assertEqual([[1,2,0.,0.,0.,.5]],state['contact_push_acks'])
 
     def test_engine_and_mass_survive_visible_to_worker_contact(self):

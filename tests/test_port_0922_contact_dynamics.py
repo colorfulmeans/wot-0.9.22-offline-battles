@@ -30,7 +30,7 @@ class GroundContactTests(unittest.TestCase):
                          for i in range(count)]
                 for peer in peers:
                     peer.update(network_id=peer['id'], kind='bot')
-                battle._contact_tanks = lambda *args: list(reversed(peers)) if reverse else peers
+                battle._contact_tanks = lambda *args, **kw: list(reversed(peers)) if reverse else peers
                 battle._motion_is_clear = lambda *args, **kw: True
                 battle._baked_pose_safe = lambda *args: True
                 battle._poll_local_ram_contact_episodes = lambda *args: None

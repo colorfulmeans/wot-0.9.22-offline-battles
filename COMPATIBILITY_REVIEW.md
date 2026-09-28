@@ -6579,6 +6579,10 @@ or completion of the original bridge-sticking report.
 
 ### September 28 bridge hang and reciprocal separation (044826)
 
+The positional-checkpoint conclusion below was contradicted by report
+115952 and is superseded by the following section. Its synthetic tests
+assumed the worker accepted every requested displacement.
+
 Report `20260928-044826-c53da28eff15` confirms `test-20260928-7bc3842`
 on #1513. At the `37_caucasus` bridge, KV-5 repeatedly has one missing track
 column, no fitted support plane, roll around 0.55-0.65 and zero angular
@@ -6634,3 +6638,70 @@ plus engine-power inputs through actual worker receipt application. All 146
 client files compile under CPython 2.7.18; #1513 inspection and ABI audit pass.
 Actual bridge geometry, KV-5/light-tank pushing feel and Windows timing still
 require gameplay acceptance; automated results do not establish retail parity.
+
+### September 28 occupied-space regression (115952)
+
+Report `20260928-115952-c7d54bb27c55` consistently identifies
+`test-20260928-50c1e6a` across launcher, server and both clients. The first
+`37_caucasus` round uses KV-5, 100575 kg. The reported player/Bot/wreck
+penetration contradicts the previous positional-ledger acceptance claim.
+Logs include separation-only worker checkpoints increasing while the
+transferred velocity is zero; they do not prove that the requested space
+was cleared. Three-body contact and native obstruction were absent from
+the earlier delayed-pose regression.
+
+The visible adapter previously added all unacknowledged positional requests
+to a canonical Bot pose, even while its renderer still displayed the old
+hull. The worker could reject those requests and acknowledge them anyway.
+Its contact displacement used planning rays rather than the injected native
+hull-motion resolver, and checked no intervening vehicles. Finally, current
+human checkpoints disabled the complete worker pair instead of only the
+already-delivered impulse.
+
+Physical momentum still uses descriptor mass, engine-derived drive velocity,
+track hold, and the cumulative receipt/ACK path. Position is constrained
+separately: the remote body occupies its presented/accepted pose until its
+owner moves it. The visible client sends no positional requests, and the
+worker consumes momentum without teleporting for the final two retained
+wire fields. A current player remains a positional obstacle on the worker;
+the checkpoint disables only duplicate impulse application. No second
+writer of Bot presentation or authority is introduced.
+
+A four-axis swept OBB interval test now bounds drive, residual shove and
+separation travel against other hulls, including wrecks. It permits escape
+from existing overlap and tangential travel, uses the existing one-centimetre
+contact slop, and cannot skip a vehicle merely because its endpoint is clear.
+Both integrators retain incoming velocity for the mass-weighted impact solve.
+Worker contact motion also calls the existing passive native hull resolver
+with the actual descriptor, hull attitude, movement direction and exact
+distance, without active-drive crush. Existing world, detached-turret and
+terrain guards remain in place. Bounded diagnostics record requested and
+accepted contact moves and whether native geometry rejected them.
+
+Four regression scenarios reproduce nine failing cases on the old runtime:
+unaccepted separation at two mass ratios and three render rates, a wreck
+crossing another vehicle, native obstruction missed by planning rays, and a
+live player omitted from worker separation. They pass after the change.
+Additional coverage checks one second of player driving into live/wreck
+bodies at 25/60/144 Hz, opposing drive endpoints, repeated wreck/Bot pushes
+against a wall, oblique/long sweeps, vertical separation, escape directions,
+and unchanged reciprocal mass-weighted momentum.
+
+Bridge evidence is improved but does not establish retail parity. At
+11:51:36 the native contact is a real vertical side face (normal Y=0), and
+by 11:51:38 the player is airborne at Y=-4.234 with vertical speed -8.654.
+At 11:57:47 the one-sided support is still rotating (roll velocity 1.24767),
+and by 11:57:49 the vehicle is airborne at Y=-6.787 with vertical speed
+-12.642. The samples show departure rather than indefinite attachment.
+Two-second diagnostics cannot determine whether the brief visible side
+contact has the exact retail duration. This follow-up does not change
+suspension, gravity, support retention or tipping coefficients.
+
+Validation runs 1,464 focused checks with one environment-dependent skip
+and no failures, excluding the same six previously reproduced navigation
+failures. The complete 528-test Bot module remains red (26 failures and
+14 errors); the existing gameplay gate remains at seven failures and two
+errors. Full-suite success is not claimed. All 146 client files compile
+under CPython 2.7.18, and the exact installed #1513 inspection and ABI audit
+pass. Actual crowded KV-5 pushing, native map obstruction and presentation
+timing remain Windows gameplay acceptance boundaries for the test package.
