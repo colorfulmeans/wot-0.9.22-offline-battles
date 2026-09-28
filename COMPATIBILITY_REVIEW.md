@@ -6755,3 +6755,46 @@ navigation failures. All 146 client files compile under CPython 2.7.18; exact
 #1513 inspection and ABI audit pass. Existing full-suite failures are not
 claimed fixed. Actual Windows KV-5 first-impact HP/timing still requires the
 user's gameplay acceptance of the matching test package.
+
+### September 28 repeat wreck pushing (134227)
+
+Report `20260928-134227-c7b301f7839c` runs `test-20260928-faedc54` in
+all roles. KV-5 remains 100575 kg and M41 Bulldog remains 23496 kg. The
+first enemy contact at 13:40:59 produces 382 RAM damage; M41 dies on the
+next impact at 13:41:07. Later visible contact diagnostics still assign
+that wreck `(3.5360, -5.5498)` horizontal velocity at 13:41:35, despite the
+reported stationary obstruction. This is not a lost-mass conversion.
+
+`SnapshotSync._upsert` emitted the first dead state, then accepted only pose
+targets for subsequent wreck snapshots. Its render chase therefore moved
+the corpse while the visible battle record retained the death-frame
+`push_x`, `push_z` and `contact_push_acks`. A visible non-authority's Bot
+runtime has no simulated Bot states, so `_contact_tanks` reads exactly that
+stale record. Spent impulses then remain pending and stopped wrecks appear
+to keep moving away, suppressing later reciprocal contact impulses.
+
+The dead-state branch now emits a state-only update when the canonical
+state changes. Velocity and acknowledgements advance together, including
+an acknowledgement at an unchanged position when geometry rejected motion.
+The render chase remains the only displayed-pose writer. Identical settled
+states emit nothing, nested ledgers are copied for comparison, destruction
+is not reissued, and snapshot sequence/round fences remain unchanged. The
+same state transport covers retained Bot and human corpses; it does not
+assign a new pose authority to human wrecks or change their existing
+immovable-owner policy. The reported Bot corpse retains original descriptor
+mass, existing track resistance, world guards and the worker integrator.
+
+Three new snapshot tests and a visible-to-worker repeated-shove test produce
+five failures on the unchanged parent. All pass after the fix. The integrated
+case sends three consecutive shove/settle/ack cycles for 23496-kg and
+100575-kg wrecks, verifies original mass, repeatable displacement, stopped
+velocity, one-time momentum consumption and no RAM HP on corpses. A lighter
+wreck travels farther under the same incoming KV-5 speed. Existing heavy,
+equal-mass, medium and light engine/mass pushing checks also pass.
+
+Validation runs 1,471 focused checks plus 42 snapshot/mass checks, one
+environment-dependent skip and no failures. The same six previously
+reproduced navigation failures remain excluded. All 146 client files
+compile under CPython 2.7.18. The correction adds no native API or physical
+coefficient; actual Windows repeat pushing remains the gameplay acceptance
+boundary for the test package.

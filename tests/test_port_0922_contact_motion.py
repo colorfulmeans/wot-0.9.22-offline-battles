@@ -84,6 +84,88 @@ class WorkerSolidMotionTests(unittest.TestCase):
         runtime._clear = lambda *args: True
         return runtime
 
+    def test_repeated_wreck_shoves_reconcile_velocity_and_ack_at_original_mass(self):
+        import copy
+        import types
+        import test_port_0922_battle_runtime as t
+        travel = {}
+        for wreck_mass in (23496.0, 100575.0):
+            worker = self.prepare()
+            worker.states.pop(12)
+            wreck = worker.states[11]
+            wreck.update(alive=False, health=0, mass=wreck_mass, grounded_once=True,
+                         contact_push_acks=[])
+            worker._physics_params_for(11)['mass'] = wreck_mass
+            worker._player_collision_profile = lambda raw: dict(
+                mass=100575., shape=contact.DEFAULT_SHAPE, ram_profile={},
+                physics=worker._physics_params_for(11))
+            native = t._runtime()
+            battle = t.BattleRuntime(native)
+            battle.client = t._Client()
+            battle._avatar = native.bigworld.avatar
+            battle._bots = types.SimpleNamespace(states={})
+            battle._local_physics = dict(t._effective_params_snapshot()['physics'], mass=100575.)
+            local = t._Vehicle(10, t._Descriptor(), t._Vector(), (0,0,0), {'health':500})
+            remote = t._Vehicle(11, t._Descriptor(), t._Vector(), (0,0,0), {'health':0})
+            native.bigworld.entities[11] = remote
+            initial = copy.deepcopy(wreck)
+            battle._records = {'bot:11': dict(engine_id=11, network_id=11,
+                kind='bot', local=False, ready=True, tombstone=False,
+                state=initial, presented_pose=dict(initial))}
+            battle._collision_shape = lambda unused: contact.DEFAULT_SHAPE
+            battle._motion_is_clear = lambda *args, **kw: True
+            battle._baked_pose_safe = lambda *args: True
+            battle._materialize_record = mock.Mock()
+            battle._fallback_postmortem_viewpoint = mock.Mock()
+            battle._apply_record_pose = mock.Mock()
+            sync = t.battle_runtime_module.SnapshotSync(battle.client.player_id)
+            sync.manifest({'round_id':5, 'bots':[initial]})
+            def receive(event):
+                if event['type'] == 'destroy':
+                    battle._destroy_entity(event)
+                elif event['type'] == 'update':
+                    battle._update_entity(event)
+            sync.on_event = receive
+            sync.snapshot({'round_id':5, 'server_tick':1, 'bots':[initial]})
+            player = dict(id=battle.client.player_id, alive=True, x=100., y=0.,
+                          z=100., yaw=0., speed=0., team=1, tank_pushes=[])
+            travelled = []
+            with mock.patch('sys.stdout'):
+                for cycle in range(3):
+                    record = battle._records['bot:11']
+                    position = (record['presented_pose']['x'], 0.,
+                                record['presented_pose']['z']-6.99)
+                    bodies = battle._contact_tanks(position, contact.DEFAULT_SHAPE)
+                    self.assertEqual(wreck_mass, bodies[0]['mass'])
+                    self.assertFalse(bodies[0]['immovable'])
+                    self.assertEqual((0.,0.), bodies[0]['physical_velocity'])
+                    battle._local_speed = 6.
+                    battle._local_push_x = battle._local_push_z = 0.
+                    battle._resolve_local_tank_contacts(local, position, 0., .1)
+                    row = list(battle._local_contact_pushes[11])
+                    player['tank_pushes'] = [row]
+                    before = wreck['z']
+                    worker._resolve_tank_contacts([player], cycle*10.+1., .1)
+                    self.assertEqual([[player['id']]+row[1:]], wreck['contact_push_acks'])
+                    # Let native track resistance settle the wreck. Repeated
+                    # delivery of the same checkpoint must not add momentum.
+                    for tick in range(100):
+                        worker._resolve_tank_contacts([player], cycle*10.+1.1+tick*.1, .1)
+                    self.assertEqual((0.,0.), (wreck['push_x'],wreck['push_z']))
+                    travelled.append(wreck['z']-before)
+                    sync.snapshot({'round_id':5, 'server_tick':cycle+2,
+                                   'bots':[copy.deepcopy(wreck)]})
+                    state = record['state']
+                    self.assertEqual(wreck['contact_push_acks'], state['contact_push_acks'])
+                    self.assertEqual((0.,0.), (state['push_x'],state['push_z']))
+                    self.assertFalse(state['alive'])
+                    self.assertEqual({}, battle._local_ram_receipts)
+            self.assertTrue(all(distance > 0. for distance in travelled), travelled)
+            for distance in travelled[1:]:
+                self.assertAlmostEqual(travelled[0], distance, places=5)
+            travel[wreck_mass] = travelled[0]
+        self.assertGreater(travel[23496.], travel[100575.])
+
     def test_a_shoved_wreck_cannot_cross_a_third_vehicle(self):
         runtime = self.prepare()
         state = runtime.states[11]

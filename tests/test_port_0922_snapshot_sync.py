@@ -1241,6 +1241,57 @@ class SnapshotSyncTests(unittest.TestCase):
         self.assertGreater(events[0]['pose']['x'], 0.0)
         self.assertLess(events[0]['pose']['x'], 3.0)
 
+    def test_wreck_momentum_and_acknowledgements_advance_without_a_pose_write(self):
+        for kind, collection in (('bot', 'bots'), ('player', 'players')):
+            with self.subTest(kind=kind):
+                sync = self.module.SnapshotSync(clock=lambda: self.now[0])
+                initial = dict(player(7), mass=23496.0, push_x=0.0, push_z=0.0,
+                               contact_push_acks=[])
+                sync.manifest({'round_id': 1, collection: [initial]})
+                dead = dict(initial, alive=False, push_z=5.0,
+                            contact_push_acks=[[1, 1, 0., 117480., 0., 0.]])
+                events = sync.snapshot({'round_id': 1, 'server_tick': 1, collection: [dead]})
+                self.assertEqual(['destroy'], [event['type'] for event in events])
+                stopped = dict(dead, push_z=0.0,
+                               contact_push_acks=[[1, 2, 0., 140976., 0., 0.]])
+                events = sync.snapshot({'round_id': 1, 'server_tick': 2, collection: [stopped]})
+                self.assertEqual(['update'], [event['type'] for event in events])
+                self.assertIsNone(events[0]['pose'])
+                self.assertEqual(0.0, events[0]['state']['push_z'])
+                self.assertEqual(stopped['contact_push_acks'], events[0]['state']['contact_push_acks'])
+                self.assertEqual(23496.0, events[0]['state']['mass'])
+                self.assertFalse(events[0]['state']['alive'])
+                self.assertEqual([], sync.snapshot({'round_id': 1, 'server_tick': 3, collection: [stopped]}))
+                self.assertEqual([], sync.advance(1.0))
+
+    def test_wreck_state_comparison_does_not_alias_a_reused_ack_list(self):
+        dead = dict(player(7, alive=False), push_z=0.0,
+                    contact_push_acks=[[1, 1, 0., 10., 0., 0.]])
+        self.sync.manifest({'round_id': 1, 'bots': [dead]})
+        self.sync.snapshot({'round_id': 1, 'server_tick': 1, 'bots': [dead]})
+        dead['contact_push_acks'][0][1] = 2
+        dead['contact_push_acks'][0][3] = 20.0
+        events = self.sync.snapshot({'round_id': 1, 'server_tick': 2, 'bots': [dead]})
+        self.assertEqual(['update'], [event['type'] for event in events])
+        self.assertEqual(2, events[0]['state']['contact_push_acks'][0][1])
+
+    def test_changed_wreck_state_keeps_render_chase_as_the_only_pose_writer(self):
+        dead = dict(player(7, alive=False), push_z=2.0, contact_push_acks=[])
+        self.sync.manifest({'round_id': 1, 'bots': [dead]})
+        self.sync.snapshot({'round_id': 1, 'server_tick': 1, 'bots': [dead]})
+        moved = dict(dead, x=3.0, push_z=1.0)
+        self.now[0] = 0.2
+        events = self.sync.snapshot({'round_id': 1, 'server_tick': 2, 'bots': [moved]})
+        self.assertEqual(['update'], [event['type'] for event in events])
+        self.assertIsNone(events[0]['pose'])
+        self.assertEqual(0.0, self.sync._entities['bot:7']['current']['x'])
+        self.now[0] += 0.05
+        events = self.sync.advance(self.now[0])
+        self.assertEqual(['update'], [event['type'] for event in events])
+        self.assertTrue(events[0]['interpolated'])
+        self.assertGreater(events[0]['pose']['x'], 0.0)
+        self.assertLess(events[0]['pose']['x'], 3.0)
+
     def test_a_settled_wreck_costs_nothing_per_rendered_frame(self):
         self.sync.manifest({'round_id': 1, 'bots': [player(7)]})
         self.sync.snapshot({'round_id': 1, 'server_tick': 1,

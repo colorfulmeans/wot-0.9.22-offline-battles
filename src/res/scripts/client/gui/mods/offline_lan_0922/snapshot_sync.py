@@ -2,6 +2,7 @@ from __future__ import print_function
 
 """Engine-free translation of LAN v5 snapshots into entity lifecycle data."""
 
+import copy
 import math
 
 
@@ -396,6 +397,7 @@ class SnapshotSync(object):
         if not alive:
             if not record['dead']:
                 record['dead'] = True
+                record['wreck_state'] = copy.deepcopy(state)
                 record['wreck_settled'] = True
                 if pose is not None:
                     record['current'] = dict(pose)
@@ -411,6 +413,17 @@ class SnapshotSync(object):
                 record['target'] = dict(pose)
                 record['target_time'] = now
                 record['timed_prediction'] = False
+            # A dead hull still has canonical velocity, mass and contact
+            # acknowledgements. Pose-only chase left its consumer at the
+            # death checkpoint: already-spent momentum then looked pending
+            # forever and suppressed the next shove. Advance state atomically
+            # while advance() remains the sole writer of its displayed pose.
+            # Copy the nested ledgers for comparison; callers may reuse them.
+            if state != record.get('wreck_state'):
+                record['wreck_state'] = copy.deepcopy(state)
+                self._emit({'type': 'update', 'entity': key, 'kind': kind,
+                            'id': state['id'], 'state': _copy_state(state),
+                            'pose': None, 'remote': True}, output)
             return
         if record['dead']:
             return
