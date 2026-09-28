@@ -7560,7 +7560,7 @@ is changed by this patch; native profiling/optimization remains separate.
 Validation: 1,181 protocol/codec/entity/battle/direction/bridge tests pass with
 one unavailable-interpreter skip; 160 server/lineage/contact/snapshot tests pass.
 An independent CPython 2.7.18 run compiles all 146 client modules and matches
-Python 3.11 rollover wire rows exactly. Installed-client inspection passes.
+Python 3.12.14 rollover wire rows exactly. Installed-client inspection passes.
 These are logic and ABI checks, not a claim of new native gameplay acceptance.
 The additional 617-case Bot/physics run has 26 failures and 14 errors; rerunning
 all 35 affected methods with the parent server/codec/client modules reproduces
