@@ -1178,7 +1178,8 @@ def _destructible_rotation_interval_bbox(bbox, half_angle, pivot_offset=0.0):
 
 
 def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
-                                pitch=0.0, roll=0.0, previous_contacts=None):
+                                pitch=0.0, roll=0.0, previous_contacts=None,
+                                translation=(0.0, 0.0)):
     """Permit only reduced penetration of a face already inside this body.
 
     A replacement can appear inside an occupied hull. Probing its enclosing
@@ -1194,7 +1195,7 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
 
     def departing(collision):
         point, normal = collision[:2]
-        if abs(normal.y) > 0.2 or abs(pose_y[1]) < 0.1:
+        if normal.y < -0.2 or abs(pose_y[1]) < 0.1:
             return False
         dx, dy, dz = (point.x - position[0], point.y - position[1],
                       point.z - position[2])
@@ -1202,12 +1203,8 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
         y = (dy - x * pose_y[0] - z * pose_y[2]) / pose_y[1]
         inside = all(low[i] - 0.001 <= value <= high[i] + 0.001
                      for i, value in enumerate((x, y, z)))
-        plane = dx * normal.x + dy * normal.y + dz * normal.z
-        # Use the exposed face. A backface enclosing the centre is not
-        # evidence for a safe escape from this side of the object.
-        if plane >= 0.0:
-            return False
         before, after, swept = [], [], []
+        plane_travel = translation[0]*normal.x + translation[1]*normal.z
         for cx in (low[0], high[0]):
             for cy in (low[1], high[1]):
                 for cz in (low[2], high[2]):
@@ -1217,10 +1214,12 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
                                         cy * pose_y[1] + cz * pose_y[2])
                     before.append(a * cosine + b * sine + height)
                     after.append(a * math.cos(end_yaw) +
-                                 b * math.sin(end_yaw) + height)
+                                 b * math.sin(end_yaw) + height + plane_travel)
                     swept.append(_trig_interval_extrema(
-                        a, b, start_yaw, end_yaw)[0] + height)
-        improves = (min(after) > min(before) + 1.0e-8 and
+                        a, b, start_yaw, end_yaw)[0] + height + min(0.0, plane_travel))
+        support_slide = (world_collision._drivable_surface(collision) and
+                         min(after) >= min(before) - 1.0e-8)
+        improves = ((min(after) > min(before) + 1.0e-8 or support_slide) and
                     min(swept) >= min(before) - 1.0e-8)
         if not improves or inside:
             return improves
@@ -19514,7 +19513,7 @@ class BattleRuntime(object):
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
             pitch=None, roll=None, record_local=True, pivot_offset=0.0,
-            contact_trace=None, include_static=False):
+            contact_trace=None, include_static=False, translation=(0.0, 0.0)):
         """Recast every rotating body slice against the live native BSP.
 
         The catalog owns each destructible's original shape.  Once a structure
@@ -19599,21 +19598,27 @@ class BattleRuntime(object):
                 sweep_bbox, abs(yaw_delta) * 0.5 / float(steps), pivot_offset)
             slice_position = vehicle_physics.track_pivot_position(
                 position, start_yaw, slice_yaw, pivot_offset)
+            slice_position = (slice_position[0]+translation[0]*lower,
+                              slice_position[1], slice_position[2]+translation[1]*lower)
+            slice_travel = (translation[0]/steps, translation[1]/steps)
+            travel_length = math.hypot(*slice_travel)
             sweep_descriptor = _destructible_world_sweep_descriptor(
                 descriptor, interval_bbox)
             departing = None if pivot_offset else _rotation_departing_contact(
-                position, bbox, float(start_yaw) + yaw_delta * lower,
+                slice_position if travel_length else position,
+                bbox, float(start_yaw) + yaw_delta * lower,
                 float(start_yaw) + yaw_delta * upper, pitch, roll,
-                read_previous_contacts)
-            for probe_speed in (1.0e-6, -1.0e-6):
+                read_previous_contacts, slice_travel)
+            for probe_speed in ((travel_length,) if travel_length else (1.0e-6, -1.0e-6)):
                 trace = {}
                 world_status = world_collision.check_horizontal_collision(
                     self._runtime.bigworld, self._runtime.math,
                     self._avatar.spaceID, self._vector(slice_position),
-                    slice_yaw, probe_speed, sweep_descriptor, False, 0.0,
+                    slice_yaw, probe_speed, sweep_descriptor, False, 1.0 if travel_length else 0.0,
                     True, False, None, commit_enabled=False,
                     pitch=sweep_pitch, roll=sweep_roll,
-                    trace=trace, exact_footprint=True,
+                    trace=trace, exact_footprint=not travel_length,
+                    motion_yaw=math.atan2(*slice_travel) if travel_length else None,
                     departing_contact=departing)
                 if isinstance(world_status, bool):
                     world_status = 'hard' if world_status else 'clear'
@@ -19840,10 +19845,12 @@ class BattleRuntime(object):
 
     def _resolve_bot_rotation(
             self, bot_id, position, start_yaw, end_yaw, descriptor, dt, now,
-            rotation_speed_cap, pivot_offset=0.0):
+            rotation_speed_cap, pivot_offset=0.0, translation=(0.0, 0.0)):
         """Keep a Bot's complete pivot outside live and damaged structures."""
         end_position = vehicle_physics.track_pivot_position(
             position, start_yaw, end_yaw, pivot_offset)
+        end_position = (end_position[0]+translation[0], end_position[1],
+                        end_position[2]+translation[1])
         bot_state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
         bot_state.pop('_rotation_contact_trace', None)
         pitch = _number(bot_state.get(
@@ -19899,7 +19906,7 @@ class BattleRuntime(object):
             position, start_yaw, end_yaw, descriptor,
             pitch=pitch, roll=roll, record_local=False,
             pivot_offset=pivot_offset, contact_trace=contact_trace,
-            include_static=not bot_state.get('alive', True))
+            include_static=not bot_state.get('alive', True), translation=translation)
         if not clear:
             self._bot_motion_kinds[int(bot_id)] = 'world'
             bot_state['_rotation_contact_trace'] = contact_trace
@@ -21122,9 +21129,11 @@ class BattleRuntime(object):
                   if start_position is not None else (0.0, 0.0))
         others = self._contact_tanks(
             position, own['shape'], dt, extra_reach=math.hypot(*travel))
+        drive_fraction = 1.0
         if start_position is not None:
             start_body = dict(own, x=start_position[0], z=start_position[2])
             fraction = tank_collision.translation_fraction(start_body, travel, others)
+            drive_fraction = fraction
             position = (start_position[0]+travel[0]*fraction, position[1],
                         start_position[2]+travel[1]*fraction)
             own['x'], own['z'] = position[0], position[2]
@@ -21220,8 +21229,18 @@ class BattleRuntime(object):
         correction_x, correction_z = contact['correction']
         move_x = correction_x + push_x * dt
         move_z = correction_z + push_z * dt
-        fraction = tank_collision.translation_fraction(own, (move_x, move_z), others)
-        move_x, move_z = move_x*fraction, move_z*fraction
+        guarded_position = position
+        if (start_position is not None and
+                (drive_fraction < 1.0 or delta_x or delta_z or push_x or push_z)):
+            # The first sweep finds the contact for the impulse solver. It
+            # must not separately consume the drive displacement: a diagonal
+            # response may only be legal when its forward and lateral parts
+            # move together. Re-sweep the complete post-contact translation.
+            position = (start_position[0], position[1], start_position[2])
+            own['x'], own['z'] = position[0], position[2]
+            move_x += travel[0] + math.sin(yaw) * applied_forward * dt
+            move_z += travel[1] + math.cos(yaw) * applied_forward * dt
+        move_x, move_z = tank_collision.slide_translation(own, (move_x, move_z), others)
         distance = math.sqrt(move_x * move_x + move_z * move_z)
         if distance > 0.0001:
             contact_yaw = math.atan2(move_x, move_z)
@@ -21237,6 +21256,7 @@ class BattleRuntime(object):
                      not arena_recovery)):
                 push_x = 0.0
                 push_z = 0.0
+                position = guarded_position
             else:
                 position = candidate
         self._local_push_x, self._local_push_z = push_x, push_z

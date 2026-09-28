@@ -12,6 +12,79 @@ from test_port_0922_tank_contact_ledger import ledger, bot_state_codec
 
 
 class AngularContactTests(unittest.TestCase):
+    def test_visible_contact_resweeps_drive_and_impulse_as_one_vector(self):
+        native=vt._runtime();battle=vt.BattleRuntime(native)
+        battle.client=vt._Client();battle._avatar=native.bigworld.avatar
+        local=vt._Vehicle(10,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':500})
+        shape=c.DEFAULT_SHAPE
+        peer=_tank(2,(shape[0]+shape[1])/math.sqrt(2.)+shape[0]-.01,0.)
+        peer.update(network_id=2)
+        battle._collision_shape=lambda unused:shape
+        battle._contact_tanks=lambda *args,**kwargs:[peer]
+        battle._motion_is_clear=lambda *args,**kwargs:True
+        battle._baked_pose_safe=lambda *args:True
+        battle._poll_local_ram_contact_episodes=lambda *args:None
+        battle._local_speed=2.
+        travel=.2/math.sqrt(2.)
+        with mock.patch('sys.stdout'):
+            accepted=battle._resolve_local_tank_contacts(
+                local,(travel,0.,travel),math.pi/4.,.1,(0.,0.,0.))
+        self.assertAlmostEqual(0.,accepted[0])
+        tangent=(battle._local_speed*math.cos(math.pi/4.)+battle._local_push_z)*.1
+        self.assertAlmostEqual(tangent,accepted[2])
+        self.assertGreater(accepted[2],travel*.5)
+
+    def test_combined_wreck_world_sweep_covers_every_translated_yaw_slice(self):
+        native=vt._runtime();battle=vt.BattleRuntime(native)
+        battle._avatar=native.bigworld.avatar
+        battle._destructibles=types.SimpleNamespace(
+            native_replacement_bsp_active=lambda:False,
+            _vehicle_body_bbox=lambda unused:((-1.7,-.4,-3.5),(1.7,1.8,3.2),None))
+        for blocked in (False,True):
+            with mock.patch.object(vt.battle_runtime_module.world_collision,
+                    'check_horizontal_collision',
+                    side_effect=['clear','hard' if blocked else 'clear']) as probe:
+                self.assertEqual(not blocked,battle._native_world_rotation_is_clear(
+                    (2.,3.,4.),0.,.16,vt._Descriptor(),include_static=True,
+                    translation=(.2,.4),record_local=False))
+            self.assertEqual(2,probe.call_count)
+            for index,call in enumerate(probe.call_args_list):
+                self.assertAlmostEqual(2.+index*.1,call.args[3].x)
+                self.assertAlmostEqual(4.+index*.2,call.args[3].z)
+                self.assertAlmostEqual(math.hypot(.1,.2),call.args[5])
+                self.assertEqual(1.,call.args[8])
+                self.assertAlmostEqual(math.atan2(.1,.2),call.kwargs['motion_yaw'])
+                self.assertFalse(call.kwargs['exact_footprint'])
+                self.assertFalse(call.kwargs['commit_enabled'])
+
+    def test_oblique_contact_retains_tangent_without_crossing_a_second_hull(self):
+        moving = _tank(1,0.,0.)
+        wall = _tank(2,2.99,0.)
+        movement = (.2,1.)
+        self.assertEqual(0., c.translation_fraction(moving,movement,[wall]))
+        self.assertEqual((0.,1.), c.slide_translation(moving,movement,[wall]))
+        corner = _tank(3,0.,7.2)
+        accepted = c.slide_translation(moving,movement,[wall,corner])
+        self.assertAlmostEqual(0.,accepted[0])
+        self.assertLess(accepted[1],.22)
+        for f in range(101):
+            at = dict(moving,x=accepted[0]*f/100.,z=accepted[1]*f/100.)
+            for peer in (wall,corner):
+                overlap = c._obb_overlap(at['x'],at['z'],at['yaw'],at['shape'],
+                    peer['x'],peer['z'],peer['yaw'],peer['shape'])[2]
+                self.assertLessEqual(overlap,c.POSITION_SLOP+1.e-8)
+
+    def test_wreck_corner_sweep_admits_coupled_turn_not_translation_into_pusher(self):
+        wreck = _tank(1,0.,0.,mass=25000.)
+        pusher = _tank(2,1.5316034433,5.8740801617,yaw=2.4772432636,mass=100575.)
+        move = (.2255501756,-.2342856616)
+        turn = -.06348706
+        self.assertEqual(0.,c.translation_fraction(wreck,move,[pusher]))
+        self.assertEqual(1.,c.rotation_fraction((0,0,0),0.,turn,wreck['shape'],
+                                              [pusher],translation=move))
+        self.assertLess(c.rotation_fraction((0,0,0),0.,-turn,wreck['shape'],
+                                           [pusher],translation=move),.01)
+
     def test_wreck_rotation_checks_static_world_before_any_structure_breaks(self):
         native=vt._runtime();battle=vt.BattleRuntime(native)
         battle._avatar=native.bigworld.avatar
@@ -87,6 +160,24 @@ class WreckOwnerTests(unittest.TestCase):
     tearDown = bt.ShovedWreckTests.tearDown
     _runtime = bt.ShovedWreckTests._runtime
     _wreck = bt.ShovedWreckTests._wreck
+
+    def test_worker_commits_coupled_wreck_turn_only_after_whole_world_sweep(self):
+        for blocked in (False,True):
+            worker=self._runtime();worker.states.pop(12)
+            state=self._wreck(worker)
+            state.update(x=0.,y=0.,z=0.,yaw=0.,collision_shape=(1.5,3.5,-.8,2.))
+            worker._contact_motion_bodies=lambda unused: [
+                _tank(2,1.5316034433,5.8740801617,yaw=2.4772432636,mass=100575.)]
+            worker.motion_resolver=mock.Mock(return_value='clear')
+            worker._wreck_rotation_probe=mock.Mock(return_value=not blocked)
+            move=(.2255501756,-.2342856616)
+            self.assertEqual(not blocked,worker._try_wreck_swept_pose(state,move,-.6348706,.1))
+            self.assertEqual(move,worker._wreck_rotation_probe.call_args.kwargs['translation'])
+            if blocked:
+                self.assertEqual((0.,0.,0.),(state['x'],state['z'],state['yaw']))
+            else:
+                self.assertEqual(move,(state['x'],state['z']))
+                self.assertAlmostEqual(-.06348706,state['yaw'])
 
     def test_wire_only_bot_state_uses_installed_mass_for_pending_momentum(self):
         worker=self._runtime();worker.states.pop(12)

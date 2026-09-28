@@ -528,20 +528,23 @@ def _obb_overlap(x_a, z_a, yaw_a, shape_a,
 
 
 def rotation_fraction(position, yaw, candidate_yaw, shape, others,
-                      pivot_offset=0.0):
+                      pivot_offset=0.0, translation=(0.0, 0.0)):
     """Project kinematic traverse onto the first legal chassis contact.
 
-    Translation and its mass/track-force response run separately. Traverse
-    cannot bypass that response by turning a corner into the other hull and
-    asking positional separation to move it for free. Existing overlap may
-    decrease; neither player nor Bot identity changes this geometry rule.
+    Powered traverse uses zero translation. A passive wreck can supply its
+    simultaneous centre travel so the complete rigid pose is constrained.
+    Traverse cannot bypass the mass/track-force response by turning a corner
+    into the other hull and asking positional separation to move it for free.
+    Existing overlap may decrease; neither player nor Bot identity changes
+    this geometry rule.
     Sample the whole swept angle at less than half the existing penetration
     slop per corner, then refine the first blocked interval. End poses alone
     miss a hull swept through during a late callback.
     """
     delta = (candidate_yaw-yaw+math.pi) % (2.0*math.pi)-math.pi
     radius = math.hypot(shape[0], shape[1])
-    travel = abs(delta)*(radius+abs(pivot_offset))
+    linear_travel = math.hypot(*translation)
+    travel = abs(delta)*(radius+abs(pivot_offset)) + linear_travel
     if travel <= 1e-9:
         return 1.0
     samples = max(1, int(math.ceil(travel/(POSITION_SLOP*0.5))))
@@ -552,15 +555,15 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others,
             where = (other['x'], other.get('y', 0.0), other['z'])
         other_shape = _tank_shape(other)
         reach = (radius+math.hypot(other_shape[0], other_shape[1]) +
-                 abs(pivot_offset)*abs(delta))
+                 abs(pivot_offset)*abs(delta) + linear_travel)
         if ((position[0]-where[0])**2+(position[2]-where[2])**2 > reach*reach or
                 not vertical_overlap(position[1], shape, where[1], other_shape)):
             continue
         other_yaw = other.get('yaw', 0.0)
         def depth(at):
             angle = yaw+delta*at
-            px = position[0]+pivot_offset*(math.cos(yaw)-math.cos(angle))
-            pz = position[2]+pivot_offset*(math.sin(angle)-math.sin(yaw))
+            px = position[0]+pivot_offset*(math.cos(yaw)-math.cos(angle))+translation[0]*at
+            pz = position[2]+pivot_offset*(math.sin(angle)-math.sin(yaw))+translation[1]*at
             hit = _obb_overlap(px, pz, angle, shape,
                               where[0], where[2], other_yaw, other_shape)
             return hit[2]
@@ -574,7 +577,7 @@ def rotation_fraction(position, yaw, candidate_yaw, shape, others,
                      math.hypot(position[0]-where[0], position[2]-where[2]))
         def first_blocked(lo, hi, dl, dh):
             span = (hi-lo)*fraction/float(samples)
-            if max(dl, dh)+lipschitz*abs(delta)*span*.5 <= allowed+1e-9:
+            if max(dl, dh)+(lipschitz*abs(delta)+linear_travel)*span*.5 <= allowed+1e-9:
                 return None
             if hi-lo == 1:
                 return (lo, hi) if dh > allowed+1e-9 else None
@@ -948,6 +951,50 @@ def translation_fraction(body, movement, others):
         if entry <= leave and leave >= 0.0:
             fraction = min(fraction, max(0.0, entry))
     return fraction
+
+
+def slide_translation(body, movement, others):
+    """Retain tangential travel when another owned hull blocks the normal.
+
+    Replica positions stay solid until their owner moves them. Truncating
+    the entire vector at first contact also cancels the unconstrained tangent
+    and wedges oblique pushes. Project only the entering remainder, re-sweep
+    every projected segment, and leave momentum to the reciprocal solver.
+    """
+    current = dict(body)
+    remaining = tuple(movement)
+    total = [0.0, 0.0]
+    for unused in range(4):
+        fraction = translation_fraction(current, remaining, others)
+        accepted = (remaining[0]*fraction, remaining[1]*fraction)
+        for i, key in enumerate(('x', 'z')):
+            current[key] += accepted[i]
+            total[i] += accepted[i]
+        if fraction >= 1.0:
+            break
+        remaining = (remaining[0]*(1.0-fraction), remaining[1]*(1.0-fraction))
+        changed = False
+        for other in others:
+            if current['id'] == other['id'] or not vertical_overlap(
+                    current.get('y'), _tank_shape(current), other.get('y'),
+                    _tank_shape(other), pitch_a=current.get('pitch', 0.0),
+                    roll_a=current.get('roll', 0.0), pitch_b=other.get('pitch', 0.0),
+                    roll_b=other.get('roll', 0.0)):
+                continue
+            contact = _obb_overlap(current['x'], current['z'], current['yaw'],
+                _tank_shape(current), other['x'], other['z'], other['yaw'], _tank_shape(other))
+            contact = _owner_oriented_contact(contact, current['x']-other['x'],
+                current['z']-other['z'], current['id'], other['id'])
+            if contact[2] < POSITION_SLOP-1.0e-7:
+                continue
+            entering = remaining[0]*contact[0]+remaining[1]*contact[1]
+            if entering < -1.0e-9:
+                remaining = (remaining[0]-entering*contact[0],
+                             remaining[1]-entering*contact[1])
+                changed = True
+        if not changed or math.hypot(*remaining) <= 1.0e-9:
+            break
+    return tuple(total)
 
 
 def obb_vertices(body):

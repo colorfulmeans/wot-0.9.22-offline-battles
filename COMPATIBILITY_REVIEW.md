@@ -6992,3 +6992,58 @@ The broader 528-case Bot run has the same 26 baseline failures and 14 errors,
 plus one final map-boundary guard regression. Retaining that last rectangle
 guard with navigation hazards disabled resolves the new case; its final
 rerun is included in the 69 passing checks above.
+
+### September 28 report 164103: oblique pushing and occupied bridge faces
+
+Report `20260928-164103-4bfcb01dfef0` runs `test-20260928-78a74fe`
+on `37_caucasus`. The worker receives repeated momentum for wreck 29
+(23,380 kg), but records accepted displacement `(0, 0)` with
+`vehicle_fraction=1` and `native_world=True`. After the initial motion it
+stays near `(-19.76053, 0.496, 112.73646)`. This proves a world-motion veto,
+not missing momentum or a globally missing wreck yaw field. The same report
+has a 100,575 kg KV-5 against the 34,080 kg STA-1. Logged mass and engine
+power are present; their presence alone does not prove correct native pushing.
+
+Contact integration previously clipped engine travel before adding the
+forward/lateral impulse components. At oblique contact, separately constraining
+those components can reject a legal combined displacement. Visible and worker
+owners now re-sweep their complete post-contact travel. The vehicle constraint
+retains an unblocked tangent after first contact, re-sweeping each projected
+segment against every nearby hull. Remote replicas remain position-fixed;
+their physical mass and reciprocal momentum still belong to their owner.
+No player multiplier, extra engine force, mass change or friction coefficient
+change is introduced. First-impact armour and ram HP remain separate.
+
+A passive wreck can pivot away from a corner while its centre moves towards
+the pusher. Its translation and yaw now have a combined swept-pose admission
+path. The complete trajectory must pass vehicle, arena, detached-turret,
+catalog and native-world checks before either pose component commits. The
+native adapter sweeps each enclosing angular slice along its centre travel;
+a missing rotation adapter falls back to the existing guarded path. The
+original installed mass and footprint inertia continue to determine response.
+
+The native departing-face predicate also required the hull centre to have
+already crossed an exposed bridge side. A partly overhanging track can occupy
+that face while the centre is still over the deck, making departure impossible.
+Departure now requires a native face inside the original mounted chassis/hull
+volume and non-increasing penetration, without that centre-side requirement.
+An already occupied upward support face may admit tangential movement. Later
+hits can reuse only a witnessed coincident plane; new walls, inward travel and
+ceilings still block. The exact installed bridge mesh
+`env043_CaucasusBridge_part1.primitives_processed` contains the side/top
+geometry in the reported area. An offline raycast using an approximate hull
+clears some tested attitudes but still blocks others; it is not an exact
+native reproduction or proof that all bridge-edge traps are solved. Rejected
+contact diagnostics now include the authoritative pose and world trace.
+
+Validation adds oblique tangent/corner constraints, the visible post-impulse
+travel invariant, coupled wreck yaw, native translated-slice call arguments,
+atomic world vetoes and partly overhanging finite-deck departure with a backing
+wall. The 1,473-case subsystem selection passes with one environment skip and
+the same six known navigation exclusions; 74 wreck/snapshot/mass checks pass.
+The complete 528-case Bot module has the same 26 failure occurrences and 14
+errors as the prior baseline, and the 27-case gameplay gate retains seven
+failures and two errors. All 146 client sources compile under CPython 2.7.18;
+the installed #1513 inspection and ABI audit pass. No native API is added.
+Actual delayed pushing, native bridge departure and wreck presentation still
+require Windows gameplay acceptance of the replacement package.

@@ -8274,7 +8274,12 @@ class BotRuntime(object):
                 continue
             move = (state['x']-start[0], state['z']-start[2])
             fraction = tank_collision.translation_fraction(by_id[state['id']], move, bodies)
-            state['x'], state['z'] = start[0]+move[0]*fraction, start[2]+move[1]*fraction
+            if fraction < 1.0 or state.get('push_x') or state.get('push_z'):
+                state['_contact_drive_sweep'] = (start, move)
+            else:
+                state.pop('_contact_drive_sweep', None)
+            accepted = tank_collision.slide_translation(by_id[state['id']], move, bodies)
+            state['x'], state['z'] = start[0]+accepted[0], start[2]+accepted[1]
 
     @staticmethod
     def _retained_contact_speed(speed, forced):
@@ -8315,12 +8320,20 @@ class BotRuntime(object):
         if advance_forward:
             move_x += math.sin(yaw) * applied_forward * step
             move_z += math.cos(yaw) * applied_forward * step
+        if advance_push and not advance_forward:
+            drive_sweep = state.pop('_contact_drive_sweep', None)
+            if drive_sweep is not None and state.get('alive', True):
+                start, drive_move = drive_sweep
+                state['x'], state['z'] = start[0], start[2]
+                move_x += drive_move[0] + math.sin(yaw) * applied_forward * step
+                move_z += drive_move[1] + math.cos(yaw) * applied_forward * step
         requested_move = (move_x, move_z)
         world_blocked = False
         bodies = self._contact_motion_bodies(getattr(self, '_contact_players', ()))
         fraction = tank_collision.translation_fraction(
             self._contact_motion_body(state), (move_x, move_z), bodies)
-        move_x, move_z = move_x*fraction, move_z*fraction
+        move_x, move_z = tank_collision.slide_translation(
+            self._contact_motion_body(state), (move_x, move_z), bodies)
         move_distance = math.sqrt(move_x * move_x + move_z * move_z)
         if move_distance > 0.0001:
             contact_yaw = math.atan2(move_x, move_z)
@@ -8386,11 +8399,18 @@ class BotRuntime(object):
             state['_contact_motion_log_time'] = now + 2.0
             sys.stdout.write(
                 '[Offline LAN 0.9.22] CONTACT move bot=%d alive=%s '
-                'requested=%s accepted=%s vehicle_fraction=%.6f native_world=%s\n' % (
+                'requested=%s accepted=%s vehicle_fraction=%.6f native_world=%s '
+                'pose=%s yaw=%.5f pitch=%.5f roll=%.5f world_trace=%s\n' % (
                     state['id'], state.get('alive', True), requested_move,
-                    (move_x, move_z), fraction, world_blocked))
+                    (move_x, move_z), fraction, world_blocked, _position(state),
+                    state['yaw'], state.get('pitch', 0.0), state.get('roll', 0.0),
+                    state.get('_world_contact_trace') if world_blocked else None))
         state['x'] += move_x
         state['z'] += move_z
+        if advance_forward and state.get('_contact_drive_sweep') is not None:
+            start, drive_move = state['_contact_drive_sweep']
+            state['_contact_drive_sweep'] = (start,
+                (drive_move[0]+move_x, drive_move[1]+move_z))
         if not advance_push:
             state['push_x'] = push_x
             state['push_z'] = push_z
@@ -8455,6 +8475,50 @@ class BotRuntime(object):
         state['yaw'] = math.atan2(math.sin(candidate), math.cos(candidate))
         state['push_yaw'] = omega
 
+    def _try_wreck_swept_pose(self, state, movement, omega, step):
+        """Admit translation and yaw together, with one vehicle constraint.
+
+        A corner shove can pivot away while its centre approaches the pusher.
+        Testing that centre translation first cancels a legal rigid-body step
+        and then suppresses its turn. Neither component may commit unless the
+        whole vehicle sweep and the world/arena/turret gates all admit it.
+        """
+        if (not omega or not math.hypot(*movement) or step <= 0.0 or
+                not callable(self._wreck_rotation_probe)):
+            return False
+        start, yaw = _position(state), state['yaw']
+        others = [body for body in self._contact_motion_bodies(
+            getattr(self, '_contact_players', ())) if body['id'] != state['id']]
+        fraction = tank_collision.rotation_fraction(start, yaw, yaw+omega*step,
+            state['collision_shape'], others, translation=movement)
+        if fraction <= 0.0:
+            return False
+        move_x, move_z = movement[0]*fraction, movement[1]*fraction
+        end = (start[0]+move_x, start[1], start[2]+move_z)
+        end_yaw = yaw+omega*step*fraction
+        if (not self._baked_pose_progress_clear(state, start, yaw, end, end_yaw) or
+                not self._turret_pose_is_clear(state, start, yaw, end, end_yaw)):
+            return False
+        descriptor = self._descriptors.get(int(state['id']))
+        now = getattr(self, '_contact_now', 0.0)
+        if callable(self.motion_resolver):
+            if self._passive_motion_status(state, start, math.atan2(move_x, move_z),
+                    math.hypot(move_x, move_z)/step, descriptor, step, now,
+                    commit_enabled=False) != 'clear':
+                return False
+        else:
+            # Keep narrow adapters on their established translation gate.
+            return False
+        if not self._wreck_rotation_probe(
+                state['id'], start, yaw, end_yaw, descriptor, step, now, 0.0,
+                translation=(move_x, move_z)):
+            return False
+        state['x'], state['z'] = end[0], end[2]
+        state['yaw'] = math.atan2(math.sin(end_yaw), math.cos(end_yaw))
+        if fraction < 1.0:
+            state['push_yaw'] = 0.0
+        return True
+
     def _apply_wreck_contact_response(self, state, result, step):
         """Advance a passive hull through the same terrain and world guards."""
         if not callable(self._physics_ground_probe):
@@ -8472,9 +8536,12 @@ class BotRuntime(object):
                 state.get('airborne', False))
         motion = dict(result, delta_velocity=(0.0, 0.0), delta_yaw=0.0)
         state['push_x'], state['push_z'], state['push_yaw'] = vx, vz, omega
-        self._apply_tank_contact_response(state, motion, step,
-            apply_friction=False, apply_correction=bool(vx or vz or omega))
-        self._advance_wreck_yaw(state, motion, step)
+        correction = result['correction'] if vx or vz or omega else (0.0, 0.0)
+        movement = (vx*step+correction[0], vz*step+correction[1])
+        if not self._try_wreck_swept_pose(state, movement, omega, step):
+            self._apply_tank_contact_response(state, motion, step,
+                apply_friction=False, apply_correction=bool(vx or vz or omega))
+            self._advance_wreck_yaw(state, motion, step)
         # Run even when translation/rotation stopped: a falling wreck has no
         # live drive tick to finish its flight or landing on its behalf.
         if self._update_vertical_motion(state, step, before, old_yaw):
@@ -9007,6 +9074,7 @@ class BotRuntime(object):
                         self._apply_tank_contact_response(state, idle, step)
                     else:
                         self._apply_wreck_contact_response(state, idle, step)
+                state.pop('_contact_drive_sweep', None)
                 continue
             if not state_alive and not (
                     self._wreck_is_active(state) or

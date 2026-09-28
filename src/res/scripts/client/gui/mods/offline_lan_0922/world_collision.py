@@ -250,31 +250,62 @@ def _vehicle_motion_extents(descriptor):
 	return max(abs(left), abs(right)), back, front
 
 
-def _translation_departing_contact(pos, yaw, bounds, pose_y, dx, dz):
+def _vehicle_motion_heights(descriptor):
+	hull_box = _vehicle_hull_bbox(descriptor)
+	if hull_box is None:
+		return 0.6, 1.6
+	chassis = _descriptor_value(descriptor, 'chassis')
+	chassis_box = _descriptor_value(chassis, 'hitTester').bbox
+	hull_position = _descriptor_value(chassis, 'hullPosition')
+	return (min(float(chassis_box[0][1]), float(hull_box[0][1])+float(hull_position[1])),
+		max(float(chassis_box[1][1]), float(hull_box[1][1])+float(hull_position[1])))
+
+
+def _translation_departing_contact(pos, yaw, bounds, pose_y, dx, dz,
+		height_bounds=(0.6, 1.6)):
 	"""Release only an existing wall plane whose penetration is decreasing.
 
-	The hit must be inside the original occupied hull, with its centre on the
-	outside of the exposed face. Each later native surface is still recast;
-	a new wall, an inward step, or a backface cannot borrow this exception.
+	The hit must be inside the original occupied hull. Its centre need not
+	have crossed the face: a partly overhanging track already overlaps a
+	bridge side while the centre is still above the deck. Each later native
+	surface is recast; a new wall or an inward step cannot use this exception.
 	"""
 	import math
 	left, right, back, front = bounds
 	sine, cosine = math.sin(yaw), math.cos(yaw)
+	planes = []
 
 	def departing(collision):
 		point, normal = collision[:2]
-		if abs(normal.y) > 0.2 or abs(pose_y[1]) < 0.1:
+		if normal.y < -0.2 or abs(pose_y[1]) < 0.1:
 			return False
-		if dx * normal.x + dz * normal.z <= 1.0e-8:
+		outward = dx * normal.x + dz * normal.z
+		# Existing upward support may be crossed tangentially without deeper
+		# penetration. Its finite edge must not become a horizontal wall as
+		# suspension tips the hull. New terrain and every later wall still
+		# have to pass the ordinary sweep.
+		if (outward < -1.0e-8 or
+				(outward <= 1.0e-8 and not _drivable_surface(collision))):
 			return False
 		px, py, pz = point.x - pos.x, point.y - pos.y, point.z - pos.z
-		if px * normal.x + py * normal.y + pz * normal.z >= -1.0e-8:
-			return False
 		x, z = px * cosine - pz * sine, px * sine + pz * cosine
 		y = (py - x * pose_y[0] - z * pose_y[2]) / pose_y[1]
-		return (left - 0.001 <= x <= right + 0.001 and
+		inside = (left - 0.001 <= x <= right + 0.001 and
 			-back - 0.001 <= z <= front + 0.001 and
-			0.6 - 0.001 <= y <= 1.6 + 0.001)
+			height_bounds[0] - 0.001 <= y <= height_bounds[1] + 0.001)
+		if inside:
+			planes.append((point, normal))
+			return True
+		# A destination perimeter can cross the same finite face just beyond
+		# the old footprint. Only a prior native hit inside that footprint
+		# proves this is the already occupied plane, rather than a new wall.
+		for old_point, old_normal in planes:
+			alignment = (normal.x*old_normal.x + normal.y*old_normal.y + normal.z*old_normal.z)
+			distance = ((point.x-old_point.x)*normal.x +
+				(point.y-old_point.y)*normal.y + (point.z-old_point.z)*normal.z)
+			if alignment >= 0.9999 and abs(distance) <= 0.001:
+				return True
+		return False
 	return departing
 
 
@@ -719,7 +750,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		if departing_contact is None and _ahead > 0.0:
 			departing_contact = _translation_departing_contact(
 				pos, yaw, (left, right, hl_back, hl_front), pose_y,
-				travel_x, travel_z)
+				travel_x, travel_z, _vehicle_motion_heights(td))
 		ground_plane = (
 			float(pos.x), float(pos.y) + 1.6 * pose_y[1], float(pos.z),
 			cos_y * pose_y[0] + sin_y * pose_y[2],

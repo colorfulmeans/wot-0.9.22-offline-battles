@@ -983,16 +983,17 @@ class WorldCollisionTests(unittest.TestCase):
                     1, _Vector(), 0.0, direction * 2.0, descriptor, False, 0.04,
                     motion_yaw=0.0 if direction > 0 else math.pi))
 
-    def test_departing_wall_does_not_hide_inward_corner_or_backface(self):
+    def test_departing_wall_retains_inward_corner_and_unwitnessed_face(self):
         departing = world_collision._translation_departing_contact(
             _Vector(), 0.0, (-1.5, 1.5, 3.0, 3.0),
             (0.0, 1.0, 0.0), -0.4, 0.1)
         self.assertTrue(departing((_Vector(1.4, 0.6, 0), _Vector(-1, 0, 0))))
         self.assertFalse(departing((_Vector(0, 0.6, 2.9), _Vector(0, 0, -1))))
-        # A face beyond the old body and an enclosing backface cannot prove
-        # an existing shallow overlap, even when motion follows its normal.
+        # A new face beyond the old body has no existing-overlap proof.
         self.assertFalse(departing((_Vector(1.6, 0.6, 0), _Vector(-1, 0, 0))))
-        self.assertFalse(departing((_Vector(-1.4, 0.6, 0), _Vector(-1, 0, 0))))
+        # 164103: the centre can still be on the bridge while the occupied
+        # track overlaps its edge. Outward motion reduces that overlap too.
+        self.assertTrue(departing((_Vector(-1.4, 0.6, 0), _Vector(-1, 0, 0))))
         scene = types.SimpleNamespace(wg_collideSegment=mock.Mock(side_effect=(
             (_Vector(1.4, 0.6, 0), _Vector(-1, 0, 0), 0),
             (_Vector(0, 0.6, 2.9), _Vector(0, 0, -1), 0))))
@@ -1002,6 +1003,40 @@ class WorldCollisionTests(unittest.TestCase):
                 collision_filter=None, departing_contact=departing)
         self.assertEqual(2, scene.wg_collideSegment.call_count)
         self.assertEqual(-1.0, hit[1].z)
+
+    def test_partly_overhanging_hull_can_leave_finite_deck_but_not_cross_new_wall(self):
+        descriptor = _Strict1513Component(hull=_Strict1513Component(
+            hitTester=_Strict1513Component(bbox=((-1.5, 0., -3.), (1.5, 2., 3.)))))
+        for backing in (False, True):
+            def collide(space, start, end, mask, *unused):
+                hits = []
+                for axis, at, normal in (('x', 0., _Vector(1, 0, 0)),
+                                         ('y', 1.1093, _Vector(0, 1, 0))):
+                    delta = getattr(end, axis)-getattr(start, axis)
+                    if abs(delta) < 1.e-9:
+                        continue
+                    fraction = (at-getattr(start, axis))/delta
+                    if not 0. <= fraction <= 1.:
+                        continue
+                    point = start+(end-start).scale(fraction)
+                    if ((axis == 'x' and .86 <= point.y <= 1.1093) or
+                            (axis == 'y' and point.x <= 0.)):
+                        hits.append((fraction, point, normal))
+                if backing and end.x != start.x:
+                    fraction = (1.25-start.x)/(end.x-start.x)
+                    if 0. <= fraction <= 1.:
+                        hits.append((fraction, start+(end-start).scale(fraction), _Vector(-1,0,0)))
+                if hits:
+                    unused, point, normal = min(hits, key=lambda row: row[0])
+                    return point, normal, 108
+            scene = types.SimpleNamespace(wg_collideSegment=collide)
+            with self.subTest(backing=backing), mock.patch.object(
+                    world_collision, 'prepare_horizontal_collision_filter', return_value=None), \
+                    mock.patch.object(world_collision, '_destroy_and_recast', return_value=False):
+                self.assertEqual(backing, world_collision.check_horizontal_collision(
+                    scene, types.SimpleNamespace(Vector3=_Vector), 1,
+                    _Vector(-.3,.496,0), 0., 1., descriptor, False, .1,
+                    motion_yaw=math.pi/2))
 
     def test_translated_perimeter_retains_body_pitch_and_roll(self):
         descriptor = _Strict1513Component(hull=_Strict1513Component(
