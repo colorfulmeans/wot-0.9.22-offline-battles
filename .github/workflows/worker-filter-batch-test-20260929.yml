@@ -1,0 +1,38 @@
+name: Build environment for 0.9.6 worker filter-batch test
+on:
+  push:
+    branches: [test/096-worker-filter-batch-20260929]
+    paths: [.github/workflows/worker-filter-batch-test-20260929.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: worker-filter-batch-test-20260929
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/test/096-worker-filter-batch-20260929'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export pinned compiler and baseline tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir build-environment
+          git archive 3fdd95a28fcc18fe38499b2c66a4cbbab34ac0f3 | gzip > build-environment/baseline-source.tar.gz
+          docker run --rm --platform linux/amd64 -v "$PWD/build-environment:/out" python:2.7.18@sha256:cfa62318c459b1fde9e0841c619906d15ada5910d625176e24bf692cf8a2601d sh -c 'python --version 2> /out/compiler-version.txt; tar -czf /out/compiler-runtime.tar.gz -C /usr/local bin/python2.7 lib/python2.7 lib/libpython2.7.so.1.0'
+          git rev-parse HEAD > build-environment/recipe-commit.txt
+          cd build-environment
+          sha256sum *.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-filter-batch-build-environment-${{ github.run_id }}
+          path: build-environment/
+          if-no-files-found: error
+          retention-days: 7
