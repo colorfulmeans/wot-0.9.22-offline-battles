@@ -4,6 +4,7 @@ on:
     branches: [test/096-worker-pose-reuse-20260929]
     paths:
       - .github/workflows/worker-pose-reuse-test-20260929.yml
+      - tools/compile_worker_pose_test_20260929.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -28,18 +29,17 @@ jobs:
           run-id: 36480836532
           github-token: ${{ github.token }}
           path: baseline-release
-      - name: Verify baseline release and apply exact reviewed two-file patch
+      - name: Verify pinned release and apply only the exact two-file patch
         shell: python
         run: |
-          import hashlib, pathlib, subprocess, zipfile
+          import hashlib, io, pathlib, subprocess, zipfile
           base = '3fdd95a28fcc18fe38499b2c66a4cbbab34ac0f3'
           subprocess.run(['git','merge-base','--is-ancestor',base,'HEAD'],check=True)
           allowed = {'tools/worker_pose_reuse_20260929.patch', 'tools/compile_worker_pose_test_20260929.py', '.github/workflows/worker-pose-reuse-test-20260929.yml'}
           changed = set(subprocess.check_output(['git','diff','--name-only',base,'HEAD','--'],text=True).splitlines())
-          assert changed <= allowed, sorted(changed - allowed)
+          assert changed <= allowed, sorted(changed-allowed)
           release = pathlib.Path('baseline-release/wot-0.9.22-offline-battles-0.9.6-Windows-x64.zip')
           assert hashlib.sha256(release.read_bytes()).hexdigest() == '57cfc178ebabca97b12914e8c9ecbe411e9e60995e6517d70607d7f861283eba'
-          import io
           with zipfile.ZipFile(release) as full:
               with zipfile.ZipFile(io.BytesIO(full.read('_internal/client/0.9.22.zip'))) as client:
                   mods = [p for p in client.namelist() if p.endswith('.wotmod')]
@@ -54,34 +54,21 @@ jobs:
           assert hashlib.sha256(patch.read_bytes()).hexdigest() == '57b4468d8aaf7e1ef30183c10f6769ce985b0e3d8979a131f78ba2ae4c8e84b2'
           subprocess.run(['git','apply','--check',str(patch)],check=True)
           subprocess.run(['git','apply',str(patch)],check=True)
-          changed_runtime = set(subprocess.check_output(['git','diff','--name-only','--'],text=True).splitlines())
-          assert changed_runtime == {str(root/'vehicle_physics.py'),str(root/'bot_runtime.py')}, changed_runtime
-      - name: Compile real Python 2.7 bytecode and compare compiled physics behavior
+          runtime_changes = set(subprocess.check_output(['git','diff','--name-only','--'],text=True).splitlines())
+          assert runtime_changes == {str(root/'vehicle_physics.py'),str(root/'bot_runtime.py')}, runtime_changes
+      - name: Compile and test original versus candidate Python 2.7 code objects
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p compiled-worker-pose-test
-          cat > compiled-worker-pose-test/bootstrap_test.py <<'PY'
-          import runpy
-          import sys
-          import types
-          # Python 2 requires ancestor packages even when the leaf module is mocked.
-          for name in ('gui', 'gui.mods', 'gui.mods.offline_lan_0922'):
-              package = types.ModuleType(name)
-              package.__path__ = []
-              sys.modules[name] = package
-              if '.' in name:
-                  parent, leaf = name.rsplit('.', 1)
-                  setattr(sys.modules[parent], leaf, package)
-          runpy.run_path('tools/compile_worker_pose_test_20260929.py', run_name='__main__')
-          PY
           docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
             -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT \
             python:2.7.18@sha256:cfa62318c459b1fde9e0841c619906d15ada5910d625176e24bf692cf8a2601d \
-            python compiled-worker-pose-test/bootstrap_test.py \
+            python tools/compile_worker_pose_test_20260929.py \
             2>&1 | tee compiled-worker-pose-test/compiler-test.log
           cp tools/worker_pose_reuse_20260929.patch compiled-worker-pose-test/
           cp tools/compile_worker_pose_test_20260929.py compiled-worker-pose-test/
+          cp launcher/core.py compiled-worker-pose-test/launcher_core_baseline.py
           git rev-parse HEAD > compiled-worker-pose-test/source-recipe-commit.txt
       - uses: actions/upload-artifact@v4
         with:
