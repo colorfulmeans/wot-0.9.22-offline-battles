@@ -1,0 +1,177 @@
+--- a/src/res/scripts/client/gui/mods/offline_lan_0922/vehicle_physics.py
++++ b/src/res/scripts/client/gui/mods/offline_lan_0922/vehicle_physics.py
+@@ -1125,6 +1125,29 @@
+ 		params.get('pseudo_contacts', ()), position, yaw, pitch, roll)
+ 
+ 
++def suspension_sample_pose(params, position, yaw, pitch=0.0, roll=0.0):
++	"""Build geometry for one unchanged pre-solve pose, never terrain results.
++
++	The caller must rebuild after any translation, attitude or descriptor
++	change. No native query, contact band, support memory or solver step is
++	skipped. Offsets also retain Y, which the sampling and plane-fit adapters
++	previously recomputed independently.
++	"""
++	x, unused_y, z = map(float, position)
++	sine, cosine = math.sin(float(yaw)), math.cos(float(yaw))
++	rotation = _suspension_rotation(pitch, roll)
++	spring_offsets = tuple(_suspension_point_offset(point, rotation)
++		for point in params['springs'])
++	pseudo_offsets = tuple(_suspension_point_offset(point, rotation)
++		for point in params.get('pseudo_contacts', ()))
++	def world_points(offsets):
++		return tuple((x + cosine * ox + sine * oz,
++			z - sine * ox + cosine * oz) for ox, unused_oy, oz in offsets)
++	return {'spring_offsets': spring_offsets, 'pseudo_offsets': pseudo_offsets,
++		'spring_points': world_points(spring_offsets),
++		'pseudo_points': world_points(pseudo_offsets)}
++
++
+ def ground_normal(gradient_x, gradient_z):
+ 	'''Return the upward unit normal of ``y = gx*x + gz*z + c``.'''
+ 	try:
+@@ -1353,11 +1376,14 @@
+ 
+ 
+ def suspension_world_ground_plane(params, ground_heights, position, yaw,
+-		maximum_residual=None, pitch=0.0, roll=0.0):
++		maximum_residual=None, pitch=0.0, roll=0.0, sample_offsets=None):
+ 	'''Fit one suspension plane in stable world-space coordinates.'''
+-	rotation = _suspension_rotation(pitch, roll)
+-	points = tuple(_suspension_point_offset(spring, rotation)
+-		for spring in params['springs'])
++	if sample_offsets is None:
++		rotation = _suspension_rotation(pitch, roll)
++		points = tuple(_suspension_point_offset(spring, rotation)
++			for spring in params['springs'])
++	else:
++		points = sample_offsets
+ 	local_plane = suspension_ground_plane(
+ 		params, ground_heights, maximum_residual,
+ 		tuple((point[0], point[2]) for point in points))
+--- a/src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py
++++ b/src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py
+@@ -6079,7 +6079,8 @@
+ 
+     def _suspension_ground_samples(self, state, params,
+                                    probe_height=None,
+-                                   support_gradient=None, sweep_drop=0.0):
++                                   support_gradient=None, sweep_drop=0.0,
++                                   sample_pose=None):
+         """Sample the five damper positions on each track exactly once."""
+         pitch = _number(state.get('terrain_pitch', state.get('pitch')))
+         roll = _number(state.get('roll'))
+@@ -6090,26 +6091,27 @@
+         body_height = (position[1] if probe_height is None else
+                        float(probe_height))
+         yaw = _number(state.get('yaw'))
+-        points = vehicle_physics.suspension_world_points(
+-            params, position, yaw,
+-            _number(state.get('terrain_pitch', state.get('pitch'))),
+-            _number(state.get('roll')))
++        if sample_pose is None:
++            sample_pose = vehicle_physics.suspension_sample_pose(
++                params, position, yaw, pitch, roll)
++        points = sample_pose['spring_points']
++        offsets = sample_pose['spring_offsets']
+         memory = state.get('_spring_ground_memory')
+         if not isinstance(memory, list) or len(memory) != len(points):
+             memory = [None] * len(points)
+         pitch = _number(
+             state.get('terrain_pitch', state.get('pitch')))
+         roll = _number(state.get('roll'))
+-        flat_limit = (None if state.get('airborne') else
+-                      vehicle_physics.suspension_flat_support_limit(
+-                          params, body_height, pitch, roll))
++        flat_limit = (None if state.get('airborne') else max(
++            float(body_height) + offsets[index][1] +
++            spring['max_compression'] - spring['static_compression'] + 0.05
++            for index, spring in enumerate(params['springs'])))
+         result = []
+         for index, point in enumerate(points):
+             x, z = point
+             spring = params['springs'][index]
+             spring_height = (
+-                body_height + vehicle_physics.suspension_point_offset(
+-                    spring, pitch, roll)[1])
++                body_height + offsets[index][1])
+             minimum_y = (
+                 spring_height - spring['rest_length'] -
+                 vehicle_physics.CONTACT_PENETRATION - sweep_drop)
+@@ -6150,16 +6152,20 @@
+ 
+     def _suspension_pseudo_ground_samples(self, state, params,
+                                           probe_height=None,
+-                                          support_gradient=None, sweep_drop=0.0):
++                                          support_gradient=None, sweep_drop=0.0,
++                                          sample_pose=None):
+         """Sample track-gap and belly contacts once for this authority tick."""
+         position = _position(state)
+         body_height = (position[1] if probe_height is None else
+                        float(probe_height))
+         yaw = _number(state.get('yaw'))
+-        points = vehicle_physics.suspension_pseudo_world_points(
+-            params, position, yaw,
+-            _number(state.get('terrain_pitch', state.get('pitch'))),
+-            _number(state.get('roll')))
++        if sample_pose is None:
++            sample_pose = vehicle_physics.suspension_sample_pose(
++                params, position, yaw,
++                _number(state.get('terrain_pitch', state.get('pitch'))),
++                _number(state.get('roll')))
++        points = sample_pose['pseudo_points']
++        offsets = sample_pose['pseudo_offsets']
+         memory = state.get('_pseudo_ground_memory')
+         if not isinstance(memory, list) or len(memory) != len(points):
+             memory = [None] * len(points)
+@@ -6171,8 +6177,7 @@
+             x, z = point
+             contact = params['pseudo_contacts'][index]
+             point_height = (
+-                body_height + vehicle_physics.suspension_point_offset(
+-                    contact, pitch, roll)[1])
++                body_height + offsets[index][1])
+             minimum_y = (
+                 point_height - params['rest_length'] -
+                 vehicle_physics.CONTACT_PENETRATION - sweep_drop)
+@@ -6213,11 +6218,12 @@
+ 
+     @staticmethod
+     def _suspension_world_ground_plane(
+-            params, ground, position, yaw, pitch=0.0, roll=0.0):
++            params, ground, position, yaw, pitch=0.0, roll=0.0,
++            sample_offsets=None):
+         """Fit one spring batch and bind its local centre to world X/Z."""
+         return vehicle_physics.suspension_world_ground_plane(
+             params, ground, position, yaw,
+-            SUSPENSION_GROUND_PLANE_EPSILON, pitch, roll)
++            SUSPENSION_GROUND_PLANE_EPSILON, pitch, roll, sample_offsets)
+ 
+     @staticmethod
+     def _suspension_plane_height(plane, x, z):
+@@ -6930,14 +6936,22 @@
+             _number(state.get('turret_yaw')))
+         if params is not base_params:
+             params['contact_reference_plane'] = previous_plane
++        # Reuse geometry only within this unchanged pre-solve pose. Native
++        # support is still sampled afresh, including post-contact dt=0 passes.
++        sample_pose = vehicle_physics.suspension_sample_pose(
++            params, position, _number(state.get('yaw')),
++            _number(state.get('terrain_pitch', state.get('pitch'))),
++            _number(state.get('roll')))
+         ground = self._suspension_ground_samples(
+-            state, params, probe_height, support_gradient, sweep_drop)
++            state, params, probe_height, support_gradient, sweep_drop,
++            sample_pose)
+         pseudo_ground = self._suspension_pseudo_ground_samples(
+-            state, params, probe_height, support_gradient, sweep_drop)
++            state, params, probe_height, support_gradient, sweep_drop,
++            sample_pose)
+         current_plane = self._suspension_world_ground_plane(
+             params, ground, position, _number(state.get('yaw')),
+             _number(state.get('terrain_pitch', state.get('pitch'))),
+-            _number(state.get('roll')))
++            _number(state.get('roll')), sample_pose['spring_offsets'])
+         if (not grounded_before and
+                 all(value is None for value in ground) and
+                 all(value is None for value in pseudo_ground)):
