@@ -1,0 +1,83 @@
+name: Compile 0.9.6 worker pose-reuse test 20260929
+on:
+  push:
+    branches: [test/096-worker-pose-reuse-20260929]
+    paths:
+      - .github/workflows/worker-pose-reuse-test-20260929.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: worker-pose-reuse-test-20260929
+  cancel-in-progress: false
+jobs:
+  compile-and-verify:
+    if: github.ref == 'refs/heads/test/096-worker-pose-reuse-20260929'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-096-verified
+          run-id: 36480836532
+          github-token: ${{ github.token }}
+          path: baseline-release
+      - name: Verify baseline release and apply exact reviewed two-file patch
+        shell: python
+        run: |
+          import hashlib, pathlib, subprocess, zipfile
+          base = '3fdd95a28fcc18fe38499b2c66a4cbbab34ac0f3'
+          subprocess.run(['git','merge-base','--is-ancestor',base,'HEAD'],check=True)
+          allowed = {'tools/worker_pose_reuse_20260929.patch', 'tools/compile_worker_pose_test_20260929.py', '.github/workflows/worker-pose-reuse-test-20260929.yml'}
+          changed = set(subprocess.check_output(['git','diff','--name-only',base,'HEAD','--'],text=True).splitlines())
+          assert changed <= allowed, sorted(changed - allowed)
+          release = pathlib.Path('baseline-release/wot-0.9.22-offline-battles-0.9.6-Windows-x64.zip')
+          assert hashlib.sha256(release.read_bytes()).hexdigest() == '57cfc178ebabca97b12914e8c9ecbe411e9e60995e6517d70607d7f861283eba'
+          import io
+          with zipfile.ZipFile(release) as full:
+              with zipfile.ZipFile(io.BytesIO(full.read('_internal/client/0.9.22.zip'))) as client:
+                  mods = [p for p in client.namelist() if p.endswith('.wotmod')]
+                  assert len(mods) == 1, mods
+                  pathlib.Path('baseline-payload.wotmod').write_bytes(client.read(mods[0]))
+          original = pathlib.Path('baseline-source')
+          original.mkdir()
+          root = pathlib.Path('src/res/scripts/client/gui/mods/offline_lan_0922')
+          for name in ('vehicle_physics.py','bot_runtime.py'):
+              (original/name).write_bytes((root/name).read_bytes())
+          patch = pathlib.Path('tools/worker_pose_reuse_20260929.patch')
+          assert hashlib.sha256(patch.read_bytes()).hexdigest() == '57b4468d8aaf7e1ef30183c10f6769ce985b0e3d8979a131f78ba2ae4c8e84b2'
+          subprocess.run(['git','apply','--check',str(patch)],check=True)
+          subprocess.run(['git','apply',str(patch)],check=True)
+          changed_runtime = set(subprocess.check_output(['git','diff','--name-only','--'],text=True).splitlines())
+          assert changed_runtime == {str(root/'vehicle_physics.py'),str(root/'bot_runtime.py')}, changed_runtime
+      - name: Compile real Python 2.7 bytecode and compare compiled physics behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p compiled-worker-pose-test
+          docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
+            -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT \
+            python:2.7.18 python tools/compile_worker_pose_test_20260929.py \
+            2>&1 | tee compiled-worker-pose-test/compiler-test.log
+          cp tools/worker_pose_reuse_20260929.patch compiled-worker-pose-test/
+          cp tools/compile_worker_pose_test_20260929.py compiled-worker-pose-test/
+          git rev-parse HEAD > compiled-worker-pose-test/source-recipe-commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-pose-reuse-096-compiled-${{ github.run_id }}
+          path: compiled-worker-pose-test/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: worker-pose-reuse-096-failure-${{ github.run_id }}
+          path: compiled-worker-pose-test/
+          if-no-files-found: warn
+          retention-days: 7
