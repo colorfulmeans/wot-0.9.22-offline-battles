@@ -61,9 +61,24 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p compiled-worker-pose-test
+          cat > compiled-worker-pose-test/bootstrap_test.py <<'PY'
+          import runpy
+          import sys
+          import types
+          # Python 2 requires ancestor packages even when the leaf module is mocked.
+          for name in ('gui', 'gui.mods', 'gui.mods.offline_lan_0922'):
+              package = types.ModuleType(name)
+              package.__path__ = []
+              sys.modules[name] = package
+              if '.' in name:
+                  parent, leaf = name.rsplit('.', 1)
+                  setattr(sys.modules[parent], leaf, package)
+          runpy.run_path('tools/compile_worker_pose_test_20260929.py', run_name='__main__')
+          PY
           docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
             -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT \
-            python:2.7.18 python tools/compile_worker_pose_test_20260929.py \
+            python:2.7.18@sha256:cfa62318c459b1fde9e0841c619906d15ada5910d625176e24bf692cf8a2601d \
+            python compiled-worker-pose-test/bootstrap_test.py \
             2>&1 | tee compiled-worker-pose-test/compiler-test.log
           cp tools/worker_pose_reuse_20260929.patch compiled-worker-pose-test/
           cp tools/compile_worker_pose_test_20260929.py compiled-worker-pose-test/
