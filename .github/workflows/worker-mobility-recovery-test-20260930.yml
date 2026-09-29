@@ -1,0 +1,133 @@
+name: Build 0.9.6 mobility recovery test4 20260930
+on:
+  push:
+    branches: [test/096-mobility-recovery-20260930]
+    paths:
+      - .github/workflows/worker-mobility-recovery-test-20260930.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  build-test-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-096-verified
+          run-id: 36480836532
+          github-token: ${{ github.token }}
+          path: baseline-release
+      - name: Restore exact collision-only patch and packaging helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/mobility.patch.gz.b64 <<'B64'
+          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
+          B64
+          base64 -d /tmp/mobility.patch.gz.b64 | gzip -d > /tmp/mobility.patch
+          echo '65170ea2da0fc57165847a9763c20f22b831ec336fa40fef07babd97c04cac28  /tmp/mobility.patch' | sha256sum -c -
+          cat > /tmp/package.py.gz.b64 <<'B64'
+          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
+          B64
+          base64 -d /tmp/package.py.gz.b64 | gzip -d > /tmp/package.py
+          git merge-base --is-ancestor 3fdd95a28fcc18fe38499b2c66a4cbbab34ac0f3 HEAD
+          changed="$(git diff --name-only 3fdd95a28fcc18fe38499b2c66a4cbbab34ac0f3 HEAD --)"
+          test "$changed" = '.github/workflows/worker-mobility-recovery-test-20260930.yml'
+          git apply --check /tmp/mobility.patch
+      - name: Record baseline regression identifiers
+        shell: bash
+        run: |
+          set +e
+          PYTHONPATH=src/res/scripts/client:tests python -m unittest -q             test_port_0922_world_collision             test_port_0922_downhill_departure             test_port_0922_rollover_bridge             test_port_0922_cliff_impacts             test_port_0922_contact_navigation_regressions             test_port_0922_rotation_contact_runtime             > /tmp/baseline-tests.txt 2>&1
+          echo $? > /tmp/baseline-tests.rc
+          set -e
+      - name: Apply mobility recovery candidate and verify regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply /tmp/mobility.patch
+          python -m py_compile             src/res/scripts/client/gui/mods/offline_lan_0922/world_collision.py             src/res/scripts/client/gui/mods/offline_lan_0922/battle_runtime.py             tests/test_096_mobility_recovery.py
+          set +e
+          PYTHONPATH=src/res/scripts/client:tests python -m unittest -q             test_port_0922_world_collision             test_port_0922_downhill_departure             test_port_0922_rollover_bridge             test_port_0922_cliff_impacts             test_port_0922_contact_navigation_regressions             test_port_0922_rotation_contact_runtime             > /tmp/candidate-tests.txt 2>&1
+          echo $? > /tmp/candidate-tests.rc
+          set -e
+          PYTHONPATH=src/res/scripts/client:tests python -m unittest -q test_096_mobility_recovery
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          def ids(path):
+              text=Path(path).read_text(errors='replace')
+              return re.findall(r'^(?:FAIL|ERROR): ([^\n]+)', text, re.M)
+          base=ids('/tmp/baseline-tests.txt')
+          cand=ids('/tmp/candidate-tests.txt')
+          if base != cand:
+              raise SystemExit('regression identifier mismatch:\nBASE=%r\nCAND=%r' % (base,cand))
+          print('existing regression identifiers unchanged:', len(base))
+          PY
+      - name: Compile the two changed runtime modules with CPython 2.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p compiled
+          docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work             python:2.7.18@sha256:cfa62318c459b1fde9e0841c619906d15ada5910d625176e24bf692cf8a2601d             python -c "import os,py_compile; root='src/res/scripts/client/gui/mods/offline_lan_0922'; out='compiled'; [(py_compile.compile(os.path.join(root,n),cfile=os.path.join(out,n+'c'),dfile='./res/scripts/client/gui/mods/offline_lan_0922/'+n,doraise=True)) for n in ('world_collision.py','battle_runtime.py')]"
+          python - <<'PY'
+          from pathlib import Path
+          for name in ('world_collision.pyc','battle_runtime.pyc'):
+              data=(Path('compiled')/name).read_bytes()
+              assert data[:4] == b'\x03\xf3\r\n', (name,data[:4])
+          print('CPython 2.7 bytecode verified')
+          PY
+      - name: Build full Windows test package from verified official 0.9.6
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          official=baseline-release/wot-0.9.22-offline-battles-0.9.6-Windows-x64.zip
+          test -f "$official"
+          echo '57cfc178ebabca97b12914e8c9ecbe411e9e60995e6517d70607d7f861283eba  '"$official" | sha256sum -c -
+          out=artifact/wot-0.9.22-offline-battles-0.9.6-mobility-recovery-test4-20260930-Windows-x64.zip
+          python /tmp/package.py "$official" compiled "$out" | tee artifact/package-verification.txt
+          python - <<'PY'
+          import io,zipfile
+          from pathlib import Path
+          outer=Path('artifact/wot-0.9.22-offline-battles-0.9.6-mobility-recovery-test4-20260930-Windows-x64.zip').read_bytes()
+          with zipfile.ZipFile(io.BytesIO(outer)) as z:
+              client=z.read('_internal/client/0.9.22.zip')
+          with zipfile.ZipFile(io.BytesIO(client)) as z:
+              w=z.read('mods/0.9.22.0.1/org.colorfulmeans.offline_lan_0922_0.9.6.wotmod')
+          Path('artifact/candidate.wotmod').write_bytes(w)
+          PY
+          python tools/validate_wotmod.py artifact/candidate.wotmod | tee artifact/wotmod-validation.txt
+          rm artifact/candidate.wotmod
+          cp /tmp/baseline-tests.txt artifact/baseline-regressions.txt
+          cp /tmp/candidate-tests.txt artifact/candidate-regressions.txt
+          cp /tmp/mobility.patch artifact/mobility-recovery.patch
+          cat > artifact/README_ZH.txt <<'TXT'
+          WoT 0.9.22 offline battles - 0.9.6 mobility recovery test4
+          Build identity: colorfulmeans-096-mobility-recovery-test-20260930-4
+
+          This build starts from the verified official 0.9.6 package.
+          It does NOT contain the earlier pose-cache, filter-cache, or suspension-sleep performance experiments.
+
+          Changes under test:
+          1. Destination-perimeter terrain profiles are direction-neutral, so a cross-body lane on a bank cannot become an artificial uphill wall only because of polygon winding. Terrain evidence is evaluated at the translated destination pose; upper hull rays still block real walls.
+          2. Non-centre track-pivot rotation can use the same strict departing-contact proof as centre rotation. Only an already occupied plane whose penetration is reduced may be released; deeper/new contact remains blocked.
+          3. When another vehicle clips requested translation, only the accepted translation fraction consumes the contact traverse drive budget. This targets the FV4005 case where internal road speed remained non-zero while realised travel was zero and A/D had no torque.
+
+          No suspension-sleep/performance changes, no physics time-step changes, no pathfinding changes, no shutdown changes.
+
+          Install: fully exit the game/worker/launcher; extract this package to a new folder; run its launcher and select the existing #1513 game directory. Do not mix _internal folders between builds and do not reset save data.
+          TXT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobility-recovery-test4-096
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
