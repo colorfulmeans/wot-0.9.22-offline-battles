@@ -42,7 +42,7 @@ def physics(code, name):
     return module
 
 def sampler(code, module, optimized):
-    env = {'math': math, 'vehicle_physics': module,
+    env = {'__builtins__': __builtins__, 'math': math, 'vehicle_physics': module,
            'SUSPENSION_GROUND_PLANE_EPSILON': 0.35}
     env['_number'] = types.FunctionType(child(code, '_number'), env,
                                          '_number', (0.0,))
@@ -123,9 +123,17 @@ def main():
     assert sys.version_info[:2] == (2, 7), sys.version
     if not os.path.isdir(OUTPUT):
         os.makedirs(OUTPUT)
+    for name in ('gui', 'gui.mods', 'gui.mods.offline_lan_0922'):
+        package = types.ModuleType(name)
+        package.__path__ = []
+        sys.modules[name] = package
+        if '.' in name:
+            parent, leaf = name.rsplit('.', 1)
+            setattr(sys.modules[parent], leaf, package)
     diag = types.ModuleType('gui.mods.offline_lan_0922.worker_diagnostics')
     diag.observed = lambda *a, **k: (lambda fn: fn)
     sys.modules[diag.__name__] = diag
+    sys.modules['gui.mods.offline_lan_0922'].worker_diagnostics = diag
     archive = zipfile.ZipFile('baseline-payload.wotmod')
     originals, candidates, receipts = {}, {}, {}
     for name in NAMES:
