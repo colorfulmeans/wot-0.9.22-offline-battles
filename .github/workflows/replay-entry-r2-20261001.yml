@@ -1,0 +1,152 @@
+name: Test8L-R2 replay entry and load barrier
+on:
+  push:
+    branches: [test/096-replay-entry-20261001]
+    paths: [.github/workflows/replay-entry-r2-20261001.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore exact reviewed sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import base64,hashlib,json,os,pathlib,subprocess,urllib.request
+          root='https://api.github.com/repos/colorfulmeans/wot-0.9.22-offline-battles/git/blobs/'
+          entries={
+            'd07bab7cf81cbcc21cb1dd73acf6823235c589fc':'launcher/replay_launch.py',
+            'a70be99ce0cff9188ebfa393eaad0493030904bc':'/tmp/patch_launcher.py',
+            '176bc452704876218d74b0082a7668f1c7df27d5':'/tmp/bootstrap.patch',
+            'e2c41eceeeb1bc63aefde01f07e48873d338ea38':'src/res/scripts/client/gui/mods/offline_lan_0922/replay_transport.py',
+            'b8c5f4a3c0d0dced9803080cf7b5605939b9ef3a':'launcher/tests/test_replay_entry.py',
+          }
+          for sha,name in entries.items():
+            req=urllib.request.Request(root+sha,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+            data=base64.b64decode(json.load(urllib.request.urlopen(req))['content'])
+            assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==sha
+            p=pathlib.Path(name);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(data)
+          subprocess.check_call(['python','/tmp/patch_launcher.py'])
+          subprocess.check_call(['git','apply','--check','/tmp/bootstrap.patch'])
+          subprocess.check_call(['git','apply','/tmp/bootstrap.patch'])
+          PY
+      - name: Compile real Python 2.7 runtime modules
+        run: |
+          mkdir -p prepared/compiled prepared/source
+          docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work python:2.7.18 python -c "import os,py_compile; r='src/res/scripts/client/gui/mods/offline_lan_0922'; [py_compile.compile(os.path.join(r,n),cfile='prepared/compiled/'+n+'c',dfile='./res/scripts/client/gui/mods/offline_lan_0922/'+n,doraise=True) for n in ('bootstrap.py','replay_transport.py')]"
+          cp -a launcher prepared/source/
+          cp -a tools prepared/source/
+          mkdir -p prepared/source/client
+          cp src/res/scripts/client/gui/mods/offline_lan_0922/{bootstrap,replay_transport}.py prepared/source/client/
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          r=Path('prepared')
+          assert all(p.read_bytes()[:4]==b'\x03\xf3\r\n' for p in (r/'compiled').glob('*.pyc'))
+          rows={str(p.relative_to(r)):hashlib.sha256(p.read_bytes()).hexdigest() for p in r.rglob('*') if p.is_file()}
+          (r/'hashes.json').write_text(json.dumps(rows,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-entry-r2-prepared
+          path: prepared/
+          retention-days: 30
+  windows-launcher:
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11.9'
+          architecture: x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-entry-r2-prepared
+          path: prepared
+      - name: Install pinned build dependencies
+        run: python -m pip install -r launcher/requirements-build.txt
+      - name: Baseline launcher regression identifiers
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH="$PWD/launcher;$PWD/launcher/tests;$PWD/tools;$PWD/src/res/scripts/client"
+          cmd /c "python -m unittest discover -s launcher/tests -p test_*.py -q > baseline-launcher.txt 2>&1"
+          $global:LASTEXITCODE=0
+      - name: Apply prepared launcher sources and verify
+        shell: pwsh
+        run: |
+          Copy-Item -Path prepared/source/launcher/* -Destination launcher -Recurse -Force
+          $env:PYTHONPATH="$PWD/launcher;$PWD/launcher/tests;$PWD/tools;$PWD/src/res/scripts/client"
+          cmd /c "python -m unittest test_replay_entry.PreflightTests test_replay_entry.WindowReplayTests -v > replay-entry-tests.txt 2>&1"
+          if ($LASTEXITCODE -ne 0) { Get-Content replay-entry-tests.txt; throw 'New replay entry tests failed' }
+          cmd /c "python -m unittest discover -s launcher/tests -p test_*.py -q > candidate-launcher.txt 2>&1"
+          $global:LASTEXITCODE=0
+          @'
+          import re
+          from pathlib import Path
+          def ids(name):
+              return re.findall(r'^(?:FAIL|ERROR): ([^\n]+)',Path(name).read_text(errors='replace'),re.M)
+          a,b=ids('baseline-launcher.txt'),ids('candidate-launcher.txt')
+          assert a==b,(a,b)
+          print('Existing launcher failure identifiers unchanged:',len(a))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher regression failure identifiers changed' }
+      - name: Real Windows Tk replay tab smoke
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH="$PWD/launcher;$PWD/launcher/tests;$PWD/tools;$PWD/src/res/scripts/client"
+          @'
+          import json,tempfile
+          from pathlib import Path
+          import tkinter as tk
+          from tkinter import ttk,filedialog
+          from unittest.mock import patch
+          import core,wot_launcher
+          with tempfile.TemporaryDirectory() as d, patch.object(core,'settings_path',return_value=str(Path(d)/'launcher.json')),patch.object(core,'discover_game_folders',return_value=[]):
+              w=wot_launcher.LauncherWindow(tk,ttk,filedialog)
+              w.select_replay('C:/test/recording.wotlanreplay')
+              w.root.update_idletasks()
+              assert w.battle_tabs.select()==str(w.replay_panel)
+              assert w.start_button is w.replay_start_button
+              assert w.replay_start_button['state']=='normal'
+              Path('windows-tk-smoke.json').write_text(json.dumps({'tabs':len(w.battle_tabs.tabs()),'replay_selected':True,'button':str(w.replay_start_button['text']),'Tk':tk.TkVersion}))
+              w.root.destroy()
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Real Tk replay tab failed' }
+      - name: Build actual Windows launcher runtime
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx --version-file launcher/version_info.txt --name wot-0.9.22-offline-battles --distpath launcher/dist --workpath launcher/build/pyinstaller --specpath launcher/build/spec --paths tools --paths src/res/scripts/client --hidden-import bot_tactics_ui --hidden-import bot_tactics_smoke --exclude-module gui --hidden-import PIL.ImageTk --hidden-import PIL.DdsImagePlugin --hidden-import packed_xml --hidden-import vehicle_prices --hidden-import replay_launch launcher/wot_launcher.py
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
+          $app="$PWD/launcher/dist/wot-0.9.22-offline-battles/wot-0.9.22-offline-battles.exe"
+          $p=Start-Process -FilePath $app -PassThru
+          Start-Sleep -Seconds 4
+          if ($p.HasExited) { throw 'Frozen launcher quit during GUI smoke' }
+          $null=$p.CloseMainWindow()
+          if (-not $p.WaitForExit(15000)) { $p.Kill();throw 'Frozen launcher failed clean window close' }
+          "Frozen executable opened and closed without a game" | Set-Content frozen-smoke.txt
+      - name: Bundle audit outputs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force audit | Out-Null
+          foreach ($f in @('baseline-launcher.txt','candidate-launcher.txt','replay-entry-tests.txt','windows-tk-smoke.json','frozen-smoke.txt')) { if(Test-Path $f) {Copy-Item $f audit/} }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-entry-r2-windows-audit
+          path: audit/
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-entry-r2-windows-runtime
+          path: launcher/dist/wot-0.9.22-offline-battles/
+          if-no-files-found: error
+          retention-days: 30
