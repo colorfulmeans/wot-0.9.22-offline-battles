@@ -22,6 +22,11 @@ jobs:
           echo '3fb97aded90f3a7d293acef381882cb58d7f7ac2665a737ce0ef8ab23a1ee84a  /tmp/r5-ci-input.zip' | sha256sum -c -
           mkdir r5-stage
           unzip -q /tmp/r5-ci-input.zip -d r5-stage
+          # These namespaces are supplied by the game in production, not by this mod.
+          # Empty test-only package initializers allow isolated CPython 2 imports.
+          test ! -f src/res/scripts/client/gui/__init__.py
+          test ! -f src/res/scripts/client/gui/mods/__init__.py
+          touch src/res/scripts/client/gui/__init__.py src/res/scripts/client/gui/mods/__init__.py
       - name: CPython 2.7 bytecode and fresh record-to-play contract tests
         shell: bash
         run: |
