@@ -1,0 +1,93 @@
+name: Package verified Test8L-R2 replay launcher
+on:
+  push:
+    branches: [test/096-replay-entry-20261001]
+    paths: [.github/workflows/replay-entry-r2-package-20261001.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  windows-launcher:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11.9'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            launcher/requirements-build.txt
+            server/requirements-windows-build.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-entry-r2-prepared
+          run-id: 36828799662
+          github-token: ${{ github.token }}
+          path: prepared
+      - name: Verify prepared sources and pinned toolchain
+        shell: pwsh
+        run: |
+          @'
+          import hashlib,json
+          from pathlib import Path
+          root=Path('prepared')
+          for n,h in json.loads((root/'hashes.json').read_text()).items():
+              assert hashlib.sha256((root/n).read_bytes()).hexdigest()==h,n
+          print('All prepared sources and PYC hashes match first run')
+          '@ | python -
+          if($LASTEXITCODE -ne 0){throw 'Prepared digest failure'}
+          Copy-Item -Path prepared/source/launcher/* -Destination launcher -Recurse -Force
+          python -m pip install -r launcher/requirements-build.txt
+          if($LASTEXITCODE -ne 0){throw 'Build dependencies failed'}
+      - name: Replay contracts
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH="$PWD/launcher;$PWD/launcher/tests;$PWD/tools;$PWD/src/res/scripts/client"
+          cmd /c "python -m unittest test_replay_entry.PreflightTests test_replay_entry.WindowReplayTests -v > replay-entry-tests.txt 2>&1"
+          if ($LASTEXITCODE -ne 0) { Get-Content replay-entry-tests.txt; throw 'Replay entry tests failed' }
+      - name: Build frozen launcher
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --noupx --version-file "$PWD/launcher/version_info.txt" --name wot-0.9.22-offline-battles --distpath "$PWD/launcher/dist" --workpath "$PWD/launcher/build/pyinstaller" --specpath "$PWD/launcher/build/spec" --paths "$PWD/tools" --paths "$PWD/src/res/scripts/client" --hidden-import bot_tactics_ui --hidden-import bot_tactics_smoke --exclude-module gui --hidden-import PIL.ImageTk --hidden-import PIL.DdsImagePlugin --hidden-import packed_xml --hidden-import vehicle_prices --hidden-import replay_launch "$PWD/launcher/wot_launcher.py"
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
+      - name: Execute real frozen UI and close cleanly
+        shell: pwsh
+        run: |
+          $env:LOCALAPPDATA=Join-Path $env:RUNNER_TEMP 'replay-launcher-smoke'
+          New-Item -ItemType Directory -Force "$env:LOCALAPPDATA/WoTOfflineBattles" | Out-Null
+          '{"free_notice_seen":true,"procdump_download_consent":false,"collect_crash_reports":false,"language":"en"}' | Set-Content -Encoding utf8 "$env:LOCALAPPDATA/WoTOfflineBattles/launcher.json"
+          $app="$PWD/launcher/dist/wot-0.9.22-offline-battles/wot-0.9.22-offline-battles.exe"
+          $p=Start-Process -FilePath $app -PassThru -ArgumentList '--replay C:/test/replay.wotlanreplay'
+          Start-Sleep -Seconds 5
+          $p.Refresh()
+          if ($p.HasExited) { throw 'Frozen launcher quit during GUI smoke' }
+          $null=$p.CloseMainWindow()
+          if (-not $p.WaitForExit(15000)) { $p.Kill();throw 'Frozen launcher failed clean window close' }
+          "Frozen executable opened, accepted replay argument, and closed without starting any game" | Set-Content frozen-smoke.txt
+          @'
+          from pathlib import Path
+          import hashlib,json
+          root=Path('launcher/dist/wot-0.9.22-offline-battles')
+          data={str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob('*') if p.is_file()}
+          Path('runtime-hashes.json').write_text(json.dumps(data,indent=2))
+          '@ | python -
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-entry-r2-package-audit
+          path: |
+            replay-entry-tests.txt
+            frozen-smoke.txt
+            runtime-hashes.json
+            launcher/build/spec/*.spec
+            launcher/build/pyinstaller/wot-0.9.22-offline-battles/warn-*.txt
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-entry-r2-windows-runtime
+          path: launcher/dist/wot-0.9.22-offline-battles/
+          if-no-files-found: error
+          retention-days: 30
