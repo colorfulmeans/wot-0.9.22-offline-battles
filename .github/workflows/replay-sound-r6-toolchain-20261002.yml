@@ -27,14 +27,14 @@ jobs:
           '
           echo "$image" > out/image-digest.txt
           tar czf out/python27-validation-runtime.tar.gz -C out py27
-          rm -rf out/py27
+          sudo rm -rf out/py27
           mkdir -p out/native
           base='https://raw.githubusercontent.com/StranikS-Scan/WorldOfTanks-Decompiled/487396ac2bec27127b8e03abca33bc961dc67021/source/res/scripts/client'
           for path in ReloadEffect.py helpers/CallbackDelayer.py helpers/EntityExtra.py gui/battle_control/controllers/consumables/ammo_ctrl.py Vehicle.py Avatar.py vehicle_extras.py; do
             mkdir -p "out/native/$(dirname "$path")"
             curl --fail --silent --show-error --location "$base/$path" -o "out/native/$path"
           done
-          find out -type f -exec sha256sum {} \; > out/SHA256SUMS.txt
+          find out -type f ! -name SHA256SUMS.txt -exec sha256sum {} \; > out/SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: replay-sound-r6-validation-toolchain
