@@ -1,0 +1,43 @@
+name: R6 isolated replay sound validation toolchain
+on:
+  push:
+    branches: [test/096-replay-sound-r6-20261002]
+    paths: [.github/workflows/replay-sound-r6-toolchain-20261002.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Stage pinned Python 2.7 runtime for local bytecode validation only
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='python:2.7.18@sha256:cfa62318c459b1fde9e0841c619906d15ada5910d625176e24bf692cf8a2601d'
+          docker pull "$image"
+          mkdir -p out/py27
+          docker run --rm -v "$PWD/out/py27:/out" "$image" sh -ec '
+            cp -a /usr/local/bin /usr/local/lib /out/
+            rm -rf /out/lib/python2.7/site-packages /out/lib/python2.7/test /out/lib/python2.7/idlelib /out/lib/python2.7/lib2to3/tests
+            mkdir -p /out/lib/python2.7/site-packages
+            cp -L /usr/lib/x86_64-linux-gnu/libssl.so.1.1 /usr/lib/x86_64-linux-gnu/libcrypto.so.1.1 /out/lib/
+            python -c "import sys,hashlib,gzip,marshal,py_compile; print(sys.version)" > /out/verification.txt
+          '
+          echo "$image" > out/image-digest.txt
+          tar czf out/python27-validation-runtime.tar.gz -C out py27
+          rm -rf out/py27
+          mkdir -p out/native
+          base='https://raw.githubusercontent.com/StranikS-Scan/WorldOfTanks-Decompiled/487396ac2bec27127b8e03abca33bc961dc67021/source/res/scripts/client'
+          for path in ReloadEffect.py helpers/CallbackDelayer.py helpers/EntityExtra.py gui/battle_control/controllers/consumables/ammo_ctrl.py Vehicle.py Avatar.py vehicle_extras.py; do
+            mkdir -p "out/native/$(dirname "$path")"
+            curl --fail --silent --show-error --location "$base/$path" -o "out/native/$path"
+          done
+          find out -type f -exec sha256sum {} \; > out/SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: replay-sound-r6-validation-toolchain
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
