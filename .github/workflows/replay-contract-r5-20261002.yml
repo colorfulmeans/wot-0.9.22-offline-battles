@@ -1,0 +1,36 @@
+name: Test8L-R5 replay native descriptor contract
+on:
+  push:
+    branches: [test/096-replay-contract-r5-20261002]
+    paths: [.github/workflows/replay-contract-r5-20261002.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compile-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Restore exact R4 bytecode and reviewed candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .test-inputs/replay-contract-r5-20261002/0*.b64 | base64 -d > /tmp/r5-ci-input.zip
+          echo '3fb97aded90f3a7d293acef381882cb58d7f7ac2665a737ce0ef8ab23a1ee84a  /tmp/r5-ci-input.zip' | sha256sum -c -
+          mkdir r5-stage
+          unzip -q /tmp/r5-ci-input.zip -d r5-stage
+      - name: CPython 2.7 bytecode and fresh record-to-play contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work python:2.7.18@sha256:cfa62318c459b1fde9e0841c619906d15ada5910d625176e24bf692cf8a2601d python /work/r5-stage/ci_run.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: replay-contract-r5-verified
+          path: r5-output/
+          if-no-files-found: error
+          retention-days: 30
