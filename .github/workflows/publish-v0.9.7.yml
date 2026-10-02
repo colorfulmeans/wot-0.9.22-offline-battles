@@ -1,4 +1,5 @@
 name: Build and publish v0.9.7
+# Validate the exact isolated replay resources as well as the Python 2.7 mod.
 
 on:
   workflow_dispatch:
