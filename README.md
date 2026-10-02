@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.9.6** — [Release notes](docs/releases/v0.9.6.md).
+Current release: **v0.9.7** — [Release notes](docs/releases/v0.9.7.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.9.6-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.9.7-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -66,12 +66,15 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
-The [v0.9.6 release notes](docs/releases/v0.9.6.md) cover the complete
-follow-up since v0.9.5, centered on player/Bot collision, repeated wreck
-pushing and rotation, bridge support, braking, ammunition effects and
-battle notifications. The release includes a separate English Word
-inventory of unresolved internal-module geometry. Read its coverage
-limits before interpreting an absent critical hit as missing geometry.
+The [v0.9.7 release notes](docs/releases/v0.9.7.md) cover the follow-up
+since v0.9.6: crew hit feedback, steering and ram contacts, lighter Bot ground
+support, bridge departures, visibility and audio fixes, crew service records,
+offline replays, large LAN state transfers and linked game/session shutdown.
+Recordings are stored in `replays/offline` in the game folder; open them from
+the launcher's Replay tab. Playback currently supports forward 1x and a manual
+camera. Keep the original vehicle profile and use recordings from this version.
+The unresolved internal-module inventory attached to the v0.9.6 release still
+describes outstanding geometry work; this release does not add guessed layouts.
 
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
@@ -471,7 +474,8 @@ artifact. For a local build, use this order from the repository root:
 # Windows server, with x64 Python 3.11 and the pinned packager
 python -m pip install -r server/requirements-windows-build.txt
 pwsh -NoProfile -File server/build_windows_server.ps1
-# Client package, with CPython 2.7
+# Reproduce the verified recorder resource, then build with CPython 2.7
+python tools/build_replay_runtime.py
 python2.7 build_wotmod.py
 # Windows launcher, after the client package exists
 pwsh -NoProfile -File launcher/build_launcher.ps1

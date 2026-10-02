@@ -9,6 +9,8 @@ import threading
 import time
 import uuid
 
+from gui.mods.offline_lan_0922 import state_transfer
+
 from gui.mods.offline_lan_0922 import effective_params as effective_params_wire
 from gui.mods.offline_lan_0922.battle_achievements import (
     AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES)
@@ -48,6 +50,7 @@ PLAYER_ENVIRONMENT_CAPABILITY = 'player_environment_v2'
 EFFECTIVE_PARAMS_CAPABILITY = effective_params_wire.CAPABILITY
 SIMULATION_WORKER_CAPABILITY = 'simulation_worker_v1'
 CLIENT_CAPABILITIES = (
+    state_transfer.CAPABILITY,
     PROJECTILE_LEDGER_CAPABILITY,
     RICOCHET_CONTINUATION_CAPABILITY,
     DESTRUCTIBLE_CATALOG_V5_CAPABILITY,
@@ -1834,6 +1837,8 @@ class LANClient(object):
         return payload
 
     def stop(self):
+        from gui.mods.offline_lan_0922 import offline_replay
+        offline_replay.finish(self, 'transport_stop')
         with self._outbound_lock:
             if (not self.running and self.sock is None and
                     self._poll_callback is None and
@@ -3560,11 +3565,16 @@ class LANClient(object):
                 raise
         return True
 
+    @staticmethod
+    def _state_transfer_diagnostic(stage, fields):
+        print('[Offline LAN 0.9.22] STATE_TRANSFER %s %s' % (
+            stage, json.dumps(fields, sort_keys=True, separators=(',', ':'))))
+
     def _worker(self, generation=None):
         if generation is None:
             generation = self._transport_generation
         sock = None
-        recv_buffer = u''
+        decoder = state_transfer.StreamDecoder(self._state_transfer_diagnostic)
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(3.0)
@@ -3602,32 +3612,16 @@ class LANClient(object):
                 try:
                     chunk = sock.recv(8192)
                 except socket.timeout:
+                    decoder.check_timeout(_monotonic_time())
                     continue
                 if generation != self._transport_generation:
                     break
                 if not chunk:
+                    decoder.finish()
                     self._record_peer_close(generation, sock)
                     break
                 received_time = _monotonic_time()
-                try:
-                    recv_buffer += chunk.decode('utf-8')
-                except UnicodeError:
-                    self._record_transport_error(
-                        'server sent invalid UTF-8', generation, sock)
-                    break
-                if len(recv_buffer) > MAX_BUFFER_BYTES:
-                    self._record_transport_error(
-                        'server message buffer exceeded limit',
-                        generation, sock)
-                    break
-                while u'\n' in recv_buffer:
-                    line, recv_buffer = recv_buffer.split(u'\n', 1)
-                    if not line:
-                        continue
-                    try:
-                        message = json.loads(line)
-                    except (TypeError, ValueError):
-                        continue
+                for message in decoder.feed(chunk, received_time):
                     if isinstance(message, dict):
                         # Frame stalls must not inflate RTT or countdown
                         # projection: both end in this network thread, not
@@ -4388,6 +4382,10 @@ class LANClient(object):
     def _handle_message(self, message, trusted_player_static=None):
         if not isinstance(message, dict):
             return
+        replay_hint = None
+        if getattr(self, '_offline_replay_recorder', None) is not None:
+            from gui.mods.offline_lan_0922 import offline_replay
+            replay_hint = offline_replay.sparse_hint(message)
         kind = message.get('type')
         if kind == 'battle_receipt':
             if (not _valid_battle_receipt(message) or
@@ -5431,9 +5429,11 @@ class LANClient(object):
             message = self._adopt_detached_turrets(message)
             if kind == 'snapshot':
                 self.last_snapshot = message
-        self._notify(kind, message)
+        self._notify(kind, message, replay_hint=replay_hint)
 
-    def _notify(self, kind, message):
+    def _notify(self, kind, message, replay_hint=None):
+        from gui.mods.offline_lan_0922 import offline_replay
+        offline_replay.observe_wire(self, message, replay_hint)
         if self.on_event is not None and kind is not None:
             if (isinstance(message, dict) and
                     '_client_received_time' in message):

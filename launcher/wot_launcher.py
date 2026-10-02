@@ -25,6 +25,7 @@ if __package__ in (None, ""):
     import save_ledger
     import save_personal_missions
     import personal_missions_ui
+    import replay_launch
     import save_slots
     import vehicle_editor_ui
     import vehicle_overlays
@@ -32,7 +33,7 @@ else:
     from . import (
         bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
-        save_personal_missions, personal_missions_ui)
+        save_personal_missions, personal_missions_ui, replay_launch)
 
 
 # The account balances a save carries, in the order the panel shows them.
@@ -48,10 +49,17 @@ _SHOP_HELP = (
     "next game startup. Owned or queued vehicles cannot be added twice. "
     "Close the game before adding vehicles.")
 
-LAUNCHER_VERSION = "0.9.6"
+LAUNCHER_VERSION = "0.9.7"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
+    "Replay": "录像回放",
+    "Replay file": "录像文件",
+    "Select replay...": "选择录像…",
+    "Play replay": "播放录像",
+    "Select a .wotlanreplay recorded with this mod. Playback starts automatically after the garage loads; no LAN room or simulation worker is started. Use the same vehicle data profile as the recording.":
+        "选择本模组的 .wotlanreplay 录像。进入车库后自动加载回放，不开联机房间、不启动隐藏模拟端。请选择与录制时相同的车辆属性方案。",
+
     core.worker_startup_exit_hint(0xc0000135):
         "0xC0000135：无法加载必需的 DLL。请检查游戏文件完整性，并安装 "
         "DirectX 9 June 2010 运行库和 Visual C++ x86 运行库。"
@@ -604,6 +612,8 @@ class LauncherWindow(object):
         self._stop_requested_roles = set()
         self._stop_requested = False
         self._close_pending = False
+        self._replay_tab = False
+        self._active_replay_path = None
         self._selected_client = None
         self._profile_names = []
         self._bot_lineup_profile_names = []
@@ -718,6 +728,21 @@ class LauncherWindow(object):
         self.network_panel = tk.Frame(self.battle_tabs, padx=10, pady=10)
         self.battle_tabs.add(self.single_panel, text="")
         self.battle_tabs.add(self.network_panel, text="")
+        self.replay_panel = tk.Frame(self.battle_tabs, padx=10, pady=10)
+        self.battle_tabs.add(self.replay_panel, text="")
+        self.replay_file = tk.StringVar(value="")
+        self.replay_file_label = tk.Label(self.replay_panel, text="")
+        self.replay_file_label.grid(row=0, column=0, sticky="w")
+        self.replay_entry = tk.Entry(self.replay_panel, textvariable=self.replay_file, width=48)
+        self.replay_entry.grid(row=0, column=1, sticky="we", padx=(6, 6))
+        self.replay_browse_button = tk.Button(self.replay_panel, text="", command=self._browse_replay)
+        self.replay_browse_button.grid(row=0, column=2, sticky="e")
+        self.replay_help_label = tk.Label(self.replay_panel, text="", anchor="w", justify="left", wraplength=620)
+        self.replay_help_label.grid(row=1, column=0, columnspan=3, sticky="we", pady=(8, 6))
+        self.replay_start_button = tk.Button(self.replay_panel, text="", command=self._start_replay,
+                                           height=2, font=("TkDefaultFont", 10, "bold"))
+        self.replay_start_button.grid(row=2, column=0, columnspan=3, sticky="we")
+        self.replay_panel.grid_columnconfigure(1, weight=1)
         self.battle_tabs.bind("<<NotebookTabChanged>>", self._mode_tab_changed)
 
         self.single_player_name_label = tk.Label(self.single_panel, text="")
@@ -1076,6 +1101,11 @@ class LauncherWindow(object):
         self.battle_tabs.tab(
             self.single_panel, text=self._t("Single player"))
         self.battle_tabs.tab(self.network_panel, text=self._t("Online"))
+        self.battle_tabs.tab(self.replay_panel, text=self._t("Replay"))
+        self.replay_file_label.config(text=self._t("Replay file"))
+        self.replay_browse_button.config(text=self._t("Select replay..."))
+        self.replay_start_button.config(text=self._t("Play replay"))
+        self.replay_help_label.config(text=self._t("Select a .wotlanreplay recorded with this mod. Playback starts automatically after the garage loads; no LAN room or simulation worker is started. Use the same vehicle data profile as the recording."))
         self.single_player_name_label.config(text=self._t("Player name"))
         self.network_player_name_label.config(text=self._t("Player name"))
         self.single_help_label.config(text=self._t(
@@ -1163,6 +1193,10 @@ class LauncherWindow(object):
         self._bot_tactics_editors = editors
 
     def _sync_mode_tab(self):
+        if getattr(self, '_replay_tab', False):
+            self.battle_tabs.select(self.replay_panel)
+            self.start_button = self.replay_start_button
+            return
         panel = (self.single_panel if self.mode.get() == core.MODE_SINGLE
                  else self.network_panel)
         self.battle_tabs.select(panel)
@@ -1175,18 +1209,55 @@ class LauncherWindow(object):
             index = self.battle_tabs.index("current")
         except Exception:
             return
-        self.mode.set(core.MODE_SINGLE if index == 0 else core.MODE_JOIN)
+        self._replay_tab = index == 2
+        if not self._replay_tab:
+            self.mode.set(core.MODE_SINGLE if index == 0 else core.MODE_JOIN)
         self._refresh_mode(sync_tab=False)
 
     def _start_single(self):
+        self._replay_tab = False
         self.mode.set(core.MODE_SINGLE)
         self._refresh_mode()
         return self._start()
 
     def _start_network(self):
+        self._replay_tab = False
         self.mode.set(core.MODE_JOIN)
         self._refresh_mode()
         return self._start()
+
+    def select_replay(self, path):
+        self.replay_file.set(path)
+        self._replay_tab = True
+        self._refresh_mode()
+
+    def _browse_replay(self):
+        if self._busy or self._maintenance_busy:
+            return
+        initial = os.path.join(self.game_root.get().strip(), 'replays', 'offline')
+        path = self._filedialog.askopenfilename(
+            title=self._t('Select replay...'), parent=self.root,
+            initialdir=initial if os.path.isdir(initial) else None,
+            filetypes=[('Offline replay', '*.wotlanreplay')])
+        if path:
+            self.select_replay(path)
+
+    def _start_replay(self):
+        if self._busy:
+            self._kill_game()
+            return
+        if self._maintenance_busy:
+            return
+        if self._server_is_running() or self._room_worker_is_running():
+            self._log('REPLAY_ENTRY: close the running LAN room before playback.')
+            return
+        try:
+            path = replay_launch.checked_path(self.replay_file.get())
+        except (ValueError, OSError) as error:
+            self._log('REPLAY_ENTRY: %s' % error)
+            return
+        self._replay_tab = True
+        self._start(replay_path=path)
 
     def _browse(self):
         selected = self._filedialog.askdirectory(
@@ -1261,6 +1332,19 @@ class LauncherWindow(object):
         else:
             self.single_start_button.config(state="normal")
             self.network_start_button.config(state="normal")
+        replay_button = getattr(self, 'replay_start_button', None)
+        if replay_button is not None:
+            replay_button.config(text=self._t("Play replay"),
+                                 state="disabled" if self._busy or self._maintenance_busy else "normal")
+            if self._busy and getattr(self, '_active_replay_path', None):
+                self.single_start_button.config(state="disabled")
+                self.network_start_button.config(state="disabled")
+                replay_button.config(state="normal", text=self._t("Close game"))
+                self.start_button = replay_button
+            elif not self._busy and getattr(self, '_replay_tab', False):
+                self.start_button = replay_button
+            self.replay_browse_button.config(state="disabled" if self._busy or self._maintenance_busy else "normal")
+            self.replay_entry.config(state="disabled" if self._busy or self._maintenance_busy else "normal")
         if server_running:
             server_state = (
                 "normal" if not self._busy and not self._maintenance_busy
@@ -2733,7 +2817,7 @@ class LauncherWindow(object):
             core.LOCAL_HOST, core.DEFAULT_SERVER_PORT))
         self._save_settings()
 
-    def _start(self):
+    def _start(self, replay_path=None):
         if self._maintenance_busy:
             self._log("Wait for launcher maintenance to finish.")
             return
@@ -2746,13 +2830,17 @@ class LauncherWindow(object):
             selected_profile if selected_profile in self._profile_names
             else None)
         try:
-            session_mode = self.mode.get()
+            session_mode = core.MODE_SINGLE if replay_path else self.mode.get()
             session = core.plan_session(
                 status, session_mode, self.join_address.get(),
                 vehicle_profile=profile_name)
             session["bot_lineup"] = bot_lineup_profiles.assignments_for(
                 self._bot_lineup_store,
                 self.bot_lineup_profile.get().strip())
+            if replay_path:
+                session['replay_path'] = replay_path
+                session['needs_server'] = False
+                session['bot_lineup'] = []
             session[COLLECT_CRASH_REPORTS_SETTING] = bool(
                 self.collect_crash_reports.get())
             session[FULL_CRASH_DUMPS_SETTING] = bool(
@@ -2767,6 +2855,7 @@ class LauncherWindow(object):
         self._forced_stop_roles = set()
         self._stop_requested_roles = set()
         self._stop_requested = False
+        self._active_replay_path = replay_path
         self._set_busy(True)
         thread = threading.Thread(
             target=self._run_session,
@@ -2775,10 +2864,11 @@ class LauncherWindow(object):
         thread.start()
 
     def _run_session(self, game_root, session, name):
+        replay_path = session.get("replay_path")
         host = session["host"]
         port = session["tcp_port"]
         needs_worker = (
-            session["client"] == core.PORT_0_9_22 and
+            not replay_path and session["client"] == core.PORT_0_9_22 and
             session["mode"] == core.MODE_SINGLE)
         server_loopback_only = (
             session["client"] == core.PORT_0_9_22 and
@@ -2816,6 +2906,12 @@ class LauncherWindow(object):
                     "recorded: %s" %
                     error)
         try:
+            if replay_path:
+                self._log("REPLAY_ENTRY validating selected recording...")
+                info = replay_launch.validate(replay_path, progress=self._log,
+                                              cancelled=lambda: self._stop_requested)
+                self._log("REPLAY_ENTRY valid map=%s bots=%s records=%s duration=%.2fs; server=False worker=False" %
+                          (info['map'], info['bots'], info['records'], info['duration']))
             self._log("Installing the %s mod into %s..." %
                       (session["client"], game_root))
             for action in core.install_client_mod(game_root,
@@ -2912,7 +3008,11 @@ class LauncherWindow(object):
                 return
             preferred_team = session.get(
                 "preferred_team", core.DEFAULT_PREFERRED_TEAM)
-            if preferred_team == core.DEFAULT_PREFERRED_TEAM:
+            if replay_path:
+                game_crashed = self._run_game(
+                    game_root, session["client"], host, port,
+                    paired_worker=False, replay_path=replay_path)
+            elif preferred_team == core.DEFAULT_PREFERRED_TEAM:
                 game_crashed = self._run_game(
                     game_root, session["client"], host, port,
                     paired_worker=needs_worker)
@@ -2985,6 +3085,7 @@ class LauncherWindow(object):
             self._observed_crash_roles = set()
             self._forced_stop_roles = set()
             self._stop_requested_roles = set()
+            self._active_replay_path = None
             self._set_busy(False)
             if automatic_report_path is not None:
                 self.root.after(
@@ -3392,7 +3493,7 @@ class LauncherWindow(object):
 
     def _run_game(self, game_root, port_version, host, port,
                   paired_worker=False,
-                  preferred_team=core.DEFAULT_PREFERRED_TEAM):
+                  preferred_team=core.DEFAULT_PREFERRED_TEAM, replay_path=None):
         self._log("Starting %s..." % core.GAME_EXECUTABLE)
         command = core.visible_client_command(
             game_root, port_version, paired_worker=paired_worker)
@@ -3402,6 +3503,9 @@ class LauncherWindow(object):
         if port_version == core.PORT_0_9_22:
             environment = self._crash_capture_environment(
                 environment, error_reports.ROLE_VISIBLE_CLIENT)
+        environment = replay_launch.child_environment(environment, replay_path)
+        if replay_path:
+            self._log("REPLAY_ENTRY launch visible-only; automatic replay after garage load.")
         game_process = subprocess.Popen(
             command, cwd=game_root, env=environment)
         self._game = game_process
@@ -3640,7 +3744,15 @@ def main(argv=None):
     import tkinter
     from tkinter import filedialog, ttk
 
-    LauncherWindow(tkinter, ttk, filedialog).run()
+    window = LauncherWindow(tkinter, ttk, filedialog)
+    replay_path = os.environ.get(replay_launch.FILE_ENV, '')
+    if '--replay' in argv:
+        index = argv.index('--replay')
+        if index + 1 < len(argv):
+            replay_path = argv[index + 1]
+    if replay_path:
+        window.select_replay(replay_path)
+    window.run()
     return 0
 
 

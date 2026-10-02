@@ -15664,8 +15664,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
                     event, target_record, attacker_record)
                 flags = battle._avatar.shot_results[0][0] >> 32
                 vehicle_flags = runtime.constants.VEHICLE_HIT_FLAGS
+                self.assertFalse(flags & vehicle_flags.ATTACK_IS_EXTERNAL_EXPLOSION)
+                self.assertTrue(flags & vehicle_flags.ATTACK_IS_DIRECT_PROJECTILE)
                 self.assertEqual(explosion_flags, bool(
-                    flags & vehicle_flags.ATTACK_IS_EXTERNAL_EXPLOSION))
+                    flags & vehicle_flags.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION))
                 if shot_result == 1 and not damage:
                     self.assertTrue(flags & vehicle_flags.
                                     MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE)

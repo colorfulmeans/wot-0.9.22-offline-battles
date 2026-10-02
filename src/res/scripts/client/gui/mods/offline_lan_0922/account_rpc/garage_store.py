@@ -496,6 +496,7 @@ class GarageStore(object):
         self._path = path
         self._dirty = False
         self._battle_receipts = []
+        self._crew_service_rosters = {}
         self._receipts_loaded = False
         # Inventory ids are rebuilt on startup. Preserve actual crew awards
         # for a same-session results retry, never as durable crew identity.
@@ -760,6 +761,7 @@ class GarageStore(object):
         return {
             'schema': SCHEMA, 'vehicles': vehicles, 'owned': owned,
             'ledger': _ledger_payload(snapshot),
+            'crewServiceRosters': dict(self._crew_service_rosters),
             'battleCrewReceipts': list(battle_receipts)[
                 -MAX_BATTLE_RECEIPTS:],
         }
@@ -800,6 +802,42 @@ class GarageStore(object):
             except (TypeError, ValueError):
                 continue
         return owned
+
+    def _load_crew_service_rosters(self, stored):
+        from gui.mods.offline_lan_0922 import crew_service
+        self._crew_service_rosters = crew_service.validate_journal(
+            (stored or {}).get('crewServiceRosters'))
+
+    def capture_crew_service(self, snapshot, receipt_id, vehicle_type_cd,
+                             tankmen_module=None):
+        from gui.mods.offline_lan_0922 import crew_service
+        self._ensure_receipts_loaded()
+        key = crew_service.receipt_key(receipt_id)
+        if key in self._crew_service_rosters:
+            return True
+        record = next((row for row in _records(snapshot)
+                       if int(row.get('vehicleTypeCompactDescr', 0)) ==
+                       int(vehicle_type_cd)), None)
+        if record is None:
+            raise ValueError('participating crew vehicle is unavailable')
+        if tankmen_module is None:
+            from items import tankmen as tankmen_module
+        roster = crew_service.capture(record, tankmen_module)
+        previous = dict(self._crew_service_rosters)
+        # A bounded journal retains recent unresolved starts and completed
+        # starts alike; no historical account medals are assigned to new crew.
+        if len(previous) >= MAX_BATTLE_RECEIPTS:
+            completed = set(row['receipt_id'] for row in self._battle_receipts)
+            for old in list(self._crew_service_rosters):
+                if old in completed:
+                    del self._crew_service_rosters[old]
+            if len(self._crew_service_rosters) >= MAX_BATTLE_RECEIPTS:
+                raise ValueError('crew participation journal is full')
+        self._crew_service_rosters[key] = roster
+        if self._path is not None and not self._write_state(self._payload(snapshot), snapshot):
+            self._crew_service_rosters = previous
+            raise IOError('could not save participating crew; battle not started')
+        return True
 
     def apply_battle_crew_xp(self, snapshot, receipt_id,
                              vehicle_type_compact_descr, battle_xp,
@@ -901,6 +939,26 @@ class GarageStore(object):
             'xp_by_tankman': {},
             'income': income,
         }
+        if not training and campaign_receipt is not None:
+            from gui.mods.offline_lan_0922 import crew_service
+            roster = self._crew_service_rosters.get(receipt_id)
+            if roster is not None:
+                if tankmen_module is None:
+                    from items import tankmen as tankmen_module
+                # Resolve only enrolled members. Dossier bytes then travel with
+                # the native descriptor through transfer, barracks and retraining.
+                service = crew_service.award(
+                    state.snapshot(), roster,
+                    campaign_receipt.get('achievements') or (), tankmen_module)
+                result['crew_service'] = service
+                for vehicle_id in service['vehicles']:
+                    state._touched.add(vehicle_id)
+                state._touched_tankmen.update(service['members'])
+                state.revision += 1
+                _log('CREW_SERVICE receipt=%s members=%s medals=%s' % (
+                    receipt_id, service['members'], service['medals']))
+            else:
+                _log('CREW_SERVICE legacy_unattributed receipt=%s; no invented service history' % receipt_id)
         crew = None
         if not training:
             crew = _contained(
@@ -993,6 +1051,7 @@ class GarageStore(object):
         result['touched_items'] = dict(
             (int(item_type), sorted(int(value) for value in items))
             for item_type, items in state.touched_items().items())
+        result['touched_tankmen'] = sorted(state.touched_tankmen())
         result['touched_vehicles'] = sorted(state.touched_vehicles())
         staged = state.snapshot()
         marker = {
@@ -1003,6 +1062,8 @@ class GarageStore(object):
         if 'awarded' in result:
             marker['awarded'] = dict(result['awarded'])
         marker['touched_items'] = copy.deepcopy(result['touched_items'])
+        # Session IDs are not persisted; native crew descriptor bytes carry service.
+
         marker['touched_vehicle_types'] = sorted(int(record['vehicleTypeCompactDescr'])
             for record in _records(staged) if int(record['id']) in result['touched_vehicles'])
         if 'personal_missions' in result:
@@ -1117,6 +1178,7 @@ class GarageStore(object):
         snapshot.update(staged)
         self._battle_receipts = self._validated_battle_receipts(
             stored.get('battleCrewReceipts'))
+        self._load_crew_service_rosters(stored)
         self._receipts_loaded = True
         if ledger_only or skipped:
             self._restore_degraded = True
@@ -1206,6 +1268,7 @@ class GarageStore(object):
         if stored is not None:
             self._battle_receipts = self._validated_battle_receipts(
                 stored.get('battleCrewReceipts'))
+            self._load_crew_service_rosters(stored)
         self._receipts_loaded = True
 
     @staticmethod

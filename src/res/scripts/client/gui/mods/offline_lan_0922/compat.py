@@ -11,7 +11,7 @@ except ImportError:
 
 from gui.mods.offline_lan_0922.entities.remote_vehicle import (
     clear_ground_decal_visibility_state, close_stock_presentation_extras,
-    set_ground_decal_visibility, stop_ground_effects)
+    set_ground_decal_visibility, stop_ground_effects, stop_bound_visual_effects)
 
 
 OFFLINE_SERVER_ADDRESS = 'offline-lan.local:0'
@@ -2393,6 +2393,7 @@ class OfflineCompatibility(object):
             if vehicle is not None and undrawn_lan_remote(vehicle):
                 stop_ground_effects(appearance)
                 set_ground_decal_visibility(appearance, False)
+                stop_bound_visual_effects(appearance)
                 return None
             return original(appearance, distance_from_player)
 

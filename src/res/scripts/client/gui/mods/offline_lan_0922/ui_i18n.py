@@ -31,6 +31,7 @@ def tr(source):
 
 
 _ZH = {
+    'Replay playback stopped (%s).': u'录像回放已停止（%s）。',
     'Personal mission %d': u'个人任务 %d',
     'Personal mission completed: %s.': u'个人任务完成：%s。',
     'Personal mission completed with honors: %s.': u'个人任务完美完成：%s。',

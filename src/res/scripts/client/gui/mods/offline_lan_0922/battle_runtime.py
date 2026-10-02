@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import base64
 import bisect
+from gui.mods.offline_lan_0922 import ram_history
 import collections
 import copy
 import json
@@ -1177,9 +1178,50 @@ def _destructible_rotation_interval_bbox(bbox, half_angle, pivot_offset=0.0):
     )
 
 
+def _contact_traverse_drive_intent(command, accepted_fraction):
+    """Spend drive traction only in proportion to accepted hull translation.
+
+    Vehicle contact can clip the requested translation to zero while the copied
+    longitudinal integrator still carries a non-zero internal road speed.  If
+    that stale/requested speed is charged as fully realised drive here,
+    ``contact_traverse`` can leave no track budget for A/D even though the
+    chassis has not moved.  Preserve the untouched case at fraction 1 and
+    release only the portion physically vetoed by another vehicle.
+    """
+    try:
+        fraction = max(0.0, min(1.0, float(accepted_fraction)))
+        return float(command) * fraction
+    except (TypeError, ValueError, OverflowError):
+        return float(command or 0.0)
+
+
+def _trig_linear_interval_minimum(a, b, start, end, drift):
+    """Exact min of a*cos(theta)+b*sin(theta)+drift*t on t in [0,1]."""
+    delta = end-start
+    values = [a*math.cos(start)+b*math.sin(start),
+              a*math.cos(end)+b*math.sin(end)+drift]
+    radius = math.hypot(a, b)
+    if abs(delta)*radius <= 1.0e-15:
+        return min(values)
+    rhs = -drift/(delta*radius)
+    if -1.0 <= rhs <= 1.0:
+        phase = math.atan2(-a, b)
+        alpha = math.acos(rhs)
+        lo, hi = min(start, end), max(start, end)
+        for root in (phase+alpha, phase-alpha):
+            first = int(math.ceil((lo-root)/(2.0*math.pi)))
+            last = int(math.floor((hi-root)/(2.0*math.pi)))
+            for cycle in range(first, last+1):
+                angle = root+cycle*2.0*math.pi
+                t = (angle-start)/delta
+                if 0.0 <= t <= 1.0:
+                    values.append(a*math.cos(angle)+b*math.sin(angle)+drift*t)
+    return min(values)
+
+
 def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
                                 pitch=0.0, roll=0.0, previous_contacts=None,
-                                translation=(0.0, 0.0)):
+                                translation=(0.0, 0.0), pivot_offset=0.0):
     """Permit only reduced penetration of a face already inside this body.
 
     A replacement can appear inside an occupied hull. Probing its enclosing
@@ -1192,6 +1234,7 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
     pose_y = world_collision._hull_pose_y(pitch, roll)
     end_yaw = float(start_yaw) + _angle_delta(start_yaw, end_yaw)
     sine, cosine = math.sin(start_yaw), math.cos(start_yaw)
+    pivot_offset = float(pivot_offset or 0.0)
 
     def departing(collision):
         point, normal = collision[:2]
@@ -1205,18 +1248,33 @@ def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
                      for i, value in enumerate((x, y, z)))
         before, after, swept = [], [], []
         plane_travel = translation[0]*normal.x + translation[1]*normal.z
+        # A non-centre track turn moves the chassis centre around the planted
+        # track.  Folding that exact arc into each corner's trigonometric
+        # coefficients lets an already occupied wall plane release when the
+        # track-pivot turn reduces penetration.  Previously pivot turns disabled
+        # this departing-contact proof entirely, so a hull that touched a wall
+        # could have both A/D directions vetoed forever.
+        pivot_constant = pivot_offset * (
+            normal.x * cosine - normal.z * sine)
         for cx in (low[0], high[0]):
             for cy in (low[1], high[1]):
                 for cz in (low[2], high[2]):
-                    a = normal.x * cx + normal.z * cz
-                    b = normal.x * cz - normal.z * cx
+                    # Rotating around local X=pivot_offset is equivalent to
+                    # rotating (cx-pivot_offset, cz) about the fixed pivot and
+                    # adding the pivot's world-plane constant.
+                    pivot_x = cx - pivot_offset
+                    a = normal.x * pivot_x + normal.z * cz
+                    b = normal.x * cz - normal.z * pivot_x
                     height = normal.y * (cx * pose_y[0] +
                                         cy * pose_y[1] + cz * pose_y[2])
-                    before.append(a * cosine + b * sine + height)
+                    before.append(a * cosine + b * sine +
+                                  pivot_constant + height)
                     after.append(a * math.cos(end_yaw) +
-                                 b * math.sin(end_yaw) + height + plane_travel)
-                    swept.append(_trig_interval_extrema(
-                        a, b, start_yaw, end_yaw)[0] + height + min(0.0, plane_travel))
+                                 b * math.sin(end_yaw) + pivot_constant +
+                                 height + plane_travel)
+                    swept.append(_trig_linear_interval_minimum(
+                        a, b, start_yaw, end_yaw, plane_travel) +
+                        pivot_constant + height)
         support_slide = (world_collision._drivable_surface(collision) and
                          min(after) >= min(before) - 1.0e-8)
         improves = ((min(after) > min(before) + 1.0e-8 or support_slide) and
@@ -1740,6 +1798,14 @@ class BattleRuntime(object):
             self._read_local_vehicle_rotation_speed
         self._config = None
         self._worker_mode = False
+        self._replay_mode = False
+        self._replay_local = None
+        self._replay_local_applied = None
+        self._replay_reload_edges = None
+        self._replay_reload_sound = None
+        self._replay_muzzle_count = 0
+        self._replay_gun_signature = None
+        self._replay_publishing = False
         self._start_message = None
         self.client = None
         self.state = 'idle'
@@ -1849,6 +1915,7 @@ class BattleRuntime(object):
         self._feedback_shell_failures = set()
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
+        self._local_reaction_rate = 0.0
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
         self._local_direction_command = 0.0
@@ -2108,6 +2175,14 @@ class BattleRuntime(object):
         self._runtime = self._runtime or _load_runtime()
         self._config = dict(config or {})
         self._worker_mode = bool(self._config.get('worker_mode', False))
+        self._replay_mode = bool(getattr(lan_client, 'is_offline_replay', False))
+        self._replay_local = None
+        self._replay_local_applied = None
+        self._replay_reload_edges = None
+        self._replay_reload_sound = None
+        self._replay_muzzle_count = 0
+        self._replay_gun_signature = None
+        self._replay_publishing = False
         self._combat_diagnostics = (
             WorkerCombatDiagnostics(_PROFILE_CLOCK, detail_stride=4)
             if self._worker_mode and PERFORMANCE_DIAGNOSTICS else None)
@@ -2205,6 +2280,7 @@ class BattleRuntime(object):
         self._feedback_shell_failures = set()
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
+        self._local_reaction_rate = 0.0
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
         self._local_direction_command = 0.0
@@ -3318,6 +3394,16 @@ class BattleRuntime(object):
         and no optional devices, so the battle would measure a different tank
         from the one the garage panel measures.
         """
+        if getattr(self, '_replay_mode', False):
+            from gui.mods.offline_lan_0922 import replay_presentation
+            row = replay_presentation.recorded_player(self.client.reader.header)
+            encoded = lan_protocol._canonical_vehicle_compact_descr(row.get('vehicle_compact_descr'))
+            if encoded is None:
+                raise RuntimeError('replay local mounted descriptor is missing')
+            descriptor = self._runtime.vehicles.VehicleDescr(compactDescr=base64.b64decode(encoded.encode('ascii')))
+            if str(descriptor.type.name) != str(vehicle_name):
+                raise RuntimeError('replay local descriptor does not match recorded vehicle')
+            return descriptor
         vehicles = self._runtime.vehicles
         fitting = self._garage_loadout_snapshot()['fitting']
         if fitting is not None and fitting[1] == vehicle_name:
@@ -4129,8 +4215,13 @@ class BattleRuntime(object):
         lock = getattr(rotator, 'lock', None)
         if not callable(lock):
             raise RuntimeError('#1513 gun lock boundary is unavailable')
-        avatar.isGunLocked = bool(locked)
-        lock(bool(locked))
+        # A saved pose, not today's mouse target, owns the replay gun.  Native
+        # PREBATTLE -> BATTLE callbacks must not release its aiming integrator.
+        # Keep the native timer alive for marker/audio updates; do not stop and
+        # restart the rotator (and its sound objects) on every saved sample.
+        locked = bool(locked or self._replay_mode)
+        avatar.isGunLocked = locked
+        lock(locked)
         return True
 
     def _bind_local_arcade_camera(self):
@@ -4612,6 +4703,18 @@ class BattleRuntime(object):
                 '#1513 own-vehicle auxiliary physics boundary is unavailable')
         publish(*payload)
         self._last_presented_rpm = payload
+        if now >= getattr(self, '_engine_audio_report_at', 0.0):
+            self._engine_audio_report_at = now + 5.0
+            entity = self._server_entity(self._server.vehicle_id) if self._server is not None else None
+            appearance = getattr(entity, 'appearance', None)
+            detailed = getattr(appearance, 'detailedEngineState', None)
+            from gui.mods.offline_lan_0922 import engine_audio
+            observer = getattr(appearance, '_offlineEngineRelay', None)
+            if observer is not None:
+                observer.report('sample')
+            sys.stdout.write('[Offline LAN 0.9.22] ENGINE_AUDIO local replay=%s owner=%s mode=%s rpm_input=%.3f rpm_state=%s speed=%.3f\n' %
+                (getattr(self, '_replay_mode', False), getattr(appearance, 'engineAudition', None) is not None,
+                 getattr(detailed, 'mode', None), value, getattr(detailed, 'rpm', None), self._local_speed))
         return True
 
     def local_damage_report(self):
@@ -5694,10 +5797,14 @@ class BattleRuntime(object):
                                   ground_start, ground_end, self._ground_filter(nx, nz)))
                 except Exception:
                     return {'clear': False, 'collision': True,
-                            'water': False, 'slope': 99.0}
+                            'water': False, 'slope': 99.0,
+                            'slope_valid': False, 'probe_failed': True,
+                            'reason': 'planning_ground_query_failed'}
                 if ground is None:
                     return {'clear': False, 'collision': False,
-                            'water': False, 'slope': 99.0}
+                            'water': False, 'slope': 99.0,
+                            'slope_valid': False,
+                            'reason': 'planning_ground_missing'}
                 next_y = float(ground[0].y)
                 water_depth = self._water_depth((nx, next_y, nz))
                 if (wet_escape and
@@ -6729,6 +6836,10 @@ class BattleRuntime(object):
         self._local_physics = vehicle_physics.derive_params(
             entity.typeDescriptor,
             self._local_factors(entity.typeDescriptor))
+        if getattr(self, '_replay_mode', False):
+            snapshot = self._accepted_local_effective_params()
+            if snapshot is not None:
+                self._local_physics = dict(snapshot['physics'])
         # The ten-spring trial is derived lazily on the first copied-physics
         # tick. A malformed detailed chassis descriptor can then fall back to
         # the existing support path without aborting local-vehicle startup.
@@ -6848,9 +6959,10 @@ class BattleRuntime(object):
         if detailed is self._local_engine_state:
             return True
         try:
-            detailed.vehicleSpeedLink = self._local_vehicle_speed_link
-            detailed.rotationSpeedLink = \
-                self._local_vehicle_rotation_speed_link
+            from gui.mods.offline_lan_0922 import engine_audio
+            engine_audio.bind_motion(
+                appearance, self._local_vehicle_speed_link,
+                self._local_vehicle_rotation_speed_link, is_player=True)
         except Exception as error:
             # A half-applied pair still reads the copied speed, so keep no
             # ownership claim and let the next frame retry the whole rebind.
@@ -7261,7 +7373,8 @@ class BattleRuntime(object):
         self._local_matrix.setRotateYPR((
             self._local_yaw, self._local_pitch, self._local_roll))
         self._local_matrix.translation = position
-        self._update_local_hull_aiming(entity, dt)
+        if not self._replay_mode:
+            self._update_local_hull_aiming(entity, dt)
         self._refresh_local_stabilised_snapshot()
         # Exact #1513's CompoundAppearance.__linkCompound rebinds
         # ``compoundModel.matrix`` from Vehicle.matrix after every model
@@ -7327,6 +7440,9 @@ class BattleRuntime(object):
 
     def _local_engine_mode_value(self, alive):
         """Return the exact #1513 ``(power, movementFlags)`` engine mode."""
+        if getattr(self, '_replay_mode', False):
+            # Replay has no live movement sender: use the recorded pose motion.
+            return self._bot_engine_mode(alive, self._local_speed, self._local_turn_speed)
         forward = _number(getattr(self._sender, 'forward', 0.0))
         # The retail cell contributes limited-traverse autorotation even when
         # A/D is idle.  Drive native track animation from the effective turn
@@ -7831,6 +7947,25 @@ class BattleRuntime(object):
         """
         if self._garage_loadout is not None:
             return self._garage_loadout
+        if getattr(self, '_replay_mode', False):
+            from gui.mods.offline_lan_0922 import replay_presentation
+            row = replay_presentation.recorded_player(self.client.reader.header)
+            recorded = row.get('effective_params') or {}
+            encoded = lan_protocol._canonical_vehicle_compact_descr(row.get('vehicle_compact_descr'))
+            if encoded is None:
+                raise RuntimeError('replay local mounted descriptor is missing')
+            self._garage_loadout = {
+                'shells': dict((int(k), int(n)) for k, n in recorded.get('ammo', ())),
+                'shell_order': tuple(int(x['compact_descr']) for x in recorded['gun']['shots']),
+                'equipment_ids': [int(x['compactDescr']) for x in recorded.get('equipment', ())],
+                'equipments': (), 'battle_boosters': (), 'crew': (),
+                'crew_group': int(self.client.reader.header.get('local_crew_group', 0)),
+                'camouflage_id': (recorded.get('camouflage') or {}).get('camouflage_id'),
+                'outfit': self._remote_outfit(row, 'player'),
+                'fitting': (base64.b64decode(encoded.encode('ascii')), row['vehicle']),
+                'personal_mission_ids': (),
+            }
+            return self._garage_loadout
         item = self._garage_item()
         vehicle_equipment = getattr(item, 'equipment', None)
         consumables = getattr(
@@ -8001,6 +8136,21 @@ class BattleRuntime(object):
         equipment bonus the garage shows and the battle ignores shows up here
         as a difference, not as a feeling.
         """
+        if getattr(self, '_replay_mode', False):
+            from gui.mods.offline_lan_0922 import replay_presentation
+            accepted = self._accepted_local_effective_params()
+            replay_presentation.verify_descriptor(descriptor, accepted)
+            original = self.client.reader.header.get('local_descriptor_contract')
+            if original is not None and not replay_presentation._equal_values(original, replay_presentation.descriptor_contract(descriptor)):
+                raise RuntimeError('recorded vehicle/module values differ from the current resource profile')
+            from gui.mods.offline_lan_0922 import offline_replay
+            offline_replay.log('play_parameters source=recorded_effective clip=%s mass=%.3f speed=%.3f/%.3f powerW=%.3f reload=%.6f view=%.3f no_live_simulation=True' % (
+                accepted['gun']['clip_size'], accepted['physics']['mass'],
+                accepted['physics']['speedFwd'], accepted['physics']['speedBwd'],
+                accepted['physics']['powerW'], self._gun_state.reload,
+                self._vision_radius(descriptor, local=True)))
+            self._gun_state._offline_replay_owned = True
+            return True
         state = self._gun_state
         profile = self._spotting_profile(descriptor, local=True)
         loadout = self._local_loadout(descriptor)
@@ -8349,19 +8499,69 @@ class BattleRuntime(object):
 
     def _publish_reload_event(self, time_left, base_time, force=False):
         """Send one #1513 reload edge and let the stock HUD interpolate it."""
+        if getattr(self, '_replay_mode', False) and not getattr(self, '_replay_publishing', False):
+            return False
         if self._server is None:
             return False
         event = (max(0.0, float(time_left)),
                  max(0.0, float(base_time)))
         if not force and self._reload_event == event:
             return False
+        previous = self._reload_event
+        audio = None
+        if (not getattr(self, '_worker_mode', False) and
+                not getattr(self, '_replay_mode', False) and self._gun_state is not None):
+            audio = self._run_optional_feature(
+                'live reload sound', self._ensure_live_reload_sound)
         self._avatar.updateVehicleGunReloadTime(
             self._server.vehicle_id, event[0], event[1])
         self._reload_event = event
+        if audio:
+            if not self._battle_live:
+                audio.stop()
+            else:
+                now = self._clock()
+                state = self._gun_state
+                gun = {'reload_time': event[0], 'reload_duration': event[1],
+                       'clip': int(state.clip), 'shot_index': int(state.shot_index),
+                       'ammo': list(state.ammo)}
+                reason = ('complete' if event[0] <= 0.0 else
+                          ('start' if previous is None or previous[0] <= 0.0 else 'update'))
+                self._run_optional_feature(
+                    'live reload sound', audio.on_edge,
+                    ((event[0], event[1], reason), gun, now, now))
         return True
+
+    def _ensure_live_reload_sound(self):
+        """Own only this Avatar's mechanical audio; the live gun remains authoritative."""
+        from gui.mods.offline_lan_0922 import replay_sound
+        ammo = self._avatar.guiSessionProvider.shared.ammo
+        audio = getattr(self, '_live_reload_sound', None)
+        if audio is not None and audio.owns(ammo):
+            return audio
+        if audio is not None:
+            audio.close()
+        settings = ammo.getGunSettings()
+        if settings.reloadEffect is None:
+            return None  # Stock has not installed an effect, or this gun has none.
+        def log(text):
+            sys.stdout.write('[Offline LAN 0.9.22] LIVE_' + text + '\n')
+        audio = replay_sound.ReplayReloadSound(settings.reloadEffect, settings, log=log)
+        self._live_reload_sound = audio.bind(ammo)
+        return audio
+
+    def _pump_live_reload_sound(self, now):
+        audio = getattr(self, '_live_reload_sound', None)
+        if audio is not None:
+            if not self._battle_live or (self.local_health() or 0) <= 0:
+                audio.stop()
+            else:
+                audio.pump(now)
 
     def _publish_ammo_state(self, state, force=False):
         """Publish shell counts only when the copied gun state changes."""
+        if getattr(self, '_replay_mode', False) and not getattr(self, '_replay_publishing', False):
+            return False
         signature = (
             int(state.shot_index), tuple(int(value) for value in state.ammo),
             int(state.clip))
@@ -8457,6 +8657,8 @@ class BattleRuntime(object):
     @staticmethod
     def _rescale_current_reload(state, reload_factor):
         """Preserve completed reload progress when its live factor changes."""
+        if state is not None and getattr(state, '_offline_replay_owned', False):
+            return False
         if (state is None or state.reload_time <= 0.0 or
                 int(state.clip) > 0):
             return False
@@ -8486,6 +8688,8 @@ class BattleRuntime(object):
         Lightweight contract tests construct a GunState without starting the
         battle clock.  There is no elapsed timeline to close in that case.
         """
+        if getattr(self, '_replay_mode', False):
+            return None
         if (state is None or self._worker_mode or
                 self._gun_last_tick is None):
             return None
@@ -8504,6 +8708,8 @@ class BattleRuntime(object):
 
     def _apply_current_reload_factor(self, state, entity):
         """Apply the live critical factor before publishing a new cycle."""
+        if getattr(self, '_replay_mode', False):
+            return False
         if state is None or entity is None:
             return False
         return self._rescale_current_reload(
@@ -8516,6 +8722,8 @@ class BattleRuntime(object):
         publications.  A trigger must first consume that same elapsed time or
         it can reject a round which the native HUD already presents as ready.
         """
+        if getattr(self, '_replay_mode', False):
+            return self._gun_state
         if entity is None or entity.typeDescriptor is None:
             raise RuntimeError('player Vehicle descriptor is unavailable')
         descriptor = entity.typeDescriptor
@@ -8569,6 +8777,10 @@ class BattleRuntime(object):
         return state
 
     def _ammo_tick(self):
+        if getattr(self, '_replay_mode', False):
+            # Timeline presentation owns every reload/clip/ammo edge. No
+            # independent 10 Hz gun or server-marker clock runs in replay.
+            return
         if self.state != 'running' or self._server is None:
             return
         try:
@@ -8662,6 +8874,8 @@ class BattleRuntime(object):
         return self._report_skill_detail('intuition', detail)
 
     def _reload_partial_clip_now(self, state):
+        if getattr(self, "_replay_mode", False):
+            return False
         edge = self._advance_local_gun_edge(state)
         entity = edge[0] if edge is not None else None
         previous_reload = state.reload_time
@@ -11319,47 +11533,41 @@ class BattleRuntime(object):
                 direct_he = (not event.get('splash') and shell_type == int(
                     self._runtime.constants.SHELL_TYPES_INDICES[
                         'HIGH_EXPLOSIVE']))
-                # A resisted HE hit can still remove HP through its blast.
-                # Use the explosion voice flags for that damage while leaving
-                # the canonical projectile penetration result untouched.
-                explosion = bool(event.get('splash')) or (
-                    direct_he and shot_result != 2 and damage > 0)
-                if explosion:
-                    flags = int(flags_type.ATTACK_IS_EXTERNAL_EXPLOSION)
+                # Origin (direct / nearby) is independent of blast damage.
+                # Never turn a direct resisted HE hit into an external blast,
+                # or invent projectile penetration just to select a voice.
+                external_blast = bool(event.get('splash'))
+                blast_damage = external_blast or (direct_he and shot_result != 2)
+                flags = int(flags_type.ATTACK_IS_EXTERNAL_EXPLOSION
+                            if external_blast else flags_type.ATTACK_IS_DIRECT_PROJECTILE)
+                if external_blast:
                     if damage > 0:
-                        flags |= int(
-                            flags_type.
-                            MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION)
+                        flags |= int(flags_type.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION)
+                elif direct_he:
+                    if damage <= 0:
+                        flags |= int(flags_type.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE)
+                    elif shot_result == 2:
+                        flags |= int(flags_type.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE)
+                    else:
+                        flags |= int(flags_type.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION)
+                elif shot_result == 2:
+                    flags |= int(flags_type.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE)
+                elif shot_result == 1:
+                    flags |= int(flags_type.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE)
+                else:
+                    flags |= int(flags_type.RICOCHET)
+                if blast_damage:
                     critical_cause = 'explosion'
                     pierced_flag = int(flags_type.DEVICE_PIERCED_BY_EXPLOSION)
-                    device_flag = int(
-                        flags_type.DEVICE_DAMAGED_BY_EXPLOSION)
-                    chassis_flag = int(
-                        flags_type.CHASSIS_DAMAGED_BY_EXPLOSION)
-                    gun_flag = int(
-                        flags_type.GUN_DAMAGED_BY_EXPLOSION)
+                    device_flag = int(flags_type.DEVICE_DAMAGED_BY_EXPLOSION)
+                    chassis_flag = int(flags_type.CHASSIS_DAMAGED_BY_EXPLOSION)
+                    gun_flag = int(flags_type.GUN_DAMAGED_BY_EXPLOSION)
                 else:
-                    flags = int(flags_type.ATTACK_IS_DIRECT_PROJECTILE)
-                    if direct_he and shot_result != 2:
-                        shot_result = 1
-                    if shot_result == 2:
-                        flags |= int(
-                            flags_type.
-                            MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE)
-                    elif shot_result == 1:
-                        flags |= int(
-                            flags_type.
-                            MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE)
-                    else:
-                        flags |= int(flags_type.RICOCHET)
                     critical_cause = 'shot'
                     pierced_flag = int(flags_type.DEVICE_PIERCED_BY_PROJECTILE)
-                    device_flag = int(
-                        flags_type.DEVICE_DAMAGED_BY_PROJECTILE)
-                    chassis_flag = int(
-                        flags_type.CHASSIS_DAMAGED_BY_PROJECTILE)
-                    gun_flag = int(
-                        flags_type.GUN_DAMAGED_BY_PROJECTILE)
+                    device_flag = int(flags_type.DEVICE_DAMAGED_BY_PROJECTILE)
+                    chassis_flag = int(flags_type.CHASSIS_DAMAGED_BY_PROJECTILE)
+                    gun_flag = int(flags_type.GUN_DAMAGED_BY_PROJECTILE)
                 for critical_event in (
                         (critical or {}).get('events') or ()):
                     if critical_event.get(
@@ -11395,7 +11603,13 @@ class BattleRuntime(object):
                 if not callable(callback):
                     raise RuntimeError(
                         '#1513 shot-result feedback boundary is unavailable')
-                callback([(flags << 32) | target_id])
+                if (enemy and critical_count > 0 and not direct_he and
+                        not external_blast and not bool(event.get('dead'))):
+                    from gui.mods.offline_lan_0922 import critical_voice
+                    critical_voice.present(self._avatar, callback,
+                                           [(flags << 32) | target_id])
+                else:
+                    callback([(flags << 32) | target_id])
         if target_record.get('local') and enemy:
             attacker_id = int(attacker_record['engine_id'])
             blocked_damage = max(
@@ -12178,6 +12392,10 @@ class BattleRuntime(object):
         return changed
 
     def _accept_player_fire_commit(self, event, record):
+        if self._replay_mode:
+            # A recorded shot is already an accepted outcome, not a live
+            # trigger to charge against this machine's current garage ammo.
+            return False
         if event.get('shooter_kind') != 'player':
             return False
         try:
@@ -12398,6 +12616,165 @@ class BattleRuntime(object):
             return True
         return bool(record.get('spot_visible', True))
 
+    def _show_replay_local_muzzle(self, entity, burst_count):
+        """Play the native shooting extra without creating a new fire intent."""
+        extra = entity.typeDescriptor.extrasDict['shoot']
+        # Match #1513 Vehicle.showShooting: an already-running native extra
+        # owns callbacks and must be retired before the next shot/burst.
+        # This is presentation only: no new fire intent, ammunition or damage.
+        extra.stopFor(entity)
+        extra.startFor(entity, burst_count)
+        self._replay_muzzle_count = getattr(self, '_replay_muzzle_count', 0) + 1
+        if self._replay_muzzle_count <= 3 or self._replay_muzzle_count % 50 == 0:
+            from gui.mods.offline_lan_0922 import offline_replay
+            offline_replay.log('REPLAY_SOUND muzzle stop_start=True shown=%d burst=%d' % (
+                self._replay_muzzle_count, burst_count))
+
+    def apply_replay_local(self, message):
+        from gui.mods.offline_lan_0922 import offline_replay
+        self._replay_local = offline_replay.validate_local(message)
+        self._apply_replay_ammo(self._replay_local)
+
+    def _present_replay_local(self, dt):
+        """Interpolate pose per render frame; replay is the sole gun owner."""
+        left = self._replay_local
+        if not self._replay_mode or left is None or self._server is None:
+            return False
+        entity = self._server_entity(self._server.vehicle_id)
+        if entity is None or self._local_matrix is None or self._local_model is None:
+            return False
+        from gui.mods.offline_lan_0922 import offline_replay, replay_presentation
+        right = getattr(self.client, '_replay_local_future', None)
+        moment = self.client.presentation_time() if hasattr(self.client, 'presentation_time') else left.get('_replay_t', 0.0)
+        sample = replay_presentation.blend_pose(left, right, moment)
+        self._local_position = tuple(sample['position'])
+        for name in offline_replay.LOCAL_SCALARS:
+            if name in sample:
+                setattr(self, name, sample[name])
+        position = self._update_local_presentation(entity, dt)
+        self._avatar.updateOwnVehiclePosition(position,
+            self._vector(_engine_rotation(self._local_yaw)),
+            self._local_speed, self._local_turn_speed)
+        if self._binding is not None:
+            self._run_optional_feature(
+                'engine RPM presentation', self._publish_rpm, (self._clock(),))
+        self._apply_replay_gun_pose(sample)
+        self._apply_replay_ammo(left)
+        if left is not self._replay_local_applied:
+            for key, visible in left.get('visibility', {}).items():
+                record = self._records.get(key)
+                if record is not None:
+                    self._set_record_spot_visibility(record, visible[0], visible[1])
+        self._replay_local_applied = left
+        return True
+
+    def _apply_replay_ammo(self, sample):
+        if not getattr(self, '_replay_mode', False) or self._gun_state is None or self._server is None:
+            return False
+        from gui.mods.offline_lan_0922 import replay_presentation, offline_replay
+        edge = getattr(self, '_replay_reload_edges', None)
+        if edge is None:
+            edge = self._replay_reload_edges = replay_presentation.ReloadEdges()
+        gun = sample.get('gun', {})
+        # Copy only the small state vectors. Never alias a source sample which
+        # any native callback or read-only historical fixture can mutate.
+        for name, value in gun.items():
+            setattr(self._gun_state, name, list(value) if name == 'ammo' else value)
+        self._gun_state._offline_replay_owned = True
+        stamp = sample.get('_replay_t', 0.0)
+        now = self.client.presentation_time() if hasattr(self.client, 'presentation_time') else stamp
+        publication = edge.observe(gun, stamp, now, self._battle_live)
+        # Bind one replay-owned reload effect BEFORE publishing HUD updates.
+        # The native AmmoController remains responsible for its numeric HUD;
+        # its triggerReloadEffect side effect cannot start a second scheduler.
+        audio = None
+        if self._optional_feature_enabled('replay reload sound'):
+            audio = self._run_optional_feature(
+                'replay reload sound', self._ensure_replay_reload_sound)
+        self._replay_publishing = True
+        try:
+            self._publish_ammo_state(self._gun_state)
+            if publication is not None:
+                self._publish_reload_event(publication[0], publication[1], force=True)
+                if edge.notifications <= 4 or edge.notifications % 50 == 0:
+                    offline_replay.log('play_reload edge=%s notifications=%s complete=%s t=%.6f left=%.6f clip=%s' % (
+                        publication[2], edge.notifications, edge.completions, now, publication[0], self._gun_state.clip))
+        finally:
+            self._replay_publishing = False
+        if audio:
+            if not self._battle_live or sample.get('health', 1) <= 0:
+                audio.stop()
+            else:
+                audio.on_edge(publication, gun, stamp, now)
+                audio.pump(now)
+        return True
+
+    def _ensure_replay_reload_sound(self):
+        from gui.mods.offline_lan_0922 import replay_sound, offline_replay
+        ammo = self._avatar.guiSessionProvider.shared.ammo
+        audio = getattr(self, '_replay_reload_sound', None)
+        if audio is not None and audio.owns(ammo):
+            return audio
+        if audio is not None:
+            audio.close()
+        settings = ammo.getGunSettings()
+        audio = replay_sound.ReplayReloadSound(
+            settings.reloadEffect, settings, log=offline_replay.log)
+        self._replay_reload_sound = audio.bind(ammo)
+        return audio
+
+    def _apply_replay_gun_pose(self, sample):
+        """Restore #1513's native gun owner and animation, not its read-only API.
+
+        turretYaw/gunPitch are getter-only properties.  forceGunParams owns
+        their backing state and the marker, but does NOT commit model matrices.
+        Use the same native matrix methods used by reset/rotate so static gun
+        geometry and mounted model providers keep their normal semantics.
+
+        Early schema-1 recorders read a non-canonical entity.gunAngles alias;
+        that field can be zero even when the real gunAnglesPacked is nonzero.
+        Recreate the packed echo from the recorded floating-point angles using
+        the existing descriptor-aware binding, never from that obsolete alias.
+        """
+        if not self._replay_mode:
+            return False
+        if 'turret_yaw' not in sample and 'gun_pitch' not in sample:
+            # Motion-only legacy fixtures/records carry no new gun evidence.
+            return False
+        rotator = getattr(self._avatar, 'gunRotator', None)
+        force = getattr(rotator, 'forceGunParams', None)
+        turret_matrix = getattr(
+            rotator, '_VehicleGunRotator__updateTurretMatrix', None)
+        gun_matrix = getattr(
+            rotator, '_VehicleGunRotator__updateGunMatrix', None)
+        if not all(callable(method) for method in (
+                force, turret_matrix, gun_matrix)):
+            raise RuntimeError(
+                '#1513 replay gun-pose interface is unavailable: '
+                'forceGunParams/updateTurretMatrix/updateGunMatrix')
+        yaw = float(sample.get('turret_yaw', rotator.turretYaw))
+        pitch = float(sample.get('gun_pitch', rotator.gunPitch))
+        dispersion = float(sample.get('dispersion_angle', rotator.dispersionAngle))
+        signature = (yaw, pitch, dispersion)
+        if signature == getattr(self, '_replay_gun_signature', None):
+            return False
+        self._set_gun_locked(True)
+        self._echo_local_gun_angles(yaw, pitch)
+        # Public forced-pose update keeps all exposed angles read-only.  This
+        # does not call updateRotationAndGunMarker or solve a new mouse target.
+        force(yaw, pitch, dispersion)
+        # A recorded sample is already a realised pose. Commit it immediately
+        # like native reset(), instead of predicting a different future angle.
+        turret_matrix(yaw, 0.0)
+        gun_matrix(pitch, 0.0)
+        self._replay_gun_signature = signature
+        if self._replay_local_applied is None:
+            from gui.mods.offline_lan_0922 import offline_replay
+            offline_replay.log(
+                'play_gun_pose interface=forceGunParams '
+                'native_matrices=True packed_echo=True live_aim_locked=True')
+        return True
+
     def _show_shot(self, event, update_state=True):
         key = self._event_entity_key(event, 'attacker')
         if key is None:
@@ -12502,10 +12879,16 @@ class BattleRuntime(object):
                 if (visual_admitted and self._optional_feature_enabled(
                         'shot muzzle presentation') and
                         self._shot_muzzle_drawn(record)):
-                    self._run_optional_feature(
-                        'shot muzzle presentation', entity.showShooting,
-                        args=(burst_count, False))
-                elif record.get('local'):
+                    if self._replay_mode and record.get('local'):
+                        self._run_optional_feature(
+                            'shot muzzle presentation',
+                            self._show_replay_local_muzzle,
+                            args=(entity, burst_count))
+                    else:
+                        self._run_optional_feature(
+                            'shot muzzle presentation', entity.showShooting,
+                            args=(burst_count, False))
+                elif record.get('local') and not self._replay_mode:
                     self._run_optional_feature(
                         'local shot convergence',
                         self._show_local_shot_without_extra,
@@ -16343,8 +16726,18 @@ class BattleRuntime(object):
                     receipt.get('presentation_time_us'))
             except (TypeError, ValueError, OverflowError):
                 revision = bot_id = presentation_time_us = None
-            bot_state = self._ram_bot_state_at(
-                bot_id, revision, presentation_time_us)
+            pinned = receipt.get('ram_bot_state')
+            if isinstance(pinned, dict) and pinned.get('id') == bot_id:
+                profile = getattr(self._bots, 'states', {}).get(bot_id, {})
+                bot_state = dict((k, profile[k]) for k in
+                    ('mass', 'collision_shape', 'ram_profile', 'vehicle', 'team')
+                    if k in profile)
+                bot_state.update(pinned)
+                if not all(k in bot_state for k in ('mass', 'collision_shape', 'ram_profile')):
+                    bot_state = None
+            else:
+                bot_state = self._ram_bot_state_at(
+                    bot_id, revision, presentation_time_us)
             if bot_state is not None:
                 receipt['_ram_contact_bot_state'] = dict(bot_state)
             decorated.append(receipt)
@@ -17090,6 +17483,8 @@ class BattleRuntime(object):
                 self._refresh_fallen_tree_foliage, (now,))
             self._retry_bot_manifest(now)
             self._maybe_send_battle_ready()
+            from gui.mods.offline_lan_0922 import offline_replay
+            offline_replay.ensure_recording(self)
             if profiling:
                 next_boundary = _PROFILE_CLOCK()
                 stages['house'] = max(0.0, next_boundary - boundary)
@@ -17103,9 +17498,9 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['sync'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and not self._worker_mode:
+            if self._battle_live and not self._worker_mode and not self._replay_mode:
                 self._tick_critical_states(rule_dt)
-            if not self._worker_mode:
+            if not self._worker_mode and not self._replay_mode:
                 self._run_optional_feature(
                     'Expert damaged-device presentation',
                     self._tick_expert_target, (now,),
@@ -17119,7 +17514,7 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['critical'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and not self._worker_mode:
+            if self._battle_live and not self._worker_mode and not self._replay_mode:
                 self._tick_drowning(rule_dt, now)
                 self._tick_overturn(rule_dt, now)
             if profiling:
@@ -17220,7 +17615,7 @@ class BattleRuntime(object):
                 if self._worker_mode:
                     self._advance_player_fire_authority(rule_dt, now)
                     self._publish_player_environment(rule_dt, now)
-                else:
+                elif not self._replay_mode:
                     self._tick_critical_states(rule_dt)
                     self._tick_drowning(rule_dt, now)
                     self._tick_overturn(rule_dt, now)
@@ -17228,7 +17623,7 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['transition'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and not self._worker_mode:
+            if self._battle_live and not self._worker_mode and not self._replay_mode:
                 self._local_frame_stages = stages if profiling else None
                 try:
                     self._drive_local(dt)
@@ -17239,7 +17634,10 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['local'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and not self._worker_mode:
+            if not self._worker_mode and not self._replay_mode:
+                self._run_optional_feature(
+                    'live reload sound pump', self._pump_live_reload_sound, (now,))
+            if self._battle_live and not self._worker_mode and not self._replay_mode:
                 self._run_optional_feature(
                     'target outline', self._update_target_outline, (now,),
                     self._disable_target_outline_presentation)
@@ -17250,7 +17648,7 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['outline'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and self._bots is not None:
+            if self._battle_live and self._bots is not None and not self._replay_mode:
                 if self._worker_mode:
                     self._worker_probe_authority_callbacks += 1
                 self._advance_artillery_arcs(now)
@@ -17328,7 +17726,7 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['bots_update'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and self._bots is not None:
+            if self._battle_live and self._bots is not None and not self._replay_mode:
                 presentation_states = getattr(
                     self._bots, 'presentation_states', None)
                 if not callable(presentation_states):
@@ -17356,7 +17754,7 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['bot_present'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and self._bots is not None:
+            if self._battle_live and self._bots is not None and not self._replay_mode:
                 for outgoing in outgoing_messages:
                     is_bot_state = outgoing.get('type') == 'bot_state'
                     if is_bot_state:
@@ -17376,7 +17774,7 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['bot_events'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if not self._worker_mode:
+            if not self._worker_mode and not self._replay_mode:
                 if self._battle_live:
                     self._run_optional_feature(
                         'spotting', self._update_spotting, (now,),
@@ -17392,7 +17790,7 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['spot'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and not self._worker_mode:
+            if self._battle_live and not self._worker_mode and not self._replay_mode:
                 validate_lock = getattr(
                     self._runtime.compatibility,
                     'validate_target_lock', None)
@@ -17402,6 +17800,10 @@ class BattleRuntime(object):
                 self._run_optional_feature(
                     'target lock validation', validate_lock, (self._avatar,),
                     disable=False)
+            if self._replay_mode:
+                self._present_replay_local(dt)
+            else:
+                offline_replay.record_local(self)
             self._worker_probe_bot_count = bot_count
             self._run_optional_feature(
                 'authority worker probe',
@@ -19449,6 +19851,10 @@ class BattleRuntime(object):
         pivot_offset = vehicle_physics.track_pivot_from_poses(
             self._local_physics or vehicle_physics.derive_params(entity.typeDescriptor),
             start_position, start_yaw, end_position, end_yaw)
+        pivot_end = vehicle_physics.track_pivot_position(
+            start_position, start_yaw, end_yaw, pivot_offset)
+        translation = (end_position[0]-pivot_end[0],
+                       end_position[2]-pivot_end[2])
         now = self._clock()
         rotation_speed_cap = self._destructible_rotation_speed_cap(
             self._local_physics,
@@ -19496,7 +19902,9 @@ class BattleRuntime(object):
             if (status in ('clear', 'crushed', 'approach') and
                     not self._native_world_rotation_is_clear(
                         start_position, start_yaw, end_yaw,
-                        entity.typeDescriptor, pivot_offset=pivot_offset)):
+                        entity.typeDescriptor, pivot_offset=pivot_offset,
+                        translation=translation,
+                        include_static=bool(math.hypot(*translation) > 1.0e-9))):
                 return False
             return status in ('clear', 'crushed', 'approach')
         token = self._destructible_contact_token(detail.get('token'))
@@ -19526,9 +19934,160 @@ class BattleRuntime(object):
         if (status in ('clear', 'crushed', 'approach') and
                 not self._native_world_rotation_is_clear(
                     start_position, start_yaw, end_yaw,
-                    entity.typeDescriptor, pivot_offset=pivot_offset)):
+                    entity.typeDescriptor, pivot_offset=pivot_offset,
+                        translation=translation,
+                        include_static=bool(math.hypot(*translation) > 1.0e-9))):
             return False
         return status in ('clear', 'crushed', 'approach')
+
+    def _recover_local_held_peer_turn(self, entity, position, yaw, turn, dt,
+                                      others):
+        """A held peer may redirect motor force into the player's own body."""
+        if not self._local_physics:
+            return None
+        own = {'id': -1, 'x': position[0], 'y': position[1], 'z': position[2],
+               'yaw': yaw, 'shape': self._collision_shape(entity.typeDescriptor),
+               'mass': self._local_physics['mass'], 'alive': True,
+               'vx': math.sin(yaw)*self._local_speed + self._local_push_x,
+               'vz': math.cos(yaw)*self._local_speed + self._local_push_z}
+        reaction_params = dict(self._local_physics)
+        reaction_params['rotSpd'] *= critical_damage.stat_factor(entity, 'traverse')
+        wanted, torque = vehicle_physics.contact_traverse(
+            reaction_params, own['shape'][0], self._local_speed, turn, dt,
+            getattr(self, '_local_drive_throttle', 0.0), self._local_pitch)
+        own.update(traverse_speed=wanted, traverse_torque=torque)
+        for other in others:
+            if (not other.get('shape') or not other.get('mass') or
+                    not tank_collision.vertical_overlap(
+                        position[1], own['shape'], other.get('y', 0.0),
+                        other['shape'], pitch_a=self._local_pitch,
+                        roll_a=self._local_roll, pitch_b=other.get('pitch', 0.0),
+                        roll_b=other.get('roll', 0.0))):
+                continue
+            nx, nz, depth = tank_collision._obb_overlap(
+                own['x'], own['z'], yaw, own['shape'],
+                other['x'], other['z'], other.get('yaw', 0.0), other['shape'])
+            if depth < -tank_collision.POSITION_SLOP:
+                continue
+            point = tank_collision.traverse_contact_point(own, other, (nx, nz), wanted)
+            if point is None:
+                continue
+            # A lighter finite peer must receive the existing reciprocal
+            # motor impulse before considering a held-face self-reaction.
+            # Otherwise a tiny first recoil step looks supportable by almost
+            # every parked tank and would suppress the intended heavy shove.
+            changes = dict((body['id'], {}) for body in (own, other))
+            peer_delta = tank_collision.traverse_impulses(
+                [own, other], dt, anchor=own['id'],
+                angular_results=changes)[other['id']]
+            if (math.hypot(*peer_delta) > 1.0e-9 or
+                    abs(changes[other['id']].get('delta_yaw', 0.0)) > 1.0e-9):
+                continue
+            result = self._recover_local_world_turn(entity, position, yaw, turn, dt,
+                {'hit': (point[0], position[1]+0.6, point[1]),
+                 'normal': (nx, 0.0, nz)}, held_peer=other)
+            if result is not None:
+                return result
+        return None
+
+    def _recover_local_world_turn(self, entity, position, yaw, turn, dt, trace,
+                                  held_peer=None):
+        """Apply a torque-limited reaction only through a complete pose sweep."""
+        if (self._local_airborne or not self._local_physics or
+                math.cos(self._local_pitch)*math.cos(self._local_roll) < 0.8 or
+                'hit' not in trace or 'normal' not in trace):
+            self._local_reaction_rate = 0.0
+            return None
+        normal = trace['normal']
+        normal_length = math.hypot(normal[0], normal[2])
+        key = None if normal_length <= 1.0e-9 else (
+            held_peer.get('id') if held_peer is not None else 'world',
+            normal[0]/normal_length, normal[2]/normal_length)
+        previous_key = getattr(self, '_local_reaction_key', None)
+        previous_rate = getattr(self, '_local_reaction_rate', 0.0)
+        if (key is None or previous_key is None or key[0] != previous_key[0] or
+                key[1]*previous_key[1]+key[2]*previous_key[2] < 0.999):
+            previous_rate = 0.0
+        reaction_params = dict(self._local_physics)
+        reaction_params['rotSpd'] *= critical_damage.stat_factor(entity, 'traverse')
+        candidate = vehicle_physics.fixed_contact_turn(
+            reaction_params, self._collision_shape(entity.typeDescriptor),
+            position, yaw, turn, self._local_speed,
+            getattr(self, '_local_drive_throttle', 0.0), dt,
+            trace['hit'], trace['normal'], previous_rate,
+            bounds=world_collision._vehicle_motion_bounds(entity.typeDescriptor),
+            slope_pitch=self._local_pitch)
+        if candidate is None:
+            self._local_reaction_rate = 0.0
+            return None
+        if held_peer is not None and not held_peer.get('immovable'):
+            # A finite peer may serve as a held face only if its existing
+            # ground law absorbs this entire reaction. Otherwise leave the
+            # finite-mass reciprocal push to the normal contact owner below.
+            grip = held_peer.get('contact_decel')
+            mass = held_peer.get('mass', 0.0)
+            vx, vz = held_peer.get('physical_velocity') or (
+                held_peer.get('vx', 0.0), held_peer.get('vz', 0.0))
+            nx, nz = candidate['normal']
+            angle_peer = held_peer.get('yaw', 0.0)
+            forward = nx*math.sin(angle_peer)+nz*math.cos(angle_peer)
+            side = nx*math.cos(angle_peer)-nz*math.sin(angle_peer)
+            delta = candidate['normal_impulse']/mass if mass > 0.0 else float('inf')
+            held = (grip is not None and mass > 0.0 and
+                    math.hypot(vx, vz) < 1.0e-8 and
+                    abs(held_peer.get('traverse_speed', 0.0)) < 1.0e-8 and
+                    abs(held_peer.get('push_yaw', 0.0)) < 1.0e-8 and
+                    delta*abs(forward) <= grip[0]*dt and
+                    delta*abs(side) <= grip[1]*dt)
+            if held and not held_peer.get('alive', True):
+                point = trace['hit']
+                arm = ((point[2]-held_peer['z'])*nx -
+                       (point[0]-held_peer['x'])*nz)
+                shape_peer = held_peer['shape']
+                inertia = tank_collision.wreck_yaw_inertia(held_peer)
+                # Wreck yaw remains finite: do not pretend that a corner-
+                # loaded wreck is held merely because its centre can hold.
+                peer_params = held_peer.get('contact_params')
+                if peer_params is None or not inertia:
+                    held = False
+                else:
+                    j = candidate['normal_impulse']
+                    remaining = vehicle_physics.wreck_contact_step(
+                        peer_params, -j*nx/mass, -j*nz/mass, -j*arm/inertia,
+                        angle_peer, shape_peer, dt,
+                        math.cos(held_peer.get('pitch', 0.0))*
+                        math.cos(held_peer.get('roll', 0.0)))
+                    held = all(abs(value) <= 1.0e-8 for value in remaining)
+            if not held:
+                self._local_reaction_rate = 0.0
+                return None
+        move, angle = candidate['translation'], candidate['angle']
+        shape = self._collision_shape(entity.typeDescriptor)
+        others = self._contact_tanks(position, shape, dt,
+                                     extra_reach=math.hypot(*move))
+        fraction = tank_collision.rotation_fraction(
+            position, yaw, yaw+angle, shape, others, translation=move)
+        move = (move[0]*fraction, move[1]*fraction)
+        end = (position[0]+move[0], position[1], position[2]+move[1])
+        end_yaw = yaw+angle*fraction
+        clear = (fraction > 1.0e-6 and
+                 self._arena_rotation_is_clear(entity, position, yaw, end_yaw, end)
+                 and self._pose_sweep_is_clear(
+                     entity, position, yaw, end, end_yaw, self._local_speed, dt))
+        self._local_reaction_rate = (candidate['rate'] if clear and
+                                    fraction >= 1.0-1.0e-8 else 0.0)
+        self._local_reaction_key = key if clear else None
+        if clear:
+            self._local_contact_reaction_paid = True
+        now = self._clock()
+        if now >= getattr(self, '_contact_steer_log_time', 0.0):
+            self._contact_steer_log_time = now+2.0
+            sys.stdout.write('[Offline LAN 0.9.22] CONTACT_STEER fixed '
+                'clear=%s source=%s mass=%.3f powerW=%.3f torque=%.3f '
+                'angle=%.7f move=%s fraction=%.6f\n' % (
+                    clear, key[0] if key else '-', self._local_physics['mass'], self._local_physics['powerW'],
+                    candidate['torque'], angle, move, fraction))
+        return (end, end_yaw) if clear else None
 
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
@@ -19552,6 +20111,7 @@ class BattleRuntime(object):
         active_reader = getattr(
             self._destructibles, 'native_replacement_bsp_active', None)
         if (not include_static and not pivot_offset and
+                math.hypot(*translation) <= 1.0e-9 and
                 callable(active_reader) and not active_reader()):
             # Before the first accepted retained replacement there is no
             # damaged BSP to find.  The ordinary catalog/baked guards own live
@@ -19624,11 +20184,18 @@ class BattleRuntime(object):
             travel_length = math.hypot(*slice_travel)
             sweep_descriptor = _destructible_world_sweep_descriptor(
                 descriptor, interval_bbox)
-            departing = None if pivot_offset else _rotation_departing_contact(
-                slice_position if travel_length else position,
-                bbox, float(start_yaw) + yaw_delta * lower,
-                float(start_yaw) + yaw_delta * upper, pitch, roll,
-                read_previous_contacts, slice_travel)
+            slice_start_yaw = float(start_yaw) + yaw_delta * lower
+            slice_end_yaw = float(start_yaw) + yaw_delta * upper
+            slice_start_position = vehicle_physics.track_pivot_position(
+                position, start_yaw, slice_start_yaw, pivot_offset)
+            slice_start_position = (
+                slice_start_position[0] + translation[0] * lower,
+                slice_start_position[1],
+                slice_start_position[2] + translation[1] * lower)
+            departing = _rotation_departing_contact(
+                slice_start_position, bbox, slice_start_yaw, slice_end_yaw,
+                pitch, roll, read_previous_contacts, slice_travel,
+                pivot_offset=pivot_offset)
             for probe_speed in ((travel_length,) if travel_length else (1.0e-6, -1.0e-6)):
                 trace = {}
                 world_status = world_collision.check_horizontal_collision(
@@ -20587,6 +21154,8 @@ class BattleRuntime(object):
             'bot_id': bot_id,
             'record': record,
             'presentation_time_us': record.get('presentation_time_us'),
+            'bot_history_bracket': (list(record['presentation_bracket'])
+                if record.get('presentation_bracket') is not None else None),
             'local_vehicle': local_vehicle,
             'bot_vehicle': bot_vehicle,
             'hit_point': _xyz(hit_point),
@@ -20673,7 +21242,9 @@ class BattleRuntime(object):
         proof['attempts'] += 1
         record = proof['record']
         presentation_time_us = proof['presentation_time_us']
-        revision = self._ram_bot_revision_at(bot_id, presentation_time_us)
+        bracket = proof.get('bot_history_bracket')
+        revision = (bracket[2] if bracket is not None else
+                    self._ram_bot_revision_at(bot_id, presentation_time_us))
         local_matrix = proof['local_matrix']
         bot_matrix = proof['bot_matrix']
         contact_normal = proof.get('contact_normal')
@@ -20741,13 +21312,17 @@ class BattleRuntime(object):
             'bot_vx': proof['bot_vx'], 'bot_vy': proof['bot_vy'],
             'bot_vz': proof['bot_vz'],
         }
+        if bracket is not None:
+            receipt['bot_history_bracket'] = list(bracket)
         self._local_ram_receipt = receipt
         self._local_ram_receipts[self._local_ram_seq] = dict(receipt)
         self._native_ram_contact_proofs.pop(event_seq, None)
         sys.stdout.write(
             '[Offline LAN 0.9.22] RAM native contact accepted '
-            'bot_id=%d player_armor=%.3f bot_armor=%.3f\n' % (
-                bot_id, player_armor, bot_armor))
+            'bot_id=%d player_armor=%.3f bot_armor=%.3f '
+            'seq=%d event=%d bracket=%s\n' % (
+                bot_id, player_armor, bot_armor, self._local_ram_seq,
+                event_seq, bracket))
         return True
 
     def _retry_native_ram_contact_proofs(self):
@@ -20892,6 +21467,19 @@ class BattleRuntime(object):
             bot_vehicle = other.get('_vehicle')
             if (estimated is None or record is None or bot_vehicle is None):
                 continue
+            witnesses = []
+            for body in others:
+                if (tank_collision.vertical_overlap(
+                        own.get('y'), own['shape'], body.get('y'), body['shape'],
+                        pitch_a=own.get('pitch', 0.0), roll_a=own.get('roll', 0.0),
+                        pitch_b=body.get('pitch', 0.0), roll_b=body.get('roll', 0.0)) and
+                        tank_collision.obb_contact(own['x'], own['z'], own['yaw'], own['shape'],
+                            body['x'], body['z'], body['yaw'], body['shape']) is not None):
+                    witnesses.append((body.get('network_id'), body.get('alive', True), body.get('team')))
+            sys.stdout.write('[Offline LAN 0.9.22] RAM_EVIDENCE observed '
+                'bot=%d next_event=%d stamp=%s bracket=%s contacts=%s\n' % (
+                    bot_id, self._native_ram_event_seq+1,
+                    record.get('presentation_time_us'), record.get('presentation_bracket'), witnesses))
             queued = self._queue_ram_contact_proof(
                 record, entity, bot_vehicle, hit_point,
                 (own['vx'], own.get('vy', 0.0), own['vz']),
@@ -21109,6 +21697,7 @@ class BattleRuntime(object):
             result.append({
                 'traverse_speed': traverse[0], 'traverse_torque': traverse[1],
                 'contact_decel': grip,
+                'contact_params': params,
                 'id': 1000000 + int(record.get('engine_id', 0)),
                 'network_id': int(record.get('network_id', 0)),
                 'engine_id': int(record.get('engine_id', 0)),
@@ -21151,6 +21740,13 @@ class BattleRuntime(object):
         if start_position is None:
             start_position = getattr(self, '_local_contact_start_position', None)
         self._local_contact_start_position = None
+        reaction_paid = bool(getattr(self, '_local_contact_reaction_paid', False))
+        self._local_contact_reaction_paid = False
+        if reaction_paid:
+            # This complete translation+yaw already passed its joint sweep.
+            # Reinterpreting its chord as pure drive at the final heading
+            # would undo a legal recoil or spend the same drive twice.
+            start_position = None
         self._retry_native_ram_contact_proofs()
         own_mass = _number(
             (self._local_physics or {}).get('mass'), 25000.0)
@@ -21185,10 +21781,13 @@ class BattleRuntime(object):
                         start_position[2]+travel[1]*fraction)
             own['x'], own['z'] = position[0], position[2]
         if self._local_physics is not None:
+            contact_drive_intent = getattr(self, '_local_drive_throttle', 0.0)
             own['traverse_speed'], own['traverse_torque'] = vehicle_physics.contact_traverse(
                 self._local_physics, own['shape'][0], self._local_speed,
                 getattr(self, '_local_drive_turn', 0.0), dt,
-                getattr(self, '_local_drive_throttle', 0.0), self._local_pitch)
+                contact_drive_intent, self._local_pitch)
+            if reaction_paid:
+                own['traverse_torque'] = 0.0
         self._poll_local_ram_contact_episodes(entity, own, others)
         now = self._clock()
         physical_others = []
@@ -23183,6 +23782,9 @@ class BattleRuntime(object):
                 self._local_turn_speed = 0.0
         self._local_drive_turn = turn
         self._local_drive_throttle = throttle
+        self._local_contact_reaction_paid = False
+        if not turn or self._local_airborne:
+            self._local_reaction_rate = 0.0
         if not siege_drive_locked and not self._local_airborne:
             self._local_turn_speed = vehicle_physics.traverse_step(
                 self._local_physics, self._local_turn_speed,
@@ -23200,25 +23802,40 @@ class BattleRuntime(object):
             candidate_yaw += 2.0 * math.pi
         if abs(_angle_delta(candidate_yaw, yaw)) > 1.0e-9:
             shape = self._collision_shape(entity.typeDescriptor)
+            turn_peers = self._contact_tanks(position, shape, dt, extra_reach=
+                abs(pivot_offset * _angle_delta(yaw, candidate_yaw)))
             allowed = tank_collision.rotation_fraction(
-                position, yaw, candidate_yaw, shape,
-                self._contact_tanks(position, shape, extra_reach=
-                    abs(pivot_offset * _angle_delta(yaw, candidate_yaw))),
+                position, yaw, candidate_yaw, shape, turn_peers,
                 pivot_offset=pivot_offset)
             if allowed < 1.0:
-                candidate_yaw = yaw + _angle_delta(yaw, candidate_yaw)*allowed
-                self._local_turn_speed = 0.0
-                contact_path = contact_path or 'tank_turn_contact'
+                recovery = self._recover_local_held_peer_turn(
+                    entity, position, yaw, turn, dt, turn_peers)
+                if recovery is not None:
+                    position, yaw = recovery
+                    candidate_yaw = yaw
+                    pivot_offset = 0.0
+                    self._local_turn_speed = self._local_reaction_rate
+                    contact_path = contact_path or 'held_peer_reaction_turn'
+                else:
+                    candidate_yaw = yaw + _angle_delta(yaw, candidate_yaw)*allowed
+                    self._local_turn_speed = 0.0
+                    contact_path = contact_path or 'tank_turn_contact'
         candidate_position = vehicle_physics.track_pivot_position(
             position, yaw, candidate_yaw, pivot_offset)
         if self._arena_rotation_is_clear(
                 entity, position, yaw, candidate_yaw, candidate_position):
             yaw_changed = abs(_angle_delta(yaw, candidate_yaw)) > 1.0e-8
+            if yaw_changed:
+                # A failed tree/catalog proposal must not borrow an unrelated
+                # translation/previous-frame native contact for recoil.
+                self._local_world_collision_trace = {}
             sweep_clear = (not yaw_changed or self._local_airborne or
                            self._pose_sweep_is_clear(
                                entity, position, yaw, candidate_position,
                                candidate_yaw, self._local_speed, dt))
             if sweep_clear:
+                if not self._local_contact_reaction_paid:
+                    self._local_reaction_rate = 0.0
                 position = candidate_position
                 yaw = candidate_yaw
                 if (yaw_changed and
@@ -23228,8 +23845,17 @@ class BattleRuntime(object):
                 # A catalog hard body or an unresolved kinetic contact owns
                 # the same angular stop as the arena edge.  Translation already
                 # passed the unchanged native world probe above.
-                self._local_turn_speed = 0.0
-                contact_path = contact_path or 'turn_contact'
+                primary_turn_trace = dict(getattr(
+                    self, '_local_world_collision_trace', None) or {})
+                recovery = self._recover_local_world_turn(
+                    entity, position, yaw, turn, dt, primary_turn_trace)
+                if recovery is not None:
+                    position, yaw = recovery
+                    self._local_turn_speed = self._local_reaction_rate
+                    contact_path = contact_path or 'world_reaction_turn'
+                else:
+                    self._local_turn_speed = 0.0
+                    contact_path = contact_path or 'turn_contact'
         else:
             # The rectangular red border behaves as a hard chassis contact:
             # keep this tick's last legal pose and remove angular momentum.
@@ -23249,12 +23875,15 @@ class BattleRuntime(object):
         finally:
             self._local_support_tick_pose = None
             self._local_support_motion_pose = None
-        if pivot_offset and self._local_support_rise_blocked:
+        if (pivot_offset or self._local_contact_reaction_paid) and \
+                self._local_support_rise_blocked:
             # The support solver restored the old centre; keep yaw coupled
             # to that pose instead of retaining the rejected track arc.
             yaw = tick_yaw
             self._local_turn_speed = 0.0
             self._local_drive_turn = 0.0
+            self._local_reaction_rate = 0.0
+            self._local_contact_reaction_paid = False
         uncanonical_yaw = yaw
         yaw = self._canonicalize_local_attitude(yaw)
         # Canonicalizing an over-vertical pitch reverses signed road speed
@@ -23724,6 +24353,12 @@ class BattleRuntime(object):
                 now - self._track_report_time) < TRACK_REPORT_SECONDS:
             return False
         self._track_report_time = now
+        appearance = getattr(vehicle, 'appearance', None)
+        detailed = getattr(appearance, 'detailedEngineState', None)
+        sys.stdout.write('[Offline LAN 0.9.22] ENGINE_AUDIO remote id=%s visible=%s owner=%s mode=%s rpm=%s\n' %
+            (getattr(vehicle, 'bw_entity_id', '?'), getattr(vehicle, '_offlineNativeDrawVisible', True),
+             getattr(appearance, 'engineAudition', None) is not None,
+             getattr(detailed, 'mode', None), getattr(detailed, 'rpm', None)))
         feed_state = getattr(vehicle, 'track_feed_state', None)
         written, outcome, hidden, engine_owned = (
             feed_state() if callable(feed_state)
@@ -25369,6 +26004,7 @@ class BattleRuntime(object):
                 stamp = event.get('presentation_time_us')
                 record['presentation_time_us'] = (
                     int(stamp) if stamp is not None else None)
+                record['presentation_bracket'] = event.get('presentation_bracket')
                 self._apply_record_pose(record, pose)
                 return
         state = dict(record.get('state') or {})
@@ -25381,6 +26017,7 @@ class BattleRuntime(object):
             stamp = event.get('presentation_time_us')
             record['presentation_time_us'] = (
                 int(stamp) if stamp is not None else None)
+            record['presentation_bracket'] = event.get('presentation_bracket')
         self._materialize_record(record)
 
     def _materialize_record(self, record):
@@ -26190,6 +26827,10 @@ class BattleRuntime(object):
         reads; only the crew behind it differs, because a bot has the default
         crew instead of the player's own.
         """
+        if local and getattr(self, '_replay_mode', False):
+            snapshot = self._accepted_local_effective_params()
+            if snapshot is not None:
+                return snapshot['spotting']
         if local:
             if self._local_spotting_cache is None:
                 snapshot = self._garage_loadout_snapshot()
@@ -27898,6 +28539,8 @@ class BattleRuntime(object):
         return True
 
     def shoot(self, aim_yaw, gun_pitch, player_burst=None):
+        if self._replay_mode:
+            return False
         if (self._local_player_burst is not None and
                 player_burst is not self._local_player_burst):
             return False
@@ -28218,6 +28861,8 @@ class BattleRuntime(object):
         self._runtime.bigworld.callback(0.0, leave_after_mailbox_returns)
 
     def stop(self, show_login=False, restore_account=True):
+        from gui.mods.offline_lan_0922 import offline_replay
+        offline_replay.finish(self.client, 'battle_stop')
         if self.state in ('idle', 'stopped'):
             if not restore_account and self._lobby_restore_token is not None:
                 self._cancel_deferred_lobby_restore()
@@ -28464,6 +29109,20 @@ class BattleRuntime(object):
             raise cleanup_error
 
     def _cleanup(self):
+        audio = getattr(self, '_live_reload_sound', None)
+        if audio is not None:
+            try:
+                audio.close()
+            except Exception as error:
+                self._warn_optional_failure('live reload sound cleanup', error, disable=False)
+            self._live_reload_sound = None
+        audio = getattr(self, '_replay_reload_sound', None)
+        if audio is not None:
+            try:
+                audio.close()
+            except Exception as error:
+                self._warn_optional_failure('replay reload sound cleanup', error, disable=False)
+            self._replay_reload_sound = None
         combat_diagnostic = self._combat_diagnostics
         if combat_diagnostic is not None:
             combat_diagnostic.close()
@@ -28690,6 +29349,7 @@ class BattleRuntime(object):
         self._feedback_shell_failures = set()
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
+        self._local_reaction_rate = 0.0
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
         self._local_direction_command = 0.0
@@ -28945,6 +29605,11 @@ class BattleRuntime(object):
             self.error = '%s; cleanup failed: %s' % (
                 self.error, cleanup_failure)
         self.state = 'failed'
+        if getattr(self, '_replay_mode', False):
+            # This disposable process must not construct a fresh Account,
+            # even after a native playback failure. Its session defers quit.
+            self._report_failure(False, active_traceback)
+            return
         # Asynchronous map/entity failures happen after OfflineMapCreator has
         # replaced the lobby Account.  Recover across the same native callback
         # boundary as a normal round exit; constructing Hangar in this cleanup

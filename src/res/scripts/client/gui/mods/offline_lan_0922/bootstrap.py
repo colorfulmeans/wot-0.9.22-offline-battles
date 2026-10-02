@@ -56,8 +56,19 @@ _postbattle_store = None
 
 
 def _schedule(delay, function):
+    """Retire the handle before running it; it is no longer cancellable."""
     global _callback_id
-    _callback_id = BigWorld.callback(delay, function)
+    token = [None]
+
+    def deliver():
+        global _callback_id
+        if _callback_id != token[0]:
+            return
+        _callback_id = None
+        function()
+
+    token[0] = BigWorld.callback(delay, deliver)
+    _callback_id = token[0]
 
 
 def _garage_store():
@@ -180,6 +191,10 @@ def _bind_battle_progress(context):
             for name in ('unlocks', 'eliteVehicles'):
                 context.setdefault('postbattle_added_' + name, set()).update(
                     set(after_stats[name]) - set(before_stats[name]))
+        if result.get('touched_tankmen'):
+            from items import ITEM_TYPE_INDICES
+            touched_items.setdefault(ITEM_TYPE_INDICES['tankman'], set()).update(
+                int(value) for value in result['touched_tankmen'])
         touched.add(int(result['vehicle_id']))
         touched.update(int(vehicle_id) for vehicle_id in result.get('touched_vehicles', ()))
         # The depot changed too: a battle spends rounds and consumables, and
@@ -190,7 +205,23 @@ def _bind_battle_progress(context):
                 int(compact_descr) for compact_descr in items)
         return result
 
+    def capture(receipt_id, vehicle):
+        from items import tankmen, vehicles
+        provider = getattr(g_compatibility, 'garage_state', None)
+        live = provider() if callable(provider) else None
+        snapshot = live.snapshot() if live is not None else context.get('selected_vehicle')
+        if not isinstance(snapshot, dict):
+            raise RuntimeError('participating crew snapshot is unavailable')
+        descriptor = vehicles.VehicleDescr(typeName=str(vehicle))
+        nation_id, vehicle_id = descriptor.type.id
+        compact = vehicles.makeIntCompactDescrByID('vehicle', nation_id, vehicle_id)
+        return garage_store.capture_crew_service(
+            snapshot, receipt_id, compact, tankmen_module=tankmen)
+
     binder(apply)
+    participant_binder = getattr(postbattle, 'set_participation_applier', None)
+    if callable(participant_binder):
+        participant_binder(capture)
     return True
 
 
@@ -1026,6 +1057,12 @@ def _cleanup_runtime():
         errors.append(error)
 
     try:
+        from gui.mods.offline_lan_0922 import engine_audio
+        engine_audio.uninstall()
+    except Exception as error:
+        errors.append(error)
+
+    try:
         g_compatibility.fini()
     except Exception as error:
         errors.append(error)
@@ -1115,6 +1152,9 @@ def _install_lan_session():
     if _session is not None:
         return True
     from gui.mods.offline_lan_0922.lan_session import LANSession
+    from gui.mods.offline_lan_0922 import engine_audio, runtime_diagnostics
+    engine_audio.install()
+    runtime_diagnostics.install_exit_trace()
     session = LANSession(
         _config, lobby_ready=_native_lobby_is_ready,
         callback=BigWorld.callback,
@@ -1295,8 +1335,27 @@ def _dossier_cache_career():
     return '%s.%s.%s' % (port_config.active_save_slot(), role, account_key)
 
 
+_replay_autostart_requested = False
+
+
+def _autostart_selected_replay():
+    # A separate callback lets the native HANGAR_READY stack unwind first.
+    # Do not call again on returning from playback or start a live LAN room.
+    try:
+        from gui.mods.offline_lan_0922 import offline_replay
+        if (not offline_replay.replay_request() or _session is None or
+                _client_mode == port_config.SIMULATION_WORKER_MODE):
+            return
+        sys.stdout.write('[Offline LAN 0.9.22] REPLAY_ENTRY auto_join\n')
+        _session.join()
+    except Exception as error:
+        sys.stdout.write('[Offline LAN 0.9.22] REPLAY_ENTRY failed: %s\n' % error)
+        _fail_startup(error)
+
+
 def _wait_for_lobby():
     global _callback_id, _deadline, _player_ready_signaled
+    global _replay_autostart_requested
     _callback_id = None
     try:
         if _lobby_view_loaded and _deadline <= 0.0:
@@ -1323,11 +1382,18 @@ def _wait_for_lobby():
                         raise RuntimeError(
                             'visible player ready marker was not published')
                     _player_ready_signaled = True
-                sys.stdout.write(
-                    '[Offline LAN 0.9.22] lobby ready; click Battle to join '
-                    '%s:%s\n' % (
-                        _config.get('host', '127.0.0.1'),
-                        _config.get('port', 28782)))
+                from gui.mods.offline_lan_0922 import offline_replay
+                if (offline_replay.replay_request() and
+                        os.environ.get('WOT_OFFLINE_REPLAY_AUTOSTART') == '1'):
+                    if not _replay_autostart_requested:
+                        _replay_autostart_requested = True
+                        _schedule(0.10, _autostart_selected_replay)
+                else:
+                    sys.stdout.write(
+                        '[Offline LAN 0.9.22] lobby ready; click Battle to join '
+                        '%s:%s\n' % (
+                            _config.get('host', '127.0.0.1'),
+                            _config.get('port', 28782)))
             return
         # EULA and other first-run screens require user interaction and must
         # not consume the hangar-startup timeout.  The deadline begins when
