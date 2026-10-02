@@ -95,7 +95,7 @@ jobs:
               assert mod.testzip() is None
               for path in paths:
                   raw = mod.read(prefix + path + 'c')
-                  assert raw[:4] == '\\x03\\xf3\\r\\n', path
+                  assert raw[:4] == '\x03\xf3\r\n', path
                   actual = marshal.loads(raw[8:])
                   expected = compile(open('src/' + prefix + path, 'rb').read(),
                                      actual.co_filename, 'exec')
