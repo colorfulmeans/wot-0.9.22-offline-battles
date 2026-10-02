@@ -299,7 +299,13 @@ jobs:
           @'
           from pathlib import Path
           import os, struct, zipfile
-          root = Path(os.environ['RUNNER_TEMP']) / 'launcher-download'
+          root = Path('launcher/dist/wot-0.9.22-offline-battles')
+          tested = Path(os.environ['RUNNER_TEMP']) / 'launcher-download'
+          # The server smoke writes a log beside its executable. Ship the
+          # pristine upload source, after proving its files match the tested copy.
+          for path in root.rglob('*'):
+              if path.is_file():
+                  assert path.read_bytes() == (tested / path.relative_to(root)).read_bytes(), path
           with zipfile.ZipFile(root / '_internal/client/0.9.22.zip') as client:
               binaries = [(client.read('offline_worker_starter.exe'), 0x14c)]
           binaries.append(((root / 'wot-0.9.22-offline-battles.exe').read_bytes(), 0x8664))
@@ -307,7 +313,7 @@ jobs:
               offset = struct.unpack_from('<I', data, 0x3c)[0]
               assert data[offset:offset + 4] == b'PE\0\0'
               assert struct.unpack_from('<H', data, offset + 4)[0] == expected
-          assert {p.name for p in root.iterdir()} == {'wot-0.9.22-offline-battles.exe', '_internal', 'licenses', 'README.txt', 'LICENSE', 'THIRD_PARTY_NOTICES.md'}
+          assert {p.name for p in root.iterdir()} == {'wot-0.9.22-offline-battles.exe', '_internal', 'licenses', 'README.txt', 'LICENSE', 'THIRD_PARTY_NOTICES.md'}, sorted(p.name for p in root.iterdir())
           output = Path('release-assets')
           output.mkdir()
           target = output / 'wot-0.9.22-offline-battles-0.9.7-Windows-x64.zip'
