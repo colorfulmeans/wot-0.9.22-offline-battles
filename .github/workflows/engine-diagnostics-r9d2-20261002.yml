@@ -1,0 +1,104 @@
+name: R9D2 engine diagnostics Windows checks
+on:
+  push:
+    branches: [test/096-engine-diagnostics-r9d2-20261002]
+    paths: [tools/engine_diagnostics_r9d2/**, .github/workflows/engine-diagnostics-r9d2-20261002.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Reproduce exact packaged panel
+        shell: pwsh
+        run: python tools/engine_diagnostics_r9d2/build_panel.py
+      - name: Windows PowerShell 5 and real file/process checks
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Path r9d2-results | Out-Null
+          Start-Transcript -Path r9d2-results/windows-tests.txt | Out-Null
+          $passed=New-Object 'System.Collections.Generic.List[string]'
+          function Assert($ok,[string]$name){ if (-not $ok){ throw $name };$passed.Add($name);Write-Host ('PASS '+$name) }
+          $source=(Resolve-Path 'r9d2-panel/Engine-Diagnostics.ps1').Path
+          $tokens=$null;$errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile($source,[ref]$tokens,[ref]$errors)
+          Assert ($errors.Count -eq 0) 'PowerShell 5 accepts entire panel'
+          . $source -LibraryOnly
+          $root=Join-Path $env:RUNNER_TEMP ('r9d2-'+[Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $game=Join-Path $root ([string][char]0x6D4B+[char]0x8BD5+' game')
+          New-Item -ItemType Directory -Path $game | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $game 'WorldOfTanks.exe'),[byte[]]@())
+          $playerLog=Join-Path $game 'offline-player-python.log'
+          [IO.File]::WriteAllText($playerLog,'OLD')
+          $runs=@();foreach($mode in @('A','B','C','D')){$runs+=New-DiagnosticRun $root $game $mode}
+          Assert ((@($runs.Id | Select-Object -Unique)).Count -eq 4) 'Four distinct mode run directories'
+          Assert ($runs[3].Mode -eq 'D') 'D accepted as explicit mode'
+          Assert ($runs[0].Offsets['offline-player-python.log'] -eq 3) 'Existing log offset retained'
+          $env:WOT_OFFLINE_ENGINE_DIAG_MODE='parent-sentinel';$env:WOT_OFFLINE_REPLAY_FILE='old'
+          $info=New-DiagnosticProcessInfo $env:COMSPEC $root $runs[3]
+          Assert ($env:WOT_OFFLINE_ENGINE_DIAG_MODE -eq 'parent-sentinel') 'Parent environment not modified'
+          Assert ($info.EnvironmentVariables['WOT_OFFLINE_ENGINE_DIAG_MODE'] -eq 'D') 'D sent only to child'
+          Assert (-not $info.EnvironmentVariables.ContainsKey('WOT_OFFLINE_REPLAY_FILE')) 'Stale replay removed only in child'
+          $childFile=Join-Path $root 'child.txt'
+          $info.Arguments='/d /c set WOT_OFFLINE_ENGINE_DIAG_MODE > "'+$childFile+'"'
+          $p=New-Object Diagnostics.Process;$p.StartInfo=$info;[void]$p.Start()
+          Assert ($p.WaitForExit(15000)) 'Real child process returns'
+          Assert (([IO.File]::ReadAllText($childFile)).Contains('=D')) 'Real child received D'
+          $p.Dispose()
+          $file=Join-Path $runs[0].Folder 'engine-health.jsonl'
+          $valid=@('{"kind":"session_start","wall_time":1}', '{"kind":"sample","wall_time":2}', '{"kind":"session_end","wall_time":3}', '{"kind":"writer_end","dropped_records":0,"record_errors":0,"normalized_fields":1,"limit":false}')
+          [IO.File]::WriteAllLines($file,$valid)
+          $h=Get-DiagnosticHealth $file
+          Assert ($h.Complete -and $h.HasSamples -and $h.Samples -eq 1) 'Complete stream accepted'
+          Assert ($h.NormalizedFields -eq 1) 'Encoding normalization reported, not hidden'
+          [IO.File]::WriteAllLines($file,$valid[0..1]);$h=Get-DiagnosticHealth $file
+          Assert (-not $h.Complete) 'Truncated stream without end rejected'
+          [IO.File]::WriteAllLines($file,@($valid[0],$valid[2],$valid[3]));$h=Get-DiagnosticHealth $file
+          Assert (-not $h.HasSamples) 'No samples identified separately'
+          [IO.File]::WriteAllLines($file,@($valid[0],'{malformed',$valid[2],$valid[3]));$h=Get-DiagnosticHealth $file
+          Assert ($h.ParseErrors -gt 0 -and -not $h.Complete) 'Malformed JSON cannot claim completeness'
+          $badFooter='{"kind":"writer_end","dropped_records":3,"record_errors":0,"limit":false}'
+          [IO.File]::WriteAllLines($file,@($valid[0],$valid[1],$valid[2],$badFooter));$h=Get-DiagnosticHealth $file
+          Assert ($h.Dropped -eq 3 -and -not $h.Complete) 'Dropped records visible'
+          [IO.File]::WriteAllLines($file,$valid)
+          [IO.File]::AppendAllText($playerLog,'NEW')
+          [IO.File]::WriteAllText((Join-Path $runs[0].Folder 'engine-health.errors.txt'),'test side channel')
+          $a=Export-DiagnosticRun $runs[0] 'controlled synthetic note'
+          Assert (-not $a.Incomplete) 'Exporter accepts healthy stream'
+          Assert (([IO.File]::ReadAllText((Join-Path $runs[0].Folder 'captured/offline-player-python.log'))) -eq 'NEW') 'Only current log delta copied'
+          $z=[IO.Compression.ZipFile]::OpenRead($a.Path)
+          try {
+            $names=@($z.Entries | ForEach-Object {$_.FullName})
+            Assert ($names -contains 'engine-health.errors.txt') 'Independent errors included in report'
+            Assert ($names -notcontains 'vehicle_profiles.json') 'Player profiles not collected'
+          } finally {$z.Dispose()}
+          $a2=Export-DiagnosticRun $runs[0]
+          Assert ($a.Path -ne $a2.Path) 'Repeat export does not overwrite'
+          $b=Export-DiagnosticRun $runs[1]
+          Assert ($b.Incomplete -and $b.DiagnosticFiles -eq 0) 'Missing diagnostics explicitly incomplete'
+          $raw=Join-Path $root 'raw.log';$tail=Join-Path $root 'tail.log'
+          [IO.File]::WriteAllText($raw,'0123456789');$m=Copy-DiagnosticDelta $raw $tail 0 3
+          Assert ($m.Truncated -and ([IO.File]::ReadAllText($tail) -eq '789')) 'Byte cap retained'
+          [IO.File]::WriteAllText($raw,'R');$m=Copy-DiagnosticDelta $raw $tail 100 3
+          Assert ($m.SourceReset) 'Source reset retained'
+          [IO.File]::WriteAllBytes((Join-Path (Split-Path $source) 'wot-0.9.22-offline-battles.exe'),[byte[]]@())
+          & powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File $source -UiSmoke
+          Assert ($LASTEXITCODE -eq 0) 'Four-button WinForms panel constructs'
+          $result=@{Count=$passed.Count;Passed=@($passed);PSVersion=$PSVersionTable.PSVersion.ToString();GameStarted=$false;NativeSoundTested=$false;ScriptSHA256=(Get-FileHash $source -Algorithm SHA256).Hash.ToLower()}
+          $result | ConvertTo-Json -Depth 8 | Set-Content r9d2-results/result.json -Encoding UTF8
+          Copy-Item $source r9d2-results/Engine-Diagnostics.ps1
+          Stop-Transcript | Out-Null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: engine-diagnostics-r9d2-windows
+          path: r9d2-results/
+          if-no-files-found: warn
+          retention-days: 14
