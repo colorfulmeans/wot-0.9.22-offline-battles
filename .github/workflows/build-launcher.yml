@@ -10,6 +10,7 @@ on:
       - fix/0922-native-offers-training-reserves-20260917
       - fix/094-pr40-gameplay-20260925
       - release/v0.9.5
+      - fix/097-bot-withdrawal-and-slope-aim
 
 permissions:
   contents: read
@@ -75,6 +76,32 @@ jobs:
           -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
           -w /work python:2.7.18
           python build_wotmod.py
+      - name: Verify packaged Bot bytecode matches this checkout
+        if: github.ref == 'refs/heads/fix/097-bot-withdrawal-and-slope-aim'
+        shell: bash
+        run: |
+          docker run --rm -i -v "$PWD:/work" -w /work python:2.7.18 python - <<'PY'
+          import glob, marshal, types, zipfile
+          def signature(code):
+              return (code.co_argcount, code.co_nlocals, code.co_stacksize,
+                      code.co_flags, code.co_code,
+                      tuple(signature(x) if isinstance(x, types.CodeType) else x
+                            for x in code.co_consts),
+                      code.co_names, code.co_varnames, code.co_freevars,
+                      code.co_cellvars, code.co_firstlineno, code.co_lnotab)
+          paths = ['ai/adapter.py', 'ai/driver.py', 'ai/traffic.py', 'bot_runtime.py']
+          prefix = 'res/scripts/client/gui/mods/offline_lan_0922/'
+          with zipfile.ZipFile(glob.glob('dist/*.wotmod')[0]) as mod:
+              assert mod.testzip() is None
+              for path in paths:
+                  raw = mod.read(prefix + path + 'c')
+                  assert raw[:4] == '\\x03\\xf3\\r\\n', path
+                  actual = marshal.loads(raw[8:])
+                  expected = compile(open('src/' + prefix + path, 'rb').read(),
+                                     actual.co_filename, 'exec')
+                  assert signature(actual) == signature(expected), path
+          print('Verified all four packaged Bot modules against source.')
+          PY
       - name: Validate 0.9.22 client package
         run: >-
           python tools/validate_wotmod.py
