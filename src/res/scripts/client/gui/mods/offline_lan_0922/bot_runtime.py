@@ -147,7 +147,7 @@ _PUBLICATION_EDGE_SCALAR_FIELDS = (
     'burst_interval', 'burst_shell_index',
     'siege_state', 'siege_transition_total_ms',
     'health', 'alive', 'combat_base_revision', 'combat_seq',
-    'death_reason', 'display_health', 'world_pose',
+    'death_reason', 'display_health', 'world_pose', 'route_wreck_blocked',
     'stun_end_server_time_ms',
 )
 _PUBLICATION_EDGE_MISSING = object()
@@ -8056,11 +8056,40 @@ class BotRuntime(object):
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
         mode = strategic.get('combat_mode', 'route')
+        authority_state = self.states.get(int(bot_id))
+        if authority_state is not None:
+            authority_state['route_wreck_blocked'] = False
         stop_at_goal = mode not in ('route', 'advance')
         if self.navigator is None:
             state['navigation_stop_at_target'] = stop_at_goal
             return goal
         grid = getattr(self.navigator, 'grid', None)
+        # Publish exact static-hull evidence, not a guess from a stalled pose.
+        # Local A* gets the first opportunity to bypass it; the server may
+        # abandon this macro lane only after sustained lack of progress.
+        crosses = getattr(grid, 'path_crosses_static_hull', None)
+        if (authority_state is not None and callable(crosses) and
+                mode in ('route', 'advance') and
+                strategic.get('throttle_override') is None):
+            evidence_key = (strategic.get('route_id'),
+                            strategic.get('route_index'), tuple(goal),
+                            getattr(grid, 'static_hull_revision', 0))
+            receipt = authority_state.get('_route_wreck_receipt')
+            now = float(state.get('now', 0.0))
+            if (receipt is None or receipt[0] != evidence_key or
+                    now >= receipt[1]):
+                anchor = _point(strategic.get('route_anchor'), position)
+                nav_state = getattr(self.navigator, 'bot_states', {}).get(
+                    int(bot_id), {})
+                path = getattr(self.navigator, 'paths', {}).get(
+                    nav_state.get('path_key')) or ()
+                remaining = [position] + list(path[int(nav_state.get('index', 0)):])
+                blocked = bool(crosses((position, goal)) or
+                               crosses((anchor, goal)) or
+                               crosses(remaining))
+                receipt = (evidence_key, now + 1.0, blocked)
+                authority_state['_route_wreck_receipt'] = receipt
+            authority_state['route_wreck_blocked'] = receipt[2]
         if strategic.get('move_area_bounds') is not None:
             grounded = self._radio_ground_goal(bot_id, position, goal, strategic, grid)
             if grounded is None:

@@ -52,6 +52,8 @@ CLOSE_THREAT_SCORE_BONUS = 100.0
 CLOSE_THREAT_FOCUS_LIMIT = 4
 ROUTE_REBALANCE_SECONDS = 4.0
 ROUTE_LEASE_SECONDS = 6.0
+WRECK_ROUTE_WAIT_SECONDS = 20.0
+WRECK_ROUTE_AVOID_SECONDS = 120.0
 MAX_BASE_DEFENDERS = 3
 BASE_DEFENSE_RELEASE_SECONDS = 3.0
 MAX_BASE_CAPTURERS = 3
@@ -197,6 +199,8 @@ class BotPlanner(object):
         self._last_orders = None
         self._last_order_signature = None
         self._route_states = {}
+        self._wreck_route_progress = {}
+        self._wreck_route_avoid = {}
         self._route_assignments = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
@@ -226,6 +230,8 @@ class BotPlanner(object):
         self._last_orders = None
         self._last_order_signature = None
         self._route_states = {}
+        self._wreck_route_progress = {}
+        self._wreck_route_avoid = {}
         self._route_assignments = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
@@ -754,6 +760,7 @@ class BotPlanner(object):
                     order, bot, team_order_by_bot.get(bot["id"]),
                     players, defense, route_point, turnback_point)
                 self._apply_authored_route_order(order, bot, route_point)
+                self._reroute_wreck_stall(order, bot, manifest, now)
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
         payload = {"orders": orders}
@@ -843,6 +850,10 @@ class BotPlanner(object):
 
     def _prune_tactical_state(self, bots, known_targets, now):
         live_bots = dict((bot["id"], bot) for bot in bots)
+        for states in (self._wreck_route_progress, self._wreck_route_avoid):
+            for bot_id in list(states):
+                if bot_id not in live_bots:
+                    del states[bot_id]
         for bot_id in list(self._route_states):
             if bot_id not in live_bots:
                 del self._route_states[bot_id]
@@ -2217,6 +2228,13 @@ class BotPlanner(object):
             if authored is not None and authored['policy'] == 'fixed':
                 protected_ids.add(bot['id'])
         catalog = self._route_catalog(bots)
+        # A physical detour survives a donor's death and pressure rebalance.
+        for bot in bots:
+            assigned = self._route_assignments.get(bot['id'], {})
+            if assigned.get('wreck_detour'):
+                route = assigned['route']
+                catalog[str(route.get('id') or '')] = route
+                protected_ids.add(bot['id'])
         for bot in bots:
             route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
             route_id = str(route.get("id") or "")
@@ -2358,6 +2376,92 @@ class BotPlanner(object):
                                 for contact in contacts),
         }
         self._route_states.pop(donor["id"], None)
+
+    def _reroute_wreck_stall(self, order, bot, manifest, now):
+        """Abandon a corpse-blocked macro lane after local recovery stalls.
+
+        The worker proves the obstruction against installed wreck hulls. A
+        turning chassis or queued path is not progress; advancing toward the
+        gate or travelling a real detour is. Holds and combat never count.
+        """
+        bot_id = bot['id']
+        state = bot['state']
+        route_id = str(order.get('route_id') or '')
+        authored = bot_tactics.route_config(
+            self.tactics, self.tactics_map, route_id)
+        if (order.get('combat_mode') not in ('route', 'advance') or
+                order.get('team_command') or
+                order.get('throttle_override') is not None or
+                not state.get('route_wreck_blocked') or
+                not self._route_donor_eligible(bot) or
+                (authored is not None and authored['policy'] == 'fixed')):
+            self._wreck_route_progress.pop(bot_id, None)
+            return
+        point = _point(state)
+        goal = _point(order.get('move_position') or {})
+        distance = math.hypot(goal['x'] - point['x'], goal['z'] - point['z'])
+        if distance <= 15.0:
+            self._wreck_route_progress.pop(bot_id, None)
+            return
+        key = (route_id, order.get('route_index'))
+        progress = self._wreck_route_progress.get(bot_id)
+        if (progress is None or progress['key'] != key or
+                math.hypot(goal['x'] - progress['goal']['x'],
+                           goal['z'] - progress['goal']['z']) > 2.0):
+            progress = None
+        if progress is not None:
+            moved = math.hypot(point['x'] - progress['point']['x'],
+                               point['z'] - progress['point']['z'])
+            if progress['distance'] - distance >= 2.0 or moved >= 8.0:
+                progress = None
+        if progress is None:
+            self._wreck_route_progress[bot_id] = {
+                'key': key, 'goal': goal, 'point': point,
+                'distance': distance, 'since': _number(now)}
+            return
+        if _number(now) - progress['since'] < WRECK_ROUTE_WAIT_SECONDS:
+            return
+        avoided = self._wreck_route_avoid.setdefault(bot_id, {})
+        avoided[route_id] = _number(now) + WRECK_ROUTE_AVOID_SECONDS
+        catalog = self._route_catalog([
+            raw for raw in manifest or ()
+            if _integer(raw.get('team')) == bot['team']])
+        candidates = []
+        class_tag = str(bot.get('profile', {}).get('class_tag') or '')
+        for candidate_id, route in sorted(catalog.items()):
+            if (candidate_id == route_id or
+                    _number(avoided.get(candidate_id)) > _number(now)):
+                continue
+            config = bot_tactics.route_config(
+                self.tactics, self.tactics_map, candidate_id)
+            if config is not None and not bot_tactics.matches(config, bot):
+                continue
+            affinity = _number((route.get('class_weights') or {}).get(
+                class_tag), 0.5)
+            if affinity < MIN_ROUTE_CLASS_AFFINITY:
+                continue
+            nearest = min(math.hypot(
+                _number(p.get('x')) - point['x'],
+                _number(p.get('z')) - point['z'])
+                for p in route['waypoints'])
+            candidates.append((-affinity, nearest, candidate_id, route))
+        if not candidates:
+            # No suitable alternative: keep the physical hold, never force
+            # through a wreck or repeat a route-switch storm each tick.
+            progress['since'] = _number(now)
+            return
+        route = min(candidates, key=lambda value: value[:3])[3]
+        self._route_assignments[bot_id] = {
+            'route': route, 'until': 0.0, 'wreck_detour': True}
+        self._route_states.pop(bot_id, None)
+        self._wreck_route_progress.pop(bot_id, None)
+        new_id, index, move, anchor, join = self._route(bot, now)
+        order.update(route_id=new_id, route_index=index,
+                     move_position=move, face_position=dict(move),
+                     route_anchor=anchor, route_join=join,
+                     route_switch_reason='wreck_stall',
+                     previous_route_id=route_id)
+        self._apply_authored_route_order(order, bot, move)
 
     def _route(self, bot, now, stop_before_objective=False):
         assignment = self._route_assignments.get(bot["id"])
