@@ -1,0 +1,90 @@
+name: R9D engine diagnostic Windows entry tests
+on:
+  push:
+    branches: [test/096-engine-diagnostics-r9d-20261002]
+    paths: [tools/engine_diagnostics_r9d/**, .github/workflows/engine-diagnostics-r9d-20261002.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-entry:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Actual Windows PowerShell and WinForms boundary checks
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $PWD 'r9d-results'
+          New-Item -ItemType Directory -Path $out | Out-Null
+          Start-Transcript -Path (Join-Path $out 'windows-tests.txt') | Out-Null
+          $passed = New-Object 'System.Collections.Generic.List[string]'
+          function Assert($value, [string]$name) { if (-not $value) { throw $name }; $passed.Add($name); Write-Host ('PASS ' + $name) }
+          $source = (Resolve-Path 'tools/engine_diagnostics_r9d/Engine-Diagnostics.ps1').Path
+          $tokens=$null; $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile($source,[ref]$tokens,[ref]$errors)
+          Assert ($errors.Count -eq 0) 'PowerShell 5 parser accepts whole file'
+          . $source -LibraryOnly
+          $root=Join-Path $env:RUNNER_TEMP ('engine-test-' + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $game=Join-Path $root ([string][char]0x6D4B + [char]0x8BD5 + ' game')
+          New-Item -ItemType Directory -Path $game | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $game 'WorldOfTanks.exe'), [byte[]]@())
+          $playerLog=Join-Path $game 'offline-player-python.log'
+          [IO.File]::WriteAllText($playerLog,'OLD')
+          $a=New-DiagnosticRun $root $game A
+          $b=New-DiagnosticRun $root $game B
+          $c=New-DiagnosticRun $root $game C
+          Assert (($a.Id -ne $b.Id) -and ($b.Id -ne $c.Id)) 'A B C unique runs, including Unicode directory'
+          Assert ($a.Offsets['offline-player-python.log'] -eq 3) 'Logs begin at recorded byte offsets'
+          $env:WOT_OFFLINE_ENGINE_DIAG_MODE='parent-sentinel'
+          $env:WOT_OFFLINE_REPLAY_FILE='stale-replay-sentinel'
+          $info=New-DiagnosticProcessInfo $env:COMSPEC $root $b
+          Assert ($env:WOT_OFFLINE_ENGINE_DIAG_MODE -eq 'parent-sentinel') 'Parent mode remains unchanged'
+          Assert ($info.EnvironmentVariables['WOT_OFFLINE_ENGINE_DIAG_MODE'] -eq 'B') 'Child mode B is isolated'
+          Assert ($info.EnvironmentVariables['WOT_OFFLINE_ENGINE_DIAG_DIR'] -eq $b.Folder) 'Unicode log directory reaches child environment'
+          Assert (-not $info.EnvironmentVariables.ContainsKey('WOT_OFFLINE_REPLAY_FILE')) 'Stale replay file is absent from new launcher child'
+          $childOutput=Join-Path $root 'child-env.txt'
+          $info.Arguments='/d /c set WOT_OFFLINE_ENGINE_DIAG_MODE > "' + $childOutput + '"'
+          $p=New-Object Diagnostics.Process; $p.StartInfo=$info
+          [void]$p.Start(); Assert ($p.WaitForExit(15000)) 'Real Windows child exits'
+          Assert (([IO.File]::ReadAllText($childOutput)).Contains('=B')) 'Real child received mode B'
+          $p.Dispose()
+          [IO.File]::AppendAllText($playerLog,'NEW-A')
+          [IO.File]::WriteAllText((Join-Path $a.Folder 'engine-test.jsonl'),'{"kind":"test","mode":"A"}')
+          $first=Export-DiagnosticRun $a 'local silent; shot audible'
+          $delta=[IO.File]::ReadAllText((Join-Path $a.Folder 'captured\offline-player-python.log'))
+          Assert ($delta -eq 'NEW-A') 'Collector excludes earlier cumulative log content'
+          Assert ($first.DiagnosticFiles -eq 1) 'Collector counts actual probe files'
+          $archive=[IO.Compression.ZipFile]::OpenRead($first.Path)
+          try { $names=@($archive.Entries | ForEach-Object { $_.FullName }); Assert ($names -contains 'captured/offline-player-python.log') 'ZIP contains bounded game log delta'; Assert ($names -notcontains 'vehicle_profiles.json') 'ZIP does not collect vehicle profiles' } finally { $archive.Dispose() }
+          $second=Export-DiagnosticRun $a 'second export'
+          Assert ($first.Path -ne $second.Path) 'Repeated export preserves previous ZIP'
+          $raw=Join-Path $root 'raw.log';[IO.File]::WriteAllText($raw,'0123456789abcdef')
+          $target=Join-Path $root 'tail.log';$meta=Copy-DiagnosticDelta $raw $target 0 5
+          Assert ($meta.Truncated -and ([IO.File]::ReadAllText($target) -eq 'bcdef')) 'Byte cap is enforced and reported'
+          [IO.File]::WriteAllText($raw,'R');$meta=Copy-DiagnosticDelta $raw $target 100 5
+          Assert ($meta.SourceReset -and ([IO.File]::ReadAllText($target) -eq 'R')) 'Log truncation/reset is explicitly reported'
+          $missing=Copy-DiagnosticDelta (Join-Path $root 'absent.log') $target 0
+          Assert ($missing.Status -eq 'missing') 'Missing source is reported rather than assumed collected'
+          $empty=Export-DiagnosticRun $b
+          Assert ($empty.DiagnosticFiles -eq 0) 'Missing engine diagnostic file remains visible'
+          $ui=Join-Path $root 'ui';New-Item -ItemType Directory -Path $ui|Out-Null
+          Copy-Item -LiteralPath $source -Destination (Join-Path $ui 'Engine-Diagnostics.ps1')
+          [IO.File]::WriteAllBytes((Join-Path $ui 'wot-0.9.22-offline-battles.exe'),[byte[]]@())
+          & powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $ui 'Engine-Diagnostics.ps1') -UiSmoke
+          Assert ($LASTEXITCODE -eq 0) 'WinForms panel controls construct without launching a game'
+          $result=@{ Platform='Windows'; PSVersion=$PSVersionTable.PSVersion.ToString(); Count=$passed.Count; Passed=@($passed); BigWorldTested=$false; RealLauncherOrGameStarted=$false; ScriptSHA256=(Get-FileHash $source -Algorithm SHA256).Hash.ToLower() }
+          $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $out 'result.json') -Encoding UTF8
+          Copy-Item -LiteralPath $source -Destination (Join-Path $out 'Engine-Diagnostics.ps1')
+          Stop-Transcript | Out-Null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: engine-diagnostics-r9d-windows-entry
+          path: r9d-results/
+          if-no-files-found: error
+          retention-days: 14
