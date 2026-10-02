@@ -89,6 +89,72 @@ class BotAdapter(object):
         return self._drive_order(
             bot_id, state, position, strategic, direction_clear)
 
+    def _reverse_withdrawal(self, state, strategic, position, target,
+                            destination, direction_clear):
+        """Back toward a nearby withdrawal point while preserving frontal armour.
+
+        Long withdrawals retain reverse while an in-range contact is tracked;
+        after contact is lost the ordinary route driver may turn and travel.
+        Native motion still independently proves every realised movement.
+        """
+        if strategic.get('combat_mode') not in (
+                'withdraw', 'low_health_retreat', 'under_fire_withdraw',
+                'crossfire_withdraw'):
+            return None
+        if strategic.get('throttle_override') is not None:
+            return None
+        dx, dz = target[0] - position[0], target[2] - position[2]
+        distance = math.hypot(dx, dz)
+        if distance <= WAYPOINT_ARRIVAL_RADIUS:
+            return None
+        goal_distance = math.hypot(
+            destination[0] - position[0], destination[2] - position[2])
+        threat = _position(strategic.get('aim_position'), position)
+        exposed = (strategic.get('target_id') is not None and
+                   math.hypot(threat[0] - position[0],
+                              threat[2] - position[2]) <=
+                   float(strategic.get('fire_range', 0.0)))
+        if goal_distance > 30.0 and not exposed:
+            return None
+        yaw = float(state.get('yaw', 0.0))
+        travel_yaw = math.atan2(dx, dz)
+        # atan2 is the rear travel heading; the desired hull faces opposite it.
+        face_yaw = travel_yaw + math.pi
+        error = (face_yaw - yaw + math.pi) % (2.0 * math.pi) - math.pi
+        if abs(error) > math.pi / 3.0:
+            return None
+        length = float(state.get('half_length', 3.5))
+        width = float(state.get('half_width', 1.7))
+        reach = min(distance, length * 1.6)
+        clear = True
+        blocker = None
+        pose_clear = state.get('pose_clear')
+        for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
+            sample_yaw = yaw + error * fraction
+            clear = clear and self.driver._clear(
+                direction_clear, sample_yaw + math.pi, reach)
+            blocker = blocker or self.driver._reverse_blocked_by_vehicle(
+                position, sample_yaw, state.get('neighbours', ()), length, width)
+            try:
+                if pose_clear is not None:
+                    clear = clear and bool(pose_clear(sample_yaw))
+            except Exception:
+                clear = False
+        if not clear or blocker is not None:
+            result = {'throttle': 0.0, 'turn': 0.0, 'target_yaw': yaw,
+                      'recovery_mode': 'blocked'}
+            if blocker is not None:
+                result['reverse_blocked_by'] = blocker
+            return result
+        # Reverse steering has the opposite input sign. Align gently before
+        # backing rather than turning the chassis around toward the waypoint.
+        braking_distance = max(0.0, float(state.get('stopping_distance') or 0.0))
+        stopping = (float(state.get('speed', 0.0)) < -0.05 and
+                    distance <= max(WAYPOINT_ARRIVAL_RADIUS, braking_distance))
+        return {'throttle': 0.0 if stopping else -0.72,
+                'turn': 0.0 if stopping else -max(-0.5, min(0.5, error / 0.58)),
+                'target_yaw': face_yaw, 'recovery_mode': 'reverse_withdraw'}
+
     @observed('driver.order')
     def _drive_order(self, bot_id, state, position, strategic,
                      direction_clear):
@@ -135,19 +201,22 @@ class BotAdapter(object):
                 'recovery_mode': 'nav_wait',
             }
         else:
-            local = self.driver.drive(
-                bot_id, int(state['slot']), position,
-                float(state.get('yaw', 0.0)),
-                float(state.get('speed', 0.0)), float(state.get('dt', 0.0)),
-                target, state.get('neighbours', ()), direction_clear,
-                velocity=state.get('velocity'),
-                half_length=float(state.get('half_length', 3.5)),
-                half_width=float(state.get('half_width', 1.7)),
-                movement_intent=movement_intent,
-                stopping_distance=state.get('stopping_distance'),
-                stop_at_target=stop_at_target,
-                decision_horizon=float(state.get('decision_horizon', 0.0)),
-                pose_clear=state.get('pose_clear'))
+            local = self._reverse_withdrawal(
+                state, strategic, position, target, move_position, direction_clear)
+            if local is None:
+                local = self.driver.drive(
+                    bot_id, int(state['slot']), position,
+                    float(state.get('yaw', 0.0)),
+                    float(state.get('speed', 0.0)), float(state.get('dt', 0.0)),
+                    target, state.get('neighbours', ()), direction_clear,
+                    velocity=state.get('velocity'),
+                    half_length=float(state.get('half_length', 3.5)),
+                    half_width=float(state.get('half_width', 1.7)),
+                    movement_intent=movement_intent,
+                    stopping_distance=state.get('stopping_distance'),
+                    stop_at_target=stop_at_target,
+                    decision_horizon=float(state.get('decision_horizon', 0.0)),
+                    pose_clear=state.get('pose_clear'))
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
         # their stable 12-30 degree hull angle while the turret keeps tracking
@@ -185,6 +254,9 @@ class BotAdapter(object):
         if strategic.get('hull_angle_degrees') is not None:
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))
+        for name in ('forward_blocked_by', 'reverse_blocked_by'):
+            if name in local:
+                result[name] = local[name]
         difference = target_yaw - float(state.get('yaw', 0.0))
         while difference > math.pi:
             difference -= 2.0 * math.pi

@@ -2171,6 +2171,7 @@ class BotRuntime(object):
         self._pending_launch_by_bot = {}
         self._artillery_intents = {}
         self._artillery_reproofs = {}
+        self._spg_aim_solutions = {}
         self._ballistic_solution_cache = {}
         self._friendly_repositions = {}
         self._shot_los_cache = {}
@@ -8195,8 +8196,8 @@ class BotRuntime(object):
         actual forward travel remaining after throttle is released.  A grade
         which cannot reduce forward speed has no finite stopping distance.
         """
-        current = abs(_number(speed))
-        if current <= TRAFFIC_DIRECTION_SPEED_EPSILON:
+        current = _number(speed)
+        if abs(current) <= TRAFFIC_DIRECTION_SPEED_EPSILON:
             return 0.0
         step = PUBLICATION_SECONDS
         distance = 0.0
@@ -8209,11 +8210,11 @@ class BotRuntime(object):
                 float(slope_pitch), step, False, 0, False)
             if math.isnan(following) or math.isinf(following):
                 return float('inf')
-            if following <= TRAFFIC_DIRECTION_SPEED_EPSILON:
-                return distance + max(0.0, following) * step
-            if following >= current:
+            if abs(following) <= TRAFFIC_DIRECTION_SPEED_EPSILON:
+                return distance + abs(following) * step
+            if abs(following) >= abs(current):
                 return float('inf')
-            distance += following * step
+            distance += abs(following) * step
             current = following
         return float('inf')
 
@@ -8222,7 +8223,7 @@ class BotRuntime(object):
             self, source, command, physics_params):
         """Memoize the exact coast integral for unchanged physical inputs."""
         bot_id = int(_number(source.get('id')))
-        speed = abs(_number(source.get('speed')))
+        speed = _number(source.get('speed'))
         slope_pitch = _number(source.get('last_drive_pitch'))
         steering = abs(_number(command.get('turn'))) > 0.01
         key = (id(physics_params), speed, slope_pitch, steering)
@@ -9748,6 +9749,7 @@ class BotRuntime(object):
         return intent is not None or reproof is not None
 
     def _clear_artillery_intents(self):
+        self._spg_aim_solutions.clear()
         bot_ids = set(self._artillery_intents)
         bot_ids.update(self._artillery_reproofs)
         for bot_id in list(bot_ids):
@@ -10140,6 +10142,24 @@ class BotRuntime(object):
         """Slew the rendered turret and barrel through the 0.8.2 limits."""
         descriptor = self._descriptors.get(state['id'], {})
         ballistic_solution = command.get('_ballistic_solution')
+        planning_pending = False
+        if str((state.get('profile') or {}).get('class_tag') or '') == 'SPG':
+            signature = self._ballistic_solution_signature(
+                state, target, descriptor, state.get('shell_index', 0))
+            if target is not None and isinstance(ballistic_solution, dict):
+                self._spg_aim_solutions[state['id']] = (
+                    signature, dict(ballistic_solution))
+            else:
+                cached = self._spg_aim_solutions.get(state['id'])
+                if target is not None and cached is not None and cached[0] == signature:
+                    # Expiring a strategic receipt must not lower the barrel
+                    # back to a direct-fire line while its next arc is queued.
+                    # This is aim continuity only: the actual command remains
+                    # unproved, and both alignment and fire admission stay off.
+                    ballistic_solution = cached[1]
+                    planning_pending = True
+                else:
+                    self._spg_aim_solutions.pop(state['id'], None)
         if target is None and not isinstance(ballistic_solution, dict):
             # Strategic route points lie on the terrain. They steer the hull,
             # but are not gun targets: aiming a tall tank at a nearby ground
@@ -10202,10 +10222,13 @@ class BotRuntime(object):
                             state, descriptor, 'turret_speed'))
         turret_step = turret_speed * step
         current_relative = state.get('turret_yaw', 0.0)
-        turret_difference = _angle_delta(desired_relative, current_relative)
-        current_relative = _wrapped(
-            current_relative + max(-turret_step,
-                                   min(turret_step, turret_difference)))
+        # A limited turret must travel through its legal interval. Wrapping
+        # +170 to -170 chooses the forbidden rear gap and sticks at the stop.
+        turret_difference = (desired_relative - current_relative if limited
+                             else _angle_delta(desired_relative, current_relative))
+        current_relative += max(-turret_step, min(turret_step, turret_difference))
+        if not limited:
+            current_relative = _wrapped(current_relative)
         if limited:
             current_relative = max(
                 minimum_yaw, min(maximum_yaw, current_relative))
@@ -10238,7 +10261,8 @@ class BotRuntime(object):
             world_angles[0] if world_angles is not None else
             _wrapped(state['yaw'] + current_relative))
         state['gun_aligned'] = bool(
-            pitch_limits is not None and target is not None and
+            not planning_pending and pitch_limits is not None and
+            target is not None and
             abs(_angle_delta(raw_relative, state['turret_yaw'])) <= 0.06 and
             abs(raw_pitch - state['gun_pitch']) <= 0.04)
         return desired_yaw, horizontal
@@ -12118,7 +12142,8 @@ class BotRuntime(object):
                 command = timed_call(
                     self._combat_diagnostics, 'bot.traffic',
                     self._traffic_coordinator.adjust,
-                    state['id'], traffic_bodies[state['id']], command,
+                    state['id'], dict(traffic_bodies[state['id']],
+                                      pose_clear=sample_pose_clear), command,
                     decision_state['neighbours'], now, sample_clear)
                 if reposition_expired:
                     # Resume the ordinary strategic movement on this frame,
@@ -12296,12 +12321,63 @@ class BotRuntime(object):
                 gun_yaw_limits = ai_driver.gun_yaw_limits(descriptor)
                 self._gun_yaw_limits[state['id']] = gun_yaw_limits
             minimum_yaw, maximum_yaw, unused_limited = gun_yaw_limits
+            hull_aim_yaw = desired_aim_yaw
+            if unused_limited and target is not None:
+                # Gun traverse is local to the pitched/rolled chassis. Keep
+                # hull laying on the same world arc as the gun, including a
+                # retained SPG solution while its exact proof is pending.
+                aim_pitch = -math.atan2(
+                    aim_position[1] + 1.0 - state['y'], max(0.5, aim_distance))
+                aim_signature = self._ballistic_solution_signature(
+                    state, target, descriptor, state.get('shell_index', 0))
+                cached_aim = self._ballistic_solution_cache.get(state['id'])
+                aim_solution = (cached_aim[2] if cached_aim is not None and
+                                cached_aim[0] == aim_signature else None)
+                if pending_intent is not None:
+                    aim_solution = pending_intent['solution']
+                elif pending_reproof is not None:
+                    aim_solution = pending_reproof.get('hold_solution')
+                if not isinstance(aim_solution, dict):
+                    retained_aim = self._spg_aim_solutions.get(state['id'])
+                    if retained_aim is not None and retained_aim[0] == aim_signature:
+                        aim_solution = retained_aim[1]
+                if isinstance(aim_solution, dict):
+                    desired_aim_yaw = aim_solution['yaw']
+                    aim_pitch = aim_solution['pitch']
+                local_aim = self._local_gun_angles_for_world(
+                    state, desired_aim_yaw, aim_pitch)
+                hull_aim_yaw = (state['yaw'] + local_aim[0]
+                                if local_aim is not None else desired_aim_yaw)
             turn, throttle, hull_aiming = ai_driver.combat_hull_aim(
-                state['yaw'], desired_aim_yaw, minimum_yaw, maximum_yaw,
+                state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
                 target is not None and
-                command.get('combat_mode') != 'base_defense')
+                command.get('combat_mode') != 'base_defense',
+                combat_mode=command.get('combat_mode'),
+                movement_intent=command.get('movement_intent', True))
             state['hull_aiming'] = bool(hull_aiming)
+            # Cached strategic orders cannot justify driving into a hull that
+            # moved into the corridor since the last decision. Keep physics as
+            # the owner of momentum and contact, and brake the drive input.
+            safety_body = {
+                'id': state['id'], 'position': position, 'yaw': state['yaw'],
+                'shape': state.get('collision_shape'),
+                'half_width': state.get('half_width', 1.7),
+                'half_length': state.get('half_length', 3.5),
+                'velocity': (math.sin(state['yaw']) * state['speed'], 0.0,
+                             math.cos(state['yaw']) * state['speed']),
+            }
+            def current_stopping_distance():
+                return self._cached_traffic_stopping_distance(
+                    state, dict(command, turn=turn),
+                    self._physics_params_for(state['id']) or
+                    vehicle_physics._DEFAULTS)
+            safety = self._traffic_coordinator.safe_controls(
+                safety_body, dict(command, throttle=throttle, turn=turn),
+                self._neighbours_for(state, neighbours), now,
+                current_stopping_distance, step)
+            throttle, turn = safety['throttle'], safety['turn']
+            state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
             if siege_motion_locked:
                 # Stock Siege transitions immobilize the hull for the whole
                 # transition tick, including the publication which starts or
@@ -12367,10 +12443,30 @@ class BotRuntime(object):
                     ai_driver.WAYPOINT_ARRIVAL_RADIUS)
                 maximum_probe_distance = min(remaining, reactive_horizon)
             elif (travel_sign < 0.0 and reactive_horizon is not None and
-                    command.get('recovery_mode') == 'reverse_turn'):
+                    command.get('recovery_mode') in ('reverse_turn', 'reverse_withdraw')):
                 # Recovery is intentionally a short backing manoeuvre. A wall
                 # beyond that escape edge must not veto clear space at the rear.
                 maximum_probe_distance = reactive_horizon
+            elif command.get('recovery_mode') == 'friendly_yield':
+                # The authored route does not own this finite clearance move.
+                # Receipts measure from the chassis origin, so its leading
+                # hull must remain contained even near the yield endpoint.
+                maximum_probe_distance = reactive_horizon
+                remaining = self._traffic_coordinator.clearance_distance(
+                    state['id'], position)
+                if remaining is not None:
+                    leading = max(0.5, state.get('half_length', 3.5))
+                    frame_reach = max(
+                        0.4, abs(state['speed']) * min(0.2, step) + 0.2)
+                    endpoint_reach = leading + remaining
+                    maximum_probe_distance = (
+                        endpoint_reach if reactive_horizon is None else
+                        min(endpoint_reach, reactive_horizon))
+                    maximum_probe_distance = max(
+                        leading + frame_reach, maximum_probe_distance)
+                    if remaining <= 0.0:
+                        throttle = 0.0
+                        turn = 0.0
             cached_motion_probe = self._motion_probe_cache.get(state['id'])
             # A frozen pose keeps this slice's realised translation at zero
             # without claiming that the corridor is blocked, so it must not

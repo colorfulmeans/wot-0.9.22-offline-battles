@@ -9,6 +9,7 @@ steering, so it is safe to exercise outside the BigWorld client.
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
 
 import math
+from gui.mods.offline_lan_0922 import tank_collision
 
 
 WAYPOINT_ARRIVAL_RADIUS = 1.5
@@ -95,21 +96,36 @@ def gun_yaw_limits(descriptor):
 
 
 def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
-		turn, throttle, recovery_mode, has_target=True):
+		turn, throttle, recovery_mode, has_target=True,
+		combat_mode=None, movement_intent=False):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
-	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn',
-			'pivot_recovery'):
+	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn', 'reverse_withdraw',
+			'pivot_recovery', 'forward_escape', 'contact_escape', 'friendly_yield',
+			'nav_wait', 'physical_hold'):
+		return float(turn), float(throttle), False
+	if movement_intent and combat_mode != 'engage':
+		# A target can remain visible while a TD retreats or follows a route.
+		# Laying its fixed gun must not stop that move or reverse its safe turn.
+		# Explicit engagement still owns its mature stop-and-aim behaviour;
+		# a tactical firing hold may aim once the planner has ended movement.
 		return float(turn), float(throttle), False
 	limited = not (float(minimum_yaw) <= -math.pi + 0.1 and
 	               float(maximum_yaw) >= math.pi - 0.1)
 	if not limited:
 		return float(turn), float(throttle), False
 	relative = _angle_delta(target_yaw, hull_yaw)
-	if float(minimum_yaw) + 0.04 <= relative <= float(maximum_yaw) - 0.04:
-		return float(turn), float(throttle), False
-	# Rotate before the physics step. The former post-physics velocity write was
-	# overwritten by LocalDriver on the next frame and never moved the hull.
-	hull_delta = _angle_delta(target_yaw, hull_yaw)
+	minimum_yaw, maximum_yaw = float(minimum_yaw), float(maximum_yaw)
+	margin = min(0.04, max(0.0, maximum_yaw - minimum_yaw) * 0.25)
+	if minimum_yaw + margin <= relative <= maximum_yaw - margin:
+		# A firing hold must not hand the hull back to an incompatible armour
+		# angle and immediately push the target outside this same arc again.
+		# Travel and recovery keep their normal steering owner.
+		return (0.0 if abs(float(throttle)) <= 0.01 else float(turn),
+		        float(throttle), False)
+	# Aim inside the installed interval, including asymmetric and fixed guns.
+	# A zero-width gun must not create an inverted artificial margin interval.
+	center = (minimum_yaw + maximum_yaw) * 0.5
+	hull_delta = _angle_delta(target_yaw - center, hull_yaw)
 	aim_turn = max(-1.0, min(1.0, hull_delta / 0.58))
 	return aim_turn, 0.0, True
 
@@ -344,7 +360,7 @@ class LocalDriver(object):
 
 	@observed('driver.reverse_contacts')
 	def _reverse_blocked_by_vehicle(self, position, yaw, neighbours,
-			half_length, half_width):
+			half_length, half_width, maximum_distance=None):
 		"""Reject a blind reverse whose reachable hull sweep is occupied.
 
 		``direction_clear`` answers for terrain and static world geometry only.
@@ -352,7 +368,8 @@ class LocalDriver(object):
 		second of every other one, so an unchecked reverse recovery drives each
 		hull straight into the one behind it and the whole formation grinds.
 		"""
-		reverse_distance = half_length * 1.6
+		reverse_distance = (max(0.0, float(half_length)) * 1.6
+			if maximum_distance is None else max(0.0, float(maximum_distance)))
 		# Translating an OBB along its longitudinal axis sweeps one exact longer
 		# OBB. Sampling only the final pose misses a hull at the current or an
 		# intermediate reachable position.
@@ -380,6 +397,22 @@ class LocalDriver(object):
 				other_width = float(
 					neighbour.get('half_width', half_width) or half_width)
 			try:
+				contact = tank_collision._obb_overlap(
+					position[0], position[2], yaw, (half_width, half_length),
+					other[0], other[2], other_yaw, (other_width, other_length))
+				if contact[2] >= -1.0e-9:
+					back_x, back_z = -math.sin(yaw), -math.cos(yaw)
+					outward = back_x*contact[0] + back_z*contact[1]
+					away = back_x*(position[0]-other[0]) + back_z*(position[2]-other[2])
+					if outward >= -1.0e-9 and away >= -1.0e-9:
+						# The sweep includes the current hull. Its front/side
+						# contact is not a new rear obstacle when every point
+						# moves out or tangentially along that face. Centre
+						# distance may stay constant in an exactly parallel
+						# side hug; neither direction may be denied for that.
+						# At an offset prefer the nearer end of the overlap.
+						# Other peers still veto the complete swept corridor.
+						continue
 				if self._obb_overlap(
 						sweep, float(yaw), sweep_length, half_width,
 						other, other_yaw, other_length, other_width):
@@ -395,15 +428,11 @@ class LocalDriver(object):
 
 	def _static_hull_ahead(self, position, candidate_yaw, neighbours,
 			half_length, half_width):
-		"""Reject a candidate whose near hull sweep is occupied by a wreck.
+		"""Reject a candidate occupied by a wreck or a stationary living hull.
 
-		Living traffic is deliberately not a steering veto: it clears by itself
-		and the simultaneous contact solver owns the impending collision. A
-		destroyed hull never moves and never yields, so a heading that ends
-		inside one is not a direction this tank can drive, and re-selecting it
-		is exactly the visible grind against a corpse. Only a neighbour that
-		explicitly reports itself dead is treated this way, so a caller that
-		does not publish aliveness keeps the previous behaviour.
+		Moving traffic retains crossing coordination and contact physics. A
+		parked gun or stopped player cannot be assumed to clear the route: choose
+		a hull-checked branch around it instead of repeatedly driving into it.
 
 		The reach matches the reverse check: this is the space the hull is
 		about to enter, not a long-range forecast, so a wreck further along the
@@ -416,8 +445,12 @@ class LocalDriver(object):
 			float(position[2]) + math.cos(candidate_yaw) * reach * 0.5)
 		sweep_length = half_length + reach * 0.5
 		for neighbour in neighbours or ():
-			if not isinstance(neighbour, dict) or neighbour.get('alive', True):
+			if not isinstance(neighbour, dict):
 				continue
+			if neighbour.get('alive', True):
+				velocity = neighbour.get('velocity')
+				if velocity is None or math.hypot(velocity[0], velocity[2]) > 0.65:
+					continue
 			other = self._neighbour_position(neighbour)
 			if other is None:
 				continue
@@ -690,6 +723,13 @@ class LocalDriver(object):
 						recovery_yaw = float(yaw) + direction * RECOVERY_YAW_OFFSET
 					else:
 						# Neither rotation fits and the rear is denied. Hold the
+						forward_blocker = self._reverse_blocked_by_vehicle(
+							position, float(yaw) + math.pi, neighbours,
+							own_half_length, own_half_width)
+						if (forward_blocker is None and self._clear(
+								direction_clear, float(yaw), escape_distance)):
+							return {'throttle': 0.72, 'turn': 0.0,
+								'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
 						# pose instead of grinding the corners, and publish the
 						# hull that owns the escape so the queue can clear it.
 						blocked = {
@@ -700,6 +740,8 @@ class LocalDriver(object):
 						}
 						if reverse_blocker is not None:
 							blocked['reverse_blocked_by'] = reverse_blocker
+						if forward_blocker is not None:
+							blocked['forward_blocked_by'] = forward_blocker
 						return blocked
 				return {
 					'throttle': 0.0,
@@ -717,11 +759,13 @@ class LocalDriver(object):
 			# manoeuvre parks the hull across the passage and blocks the whole
 			# column behind it. Keep the escape and drop the turn.
 			for fraction in RECOVERY_SWEEP_FRACTIONS:
-				if not self._clear(
+				if ((pose_clear is not None and not pose_clear(
+						float(yaw) + direction * RECOVERY_YAW_OFFSET * fraction)) or
+						not self._clear(
 						direction_clear,
 						float(yaw) + math.pi +
 						direction * RECOVERY_YAW_OFFSET * fraction,
-						escape_distance):
+						escape_distance)):
 					recovery_turn = 0.0
 					recovery_target = float(yaw)
 					break

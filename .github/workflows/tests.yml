@@ -10,6 +10,25 @@ permissions:
   contents: read
 
 jobs:
+  bot-behavior-regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Check traffic, withdrawal and slope aiming independently
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests:server:src/res/scripts/client
+        run: |
+          python -m unittest test_port_0922_bot_withdrawal test_port_0922_traffic test_port_0922_traffic_jam
+          python -m unittest test_port_0922_withdrawal_runtime
+          python -m unittest test_port_0922_artillery_controller test_port_0922_spg_tracking
+          python -m unittest test_port_0922_gameplay_followup.AimProgressTests
+      - name: Compile changed client code under Python 2.7
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; root='src/res/scripts/client/gui/mods/offline_lan_0922'; paths=['ai/adapter.py','ai/driver.py','ai/traffic.py','bot_runtime.py']; [compile(open(os.path.join(root,p),'rb').read(),p,'exec') for p in paths]; print('Changed client code compiles under Python 2.7')"
   test:
     needs: windows-server
     runs-on: ubuntu-latest
