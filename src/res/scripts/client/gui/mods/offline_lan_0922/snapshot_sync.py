@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import copy
 import math
+from gui.mods.offline_lan_0922 import ram_history
 
 
 PREDICTION_SECONDS = 0.05
@@ -195,7 +196,7 @@ class SnapshotSync(object):
         return message.get('sequence', message.get('server_tick'))
 
     def _set_remote_target(self, record, pose, now, sample_time_us=None,
-                           sample_age=0.0, live_timeline_started=False):
+                           sample_age=0.0, live_timeline_started=False, sample_revision=None):
         previous = record['target']
         previous_time = record['target_time']
         previous_sample_time_us = record.get('target_sample_time_us')
@@ -326,11 +327,13 @@ class SnapshotSync(object):
             else:
                 record['interpolation_delay_us'] = None
             record['timed_samples'].append({
-                'time_us': sample_time_us, 'pose': dict(pose)})
+                'time_us': sample_time_us, 'pose': dict(pose),
+                'revision': sample_revision})
         record['target'] = pose
         record['velocity'] = velocity
         record['target_time'] = now
         record['target_sample_time_us'] = sample_time_us
+        record['target_sample_revision'] = sample_revision
         record['target_age'] = max(0.0, float(sample_age)) if timed else 0.0
         record['timed_prediction'] = timed
         record['timed_teleport'] = timed_teleport
@@ -367,7 +370,7 @@ class SnapshotSync(object):
     def _upsert(self, kind, state, now, output, update_remote_pose=True,
                 sample_time_us=None, sample_age=0.0, motion_time_us=None,
                 motion_anchor_local_time=None,
-                live_timeline_started=False):
+                live_timeline_started=False, sample_revision=None):
         key = _entity_key(kind, state)
         if key is None:
             return
@@ -448,7 +451,7 @@ class SnapshotSync(object):
             update_remote_pose or record['target'] is None)
         snapped = (self._set_remote_target(
                        record, pose, now, sample_time_us, sample_age,
-                       live_timeline_started)
+                       live_timeline_started, sample_revision)
                    if pose is not None and update_remote_pose else False)
         target = (dict(record['target'])
                   if record['target'] is not None else None)
@@ -605,7 +608,8 @@ class SnapshotSync(object):
                         motion_anchor_local_time
                         if kind == 'bot' and timed_bot_poses else None),
                     live_timeline_started=(
-                        kind == 'bot' and live_timeline_started))
+                        kind == 'bot' and live_timeline_started),
+                    sample_revision=(revision if kind == 'bot' else None))
         if live_timeline_started:
             self._live_timeline_reset_pending = False
         for key, record in list(self._entities.items()):
@@ -754,6 +758,8 @@ class SnapshotSync(object):
                         previous_sample = samples[index - 1]
                         target_sample = samples[index]
                         break
+                record['presentation_bracket'] = ram_history.presentation_bracket(
+                    previous_sample, target_sample)
                 previous = previous_sample['pose']
                 segment_target = target_sample['pose']
                 previous_time_us = previous_sample['time_us']
@@ -776,6 +782,9 @@ class SnapshotSync(object):
                 # A late join or the first timed sample has no confirmed
                 # segment to interpolate. Materialise that sample directly.
                 desired = dict(target)
+                endpoint = {'time_us': record.get('target_sample_time_us'),
+                            'revision': record.get('target_sample_revision')}
+                record['presentation_bracket'] = ram_history.presentation_bracket(endpoint, endpoint)
                 if record.get('presentation_time_us') is None:
                     record['presentation_time_us'] = \
                         record.get('target_sample_time_us')
@@ -813,7 +822,10 @@ class SnapshotSync(object):
                     # pre-teleport path on the following render frame.
                     record['timed_samples'] = [{
                         'time_us': record['target_sample_time_us'],
-                        'pose': dict(target)}]
+                        'pose': dict(target),
+                        'revision': record.get('target_sample_revision')}]
+                    record['presentation_bracket'] = ram_history.presentation_bracket(
+                        record['timed_samples'][0], record['timed_samples'][0])
                     record['presentation_time_us'] = (
                         record['target_sample_time_us'])
                     record['interpolation_delay_us'] = None
@@ -845,5 +857,6 @@ class SnapshotSync(object):
                             if timed and
                             record.get('presentation_time_us') is not None
                             else None),
+                        'presentation_bracket': (record.get('presentation_bracket') if timed else None),
                         'interpolated': True, 'snap': snapped}, output)
         return output

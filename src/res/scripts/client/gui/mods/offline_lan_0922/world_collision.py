@@ -114,6 +114,26 @@ def _drivable_ground_profile(heights, segment_length, allow_flat=False):
 		return False
 
 
+def _drivable_perimeter_ground_profile(heights, segment_length, allow_flat=False):
+	"""Validate support across a translated hull edge without lane-direction bias.
+
+	Destination-perimeter lanes run around the hull winding, not along vehicle
+	travel.  Applying the asymmetric uphill/downhill limit in that arbitrary
+	winding makes the same bank pass on one edge direction and become a wall
+	when the edge is reversed.  Accept the profile only if one of the two
+	orientations is a valid continuous ground profile.  Real travel lanes keep
+	their directional climb/descent law.
+	"""
+	try:
+		values = tuple(float(value) for value in heights)
+	except (TypeError, ValueError):
+		return False
+	return (
+		_drivable_ground_profile(values, segment_length, allow_flat) or
+		_drivable_ground_profile(
+			tuple(reversed(values)), segment_length, allow_flat))
+
+
 def _drivable_surface(collision, maximum_gradient=_MAX_DRIVABLE_GRADIENT):
 	"""Require the actual horizontal hit, not just nearby ground, to be a slope."""
 	try:
@@ -941,9 +961,10 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 				profile_direction, profile_look) = lane
 			start_dx, start_dz = x1 - pos.x, z1 - pos.z
 			end_dx, end_dz = x2 - pos.x, z2 - pos.z
+			perimeter_lane = lane_index in perimeter_lanes
 			lane_ground_plane = ground_plane
 			lane_pos = pos
-			if lane_index in perimeter_lanes:
+			if perimeter_lane:
 				# This lane belongs to the translated body, with unchanged
 				# attitude; do not extrapolate its height beyond the old body.
 				start_dx, start_dz = start_dx - travel_x, start_dz - travel_z
@@ -952,6 +973,11 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 					ground_plane[1] + travel_y, ground_plane[2] + travel_z,
 					ground_plane[3], ground_plane[4])
 				lane_pos = Math.Vector3(pos.x, pos.y + travel_y, pos.z)
+			# Terrain evidence for a translated destination edge belongs to the
+			# translated body pose.  Using the old centre here makes a valid bank
+			# appear above/below the body and can reject the very displacement
+			# whose perimeter is being checked.
+			profile_pos = lane_pos if perimeter_lane else pos
 			local_start = (
 				start_dx * cos_y - start_dz * sin_y,
 				start_dx * sin_y + start_dz * cos_y)
@@ -1044,16 +1070,50 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 							_drivable_surface(col_bot, _gradient_limit) or
 							pose_clamped):
 						_heights, _segment = _ground_profile(
-							spaceID, Math, pos, profile_x, profile_z,
+							spaceID, Math, profile_pos, profile_x, profile_z,
 							profile_sin, profile_cos, profile_direction,
 							profile_look, ground_plane=_profile_plane,
 							collision_filter=_sweep_filter)
-						_gradient_limit = _profile_gradient_limit(_heights)
+						_profile_drivable = (
+							_drivable_perimeter_ground_profile
+							if perimeter_lane else _drivable_ground_profile)
+						_gradient_limit = (
+							_MAX_DESCENDING_GRADIENT if perimeter_lane else
+							_profile_gradient_limit(_heights))
+						# A destination-perimeter edge is a body cross-section, not a
+						# travel direction.  If its lower witness is the exact native
+						# ground described by one continuous profile, let the upper
+						# occupied rays decide whether an independent wall exists.
+						# Requiring the lower ray remainder itself to be clear makes a
+						# long bank look like a wall at each following terrain triangle.
+						if (perimeter_lane and _heights and
+								_profile_drivable(
+									_heights, _segment, allow_flat=True) and
+								_drivable_surface(col_bot, _gradient_limit) and
+								_hit_matches_ground_profile(
+									col_bot, _heights, _segment,
+									profile_x, profile_z, profile_sin, profile_cos,
+									profile_direction) and
+								_hit_matches_exact_ground_top(
+									spaceID, Math, profile_pos, col_bot, profile_look,
+									_profile_plane, _sweep_filter)):
+							if _raised_ray_has_wall(
+									spaceID, Math, lane_pos, x1, z1, x2, z2,
+									local_start, local_end, pose_y, target_len,
+									_gradient_limit,
+									(_heights, _segment, profile_x, profile_z,
+									 profile_sin, profile_cos, profile_direction,
+									 profile_look, _profile_plane),
+									_sweep_filter, _ground_ahead, trace=trace,
+									departing_contact=departing_contact,
+									lane_rotation=lane_rotation):
+								return 'hard' if return_status else True
+							continue
 						if (_heights and
 								abs(float(_heights[-1]) -
 									float(_heights[0])) >
 								_MIN_DRIVABLE_HEIGHT_CHANGE and
-								not _drivable_ground_profile(
+								not _profile_drivable(
 									_heights, _segment)):
 							# A descending lane can leave the actual surface before a
 							# steeper drop farther ahead. Do not turn that lower ground
@@ -1064,7 +1124,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 								all(_heights[index] <= _heights[index - 1]
 									for index in range(1, len(_heights))) and
 								_ground_exit_is_clear(
-									spaceID, Math, pos, start_bot, end_bot, col_bot,
+									spaceID, Math, profile_pos, start_bot, end_bot, col_bot,
 									profile_look, _profile_plane, _sweep_filter))
 							if departing:
 								if _raised_ray_has_wall(
@@ -1092,15 +1152,15 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 								profile_sin, profile_cos,
 								profile_direction)):
 						_surface_is_ground = _hit_matches_exact_ground_top(
-							spaceID, Math, pos, col_bot, profile_look,
+							spaceID, Math, profile_pos, col_bot, profile_look,
 							_profile_plane, _sweep_filter)
 					_supported_flat_top = (not airborne and
 						_supported_flat_top_is_clear(
-							spaceID, Math, pos, end_bot, col_bot, pose_y,
+							spaceID, Math, profile_pos, end_bot, col_bot, pose_y,
 							(hw, hl_back, hl_front), _heights, _segment,
 							profile_look, _profile_plane, _sweep_filter))
 					if ((_heights and
-							_drivable_ground_profile(_heights, _segment) and
+							_profile_drivable(_heights, _segment) and
 							_surface_is_ground) or _supported_flat_top):
 						if _raised_ray_has_wall(
 								spaceID, Math, lane_pos, x1, z1, x2, z2,
@@ -1116,7 +1176,7 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 							return 'hard' if return_status else True
 						continue
 					if (not airborne and _supported_seam_is_clear(
-							spaceID, Math, pos, col_bot, x1, z1, x2, z2,
+							spaceID, Math, profile_pos, col_bot, x1, z1, x2, z2,
 							local_start, local_end, pose_y,
 							(hw, hl_back, hl_front), _sweep_filter, lane_rotation)):
 						continue

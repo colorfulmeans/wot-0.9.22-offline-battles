@@ -325,7 +325,8 @@ def clear_ground_decal_visibility_state(appearance):
     if appearance is None:
         return False
     reached = False
-    for name in ('_offlineSplodgeDetach', '_offlineSplodgeDisabled'):
+    for name in ('_offlineSplodgeDetach', '_offlineSplodgeDisabled',
+                 '_offlineVisualGateR12Model'):
         try:
             if getattr(appearance, name, None) is not None:
                 setattr(appearance, name, None)
@@ -451,6 +452,57 @@ def close_stock_presentation_extras(appearance, visible):
     reached = set_vehicle_traces_visibility(appearance, visible) or reached
     if not visible:
         reached = stop_ground_effects(appearance) or reached
+        reached = stop_bound_visual_effects(appearance) or reached
+    return reached
+
+
+def stop_bound_visual_effects(appearance):
+    """Retire timelines which do not belong to the dust/exhaust selectors.
+
+    #1513 CompoundAppearance.deactivate stops both its private effect player
+    and ModelBoundEffects. A compound draw mask and CustomEffect selectors do
+    not cover these owners. Use their stock stop paths to cancel callbacks
+    and detach already loaded particles, including distortion particles.
+    Do not deactivate the appearance or its engine/sound components.
+    """
+    if appearance is None:
+        return False
+    reached = False
+    stopped = 0
+    player = getattr(appearance, '_CompoundAppearance__effectsPlayer', None)
+    if player is not None:
+        try:
+            appearance._CompoundAppearance__stopEffects()
+            stopped += 1
+            reached = True
+        except Exception as error:
+            _report_ground_gate_failure('effects', error)
+    bound = getattr(appearance, 'boundEffects', None)
+    if bound is not None:
+        try:
+            # The stock stop method iterates a snapshot, then clears owners.
+            # Empty lists are a no-op on the periodic hidden-vehicle check.
+            effects = getattr(bound, '_effects', ())
+            count = len(effects)
+            if count:
+                bound.stop()
+                stopped += count
+            reached = True
+        except Exception as error:
+            _report_ground_gate_failure('effects', error)
+    model = getattr(appearance, 'compoundModel', None)
+    if getattr(appearance, '_offlineVisualGateR12Model', None) is not model:
+        appearance._offlineVisualGateR12Model = model
+        manager = getattr(appearance, 'customEffectManager', None)
+        selectors = getattr(manager, '_CustomEffectManager__selectors', ())
+        try:
+            enabled = sum(bool(getattr(s, '_enabled', True)) for s in selectors)
+        except Exception:
+            enabled = -1
+        sys.stdout.write(
+            '[Offline LAN 0.9.22] VISUAL_GATE_R12 id=%s '
+            'stopped_timelines=%s enabled_selectors=%s\n' %
+            (getattr(appearance, 'id', '?'), stopped, enabled))
     return reached
 
 

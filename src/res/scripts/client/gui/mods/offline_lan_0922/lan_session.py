@@ -51,6 +51,10 @@ def _show_status(message):
 
 
 def _load_client():
+    from gui.mods.offline_lan_0922 import offline_replay
+    if offline_replay.replay_request():
+        from gui.mods.offline_lan_0922.replay_transport import ReplayClient
+        return ReplayClient
     from gui.mods.offline_lan_0922.lan_client import LANClient
     return LANClient
 
@@ -2355,12 +2359,24 @@ class LANSession(object):
         if self._battle_runtime is None:
             self._battle_runtime = _load_battle_runtime()
         config = dict(self._config)
+        if getattr(self.client, 'is_offline_replay', False):
+            config.update(self.client.replay_config)
+            from gui.mods.offline_lan_0922 import replay_exit
+            replay_exit.install(self)
         config.update({'map': map_name, 'spawn': spawn, 'vehicle': vehicle})
         if 'startupTimeoutSeconds' not in config:
             config['startupTimeoutSeconds'] = 30.0
         # The runtime can report a synchronous native failure from inside
         # start().  Record ownership before entering it, then only commit the
         # active round if that ownership token survived the callback.
+        if not getattr(self.client, 'is_offline_replay', False):
+            for player in message.get('players') or ():
+                if player.get('id') == getattr(self.client, 'player_id', None):
+                    receipt_id = player.get('crew_receipt_id')
+                    capture = getattr(self._postbattle_store, 'capture_participants', None)
+                    if receipt_id and callable(capture):
+                        capture(receipt_id, vehicle)
+                    break
         self._starting_round_id = round_id
         returning = {'round_id': round_id, 'arena_unique_id': None,
                      'returned': False, 'generation': self._client_generation}
@@ -2402,6 +2418,9 @@ class LANSession(object):
         """Retire one local round while retaining the waiting-room socket."""
         if self._stopped or not self._battle_started:
             return False
+        if getattr(self.client, 'is_offline_replay', False):
+            from gui.mods.offline_lan_0922 import replay_exit
+            return replay_exit.request(self, 'leave')
         self._postbattle_return = None
         sys.stdout.write(
             '[Offline LAN 0.9.22] local player left LAN round %r\n' %
@@ -2456,6 +2475,19 @@ class LANSession(object):
             '(lobby_restored=%r)\n' %
             (round_id, reason,
              bool(_message_value(message, 'lobby_restored', False))))
+
+        if getattr(self.client, 'is_offline_replay', False):
+            # BattleRuntime already retired the failing Avatar. There is no
+            # LAN room to leave, reconnect to, or await; the replay owns only
+            # its reader/callbacks. Preserve the original playback failure and
+            # do not turn a second leave_battle signature error into 'LAN lost'.
+            self._postbattle_return = None
+            self.state = 'error'
+            self._status_notifier(
+                tr('Replay playback stopped (%s).') % as_text(reason))
+            from gui.mods.offline_lan_0922 import replay_exit
+            replay_exit.request(self, 'runtime_error', reason)
+            return False
 
         if bool(_message_value(message, 'lobby_restored', False)):
             leave = getattr(self.client, 'leave_battle', None)
@@ -2585,8 +2617,21 @@ class LANSession(object):
                   'accepted by the transport (%d rows)' % len(rows))
 
     def _on_event(self, kind, message):
-        if self._stopped:
+        if self._stopped or getattr(self, '_replay_exit_requested', False):
             return
+        if getattr(self.client, 'is_offline_replay', False):
+            # Playback is read-only. Never reopen a room picker or settle a
+            # reward, including through an accidentally forwarded message.
+            if kind in ('welcome', 'roster', 'battle_receipt'):
+                return
+            if kind == 'replay_local':
+                if self._battle_started and self._battle_runtime is not None:
+                    self._battle_runtime.apply_replay_local(message)
+                return
+            if kind in ('replay_finished', 'replay_error'):
+                from gui.mods.offline_lan_0922 import replay_exit
+                replay_exit.request(self, kind, message.get('error'))
+                return
         if kind in ('welcome', 'roster'):
             if kind == 'welcome':
                 self._send_vehicle_catalog()

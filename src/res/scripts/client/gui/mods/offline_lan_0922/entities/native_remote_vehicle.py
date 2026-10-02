@@ -12,6 +12,7 @@ from __future__ import print_function
 
 import math
 import sys
+import os
 
 from gui.mods.offline_lan_0922.entities.remote_vehicle import (
     _RemoteShotPresenter, _blend_angle, _component_aim_angles,
@@ -25,6 +26,89 @@ _SIEGE_ENABLED = 2
 _SIEGE_SWITCHING_OFF = 3
 
 
+def _activate_revealed_engine(entity, detailed):
+    import BigWorld
+    from constants import ARENA_PERIOD
+    from vehicle_systems.components import engine_state
+    avatar = BigWorld.player()
+    arena = getattr(avatar, 'arena', None)
+    if detailed is None or arena is None:
+        return False
+    period = arena.period
+    if period == ARENA_PERIOD.BATTLE:
+        # This is the exact stock hook for a vehicle first presented mid-battle.
+        engine_state.checkEngineStart(detailed, period)
+    elif period == ARENA_PERIOD.PREBATTLE:
+        engine_state.notifyEngineOnArenaPeriodChange(
+            detailed, period, arena.periodEndTime, BigWorld.serverTime())
+    else:
+        return False
+    sys.stdout.write('[Offline LAN 0.9.22] ENGINE_AUDIO reveal id=%s period=%s start_requested=True\n' %
+                     (getattr(entity, 'id', '?'), period))
+    return True
+
+
+def _audio_rebuild_log(entity, phase, **values):
+    """Diagnostics cannot retire a working native sound owner."""
+    try:
+        fields = ' '.join('%s=%r' % (key, values[key]) for key in sorted(values))
+        sys.stdout.write('[Offline LAN 0.9.22] AUDIO_REBUILD_R11 id=%s phase=%s %s\n' %
+                         (getattr(entity, 'id', '?'), phase, fields))
+    except Exception:
+        pass
+
+
+def _activate_new_audio_owner(entity, appearance, audition):
+    """R11 trial: activate ONLY a freshly assembled receiver on an active parent.
+
+    Stock initial construction activates the parent system before startSystems
+    attaches the sound model.  A hot-added receiver misses that explicit parent
+    transition.  The pinned native VehicleAudition exposes activate(); the AD
+    traces do NOT prove whether native addComponent already activates it. This
+    is a one-variable lifecycle trial, not an assertion about that C++ code.
+
+    An unavailable/raising activation must not destroy the otherwise usable
+    R9D2 receiver (which supplies GUN as well as ENGINE). Do not toggle old
+    components, restart the engine, or write any SoundObject.volume field.
+    """
+    if os.environ.get('OFFLINE_LAN_0922_CLIENT_MODE') == 'simulation_worker':
+        return 'worker_skipped'
+    if bool(getattr(entity, 'isPlayerVehicle', False)):
+        return 'player_skipped'
+    if getattr(appearance, 'engineAudition', None) is not audition:
+        return 'owner_changed'
+    if not bool(getattr(appearance, 'activated', False)):
+        _audio_rebuild_log(entity, 'activate_skipped', reason='parent_not_active')
+        return 'parent_not_active'
+    try:
+        activate = getattr(audition, 'activate', None)
+        if not callable(activate):
+            _audio_rebuild_log(entity, 'activate_unavailable', keep_receiver=True)
+            return 'unavailable'
+        _audio_rebuild_log(entity, 'activate_begin', owner=id(audition),
+                           parent_active=True)
+        activate()
+    except Exception as error:
+        _audio_rebuild_log(entity, 'activate_error', error_type=type(error).__name__,
+                           error=error, keep_receiver=True)
+        return 'error'
+    _audio_rebuild_log(entity, 'activate_returned', owner=id(audition),
+                       audible_not_verified=True)
+    return 'returned'
+
+
+def _audio_owner_is_current(entity, appearance, audition, detailed, model):
+    alive = getattr(entity, 'isAlive', None)
+    alive = alive() if callable(alive) else bool(alive)
+    return (alive and getattr(entity, 'inWorld', False) and
+            getattr(entity, 'isStarted', False) and
+            getattr(entity, 'appearance', None) is appearance and
+            getattr(appearance, 'engineAudition', None) is audition and
+            getattr(appearance, 'detailedEngineState', None) is detailed and
+            getattr(appearance, 'compoundModel', None) is model and
+            getattr(appearance, '_offlineLANMutedEngine', None) is None)
+
+
 def set_engine_audible(entity, audible):
     """Retire hidden sound owners and assemble a fresh one on reveal.
 
@@ -34,8 +118,15 @@ def set_engine_audible(entity, audible):
     "This wrapper own nothing" seen in report 83fea4595275. Retain only the
     live appearance generation, never the removed wrapper or its callbacks.
     """
+    if bool(getattr(entity, 'isPlayerVehicle', False)):
+        return False
     appearance = getattr(entity, 'appearance', None)
     if appearance is None:
+        return False
+    from gui.mods.offline_lan_0922 import engine_audio_probe as probe
+    if probe.preserve_friendly_owner(entity, audible):
+        probe.note(appearance, 'D_preserve_friendly_owner', requested_audible=False,
+                   draw_visibility_unchanged=True, enemy_gate_unchanged=True)
         return False
     saved = getattr(appearance, '_offlineLANMutedEngine', None)
     audition = getattr(appearance, 'engineAudition', None)
@@ -43,13 +134,15 @@ def set_engine_audible(entity, audible):
     if not audible:
         if audition is None:
             return saved is not None
+        probe.note(appearance, 'before_audio_remove', requested_audible=False)
         # Publish ownership before the ComponentDescriptor can re-enter.
         appearance._offlineLANMutedEngine = (
             detailed, getattr(appearance, 'compoundModel', None))
         if detailed is not None:
-            detailed.onEngineStart = None
-            detailed.onStateChanged = None
+            from gui.mods.offline_lan_0922 import engine_audio
+            engine_audio.suspend(appearance)
         appearance.engineAudition = None
+        probe.note(appearance, 'after_audio_remove', requested_audible=False)
         return True
     if saved is None:
         return False
@@ -67,6 +160,7 @@ def set_engine_audible(entity, audible):
         return False
     # Consume the request before a native assembly call can re-enter Python.
     appearance._offlineLANMutedEngine = None
+    probe.note(appearance, 'before_audio_rebuild', requested_audible=True)
     try:
         from vehicle_systems import model_assembler
         import DataLinks
@@ -79,16 +173,57 @@ def set_engine_audible(entity, audible):
         in_water = DataLinks.createBoolLink(sensor, 'isInWater')
         # Use the installed client's assembler for vehicle-specific sounds,
         # speed/track/flying links, siege sounds and its NPC update period.
-        model_assembler.assembleVehicleAudition(False, appearance)
+        try:
+            model_assembler.assembleVehicleAudition(False, appearance)
+        except Exception:
+            # Assembly may assign a new owner and then fail. This partial
+            # receiver belongs to this attempt and must remain retryable.
+            audition = getattr(appearance, 'engineAudition', None)
+            raise
         audition = appearance.engineAudition
+        probe.note(appearance, 'after_audio_assemble', requested_audible=True)
         # Complete the stock vehicle_assembler / __startSystems bindings.
         audition.setIsUnderwaterInfo(underwater)
         audition.setIsInWaterInfo(in_water)
+        # Only this newly-created receiver is touched.  Initial/continuous
+        # visible owners never enter this branch.  Follow stock initial order:
+        # component activation, model connection, then engine event delivery.
+        activation = _activate_new_audio_owner(entity, appearance, audition)
+        if not _audio_owner_is_current(entity, appearance, audition, detailed, model):
+            _audio_rebuild_log(entity, 'superseded', at='activation')
+            return False
         audition.setWeaponEnergy(weapon_energy)
         audition.attachToModel(model)
+        if not _audio_owner_is_current(entity, appearance, audition, detailed, model):
+            _audio_rebuild_log(entity, 'superseded', at='model_attach')
+            return False
         model_assembler.subscribeEngineAuditionToEngineState(
             audition, detailed)
+        # The observer retained native start/state events while the audition
+        # was absent. Seed the NEW sound owner after model/water attachment;
+        # another start request alone cannot transfer an already-running state.
+        from gui.mods.offline_lan_0922 import engine_audio
+        relay = engine_audio.register(appearance)
+        if relay is not None:
+            relay.bind(audition, detailed)
+            if relay.last_start is None:
+                _activate_revealed_engine(entity, detailed)
+        probe.note(appearance, 'after_audio_rebuild', requested_audible=True)
+        # These are availability checks, NOT a claim that the audio device
+        # played an event. Failure of diagnostics does not remove the owner.
+        sources = {}
+        try:
+            from vehicle_systems.tankStructure import TankSoundObjectsIndexes
+            for name in ('ENGINE', 'GUN'):
+                sources[name.lower()] = audition.getSoundObject(
+                    getattr(TankSoundObjectsIndexes, name)) is not None
+        except Exception as error:
+            sources['probe_error'] = type(error).__name__
+        _audio_rebuild_log(entity, 'complete', activation=activation,
+                           receiver_present=appearance.engineAudition is audition,
+                           sources=sources, audible_not_verified=True)
     except Exception as error:
+        probe.note(appearance, 'audio_rebuild_error', error_type=type(error).__name__)
         # A Python-side assembly/binding failure is local to this sound
         # owner. Retire any partial component and let a later reveal retry;
         # never put an old wrapper back or abort the model visibility edge.
@@ -96,10 +231,12 @@ def set_engine_audible(entity, audible):
                 getattr(appearance, 'detailedEngineState', None) is detailed and
                 getattr(appearance, 'compoundModel', None) is model and
                 getattr(entity, 'inWorld', False) and
-                getattr(entity, 'isStarted', False)):
+                getattr(entity, 'isStarted', False) and
+                (getattr(appearance, 'engineAudition', None) is audition or
+                 getattr(appearance, 'engineAudition', None) is None)):
             if detailed is not None:
-                detailed.onEngineStart = None
-                detailed.onStateChanged = None
+                from gui.mods.offline_lan_0922 import engine_audio
+                engine_audio.suspend(appearance)
             appearance.engineAudition = None
             appearance._offlineLANMutedEngine = saved
         if not getattr(appearance, '_offlineLANEngineRestoreReported', False):
@@ -120,6 +257,10 @@ def set_draw_visibility(entity, visible):
         raise RuntimeError(
             '#1513 native vehicle visibility gate is unavailable')
     visible = bool(visible)
+    if not visible:
+        # Retire effect timelines while their sound/node owners are still
+        # live. Audio retirement below then follows the unchanged R11 path.
+        close_stock_presentation_extras(appearance, False)
     set_engine_audible(entity, visible)
     # Vehicle.show controls the model draw pass while CompoundAppearance owns
     # the compound, stickers and crashed-track visibility.  Keep both native
@@ -136,7 +277,8 @@ def set_draw_visibility(entity, visible):
     # would have covered directly as well: the ground occlusion decals, the
     # camera-distance dust/exhaust selectors and the terrain track marks,
     # which are a separate component and no attachment at all.
-    close_stock_presentation_extras(appearance, visible)
+    if visible:
+        close_stock_presentation_extras(appearance, True)
     return True
 
 
@@ -573,10 +715,10 @@ class _NativeRemoteState(object):
                 # only supports native data-link owners; passing this plain
                 # Python state creates an empty std::function and crashes the
                 # next DetailedEngineState update with bad_function_call.
-                detailed.vehicleSpeedLink = self._vehicle_speed_link
-                detailed.rotationSpeedLink = \
-                    self._vehicle_rotation_speed_link
-                engine_ready = True
+                from gui.mods.offline_lan_0922 import engine_audio
+                engine_ready = engine_audio.bind_motion(
+                    appearance, self._vehicle_speed_link,
+                    self._vehicle_rotation_speed_link)
             except Exception as error:
                 self._record_capability(
                     'engine_audio_motion', False, error)
@@ -978,6 +1120,8 @@ class _NativeRemoteState(object):
         # rather than forgetting a still-linked presentation.
         clear_ground_decal_visibility_state(appearance)
         if appearance is not None:
+            from gui.mods.offline_lan_0922 import engine_audio
+            engine_audio.release(appearance)
             appearance._offlineLANMutedEngine = None
         self.model_changed = None
         self.entity = None

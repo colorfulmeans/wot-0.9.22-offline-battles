@@ -46,6 +46,8 @@ from vehicle_overlay_store import (
     VehicleOverlayStore,
     VehicleOverlayStoreError,
 )
+from gui.mods.offline_lan_0922 import ram_history
+from gui.mods.offline_lan_0922 import state_transfer
 from gui.mods.offline_lan_0922 import battle_bonds, tank_collision
 from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
@@ -348,6 +350,7 @@ HUMAN_RAM_CONTACT_FIELDS = frozenset((
     "vx", "vy", "vz", "bot_vx", "bot_vy", "bot_vz",
 ))
 SERVER_CAPABILITIES = (
+    state_transfer.CAPABILITY,
     DESTRUCTIBLE_CATALOG_V5_CAPABILITY,
     LEAN_SNAPSHOT_MANIFEST_CAPABILITY,
     RAM_CONTACT_LEDGER_CAPABILITY,
@@ -1806,9 +1809,22 @@ class _EndpointSendMixin:
                 "encode_error", message, error=error, sent_bytes=0)
             raise
         if len(payload) > MAX_LINE_BYTES:
-            self._record_outbound_failure(
-                "message_too_large", message, payload, sent_bytes=0)
-            return None
+            try:
+                framed = state_transfer.frame_payload(
+                    outgoing, payload,
+                    state_transfer.CAPABILITY in getattr(self, "capabilities", ()))
+            except state_transfer.TransferError:
+                self._record_outbound_failure(
+                    "message_too_large", message, payload, sent_bytes=0)
+                return None
+            _server_log_limited(
+                "state-transfer:%s:%s" % (id(self), outgoing.get("type")),
+                "STATE_TRANSFER send kind=%s round=%s bytes=%d "
+                        "frames=%d wire_bytes=%d endpoint=%s" % (
+                outgoing.get("type"), outgoing.get("round_id"), len(payload),
+                framed.count(b"\n"), len(framed),
+                getattr(self, "player_id", getattr(self, "worker_id", None))))
+            return framed
         return payload
 
     def _mark_message_sent(self, message):
@@ -2311,6 +2327,7 @@ class BattleState:
         self.bot_unavailable_checkpoints = set()
         self.bot_terminal_criticals = {}
         self.bot_state_revision = 0
+        self.ram_pose_archive = ram_history.RamPoseArchive()
         self.bot_planner = BotPlanner()
         self.vehicle_catalogs = {}
         self._monotonic = clock or time.monotonic
@@ -3532,6 +3549,7 @@ class BattleState:
         self.bot_unavailable_checkpoints = set()
         self.bot_terminal_criticals = {}
         self.bot_state_revision = 0
+        self.ram_pose_archive = ram_history.RamPoseArchive()
         self.bot_state_time_us = 0
         self.bot_source_time_us = None
         self.bot_source_receipt_time_us = None
@@ -3781,6 +3799,8 @@ class BattleState:
             self.round_start_time = int(time.time())
             for participant in connected:
                 participant.participating = True
+                participant.crew_receipt_id = "%s:%d:%d" % (
+                    self.receipt_namespace, self.round_id, participant.player_id)
             self._freeze_round_participants(connected)
             occupied_slots = {(p.team, p.slot) for p in connected}
             self.battle_mode = battle_mode
@@ -4868,6 +4888,8 @@ class BattleState:
                 # Timestamp their actual receipt so the first bot_state delta
                 # is never measured from the server process/round origin.
                 self.bot_state_time_us = received_motion_time_us
+            self.ram_pose_archive.remember(self.bot_state_revision,
+                self.bot_state_time_us, self.bot_states)
             self.pending_events.append({"kind": "bot_manifest", "bots": list(manifest)})
             return True
 
@@ -7294,6 +7316,8 @@ class BattleState:
                 self.bot_launch_clock_offset_us = (
                     next_launch_clock_offset_us)
             self.bot_state_revision += 1
+            self.ram_pose_archive.remember(self.bot_state_revision,
+                self.bot_state_time_us, self.bot_states)
             self._admit_player_gun_markers(message)
             return True
 
@@ -9853,8 +9877,17 @@ class BattleState:
 
     @classmethod
     def _consume_player_ram_contact(cls, player, contact_seq):
+        before = list(player.ram_contacts)
+        old_resolved = int(player.ram_contact_resolved_seq)
         player.ram_contacts.pop(contact_seq, None)
         cls._advance_player_ram_resolved(player)
+        _server_log(
+            'RAM_TRACE server_consume player=%d seq=%d admitted=%d '
+            'resolved=%d->%d pending_before=%s pending_after=%s' % (
+                int(player.player_id), int(contact_seq),
+                int(player.ram_contact_seq), old_resolved,
+                int(player.ram_contact_resolved_seq), before,
+                list(player.ram_contacts)))
         if int(player.ram_contact.get("seq", 0) or 0) == contact_seq:
             player.ram_contact = (dict(next(reversed(
                 player.ram_contacts.values())))
@@ -9945,6 +9978,13 @@ class BattleState:
             bot = self.bot_states.get(bot_id)
             target = (self.bot_states.get(target_id) if target_kind == "bot"
                       else self.players.get(target_id))
+            _server_log(
+                'RAM_TRACE server_report sender=%d ram_seq=%d bot=%d '
+                'target=%s:%d damage_bot=%d damage_target=%d '
+                'contact_player=%s contact_seq=%s key=%s' % (
+                    int(player_id), int(ram_seq), int(bot_id), target_kind,
+                    int(target_id), int(damage_to_bot), int(damage_to_target),
+                    contact_player_id, contact_seq, key))
             if (bot is None or target is None or
                     (target_kind == "bot" and target_id == bot_id)):
                 return False
@@ -9965,6 +10005,18 @@ class BattleState:
                         contact_seq != next(iter(target.ram_contacts), None) or
                         int(target.ram_contacts[contact_seq].get(
                             "bot_id", 0)) != bot_id):
+                    _server_log(
+                        'RAM_TRACE server_report_reject reason=contact_order '
+                        'player=%s seq=%s target_pending=%s target_admitted=%s '
+                        'target_resolved=%s bot=%d target=%s:%d' % (
+                            contact_player_id, contact_seq,
+                            (list(target.ram_contacts) if target is not None and
+                             hasattr(target, 'ram_contacts') else None),
+                            (target.ram_contact_seq if target is not None and
+                             hasattr(target, 'ram_contact_seq') else None),
+                            (target.ram_contact_resolved_seq if target is not None and
+                             hasattr(target, 'ram_contact_resolved_seq') else None),
+                            bot_id, target_kind, target_id))
                     return False
                 ram_contact = target.ram_contacts[contact_seq]
             else:
@@ -9987,6 +10039,11 @@ class BattleState:
                     return False
             if ram_contact is not None and (
                     not bot.get("alive") or not target.alive):
+                _server_log(
+                    'RAM_TRACE server_terminal_dead player=%d seq=%d bot=%d '
+                    'bot_alive=%s target_alive=%s' % (
+                        int(contact_player_id), int(contact_seq), bot_id,
+                        bot.get('alive'), target.alive))
                 # The contact was valid when admitted but combat advanced
                 # before its delayed proof was resolved. It is terminal and
                 # must not survive forever or damage an already dead tank.
@@ -10017,7 +10074,19 @@ class BattleState:
                 # immutable fingerprint have reached a terminal result.
                 self._consume_player_ram_contact(target, contact_seq)
             if damage_to_bot <= 0 and damage_to_target <= 0:
+                _server_log(
+                    'RAM_TRACE server_zero_terminal bot=%d target=%s:%d '
+                    'contact_seq=%s' % (bot_id, target_kind, target_id,
+                                        contact_seq))
                 return True
+            _server_log(
+                'RAM_TRACE server_apply bot=%d target=%s:%d '
+                'damage_bot=%d damage_target=%d contact_seq=%s '
+                'bot_hp_before=%s target_hp_before=%s' % (
+                    bot_id, target_kind, target_id, damage_to_bot,
+                    damage_to_target, contact_seq, bot.get('health'),
+                    (target.get('health') if target_kind == 'bot' else
+                     target.health)))
             reason = 2
 
             bot_combat_before = self._bot_combat_signature(bot)
@@ -10884,7 +10953,7 @@ class BattleState:
     def _normalize_ram_contact_envelope(self, player, raw_ram):
         """Validate one receipt without consulting mutable Bot progress."""
         if (not isinstance(raw_ram, dict) or
-                set(raw_ram) != HUMAN_RAM_CONTACT_FIELDS):
+                set(raw_ram) - {'bot_history_bracket'} != HUMAN_RAM_CONTACT_FIELDS):
             return None, "malformed_contact"
         try:
             seq = _exact_int(raw_ram.get("seq"), 1, 2147483647)
@@ -10960,7 +11029,7 @@ class BattleState:
         if (contact_normal_x * (center_x - hit_x) +
                 contact_normal_z * (center_z - hit_z)) <= 0.000001:
             return None, "contact_normal_mismatch"
-        return {
+        normalized = {
             "seq": seq,
             "bot_id": bot_id,
             "bot_state_revision": revision,
@@ -10991,7 +11060,14 @@ class BattleState:
             "bot_vx": round(velocities["bot_vx"], 4),
             "bot_vy": round(velocities["bot_vy"], 4),
             "bot_vz": round(velocities["bot_vz"], 4),
-        }, None
+        }
+        if 'bot_history_bracket' in raw_ram:
+            bracket = ram_history.normalize_bracket(
+                raw_ram['bot_history_bracket'], revision, presentation_time_us)
+            if bracket is None or bracket[3] > MAX_MOTION_TIME_US:
+                return None, 'invalid_history_bracket'
+            normalized['bot_history_bracket'] = bracket
+        return normalized, None
 
     def _validate_ram_contact(self, player, raw_ram):
         """Return one admitted contact or a stable fail-closed reason."""
@@ -11005,6 +11081,16 @@ class BattleState:
                 self.bot_state_revision or
                 contact["presentation_time_us"] > self.bot_state_time_us):
             return None, "invalid_contact_contract"
+        if 'bot_history_bracket' in contact:
+            pinned, reason = self.ram_pose_archive.pin(
+                contact['bot_id'], contact['bot_state_revision'],
+                contact['presentation_time_us'], contact['bot_history_bracket'])
+            if pinned is None:
+                # A claimed endpoint not in the accepted bounded source
+                # contract is not an admitted transaction. Never hand an
+                # incomplete new-style receipt to a worker to wait or guess.
+                return None, reason
+            contact['ram_bot_state'] = pinned
         return contact, None
 
     @staticmethod
@@ -11759,9 +11845,28 @@ class BattleState:
                         # still derives damage from the frozen bot history and
                         # owns the canonical HP commit.
                         contact["input_seq"] = int(player.input_seq)
+                        if 'ram_bot_state' in contact:
+                            _server_log('RAM_EVIDENCE pinned player=%d seq=%d bot=%d '
+                                'bracket=%s pose=%s archive=%d' % (
+                                    player.player_id, seq, contact['bot_id'],
+                                    contact['bot_history_bracket'], contact['ram_bot_state'],
+                                    len(self.ram_pose_archive.samples)))
                         player.ram_contact_seq = seq
                         player.ram_contacts[seq] = contact
                         player.ram_contact = dict(contact)
+                        _server_log(
+                            'RAM_TRACE server_admit player=%d seq=%d bot=%d '
+                            'bot_revision=%d presentation=%d native=%d '
+                            'input_seq=%d admitted=%d resolved=%d pending=%s' % (
+                                int(player.player_id), int(seq),
+                                int(contact.get('bot_id', 0)),
+                                int(contact.get('bot_state_revision', 0)),
+                                int(contact.get('presentation_time_us', 0)),
+                                int(contact.get('native_contact_time_us', 0)),
+                                int(contact.get('input_seq', 0)),
+                                int(player.ram_contact_seq),
+                                int(player.ram_contact_resolved_seq),
+                                list(player.ram_contacts)))
                 raw_destructible_contacts = None
                 if (HUMAN_RAM_TIMELINE_CAPABILITY in player.capabilities and
                         "destructible_contacts" in message):
@@ -14777,7 +14882,14 @@ class BattleState:
             # snapshot against the real wire budget instead.  Destructibles
             # advance by their monotonic revision, so a large ledger naturally
             # continues over later snapshots and a periodic replay remains
-            # idempotent.
+            # idempotent. Negotiated endpoints budget the bounded logical state,
+            # not a single physical line. Otherwise a large mandatory base could
+            # permanently starve orders/destruction even after loading succeeded.
+            def state_fits(value):
+                if self._projectile_message_fits(value):
+                    return True
+                return (state_transfer.CAPABILITY in player.capabilities and
+                        state_transfer.can_frame(value))
             outgoing = dict(snapshot)
             if not includes_manifest:
                 outgoing.pop("bot_manifest", None)
@@ -14785,7 +14897,7 @@ class BattleState:
             if needs_orders:
                 candidate = dict(outgoing)
                 candidate["bot_orders"] = snapshot_orders
-                if self._projectile_message_fits(candidate):
+                if state_fits(candidate):
                     outgoing = candidate
                     included_orders = True
             included_destructibles = False
@@ -14814,7 +14926,7 @@ class BattleState:
                     high = len(candidates)
                     while low < high:
                         middle = (low + high + 1) // 2
-                        if self._projectile_message_fits(
+                        if state_fits(
                                 destructible_candidate(outgoing, middle)):
                             low = middle
                         else:
@@ -14832,7 +14944,7 @@ class BattleState:
                         high = len(candidates)
                         while low < high:
                             middle = (low + high + 1) // 2
-                            if self._projectile_message_fits(
+                            if state_fits(
                                     destructible_candidate(
                                         without_orders, middle)):
                                 low = middle
@@ -14845,16 +14957,16 @@ class BattleState:
                             included_destructibles = True
                 else:
                     candidate = destructible_candidate(outgoing, 0)
-                    if self._projectile_message_fits(candidate):
+                    if state_fits(candidate):
                         outgoing = candidate
                         included_destructibles = True
             if (needs_orders and not included_orders and
-                    self._projectile_message_fits(dict(
+                    state_fits(dict(
                         outgoing, bot_orders=snapshot_orders))):
                 outgoing = dict(outgoing, bot_orders=snapshot_orders)
                 included_orders = True
             deferred_manifest_refresh = False
-            if (not self._projectile_message_fits(outgoing) and
+            if (not state_fits(outgoing) and
                     needs_manifest and not snapshot_lineage_changed and
                     supports_lean_manifest):
                 # A cadence replay is restorative, not a state transition.
@@ -14867,7 +14979,7 @@ class BattleState:
                 outgoing.pop("bot_manifest", None)
                 needs_manifest = False
                 deferred_manifest_refresh = True
-            if not self._projectile_message_fits(outgoing):
+            if not state_fits(outgoing):
                 # Never turn a locally constructed oversized snapshot into a
                 # peer disconnect.  No delivery frontier advances, so a later
                 # tick can retry after transient projectiles/contacts retire.
@@ -14990,6 +15102,7 @@ class BattleState:
                 player.equipment_intent_result),
             "tank_pushes": list(player.tank_pushes.values()),
             "turret_pushes": list(player.turret_pushes.values()),
+            "crew_receipt_id": getattr(player, "crew_receipt_id", None),
             "ram_contact_admitted_seq": player.ram_contact_seq,
             "ram_contact_resolved_seq": player.ram_contact_resolved_seq,
             "destructible_contact_admitted_seq":
@@ -15146,6 +15259,53 @@ class BattleState:
         with self.lock:
             return self._broadcast_current_roster_locked()
 
+    def _preflight_loading_transfer(self, outgoing, recipients):
+        """Validate the whole local publication before any endpoint sees it.
+
+        Serialization/unsupported-framing failures belong to the producer,
+        not the sockets. Abort this load as a room transition with no result
+        receipt; never kick every peer for a server-side encoding decision.
+        Legacy launcher probes stay compatible. An old GAME client must be
+        updated before it can participate in an oversized loading state.
+        """
+        try:
+            payload = state_transfer.json_payload(outgoing)
+            if len(payload) > MAX_LINE_BYTES and any(
+                    state_transfer.CAPABILITY not in getattr(
+                        endpoint, "capabilities", ()) for endpoint in recipients):
+                raise state_transfer.TransferError("upgrade_required")
+            state_transfer.frame_payload(outgoing, payload, supported=True)
+        except state_transfer.TransferError as error:
+            failed_round = self.round_id
+            code = "loading_" + error.code
+            _server_log("STATE_TRANSFER loading_rejected round=%s reason=%s" % (
+                failed_round, error.code))
+            # No battle has been activated. The normal newer-round roster
+            # releases any already created native scenes, without rewards.
+            self._reset_round()
+            denied = {
+                "type": "start_denied", "protocol": PROTOCOL_VERSION,
+                "round_id": self.round_id, "code": code,
+                "host_player_id": self.host_player_id,
+                "message": ("Update every game client and the host to Test8 "
+                            "or newer." if error.code == "upgrade_required"
+                            else "Loading state could not be encoded safely; "
+                                 "the room returned to waiting."),
+            }
+            for endpoint in self.players.values():
+                if endpoint.connected:
+                    endpoint.offer_reliable(denied)
+            self._broadcast_current_roster_locked()
+            return False
+        if len(payload) > MAX_LINE_BYTES:
+            sizes = dict((key, len(state_transfer.json_payload(value)))
+                         for key, value in outgoing.items())
+            _server_log("STATE_TRANSFER loading_preflight round=%s kind=%s "
+                        "bytes=%d sections=%s" % (
+                self.round_id, outgoing.get("type"), len(payload),
+                json.dumps(sizes, sort_keys=True, separators=(",", ":"))))
+        return True
+
     def broadcast_loading_transition(self, message):
         """Publish one #1513 loading transition with strict membership repair."""
         with self.lock:
@@ -15221,6 +15381,8 @@ class BattleState:
 
             recipients = tuple(
                 self._connected_endpoints(participating_only=True))
+            if not self._preflight_loading_transfer(outgoing, recipients):
+                return False
             failed = []
             # Defer removals until the transition has been queued for every
             # surviving recipient. If an enqueue fails, a revisioned roster
@@ -16237,6 +16399,8 @@ def run_server(host, port, map_name, max_players,
         kwargs={"shutdown_callback": shutdown_controller.request},
         name="battle-tick", daemon=True)
     thread.start()
+    _server_log(
+        "RAM_TRACE diagnostic_build=colorfulmeans-096-ram-evidence-test6-20260930-1")
     _server_log(
         "LAN battle server listening on %s:%d "
         "(map=%s, max_players=%d, team_sizes=%d:%d)" % (

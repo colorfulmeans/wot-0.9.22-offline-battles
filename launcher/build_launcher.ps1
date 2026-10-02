@@ -53,6 +53,7 @@ python -m PyInstaller `
     --specpath $SpecRoot `
     --paths (Join-Path $RepoRoot "tools") `
     --paths (Join-Path $RepoRoot "src/res/scripts/client") `
+    --hidden-import replay_launch `
     --hidden-import bot_tactics_ui `
     --hidden-import bot_tactics_smoke `
     --exclude-module gui `
@@ -101,9 +102,6 @@ Copy-Item -Force `
     (Join-Path $LauncherRoot "LAUNCHER_README.txt") `
     (Join-Path $DistRoot "$AppName\README.txt")
 Copy-Item -Force `
-    (Join-Path $RepoRoot "TESTING_20260916_GROUP1_ZH.md") `
-    (Join-Path $DistRoot "$AppName\TESTING_20260916_GROUP1_ZH.md")
-Copy-Item -Force `
     (Join-Path $RepoRoot "LICENSE") `
     (Join-Path $DistRoot "$AppName\LICENSE")
 Copy-Item -Force `
@@ -121,7 +119,7 @@ python (Join-Path $RepoRoot "tools/stage_editor_licenses.py") $LicenseRoot
 if ($LASTEXITCODE -ne 0) { throw "Pillow license staging failed" }
 
 foreach ($entry in @("$AppName.exe", "README.txt",
-                     "TESTING_20260916_GROUP1_ZH.md", "LICENSE",
+                     "LICENSE",
                      "THIRD_PARTY_NOTICES.md", "licenses\Boost-1.0.txt")) {
     if (-not (Test-Path -LiteralPath (Join-Path $DistRoot "$AppName\$entry"))) {
         throw "Launcher distribution is incomplete: $entry"

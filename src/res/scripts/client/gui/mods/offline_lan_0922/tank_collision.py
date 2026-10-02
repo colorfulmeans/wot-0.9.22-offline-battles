@@ -623,6 +623,28 @@ def post_contact_velocity_bodies(tanks, results):
     return updated
 
 
+def traverse_contact_point(a, b, normal, omega):
+    """Choose the closing endpoint of the actual common footprint.
+
+    A longer hull's extreme corner may be metres beyond its shorter peer.
+    Apply force only in the clipped contact patch, including a slop-wide
+    touching skin, never at that fictitious distant corner. The pair normal
+    still comes from SAT and the real shapes are never enlarged for motion.
+    """
+    aa, bb = dict(a, shape=_tank_shape(a)), dict(b, shape=_tank_shape(b))
+    polygon = obb_overlap_polygon(aa, bb)
+    if not polygon:
+        shape = bb['shape']
+        bb['shape'] = (shape[0]+POSITION_SLOP, shape[1]+POSITION_SLOP,
+                       shape[2], shape[3])
+        polygon = obb_overlap_polygon(aa, bb)
+    if not polygon:
+        return None
+    nx, nz = normal
+    return min(polygon, key=lambda point:
+               ((point[1]-a['z'])*nx-(point[0]-a['x'])*nz)*omega)
+
+
 def traverse_impulses(tanks, dt, anchor=None, angular_results=None):
     """Spend track torque at an occupied corner instead of a free yaw shove.
 
@@ -668,16 +690,11 @@ def traverse_impulses(tanks, dt, anchor=None, angular_results=None):
                                          b['x'], b['z'], b['yaw'], other_shape)
             if depth < -POSITION_SLOP:
                 continue
-            corners = [(axes[0][0]*x+axes[1][0]*z,
-                        axes[0][1]*x+axes[1][1]*z)
-                       for x in (-shape[0], shape[0])
-                       for z in (-shape[1], shape[1])]
-            # A face has two extreme corners. Only the one moving into the
-            # peer loads the drive, and a corner moving away releases it.
-            support = min(x*nx+z*nz for x, z in corners)
-            arms = [(z*nx-x*nz, x, z) for x, z in corners
-                    if x*nx+z*nz <= support+POSITION_SLOP]
-            arm, corner_x, corner_z = min(arms, key=lambda r: r[0]*omega)
+            point = traverse_contact_point(a, b, (nx, nz), omega)
+            if point is None:
+                continue
+            corner_x, corner_z = point[0]-a['x'], point[1]-a['z']
+            arm = corner_z*nx-corner_x*nz
             if arm*omega >= -1e-9:
                 continue
             ia = 0.0 if a.get('immovable') else 1.0/a['mass']

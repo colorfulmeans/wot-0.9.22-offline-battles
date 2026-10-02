@@ -2184,33 +2184,113 @@ def engine_force(p, v, throttle, slope_pitch=0.0):
 	return f * throttle
 
 
+def steering_drive_scale(drive_intent, steering):
+	"""Allocate one motor/traction budget before either drive consumer runs.
+
+	Steering reserves one control channel, even for an analogue partial turn.
+	The torque consumer still scales its request by turn magnitude. This is
+	the copied planar transmission model, not a recovered #1513 gearbox law.
+	The same factor applies to longitudinal_step and contact_traverse: no
+	consumer may first take full P/v and starve the other at every road speed.
+	"""
+	return (1.0 / (1.0 + min(1.0, abs(float(drive_intent))))
+		if steering else 1.0)
+
+
 def contact_traverse(p, half_width, speed, turn, dt, drive_intent=0.0,
                      slope_pitch=0.0):
-	'''Return free traverse speed and the available track couple in N m.
+	"""Return the commanded yaw rate and the shared-power track couple.
 
-	Opposed track forces act at the chassis half-width. Reuse the reviewed
-	engine power/traction law at the faster track speed, so driving and turning
-	do not each claim full power. This is the planar chassis approximation;
-	it does not claim a recovered retail steering transmission model.'''
+	At full W+A/D, drive and steer each receive at most half the power and
+	traction. Pure A/D retains its previous budget. The faster track speed
+	bounds rotational work; longitudinal_step spends the matching drive share.
+	"""
 	if not turn or dt <= 0.0:
 		return 0.0, 0.0
-	# Contacts need the commanded speed limit. Restarting the free-turn ramp
-	# from zero on every blocked slice permanently reduced this limit at high
-	# frame rates, even after the same motor had been held for several seconds.
-	# The contact's torque * dt budget owns its actual acceleration.
 	omega = _traverse_step(p, 0.0, turn, speed,
 		max(dt, ANG_ACCELERATION_TIME), drive_intent=drive_intent)
 	track_speed = abs(speed)+abs(omega)*half_width
 	force = abs(engine_force(p, track_speed, turn, slope_pitch))
-	if drive_intent:
-		drive_force = abs(engine_force(p, speed, drive_intent, slope_pitch))
-		power = p['powerW']*POWER_FACTOR*p.get('nativePowerRatio', 1.0)
-		unused_power = max(0.0, power-drive_force*abs(speed))
-		force *= unused_power/power if power > 0.0 else 0.0
-		traction = (longitudinal_slope_grip(slope_pitch)*p['mass']*GRAVITY*
-		             max(.1, math.cos(slope_pitch)))
-		force = min(force, max(0.0, traction-drive_force))
+	force *= steering_drive_scale(drive_intent, turn)
 	return omega, force*half_width
+
+
+def fixed_contact_turn(p, shape, position, yaw, turn, speed, drive_intent,
+                       dt, hit, normal, previous_rate=0.0, bounds=None,
+                       slope_pitch=0.0):
+	"""Torque-limited planar reaction against one fixed occupied face.
+
+	Return a candidate, never permission to move. The runtime MUST sweep the
+	combined translation/yaw against every actual world and vehicle obstacle.
+	The fixed face has zero inverse mass. The moving hull has its installed
+	mass and footprint inertia. I + m*r*r includes the recoil displacement;
+	engine torque cannot produce a free geometric escape/teleport.
+
+	This uses the copied net track-couple and rolling-drag approximation, not
+	a reconstruction of the native multi-point track/soil solver.
+	"""
+	if dt <= 0.0 or not turn or p['mass'] <= 0.0:
+		return None
+	values = tuple(position)+tuple(hit)+tuple(normal)+(yaw, dt, previous_rate)
+	if any(math.isnan(float(v)) or math.isinf(float(v)) for v in values):
+		return None
+	nx, ny, nz = (float(v) for v in normal)
+	norm = math.sqrt(nx*nx+ny*ny+nz*nz)
+	horizontal = math.hypot(nx, nz)
+	# Upward terrain and bridge undersides remain suspension's domain.
+	if norm <= 1.0e-9 or horizontal <= 1.0e-9 or abs(ny)/norm > 0.65:
+		return None
+	nx, nz = nx/horizontal, nz/horizontal
+	width, length = shape[:2]
+	sine, cosine = math.sin(yaw), math.cos(yaw)
+	left, right, back, front = (bounds if bounds is not None else
+		(-width, width, length, length))
+	corners = [(cosine*x+sine*z, -sine*x+cosine*z)
+		for x in (left, right) for z in (-back, front)]
+	plane = (hit[0]-position[0])*nx+(hit[2]-position[2])*nz
+	gap = min(x*nx+z*nz for x,z in corners)-plane
+	# Only existing/touching faces. A future obstacle does not give a remote
+	# repulsion force; the runtime can first advance a checked partial arc.
+	if gap > 0.011 or gap < -0.25:
+		return None
+	omega, torque = contact_traverse(
+		p, width, speed, turn, dt, drive_intent, slope_pitch)
+	if not omega or torque <= 0.0:
+		return None
+	direction = 1.0 if omega > 0.0 else -1.0
+	arm = max(0.0, max(-direction*(z*nx-x*nz) for x,z in corners))
+	if arm <= 1.0e-9:
+		return None
+	# A bound on the normal corner velocity over the proposed arc. Using it
+	# for both inertia and displacement pays for the same motion, and proves
+	# that a linear recoil cannot deepen any part of the occupied plane.
+	radius = max(math.hypot(x,z) for x,z in corners)
+	arm += radius*min(abs(omega)*float(dt), math.pi)
+	inertia = p['mass']*(width*width+length*length)/3.0
+	effective_inertia = inertia+p['mass']*arm*arm
+	# The longitudinal step has already paid rolling work F*abs(speed).
+	# Only the additional two-track work caused by differential motion belongs
+	# here. Equal-sign track speeds have cancelling rolling torques; charging
+	# F*width again would falsely immobilise a moving hull beside a wall.
+	differential_speed = abs(omega)*width
+	additional_speed = max(0.0, differential_speed-abs(speed))
+	resistance = (rolling_resist_force(p, steering=True)*additional_speed /
+		abs(omega))
+	net = max(0.0, torque-resistance)
+	if net <= 0.0:
+		return None
+	initial = min(abs(omega), max(0.0, direction*previous_rate))
+	acceleration = net/effective_inertia
+	final = min(abs(omega), initial+acceleration*dt)
+	angle = direction*(initial+final)*0.5*dt
+	if abs(angle) <= 1.0e-10:
+		return None
+	distance = arm*abs(angle)
+	return {'translation': (nx*distance, nz*distance), 'angle': angle,
+		'rate': direction*final, 'torque': torque, 'net_torque': net,
+		'effective_inertia': effective_inertia, 'arm': arm,
+		'normal': (nx, nz), 'gap': gap,
+		'normal_impulse': p['mass']*arm*(final-initial)}
 
 
 def rolling_resist_force(p, terrainIdx=0, steering=False):
@@ -2473,7 +2553,8 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 
 	if throttle != 0:
 		# Drive: engine force (power/traction limited) + slope gravity.
-		_ef = engine_force(p, v, throttle, slope_pitch) / p['mass']
+		_ef = (engine_force(p, v, throttle, slope_pitch) *
+			steering_drive_scale(throttle, steering) / p['mass'])
 		# TRUE rolling-drag-aware climb limit: powering INTO a grade the pulling tracks
 		# cannot overcome (peak drive accel < gravity-along + rolling drag). There the
 		# drive is CUT and the hold dropped to the slide limit, so the hull slides BACK

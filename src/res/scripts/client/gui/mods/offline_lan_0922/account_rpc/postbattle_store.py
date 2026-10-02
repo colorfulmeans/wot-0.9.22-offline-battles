@@ -1131,6 +1131,7 @@ class PostBattleStore(object):
         self._history = []
         self._progress = self._empty_progress()
         self._progress_applier = None
+        self._participation_applier = None
         # Per-battle outcomes preserve new-record and gun-mark notifications.
         # Pending results persist these alongside the receipt until claimed.
         self._awards = {}
@@ -1145,6 +1146,16 @@ class PostBattleStore(object):
         if callback is not None and not callable(callback):
             raise TypeError('postbattle progress applier must be callable')
         self._progress_applier = callback
+
+    def set_participation_applier(self, callback):
+        if callback is not None and not callable(callback):
+            raise TypeError('participation applier must be callable')
+        self._participation_applier = callback
+
+    def capture_participants(self, receipt_id, vehicle):
+        if self._participation_applier is None:
+            return False
+        return self._participation_applier(receipt_id, vehicle)
 
     @staticmethod
     def _empty_progress():

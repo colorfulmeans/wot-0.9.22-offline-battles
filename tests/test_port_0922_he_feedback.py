@@ -70,7 +70,9 @@ class HEFeedbackTests(unittest.TestCase):
                         flags = battle._avatar.shot_results[0][0] >> 32
                         vhf = runtime.constants.VEHICLE_HIT_FLAGS
                         expected = (vhf.ATTACK_IS_DIRECT_PROJECTILE |
-                            (vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE
+                            ((vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE
+                              if result == 2 else
+                              vhf.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION)
                              if damage else
                              vhf.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE))
                         self.assertEqual(expected, flags)

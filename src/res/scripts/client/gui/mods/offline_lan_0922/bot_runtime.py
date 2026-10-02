@@ -48,6 +48,13 @@ except NameError:
     _STRING_TYPES = (str,)
 
 
+# Test8L is an explicit low-compute physics ablation, not an equivalent solver.
+# Every Bot body, including a wreck, uses the existing basic terrain/ballistic
+# path. The player's own suspension is outside BotRuntime and is unchanged.
+# This is a build-time switch; it is not persisted in user saves/configuration.
+BOT_FULL_SUPPORT_ENABLED = False
+
+
 OBSERVATION_SECONDS = 0.40
 # The logical runtime keeps its mature 30 Hz default for engine-free callers.
 # Production hidden workers explicitly select the lower-cost 10 Hz control and
@@ -704,6 +711,26 @@ def _slew(current, desired, maximum_step):
 def _rotation_speed(component, default):
     return max(0.0, _number(_value(component, 'rotationSpeed', default),
                             default))
+
+
+def _motion_drive_pitch(probe, travel_sign, state):
+    """Keep an unavailable navigation grade out of physical gravity."""
+    if isinstance(probe, dict):
+        try:
+            slope = float(probe.get('slope'))
+        except (TypeError, ValueError, OverflowError):
+            slope = None
+        # 99 is the legacy no-ground/query-error sentinel, not a gradient.
+        if (probe.get('slope_valid', True) and
+                not probe.get('probe_failed', False) and slope is not None and
+                not math.isnan(slope) and not math.isinf(slope) and
+                abs(slope) != 99.0):
+            return float(travel_sign) * -math.atan(slope)
+    # Reuse the accepted hull support pose; never turn a failed lookahead
+    # into a near-vertical hill. This pitch is already hull-forward.
+    return _number(state.get('terrain_pitch'),
+                   _number(state.get('pitch')) -
+                   _number(state.get('suspension_pitch')))
 
 
 def slope_pose(probe, position, yaw, half_length, half_width,
@@ -2175,6 +2202,8 @@ class BotRuntime(object):
         self._ram_contacts = frozenset()
         self._ram_seq = 0
         self._human_ram_receipt_seq = {}
+        self._ram_wait_log_key = None
+        self._ram_wait_log_next = 0.0
         self._human_ram_report_cache = {}
         self.finished = False
         self._visibility_cache = {}
@@ -2767,7 +2796,13 @@ class BotRuntime(object):
         return True
 
     def _suspension_params_for(self, bot_id):
-        """Return descriptor-derived data, disabling one unsupported Bot."""
+        """Select detailed support, or the explicit Test8L basic-ground path."""
+        if not BOT_FULL_SUPPORT_ENABLED:
+            # Keep this before both activation and the cache. Neither contact,
+            # motion, nor death may re-enable expensive spring integration.
+            self._report_suspension_trial(
+                'disabled: Test8L basic ground for live Bots and wrecks')
+            return None
         bot_id = int(bot_id)
         if (self._suspension_ground_probe is None and
                 (self._wreck_ground_probe is None or
@@ -3288,6 +3323,8 @@ class BotRuntime(object):
             self._ram_contacts = frozenset()
             self._ram_seq = 0
             self._human_ram_receipt_seq = {}
+            self._ram_wait_log_key = None
+            self._ram_wait_log_next = 0.0
             self._human_ram_report_cache = {}
             self._contact_lease_elapsed = {}
             self.adapter = None
@@ -7340,22 +7377,16 @@ class BotRuntime(object):
                 else:
                     state['y'] = ground
                 state['vertical_speed'] = (
-                    ((state['y'] - previous_y) / step
-                     if state['y'] < previous_y else
-                     vehicle_physics.launch_vertical_speed(
-                         state['speed'], state.get('last_drive_pitch', 0.0)))
+                    (state['y'] - previous_y) / step
                     if step > 0.0 and not state.get('airborne', False)
                     else 0.0)
                 state['airborne'] = False
                 if impact_speed < 0.0:
                     self._apply_bot_landing_impact(state, impact_speed)
             else:
-                if (not state.get('airborne', False) and
-                        abs(state.get('vertical_speed', 0.0)) < 1.0e-8):
-                    pitch = state.get('last_drive_pitch', 0.0)
-                    state['vertical_speed'] = (
-                        vehicle_physics.launch_vertical_speed(
-                            state['speed'], pitch))
+                # Retain only the vertical travel observed on the support.
+                # A corridor beyond a level bridge may already see a bank or
+                # no ground; neither can launch this hull off the deck.
                 state['airborne'] = True
                 substeps = min(8, max(
                     1, int(abs(state.get('vertical_speed', 0.0) * step) /
@@ -7374,12 +7405,7 @@ class BotRuntime(object):
                             state, impact_speed)
                         break
         elif state.get('grounded_once', False):
-            if (not state.get('airborne', False) and
-                    abs(state.get('vertical_speed', 0.0)) < 1.0e-8):
-                state['vertical_speed'] = (
-                    vehicle_physics.launch_vertical_speed(
-                        state['speed'],
-                        state.get('last_drive_pitch', 0.0)))
+            # Loss of support adds gravity, not a new navigation-derived kick.
             state['airborne'] = True
             state['vertical_speed'] -= vehicle_physics.GRAVITY * step
             state['y'] += state['vertical_speed'] * step
@@ -8709,6 +8735,17 @@ class BotRuntime(object):
                     state.get('airborne', False)))
         return moved
 
+    def _trace_ram_wait(self, player_id, seq, bot_id, now, reason, receipt):
+        """Observe an invariant failure without modifying HP or FIFO order."""
+        key = (player_id, seq, bot_id, reason)
+        if key != self._ram_wait_log_key or now >= self._ram_wait_log_next:
+            self._ram_wait_log_key, self._ram_wait_log_next = key, now+2.0
+            sys.stdout.write('[Offline LAN 0.9.22] RAM_EVIDENCE wait '
+                'player=%d seq=%d bot=%d reason=%s bracket=%s pinned=%s\n' % (
+                    player_id, seq, bot_id, reason,
+                    receipt.get('bot_history_bracket'),
+                    isinstance(receipt.get('ram_bot_state'), dict)))
+
     def _resolve_human_ram_receipts(self, players, now):
         """Recompute HP from a client-observed historical contact.
 
@@ -8767,15 +8804,14 @@ class BotRuntime(object):
                 if cached is not None:
                     reports.extend(dict(report) for report in cached)
                     break
-                # Missing history is temporary when replaceable snapshots
-                # coalesce the exact revision. Do not skip this sequence and
-                # let a later receipt overtake it.
-                if not isinstance(historical, dict):
-                    break
                 current = self.states.get(bot_id)
                 if current is None:
-                    # A takeover snapshot can expose the receipt before the
-                    # bot state has materialised. Keep it retryable.
+                    self._trace_ram_wait(player_id, seq, bot_id, now,
+                                         'body_not_ready', receipt)
+                    break
+                if current.get('alive', True) and not isinstance(historical, dict):
+                    self._trace_ram_wait(player_id, seq, bot_id, now,
+                                         'history_or_profile_missing', receipt)
                     break
                 if (not current.get('alive', True) or
                         int(_number(historical.get('id'), -1)) != bot_id):
@@ -12600,16 +12636,11 @@ class BotRuntime(object):
                 diagnostic.phase('bot.integrate')
             if not self.native_motion:
                 params = self._physics_params_for(state['id'])
-                # The selected corridor's ground sample is also the copied
-                # physics slope.  A second native probe here used to double the
-                # render-thread work for every moving bot.
-                slope = (_number(motion_probe.get('slope'))
-                         if isinstance(motion_probe, dict) else 0.0)
                 # Direction probes follow travel_yaw, while copied physics and
                 # stored pose pitch use the hull-forward axis. Convert reverse
-                # probes once so signed speed stays correct while coasting and
-                # when a ramp loses support.
-                slope_pitch = travel_sign * -math.atan(slope)
+                # probes once, after excluding no-ground/error sentinels.
+                slope_pitch = _motion_drive_pitch(
+                    motion_probe, travel_sign, state)
                 turn_speed = (0.0 if siege_motion_locked else
                     vehicle_physics.traverse_step(
                         params, self._turn_speeds.get(state['id'], 0.0),

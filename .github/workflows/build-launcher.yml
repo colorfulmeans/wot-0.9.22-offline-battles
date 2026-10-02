@@ -67,6 +67,8 @@ jobs:
         with:
           name: launcher-manual-server-input
           path: dist/server
+      - name: Reproduce the verified recorder resource
+        run: python tools/build_replay_runtime.py
       - name: Build Python 2.7 0.9.22 client package
         run: >-
           docker run --rm --platform linux/amd64 -v "$PWD:/work"

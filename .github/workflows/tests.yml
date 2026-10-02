@@ -50,6 +50,8 @@ jobs:
           name: wot-0.9.22-native-exception-trail-probe
           path: native-probe/native_exception_trail.exe
           if-no-files-found: error
+      - name: Reproduce the verified recorder resource
+        run: python tools/build_replay_runtime.py
       - name: Build Python 2.7 0.9.22 LAN client
         run: >-
           docker run --rm --platform linux/amd64 -v "$PWD:/work"

@@ -1553,7 +1553,7 @@ class PayloadStagingTest(unittest.TestCase):
         self.assertIn('"mapstudio"', script)
         self.assertIn("Map Studio", script)
 
-    def test_windows_distribution_carries_the_current_test_guide(self):
+    def test_windows_distribution_omits_historical_test_guides(self):
         launcher_root = os.path.dirname(os.path.dirname(__file__))
         repo_root = os.path.dirname(launcher_root)
         guide_name = "TESTING_20260916_GROUP1_ZH.md"
@@ -1562,10 +1562,7 @@ class PayloadStagingTest(unittest.TestCase):
         script_path = os.path.join(launcher_root, "build_launcher.ps1")
         with open(script_path, "r", encoding="utf-8") as stream:
             script = stream.read()
-        # Source, destination and final distribution completeness guard.
-        self.assertEqual(3, script.count(guide_name))
-        self.assertIn(
-            'Join-Path $DistRoot "$AppName\\%s"' % guide_name, script)
+        self.assertNotIn(guide_name, script)
         self.assertNotIn("TESTING_20260915_ZH.md", script)
 
     def test_windows_distribution_does_not_bundle_procdump(self):
