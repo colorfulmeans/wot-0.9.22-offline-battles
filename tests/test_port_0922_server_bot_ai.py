@@ -1144,6 +1144,29 @@ class ServerBotTacticsTests(unittest.TestCase):
             planner.build_orders(manifest, states, [], float(now), defense)
         self.assertEqual(selected, set(planner._base_capture[1]['bot_ids']))
 
+    def test_capture_progress_respects_each_bots_contact_lease(self):
+        for known in (False, True):
+            with self.subTest(known=known):
+                planner = BotPlanner()
+                manifest = [_bot(400 + i, 1, i, self.route, 'mediumTank') for i in range(4)]
+                states = [_state(bot['id'], 1, i * 20, 0) for i, bot in enumerate(manifest)]
+                defense = _capture_defense()
+                planner.build_orders(manifest, states, [], 0., defense)
+                selected = set(planner._base_capture[1]['bot_ids'])
+                stalled = min(selected)
+                backup = next(s['id'] for s in states if s['id'] not in selected)
+                target = planner._capture_target(defense, 1)
+                for state in states:
+                    if state['id'] in selected and state['id'] != stalled:
+                        state.update(x=target['point']['x'], z=target['point']['z'])
+                contact = dict(radio_bot_until={(stalled if known else backup): 30.})
+                planner._contacts[1] = {('human', 900): contact}
+                bots = planner._alive_bots(manifest, states)
+                result = planner._update_base_capture(1, bots, target, set(), 21., [contact])
+                self.assertEqual(known, stalled in result)
+                self.assertEqual(not known, backup in result)
+                self.assertEqual(3, len(result))
+
     def test_no_capture_replacement_does_not_empty_the_squad(self):
         planner = BotPlanner()
         manifest = [_bot(400 + i, 1, i, self.route, 'mediumTank') for i in range(4)]

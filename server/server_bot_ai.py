@@ -735,7 +735,7 @@ class BotPlanner(object):
             self._rebalance_routes(
                 team, team_bots, contacts[team], now, protected_ids)
             capture_ids = self._update_base_capture(
-                team, team_bots, capture_targets[team], protected_ids, now)
+                team, team_bots, capture_targets[team], protected_ids, now, contacts[team])
             assignments = self._assign_targets(team_bots, contacts[team], now)
             assignments = self._prioritize_base_invaders(
                 team, team_bots, contacts[team], assignments,
@@ -1342,7 +1342,7 @@ class BotPlanner(object):
         max_health = max(1.0, _number(state.get("max_health"), 1.0))
         return (distance / speed, -(health / max_health), bot["id"])
 
-    def _update_base_capture(self, team, bots, target, protected_ids, now=0.0):
+    def _update_base_capture(self, team, bots, target, protected_ids, now=0.0, contacts=()):
         """Keep a small, stable capture squad and replace lost members."""
         if target is None:
             self._base_capture[team] = {}
@@ -1382,7 +1382,7 @@ class BotPlanner(object):
                                   target['point']['z'] - _number(bot['state'].get('z')))
             receipt = progress.setdefault(bot_id, dict(best=distance, since=now))
             if (distance <= target.get('radius', 50.0) or
-                    self._contacts_for_bot(bot, self._contacts[team], now)):
+                    self._contacts_for_bot(bot, contacts, now)):
                 receipt.update(best=distance, since=now)
             elif distance < receipt['best'] - 0.25:
                 receipt.update(best=distance, since=now)
