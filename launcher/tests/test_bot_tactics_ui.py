@@ -44,7 +44,11 @@ class EditorUITests(unittest.TestCase):
         self.assertFalse(self.ui.dirty())
         self.ui.items.selection_set(ids[0]);self.root.update();self.ui.selected_point=0
         with mock.patch.object(ui_module.simpledialog,'askfloat',return_value=30):self.ui.edit_point_condition()
-        first=self.ui._selected()['point'];self.click((first[0]-20,first[1]),shift=True)
+        first=self.ui._selected()['point']
+        # Keep the insertion outside the existing node's 10-pixel hit radius
+        # even on the smaller desktop used by the Windows packaging runner.
+        x,y=self.ui.view.screen(first)
+        self.click(self.ui.view.world(x-30,y),shift=True)
         self.assertEqual(30,self.ui._selected()['points'][0][3])
         self.assertEqual(0,self.ui._selected()['points'][1][3])
         shapes=[(self.ui.canvas.type(i),self.ui.canvas.itemcget(i,'fill')) for i in self.ui.canvas.find_all()
