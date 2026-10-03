@@ -2185,23 +2185,24 @@ def engine_force(p, v, throttle, slope_pitch=0.0):
 
 
 def steering_drive_scale(drive_intent, steering):
-	"""Allocate one motor/traction budget before either drive consumer runs.
+	"""Keep 75% drive at full combined input; analogue corrections cost less.
 
-	Steering reserves one control channel, even for an analogue partial turn.
-	The torque consumer still scales its request by turn magnitude. This is
-	the copied planar transmission model, not a recovered #1513 gearbox law.
-	The same factor applies to longitudinal_step and contact_traverse: no
-	consumer may first take full P/v and starve the other at every road speed.
+	This is a playtest allocation, not a recovered #1513 gearbox law.
+	The complementary contact torque budget prevents double-spending power.
 	"""
-	return (1.0 / (1.0 + min(1.0, abs(float(drive_intent))))
-		if steering else 1.0)
+	return 1.0 - 0.25 * min(1.0, abs(float(steering)))
+
+
+def steering_torque_scale(drive_intent):
+	"""Pure pivot owns full torque; full drive reserves 25% for steering."""
+	return 1.0 - 0.75 * min(1.0, abs(float(drive_intent)))
 
 
 def contact_traverse(p, half_width, speed, turn, dt, drive_intent=0.0,
                      slope_pitch=0.0):
 	"""Return the commanded yaw rate and the shared-power track couple.
 
-	At full W+A/D, drive and steer each receive at most half the power and
+	At full W+A/D, drive receives 75% and steer at most 25% of power and
 	traction. Pure A/D retains its previous budget. The faster track speed
 	bounds rotational work; longitudinal_step spends the matching drive share.
 	"""
@@ -2211,7 +2212,7 @@ def contact_traverse(p, half_width, speed, turn, dt, drive_intent=0.0,
 		max(dt, ANG_ACCELERATION_TIME), drive_intent=drive_intent)
 	track_speed = abs(speed)+abs(omega)*half_width
 	force = abs(engine_force(p, track_speed, turn, slope_pitch))
-	force *= steering_drive_scale(drive_intent, turn)
+	force *= steering_torque_scale(drive_intent)
 	return omega, force*half_width
 
 
@@ -2300,7 +2301,7 @@ def rolling_resist_force(p, terrainIdx=0, steering=False):
 	scales it; steering adds track-differential drag.'''
 	f = p['mass'] * p['specificFriction'] * GRAVITY_FACTOR * p['terrainResist'][terrainIdx]
 	if steering:
-		f *= STEER_RESIST_MULT
+		f *= 1.0 + (STEER_RESIST_MULT - 1.0) * min(1.0, abs(float(steering)))
 	return f
 
 

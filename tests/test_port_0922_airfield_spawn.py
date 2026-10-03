@@ -107,14 +107,75 @@ class AirfieldSpawnTests(unittest.TestCase):
                 8, (0., 0., -2.), 0., 20., desc, .2, 1., commit_enabled=False))
             self.assertEqual([], calls)
 
-    def test_unstreamed_tree_registry_holds_softly_and_recovers(self):
+    def test_unstreamed_tree_registry_does_not_freeze_motion_and_recovers(self):
         with self.tree_scene(streamed=False) as (battle, desc, manager, calls):
-            self.assertEqual('soft', battle._resolve_bot_motion(
+            self.assertEqual('clear', battle._resolve_bot_motion(
                 8, (0., 0., -2.), 0., 20., desc, .2, 1.))
             self.assertEqual([], calls)
             manager.onChunkLoad(22, 1)
             self.assertEqual('crushed', battle._resolve_bot_motion(
                 8, (0., 0., -2.), 0., 20., desc, .2, 1.1))
+
+    def test_pending_tree_presentation_retains_realised_contact_after_tank_leaves(self):
+        with self.tree_scene() as (battle, desc, unused_mgr, calls):
+            with mock.patch.object(sensor, 'commit_tree_contacts',
+                    return_value={'status': 'pending'}):
+                self.assertEqual('clear', battle._resolve_bot_motion(
+                    8, (0., 0., -2.), 0., 20., desc, .2, 1.))
+            self.assertEqual(1, len(battle._bot_tree_contacts_pending))
+            battle._bots.states[8].update(x=100., z=100.)
+            battle._retry_bot_tree_contacts(1.1)
+            self.assertEqual([], calls)
+            battle._retry_bot_tree_contacts(1.3)
+            self.assertEqual(1, len(calls))
+            self.assertEqual({}, battle._bot_tree_contacts_pending)
+            battle._retry_bot_tree_contacts(2.)
+            self.assertEqual(1, len(calls))
+
+    def test_tree_publication_retry_does_not_restart_falling_animation(self):
+        with self.tree_scene() as (battle, desc, unused_mgr, calls):
+            with mock.patch.object(sensor, '_publish_destroyed',
+                    side_effect=RuntimeError('temporary transport backpressure')):
+                self.assertEqual('clear', battle._resolve_bot_motion(
+                    8, (0., 0., -2.), 0., 20., desc, .2, 1.))
+            self.assertEqual(1, len(calls))
+            self.assertEqual(1, len(battle._bot_tree_contacts_pending))
+            battle._retry_bot_tree_contacts(1.3)
+            self.assertEqual(1, len(calls))
+            self.assertEqual({}, battle._bot_tree_contacts_pending)
+            self.assertIn((22, 0), sensor.g_offh_tree_state['canonical_published'])
+
+    def test_pending_registry_does_not_bypass_native_wall(self):
+        with self.tree_scene(streamed=False) as (battle, desc, unused_mgr, calls):
+            with mock.patch('gui.mods.offline_lan_0922.battle_runtime.'
+                    'world_collision.check_horizontal_collision', return_value='hard'):
+                # Bypass corridor reuse so the genuine world sweep owns verdict.
+                battle._bots.motion_world_corridor_reusable = lambda *a: False
+                self.assertEqual('hard', battle._resolve_bot_motion(
+                    8, (0., 0., -2.), 0., 20., desc, .2, 1.))
+            self.assertEqual([], calls)
+            self.assertEqual({}, battle._bot_tree_contacts_pending)
+
+    def test_deferred_tree_contact_does_not_cross_space_lifecycle(self):
+        with self.tree_scene() as (battle, desc, unused_mgr, calls):
+            with mock.patch.object(sensor, 'commit_tree_contacts',
+                    return_value={'status': 'pending'}):
+                battle._resolve_bot_motion(8, (0., 0., -2.), 0., 20., desc, .2, 1.)
+            battle._avatar.spaceID = 2
+            battle._retry_bot_tree_contacts(2.)
+            self.assertEqual([], calls)
+            self.assertEqual({}, battle._bot_tree_contacts_pending)
+
+    def test_deferred_tree_contact_does_not_cross_round_with_reused_space(self):
+        with self.tree_scene() as (battle, desc, unused_mgr, calls):
+            battle._start_message={'round_id': 1}
+            with mock.patch.object(sensor, 'commit_tree_contacts',
+                    return_value={'status': 'pending'}):
+                battle._resolve_bot_motion(8, (0., 0., -2.), 0., 20., desc, .2, 1.)
+            battle._start_message={'round_id': 2}
+            battle._retry_bot_tree_contacts(2.)
+            self.assertEqual([], calls)
+            self.assertEqual({}, battle._bot_tree_contacts_pending)
 
     def test_navigation_wait_is_bounded_but_escape_still_checks_walls(self):
         adapter = BotAdapter('31_airfield', 1,

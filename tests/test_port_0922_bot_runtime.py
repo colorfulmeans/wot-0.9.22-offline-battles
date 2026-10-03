@@ -1951,6 +1951,25 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([descriptor], bot_calls)
         self.assertEqual([({}, None)], fallback_calls)
 
+    def test_bot_motion_preserves_partial_steering_input(self):
+        command=dict(self._stationary_command(),throttle=1.,turn=.0924,combat_mode='route',
+                         move_position=(100.,0.,0.),recovery_mode='drive',
+                         movement_intent=True)
+        runtime=self.module.BotRuntime(
+            1,descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *unused,**kwargs: _FixedAdapter(command),
+            direction_probe=lambda *unused: {'clear': True,'slope': 0.},
+            ground_probe=lambda *unused: 0.,physics_ground_probe=lambda *unused: 0.,
+            spawn_resolver=_spawn_resolver,baked_graph=_graph())
+        runtime.battle_start(self.start)
+        original=self.module.vehicle_physics.longitudinal_step
+        with mock.patch.object(self.module.vehicle_physics,'longitudinal_step',
+                               wraps=original) as drive:
+            runtime.update(.04,1.)
+        powered=[call for call in drive.call_args_list if call.args[2] == 1.]
+        self.assertTrue(powered)
+        self.assertTrue(all(call.args[3] == .0924 for call in powered))
+
     def test_decision_and_copied_motion_reuse_installed_physics(self):
         self.runtime.battle_start(self.start)
         installed = self.runtime._physics_params[11]

@@ -13016,7 +13016,7 @@ class BotRuntime(object):
                 speed = (0.0 if siege_motion_locked else
                     vehicle_physics.longitudinal_step(
                         params, previous_speed, throttle,
-                        steer_dir != 0, slope_pitch, step,
+                        turn if steer_dir else 0.0, slope_pitch, step,
                         bool(state.get('airborne', False)), 0, False,
                         state['service_brake']))
                 if forced_speed:
@@ -13025,7 +13025,7 @@ class BotRuntime(object):
                     # without charging another brake/friction budget to it.
                     unforced_speed = vehicle_physics.longitudinal_step(
                         params, previous_speed - forced_speed, throttle,
-                        steer_dir != 0, slope_pitch, step,
+                        turn if steer_dir else 0.0, slope_pitch, step,
                         bool(state.get('airborne', False)), 0, False,
                         state['service_brake'])
                     forced_speed = self._retained_contact_speed(

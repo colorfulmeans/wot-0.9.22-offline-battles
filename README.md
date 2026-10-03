@@ -76,6 +76,16 @@ camera. Keep the original vehicle profile and use recordings from this version.
 The unresolved internal-module inventory attached to the v0.9.6 release still
 describes outstanding geometry work; this release does not add guessed layouts.
 
+The current Bot test branch uses an experimental shared drive budget: full
+forward/reverse plus steering reserves 25% for contact steering and keeps 75%
+for longitudinal drive. Partial steering reduces drive and adds rolling drag
+continuously; both player and Bot callers preserve the analogue input. This
+allocation is a playtest choice, not a recovered retail gearbox law. Missing
+tree registrations no longer freeze Bots: native world and catalog collision
+checks remain authoritative, and exact realised tree contacts retry separately
+when presentation/publication is pending. Exact-client gameplay remains the
+acceptance boundary for climbing, pushing and tree-felling behaviour.
+
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
 spawn groups and the large Grand Battle maps. The current package has neither
