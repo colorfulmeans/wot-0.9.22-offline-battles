@@ -44,6 +44,13 @@ launches retain English unless `WOT_OFFLINE_UI_LANGUAGE=zh` is set.
 When you host, approve the UAC prompt that opens TCP 28782 for the launcher.
 Run the server only on a network you trust.
 
+Bot error reports automatically include bounded motion and navigation receipts:
+stationary hulls at most once per three seconds, and hulls circling inside an
+eight-metre pocket at most once per fifteen seconds. The receipts include nearby
+baked cells, local fallback rejection counts, the next path points and alignment
+timers, without extra native ground or collision queries. Reproduce the problem
+and export the launcher's error report; no debug switch is required.
+
 ## The garage
 
 The 0.9.22 client gets a working offline garage:
@@ -75,6 +82,40 @@ the launcher's Replay tab. Playback currently supports forward 1x and a manual
 camera. Keep the original vehicle profile and use recordings from this version.
 The unresolved internal-module inventory attached to the v0.9.6 release still
 describes outstanding geometry work; this release does not add guessed layouts.
+
+The current Bot test branch uses an experimental shared drive budget: full
+forward/reverse plus steering reserves 25% for contact steering and keeps 75%
+for longitudinal drive. Partial steering reduces drive and adds rolling drag
+continuously; both player and Bot callers preserve the analogue input. This
+allocation is a playtest choice, not a recovered retail gearbox law. Missing
+tree registrations no longer freeze Bots: native world and catalog collision
+checks remain authoritative, and exact realised tree contacts retry separately
+when presentation/publication is pending. Exact-client gameplay remains the
+acceptance boundary for climbing, pushing and tree-felling behaviour.
+
+The same test branch separates Bot/wreck ground placement from vertical
+momentum. A support-height correction no longer becomes a launch impulse
+when a worker catch-up slice is short. Grounded momentum follows signed
+travel on the supported chassis plane; normal ramp departures, airborne
+gravity and landing damage remain active. Live #1513 playtesting is required.
+
+Blocked artillery deployment first uses collision-checked straight escape
+steps when the hull cannot pivot. After twenty seconds without net progress,
+it can choose another reachable parking position, keeping manual positions
+inside authored regions and respecting other artillery reservations. Retries
+are bounded. Shallow depressions now check opposing chassis support before
+small successive drops can lower a Bot or wreck between the banks; ordinary
+slopes and genuine cliff departures retain their normal support behaviour.
+
+Nearby Bot route corners now use the installed traverse rate to brake and
+align before advancing, preventing a coasting hull from orbiting a short
+navigation point. Failed forward motion can try shorter checked straight
+escapes before repeating a pivot. Artillery stuck in a coarse navigation hole
+can rank alternate parking from its original connected spawn, while all
+movement still uses the live pose and native collision checks. Capture squads
+replace a member after twenty seconds without net progress when another
+eligible vehicle is available; vehicles inside the circle or fighting known
+contacts retain their places, and the three-vehicle limit remains unchanged.
 
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched

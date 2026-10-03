@@ -6270,6 +6270,7 @@ class BattleState:
             "push_yaw": _finite_float(raw.get("push_yaw")),
             "airborne": bool(raw.get("airborne", False)),
             "service_brake": bool(raw.get("service_brake", False)),
+            "route_wreck_blocked": bool(raw.get("route_wreck_blocked", False)),
             "contact_push_acks": list(tank_contact_ledger.normalize(
                 raw.get("contact_push_acks", [])).values()),
             "movement_dir": (1 if movement > 0.01 else
@@ -6668,6 +6669,7 @@ class BattleState:
         admitted, and no projectile edge is derived from a state it refused.
         """
         result = dict(previous) if previous else {}
+        result['route_wreck_blocked'] = bool(raw.get('route_wreck_blocked', False))
         # The ledgers this holds must not alias the retired state; every other
         # path here produces fresh containers.
         for name in ("critical", "equipment_states", "ammo_remaining"):

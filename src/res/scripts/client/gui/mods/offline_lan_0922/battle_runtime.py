@@ -1888,6 +1888,7 @@ class BattleRuntime(object):
         self._skill_diagnostic_counts = {}
         self._skill_diagnostic_dropped = {}
         self._records = {}
+        self._bot_registry_cursor = 0
         self._records_revision = 0
         self._last_snapshot = None
         self._last_frame_time = None
@@ -2007,6 +2008,7 @@ class BattleRuntime(object):
         self._local_motion_kinds = '-'
         self._local_motion_status = 'clear'
         self._bot_motion_kinds = {}
+        self._bot_tree_contacts_pending = {}
         self._crush_reports = 0
         self._next_crush_report = {}
         self._bot_lane_wreck_rows_cache = None
@@ -2366,6 +2368,7 @@ class BattleRuntime(object):
         self._local_motion_kinds = '-'
         self._local_motion_status = 'clear'
         self._bot_motion_kinds = {}
+        self._bot_tree_contacts_pending = {}
         self._crush_reports = 0
         self._next_crush_report = {}
         self._bot_lane_wreck_rows_cache = None
@@ -3764,6 +3767,7 @@ class BattleRuntime(object):
                 motion_report=self._report_bot_destructible_contact,
                 turret_motion_probe=self._turret_motion_is_clear,
                 wreck_rotation_probe=self._resolve_bot_rotation,
+                rotation_resolver=self._resolve_bot_rotation,
                 wreck_ground_probe=self._suspension_ground_y,
                 turret_hulls_provider=self._turret_navigation_hulls,
                 world_receipt_probe=self._direction_world_receipt,
@@ -5595,11 +5599,19 @@ class BattleRuntime(object):
         return prepare(start, end) if callable(prepare) else None
 
     def _collide_navigation(self, start, end, trace=None):
-        """Query native route geometry without a physical broken-skin recast."""
+        """Plan against live geometry and release proved broken BSP skins."""
         collision_filter = self._navigation_collision_filter(start, end)
         if trace is not None:
             collision_filter = world_collision._trace_collision_filter(
                 collision_filter, trace)
+        collide = getattr(self._destructibles, 'collide_motion_segment', None)
+        if callable(collide):
+            # Merged original BSP keys may survive after an accepted prop is
+            # hidden. Use the same bounded identity proof as physical motion;
+            # intact neighbours, replacements and backing walls remain solid.
+            return collide(self._avatar.spaceID, start, end, collision_filter,
+                self._runtime.bigworld.wg_collideSegment,
+                'native.navigation.ray')
         args = (self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS)
         if collision_filter is not None:
             args += (collision_filter,)
@@ -16796,6 +16808,37 @@ class BattleRuntime(object):
                 self._live_local_player_state(self._local_state())))
         return players
 
+    def _prewarm_bot_destructible_registries(self, now):
+        """Advance a bounded spawn/idle registry scan without requiring motion."""
+        if not self._worker_mode or self._bots is None:
+            return 0
+        prewarm = getattr(self._destructibles, 'prewarm_tree_registry', None)
+        if not callable(prewarm):
+            return 0
+        self._retry_bot_tree_contacts(now)
+        states = [state for state in self._bots._ordered_states()
+                  if state.get('alive', True)]
+        if not states:
+            return 0
+        start = self._bot_registry_cursor % len(states)
+        ready = 0
+        # The sensor shares one bounded native-name budget across all actors.
+        # Visit both teams fairly, including tanks still waiting for a path.
+        for offset in range(min(2, len(states))):
+            state = states[(start + offset) % len(states)]
+            record = self._records.get('bot:%d' % int(state['id']))
+            descriptor = self._bots._descriptors.get(int(state['id']))
+            if record is None or not record.get('ready') or descriptor is None:
+                continue
+            position = (state['x'], state['y'], state['z'])
+            detail = prewarm(
+                self._avatar.spaceID, self._vector(position),
+                state['yaw'], descriptor, now)
+            if isinstance(detail, dict) and detail.get('status') == 'ready':
+                ready += 1
+        self._bot_registry_cursor = (start + 2) % len(states)
+        return ready
+
     def _prewarm_player_tree_registries(self, now):
         """Register countdown tree identities near authoritative humans."""
         prewarm = getattr(
@@ -17574,6 +17617,10 @@ class BattleRuntime(object):
                     # Tree registration is likewise a countdown optimisation.
                     # A broken native registry must not prevent battle start.
                     pass
+            try:
+                self._prewarm_bot_destructible_registries(now)
+            except Exception as error:
+                self._warn_optional_failure('bot destructible prewarm', error)
             try:
                 self._prewarm_critical_layout()
             except Exception as error:
@@ -19279,8 +19326,6 @@ class BattleRuntime(object):
                                   now, detail, stage='proposal',
                                   descriptor=None, start_yaw=None):
         """Keep missing tree contacts observable without native probes."""
-        if self._worker_mode:
-            return
         try:
             from gui.mods.offline_lan_0922.tree_diagnostics import (
                 TreeContactDiagnostics)
@@ -19358,9 +19403,12 @@ class BattleRuntime(object):
         self._report_local_tree_motion(
             start_position, end_position, end_yaw, speed, dt, now, detail,
             descriptor=descriptor, start_yaw=start_yaw)
-        if status in ('pending', 'hard') and not self._worker_mode:
+        if status in ('pending', 'hard'):
             # Missing, ambiguous or isolated tree registry evidence is not a
-            # hard-world contact.  The visible tank may keep moving while
+            # hard-world contact. Both human and Bot motion still check the
+            # independent native world and catalog before moving. Keep warming
+            # exact identities rather than turning registry absence into a wall.
+            # The tank may keep moving while
             # prewarming makes an exact identity available for a later frame.
             return clear
         return {
@@ -20430,6 +20478,61 @@ class BattleRuntime(object):
             self._local_motion_soft_block = True
         return status in ('clear', 'crushed')
 
+    def _complete_bot_tree_contact(
+            self, proposal, start, start_yaw, end, end_yaw,
+            descriptor, speed, now, dt, commit_enabled, world_status):
+        """Commit a realised worker sweep, never a navigation candidate."""
+        if proposal.get('status') in ('pending', 'hard'):
+            return world_status
+        if not proposal.get('requires_commit') or not commit_enabled:
+            return world_status
+        committer = getattr(self._destructibles, 'commit_tree_contacts', None)
+        if not callable(committer):
+            raise RuntimeError('worker tree contact boundary is unavailable')
+        token = proposal.get('token')
+        committed = committer(
+            self._avatar.spaceID, token, self._vector(start), start_yaw,
+            self._vector(end), end_yaw, speed, descriptor, now,
+            dt=dt, publish=True)
+        committed_token = (self._destructible_contact_token(
+            committed.get('token')) if isinstance(committed, dict) else None)
+        key = tuple(token)
+        if (not isinstance(committed, dict) or
+                committed.get('status') != 'crushed' or
+                committed_token is None or
+                not set(token).issubset(set(committed_token))):
+            # An exact, realised tree sweep has already passed world/catalog
+            # checks. Keep its original geometry for bounded idle retries;
+            # presentation or publication latency must not freeze the hull.
+            if not isinstance(committed, dict) or committed.get('status') != 'hard':
+                self._bot_tree_contacts_pending.setdefault(key, (
+                    self._avatar.spaceID, tuple(start), start_yaw,
+                    tuple(end), end_yaw, descriptor, speed, dt,
+                    (self._start_message or {}).get('round_id'), now))
+            else:
+                self._bot_tree_contacts_pending.pop(key, None)
+            return world_status
+        self._bot_tree_contacts_pending.pop(key, None)
+        return 'crushed'
+
+    def _retry_bot_tree_contacts(self, now):
+        """Retry two realised contacts fairly, fenced to this battle space."""
+        pending = self._bot_tree_contacts_pending
+        due = sorted((key for key in pending
+                      if now - pending[key][-1] >= 0.25),
+                     key=lambda key: (pending[key][-1], key))
+        for key in due[:2]:
+            (space, start, start_yaw, end, end_yaw, td, speed, dt,
+             round_id, unused_stamp) = pending.pop(key)
+            if (space != self._avatar.spaceID or
+                    round_id != (self._start_message or {}).get('round_id')):
+                continue
+            proposal = {'status': 'crushed', 'requires_commit': True,
+                        'token': key}
+            self._complete_bot_tree_contact(
+                proposal, start, start_yaw, end, end_yaw,
+                td, speed, now, dt, True, 'clear')
+
     def _resolve_bot_rotation(
             self, bot_id, position, start_yaw, end_yaw, descriptor, dt, now,
             rotation_speed_cap, pivot_offset=0.0, translation=(0.0, 0.0)):
@@ -20493,10 +20596,17 @@ class BattleRuntime(object):
             position, start_yaw, end_yaw, descriptor,
             pitch=pitch, roll=roll, record_local=False,
             pivot_offset=pivot_offset, contact_trace=contact_trace,
-            include_static=not bot_state.get('alive', True), translation=translation)
+            include_static=True, translation=translation)
         if not clear:
             self._bot_motion_kinds[int(bot_id)] = 'world'
             bot_state['_rotation_contact_trace'] = contact_trace
+        elif bot_state.get('alive', True):
+            tree = self._tree_motion_proposal(
+                position, start_yaw, end_position, end_yaw,
+                0.0, descriptor, now, dt)
+            clear = self._complete_bot_tree_contact(
+                tree, position, start_yaw, end_position, end_yaw,
+                descriptor, 0.0, now, dt, True, 'clear') in ('clear', 'crushed')
         return clear
 
     def _resolve_bot_motion(self, bot_id, position, yaw, speed,
@@ -20546,6 +20656,13 @@ class BattleRuntime(object):
         }
         if motion_yaw is not None:
             destructible_motion['motion_yaw'] = float(motion_yaw)
+        tree = {'status': 'clear', 'requires_commit': False}
+        if self._destructibles is not None and not airborne:
+            tree = self._tree_motion_proposal(
+                position, yaw, contact_end, yaw, speed, descriptor, now, dt)
+            if tree.get('status') in ('pending', 'hard'):
+                self._bot_motion_kinds[int(bot_id)] = 'tree_registry'
+                tree = {'status': 'clear', 'requires_commit': False}
         if (self._destructibles is not None and not airborne and
                 movement_dir * float(speed) > 0.0 and rotation_dir == 0 and
                 abs(turn_speed) <= 0.01 and callable(corridor_reusable) and
@@ -20556,7 +20673,9 @@ class BattleRuntime(object):
                     **destructible_motion)):
             if diagnostic is not None:
                 diagnostic.count('motion_world_reused')
-            return 'clear'
+            return self._complete_bot_tree_contact(
+                tree, position, yaw, contact_end, yaw,
+                descriptor, speed, now, dt, commit_enabled, 'clear')
         if diagnostic is not None:
             diagnostic.count('motion_world_fallback')
             if airborne:
@@ -20622,7 +20741,9 @@ class BattleRuntime(object):
         if accepted_now and status in ('clear', 'approach', 'soft'):
             raise RuntimeError('bot contact receipt is inconsistent')
         if status == 'approach':
-            return 'clear'
+            return self._complete_bot_tree_contact(
+                tree, position, yaw, contact_end, yaw,
+                descriptor, speed, now, dt, commit_enabled, 'clear')
         if accepted_now:
             # The catalog has committed this exact contact. Check the new BSP
             # now so a real replacement wall blocks on the very same frame.
@@ -20637,6 +20758,10 @@ class BattleRuntime(object):
                 bot_state['_world_contact_trace'] = contact_trace
                 self._bot_motion_kinds[int(bot_id)] = 'world'
                 return 'hard'
+        if status in ('clear', 'crushed'):
+            return self._complete_bot_tree_contact(
+                tree, position, yaw, contact_end, yaw,
+                descriptor, speed, now, dt, commit_enabled, status)
         return status
 
     @staticmethod
@@ -23669,7 +23794,7 @@ class BattleRuntime(object):
                 drive_physics['speedBwd'] *= speed_factor
             self._local_speed = vehicle_physics.longitudinal_step(
                 drive_physics, self._local_speed,
-                throttle, turn != 0.0,
+                throttle, turn,
                 slope_pitch, dt, self._local_airborne, 0,
                 handbrake, self._local_service_brake)
 

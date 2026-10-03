@@ -83,6 +83,21 @@ _GREAT_WALL_PASSAGE_X = 404.0
 # confirmed by the user's route review and by the pinned client's terrain,
 # water and compiled BSP data; none of their limits relax the global baker.
 _REVIEWED_NARROW_CORNER_CONTRACTS = {
+    '31_airfield': (
+        {
+            'id': 'airfield_west_east_exit_first_corner',
+            'points': ((-314.0, -186.0), (-310.0, -190.0)),
+            'side_states': {(-314.0, -190.0): 0},
+        },
+        {
+            'id': 'airfield_west_east_exit_second_corner',
+            'points': ((-306.0, -190.0), (-302.0, -194.0)),
+            'side_states': {
+                (-306.0, -194.0): 0,
+                (-302.0, -190.0): 0,
+            },
+        },
+    ),
     '84_winter': ({
         'id': 'winter_south_safe_diagonal',
         'points': ((126.0, -278.0), (130.0, -274.0)),
@@ -1444,7 +1459,7 @@ def _add_reversible_path_links(graph, cells, indices, label):
 
 def install_reviewed_narrow_corner_link(graph, terrain, obstacles, legacy,
                                         contract):
-    """Add one exact safe diagonal while leaving both blocked side cells shut."""
+    """Add one exact safe diagonal while leaving blocked side cells shut."""
     label = str(contract['id'])
     points = tuple(tuple(point) for point in contract['points'])
     if len(points) != 2:

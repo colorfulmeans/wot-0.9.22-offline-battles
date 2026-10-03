@@ -390,7 +390,19 @@ def _has_initial_support(zone, team, states, bounds):
     return count >= required['minimum']
 
 
-def assign_initial_positions(map_name, graph, states, mode='regular', catalog=None):
+def parking_point_available(point, clearance, team, excluded, occupied):
+    """Keep failed destination regions and other SPG reservations out of retry."""
+    for old in excluded or ():
+        if math.hypot(point[0] - old[0], point[2] - old[2]) < max(12.0, clearance * 2):
+            return False
+    for other_team, old, radius in occupied or ():
+        if other_team == team and math.hypot(point[0] - old[0], point[2] - old[2]) < clearance + radius + RESERVATION_GAP:
+            return False
+    return True
+
+
+def assign_initial_positions(map_name, graph, states, mode='regular', catalog=None,
+                             actor_ids=None, excluded=(), occupied=()):
     """Return bot-id -> plan and typed per-SPG outcomes without mutating input.
 
     This runs once before the round manifest is published. It selects a whole
@@ -421,6 +433,8 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
     candidate_cache = {}
     for state in artillery:
         actor, team = state['id'], state.get('team')
+        if actor_ids is not None and actor not in actor_ids:
+            continue
         if team in reservations and len(reservations[team]) >= 3:
             outcomes[actor] = 'outside_three_spg_initial_capacity'
             continue
@@ -448,6 +462,8 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
         reachable = grid.distances(origin)
         choices = []
         for zone, cell, index, point in candidates:
+            if not parking_point_available(point, radius, team, excluded, occupied):
+                continue
             if not _has_initial_support(zone, team, states, entry['bounds']):
                 continue
             if index not in reachable:

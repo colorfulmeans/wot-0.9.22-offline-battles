@@ -2492,14 +2492,20 @@ def _boxes_intersect(left, right):
 		for left_index in range(len(generators))
 		for right_index in range(left_index + 1, len(generators)))
 	for axis in axes:
-		length_squared = _vector_dot(axis, axis)
+		ax, ay, az = axis
+		length_squared = ax * ax + ay * ay + az * az
 		if length_squared <= 1.0e-16:
 			continue
-		left_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in left_half_axes)
-		right_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in right_half_axes)
-		if (abs(_vector_dot(delta, axis)) > left_radius + right_radius +
+		# This hot path runs for every candidate on every physical slice. Keep
+		# the same SAT axes, summation order and tolerance without allocating
+		# two generator frames and making a Python call for every projection.
+		left_radius = 0
+		for hx, hy, hz in left_half_axes:
+			left_radius += abs(ax * hx + ay * hy + az * hz)
+		right_radius = 0
+		for hx, hy, hz in right_half_axes:
+			right_radius += abs(ax * hx + ay * hy + az * hz)
+		if (abs(delta[0] * ax + delta[1] * ay + delta[2] * az) > left_radius + right_radius +
 				1.0e-7 * length_squared ** 0.5):
 			return False
 	return True
@@ -3128,7 +3134,14 @@ def _stream_baked_motion_instances_1513(spaceID, vehicle_box):
 	instances = globals().get('g_offh_destr_instances', {})
 	unresolved = []
 	cache = globals().get('g_offh_destr_unresolved_obstacles')
-	for identity in sorted(identities):
+	def contact_priority(identity):
+		baked = catalog.get('baked_instances', {}).get(identity)
+		contact = baked is not None and any(_catalog_intersections(
+			baked['boxes'], vehicle_box))
+		return (0 if contact else 1, identity)
+	# The four close-contact name proofs must serve the hull touching a prop
+	# before distant models which merely share its broad-phase spatial bin.
+	for identity in sorted(identities, key=contact_priority):
 		combat_count('destructible_stream_candidates')
 		if identity in instances:
 			if cache is not None:
@@ -5905,7 +5918,7 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 	if typ == AreaDestructibles.DESTR_TYPE_TREE:
 		_hp_gate = desc.get('health', 0)
 		try:
-			_valid_tree_health = 10 <= _hp_gate <= 1000
+			_valid_tree_health = 0 < _hp_gate <= 1000
 		except TypeError:
 			_valid_tree_health = False
 		if not _valid_tree_health:
@@ -7041,14 +7054,13 @@ def _fell_trees_near(
 								AreaDestructibles.DESTR_TYPE_FALLING_ATOM):
 							_slot_diag['result'] = 'type_unsupported'
 							continue
-						# Data-driven vegetation gate: destructibles.xml gives
-						# soft vegetation (bushes/shrubs/ferns/weeds) health<=5
-						# (or -2); real fallable trees start at health 10.
-						# ChristmasTree sentinels use 40000 = unrammable.
+						# A safely identified native TREE may be small: Airfield's
+						# BananaTree_03 has health 3. Health is not a size/type
+						# classifier. Keep nonpositive and unrammable sentinels out.
 						if typ == AreaDestructibles.DESTR_TYPE_TREE:
 							_hp_gate = desc.get('health', 0)
 							registry['tree_health'][_ti] = _hp_gate
-							if _hp_gate < 10 or _hp_gate > 1000:
+							if _hp_gate <= 0 or _hp_gate > 1000:
 								_slot_diag['result'] = 'health_gate'
 								continue
 						# Destructible matrices are CHUNK-LOCAL: world pos =
@@ -7991,7 +8003,7 @@ def _validated_tree_shot_identity_1513(spaceID, decoded):
 		return None
 	health = desc.get('health', 0)
 	try:
-		valid_health = 10 <= health <= 1000
+		valid_health = 0 < health <= 1000
 	except TypeError:
 		valid_health = False
 	if not valid_health:

@@ -28,8 +28,8 @@ class CatalogTests(unittest.TestCase):
                 self.assertNotIn('锡城', caption)
 
     def test_requested_full_himmelsdorf_name_and_winter_variant(self):
-        self.assertEqual('锡莫尔斯多夫', labels.map_label('04_himmelsdorf', 'zh'))
-        self.assertEqual('锡莫尔斯多夫（冬季）', labels.map_label('86_himmelsdorf_winter', 'zh'))
+        self.assertEqual('锡默尔斯多夫', labels.map_label('04_himmelsdorf', 'zh'))
+        self.assertEqual('锡默尔斯多夫（冬季）', labels.map_label('86_himmelsdorf_winter', 'zh'))
         self.assertEqual('Himmelsdorf', labels.map_label('04_himmelsdorf', 'en'))
         self.assertEqual('Winter Himmelsdorf', labels.map_label('86_himmelsdorf_winter', 'en'))
 
@@ -67,6 +67,7 @@ class LanguageUITests(unittest.TestCase):
         patch = mock.patch.object(ui_module.messagebox, 'showerror')
         self.errors = patch.start(); self.addCleanup(patch.stop)
         self.ui = ui_module.BotTacticsEditor(self.root, store=storage.Store(self.temp.name), language='zh')
+        self.ui.route_class_var.set('heavyTank');self.ui.symmetry_var.set(False)
         self.root.update()
 
     def choose(self, box, index):
@@ -116,11 +117,11 @@ class LanguageUITests(unittest.TestCase):
     def test_builtin_routes_are_translated_without_changing_ids(self):
         self.ui.map_var.set('喀秋莎'); self.ui.change_map(); self.root.update()
         for key, caption in [('waterfall','瀑布'),('plateau','高原'),('village','村庄')]:
-            self.assertEqual('[内置] '+caption, self.ui.items.item('builtin:'+key,'text'))
+            self.assertEqual('[默认/重型坦克] '+caption, self.ui.items.item('builtin:'+key,'text'))
         self.ui.items.selection_set('builtin:plateau'); self.root.update()
         before=copy.deepcopy(self.ui.document)
         self.ui.set_language('en'); self.root.update()
-        self.assertEqual('[Built-in] Plateau',self.ui.items.item('builtin:plateau','text'))
+        self.assertEqual('[Default/Heavy tank] Plateau',self.ui.items.item('builtin:plateau','text'))
         self.assertEqual(('builtin','plateau'),self.ui.selection)
         self.assertEqual(before,self.ui.document)
 

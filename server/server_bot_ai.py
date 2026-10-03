@@ -45,6 +45,7 @@ COMBAT_RANGE_HYSTERESIS_MIN = 8.0
 COMBAT_RANGE_HYSTERESIS_MAX = 20.0
 RETREAT_ARRIVAL_RADIUS = 6.0
 RETREAT_PROGRESS_TIMEOUT_SECONDS = 10.0
+RETREAT_DEFENSIVE_PAUSE_SECONDS = 15.0
 RETREAT_PROGRESS_EPSILON = 2.0
 ROUTE_ARRIVAL_RADIUS = 13.0
 CLOSE_THREAT_DISTANCE = 50.0
@@ -52,6 +53,8 @@ CLOSE_THREAT_SCORE_BONUS = 100.0
 CLOSE_THREAT_FOCUS_LIMIT = 4
 ROUTE_REBALANCE_SECONDS = 4.0
 ROUTE_LEASE_SECONDS = 6.0
+WRECK_ROUTE_WAIT_SECONDS = 20.0
+WRECK_ROUTE_AVOID_SECONDS = 120.0
 MAX_BASE_DEFENDERS = 3
 BASE_DEFENSE_RELEASE_SECONDS = 3.0
 MAX_BASE_CAPTURERS = 3
@@ -197,9 +200,12 @@ class BotPlanner(object):
         self._last_orders = None
         self._last_order_signature = None
         self._route_states = {}
+        self._wreck_route_progress = {}
+        self._wreck_route_avoid = {}
         self._route_assignments = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
+        self._firing_holds = {}
         self._affordances = {}
         self._cover_states = {}
         self._cover_failures = {}
@@ -226,9 +232,12 @@ class BotPlanner(object):
         self._last_orders = None
         self._last_order_signature = None
         self._route_states = {}
+        self._wreck_route_progress = {}
+        self._wreck_route_avoid = {}
         self._route_assignments = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
+        self._firing_holds = {}
         self._affordances = {}
         self._cover_states = {}
         self._cover_failures = {}
@@ -726,7 +735,7 @@ class BotPlanner(object):
             self._rebalance_routes(
                 team, team_bots, contacts[team], now, protected_ids)
             capture_ids = self._update_base_capture(
-                team, team_bots, capture_targets[team], protected_ids)
+                team, team_bots, capture_targets[team], protected_ids, now, contacts[team])
             assignments = self._assign_targets(team_bots, contacts[team], now)
             assignments = self._prioritize_base_invaders(
                 team, team_bots, contacts[team], assignments,
@@ -754,6 +763,7 @@ class BotPlanner(object):
                     order, bot, team_order_by_bot.get(bot["id"]),
                     players, defense, route_point, turnback_point)
                 self._apply_authored_route_order(order, bot, route_point)
+                self._reroute_wreck_stall(order, bot, manifest, now)
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
         payload = {"orders": orders}
@@ -838,11 +848,16 @@ class BotPlanner(object):
         self._cover_failures = {}
         self._cover_reservations = set()
         self._engage_anchors = {}
+        self._firing_holds = {}
         self._combat_states = {}
         self._retreat_states = {}
 
     def _prune_tactical_state(self, bots, known_targets, now):
         live_bots = dict((bot["id"], bot) for bot in bots)
+        for states in (self._wreck_route_progress, self._wreck_route_avoid):
+            for bot_id in list(states):
+                if bot_id not in live_bots:
+                    del states[bot_id]
         for bot_id in list(self._route_states):
             if bot_id not in live_bots:
                 del self._route_states[bot_id]
@@ -860,6 +875,9 @@ class BotPlanner(object):
         for bot_id in list(self._engage_anchors):
             if bot_id not in live_bots:
                 del self._engage_anchors[bot_id]
+        for bot_id in list(self._firing_holds):
+            if bot_id not in live_bots:
+                del self._firing_holds[bot_id]
         for bot_id in list(self._artillery_anchors):
             if bot_id not in live_bots:
                 del self._artillery_anchors[bot_id]
@@ -1107,6 +1125,10 @@ class BotPlanner(object):
         for team in (1, 2):
             incident = self._base_defense.setdefault(team, {})
             responders = incident.setdefault("responders", {})
+            blocked_until = incident.setdefault("blocked_until", {})
+            for bot_id, deadline in list(blocked_until.items()):
+                if _number(now) >= deadline:
+                    del blocked_until[bot_id]
             live = dict((bot["id"], bot) for bot in live_by_team[team])
             for bot_id in list(responders):
                 if bot_id not in live:
@@ -1147,6 +1169,26 @@ class BotPlanner(object):
                     continue
             else:
                 incident["clear_since"] = None
+                # A nearest responder can be wedged among spawn props. Keep
+                # arrived defenders, but replace a travelling tank which has
+                # made no real approach for ten seconds when a backup exists.
+                for bot_id, record in list(responders.items()):
+                    state = live[bot_id]["state"]
+                    point = record["point"]
+                    distance = math.hypot(
+                        point["x"] - _number(state.get("x")),
+                        point["z"] - _number(state.get("z")))
+                    if ("best_distance" not in record or
+                            distance + 1.0 <= record["best_distance"]):
+                        record["best_distance"] = distance
+                        record["last_progress_at"] = _number(now)
+                    backups = [value for value in live
+                               if value not in responders and
+                               value not in blocked_until]
+                    if (distance > ROUTE_ARRIVAL_RADIUS and backups and
+                            _number(now) - record["last_progress_at"] >= 10.0):
+                        blocked_until[bot_id] = _number(now) + 15.0
+                        del responders[bot_id]
                 desired = min(MAX_BASE_DEFENDERS, max(1, invaders))
                 if len(live) > 1:
                     desired = min(desired, len(live) - 1)
@@ -1210,7 +1252,8 @@ class BotPlanner(object):
                         0.0, _number(raw_state.get("time_left")) - 2.0)
                     candidates = []
                     for bot in live.values():
-                        if bot["id"] in responders:
+                        if (bot["id"] in responders or
+                                bot["id"] in blocked_until):
                             continue
                         selected = min(points, key=lambda value: (
                             math.hypot(
@@ -1269,6 +1312,7 @@ class BotPlanner(object):
                 "id": str(raw.get("id") or "%d:%d" %
                           (enemy_team, index)),
                 "point": _point(raw),
+                "radius": max(1.0, _number(raw.get("radius"), 50.0)),
             }
         return None
 
@@ -1298,7 +1342,7 @@ class BotPlanner(object):
         max_health = max(1.0, _number(state.get("max_health"), 1.0))
         return (distance / speed, -(health / max_health), bot["id"])
 
-    def _update_base_capture(self, team, bots, target, protected_ids):
+    def _update_base_capture(self, team, bots, target, protected_ids, now=0.0, contacts=()):
         """Keep a small, stable capture squad and replace lost members."""
         if target is None:
             self._base_capture[team] = {}
@@ -1320,14 +1364,43 @@ class BotPlanner(object):
         ]
         eligible = regulars if regulars else candidates
         eligible_by_id = dict((bot["id"], bot) for bot in eligible)
+        progress = state.setdefault('progress', {})
+        retired = state.setdefault('retired', {})
+        for bot_id in list(retired):
+            if bot_id not in eligible_by_id or now >= retired[bot_id]:
+                retired.pop(bot_id, None)
+        # A living member can still fail to reach the circle. Keep productive
+        # members and actual occupants; let nearby screens fill stalled slots.
+        replacement_budget = sum(1 for bot in eligible if bot['id'] not in
+                                 state.get('bot_ids', ()) and bot['id'] not in retired)
+        for bot_id in state.get('bot_ids', ()):
+            bot = eligible_by_id.get(bot_id)
+            if bot is None:
+                progress.pop(bot_id, None)
+                continue
+            distance = math.hypot(target['point']['x'] - _number(bot['state'].get('x')),
+                                  target['point']['z'] - _number(bot['state'].get('z')))
+            receipt = progress.setdefault(bot_id, dict(best=distance, since=now))
+            if (distance <= target.get('radius', 50.0) or
+                    self._contacts_for_bot(bot, contacts, now)):
+                receipt.update(best=distance, since=now)
+            elif distance < receipt['best'] - 0.25:
+                receipt.update(best=distance, since=now)
+            elif now - receipt['since'] >= 20.0:
+                alternatives = [other for other in eligible if other['id'] not in
+                                state.get('bot_ids', ()) and other['id'] not in retired]
+                if alternatives and replacement_budget > 0:
+                    retired[bot_id] = now + 30.0
+                    progress.pop(bot_id, None)
+                    replacement_budget -= 1
         selected = [
             bot_id for bot_id in state.get("bot_ids", ())
-            if bot_id in eligible_by_id
+            if bot_id in eligible_by_id and bot_id not in retired
         ][:MAX_BASE_CAPTURERS]
         missing = min(MAX_BASE_CAPTURERS, len(eligible)) - len(selected)
         if missing > 0:
             available = [
-                bot for bot in eligible if bot["id"] not in selected
+                bot for bot in eligible if bot["id"] not in selected and bot['id'] not in retired
             ]
             selected.extend(
                 bot["id"] for bot in sorted(
@@ -1336,6 +1409,12 @@ class BotPlanner(object):
                 )[:missing]
             )
         state["bot_ids"] = selected
+        for bot_id in selected:
+            if bot_id not in progress:
+                bot = eligible_by_id[bot_id]
+                distance = math.hypot(target['point']['x'] - _number(bot['state'].get('x')),
+                                      target['point']['z'] - _number(bot['state'].get('z')))
+                progress[bot_id] = dict(best=distance, since=now)
         return set(selected)
 
     def _capture_staged(self, bot, route_index):
@@ -1781,16 +1860,29 @@ class BotPlanner(object):
               _number(retreat.get("best_distance"), distance)):
             retreat["best_distance"] = distance
             retreat["last_progress_at"] = _number(now)
+        if retreat.get("phase") == "resume":
+            if order.get("target_id") is None:
+                return order
+            self._retreat_states.pop(bot_id, None)
+            return self._apply_retreat_order(
+                order, bot, retreat_point, face_point, now, moving_mode, hold_mode)
         if retreat.get("phase") != "hold" and (
                 distance <= RETREAT_ARRIVAL_RADIUS or
                 _number(now) - _number(retreat.get("last_progress_at")) >=
                 RETREAT_PROGRESS_TIMEOUT_SECONDS):
             retreat["phase"] = "hold"
+            retreat["hold_since"] = _number(now)
             retreat["anchor"] = (
                 target if distance <= RETREAT_ARRIVAL_RADIUS else
                 _point(state))
             retreat["face"] = _point(face_point)
         if retreat.get("phase") == "hold":
+            # A finished withdrawal is a defensive pause, not a permanent
+            # battle-long parking order after the local threat has gone.
+            if (order.get("target_id") is None and _number(now) -
+                    _number(retreat.get("hold_since"), now) >= RETREAT_DEFENSIVE_PAUSE_SECONDS):
+                retreat["phase"] = "resume"
+                return order
             # Keep the established combat mode so the worker continues its
             # normal cover-refresh eligibility.  The explicit phase marks
             # this as a terminal defensive hold rather than an endless drive.
@@ -2213,10 +2305,17 @@ class BotPlanner(object):
         """Move at most one adaptable tank toward a pressured route every 4s."""
         protected_ids = set(protected_ids)
         for bot in bots:
-            authored = bot_tactics.route_config(self.tactics, self.tactics_map, (bot.get('route') or {}).get('id'))
+            authored = bot_tactics.route_config(self.tactics, self.tactics_map, (bot.get('route') or {}).get('id'), bot['team'])
             if authored is not None and authored['policy'] == 'fixed':
                 protected_ids.add(bot['id'])
         catalog = self._route_catalog(bots)
+        # A physical detour survives a donor's death and pressure rebalance.
+        for bot in bots:
+            assigned = self._route_assignments.get(bot['id'], {})
+            if assigned.get('wreck_detour'):
+                route = assigned['route']
+                catalog[str(route.get('id') or '')] = route
+                protected_ids.add(bot['id'])
         for bot in bots:
             route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
             route_id = str(route.get("id") or "")
@@ -2306,7 +2405,7 @@ class BotPlanner(object):
                 continue
             if bot["id"] in protected_ids:
                 continue
-            target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, target_route)
+            target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, target_route, bot['team'])
             if target_authored is not None and not bot_tactics.matches(target_authored, bot):
                 continue
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
@@ -2359,6 +2458,92 @@ class BotPlanner(object):
         }
         self._route_states.pop(donor["id"], None)
 
+    def _reroute_wreck_stall(self, order, bot, manifest, now):
+        """Abandon a corpse-blocked macro lane after local recovery stalls.
+
+        The worker proves the obstruction against installed wreck hulls. A
+        turning chassis or queued path is not progress; advancing toward the
+        gate or travelling a real detour is. Holds and combat never count.
+        """
+        bot_id = bot['id']
+        state = bot['state']
+        route_id = str(order.get('route_id') or '')
+        authored = bot_tactics.route_config(
+            self.tactics, self.tactics_map, route_id, bot['team'])
+        if (order.get('combat_mode') not in ('route', 'advance') or
+                order.get('team_command') or
+                order.get('throttle_override') is not None or
+                not state.get('route_wreck_blocked') or
+                not self._route_donor_eligible(bot) or
+                (authored is not None and authored['policy'] == 'fixed')):
+            self._wreck_route_progress.pop(bot_id, None)
+            return
+        point = _point(state)
+        goal = _point(order.get('move_position') or {})
+        distance = math.hypot(goal['x'] - point['x'], goal['z'] - point['z'])
+        if distance <= 15.0:
+            self._wreck_route_progress.pop(bot_id, None)
+            return
+        key = (route_id, order.get('route_index'))
+        progress = self._wreck_route_progress.get(bot_id)
+        if (progress is None or progress['key'] != key or
+                math.hypot(goal['x'] - progress['goal']['x'],
+                           goal['z'] - progress['goal']['z']) > 2.0):
+            progress = None
+        if progress is not None:
+            moved = math.hypot(point['x'] - progress['point']['x'],
+                               point['z'] - progress['point']['z'])
+            if progress['distance'] - distance >= 2.0 or moved >= 8.0:
+                progress = None
+        if progress is None:
+            self._wreck_route_progress[bot_id] = {
+                'key': key, 'goal': goal, 'point': point,
+                'distance': distance, 'since': _number(now)}
+            return
+        if _number(now) - progress['since'] < WRECK_ROUTE_WAIT_SECONDS:
+            return
+        avoided = self._wreck_route_avoid.setdefault(bot_id, {})
+        avoided[route_id] = _number(now) + WRECK_ROUTE_AVOID_SECONDS
+        catalog = self._route_catalog([
+            raw for raw in manifest or ()
+            if _integer(raw.get('team')) == bot['team']])
+        candidates = []
+        class_tag = str(bot.get('profile', {}).get('class_tag') or '')
+        for candidate_id, route in sorted(catalog.items()):
+            if (candidate_id == route_id or
+                    _number(avoided.get(candidate_id)) > _number(now)):
+                continue
+            config = bot_tactics.route_config(
+                self.tactics, self.tactics_map, candidate_id, bot['team'])
+            if config is not None and not bot_tactics.matches(config, bot):
+                continue
+            affinity = _number((route.get('class_weights') or {}).get(
+                class_tag), 0.5)
+            if affinity < MIN_ROUTE_CLASS_AFFINITY:
+                continue
+            nearest = min(math.hypot(
+                _number(p.get('x')) - point['x'],
+                _number(p.get('z')) - point['z'])
+                for p in route['waypoints'])
+            candidates.append((-affinity, nearest, candidate_id, route))
+        if not candidates:
+            # No suitable alternative: keep the physical hold, never force
+            # through a wreck or repeat a route-switch storm each tick.
+            progress['since'] = _number(now)
+            return
+        route = min(candidates, key=lambda value: value[:3])[3]
+        self._route_assignments[bot_id] = {
+            'route': route, 'until': 0.0, 'wreck_detour': True}
+        self._route_states.pop(bot_id, None)
+        self._wreck_route_progress.pop(bot_id, None)
+        new_id, index, move, anchor, join = self._route(bot, now)
+        order.update(route_id=new_id, route_index=index,
+                     move_position=move, face_position=dict(move),
+                     route_anchor=anchor, route_join=join,
+                     route_switch_reason='wreck_stall',
+                     previous_route_id=route_id)
+        self._apply_authored_route_order(order, bot, move)
+
     def _route(self, bot, now, stop_before_objective=False):
         assignment = self._route_assignments.get(bot["id"])
         route = assignment.get("route") if isinstance(assignment, dict) else None
@@ -2375,9 +2560,10 @@ class BotPlanner(object):
             return route_id, 0, point, point, False
         route_id = str(route.get("id") or "uploaded_route")
         authored = bot_tactics.route_config(
-            self.tactics, self.tactics_map, route_id)
+            self.tactics, self.tactics_map, route_id, bot['team'], waypoints)
         route_limit = len(waypoints) - 1
-        if stop_before_objective and len(waypoints) > 1 and authored is None:
+        if stop_before_objective and len(waypoints) > 1 and (authored is None or
+                (authored.get('default') and not any(len(p) > 3 for p in authored['points']))):
             route_limit -= 1
         state = self._route_states.get(bot["id"])
         if state is None or state.get("route_id") != route_id:
@@ -2424,7 +2610,8 @@ class BotPlanner(object):
                         break
                     index += 1
             # User point zero is an instruction, not a baked base connector.
-            if authored is not None:
+            if authored is not None and (not authored.get('default') or
+                    any(len(p) == 4 for p in authored['points'])):
                 index = 0
             state = {"index": index, "route_id": route_id,
                      "join_index": index,
@@ -2471,11 +2658,13 @@ class BotPlanner(object):
 
     def _apply_authored_route_order(self, order, bot, route_point):
         """Apply explicit parking/travel instructions without suppressing aim."""
+        route = (self._route_assignments.get(bot['id']) or {}).get('route') or bot.get('route') or {}
         authored = bot_tactics.route_config(
-            self.tactics, self.tactics_map, order.get('route_id'))
+            self.tactics, self.tactics_map, order.get('route_id'), bot['team'], route.get('waypoints'))
         if authored is None:
             return
-        scripted = (bot['profile'].get('class_tag') == 'SPG' or
+        scripted = ((bot['profile'].get('class_tag') == 'SPG' and
+                    (not authored.get('default') or authored.get('class_tag') == 'SPG')) or
                     any(len(point) > 3 for point in authored['points']))
         if not scripted:
             return
@@ -3066,10 +3255,12 @@ class BotPlanner(object):
                     bool(focus.get("visible") and
                          bot["id"] in (observers or ())))
             self._apply_base_defense_order(order, bot, travel_override)
+            self._firing_holds.pop(bot["id"], None)
             return order
         if (no_known_enemies and capture_target is not None and
                 self._capture_staged(bot, route_index)):
             self._apply_base_capture_order(order, bot, capture_target)
+            self._firing_holds.pop(bot["id"], None)
             return order
         if str(profile.get("class_tag") or "") == "SPG":
             if focus is not None:
@@ -3081,6 +3272,7 @@ class BotPlanner(object):
                     order, bot, focus, profile, personality,
                     bool(focus.get("visible")))
             self._apply_artillery_order(order, bot, team_axis)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         if focus is None:
@@ -3093,6 +3285,7 @@ class BotPlanner(object):
                 order["combat_mode"] = "base_screen"
                 order["face_position"] = dict(capture_target["point"])
                 order["throttle_override"] = 0.0
+                self._firing_holds.pop(bot["id"], None)
                 return order
             if threat_contact is not None:
                 observers = threat_contact.get("shootable_by_bot_ids")
@@ -3104,6 +3297,7 @@ class BotPlanner(object):
                         order, bot, threat_contact, personality, now,
                         urgent=True, hold_only=low_health):
                     self._retreat_states.pop(bot["id"], None)
+                    self._firing_holds.pop(bot["id"], None)
                     return order
             self._cover_states.pop(bot["id"], None)
             if low_health:
@@ -3116,6 +3310,7 @@ class BotPlanner(object):
                     "under_fire_withdraw", "under_fire_hold")
             else:
                 self._retreat_states.pop(bot["id"], None)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         observers = focus.get("shootable_by_bot_ids")
@@ -3145,6 +3340,7 @@ class BotPlanner(object):
                         order, bot, focus, personality, now,
                         urgent=True, hold_only=True)):
                 self._retreat_states.pop(bot["id"], None)
+                self._firing_holds.pop(bot["id"], None)
                 return order
             self._cover_states.pop(bot["id"], None)
             self._apply_retreat_order(
@@ -3152,6 +3348,7 @@ class BotPlanner(object):
                 "low_health_retreat", "low_health_defend")
             self._apply_stationary_angling(
                 order, bot, profile, personality)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         if withdraw_after_hit:
@@ -3166,6 +3363,7 @@ class BotPlanner(object):
             if self._apply_cover_order(
                     order, bot, cover_focus, personality, now, urgent=True):
                 self._retreat_states.pop(bot["id"], None)
+                self._firing_holds.pop(bot["id"], None)
                 return order
             self._cover_states.pop(bot["id"], None)
             self._apply_retreat_order(
@@ -3173,6 +3371,7 @@ class BotPlanner(object):
                 "under_fire_withdraw", "under_fire_hold")
             self._apply_stationary_angling(
                 order, bot, profile, personality)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         if (crossfire_risk is not None and crossfire_risk >= 0.35 and
@@ -3185,6 +3384,7 @@ class BotPlanner(object):
                     self._apply_cover_order(
                         order, bot, focus, personality, now, urgent=True)):
                 self._retreat_states.pop(bot["id"], None)
+                self._firing_holds.pop(bot["id"], None)
                 return order
             self._cover_states.pop(bot["id"], None)
             self._apply_retreat_order(
@@ -3192,6 +3392,7 @@ class BotPlanner(object):
                 "crossfire_withdraw", "crossfire_hold")
             self._apply_stationary_angling(
                 order, bot, profile, personality)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         if not locally_shootable:
@@ -3201,9 +3402,11 @@ class BotPlanner(object):
                             order, bot, focus, personality, now)):
                     self._engage_anchors.pop(bot["id"], None)
                     self._combat_states.pop(bot["id"], None)
+                    self._firing_holds.pop(bot["id"], None)
                     return order
                 if self._apply_leased_movement_order(
                         order, bot, focus):
+                    self._firing_holds.pop(bot["id"], None)
                     return order
             self._engage_anchors.pop(bot["id"], None)
             self._combat_states.pop(bot["id"], None)
@@ -3220,6 +3423,7 @@ class BotPlanner(object):
             order["combat_mode"] = "route"
             order["move_position"] = dict(move)
             order["throttle_override"] = None
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         self._retreat_states.pop(bot["id"], None)
@@ -3233,6 +3437,7 @@ class BotPlanner(object):
             order["move_position"] = self._flank_point(
                 bot, focus, desired_range, team_bots or ())
             order["throttle_override"] = 0.78
+            self._firing_holds.pop(bot["id"], None)
             return order
         advance_score = (
             personality["aggression"] * 0.85 +
@@ -3322,7 +3527,51 @@ class BotPlanner(object):
             order["throttle_override"] = 0.0
         self._apply_stationary_angling(
             order, bot, profile, personality)
+        self._release_unproductive_firing_hold(
+            order, bot, move, route_anchor, now)
         return order
+
+    def _release_unproductive_firing_hold(self, order, bot, move, anchor, now):
+        """A ready gun without a shot cannot lease an ordinary hold forever."""
+        state = bot['state']
+        bot_id = bot['id']
+        if (order.get('combat_mode') not in ('engage', 'support_hold') or
+                order.get('throttle_override') != 0.0 or
+                'fire_seq' not in state or not self._weapon_ready(bot)):
+            self._firing_holds.pop(bot_id, None)
+            return
+        key = (order.get('target_kind'), order.get('target_id'))
+        position = _point(state)
+        record = self._firing_holds.get(bot_id)
+        sequence = _integer(state.get('fire_seq'))
+        if (record is None or record['target'] != key or
+                record['fire_seq'] != sequence or
+                math.hypot(position['x'] - record['position']['x'],
+                           position['z'] - record['position']['z']) >= 2.0):
+            record = dict(target=key, fire_seq=sequence, position=position,
+                          ready_since=_number(now))
+            self._firing_holds[bot_id] = record
+        if _number(now) - record['ready_since'] < 8.0:
+            return
+        destination = record.get('destination')
+        if destination is None:
+            destination = next((dict(point) for point in (move, anchor)
+                if math.hypot(point['x'] - position['x'],
+                              point['z'] - position['z']) > ROUTE_ARRIVAL_RADIUS), None)
+            if destination is None:
+                return
+            record['destination'] = destination
+            record['move_until'] = _number(now) + 4.0
+        if _number(now) >= record['move_until']:
+            self._firing_holds.pop(bot_id, None)
+            return
+        # Continue a map-authored route leg while the turret retains its target.
+        # Reloading, cover manoeuvres and explicit low-health holds never enter
+        # this branch; no new unproved wall-side destination is fabricated.
+        order['combat_mode'] = 'route'
+        order['move_position'] = dict(destination)
+        order['throttle_override'] = None
+        self._engage_anchors.pop(bot_id, None)
 
     @staticmethod
     def _personality(bot_id):

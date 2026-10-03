@@ -1561,7 +1561,7 @@ class CompiledSpace0922Test(unittest.TestCase):
 
     def test_reviewed_adapter_inventory_stays_map_local(self):
         self.assertEqual(
-            {'84_winter', '92_stalingrad'},
+            {'31_airfield', '84_winter', '92_stalingrad'},
             set(baker._REVIEWED_NARROW_CORNER_CONTRACTS))
         self.assertEqual(
             {'29_el_hallouf', '45_north_america',

@@ -99,8 +99,10 @@ class ParkedTrafficTests(unittest.TestCase):
 
     def test_boxed_driver_requests_both_proved_vehicle_exits(self):
         driver = LocalDriver(stuck_seconds=0.4)
-        neighbours = (body(29, 0., 8., speed=0.),
-                      body(19, 0., -8., speed=0.))
+        # Block even the minimum .5 m straight escape, not just the full
+        # recovery sweep: the driver can now use a smaller free hull gap.
+        neighbours = (body(29, 0., 7.25, speed=0.),
+                      body(19, 0., -7.25, speed=0.))
         for frame in range(20):
             order = driver.drive(
                 25, 9, (0., 0., 0.), 0., 0., .1, (40., 0., 0.),
@@ -371,12 +373,12 @@ class RuntimeTrafficJamTests(unittest.TestCase):
         for frame in range(1, 451):
             runtime.update(1. / 30., frame / 30.)
             modes[runtime._decision_cache.get(26, (0, 0, 0, {}))[3].get('traffic_mode')] += 1
-        self.assertGreater(modes['friendly_yield'], 0)
         self.assertGreater(runtime.states[25]['z'], 10.)
-        # The follower may now steer around the parked hull after it makes
-        # the initial gap; the artillery only needs to move enough to clear
-        # that blockage, then resume its hold.
-        self.assertGreater(runtime.states[26]['z'], 7.45)
+        # A checked bypass may now clear the queue without moving the gun.
+        # When traffic actually requests a yield, it must still open the gap.
+        self.assertGreaterEqual(runtime.states[26]['z'], 7.)
+        if modes['friendly_yield']:
+            self.assertGreater(runtime.states[26]['z'], 7.45)
         from gui.mods.offline_lan_0922.ai.traffic import _separation
         bodies, unused_index = runtime._traffic_snapshot([])
         self.assertGreaterEqual(_separation(bodies[25], bodies[26]), -.011)

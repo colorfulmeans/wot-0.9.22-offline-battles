@@ -169,6 +169,19 @@ class TacticsContractTests(unittest.TestCase):
         index=grid.closest((route['points'][1][0],0,route['points'][1][1]));g['heights_mm'][index]=None
         self.assertEqual('waypoint_unusable',planning.validate_route(grid,route))
 
+    def test_detailed_check_lists_all_bad_nodes_and_the_disconnected_pair(self):
+        raw=profile();g=_graph();grid=planning.graph_view('08_ruinberg',g)
+        route=raw['maps']['08_ruinberg']['routes'][0]
+        for index in (0,3):
+            p=route['points'][index];cell=grid.closest((p[0],0,p[1]));g['heights_mm'][cell]=None
+        g['links'][:]=[0]*len(g['links'])
+        rows=planning.authoring_check(raw,'08_ruinberg',g,details=True)
+        issues=next(row[2] for row in rows if row[0]=='west')
+        self.assertEqual([[1],[2,3],[4]],[issue['nodes'] for issue in issues])
+        self.assertEqual('missing_ground',issues[0]['reason'])
+        self.assertEqual(route['points'][3][:2],issues[-1]['points'][0])
+        self.assertEqual(2,len(planning.authoring_check(raw,'08_ruinberg',g)[0]))
+
 
 class RoundFreezeTests(unittest.TestCase):
     def test_host_freezes_config_next_round_reloads_and_late_messages_match(self):
@@ -240,6 +253,26 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
         self.assertFalse(rt._gunner_ready(rt.states[11],gun,target,1.0))
         self.assertFalse(rt._gunner_ready(rt.states[11],gun,target,2.0))
         self.assertTrue(rt._gunner_ready(rt.states[11],gun,target,4.0))
+
+    def test_parking_accepts_only_a_single_region_without_route_nodes(self):
+        message=self.message();zone=message['bot_tactics']['maps']['08_ruinberg']['positions'][0]
+        zone['points']=[zone['point']+[1,12.],[-106.,306.,0,0.]]
+        with self.assertRaises(cfg.TacticsError):cfg.canonical(message['bot_tactics'])
+
+    def test_blocked_manual_parking_retries_inside_authored_regions(self):
+        rt = self.runtime(); message = self.message()
+        with contextlib.redirect_stdout(io.StringIO()):
+            rt.battle_start(message)
+        state = rt.states[11]
+        original = copy.deepcopy(state['_spg_initial'])
+        order = {'combat_mode': 'artillery_deploy'}
+        rt._artillery_position_order(state, order, {}, 0.)
+        rt._artillery_position_order(state, order, {}, 20.1)
+        alternate = state['_spg_initial']
+        self.assertNotEqual(original['point'], alternate['point'])
+        self.assertEqual('launcher_manual_v1', alternate['source'])
+        self.assertIsNotNone(cfg.canonical_manual_plan(
+            alternate, rt._bot_tactics, '08_ruinberg', state['vehicle'], state['team']))
 
     def test_manifest_server_orders_and_navigation_share_same_manual_goal(self):
         from lan_battle_server import BattleState

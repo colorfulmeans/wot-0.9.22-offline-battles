@@ -6,6 +6,7 @@ Never reads unobserved enemy locations or alters native collision/shot rules.
 All geometric checks here are baked navigation checks, not native mesh/arc proof.
 """
 import copy
+import heapq
 import math
 import random
 
@@ -23,13 +24,61 @@ def graph_view(name, graph):
     return spg_positions._Graph(view, config.MAPS[name]['bounds'])
 
 
+def _route_reachable(grid, position, target):
+    """Prove only the requested directed connection, without a full flood.
+
+    Route admission needs membership, not shortest distances to every map
+    cell. Prefer cells near the destination, but exhaust the legal graph if
+    necessary. Never add a missing link or jump to a nearby free square.
+    """
+    start = grid.closest(position)
+    if start is None or target is None:
+        return False
+    cache = getattr(grid, '_route_reachability', None)
+    if cache is None:
+        cache = grid._route_reachability = {}
+        grid._route_usable = {}
+    key = (start, target)
+    if key in cache:
+        return cache[key]
+    target_row, target_col = divmod(target, grid.width)
+    visited = set([start])
+    todo = [(0, start)]
+    while todo:
+        unused_priority, index = heapq.heappop(todo)
+        if index == target:
+            cache[key] = True
+            return True
+        row, col = divmod(index, grid.width)
+        for bit, (dx, dz) in enumerate(grid.directions):
+            if not int(grid.links[index]) & (1 << bit):
+                continue
+            nx, nz = col + dx, row + dz
+            if not (0 <= nx < grid.width and 0 <= nz < grid.height):
+                continue
+            following = nz * grid.width + nx
+            if following in visited:
+                continue
+            usable = grid._route_usable.get(following)
+            if usable is None:
+                usable = grid.usable(following)
+                grid._route_usable[following] = usable
+            if not usable:
+                continue
+            visited.add(following)
+            heapq.heappush(todo, ((nx-target_col)**2 + (nz-target_row)**2,
+                                  following))
+    cache[key] = False
+    return False
+
+
 def validate_route(grid, route):
     previous = None
     for point in route['points']:
         target = grid.closest((point[0], 0, point[1]))
         if target is None:
             return 'waypoint_unusable'
-        if previous is not None and target not in grid.distances(previous):
+        if previous is not None and not _route_reachable(grid, previous, target):
             return 'waypoints_disconnected'
         previous = grid.point(target)
     return None
@@ -43,6 +92,41 @@ def route_value(route):
             'waypoints': tuple(tuple(p[:3]) for p in route['points'])}
 
 
+def default_routes(profile, name, graph):
+    """Apply editor geometry before the director assigns or restores routes.
+
+    Keep source graphs immutable and retain identities and allocation metadata.
+    Unusable edits fall back independently, just like authored custom routes.
+    """
+    edits = config.map_settings(profile, name).get('default_routes', ())
+    routes = graph.get('routes')
+    if not edits:
+        return routes, {}
+    grid = graph_view(name, graph)
+    result = copy.deepcopy(routes)
+    outcomes = {}
+    for edit in edits:
+        if edit.get('class_tag') == 'SPG':continue
+        key = '%s:%s' % (edit['team'], config.default_route_id(edit))
+        source = next((r for r in result.get(str(edit['team']), ())
+                       if r['id'] == edit['id']), None)
+        error = validate_route(grid, edit) if source is not None else 'unknown_default_route'
+        outcomes[key] = error or 'baked_route_connected'
+        if error is None:
+            if edit.get('class_tag', 'all') == 'all':
+                source['waypoints'] = [list(p[:3]) for p in edit['points']]
+            else:
+                variant = copy.deepcopy(source)
+                variant.update(id=config.default_route_id(edit),
+                               _editor_source=source['id'],
+                               _editor_class=edit['class_tag'],
+                               waypoints=[list(p[:3]) for p in edit['points']],
+                               class_weights=dict((tag, 1.0 if tag == edit['class_tag'] else 0.0)
+                                                  for tag in config.CLASSES))
+                result[str(edit['team'])].append(variant)
+    return result, outcomes
+
+
 def assign_routes(profile, name, graph, states, round_id):
     routes = config.map_settings(profile, name).get('routes', ())
     if not routes:
@@ -51,17 +135,18 @@ def assign_routes(profile, name, graph, states, round_id):
     errors = dict((r['id'], validate_route(grid, r)) for r in routes)
     result, outcomes, usage = {}, {}, {}
     for state in sorted(states, key=lambda s: (s['team'], s.get('slot', 0), s['id'])):
+        if (state.get('profile') or {}).get('class_tag') == 'SPG':continue
         applicable = [r for r in routes if config.matches(r, state)]
         if not applicable:
             continue
-        distances = grid.distances((state['x'], state['y'], state['z']))
         available = []
         for route in applicable:
             if errors[route['id']] or usage.get(route['id'], 0) >= route['capacity']:
                 continue
             p = route['points'][0]
             target = grid.closest((p[0], 0, p[1]))
-            if target not in distances:
+            if not _route_reachable(grid,
+                    (state['x'], state['y'], state['z']), target):
                 continue
             # A deterministic weighted draw without global random-state changes.
             seed = '%s:%s:%s:%s' % (config.digest(profile), round_id, state['id'], route['id'])
@@ -97,7 +182,8 @@ def _manual_candidates(grid, zone, clearance):
     return sorted(candidates)
 
 
-def assign_manual_positions(profile, name, graph, states, mode='regular'):
+def assign_manual_positions(profile, name, graph, states, mode='regular',
+                            actor_ids=None, excluded=(), occupied=()):
     zones = config.map_settings(profile, name).get('positions', ()) if mode == 'regular' else ()
     if not zones:
         return {}, {}
@@ -105,6 +191,8 @@ def assign_manual_positions(profile, name, graph, states, mode='regular'):
     plans, outcomes, reservations, cache = {}, {}, {1: [], 2: []}, {}
     identity = config.digest(profile)
     for state in sorted(states, key=lambda s: (s['team'], s.get('slot', 0), s['id'])):
+        if actor_ids is not None and state['id'] not in actor_ids:
+            continue
         if (state.get('profile') or {}).get('class_tag') != 'SPG':
             continue
         choices = [z for z in zones if z['team'] == state['team']]
@@ -119,6 +207,8 @@ def assign_manual_positions(profile, name, graph, states, mode='regular'):
             if key not in cache:
                 cache[key] = _manual_candidates(grid, zone, clearance)
             for centre_distance, index, p in cache[key]:
+                if not spg_positions.parking_point_available(p, clearance, state['team'], excluded, occupied):
+                    continue
                 if index not in distances:
                     continue
                 if any(math.hypot(p[0]-old[0][0], p[2]-old[0][2]) < clearance+old[1]+3
@@ -146,15 +236,47 @@ def assign_manual_positions(profile, name, graph, states, mode='regular'):
     return plans, outcomes
 
 
-def authoring_check(profile, name, graph):
+def route_issues(grid, route):
+    """Report every unusable node and every disconnected adjacent pair."""
+    issues, previous = [], None
+    for index, point in enumerate(route['points']):
+        target = grid.closest((point[0], 0, point[1]))
+        if target is None:
+            x, z = point[:2]
+            reason = 'outside_bounds'
+            if grid.bounds[0] <= x <= grid.bounds[2] and grid.bounds[1] <= z <= grid.bounds[3]:
+                col = int(round((x - grid.origin[0]) / grid.cell))
+                row = int(round((z - grid.origin[1]) / grid.cell))
+                if 0 <= col < grid.width and 0 <= row < grid.height:
+                    cell = row * grid.width + col
+                    reason = 'missing_ground' if grid.heights[cell] is None else 'navigation_hazard'
+            issues.append(dict(status='waypoint_unusable', nodes=[index + 1],
+                               points=[list(point[:2])], reason=reason))
+        elif previous is not None and not _route_reachable(grid, previous, target):
+            issues.append(dict(status='waypoints_disconnected', nodes=[index, index + 1],
+                               points=[list(route['points'][index-1][:2]), list(point[:2])]))
+        previous = grid.point(target) if target is not None else None
+    return issues
+
+
+def authoring_check(profile, name, graph, details=False):
     """Cheap UI evidence only; actual vehicle-sized parking is tested on load."""
     grid = graph_view(name, graph)
     messages = []
+    for route in config.map_settings(profile, name).get('default_routes', ()):
+        error = validate_route(grid, route)
+        identity = '%s:%s' % (route['team'], config.default_route_id(route))
+        messages.append((identity, error or 'baked_route_connected', route_issues(grid, route))
+                        if details else (identity, error or 'baked_route_connected'))
     for route in config.map_settings(profile, name).get('routes', ()):
         error = validate_route(grid, route)
-        messages.append((route['id'], error or 'baked_route_connected'))
+        messages.append((route['id'], error or 'baked_route_connected', route_issues(grid, route))
+                        if details else (route['id'], error or 'baked_route_connected'))
     for zone in config.map_settings(profile, name).get('positions', ()):
         # Generic radius is explicitly not a claim about a particular vehicle.
-        valid = bool(_manual_candidates(grid, zone, 6.0))
-        messages.append((zone['id'], 'generic_parking_found' if valid else 'no_generic_parking'))
+        spots = _manual_candidates(grid, zone, 6.0)
+        valid = bool(spots)
+        status = 'generic_parking_found' if valid else 'no_generic_parking'
+        issues = []
+        messages.append((zone['id'], status, issues) if details else (zone['id'], status))
     return messages

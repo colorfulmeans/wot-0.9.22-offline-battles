@@ -285,7 +285,7 @@ def chassis_span_offsets(yaw, half_width, half_length):
 
 
 def straddled_support(body_y, follow_gap, axis_samples,
-                      maximum_rise=SUPPORT_STRADDLE_RISE):
+                      maximum_rise=SUPPORT_STRADDLE_RISE, interpolate=False):
     """Return the support of a hull spanning a gap under its centre column.
 
     A tracked hull rests on its chassis ends, not on one ray at its centre.
@@ -324,7 +324,10 @@ def straddled_support(body_y, follow_gap, axis_samples,
             heights.append(height)
         if len(heights) != 2:
             continue
-        candidate = max(heights)
+        # Opposing witnesses are equidistant from the body centre. Their
+        # midpoint follows a planar slope exactly; using the higher end for
+        # small descents would hold every downhill tank above the ground.
+        candidate = sum(heights) * 0.5 if interpolate else max(heights)
         if support is None or candidate > support:
             support = candidate
     return support

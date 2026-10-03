@@ -45,7 +45,7 @@ class SharedPowerTests(unittest.TestCase):
 
     def test_longitudinal_consumer_uses_same_share(self):
         p=params(); speed=2.; dt=.01
-        expected=speed+(vp.engine_force(p,speed,1.)*.5-
+        expected=speed+(vp.engine_force(p,speed,1.)*.75-
                        vp.rolling_resist_force(p,steering=True))/p['mass']*dt
         self.assertAlmostEqual(expected,vp.longitudinal_step(p,speed,1.,True,0.,dt))
 
@@ -54,6 +54,26 @@ class SharedPowerTests(unittest.TestCase):
         expected=speed+(vp.engine_force(p,speed,1.)-
                        vp.rolling_resist_force(p))/p['mass']*dt
         self.assertAlmostEqual(expected,vp.longitudinal_step(p,speed,1.,False,0.,dt))
+
+    def test_mouse_prototype_can_correct_heading_on_reported_grade(self):
+        p=dict(vp._DEFAULTS, mass=169930., powerW=1140025.,
+               specificFriction=.6867,
+               terrainResist=(1.8077733778410008, 1.9082052587708571,
+                              3.01295570955107))
+        for direction in (-1., 1.):
+            speed=direction*.07
+            for unused in range(100):
+                speed=vp.longitudinal_step(p,speed,direction,.0924,
+                                          -direction*.1162226662,.04)
+            self.assertGreater(direction*speed,1.)
+
+    def test_tiny_steering_correction_is_continuous(self):
+        p=params(); v=2.
+        straight=vp.longitudinal_step(p,v,1.,0.,-.1,.04)
+        tiny=vp.longitudinal_step(p,v,1.,.000001,-.1,.04)
+        self.assertAlmostEqual(straight,tiny,places=5)
+        self.assertGreater(vp.longitudinal_step(p,v,1.,.1,0.,.04),
+                           vp.longitudinal_step(p,v,1.,1.,0.,.04))
 
     def test_more_power_helps_until_traction_cap(self):
         torques=[vp.contact_traverse(params(hp=hp),1.5,3.,1.,.04,1.)[1]
@@ -231,6 +251,21 @@ class LocalAdapterTests(unittest.TestCase):
         bounds=br.world_collision._vehicle_motion_bounds(d)
         trace={'hit':(bounds[1],.6,0.),'normal':(-1.,0.,0.)}
         return b,e,trace
+
+    def test_player_motion_preserves_partial_steering_input(self):
+        b,e,unused=self.setup_actor()
+        b._runtime.bigworld.entities[10]=e
+        b._server=types.SimpleNamespace(vehicle_id=10)
+        b._sender=types.SimpleNamespace(forward=1.,turn=.0924,
+            handbrake=False,send_current=lambda: True)
+        b._local_descriptor=e.typeDescriptor
+        b._local_position=(0.,0.,0.)
+        b._attach_local_presentation()
+        original=vp.longitudinal_step
+        with mock.patch.object(vp,'longitudinal_step',wraps=original) as drive:
+            b._drive_local(.04)
+        self.assertTrue(drive.called)
+        self.assertTrue(all(call.args[3] == .0924 for call in drive.call_args_list))
 
     def test_fixed_candidate_reaches_complete_runtime_pose_gate(self):
         b,e,t=self.setup_actor()

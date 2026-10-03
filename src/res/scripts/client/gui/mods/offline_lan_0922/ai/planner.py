@@ -838,7 +838,10 @@ class BattleDirector(object):
 		return self.map_data.get('routes', {}).get(int(team), ()) or ()
 
 	def _assign_route(self, agent):
-		routes = self._routes_for(agent['team'])
+		# Class edits replace the geometry after ordinary lane allocation, so
+		# the original capacity/role distribution is not multiplied by variants.
+		routes = tuple(r for r in self._routes_for(agent['team'])
+		               if not r.get('_editor_source'))
 		if not routes:
 			return None
 		profile = agent['profile']

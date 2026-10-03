@@ -22,6 +22,8 @@ def build():
         name = graph['map']
         entries[name] = dict(bounds=list(TACTICAL_MAPS[name]['bounds']),
                              bases=graph['bases'],
+                             route_ids=dict((team, [r['id'] for r in routes])
+                                            for team, routes in graph['routes'].items()),
                              resource_sha256=hashlib.sha256(raw).hexdigest())
     if len(entries) != 41:
         raise RuntimeError('Expected the pinned 41-map registry')

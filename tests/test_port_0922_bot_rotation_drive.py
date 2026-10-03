@@ -112,6 +112,43 @@ class BotRotationDriveTests(unittest.TestCase):
             state, position, 2.0684673285883455,
             position, 2.0584673285883455))
 
+    def test_airfield_spawn_missing_baked_cell_uses_native_turn_owner(self):
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        graph_path = Path(__file__).resolve().parents[1] / 'navgraphs/31_airfield.json'
+        graph = json.loads(graph_path.read_text())
+        runtime, state, rotation, motion = self.runtime_with_command(clear=True)
+        runtime.baked_graph = graph
+        runtime.navigator.grid = TerrainGrid(None, baked_graph=graph)
+        position = (-295.632707534849, -.02410566806793213, -176.89229247159562)
+        state.update(x=position[0], y=position[1], z=position[2], speed=0.)
+        grid = runtime.navigator.grid
+        self.assertTrue(all(not grid.hull_pose_clear(position, i*math.pi/18.,
+                        state['half_length'], state['half_width']) for i in range(36)))
+        observed = []
+        decide = runtime.adapter.decide
+        def capture_pose(candidate, clear):
+            observed.append(candidate['pose_clear'](candidate['yaw']-.1))
+            return decide(candidate, clear)
+        runtime.adapter.decide = capture_pose
+        old_yaw = state['yaw']
+        runtime.update(.1, 1.)
+        self.assertEqual([True], observed)
+        rotation.assert_called_once()
+        self.assertNotEqual(old_yaw, state['yaw'])
+
+    def test_missing_baked_cell_cannot_override_native_wall_refusal(self):
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        graph_path = Path(__file__).resolve().parents[1] / 'navgraphs/31_airfield.json'
+        runtime, state, rotation, motion = self.runtime_with_command(clear=False)
+        runtime.baked_graph = json.loads(graph_path.read_text())
+        runtime.navigator.grid = TerrainGrid(None, baked_graph=runtime.baked_graph)
+        state.update(x=-295.6, y=0., z=-176.9, speed=0.)
+        old_pose = (state['x'], state['z'], state['yaw'])
+        runtime.update(.1, 1.)
+        rotation.assert_called_once()
+        self.assertEqual(old_pose, (state['x'], state['z'], state['yaw']))
+        motion.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()
