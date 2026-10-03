@@ -143,7 +143,7 @@ def canonical(raw):
             for item in settings[kind]:
                 common = ('id', 'label', 'team')
                 allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points', 'mirror_id', 'symmetric')
-                                    if kind == 'routes' else ('point', 'radius', 'heading', 'priority', 'points'))
+                                    if kind == 'routes' else ('point', 'radius', 'heading', 'priority'))
                 _keys(item, allowed, common)
                 identity = _id(item['id'])
                 if identity in seen:
@@ -191,25 +191,6 @@ def canonical(raw):
                                   radius=number(item.get('radius', 12.0), 3.0, 80.0),
                                   heading=number(item.get('heading', 0.0), -180.0, 180.0),
                                   priority=integer(item.get('priority', 5), 0, 9))
-                    if 'points' in item:
-                        pts = item['points']
-                        if not isinstance(pts, list) or not 1 <= len(pts) <= 16:
-                            raise TacticsError('A parking itinerary needs 1..16 points')
-                        points = []
-                        for pt in pts:
-                            if not isinstance(pt, (list, tuple)) or len(pt) not in (3, 4):
-                                raise TacticsError('Parking waypoint must be [x, z, hold, optional wait seconds]')
-                            value = point(pt[:2], meta['bounds']) + [integer(pt[2], 0, 1)]
-                            wait = number(pt[3] if len(pt) == 4 else 0, -1, 3600)
-                            if -1 < wait < 0:
-                                raise TacticsError('Use -1 for a permanent hold')
-                            value.append(wait)
-                            if points and sum((value[i]-points[-1][i])**2 for i in (0, 1)) < 1:
-                                raise TacticsError('Consecutive waypoints need at least one metre separation')
-                            points.append(value)
-                        if points[0][:2] != result['point']:
-                            raise TacticsError('First parking waypoint must match the parking zone')
-                        result['points'] = points
                 entry[kind].append(result)
                 total += 1
             entry[kind].sort(key=lambda a: a['id'])
@@ -295,34 +276,10 @@ def map_settings(raw, name):
     return (raw or {}).get('maps', {}).get(name, {})
 
 
-def parking_route_id(zone, actor):
-    identity = ('%s:%s' % (zone['team'], zone['id'])).encode('utf8')
-    # The host's shared route/name wire limit is 24 characters. Reserve ten
-    # digits for actor identity while keeping each first parking pose private.
-    return 'user_' + hashlib.sha256(identity).hexdigest()[:8] + '_' + str(actor)
-
-
 def route_config(raw, name, route_id, team=None, waypoints=None):
     entry = map_settings(raw, name)
     custom = next((r for r in entry.get('routes', ()) if 'user_' + r['id'] == route_id), None)
     if custom is not None:return custom
-    zone = next((z for z in entry.get('positions', ()) if isinstance(route_id, TEXT)
-                 and route_id.startswith(parking_route_id(z, '')) and route_id.rsplit('_', 1)[-1].isdigit()
-                 and (team is None or z['team'] == team)), None)
-    if zone is not None and len(zone.get('points', ())) > 1:
-        points = copy.deepcopy(zone['points'])
-        if waypoints is not None:
-            if len(waypoints) != len(points):return None
-            for index, (actual, expected) in enumerate(zip(waypoints, points)):
-                actual = (actual['x'], actual['z']) if isinstance(actual, dict) else actual[:2]
-                if index == 0:
-                    # Initial parking owns a distinct vehicle-sized reservation
-                    # inside the zone. Later itinerary nodes retain exact edits.
-                    if math.hypot(actual[0]-expected[0], actual[1]-expected[1])+2 > zone['radius']+1e-5:return None
-                    points[0][:2] = actual
-                elif any(abs(actual[i]-expected[i]) > 0.0001 for i in (0, 1)):return None
-        return dict(id=route_id[5:], team=zone['team'], classes=['SPG'], slots=[],
-                    policy='fixed', capacity=3, weight=1.0, points=points, parking=True)
     edit = next((r for r in entry.get('default_routes', ())
                  if default_route_id(r) == route_id and (team is None or r['team'] == team)), None)
     if edit is None:return None

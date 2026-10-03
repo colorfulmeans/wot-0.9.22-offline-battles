@@ -254,31 +254,10 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
         self.assertFalse(rt._gunner_ready(rt.states[11],gun,target,2.0))
         self.assertTrue(rt._gunner_ready(rt.states[11],gun,target,4.0))
 
-    def test_parking_itinerary_waits_then_moves_and_survives_manifest_restore(self):
-        from server_bot_ai import BotPlanner
-        rt=self.runtime();message=self.message();zone=message['bot_tactics']['maps']['08_ruinberg']['positions'][0]
+    def test_parking_accepts_only_a_single_region_without_route_nodes(self):
+        message=self.message();zone=message['bot_tactics']['maps']['08_ruinberg']['positions'][0]
         zone['points']=[zone['point']+[1,12.],[-106.,306.,0,0.]]
-        message['bot_tactics']=cfg.canonical(message['bot_tactics'])
-        with contextlib.redirect_stdout(io.StringIO()):out=rt.battle_start(message)[0]
-        first=next(b for b in out['bots'] if b['id']==11)
-        self.assertEqual(cfg.parking_route_id(zone,11),first['route']['id'])
-        plan=first['spg_initial'];actual=first['route']['waypoints'][0]
-        self.assertEqual((plan['point']['x'],plan['point']['z']),(actual['x'],actual['z']))
-        planner=BotPlanner();planner.tactics=message['bot_tactics'];planner.tactics_map='08_ruinberg'
-        catalog=planner._route_catalog([first]);route=catalog[first['route']['id']]
-        bot=dict(first,state=dict(x=actual['x'],y=0,z=actual['z']),route=route)
-        for now, expected in ((1.,0),(12.,0),(13.,1)):
-            result=planner._route(bot,now)
-            self.assertEqual(expected,result[1])
-            order=dict(route_id=result[0],fire_allowed=True)
-            planner._apply_authored_route_order(order,bot,result[2])
-            self.assertEqual('hold' if expected==0 else 'route',order['combat_mode'])
-            self.assertTrue(order['fire_allowed'])
-        other=planning.parking_route(message['bot_tactics'],'08_ruinberg',plan,12)
-        self.assertNotEqual(first['route']['id'],other['id'])
-        with contextlib.redirect_stdout(io.StringIO()):rt._prepare_user_routes(dict(message,bot_manifest=out['bots']),True)
-        self.assertEqual([(p['x'],p['z'],bool(p.get('hold'))) for p in first['route']['waypoints']],
-                         list(rt.states[11]['route']['waypoints']))
+        with self.assertRaises(cfg.TacticsError):cfg.canonical(message['bot_tactics'])
 
     def test_manifest_server_orders_and_navigation_share_same_manual_goal(self):
         from lan_battle_server import BattleState

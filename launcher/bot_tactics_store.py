@@ -65,7 +65,7 @@ def default_spg_positions(name, graph, profile=None):
                 heading=math.degrees(math.atan2(enemy[0]-point['x'],enemy[1]-point['z']))
                 result.append(dict(id='spg_%d_%s'%(team,route['id']),team=team,
                     label=labels.route_label(route['id'],'en'),point=[point['x'],point['z']],
-                    radius=16.,heading=heading,priority=5,points=[[point['x'],point['z'],0,0.]]))
+                    radius=16.,heading=heading,priority=5))
         return result
     grid = spg_positions._Graph(graph, entry['bounds'])
     result = []
@@ -79,8 +79,7 @@ def default_spg_positions(name, graph, profile=None):
             heading = math.degrees(math.atan2(enemy[0]-point[0], enemy[1]-point[2]))
             result.append(dict(id='spg_%d_%s'%(team,identity), team=team,
                                label='%s / %s'%(identity,cell), point=[point[0],point[2]],
-                               radius=16.0, heading=heading, priority=5,
-                               points=[[point[0],point[2],0,0.0]]))
+                               radius=16.0, heading=heading, priority=5))
     return result
 
 

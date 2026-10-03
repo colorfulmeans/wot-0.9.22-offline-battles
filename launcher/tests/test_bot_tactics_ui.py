@@ -20,6 +20,8 @@ class EditorUITests(unittest.TestCase):
         self.addCleanup(self.root.destroy)
         self.errors=mock.patch.object(ui_module.messagebox,'showerror');self.error_mock=self.errors.start();self.addCleanup(self.errors.stop)
         self.ui=ui_module.BotTacticsEditor(self.root,store=storage.Store(self.temp.name))
+        self.initial_defaults=(self.ui.route_class_var.get(),self.ui.symmetry_var.get())
+        self.ui.route_class_var.set('heavyTank');self.ui.symmetry_var.set(False)
         self.ui.book.select(1);self.root.update()
 
     def click(self,point,shift=False):
@@ -36,29 +38,27 @@ class EditorUITests(unittest.TestCase):
         self.assertTrue(self.ui.symmetry_check.winfo_ismapped())
         self.assertGreater(self.ui.symmetry_check.winfo_x(),self.ui.base_label.winfo_x())
 
-    def test_spg_defaults_are_parking_points_and_editable_itineraries_use_two_colors(self):
+    def test_initial_defaults_show_all_classes_with_symmetry_enabled(self):
+        self.assertEqual(('all',True),self.initial_defaults)
+
+    def test_spg_defaults_only_allow_repositioning_parking(self):
         self.ui.map_var.set(storage.MAP_LABELS['31_airfield']);self.ui.change_map()
         self.ui.route_class_var.set('SPG');self.ui.change_route_class();self.root.update()
         ids=self.ui.items.get_children()
         self.assertTrue(ids);self.assertTrue(all(i.startswith('builtin_positions:') for i in ids))
         self.assertFalse(self.ui.dirty())
-        self.ui.items.selection_set(ids[0]);self.root.update();self.ui.selected_point=0
-        with mock.patch.object(ui_module.simpledialog,'askfloat',return_value=30):self.ui.edit_point_condition()
-        first=self.ui._selected()['point']
-        # Keep the insertion outside the existing node's 10-pixel hit radius
-        # even on the smaller desktop used by the Windows packaging runner.
-        x,y=self.ui.view.screen(first)
+        self.ui.items.selection_set(ids[0]);self.root.update()
+        self.assertFalse(self.ui.point_actions.winfo_ismapped())
+        first=self.ui._selected()['point'];x,y=self.ui.view.screen(first)
         self.click(self.ui.view.world(x-30,y),shift=True)
-        self.assertEqual(30,self.ui._selected()['points'][0][3])
-        self.assertEqual(0,self.ui._selected()['points'][1][3])
-        shapes=[(self.ui.canvas.type(i),self.ui.canvas.itemcget(i,'fill')) for i in self.ui.canvas.find_all()
-                if self.ui.canvas.type(i) in ('rectangle','oval')]
-        self.assertIn(('rectangle',ui_module.CLASS_COLORS['SPG']),shapes)
-        self.assertIn(('oval',ui_module.SPG_MOVE_COLOR),shapes)
+        self.assertNotEqual(first,self.ui._selected()['point'])
+        self.assertNotIn('points',self.ui._selected())
+        with mock.patch.object(ui_module.simpledialog,'askfloat') as ask:
+            self.ui.edit_point_condition();ask.assert_not_called()
         self.ui.save(True);self.assertFalse(self.error_mock.called,self.error_mock.call_args)
-        self.assertEqual(2,len(self.ui.store.active()['maps']['31_airfield']['positions'][0]['points']))
-        self.ui.reset_builtin();self.assertEqual(1,len(self.ui._selected()['points']))
-        self.assertFalse(self.ui.entry()['positions'])
+        self.assertNotIn('points',self.ui.store.active()['maps']['31_airfield']['positions'][0])
+        self.ui.reset_builtin();self.assertFalse(self.ui.entry()['positions'])
+        self.ui.new_route();self.assertEqual('positions',self.ui.selection[0])
 
     def test_default_symmetry_reverses_geometry_waits_and_detaches_when_disabled(self):
         source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
@@ -131,7 +131,7 @@ class EditorUITests(unittest.TestCase):
         self.ui.profile_name.set('Default adjustments');self.ui.save(True);self.root.update()
         self.assertFalse(self.error_mock.called,self.error_mock.call_args)
         saved=self.ui.store.active();entry=saved['maps']['08_ruinberg']
-        self.assertEqual([],entry['routes']);self.assertEqual(1,len(entry['default_routes']))
+        self.assertEqual([],entry['routes']);self.assertEqual(2,len(entry['default_routes']))
         self.assertEqual(source['id'],entry['default_routes'][0]['id'])
         self.ui.adopt(saved);self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
         self.assertEqual(entry['default_routes'][0]['points'],self.ui._selected()['points'])

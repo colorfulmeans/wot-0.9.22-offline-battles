@@ -18,7 +18,6 @@ except ImportError:
 
 contract = storage.contract
 PARAM_LABELS = labels.PARAM_NAMES
-SPG_MOVE_COLOR = '#ef8db4'
 
 
 class LocalizedCombobox(ttk.Combobox):
@@ -215,7 +214,7 @@ class BotTacticsEditor:
         t=LocalizedCombobox(bar,variable=self.team_var,kind='team',values=('1','2'),language=self.language,width=9)
         ttk.Label(bar,text=self.tr('出生队伍','Spawn team')).pack(side='left',padx=6);t.pack(side='left')
         t.bind('<<ComboboxSelected>>',lambda e:self.change_map(),add='+')
-        self.route_class_var = tk.StringVar(value='heavyTank')
+        self.route_class_var = tk.StringVar(value='all')
         ttk.Label(bar,text=self.tr('显示车型','Show class')).pack(side='left',padx=6)
         scope = LocalizedCombobox(bar,variable=self.route_class_var,
             kind='class_tag',values=('all',)+contract.CLASSES,
@@ -224,7 +223,7 @@ class BotTacticsEditor:
         scope.bind('<<ComboboxSelected>>',lambda e:self.change_route_class(),add='+')
         base_bar=ttk.Frame(parent);base_bar.pack(fill='x',pady=3)
         self.base_label=ttk.Label(base_bar,text='');self.base_label.pack(side='left',padx=8)
-        self.symmetry_var=tk.BooleanVar(value=False)
+        self.symmetry_var=tk.BooleanVar(value=True)
         self.symmetry_check=ttk.Checkbutton(base_bar,text=self.tr('路线对称','Route symmetry'),
                                            variable=self.symmetry_var,command=self.change_symmetry)
         self.symmetry_check.pack(side='left')
@@ -236,8 +235,6 @@ class BotTacticsEditor:
             ttk.Label(legend,text=self.tr(*labels.ENUM_NAMES['class_tag'][tag])).pack(side='left',padx=(0,8))
         tk.Label(legend,text='■',foreground=CLASS_COLORS['SPG']).pack(side='left',padx=(6,2))
         ttk.Label(legend,text=self.tr('火炮驻炮点（红色）','SPG parking (red)')).pack(side='left')
-        tk.Label(legend,text='●',foreground=SPG_MOVE_COLOR).pack(side='left',padx=(6,2))
-        ttk.Label(legend,text=self.tr('火炮移动点（粉色）','SPG movement (pink)')).pack(side='left')
         tools=ttk.Frame(parent);tools.pack(fill='x')
         for zh,en,command in [('新建路线','New route',self.new_route),('新建炮位','New SPG',self.new_position),
                               ('复制','Duplicate',self.duplicate_item),('删除','Delete',self.delete_item),
@@ -281,7 +278,7 @@ class BotTacticsEditor:
             widget.grid(row=row*2+1,column=0,sticky='ew',pady=(0,4));self.item_fields[key]=(label,widget)
         types=ttk.Frame(right);types.grid(row=16,column=0,sticky='ew');self.classes_frame=types
         self.class_vars={}
-        for i,c in enumerate(contract.CLASSES):
+        for i,c in enumerate(contract.CLASSES[:-1]):
             var=tk.BooleanVar(value=True);self.class_vars[c]=var
             ttk.Checkbutton(types,text=self.tr(*labels.ENUM_NAMES['class_tag'][c]),variable=var).grid(row=i,column=0,sticky='w')
         ttk.Button(right,text=self.tr('应用属性到草稿','Update draft properties'),command=self.update_properties).grid(row=17,column=0,sticky='ew',pady=5)
@@ -388,11 +385,9 @@ class BotTacticsEditor:
                 if source is None:return None
                 edit=self._default_edit(source)
                 return dict(id=identity,team=self.team,class_tag=self.route_class_var.get(),
-                            symmetric=bool((edit or {}).get('symmetric')),
+                            symmetric=bool((edit or {}).get('symmetric',True)),
                             points=copy.deepcopy(edit['points'] if edit else source['waypoints']))
             item=next((v for v in self.entry()[kind] if v['id']==identity),None)
-            if kind=='positions' and item is not None and 'points' not in item:
-                return dict(item,points=[list(item['point'])+[0,0.0]])
             return item
         return None
 
@@ -411,7 +406,6 @@ class BotTacticsEditor:
             entries=self._ensure_entry()['positions']
             stored=next((p for p in entries if p['id']==item['id']),None)
             if stored is None:entries.append(item);stored=item
-            if 'points' not in stored:stored['points']=copy.deepcopy(item['points'])
             return stored
         if self.selection[0]!='builtin':return item
         edits=self._ensure_entry().setdefault('default_routes',[])
@@ -485,6 +479,7 @@ class BotTacticsEditor:
         self._refresh_items()
 
     def _visible_for_class(self, kind, item):
+        if kind=='routes' and item.get('classes')==['SPG']:return False
         tag = self.route_class_var.get()
         if tag == 'all':
             return True
@@ -549,10 +544,10 @@ class BotTacticsEditor:
                 widget.grid() if key in allowed else widget.grid_remove()
         self.classes_frame.grid() if route else self.classes_frame.grid_remove()
         for widget in (self.points,self.point_actions):
-            widget.grid() if route or builtin or parking else widget.grid_remove()
-        self.wait_button.config(state='normal' if route or builtin or parking else 'disabled')
-        self.hold_button.config(text=self.tr('驻炮 / 移动','Parking / movement') if parking else self.tr('切换驻留点','Toggle hold'))
-        self.symmetry_var.set(bool((item or {}).get('symmetric')))
+            widget.grid() if route or builtin else widget.grid_remove()
+        self.wait_button.config(state='normal' if route or builtin else 'disabled')
+        self.hold_button.config(text=self.tr('切换驻留点','Toggle hold'))
+        if route or builtin:self.symmetry_var.set(bool(item.get('symmetric',True)))
         self.symmetry_check.config(state='normal' if route or builtin else 'disabled')
         for key,var in self.item_vars.items():
             val=(item or {}).get(key,'')
@@ -569,10 +564,11 @@ class BotTacticsEditor:
         else:self.points.set('')
 
     def new_route(self):
+        if self.route_class_var.get()=='SPG':return self.new_position()
         self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
         scope=self.route_class_var.get()
         self._ensure_entry()['routes'].append(dict(id=identity,label=self.tr('新路线','New route'),team=self.team,
-            classes=list(contract.CLASSES[:-1]) if scope=='all' else [scope],slots=[],policy='preferred',capacity=6,weight=1.0,points=[]))
+            classes=list(contract.CLASSES[:-1]) if scope=='all' else [scope],slots=[],policy='preferred',capacity=6,weight=1.0,points=[],symmetric=self.symmetry_var.get()))
         self.selection=('routes',identity);self._refresh_items();self.mark()
         self.status.set(self.tr('在地图上点击添加路径点；最多16个。','Click the map to add up to 16 route points.'))
 
@@ -676,6 +672,7 @@ class BotTacticsEditor:
             self._sync_symmetry();self._refresh_properties();self.redraw();self.mark()
 
     def edit_point_condition(self,event=None):
+        if self.selection and self.selection[0] in ('positions','builtin_positions'):return
         item=self._selected()
         if item is None or not item.get('points'):return
         if event is not None:
@@ -704,8 +701,8 @@ class BotTacticsEditor:
         if item is None:return
         p=self.view.world(event.x,event.y)
         parking=self.selection[0] in ('positions','builtin_positions')
-        if parking and len(item['points'])==1 and not event.state & 1:
-            self.checkpoint();stored=self._editable_item();stored['point']=list(p);stored['points'][0][:2]=p
+        if parking:
+            self.checkpoint();stored=self._editable_item();stored['point']=list(p)
             self.selected_point=0;self.drag=('position',0);self._refresh_properties();self.mark();return
         pts=item['points']
         nearest=next((i for i,pt in enumerate(pts) if math.hypot(*(a-b for a,b in zip(self.view.screen(pt), (event.x,event.y))))<10),None)
@@ -723,6 +720,8 @@ class BotTacticsEditor:
         item=self._selected()
         if item is None or self.drag is None:return
         p=list(self.view.world(event.x,event.y))
+        if self.drag[0]=='position':
+            self._editable_item()['point']=p;self.redraw();return
         self._editable_points()[self.drag[1]][:2]=p
         if self.selection[0] in ('positions','builtin_positions'):self._editable_item()['point']=self._editable_points()[0][:2]
         if self.drag[0]!='position':self._sync_symmetry()
@@ -803,10 +802,8 @@ class BotTacticsEditor:
                     if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if chosen else 2,arrow='last')
                     for i,p in enumerate(item['points']):
                         x,y=self.view.screen(p);rr=7 if chosen and i==self.selected_point else 5
-                        is_spg=item.get('classes')==['SPG']
-                        parking=is_spg and (i==0 or p[2] or (len(p)>3 and p[3]!=0))
-                        node_color=CLASS_COLORS['SPG'] if parking else SPG_MOVE_COLOR if is_spg else color
-                        draw=c.create_rectangle if parking else c.create_oval
+                        node_color=color
+                        draw=c.create_oval
                         draw(x-rr,y-rr,x+rr,y+rr,fill=node_color,outline='white' if p[2] else node_color)
                         c.create_text(x+10,y-10,text=str(i+1),fill='white',anchor='w')
                 else:
@@ -815,16 +812,6 @@ class BotTacticsEditor:
                     c.create_rectangle(x-5,y-5,x+5,y+5,fill=color,outline='white')
                     c.create_line(x,y,x+math.sin(angle)*28,y-math.cos(angle)*28,fill=color,width=2,arrow='last')
                     c.create_text(x+12,y+12,text=item['label'],fill='white',anchor='nw')
-                    pts=item.get('points') or [item['point']+[0,0.0]]
-                    coords=[v for p in pts for v in self.view.screen(p)]
-                    if len(coords)>=4:c.create_line(*coords,fill=SPG_MOVE_COLOR,width=3 if chosen else 2,arrow='last')
-                    for i,p in enumerate(pts):
-                        x,y=self.view.screen(p);rr=7 if chosen and i==self.selected_point else 5
-                        parked=i==0 or bool(p[2]) or (len(p)>3 and p[3]!=0)
-                        color=CLASS_COLORS['SPG'] if parked else SPG_MOVE_COLOR
-                        draw=c.create_rectangle if parked else c.create_oval
-                        draw(x-rr,y-rr,x+rr,y+rr,fill=color,outline='white' if chosen else color)
-                        c.create_text(x+10,y-10,text=str(i+1),fill='white',anchor='w')
 
     def check_map(self):
         try:

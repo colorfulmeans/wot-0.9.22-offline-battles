@@ -84,8 +84,8 @@ and emergency orders still take precedence over waiting.
 Copy a route or create an empty custom route for separate allocation rules.
 Custom route attributes include allowed
 classes, optional 1-based UI slots, capacity, sampling weight, and preferred or
-fixed policy. SPGs can follow class-specific default/custom scripted routes;
-ordinary unmodified deployment still uses the position library.
+fixed policy. SPGs only use parking regions; custom/default scripted SPG
+routes are not available. Ordinary deployment still uses the position library.
 
 Route points are macro intent, not a request to bypass terrain. Initial route
 selection checks baked connectivity and uses a deterministic weighted draw.
@@ -130,19 +130,13 @@ point creates a manual region override; reset/undo restore the untouched preview
 The circle represents the parking region, not a promise to place every gun at
 its centre. The worker still resolves distinct vehicle-sized initial reservations.
 
-The legend uses red squares for SPG parking stops and pink circles for movement
-points. Shift-click adds a subsequent point; double-click or Wait condition sets
-0..3600 seconds, or -1 for a permanent hold. Parking/movement toggles the point
-marker. The first point is the parking region. A single point with default wait
-0 remains stationed there, as does a terminal point with no successor. With a
-successor, arrival starts the wait and expiry advances the itinerary; waiting
-does not grant firing permission or disable the ordinary fire gates.
-
-Parking itineraries retain each gun's reserved first point and publish private
-route IDs within the host's 24-character wire limit. Later nodes and wait times
-come from the round-frozen profile. Invalid itineraries cannot attach waits to
-a fallback parking plan. The ordinary stationary behaviour remains for older
-profiles without itinerary nodes.
+The editor opens with All classes selected and Route symmetry checked.
+Unedited ordinary routes adopt symmetry when first edited; an explicitly
+disabled saved setting remains independent. SPG regions are team-specific.
+The legend uses red squares for SPG parking regions. Click or drag to reposition
+the region, then edit its radius, heading and priority. SPG movement points,
+itineraries, arrival waits and route class selection are removed. The position
+schema contains only a centre and region properties. Tank route waits remain.
 
 The editor's map check proves only baked connectivity and existence of generic
 parking space. Vehicle-sized parking is checked by the actual worker at round

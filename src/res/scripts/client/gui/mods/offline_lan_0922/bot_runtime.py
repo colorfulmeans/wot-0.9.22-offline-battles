@@ -3718,7 +3718,8 @@ class BotRuntime(object):
             for raw in message.get('bot_manifest') or ():
                 route = raw.get('route') or {}
                 authored = bot_tactics.route_config(self._bot_tactics, name, route.get('id'), raw.get('team'), route.get('waypoints'))
-                if authored is not None and not authored.get('default'):
+                if ((self.states.get(raw['id'], {}).get('profile') or {}).get('class_tag') != 'SPG' and
+                        authored is not None and not authored.get('default')):
                     plans[raw['id']] = bot_tactics_runtime.route_value(authored)
             outcomes = dict((actor, 'restored') for actor in plans)
         elif message.get('battle_mode', 'regular') == 'regular':
@@ -3731,6 +3732,7 @@ class BotRuntime(object):
                             for r in message.get('bot_manifest') or ()) if restoring else {}
             catalog = (getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {})
             for state in states:
+                if (state.get('profile') or {}).get('class_tag') == 'SPG':continue
                 if state['id'] in plans:continue
                 previous = restored.get(state['id'], state.get('route') or {})
                 config = bot_tactics.route_config(self._bot_tactics, name, previous.get('id'), state['team'])
@@ -3798,11 +3800,6 @@ class BotRuntime(object):
             plan = plans.get(actor)
             if plan is not None:
                 state['_spg_initial'] = plan
-                itinerary = bot_tactics_runtime.parking_route(self._bot_tactics, map_name, plan, actor)
-                if itinerary is not None and not (state.get('route') or {}).get('id', '').startswith('user_'):
-                    state['route'] = itinerary
-                    agent = getattr(self.adapter.director, 'agents', {}).get(actor)
-                    if agent is not None:agent['route'] = itinerary
             else:
                 state.pop('_spg_initial', None)
             state['_spg_initial_status'] = outcomes[actor]

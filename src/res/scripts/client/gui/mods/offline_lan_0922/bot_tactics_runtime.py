@@ -106,6 +106,7 @@ def default_routes(profile, name, graph):
     result = copy.deepcopy(routes)
     outcomes = {}
     for edit in edits:
+        if edit.get('class_tag') == 'SPG':continue
         key = '%s:%s' % (edit['team'], config.default_route_id(edit))
         source = next((r for r in result.get(str(edit['team']), ())
                        if r['id'] == edit['id']), None)
@@ -134,6 +135,7 @@ def assign_routes(profile, name, graph, states, round_id):
     errors = dict((r['id'], validate_route(grid, r)) for r in routes)
     result, outcomes, usage = {}, {}, {}
     for state in sorted(states, key=lambda s: (s['team'], s.get('slot', 0), s['id'])):
+        if (state.get('profile') or {}).get('class_tag') == 'SPG':continue
         applicable = [r for r in routes if config.matches(r, state)]
         if not applicable:
             continue
@@ -198,19 +200,12 @@ def assign_manual_positions(profile, name, graph, states, mode='regular'):
         distances = grid.distances((state['x'], state['y'], state['z']))
         candidates = []
         for zone in choices:
-            itinerary = zone.get('points', ())
-            if len(itinerary) > 1 and validate_route(grid, {'points': itinerary[1:]}):
-                continue
             key = (zone['id'], clearance)
             if key not in cache:
                 cache[key] = _manual_candidates(grid, zone, clearance)
             for centre_distance, index, p in cache[key]:
                 if index not in distances:
                     continue
-                if len(itinerary) > 1:
-                    next_point = itinerary[1]
-                    target = grid.closest((next_point[0], 0, next_point[1]))
-                    if not _route_reachable(grid, p, target):continue
                 if any(math.hypot(p[0]-old[0][0], p[2]-old[0][2]) < clearance+old[1]+3
                        for old in reservations[state['team']]):
                     continue
@@ -234,18 +229,6 @@ def assign_manual_positions(profile, name, graph, states, mode='regular'):
         outcomes[state['id']] = 'manual_selected'
         reservations[state['team']].append((p, clearance))
     return plans, outcomes
-
-
-def parking_route(profile, name, plan, actor):
-    """Travel from the native-admitted first reservation through authored stops."""
-    if not plan or plan.get('source') != 'launcher_manual_v1':return None
-    zone = next((z for z in config.map_settings(profile, name).get('positions', ())
-                 if z['id'] == plan['zone']), None)
-    if zone is None or len(zone.get('points', ())) <= 1:return None
-    points = [list(p) for p in zone['points']]
-    points[0][:2] = [plan['point']['x'], plan['point']['z']]
-    authored = config.route_config(profile, name, config.parking_route_id(zone, actor), zone['team'], points)
-    return route_value(authored) if authored is not None else None
 
 
 def route_issues(grid, route):
@@ -289,15 +272,6 @@ def authoring_check(profile, name, graph, details=False):
         spots = _manual_candidates(grid, zone, 6.0)
         valid = bool(spots)
         status = 'generic_parking_found' if valid else 'no_generic_parking'
-        issues = route_issues(grid, {'points': zone['points'][1:]}) if len(zone.get('points', ())) > 1 else []
-        for issue in issues:issue['nodes'] = [node+1 for node in issue['nodes']]
-        if len(zone.get('points', ())) > 1:
-            following = zone['points'][1]
-            target = grid.closest((following[0], 0, following[1]))
-            if target is not None and spots and not any(_route_reachable(grid, spot[2], target) for spot in spots):
-                issues.insert(0, dict(status='waypoints_disconnected', nodes=[1,2],
-                                     points=[list(zone['point']),list(following[:2])],
-                                     reason='parking_exit_disconnected'))
-        if issues:status = issues[0]['status']
+        issues = []
         messages.append((zone['id'], status, issues) if details else (zone['id'], status))
     return messages

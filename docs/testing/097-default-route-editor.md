@@ -117,3 +117,26 @@ are recorded in the PR handoff. Local full-launcher account-mutating tests are
 blocked by the user's running WoT process, which is not interrupted for tests.
 The unrelated historical SPG target-lease assertion remains a known baseline
 failure in full Tests; the dedicated gameplay gate stays separate.
+
+
+## October 3, 17:10 report and editor simplification
+
+Report 20261003-171033 uses build 61 and contains one current Airfield worker
+round, despite the user observing two matches. It cannot independently identify
+the other match. Live windows 3/4 have 261.025/269.456 ms frame gaps and
+245.187/252.514 ms Bot updates; prewarm is only 0.323/0.356 ms. The 30-second
+capture contains 9,605 Bot physics resolver calls, 37,854 native motion rays,
+28,878 native motion ground queries and 21,660 navigation rays. Of 4,296 motion
+world fallback checks, 3,378 are classified as turning. Cumulative physics
+resolver self time is 11,176.956 ms, followed by slice and planner/driver work.
+This identifies repeated simulation and collision work during the crowded
+opening; it is not a network fault diagnosis or evidence that deleting route
+profiles fixes ping. Later live windows 6/7 still take 95.498/90.820 ms in Bot
+updates. No native performance improvement is claimed by this UI change.
+
+The editor now starts at All classes with symmetry enabled. SPG editing retains
+parking regions only: movement points, waits and scripted SPG routes are removed
+from the editor, assignment and position schema. The user's experimental local
+active/draft profiles and their backups were explicitly authorized for deletion;
+account, garage and save data are outside that cleanup scope. No configuration
+migration or silent itinerary-ignoring compatibility path is introduced.
