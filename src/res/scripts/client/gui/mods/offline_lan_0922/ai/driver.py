@@ -583,13 +583,31 @@ class LocalDriver(object):
 				return candidate
 		return None
 
+	def _short_escape(self, state, position, yaw, speed, step, horizon,
+			stopping_distance, neighbours, direction_clear, half_length, half_width):
+		"""Choose a fresh straight escape independently of available pivot arcs."""
+		minimum = max(0.5, float(stopping_distance or 0.0) +
+			abs(float(speed)) * max(step, float(horizon)))
+		for distance in (max(2.0, minimum), max(1.0, minimum), minimum):
+			for sign in (-1.0, 1.0):
+				heading = float(yaw) + (math.pi if sign < 0 else 0.0)
+				if (self._failure_penalty(state, heading) <= 0.0 and
+						self._clear(direction_clear, heading, distance) and
+						self._reverse_blocked_by_vehicle(
+							position, float(yaw) if sign < 0 else float(yaw) + math.pi,
+							neighbours, half_length, half_width, maximum_distance=distance) is None):
+					return dict(throttle=sign * 0.45, turn=0.0, target_yaw=float(yaw),
+						recovery_probe_distance=distance,
+						recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
+		return None
+
 	@observed('driver.drive')
 	def drive(self, bot_id, team_slot, position, yaw, speed, dt, target,
 			neighbours, direction_clear, velocity=None,
 			half_length=3.5, half_width=1.7,
 			movement_intent=True, stopping_distance=None,
 			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
-			progress_target=None):
+			progress_target=None, turn_speed_limit=None):
 		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -600,6 +618,11 @@ class LocalDriver(object):
 		permanently behind after every slow callback.
 		"""
 		state = self._state(bot_id, team_slot, position)
+		alignment = state.get('alignment_target')
+		if (not movement_intent or float(speed) < -0.05 or
+				turn_speed_limit is None or
+				(alignment is not None and _distance(alignment, target) > 2.0)):
+			state.pop('alignment_target', None)
 		step = max(0.0, float(dt))
 		if not state.pop('traffic_waiting', False):
 			state['traffic_wait_time'] = 0.0
@@ -752,6 +775,12 @@ class LocalDriver(object):
 					position, yaw, neighbours,
 					own_half_length, own_half_width)
 			if not reverse_clear or reverse_blocker is not None:
+				if self._failure_penalty(state, float(yaw)) > 0.0:
+					escape = self._short_escape(state, position, yaw, speed, step,
+						decision_horizon, stopping_distance, neighbours, direction_clear,
+						own_half_length, own_half_width)
+					if escape is not None:
+						return escape
 				if not self._pivot_side_fits(pose_clear, yaw, direction):
 					mirrored = -direction
 					if self._pivot_side_fits(pose_clear, yaw, mirrored):
@@ -770,20 +799,11 @@ class LocalDriver(object):
 						# contact without room for the full backing manoeuvre.
 						# Recheck a short straight sweep on every decision; retain
 						# braking/cadence distance and the final native hull veto.
-						short_distance = max(2.0, float(stopping_distance or 0.0) +
-							abs(float(speed)) * max(step, float(decision_horizon)))
-						for drive_sign in (-1.0, 1.0):
-							sample_yaw = float(yaw) + (math.pi if drive_sign < 0 else 0.0)
-							if (self._failure_penalty(state, sample_yaw) <= 0.0 and
-									self._clear(direction_clear, sample_yaw, short_distance) and
-									self._reverse_blocked_by_vehicle(
-										position, float(yaw) if drive_sign < 0 else float(yaw) + math.pi,
-										neighbours, own_half_length, own_half_width,
-										maximum_distance=short_distance) is None):
-								return {'throttle': drive_sign * 0.45, 'turn': 0.0,
-									'target_yaw': float(yaw),
-									'recovery_probe_distance': short_distance,
-									'recovery_mode': 'short_reverse_escape' if drive_sign < 0 else 'short_forward_escape'}
+						escape = self._short_escape(state, position, yaw, speed, step,
+							decision_horizon, stopping_distance, neighbours, direction_clear,
+							own_half_length, own_half_width)
+						if escape is not None:
+							return escape
 						# Neither translation nor rotation fits. Hold the
 						# pose instead of grinding the corners, and publish the
 						# hull that owns the escape so the queue can clear it.
@@ -878,10 +898,27 @@ class LocalDriver(object):
 
 		delta = _angle_delta(chosen_yaw, yaw)
 		turn = max(-1.0, min(1.0, delta / 0.58))
+		brake = False
 		# This branch commands forward drive. Signed speed can still be negative
 		# while braking a recovery or sliding downhill; steering remains forward.
 		avoiding = state['steering_reason'] != 'route'
 		throttle = 1.0
+		if avoiding:
+			state.pop('alignment_target', None)
+		elif turn_speed_limit is not None and float(turn_speed_limit) > 0.0 and float(speed) >= -0.05:
+			# Use the installed traverse rate rather than driving a circle
+			# around a nearby navigation point. Retain the alignment at zero
+			# speed until the hull actually faces the point; coasting is not
+			# sufficient to stop a heavy tank before its next corner.
+			radius = max(1.0, abs(float(speed))) / float(turn_speed_limit)
+			if (target_distance <= max(8.0, 2.0 * radius) and abs(delta) > 0.30):
+				state['alignment_target'] = tuple(target)
+			if state.get('alignment_target') is not None:
+				if abs(delta) > 0.12:
+					throttle = 0.0
+					brake = True
+				else:
+					state.pop('alignment_target', None)
 		if (target_distance <= max(8.0, own_half_length * 2.0) and
 				abs(delta) > 0.45):
 			# Both path corners and native-checked avoidance steps can be inside
@@ -930,6 +967,7 @@ class LocalDriver(object):
 			state['braking_target'] = None
 		return {
 			'throttle': throttle,
+			'brake': brake,
 			'turn': turn,
 			'target_yaw': chosen_yaw,
 			'recovery_mode': 'avoid' if avoiding else 'drive',

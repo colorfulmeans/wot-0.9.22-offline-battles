@@ -9,6 +9,7 @@ import math
 import sys
 import types
 import unittest
+from unittest import mock
 
 from test_port_0922_bot_runtime import (
     _combat_descriptor, _flat_open_graph, _load,
@@ -269,7 +270,51 @@ class DriverRecoveryFeedbackTests(unittest.TestCase):
             self.assertGreater(runtime.states[11]['z'], 0.)
             self.assertEqual(2., commands[-1]['recovery_probe_distance'])
 
+    def test_real_forward_failure_checks_short_rear_before_an_unproved_pivot(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        driver = LocalDriver()
+        driver._state(30, 0, (0., 0., 0.)).update(recovery_time=.85, recovery_side=1.)
+        driver.remember_failure(30, 0.)
+        command = driver.drive(30, 0, (0., 0., 0.), 0., 0., .1,
+            (-20., 0., 20.), (),
+            lambda yaw, maximum_distance=None: math.cos(yaw) < 0 and maximum_distance is not None and maximum_distance <= .5,
+            half_length=5.11772, pose_clear=lambda yaw: True)
+        self.assertEqual('short_reverse_escape', command['recovery_mode'])
+        self.assertEqual(.5, command['recovery_probe_distance'])
+        self.assertEqual(0., command['turn'])
+
+    def test_live_runtime_applies_alignment_brake_to_copied_physics(self):
+        runtime, scene, commands, unused = self._runtime()
+        scene.boxes = ()
+        target = (3., 0., 0.)
+        runtime.adapter.navigation_target = lambda *unused: target
+        runtime._server_orders[11]['move_position'] = target
+        runtime.adapter.driver._state(11, 0, (0., 0., 0.))['recovery_time'] = 0.
+        runtime.states[11]['speed'] = 4.
+        physics = self.module.vehicle_physics
+        with mock.patch.object(physics, 'longitudinal_step', wraps=physics.longitudinal_step) as integrate:
+            runtime.update(.1, 1.)
+        self.assertTrue(commands[-1]['brake'])
+        self.assertEqual(0., commands[-1]['throttle'])
+        actual_slices = [call.args for call in integrate.call_args_list if call.args[8]]
+        self.assertTrue(actual_slices)
+        self.assertTrue(all(args[2] == 0. and 0. < args[5] <= .1 for args in actual_slices))
+        self.assertLess(abs(runtime.states[11]['speed']), 4.)
+
     def test_short_escape_still_checks_the_complete_neighbour_sweep(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        driver = LocalDriver()
+        driver._state(30, 0, (0., 0., 0.)).update(recovery_time=.85, recovery_side=1.)
+        # Less than the shortest .5 m escape remains beyond either hull end.
+        peers = [dict(id=10 + side, position=(0., 0., side * 10.4),
+                      half_length=5., half_width=1.6, yaw=0.) for side in (-1, 1)]
+        command = driver.drive(30, 0, (0., 0., 0.), 0., 0., .1,
+            (20., 0., 20.), peers, lambda yaw, maximum_distance=None: True,
+            half_length=5.11772, half_width=1.61594, pose_clear=lambda yaw: False)
+        self.assertEqual('blocked', command['recovery_mode'])
+        self.assertEqual(0., command['throttle'])
+
+    def test_short_escape_uses_only_the_free_gap_before_a_neighbour(self):
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver
         driver = LocalDriver()
         driver._state(30, 0, (0., 0., 0.)).update(recovery_time=.85, recovery_side=1.)
@@ -278,8 +323,9 @@ class DriverRecoveryFeedbackTests(unittest.TestCase):
         command = driver.drive(30, 0, (0., 0., 0.), 0., 0., .1,
             (20., 0., 20.), peers, lambda yaw, maximum_distance=None: True,
             half_length=5.11772, half_width=1.61594, pose_clear=lambda yaw: False)
-        self.assertEqual('blocked', command['recovery_mode'])
-        self.assertEqual(0., command['throttle'])
+        self.assertEqual('short_reverse_escape', command['recovery_mode'])
+        self.assertEqual(.5, command['recovery_probe_distance'])
+        self.assertLess(command['recovery_probe_distance'], 11. - 5. - 5.11772)
 
     def test_curved_recovery_keeps_only_the_unfailed_straight_exit(self):
         from gui.mods.offline_lan_0922.ai.driver import (

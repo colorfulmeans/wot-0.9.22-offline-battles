@@ -3774,6 +3774,7 @@ class BotRuntime(object):
                     raw.get('spg_initial'), map_name, state.get('vehicle'), team=state.get('team'), tactics=self._bot_tactics)
                 if mode == 'regular' and plan is not None:
                     state['_spg_initial'] = plan
+                    state.setdefault('_spg_selection_origin', _position(state))
                     state['_spg_initial_status'] = 'restored'
                 else:
                     state.pop('_spg_initial', None)
@@ -3800,6 +3801,7 @@ class BotRuntime(object):
             plan = plans.get(actor)
             if plan is not None:
                 state['_spg_initial'] = plan
+                state['_spg_selection_origin'] = _position(state)
             else:
                 state.pop('_spg_initial', None)
             state['_spg_initial_status'] = outcomes[actor]
@@ -11304,6 +11306,17 @@ class BotRuntime(object):
         kwargs = dict(actor_ids=(state['id'],), excluded=failed, occupied=occupied)
         states = list(self._ordered_states())
         try:
+            origin = state.get('_spg_selection_origin')
+            grid = (bot_tactics_runtime.graph_view(initial['map'], self.baked_graph)
+                    if origin is not None and self.baked_graph is not None else None)
+            if grid is not None and grid.closest(_position(state)) is None:
+                # Use the original connected component only to rank parking
+                # destinations when the live hull occupies a coarse bake hole.
+                # Movement still starts at the live pose and must pass normal
+                # navigation and native hull collision; this grants no jump.
+                if origin is not None and grid.closest(origin) is not None:
+                    states = [dict(other, **dict(zip(('x', 'y', 'z'), origin)))
+                              if other['id'] == state['id'] else other for other in states]
             if initial['source'] == 'launcher_manual_v1':
                 plans, unused = bot_tactics_runtime.assign_manual_positions(
                     self._bot_tactics, initial['map'], self.baked_graph, states, **kwargs)
@@ -12328,6 +12341,8 @@ class BotRuntime(object):
                     'half_width': state.get('half_width', 1.7),
                     'stopping_distance': stopping_distance,
                     'decision_horizon': decision_horizon,
+                    'turn_speed_limit': (physics_params.get('rotSpd')
+                                         if physics_params is not None else None),
                 }
                 reposition_order, reposition_expired = \
                     self._friendly_reposition_order(state, targets, now)
@@ -12669,7 +12684,7 @@ class BotRuntime(object):
                     ai_driver.WAYPOINT_ARRIVAL_RADIUS)
                 maximum_probe_distance = min(remaining, reactive_horizon)
             elif command.get('recovery_mode') in ('short_forward_escape', 'short_reverse_escape'):
-                maximum_probe_distance = max(2.0, _number(
+                maximum_probe_distance = max(0.5, _number(
                     command.get('recovery_probe_distance'), 2.0))
             elif command.get('recovery_mode') in (
                     'contact_escape', 'forward_escape', 'wreck_push'):
@@ -13093,7 +13108,7 @@ class BotRuntime(object):
                     vehicle_physics.longitudinal_step(
                         params, previous_speed, throttle,
                         turn if steer_dir else 0.0, slope_pitch, step,
-                        bool(state.get('airborne', False)), 0, False,
+                        bool(state.get('airborne', False)), 0, bool(command.get('brake', False)),
                         state['service_brake']))
                 if forced_speed:
                     # Advance the combined velocity once. A counterfactual
@@ -13102,7 +13117,7 @@ class BotRuntime(object):
                     unforced_speed = vehicle_physics.longitudinal_step(
                         params, previous_speed - forced_speed, throttle,
                         turn if steer_dir else 0.0, slope_pitch, step,
-                        bool(state.get('airborne', False)), 0, False,
+                        bool(state.get('airborne', False)), 0, bool(command.get('brake', False)),
                         state['service_brake'])
                     forced_speed = self._retained_contact_speed(
                         speed, speed - unforced_speed)

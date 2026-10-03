@@ -441,6 +441,7 @@ class BotAdapter(object):
                     stop_at_target=stop_at_target,
                     decision_horizon=float(state.get('decision_horizon', 0.0)),
                     progress_target=move_position,
+                    turn_speed_limit=state.get('turn_speed_limit'),
                     pose_clear=state.get('pose_clear'))
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
@@ -471,6 +472,7 @@ class BotAdapter(object):
             'fire_allowed': bool(strategic.get('fire_allowed', False)),
             'shell_index': int(strategic.get('shell_index', 0)),
             'throttle': float(local['throttle']),
+            'brake': bool(local.get('brake', False)),
             'turn': turn,
             'target_yaw': target_yaw,
             'recovery_mode': recovery_mode,

@@ -100,6 +100,16 @@ are bounded. Shallow depressions now check opposing chassis support before
 small successive drops can lower a Bot or wreck between the banks; ordinary
 slopes and genuine cliff departures retain their normal support behaviour.
 
+Nearby Bot route corners now use the installed traverse rate to brake and
+align before advancing, preventing a coasting hull from orbiting a short
+navigation point. Failed forward motion can try shorter checked straight
+escapes before repeating a pivot. Artillery stuck in a coarse navigation hole
+can rank alternate parking from its original connected spawn, while all
+movement still uses the live pose and native collision checks. Capture squads
+replace a member after twenty seconds without net progress when another
+eligible vehicle is available; vehicles inside the circle or fighting known
+contacts retain their places, and the three-vehicle limit remains unchanged.
+
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
 spawn groups and the large Grand Battle maps. The current package has neither

@@ -735,7 +735,7 @@ class BotPlanner(object):
             self._rebalance_routes(
                 team, team_bots, contacts[team], now, protected_ids)
             capture_ids = self._update_base_capture(
-                team, team_bots, capture_targets[team], protected_ids)
+                team, team_bots, capture_targets[team], protected_ids, now)
             assignments = self._assign_targets(team_bots, contacts[team], now)
             assignments = self._prioritize_base_invaders(
                 team, team_bots, contacts[team], assignments,
@@ -1312,6 +1312,7 @@ class BotPlanner(object):
                 "id": str(raw.get("id") or "%d:%d" %
                           (enemy_team, index)),
                 "point": _point(raw),
+                "radius": max(1.0, _number(raw.get("radius"), 50.0)),
             }
         return None
 
@@ -1341,7 +1342,7 @@ class BotPlanner(object):
         max_health = max(1.0, _number(state.get("max_health"), 1.0))
         return (distance / speed, -(health / max_health), bot["id"])
 
-    def _update_base_capture(self, team, bots, target, protected_ids):
+    def _update_base_capture(self, team, bots, target, protected_ids, now=0.0):
         """Keep a small, stable capture squad and replace lost members."""
         if target is None:
             self._base_capture[team] = {}
@@ -1363,14 +1364,43 @@ class BotPlanner(object):
         ]
         eligible = regulars if regulars else candidates
         eligible_by_id = dict((bot["id"], bot) for bot in eligible)
+        progress = state.setdefault('progress', {})
+        retired = state.setdefault('retired', {})
+        for bot_id in list(retired):
+            if bot_id not in eligible_by_id or now >= retired[bot_id]:
+                retired.pop(bot_id, None)
+        # A living member can still fail to reach the circle. Keep productive
+        # members and actual occupants; let nearby screens fill stalled slots.
+        replacement_budget = sum(1 for bot in eligible if bot['id'] not in
+                                 state.get('bot_ids', ()) and bot['id'] not in retired)
+        for bot_id in state.get('bot_ids', ()):
+            bot = eligible_by_id.get(bot_id)
+            if bot is None:
+                progress.pop(bot_id, None)
+                continue
+            distance = math.hypot(target['point']['x'] - _number(bot['state'].get('x')),
+                                  target['point']['z'] - _number(bot['state'].get('z')))
+            receipt = progress.setdefault(bot_id, dict(best=distance, since=now))
+            if (distance <= target.get('radius', 50.0) or
+                    self._contacts_for_bot(bot, self._contacts[team], now)):
+                receipt.update(best=distance, since=now)
+            elif distance < receipt['best'] - 0.25:
+                receipt.update(best=distance, since=now)
+            elif now - receipt['since'] >= 20.0:
+                alternatives = [other for other in eligible if other['id'] not in
+                                state.get('bot_ids', ()) and other['id'] not in retired]
+                if alternatives and replacement_budget > 0:
+                    retired[bot_id] = now + 30.0
+                    progress.pop(bot_id, None)
+                    replacement_budget -= 1
         selected = [
             bot_id for bot_id in state.get("bot_ids", ())
-            if bot_id in eligible_by_id
+            if bot_id in eligible_by_id and bot_id not in retired
         ][:MAX_BASE_CAPTURERS]
         missing = min(MAX_BASE_CAPTURERS, len(eligible)) - len(selected)
         if missing > 0:
             available = [
-                bot for bot in eligible if bot["id"] not in selected
+                bot for bot in eligible if bot["id"] not in selected and bot['id'] not in retired
             ]
             selected.extend(
                 bot["id"] for bot in sorted(
@@ -1379,6 +1409,12 @@ class BotPlanner(object):
                 )[:missing]
             )
         state["bot_ids"] = selected
+        for bot_id in selected:
+            if bot_id not in progress:
+                bot = eligible_by_id[bot_id]
+                distance = math.hypot(target['point']['x'] - _number(bot['state'].get('x')),
+                                      target['point']['z'] - _number(bot['state'].get('z')))
+                progress[bot_id] = dict(best=distance, since=now)
         return set(selected)
 
     def _capture_staged(self, bot, route_index):

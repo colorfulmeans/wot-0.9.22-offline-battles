@@ -99,8 +99,10 @@ class ParkedTrafficTests(unittest.TestCase):
 
     def test_boxed_driver_requests_both_proved_vehicle_exits(self):
         driver = LocalDriver(stuck_seconds=0.4)
-        neighbours = (body(29, 0., 8., speed=0.),
-                      body(19, 0., -8., speed=0.))
+        # Block even the minimum .5 m straight escape, not just the full
+        # recovery sweep: the driver can now use a smaller free hull gap.
+        neighbours = (body(29, 0., 7.25, speed=0.),
+                      body(19, 0., -7.25, speed=0.))
         for frame in range(20):
             order = driver.drive(
                 25, 9, (0., 0., 0.), 0., 0., .1, (40., 0., 0.),
