@@ -86,6 +86,12 @@ checks remain authoritative, and exact realised tree contacts retry separately
 when presentation/publication is pending. Exact-client gameplay remains the
 acceptance boundary for climbing, pushing and tree-felling behaviour.
 
+The same test branch separates Bot/wreck ground placement from vertical
+momentum. A support-height correction no longer becomes a launch impulse
+when a worker catch-up slice is short. Grounded momentum follows signed
+travel on the supported chassis plane; normal ramp departures, airborne
+gravity and landing damage remain active. Live #1513 playtesting is required.
+
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
 spawn groups and the large Grand Battle maps. The current package has neither

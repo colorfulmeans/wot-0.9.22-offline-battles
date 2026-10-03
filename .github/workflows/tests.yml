@@ -24,6 +24,7 @@ jobs:
         run: |
           python -m unittest test_port_0922_vehicle_physics test_port_0922_physics_regressions release097.test_096_contact_steering5
           python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_bot_motion_preserves_partial_steering_input
+          python -m unittest test_port_0922_bot_support_launch
           python -m unittest test_port_0922_bot_withdrawal test_port_0922_traffic test_port_0922_traffic_jam
           python -m unittest test_port_0922_withdrawal_runtime test_port_0922_wreck_contact_recovery test_port_0922_oct03_bot_egress test_port_0922_bot_rotation_drive test_port_0922_airfield_spawn test_port_0922_oct03_airfield_followup test_port_0922_bot_destructible_approach test_port_0922_destructibles test_port_0922_tree_followup test_port_0922_foliage_baker test_port_0922_foliage
           python -m unittest test_port_0922_contact_dynamics.GroundContactTests.test_hostile_side_contact_overrides_firing_hold_and_preserves_combat_target test_port_0922_contact_dynamics.GroundContactTests.test_korea_offset_side_contact_selects_checked_separating_end

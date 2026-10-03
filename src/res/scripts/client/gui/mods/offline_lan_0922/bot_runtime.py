@@ -7341,6 +7341,16 @@ class BotRuntime(object):
                 state['push_z'] = 0.0
                 self._turn_speeds[int(state['id'])] = 0.0
                 return True
+        # Support placement is a constraint correction, not acceleration.
+        # Dividing a probe-height change by a short catch-up slice can give a
+        # slow hull enough upward momentum to fly tens of metres. Retain only
+        # travel along the supported chassis plane, never the corridor ahead.
+        support_pitch = max(-vehicle_physics.GROUND_PITCH_LIMIT, min(
+            vehicle_physics.GROUND_PITCH_LIMIT, self._terrain_pitch(state)))
+        support_vertical_speed = -state['speed'] * math.tan(support_pitch)
+        if (state.get('grounded_once', False) and
+                not state.get('airborne', False)):
+            state['vertical_speed'] = support_vertical_speed
         snap_gap = vehicle_physics.ground_follow_gap(
             state['speed'], state.get('last_drive_pitch', 0.0), step)
         highest, centre = self._terrain_support(state, snap_gap)
@@ -7416,21 +7426,19 @@ class BotRuntime(object):
                        state.get('vertical_speed', 0.0), step))):
                 impact_speed = (state.get('vertical_speed', 0.0)
                                 if state.get('airborne', False) else 0.0)
-                previous_y = state['y']
                 if state['y'] < ground:
                     rise = ground - state['y']
                     state['y'] += min(rise, max_climb)
                 else:
                     state['y'] = ground
                 state['vertical_speed'] = (
-                    (state['y'] - previous_y) / step
-                    if step > 0.0 and not state.get('airborne', False)
-                    else 0.0)
+                    support_vertical_speed
+                    if not state.get('airborne', False) else 0.0)
                 state['airborne'] = False
                 if impact_speed < 0.0:
                     self._apply_bot_landing_impact(state, impact_speed)
             else:
-                # Retain only the vertical travel observed on the support.
+                # Retain only the physical tangent velocity on the support.
                 # A corridor beyond a level bridge may already see a bank or
                 # no ground; neither can launch this hull off the deck.
                 state['airborne'] = True
