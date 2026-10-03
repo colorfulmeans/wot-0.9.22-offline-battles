@@ -3128,7 +3128,14 @@ def _stream_baked_motion_instances_1513(spaceID, vehicle_box):
 	instances = globals().get('g_offh_destr_instances', {})
 	unresolved = []
 	cache = globals().get('g_offh_destr_unresolved_obstacles')
-	for identity in sorted(identities):
+	def contact_priority(identity):
+		baked = catalog.get('baked_instances', {}).get(identity)
+		contact = baked is not None and any(_catalog_intersections(
+			baked['boxes'], vehicle_box))
+		return (0 if contact else 1, identity)
+	# The four close-contact name proofs must serve the hull touching a prop
+	# before distant models which merely share its broad-phase spatial bin.
+	for identity in sorted(identities, key=contact_priority):
 		combat_count('destructible_stream_candidates')
 		if identity in instances:
 			if cache is not None:

@@ -23,7 +23,7 @@ jobs:
           PYTHONPATH: tests:server:src/res/scripts/client
         run: |
           python -m unittest test_port_0922_bot_withdrawal test_port_0922_traffic test_port_0922_traffic_jam
-          python -m unittest test_port_0922_withdrawal_runtime test_port_0922_wreck_contact_recovery test_port_0922_oct03_bot_egress test_port_0922_bot_rotation_drive test_port_0922_oct03_bot_egress test_port_0922_bot_rotation_drive
+          python -m unittest test_port_0922_withdrawal_runtime test_port_0922_wreck_contact_recovery test_port_0922_oct03_bot_egress test_port_0922_bot_rotation_drive test_port_0922_airfield_spawn test_port_0922_bot_destructible_approach test_port_0922_destructibles
           python -m unittest test_port_0922_contact_dynamics.GroundContactTests.test_hostile_side_contact_overrides_firing_hold_and_preserves_combat_target test_port_0922_contact_dynamics.GroundContactTests.test_korea_offset_side_contact_selects_checked_separating_end
           python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_contact_escape_final_probe_uses_the_admitted_short_sweep
           python -m unittest test_port_0922_wreck_route_switch test_port_0922_bot_state_codec test_port_0922_server_bot_ai test_port_0922_authored_route_waits test_port_0922_radio_routes
@@ -31,7 +31,7 @@ jobs:
           python -m unittest test_port_0922_gameplay_followup.AimProgressTests
       - name: Compile changed client code under Python 2.7
         run: |
-          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; root='src/res/scripts/client/gui/mods/offline_lan_0922'; paths=['ai/adapter.py','ai/driver.py','ai/traffic.py','bot_runtime.py','bot_state_codec.py','battle_runtime.py','battle_runtime.py']; [compile(open(os.path.join(root,p),'rb').read(),p,'exec') for p in paths]; print('Changed client code compiles under Python 2.7')"
+          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; root='src/res/scripts/client/gui/mods/offline_lan_0922'; paths=['ai/adapter.py','ai/driver.py','ai/traffic.py','bot_runtime.py','bot_state_codec.py','battle_runtime.py','destructibles_sensor.py']; [compile(open(os.path.join(root,p),'rb').read(),p,'exec') for p in paths]; print('Changed client code compiles under Python 2.7')"
   test:
     needs: windows-server
     runs-on: ubuntu-latest

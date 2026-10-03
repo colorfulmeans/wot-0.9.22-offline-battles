@@ -89,7 +89,7 @@ jobs:
                             for x in code.co_consts),
                       code.co_names, code.co_varnames, code.co_freevars,
                       code.co_cellvars, code.co_firstlineno, code.co_lnotab)
-          paths = ['ai/adapter.py', 'ai/driver.py', 'ai/traffic.py', 'bot_runtime.py', 'bot_state_codec.py', 'battle_runtime.py']
+          paths = ['ai/adapter.py', 'ai/driver.py', 'ai/traffic.py', 'bot_runtime.py', 'bot_state_codec.py', 'battle_runtime.py', 'destructibles_sensor.py']
           prefix = 'res/scripts/client/gui/mods/offline_lan_0922/'
           with zipfile.ZipFile(glob.glob('dist/*.wotmod')[0]) as mod:
               assert mod.testzip() is None
@@ -100,7 +100,7 @@ jobs:
                   expected = compile(open('src/' + prefix + path, 'rb').read(),
                                      actual.co_filename, 'exec')
                   assert signature(actual) == signature(expected), path
-          print('Verified all six packaged Bot modules against source.')
+          print('Verified all seven packaged Bot modules against source.')
           PY
       - name: Validate 0.9.22 client package
         run: >-

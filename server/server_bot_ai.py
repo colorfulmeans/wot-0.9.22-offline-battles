@@ -1119,6 +1119,10 @@ class BotPlanner(object):
         for team in (1, 2):
             incident = self._base_defense.setdefault(team, {})
             responders = incident.setdefault("responders", {})
+            blocked_until = incident.setdefault("blocked_until", {})
+            for bot_id, deadline in list(blocked_until.items()):
+                if _number(now) >= deadline:
+                    del blocked_until[bot_id]
             live = dict((bot["id"], bot) for bot in live_by_team[team])
             for bot_id in list(responders):
                 if bot_id not in live:
@@ -1159,6 +1163,26 @@ class BotPlanner(object):
                     continue
             else:
                 incident["clear_since"] = None
+                # A nearest responder can be wedged among spawn props. Keep
+                # arrived defenders, but replace a travelling tank which has
+                # made no real approach for ten seconds when a backup exists.
+                for bot_id, record in list(responders.items()):
+                    state = live[bot_id]["state"]
+                    point = record["point"]
+                    distance = math.hypot(
+                        point["x"] - _number(state.get("x")),
+                        point["z"] - _number(state.get("z")))
+                    if ("best_distance" not in record or
+                            distance + 1.0 <= record["best_distance"]):
+                        record["best_distance"] = distance
+                        record["last_progress_at"] = _number(now)
+                    backups = [value for value in live
+                               if value not in responders and
+                               value not in blocked_until]
+                    if (distance > ROUTE_ARRIVAL_RADIUS and backups and
+                            _number(now) - record["last_progress_at"] >= 10.0):
+                        blocked_until[bot_id] = _number(now) + 15.0
+                        del responders[bot_id]
                 desired = min(MAX_BASE_DEFENDERS, max(1, invaders))
                 if len(live) > 1:
                     desired = min(desired, len(live) - 1)
@@ -1222,7 +1246,8 @@ class BotPlanner(object):
                         0.0, _number(raw_state.get("time_left")) - 2.0)
                     candidates = []
                     for bot in live.values():
-                        if bot["id"] in responders:
+                        if (bot["id"] in responders or
+                                bot["id"] in blocked_until):
                             continue
                         selected = min(points, key=lambda value: (
                             math.hypot(

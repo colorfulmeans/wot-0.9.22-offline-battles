@@ -47,6 +47,7 @@ class BotAdapter(object):
         self._contact_peers = {}
         self._contact_attempts = {}
         self._wreck_attempts = {}
+        self._navigation_waits = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
         return self.director.register(bot_id, team, descriptor, display_name)
@@ -57,6 +58,7 @@ class BotAdapter(object):
         self._contact_peers.pop(int(bot_id), None)
         self._contact_attempts.pop(int(bot_id), None)
         self._wreck_attempts.pop(int(bot_id), None)
+        self._navigation_waits.pop(int(bot_id), None)
 
     def _hull_contact(self, bot_id, state, position):
         """Return geometry for a real hull contact across small gaps."""
@@ -390,6 +392,26 @@ class BotAdapter(object):
             requested_dx * requested_dx + requested_dz * requested_dz > 225.0 and
             target_dx * target_dx + target_dz * target_dz <=
             WAYPOINT_ARRIVAL_RADIUS * WAYPOINT_ARRIVAL_RADIUS)
+        if navigation_wait:
+            wait = self._navigation_waits.get(bot_id)
+            distance = math.hypot(requested_dx, requested_dz)
+            if (wait is None or math.hypot(
+                    wait['goal'][0] - move_position[0],
+                    wait['goal'][2] - move_position[2]) > 2.0):
+                wait = {'goal': move_position, 'best': distance, 'elapsed': 0.0}
+                self._navigation_waits[bot_id] = wait
+            elif distance + 0.5 <= wait['best']:
+                wait['best'] = distance
+                wait['elapsed'] = 0.0
+            wait['elapsed'] += max(0.0, float(state.get('dt', 0.0)))
+            if wait['elapsed'] >= 8.0:
+                # A resumable search gets a short quiet window. It cannot park
+                # an actor forever: let the existing native-checked driver
+                # escape locally while the search continues on later ticks.
+                target = move_position
+                navigation_wait = False
+        else:
+            self._navigation_waits.pop(bot_id, None)
         if contact_plan is not None:
             local = contact_plan[1]
         elif navigation_wait:

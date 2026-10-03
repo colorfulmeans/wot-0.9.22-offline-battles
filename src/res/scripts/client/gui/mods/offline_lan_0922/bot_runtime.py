@@ -12035,6 +12035,13 @@ class BotRuntime(object):
                         state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
                         self._neighbours_for(state, neighbours)) < 1.0:
                     return False
+                if callable(self.rotation_resolver):
+                    # Coarse baked cells preserve standing structures even
+                    # after their crushable modules disappear. A realised
+                    # spawn can therefore cover a missing navigation cell.
+                    # Native commit checks the complete pivot and retains its
+                    # refused sweeps above; the bake must not veto every yaw.
+                    return True
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
                 if not callable(pose_probe):
