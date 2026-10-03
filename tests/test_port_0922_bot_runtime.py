@@ -16874,6 +16874,39 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertIn('frozen=True', output.getvalue())
             self.assertIn('strategic_goal=(0.0, 0.0, 200.0)', output.getvalue())
 
+    def test_navigation_receipt_is_bounded_and_does_not_query_world(self):
+        from contextlib import redirect_stdout
+        from unittest.mock import Mock
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainNavigator
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        state['x'], state['z'] = -333.01, -195.16
+        graph = json.loads((ROOT / 'navgraphs/31_airfield.json').read_text())
+        ground, collision = Mock(side_effect=AssertionError('extra ground query')), Mock(side_effect=AssertionError('extra collision query'))
+        nav = TerrainNavigator(ground, collision, baked_graph=graph)
+        self.runtime.navigator = nav
+        key = ('route', 2, 'central', 0)
+        nav.bot_states[11] = dict(path_key=key, index=20,
+            navigation_status='pending', pending_since=0.0,
+            local_fallback=dict(at=2.0, attempted=18, missing_ground=18))
+        nav.paths[key] = tuple((float(i), 0.0, 0.0) for i in range(200))
+        order = dict(recovery_mode='nav_wait', movement_intent=True, combat_mode='route')
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.runtime._log_motion_stall(state, order, 0.0, 0.0, True, {}, 0.0)
+            self.runtime._log_motion_stall(state, order, 0.0, 0.0, True, {}, 3.0)
+            self.runtime._finish_motion_stall(state, False, False,
+                (state['x'], state['y'], state['z']))
+        row = json.loads(output.getvalue().split('[BOT MOTION] ', 1)[1])
+        receipt = row['navigation']
+        self.assertEqual(7, len(receipt['path_near_target']))
+        self.assertEqual(200, receipt['path_length'])
+        self.assertEqual(9, len(receipt['nearby_cells']))
+        self.assertIsNone(receipt['nearby_cells'][4]['height'])
+        self.assertEqual(18, receipt['local_fallback']['missing_ground'])
+        ground.assert_not_called()
+        collision.assert_not_called()
+
     def test_stall_diagnostic_keeps_airfield_vehicle_rotation_veto(self):
         from contextlib import redirect_stdout
         self.runtime.battle_start(self.start)

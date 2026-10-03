@@ -672,11 +672,27 @@ class LocalDriver(object):
 				objective_advanced = True
 				progress['best'] = distance
 				progress['at'] = state['clock']
+				progress.pop('alignment_yaw', None)
+				progress.pop('alignment_best', None)
 			elif distance + 0.002 < progress['best']:
 				# Slow uphill travel can take longer than the local stuck timeout
 				# to accumulate 8 cm. Credit its direction while the independent
 				# best-distance clock still bounds sub-threshold oscillation.
 				objective_advanced = True
+			# A deliberate brake-and-align can outlast the distance lease on
+			# a slow chassis. Credit actual new hull angles against ONE anchor
+			# per objective-progress episode. Changing local targets must not
+			# renew this anchor and disguise an endless left/right orbit.
+			if (state.get('alignment_target') is not None and
+					state['recovery_time'] <= 0.0):
+				if progress.get('alignment_yaw') is None:
+					progress['alignment_yaw'] = _yaw_to(position, state['alignment_target'])
+					progress['alignment_best'] = abs(_angle_delta(progress['alignment_yaw'], yaw))
+				else:
+					error = abs(_angle_delta(progress['alignment_yaw'], yaw))
+					if error + 0.002 < progress['alignment_best']:
+						progress['alignment_best'] = error
+						progress['at'] = state['clock']
 			objective_stalled = state['clock'] - progress['at'] >= 8.0
 		if target_distance <= WAYPOINT_ARRIVAL_RADIUS and not objective_stalled:
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)

@@ -1027,7 +1027,7 @@ class TerrainGrid(object):
 
 	def safe_local_target(self, current, goal, now, avoid_points=None,
 			side_preference=1.0, edge_penalties=None,
-			minimum_offset=0.0):
+			minimum_offset=0.0, diagnostic=None):
 		"""Choose one short, fully probed detour when the global search fails.
 
 		This is deliberately not a direct-to-goal fallback. Every candidate must
@@ -1035,6 +1035,11 @@ class TerrainGrid(object):
 		no remembered failed edge. Returning ``None`` means the only safe action is
 		to stop and retry the global planner later.
 		"""
+		if diagnostic is not None:
+			diagnostic.clear()
+			diagnostic.update(at=float(now), current=tuple(current), goal=tuple(goal),
+				attempted=0, missing_ground=0, failed_edge=0, shallow_or_unknown=0,
+				corridor_rejected=0, private_edge=0, accepted=0, selected=None)
 		dx = float(goal[0]) - float(current[0])
 		dz = float(goal[2]) - float(current[2])
 		if abs(dx) + abs(dz) < 0.1:
@@ -1054,24 +1059,46 @@ class TerrainGrid(object):
 				yaw = desired_yaw + offset
 				x = float(current[0]) + math.sin(yaw) * distance
 				z = float(current[2]) + math.cos(yaw) * distance
+				if diagnostic is not None:
+					diagnostic['attempted'] += 1
 				y = self._ground(x, z, float(current[1]))
 				if y is None:
+					if diagnostic is not None:
+						diagnostic['missing_ground'] += 1
 					continue
 				candidate = (x, y, z)
-				if not self.dry_segment_clear(current, candidate, now):
+				# Preserve the predicate order and query count while retaining
+				# the first rejection. These are receipts, never extra probes.
+				reason = None
+				if self.segment_penalty(current, candidate, now) > 0.0:
+					reason = 'failed_edge'
+				elif self.segment_has_baked_hazard(current, candidate, BAKED_SHALLOW_WATER):
+					reason = 'shallow_or_unknown'
+				elif not self.segment_clear(current, candidate):
+					reason = 'corridor_rejected'
+				if reason is not None:
+					if diagnostic is not None:
+						diagnostic[reason] += 1
 					continue
 				if (edge_penalties and any(
 						edge in edge_penalties
 						for edge in self._edge_keys_for_segment(
 							current, candidate))):
+					if diagnostic is not None:
+						diagnostic['private_edge'] += 1
 					continue
+				if diagnostic is not None:
+					diagnostic['accepted'] += 1
 				cell = self.cell_for(candidate)
 				score = (_distance_2d(candidate, goal) + abs(offset) * 3.5 +
 					         self._penalty(cell, avoid_points, False) * 2.0)
 				value = (score, abs(offset), candidate)
 				if best is None or value[:2] < best[:2]:
 					best = value
-		return best[2] if best is not None else None
+		selected = best[2] if best is not None else None
+		if diagnostic is not None:
+			diagnostic['selected'] = selected
+		return selected
 
 	def plan(self, start, goal, avoid_points=None, max_expansions=1600, now=0.0,
 			prefer_clearance=True, edge_penalties=None,
@@ -1438,7 +1465,8 @@ class TerrainNavigator(object):
 			fallback = self.grid.safe_local_target(
 				current, goal, now, avoid_points,
 				1.0 if (int(bot_id) % 2) else -1.0,
-				self._active_planning_edge_penalties(bot_id, now))
+				self._active_planning_edge_penalties(bot_id, now),
+				diagnostic=state.setdefault('local_fallback', {}))
 			if fallback is not None:
 				state['last_target'] = tuple(fallback)
 				state['navigation_status'] = 'safe'
@@ -1501,7 +1529,8 @@ class TerrainNavigator(object):
 			fallback = self.grid.safe_local_target(
 				current, goal, now, avoid_points,
 				1.0 if (int(bot_id) % 2) else -1.0,
-				self._active_planning_edge_penalties(bot_id, now))
+				self._active_planning_edge_penalties(bot_id, now),
+				diagnostic=state.setdefault('local_fallback', {}))
 			if fallback is not None:
 				state['last_target'] = tuple(fallback)
 				state['navigation_status'] = 'pending'
@@ -1589,7 +1618,7 @@ class TerrainNavigator(object):
 			current, goal, now, None,
 			1.0 if (bot_id % 2) else -1.0,
 			self._active_planning_edge_penalties(bot_id, now),
-			FIRST_CANDIDATE_OFFSET)
+			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}))
 		state['target'] = tuple(goal)
 		state['position'] = tuple(current)
 		state['progress_at'] = float(now)
@@ -1607,7 +1636,7 @@ class TerrainNavigator(object):
 			current, target, now, None,
 			1.0 if (int(bot_id) % 2) else -1.0,
 			self._active_planning_edge_penalties(bot_id, now),
-			FIRST_CANDIDATE_OFFSET)
+			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}))
 		key = self.grid._edge_cells_for_segment(current, target)
 		if key is None and escape is None:
 			return False

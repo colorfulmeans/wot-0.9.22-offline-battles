@@ -6499,21 +6499,81 @@ class BotRuntime(object):
         moved = (previous is not None and
                  (position[0] - previous[0][0]) ** 2 +
                  (position[2] - previous[0][2]) ** 2 >= 0.25)
+        roaming = state.get('_motion_roaming_log')
+        if not command.get('movement_intent'):
+            state.pop('_motion_roaming_log', None)
+            roaming = None
+        elif roaming is None or _distance(position, roaming[0]) > 8.0:
+            roaming = (position, now, now)
+            state['_motion_roaming_log'] = roaming
+        roaming_due = roaming is not None and now - roaming[2] >= 15.0
+        stationary_due = previous is not None and not moved and now - previous[1] >= 3.0
         if previous is None or moved:
             state['_motion_stall_log'] = (position, now)
+        if not stationary_due and not roaming_due:
             return
-        if now - previous[1] < 3.0:
-            return
-        state['_motion_stall_log'] = (previous[0], now)
+        if stationary_due:
+            state['_motion_stall_log'] = (previous[0], now)
+        if roaming is not None:
+            state['_motion_roaming_log'] = (roaming[0], roaming[1], now)
         cached = self._decision_cache.get(state['id'])
         planner_age = now - cached[2] if cached is not None else -1.0
         probe = motion_probe if isinstance(motion_probe, dict) else {}
         strategic = self._server_orders.get(state['id']) or {}
+        nav = self.navigator
+        nav_state = getattr(nav, 'bot_states', {}).get(int(state['id']), {})
+        path = getattr(nav, 'paths', {}).get(nav_state.get('path_key')) or ()
+        index = max(0, int(nav_state.get('index', 0)))
+        navigation = {key: nav_state.get(key) for key in (
+            'navigation_status', 'index', 'last_target', 'planned_goal',
+            'planned_at', 'pending_since', 'macro_progress_at',
+            'macro_progress_replans', 'blocked_step_replans', 'replan_active')}
+        navigation['path_near_target'] = tuple(path[max(0, index - 1):index + 6])
+        navigation['path_length'] = len(path)
+        navigation['local_fallback'] = dict(nav_state.get('local_fallback') or {})
+        navigation['direct_fallback'] = dict(
+            getattr(nav, 'bot_direct_progress', {}).get(int(state['id']), {}).get(
+                'local_fallback') or {})
+        navigation['pending_jobs'] = len(getattr(nav, 'searches', {}))
+        search_times = getattr(nav, 'search_times', {})
+        navigation['oldest_job_age'] = max(0.0, now - min(search_times.values())) if search_times else 0.0
+        grid = getattr(nav, 'grid', None)
+        if grid is not None and getattr(grid, 'prebaked', False):
+            cells = []
+            center = grid.cell_for(position)
+            for dx in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    cell = (center[0] + dx, center[1] + dz)
+                    flat = grid._baked_flat_index(cell)
+                    cells.append(dict(cell=cell,
+                        height=grid._baked_cell_height(cell),
+                        links=grid._baked_links[flat] if flat is not None else None,
+                        hazards=grid._baked_hazards[flat] if flat is not None else None))
+            navigation['nearby_cells'] = cells
+        driver_state = getattr(getattr(self.adapter, 'driver', None), 'states', {}).get(int(state['id']), {})
+        driver_trace = {key: driver_state.get(key) for key in (
+            'clock', 'stuck_time', 'recovery_time', 'recovery_count',
+            'alignment_target', 'heading_progress_yaw', 'best_heading_error')}
+        driver_trace['objective_progress'] = dict(driver_state.get('objective_progress') or {})
+        driver_trace['navigation_wait'] = dict(
+            getattr(self.adapter, '_navigation_waits', {}).get(int(state['id']), {}) or {})
         # Finish this rare diagnostic after every authority gate has run.
         # The control verdict alone cannot explain a later pose rollback.
         state['_motion_stall_pending'] = {
             'id': int(state['id']), 'vehicle': state.get('vehicle'),
             'native_motion': bool(self.native_motion),
+            'navigation': navigation, 'driver': driver_trace,
+            'decision': {key: command.get(key) for key in (
+                'combat_mode', 'recovery_mode', 'movement_intent',
+                'traffic_mode', 'move_position', 'target_yaw', 'brake')},
+            'strategic': {key: strategic.get(key) for key in (
+                'combat_mode', 'move_position', 'route_id', 'route_index',
+                'route_anchor', 'route_join', 'target_id')},
+            'motion_diagnostic': 'stationary' if stationary_due else 'local_roaming',
+            'local_roaming': None if stationary_due else dict(
+                anchor=roaming[0], elapsed=now - roaming[1],
+                net_distance=_distance(position, roaming[0]),
+                reason='movement_reset_stationary_timer'),
             'start': position, 'speed_before': state.get('speed', 0.0),
             'requested_throttle': throttle, 'turn': turn,
             'yaw': state.get('yaw'), 'pitch': state.get('pitch'),

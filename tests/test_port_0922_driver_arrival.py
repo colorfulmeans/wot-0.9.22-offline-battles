@@ -142,6 +142,39 @@ class DriverArrivalTests(unittest.TestCase):
         self.assertEqual(aligned['throttle'], 1.0)
         self.assertFalse(aligned['brake'])
 
+    def test_slow_fixed_alignment_outlasts_macro_distance_timeout(self):
+        driver = LocalDriver()
+        for frame in range(121):
+            # A 90-degree turn at 6 degrees/s takes fifteen seconds.
+            command = self._orbit_command(driver, speed=0.0,
+                yaw=-math.radians(frame * .6),
+                progress_target=(0.0, 0.0, 200.0),
+                turn_speed_limit=math.radians(6.0))
+            self.assertEqual('drive', command['recovery_mode'])
+            self.assertTrue(command['brake'])
+        self.assertEqual(0, driver.states[17]['recovery_count'])
+
+    def test_stalled_or_oscillating_alignment_still_recovers(self):
+        for oscillating in (False, True):
+            driver = LocalDriver()
+            modes = []
+            for frame in range(130):
+                command = self._orbit_command(driver, speed=0.0,
+                    yaw=(-.15 if frame % 2 else 0.0) if oscillating else 0.0,
+                    progress_target=(0.0, 0.0, 200.0))
+                modes.append(command['recovery_mode'])
+            self.assertTrue(any(mode != 'drive' for mode in modes))
+
+    def test_changing_local_targets_cannot_reset_alignment_credit(self):
+        driver = LocalDriver(stuck_seconds=100.0)
+        modes = []
+        for frame in range(180):
+            yaw = -.1 if frame % 2 else -.2
+            target = (-3.0, 0.0, 1.0 if frame % 2 else -1.0)
+            modes.append(self._orbit_command(driver, speed=0.0, yaw=yaw,
+                target=target, progress_target=(0.0, 0.0, 200.0))['recovery_mode'])
+        self.assertTrue(any(mode != 'drive' for mode in modes))
+
     def test_hold_reverse_new_goal_and_missing_physics_clear_alignment(self):
         for override in ({'movement_intent': False}, {'speed': -1.0},
                          {'target': (0.0, 0.0, 40.0)},

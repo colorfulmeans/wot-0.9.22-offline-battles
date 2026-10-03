@@ -44,6 +44,13 @@ launches retain English unless `WOT_OFFLINE_UI_LANGUAGE=zh` is set.
 When you host, approve the UAC prompt that opens TCP 28782 for the launcher.
 Run the server only on a network you trust.
 
+Bot error reports automatically include bounded motion and navigation receipts:
+stationary hulls at most once per three seconds, and hulls circling inside an
+eight-metre pocket at most once per fifteen seconds. The receipts include nearby
+baked cells, local fallback rejection counts, the next path points and alignment
+timers, without extra native ground or collision queries. Reproduce the problem
+and export the launcher's error report; no debug switch is required.
+
 ## The garage
 
 The 0.9.22 client gets a working offline garage:
