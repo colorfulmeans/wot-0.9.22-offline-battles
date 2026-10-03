@@ -83,6 +83,21 @@ _GREAT_WALL_PASSAGE_X = 404.0
 # confirmed by the user's route review and by the pinned client's terrain,
 # water and compiled BSP data; none of their limits relax the global baker.
 _REVIEWED_NARROW_CORNER_CONTRACTS = {
+    '31_airfield': (
+        {
+            'id': 'airfield_west_east_exit_first_corner',
+            'points': ((-314.0, -186.0), (-310.0, -190.0)),
+            'side_states': {(-314.0, -190.0): 0},
+        },
+        {
+            'id': 'airfield_west_east_exit_second_corner',
+            'points': ((-306.0, -190.0), (-302.0, -194.0)),
+            'side_states': {
+                (-306.0, -194.0): 0,
+                (-302.0, -190.0): 0,
+            },
+        },
+    ),
     '84_winter': ({
         'id': 'winter_south_safe_diagonal',
         'points': ((126.0, -278.0), (130.0, -274.0)),
@@ -1444,7 +1459,7 @@ def _add_reversible_path_links(graph, cells, indices, label):
 
 def install_reviewed_narrow_corner_link(graph, terrain, obstacles, legacy,
                                         contract):
-    """Add one exact safe diagonal while leaving both blocked side cells shut."""
+    """Add one exact safe diagonal while leaving blocked side cells shut."""
     label = str(contract['id'])
     points = tuple(tuple(point) for point in contract['points'])
     if len(points) != 2:
@@ -1925,6 +1940,56 @@ def expand_stationary_routes(graph, routes, bases, legacy):
                 graph, path, hold_nodes, 16, set((start, goal)))
             if len(route['waypoints']) < 2:
                 raise ValueError('stationary route expansion is incomplete')
+    return routes
+
+
+def bake_airfield_road_routes(graph, routes, legacy):
+    """Keep the reviewed exits and bends away from reported ridge goals.
+
+    These are lane gates, not new ground or collision exemptions. Every leg
+    still follows retained links; the two west-exit corner links are installed
+    separately only after exact terrain, hull clearance and grade validation.
+    Preserve the gates when reducing the path to the existing 16-point wire.
+    """
+    if graph.get('map') != '31_airfield':
+        return routes
+    corridors = {
+        'north_runway': (
+            (446, -58), (410, -10), (335, 115), (273, 248),
+            (59, 285), (-270, 201), (-342, -34), (-370, -94)),
+        'central_ridges': (
+            (446, -58), (410, -10), (390, 18), (296, 36), (139, 84),
+            (66, 46), (-42, 98), (-270, -35), (-310, -22),
+            (-334, -66), (-370, -94)),
+        'south_towns': (
+            (204, -239), (150, -270), (110, -334), (50, -334),
+            (34, -266), (-70, -260), (-234, -206), (-286, -194)),
+    }
+    holds = {'north_runway': (59, 285),
+             'central_ridges': (-42, 98), 'south_towns': (-70, -260)}
+    for route in routes.get('1', ()):
+        route_id = route['id']
+        points = [graph['bases'][0]] + list(corridors[route_id]) + [graph['bases'][1]]
+        projected = []
+        for point in points:
+            node, offset = legacy._nearest_node(graph, point)
+            if node is None or offset > graph['cell_size']:
+                raise UnsafeBakeInputError('Airfield road gate lost its ground')
+            projected.append(node)
+        path = []
+        for first, second in zip(projected, projected[1:]):
+            segment, unused_distance = legacy._graph_path(graph, first, second)
+            if not segment:
+                raise UnsafeBakeInputError('Airfield road gates are disconnected')
+            path.extend(segment if not path else segment[1:])
+        hold = min(path, key=lambda index: math.hypot(
+            legacy._node_point(graph, index)[0] - holds[route_id][0],
+            legacy._node_point(graph, index)[1] - holds[route_id][1]))
+        route['waypoints'] = legacy._sample_route_path(
+            graph, path, set([hold]), 16, projected)
+        issue = legacy._route_geometry_issue(route['waypoints'])
+        if issue is not None:
+            raise UnsafeBakeInputError('Airfield road geometry: %s' % issue)
     return routes
 
 
@@ -2609,6 +2674,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
                 routes = original_bake_routes(graph, adjusted)
                 routes = expand_stationary_routes(
                     graph, routes, adjusted['bases'], legacy)
+                routes = bake_airfield_road_routes(graph, routes, legacy)
                 return canonicalize_reversible_routes(graph, routes)
             legacy.bake_tactical_routes = bake_routes
             legacy.validate_graph = lambda graph, unused_config: original_validate(graph, safe_config(graph))

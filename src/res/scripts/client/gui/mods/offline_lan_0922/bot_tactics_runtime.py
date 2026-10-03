@@ -6,6 +6,7 @@ Never reads unobserved enemy locations or alters native collision/shot rules.
 All geometric checks here are baked navigation checks, not native mesh/arc proof.
 """
 import copy
+import heapq
 import math
 import random
 
@@ -23,13 +24,61 @@ def graph_view(name, graph):
     return spg_positions._Graph(view, config.MAPS[name]['bounds'])
 
 
+def _route_reachable(grid, position, target):
+    """Prove only the requested directed connection, without a full flood.
+
+    Route admission needs membership, not shortest distances to every map
+    cell. Prefer cells near the destination, but exhaust the legal graph if
+    necessary. Never add a missing link or jump to a nearby free square.
+    """
+    start = grid.closest(position)
+    if start is None or target is None:
+        return False
+    cache = getattr(grid, '_route_reachability', None)
+    if cache is None:
+        cache = grid._route_reachability = {}
+        grid._route_usable = {}
+    key = (start, target)
+    if key in cache:
+        return cache[key]
+    target_row, target_col = divmod(target, grid.width)
+    visited = set([start])
+    todo = [(0, start)]
+    while todo:
+        unused_priority, index = heapq.heappop(todo)
+        if index == target:
+            cache[key] = True
+            return True
+        row, col = divmod(index, grid.width)
+        for bit, (dx, dz) in enumerate(grid.directions):
+            if not int(grid.links[index]) & (1 << bit):
+                continue
+            nx, nz = col + dx, row + dz
+            if not (0 <= nx < grid.width and 0 <= nz < grid.height):
+                continue
+            following = nz * grid.width + nx
+            if following in visited:
+                continue
+            usable = grid._route_usable.get(following)
+            if usable is None:
+                usable = grid.usable(following)
+                grid._route_usable[following] = usable
+            if not usable:
+                continue
+            visited.add(following)
+            heapq.heappush(todo, ((nx-target_col)**2 + (nz-target_row)**2,
+                                  following))
+    cache[key] = False
+    return False
+
+
 def validate_route(grid, route):
     previous = None
     for point in route['points']:
         target = grid.closest((point[0], 0, point[1]))
         if target is None:
             return 'waypoint_unusable'
-        if previous is not None and target not in grid.distances(previous):
+        if previous is not None and not _route_reachable(grid, previous, target):
             return 'waypoints_disconnected'
         previous = grid.point(target)
     return None
@@ -54,14 +103,14 @@ def assign_routes(profile, name, graph, states, round_id):
         applicable = [r for r in routes if config.matches(r, state)]
         if not applicable:
             continue
-        distances = grid.distances((state['x'], state['y'], state['z']))
         available = []
         for route in applicable:
             if errors[route['id']] or usage.get(route['id'], 0) >= route['capacity']:
                 continue
             p = route['points'][0]
             target = grid.closest((p[0], 0, p[1]))
-            if target not in distances:
+            if not _route_reachable(grid,
+                    (state['x'], state['y'], state['z']), target):
                 continue
             # A deterministic weighted draw without global random-state changes.
             seed = '%s:%s:%s:%s' % (config.digest(profile), round_id, state['id'], route['id'])

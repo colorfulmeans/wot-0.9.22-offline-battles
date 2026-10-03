@@ -29,9 +29,10 @@ jobs:
           python -m unittest test_port_0922_wreck_route_switch test_port_0922_bot_state_codec test_port_0922_server_bot_ai test_port_0922_authored_route_waits test_port_0922_radio_routes
           python -m unittest test_port_0922_artillery_controller test_port_0922_spg_tracking
           python -m unittest test_port_0922_gameplay_followup.AimProgressTests
+          python -m unittest test_port_0922_airfield_routes_loading test_port_0922_bot_tactics_editor
       - name: Compile changed client code under Python 2.7
         run: |
-          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; root='src/res/scripts/client/gui/mods/offline_lan_0922'; paths=['ai/adapter.py','ai/driver.py','ai/traffic.py','bot_runtime.py','bot_state_codec.py','battle_runtime.py','destructibles_sensor.py']; [compile(open(os.path.join(root,p),'rb').read(),p,'exec') for p in paths]; print('Changed client code compiles under Python 2.7')"
+          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; root='src/res/scripts/client/gui/mods/offline_lan_0922'; paths=['ai/adapter.py','ai/driver.py','ai/traffic.py','bot_runtime.py','bot_state_codec.py','battle_runtime.py','destructibles_sensor.py','bot_tactics_runtime.py','bot_editor_maps.py']; [compile(open(os.path.join(root,p),'rb').read(),p,'exec') for p in paths]; print('Changed client code compiles under Python 2.7')"
   test:
     needs: windows-server
     runs-on: ubuntu-latest

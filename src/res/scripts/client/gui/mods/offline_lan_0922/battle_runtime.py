@@ -5597,11 +5597,19 @@ class BattleRuntime(object):
         return prepare(start, end) if callable(prepare) else None
 
     def _collide_navigation(self, start, end, trace=None):
-        """Query native route geometry without a physical broken-skin recast."""
+        """Plan against live geometry and release proved broken BSP skins."""
         collision_filter = self._navigation_collision_filter(start, end)
         if trace is not None:
             collision_filter = world_collision._trace_collision_filter(
                 collision_filter, trace)
+        collide = getattr(self._destructibles, 'collide_motion_segment', None)
+        if callable(collide):
+            # Merged original BSP keys may survive after an accepted prop is
+            # hidden. Use the same bounded identity proof as physical motion;
+            # intact neighbours, replacements and backing walls remain solid.
+            return collide(self._avatar.spaceID, start, end, collision_filter,
+                self._runtime.bigworld.wg_collideSegment,
+                'native.navigation.ray')
         args = (self._avatar.spaceID, start, end, VEHICLE_SKIP_FLAGS)
         if collision_filter is not None:
             args += (collision_filter,)
