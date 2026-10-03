@@ -735,8 +735,9 @@ class LocalDriver(object):
 			# map and leaves an in-place turn as the only recovery in exactly
 			# the places where a hull cannot turn.
 			escape_distance = own_half_length * 1.6
-			reverse_clear = self._clear(
-				direction_clear, float(yaw) + math.pi, escape_distance)
+			reverse_yaw = float(yaw) + math.pi
+			reverse_clear = (self._failure_penalty(state, reverse_yaw) <= 0.0 and
+				self._clear(direction_clear, reverse_yaw, escape_distance))
 			reverse_blocker = None
 			if reverse_clear:
 				reverse_blocker = self._reverse_blocked_by_vehicle(
@@ -753,7 +754,8 @@ class LocalDriver(object):
 						forward_blocker = self._reverse_blocked_by_vehicle(
 							position, float(yaw) + math.pi, neighbours,
 							own_half_length, own_half_width)
-						if (forward_blocker is None and self._clear(
+						if (forward_blocker is None and
+								self._failure_penalty(state, float(yaw)) <= 0.0 and self._clear(
 								direction_clear, float(yaw), escape_distance)):
 							return {'throttle': 0.72, 'turn': 0.0,
 								'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
@@ -788,6 +790,8 @@ class LocalDriver(object):
 			for fraction in RECOVERY_SWEEP_FRACTIONS:
 				if ((pose_clear is not None and not pose_clear(
 						float(yaw) + direction * RECOVERY_YAW_OFFSET * fraction)) or
+						self._failure_penalty(state, float(yaw) + math.pi +
+							direction * RECOVERY_YAW_OFFSET * fraction) > 0.0 or
 						not self._clear(
 						direction_clear,
 						float(yaw) + math.pi +

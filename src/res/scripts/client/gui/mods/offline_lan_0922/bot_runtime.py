@@ -6485,7 +6485,8 @@ class BotRuntime(object):
               'yaw=%.3f target_yaw=%s speed=%.2f throttle=%.2f turn=%.2f '
               'y=%.3f water=%.2f path_clear=%s collision=%s '
               'slope=%s probe_water=%s deferred=%s frozen=%s '
-              'hull_aim=%s grind=%s planner_age=%.2f' % (
+              'hull_aim=%s grind=%s planner_age=%.2f '
+              'target=%s/%s fire=%s gun_aligned=%s fire_seq=%s reload=%s lane=%s' % (
                   state['id'], position[0], position[2],
                   command.get('combat_mode'), command.get('recovery_mode'),
                   command.get('traffic_mode', 'none'),
@@ -6496,7 +6497,12 @@ class BotRuntime(object):
                   path_clear, probe.get('collision'), probe.get('slope'),
                   probe.get('water'), probe.get('deferred'),
                   pose_frozen, state.get('hull_aiming', False),
-                  self._hard_contact_grinds.get(state['id'], 0), planner_age))
+                  self._hard_contact_grinds.get(state['id'], 0), planner_age,
+                  strategic.get('target_kind'), strategic.get('target_id'),
+                  command.get('fire_allowed'), state.get('gun_aligned'),
+                  state.get('fire_seq'), state.get('reload_time'),
+                  self._shot_los_cache.get((state['id'],
+                      strategic.get('target_kind'), strategic.get('target_id')))))
 
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
                              settled_position):
@@ -10682,6 +10688,38 @@ class BotRuntime(object):
                 self._shot_los_deadlines.pop(old_key, None)
         return value
 
+    def _apply_blocked_direct_aim(self, source, command, target, now,
+                                  probe_budget=None):
+        """A current native wall receipt also excludes direct gun laying.
+
+        Keep the selected pair in the refresh queue before applying this local
+        overlay. Losing this gun target must not prevent a later clear lane
+        from being observed, or change the server's authored movement goal.
+        """
+        if (target is None or
+                (source.get('profile') or {}).get('class_tag') == 'SPG'):
+            return command, target
+        cached = self._shot_los_cache.get(self._shot_los_key(source, target))
+        if (cached is None or cached[1] or
+                not 0.0 <= _number(now) - cached[0] <=
+                SHOT_LANE_REFRESH_SECONDS + self._control_seconds + 1e-9):
+            return command, target
+        if (probe_budget is not None and
+                _number(now) - cached[0] > SHOT_LANE_SECONDS + 1e-9):
+            # A blocked gun must still get its next proof before it can align
+            # and fire again. Share the existing final-fire budget, rather than
+            # create an unbounded per-frame scan or wait for aim alignment.
+            if self._shot_clear(source, target, now, probe_budget=probe_budget):
+                return command, target
+        command = dict(command)
+        command['target_id'] = None
+        command.pop('target_kind', None)
+        command['fire_allowed'] = False
+        command.pop('aim_position', None)
+        if not command.get('stable_hull_face'):
+            command.pop('face_position', None)
+        return command, None
+
     def _refresh_shot_clear(self, source, target, now, observation_time,
                             probe_budget=None, lane_key=None,
                             distance_cache=None):
@@ -12035,15 +12073,17 @@ class BotRuntime(object):
                         state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
                         self._neighbours_for(state, neighbours)) < 1.0:
                     return False
-                if callable(self.rotation_resolver):
-                    # Coarse baked cells preserve standing structures even
-                    # after their crushable modules disappear. A realised
-                    # spawn can therefore cover a missing navigation cell.
-                    # Native commit checks the complete pivot and retains its
-                    # refused sweeps above; the bake must not veto every yaw.
-                    return True
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
+                if (callable(self.rotation_resolver) and callable(pose_probe) and
+                        not pose_probe(position, state['yaw'],
+                            state.get('half_length', 3.5),
+                            state.get('half_width', 1.7))):
+                    # A realised spawn can occupy a hole in the coarse bake.
+                    # Only that inconsistent current pose delegates the turn
+                    # to native commit. Valid corridors retain their complete
+                    # rectangle guard before the driver selects a recovery arc.
+                    return True
                 if not callable(pose_probe):
                     return True
                 try:
@@ -12288,6 +12328,8 @@ class BotRuntime(object):
                     int(target.get('network_id', target.get('id', 0))))
                 selected_lane_priorities[selected_key] = (
                     0 if command.get('fire_allowed') else 1)
+            command, target = self._apply_blocked_direct_aim(
+                state, command, target, now, final_shot_lane_budget)
             command = _overlay_live_target_pose(command, target, position)
             state['target_kind'] = (
                 target.get('kind') if target is not None else None)

@@ -205,6 +205,7 @@ class BotPlanner(object):
         self._route_assignments = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
+        self._firing_holds = {}
         self._affordances = {}
         self._cover_states = {}
         self._cover_failures = {}
@@ -236,6 +237,7 @@ class BotPlanner(object):
         self._route_assignments = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
+        self._firing_holds = {}
         self._affordances = {}
         self._cover_states = {}
         self._cover_failures = {}
@@ -846,6 +848,7 @@ class BotPlanner(object):
         self._cover_failures = {}
         self._cover_reservations = set()
         self._engage_anchors = {}
+        self._firing_holds = {}
         self._combat_states = {}
         self._retreat_states = {}
 
@@ -872,6 +875,9 @@ class BotPlanner(object):
         for bot_id in list(self._engage_anchors):
             if bot_id not in live_bots:
                 del self._engage_anchors[bot_id]
+        for bot_id in list(self._firing_holds):
+            if bot_id not in live_bots:
+                del self._firing_holds[bot_id]
         for bot_id in list(self._artillery_anchors):
             if bot_id not in live_bots:
                 del self._artillery_anchors[bot_id]
@@ -3209,10 +3215,12 @@ class BotPlanner(object):
                     bool(focus.get("visible") and
                          bot["id"] in (observers or ())))
             self._apply_base_defense_order(order, bot, travel_override)
+            self._firing_holds.pop(bot["id"], None)
             return order
         if (no_known_enemies and capture_target is not None and
                 self._capture_staged(bot, route_index)):
             self._apply_base_capture_order(order, bot, capture_target)
+            self._firing_holds.pop(bot["id"], None)
             return order
         if str(profile.get("class_tag") or "") == "SPG":
             if focus is not None:
@@ -3224,6 +3232,7 @@ class BotPlanner(object):
                     order, bot, focus, profile, personality,
                     bool(focus.get("visible")))
             self._apply_artillery_order(order, bot, team_axis)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         if focus is None:
@@ -3236,6 +3245,7 @@ class BotPlanner(object):
                 order["combat_mode"] = "base_screen"
                 order["face_position"] = dict(capture_target["point"])
                 order["throttle_override"] = 0.0
+                self._firing_holds.pop(bot["id"], None)
                 return order
             if threat_contact is not None:
                 observers = threat_contact.get("shootable_by_bot_ids")
@@ -3247,6 +3257,7 @@ class BotPlanner(object):
                         order, bot, threat_contact, personality, now,
                         urgent=True, hold_only=low_health):
                     self._retreat_states.pop(bot["id"], None)
+                    self._firing_holds.pop(bot["id"], None)
                     return order
             self._cover_states.pop(bot["id"], None)
             if low_health:
@@ -3259,6 +3270,7 @@ class BotPlanner(object):
                     "under_fire_withdraw", "under_fire_hold")
             else:
                 self._retreat_states.pop(bot["id"], None)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         observers = focus.get("shootable_by_bot_ids")
@@ -3288,6 +3300,7 @@ class BotPlanner(object):
                         order, bot, focus, personality, now,
                         urgent=True, hold_only=True)):
                 self._retreat_states.pop(bot["id"], None)
+                self._firing_holds.pop(bot["id"], None)
                 return order
             self._cover_states.pop(bot["id"], None)
             self._apply_retreat_order(
@@ -3295,6 +3308,7 @@ class BotPlanner(object):
                 "low_health_retreat", "low_health_defend")
             self._apply_stationary_angling(
                 order, bot, profile, personality)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         if withdraw_after_hit:
@@ -3309,6 +3323,7 @@ class BotPlanner(object):
             if self._apply_cover_order(
                     order, bot, cover_focus, personality, now, urgent=True):
                 self._retreat_states.pop(bot["id"], None)
+                self._firing_holds.pop(bot["id"], None)
                 return order
             self._cover_states.pop(bot["id"], None)
             self._apply_retreat_order(
@@ -3316,6 +3331,7 @@ class BotPlanner(object):
                 "under_fire_withdraw", "under_fire_hold")
             self._apply_stationary_angling(
                 order, bot, profile, personality)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         if (crossfire_risk is not None and crossfire_risk >= 0.35 and
@@ -3328,6 +3344,7 @@ class BotPlanner(object):
                     self._apply_cover_order(
                         order, bot, focus, personality, now, urgent=True)):
                 self._retreat_states.pop(bot["id"], None)
+                self._firing_holds.pop(bot["id"], None)
                 return order
             self._cover_states.pop(bot["id"], None)
             self._apply_retreat_order(
@@ -3335,6 +3352,7 @@ class BotPlanner(object):
                 "crossfire_withdraw", "crossfire_hold")
             self._apply_stationary_angling(
                 order, bot, profile, personality)
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         if not locally_shootable:
@@ -3344,9 +3362,11 @@ class BotPlanner(object):
                             order, bot, focus, personality, now)):
                     self._engage_anchors.pop(bot["id"], None)
                     self._combat_states.pop(bot["id"], None)
+                    self._firing_holds.pop(bot["id"], None)
                     return order
                 if self._apply_leased_movement_order(
                         order, bot, focus):
+                    self._firing_holds.pop(bot["id"], None)
                     return order
             self._engage_anchors.pop(bot["id"], None)
             self._combat_states.pop(bot["id"], None)
@@ -3363,6 +3383,7 @@ class BotPlanner(object):
             order["combat_mode"] = "route"
             order["move_position"] = dict(move)
             order["throttle_override"] = None
+            self._firing_holds.pop(bot["id"], None)
             return order
 
         self._retreat_states.pop(bot["id"], None)
@@ -3376,6 +3397,7 @@ class BotPlanner(object):
             order["move_position"] = self._flank_point(
                 bot, focus, desired_range, team_bots or ())
             order["throttle_override"] = 0.78
+            self._firing_holds.pop(bot["id"], None)
             return order
         advance_score = (
             personality["aggression"] * 0.85 +
@@ -3465,7 +3487,51 @@ class BotPlanner(object):
             order["throttle_override"] = 0.0
         self._apply_stationary_angling(
             order, bot, profile, personality)
+        self._release_unproductive_firing_hold(
+            order, bot, move, route_anchor, now)
         return order
+
+    def _release_unproductive_firing_hold(self, order, bot, move, anchor, now):
+        """A ready gun without a shot cannot lease an ordinary hold forever."""
+        state = bot['state']
+        bot_id = bot['id']
+        if (order.get('combat_mode') not in ('engage', 'support_hold') or
+                order.get('throttle_override') != 0.0 or
+                'fire_seq' not in state or not self._weapon_ready(bot)):
+            self._firing_holds.pop(bot_id, None)
+            return
+        key = (order.get('target_kind'), order.get('target_id'))
+        position = _point(state)
+        record = self._firing_holds.get(bot_id)
+        sequence = _integer(state.get('fire_seq'))
+        if (record is None or record['target'] != key or
+                record['fire_seq'] != sequence or
+                math.hypot(position['x'] - record['position']['x'],
+                           position['z'] - record['position']['z']) >= 2.0):
+            record = dict(target=key, fire_seq=sequence, position=position,
+                          ready_since=_number(now))
+            self._firing_holds[bot_id] = record
+        if _number(now) - record['ready_since'] < 8.0:
+            return
+        destination = record.get('destination')
+        if destination is None:
+            destination = next((dict(point) for point in (move, anchor)
+                if math.hypot(point['x'] - position['x'],
+                              point['z'] - position['z']) > ROUTE_ARRIVAL_RADIUS), None)
+            if destination is None:
+                return
+            record['destination'] = destination
+            record['move_until'] = _number(now) + 4.0
+        if _number(now) >= record['move_until']:
+            self._firing_holds.pop(bot_id, None)
+            return
+        # Continue a map-authored route leg while the turret retains its target.
+        # Reloading, cover manoeuvres and explicit low-health holds never enter
+        # this branch; no new unproved wall-side destination is fabricated.
+        order['combat_mode'] = 'route'
+        order['move_position'] = dict(destination)
+        order['throttle_override'] = None
+        self._engage_anchors.pop(bot_id, None)
 
     @staticmethod
     def _personality(bot_id):

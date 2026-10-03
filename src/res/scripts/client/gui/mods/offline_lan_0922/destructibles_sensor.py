@@ -5912,7 +5912,7 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 	if typ == AreaDestructibles.DESTR_TYPE_TREE:
 		_hp_gate = desc.get('health', 0)
 		try:
-			_valid_tree_health = 10 <= _hp_gate <= 1000
+			_valid_tree_health = 0 < _hp_gate <= 1000
 		except TypeError:
 			_valid_tree_health = False
 		if not _valid_tree_health:
@@ -7048,14 +7048,13 @@ def _fell_trees_near(
 								AreaDestructibles.DESTR_TYPE_FALLING_ATOM):
 							_slot_diag['result'] = 'type_unsupported'
 							continue
-						# Data-driven vegetation gate: destructibles.xml gives
-						# soft vegetation (bushes/shrubs/ferns/weeds) health<=5
-						# (or -2); real fallable trees start at health 10.
-						# ChristmasTree sentinels use 40000 = unrammable.
+						# A safely identified native TREE may be small: Airfield's
+						# BananaTree_03 has health 3. Health is not a size/type
+						# classifier. Keep nonpositive and unrammable sentinels out.
 						if typ == AreaDestructibles.DESTR_TYPE_TREE:
 							_hp_gate = desc.get('health', 0)
 							registry['tree_health'][_ti] = _hp_gate
-							if _hp_gate < 10 or _hp_gate > 1000:
+							if _hp_gate <= 0 or _hp_gate > 1000:
 								_slot_diag['result'] = 'health_gate'
 								continue
 						# Destructible matrices are CHUNK-LOCAL: world pos =
@@ -7998,7 +7997,7 @@ def _validated_tree_shot_identity_1513(spaceID, decoded):
 		return None
 	health = desc.get('health', 0)
 	try:
-		valid_health = 10 <= health <= 1000
+		valid_health = 0 < health <= 1000
 	except TypeError:
 		valid_health = False
 	if not valid_health:
