@@ -142,6 +142,10 @@ VALIDATION_NAMES = {
     'connected': ('路线连通', 'Route connected'),
     'waypoint_unusable': ('路径点不可用', 'Waypoint unusable'),
     'waypoints_disconnected': ('路径点之间不连通', 'Waypoints disconnected'),
+    'outside_bounds': ('超出地图或导航栅格边界', 'Outside arena or navigation grid'),
+    'missing_ground': ('该导航格缺少地面高度', 'Navigation cell has no ground height'),
+    'navigation_hazard': ('该导航格被标为水域或边界危险区', 'Navigation cell has a water or boundary hazard'),
+    'parking_exit_disconnected': ('停车区域内没有连通后续点的位置', 'No parking candidate connects to the next point'),
     'parking_available': ('存在可用停车空间', 'Parking space available'),
     'no_parking_space': ('没有可用停车空间', 'No parking space'),
 }

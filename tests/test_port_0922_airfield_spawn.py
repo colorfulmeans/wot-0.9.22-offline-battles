@@ -17,6 +17,24 @@ from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 
 
 class AirfieldSpawnTests(unittest.TestCase):
+    def test_slow_uphill_progress_does_not_trigger_periodic_reverse(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        driver=LocalDriver();modes=[]
+        for frame in range(200):
+            position=(0.,0.,frame*.004)
+            order=driver.drive(17,0,position,0.,.04,.1,(0.,0.,100.),[],lambda *a: True,
+                               progress_target=(0.,0.,100.))
+            modes.append(order['recovery_mode'])
+        self.assertEqual({'drive'},set(modes))
+
+    def test_short_clear_avoidance_step_aligns_before_forward_drive(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        driver=LocalDriver()
+        with mock.patch.object(driver,'_choose_yaw',return_value=.78):
+            state=driver._state(9,0,(0.,0.,0.));state['steering_reason']='avoid'
+            order=driver.drive(9,0,(0.,0.,0.),0.,0.,.1,(3.,0.,3.),[],lambda *a: True)
+        self.assertEqual('avoid',order['recovery_mode']);self.assertEqual(0.,order['throttle'])
+        self.assertGreater(order['turn'],0)
     def setUp(self):
         self.cleanup = destructible_fixture.DestructiblesCompatibilityTests()
         self.cleanup.setUp()

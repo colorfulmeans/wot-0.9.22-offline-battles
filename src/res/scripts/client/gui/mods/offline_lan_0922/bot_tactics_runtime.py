@@ -198,12 +198,19 @@ def assign_manual_positions(profile, name, graph, states, mode='regular'):
         distances = grid.distances((state['x'], state['y'], state['z']))
         candidates = []
         for zone in choices:
+            itinerary = zone.get('points', ())
+            if len(itinerary) > 1 and validate_route(grid, {'points': itinerary[1:]}):
+                continue
             key = (zone['id'], clearance)
             if key not in cache:
                 cache[key] = _manual_candidates(grid, zone, clearance)
             for centre_distance, index, p in cache[key]:
                 if index not in distances:
                     continue
+                if len(itinerary) > 1:
+                    next_point = itinerary[1]
+                    target = grid.closest((next_point[0], 0, next_point[1]))
+                    if not _route_reachable(grid, p, target):continue
                 if any(math.hypot(p[0]-old[0][0], p[2]-old[0][2]) < clearance+old[1]+3
                        for old in reservations[state['team']]):
                     continue
@@ -229,19 +236,68 @@ def assign_manual_positions(profile, name, graph, states, mode='regular'):
     return plans, outcomes
 
 
-def authoring_check(profile, name, graph):
+def parking_route(profile, name, plan, actor):
+    """Travel from the native-admitted first reservation through authored stops."""
+    if not plan or plan.get('source') != 'launcher_manual_v1':return None
+    zone = next((z for z in config.map_settings(profile, name).get('positions', ())
+                 if z['id'] == plan['zone']), None)
+    if zone is None or len(zone.get('points', ())) <= 1:return None
+    points = [list(p) for p in zone['points']]
+    points[0][:2] = [plan['point']['x'], plan['point']['z']]
+    authored = config.route_config(profile, name, config.parking_route_id(zone, actor), zone['team'], points)
+    return route_value(authored) if authored is not None else None
+
+
+def route_issues(grid, route):
+    """Report every unusable node and every disconnected adjacent pair."""
+    issues, previous = [], None
+    for index, point in enumerate(route['points']):
+        target = grid.closest((point[0], 0, point[1]))
+        if target is None:
+            x, z = point[:2]
+            reason = 'outside_bounds'
+            if grid.bounds[0] <= x <= grid.bounds[2] and grid.bounds[1] <= z <= grid.bounds[3]:
+                col = int(round((x - grid.origin[0]) / grid.cell))
+                row = int(round((z - grid.origin[1]) / grid.cell))
+                if 0 <= col < grid.width and 0 <= row < grid.height:
+                    cell = row * grid.width + col
+                    reason = 'missing_ground' if grid.heights[cell] is None else 'navigation_hazard'
+            issues.append(dict(status='waypoint_unusable', nodes=[index + 1],
+                               points=[list(point[:2])], reason=reason))
+        elif previous is not None and not _route_reachable(grid, previous, target):
+            issues.append(dict(status='waypoints_disconnected', nodes=[index, index + 1],
+                               points=[list(route['points'][index-1][:2]), list(point[:2])]))
+        previous = grid.point(target) if target is not None else None
+    return issues
+
+
+def authoring_check(profile, name, graph, details=False):
     """Cheap UI evidence only; actual vehicle-sized parking is tested on load."""
     grid = graph_view(name, graph)
     messages = []
     for route in config.map_settings(profile, name).get('default_routes', ()):
         error = validate_route(grid, route)
-        messages.append(('%s:%s' % (route['team'], config.default_route_id(route)),
-                         error or 'baked_route_connected'))
+        identity = '%s:%s' % (route['team'], config.default_route_id(route))
+        messages.append((identity, error or 'baked_route_connected', route_issues(grid, route))
+                        if details else (identity, error or 'baked_route_connected'))
     for route in config.map_settings(profile, name).get('routes', ()):
         error = validate_route(grid, route)
-        messages.append((route['id'], error or 'baked_route_connected'))
+        messages.append((route['id'], error or 'baked_route_connected', route_issues(grid, route))
+                        if details else (route['id'], error or 'baked_route_connected'))
     for zone in config.map_settings(profile, name).get('positions', ()):
         # Generic radius is explicitly not a claim about a particular vehicle.
-        valid = bool(_manual_candidates(grid, zone, 6.0))
-        messages.append((zone['id'], 'generic_parking_found' if valid else 'no_generic_parking'))
+        spots = _manual_candidates(grid, zone, 6.0)
+        valid = bool(spots)
+        status = 'generic_parking_found' if valid else 'no_generic_parking'
+        issues = route_issues(grid, {'points': zone['points'][1:]}) if len(zone.get('points', ())) > 1 else []
+        for issue in issues:issue['nodes'] = [node+1 for node in issue['nodes']]
+        if len(zone.get('points', ())) > 1:
+            following = zone['points'][1]
+            target = grid.closest((following[0], 0, following[1]))
+            if target is not None and spots and not any(_route_reachable(grid, spot[2], target) for spot in spots):
+                issues.insert(0, dict(status='waypoints_disconnected', nodes=[1,2],
+                                     points=[list(zone['point']),list(following[:2])],
+                                     reason='parking_exit_disconnected'))
+        if issues:status = issues[0]['status']
+        messages.append((zone['id'], status, issues) if details else (zone['id'], status))
     return messages

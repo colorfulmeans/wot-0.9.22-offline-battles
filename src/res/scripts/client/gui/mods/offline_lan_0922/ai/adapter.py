@@ -451,7 +451,7 @@ class BotAdapter(object):
         turn = float(local['turn'])
         dx = float(face_position[0]) - float(position[0])
         dz = float(face_position[2]) - float(position[2])
-        if (recovery_mode in ('arrived', 'nav_wait') and
+        if (recovery_mode == 'arrived' and
                 dx * dx + dz * dz > 0.01):
             target_yaw = math.atan2(dx, dz)
             difference = target_yaw - float(state.get('yaw', 0.0))

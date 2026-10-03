@@ -112,6 +112,38 @@ coverage must not be confused with 41 validated community recommendation sets.
 
 ## Validation is not native acceptance
 
+The map validation window is scrollable and reports every unusable node with
+its one-based index and X/Z coordinates, and both node numbers for disconnected
+adjacent segments. It includes team, route and class labels. Missing ground,
+water/boundary hazards and out-of-grid coordinates have separate explanations.
+These are baked-grid facts, not proof that a native ground surface is impassable.
+
+Route symmetry is always visible immediately to the right of the own-base
+coordinates, on a separate toolbar row that fits the minimum window width.
+Select a regular route to enable it. Parking regions remain team-specific.
+
+Selecting SPG shows default parking points instead of regular lane polylines.
+Ruinberg/Steppes use the sourced parking regions; other maps preview the exact
+host rear-route anchor selection, including admitted global route edits. An
+untouched preview does not create a manual override. Editing a default parking
+point creates a manual region override; reset/undo restore the untouched preview.
+The circle represents the parking region, not a promise to place every gun at
+its centre. The worker still resolves distinct vehicle-sized initial reservations.
+
+The legend uses red squares for SPG parking stops and pink circles for movement
+points. Shift-click adds a subsequent point; double-click or Wait condition sets
+0..3600 seconds, or -1 for a permanent hold. Parking/movement toggles the point
+marker. The first point is the parking region. A single point with default wait
+0 remains stationed there, as does a terminal point with no successor. With a
+successor, arrival starts the wait and expiry advances the itinerary; waiting
+does not grant firing permission or disable the ordinary fire gates.
+
+Parking itineraries retain each gun's reserved first point and publish private
+route IDs within the host's 24-character wire limit. Later nodes and wait times
+come from the round-frozen profile. Invalid itineraries cannot attach waits to
+a fallback parking plan. The ordinary stationary behaviour remains for older
+profiles without itinerary nodes.
+
 The editor's map check proves only baked connectivity and existence of generic
 parking space. Vehicle-sized parking is checked by the actual worker at round
 preparation. Full per-gun ballistic coverage is not certified by either check.

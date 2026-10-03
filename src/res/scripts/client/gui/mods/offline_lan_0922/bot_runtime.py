@@ -3717,7 +3717,7 @@ class BotRuntime(object):
             plans = {}
             for raw in message.get('bot_manifest') or ():
                 route = raw.get('route') or {}
-                authored = bot_tactics.route_config(self._bot_tactics, name, route.get('id'), raw.get('team'))
+                authored = bot_tactics.route_config(self._bot_tactics, name, route.get('id'), raw.get('team'), route.get('waypoints'))
                 if authored is not None and not authored.get('default'):
                     plans[raw['id']] = bot_tactics_runtime.route_value(authored)
             outcomes = dict((actor, 'restored') for actor in plans)
@@ -3798,6 +3798,11 @@ class BotRuntime(object):
             plan = plans.get(actor)
             if plan is not None:
                 state['_spg_initial'] = plan
+                itinerary = bot_tactics_runtime.parking_route(self._bot_tactics, map_name, plan, actor)
+                if itinerary is not None and not (state.get('route') or {}).get('id', '').startswith('user_'):
+                    state['route'] = itinerary
+                    agent = getattr(self.adapter.director, 'agents', {}).get(actor)
+                    if agent is not None:agent['route'] = itinerary
             else:
                 state.pop('_spg_initial', None)
             state['_spg_initial_status'] = outcomes[actor]

@@ -76,3 +76,44 @@ of the follow-up.
 - Package/build verification and native-game acceptance remain separate.
   Tk and plain-data checks do not prove driving through the edited roads in
   the exact Chinese HD #1513 Windows client.
+
+## Report 20261003-155309 / build 59 follow-up
+
+All six Airfield global edits were admitted. There are no class-scoped edits,
+manual parking zones or explicit node waits in the report. Airfield is outside
+the two-map sourced SPG catalog: all six guns use the host's rear-route parking
+fallback. Showing the complete regular lane for SPGs therefore misrepresented
+their actual deployment. The editor now previews parking anchors and supports
+optional parking itineraries with red parking and pink movement markers.
+
+The user confirms that Object 704 acquired and fought the nearby player in this
+round. Its remaining observation concerns spawn egress alongside AT 15, not
+target acquisition. Native traces show short avoidance goals traversed with
+full forward drive (704 at 15:46:02), and navigation waits that still turn toward
+a distant strategic heading (CDC at 15:47:35/38, with native rotation denied).
+Short avoidance goals now align before translation; a pending navigation wait
+keeps its steering stationary. The existing bounded checked escape still runs
+after the wait timeout. Slow uphill progress credits the driver's local stuck
+clock while a separate best-distance clock continues to bound oscillation.
+No drive power, terrain resistance, ground data or physical collision laws are
+changed. The edited routes in this report remain user-owned.
+
+Worker live windows 3/4 average 267.407/291.035 ms in Python, with Bot update
+263.376/285.894 ms. Prewarm is only 0.299/0.330 ms; synchronization and presentation
+are also small. Detailed capture 1 has 840.665 ms of destructible intersection
+self time across 26 detailed frames, plus motion world, support and native
+physics work. Capture 2 additionally has 677.977 ms of search-batch self work
+across 25 detailed frames. The bottleneck is battle simulation, not evidence of
+Internet latency or a profile initialization pause. Later live window 10 is
+78.670 ms in Python / 75.635 ms in Bot update; window 11 has already returned to
+prebattle and is 16.880 ms in Python. The final low ping cannot be extrapolated
+to a healthy full opening lineup. No native performance improvement is claimed.
+
+Before packaging, 722 dedicated Bot regression cases pass (one optional skip),
+and 35 actual Windows Tk / localization / itinerary integration cases pass.
+The expanded executable editor smoke checks Airfield parking previews and the
+relocated symmetry control. Package inspection and the clean Windows CI result
+are recorded in the PR handoff. Local full-launcher account-mutating tests are
+blocked by the user's running WoT process, which is not interrupted for tests.
+The unrelated historical SPG target-lease assertion remains a known baseline
+failure in full Tests; the dedicated gameplay gate stays separate.

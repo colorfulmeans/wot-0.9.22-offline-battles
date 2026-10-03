@@ -5,6 +5,7 @@ import copy
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -38,6 +39,49 @@ MAP_LABELS = {key: labels.map_label(key, 'zh') for key in contract.MAPS}
 
 def root_path():
     return Path(core.settings_path()).parent / 'bot_tactics'
+
+
+def default_spg_positions(name, graph, profile=None):
+    """Show sourced parking regions, never the regular combat-route nodes."""
+    from gui.mods.offline_lan_0922 import spg_positions
+    entry = spg_positions.CATALOG['maps'].get(name)
+    if not graph:return []
+    if entry is None:
+        for path in (_source.parents[3]/'server',_bundled.parents[3]/'server'):
+            if path.is_dir() and str(path) not in sys.path:sys.path.insert(0,str(path))
+        from server_bot_ai import BotPlanner
+        planner=BotPlanner()
+        routes,_=runtime.default_routes(profile or contract.empty(),name,graph)
+        result=[]
+        for team in (1,2):
+            own,enemy=graph['bases'][team-1],graph['bases'][2-team]
+            axis=tuple(dict(x=p[0],y=0,z=p[1]) for p in (own,enemy))
+            for index,route in enumerate(routes.get(str(team),())):
+                if route.get('_editor_class'):continue
+                weights=route.get('class_weights') or {}
+                if weights.get('SPG',0)<=0 and route.get('role_weights',{}).get('artillery',0)<=0:continue
+                wire=dict(route,waypoints=[dict(x=p[0],y=0,z=p[1]) for p in route['waypoints']])
+                point=planner._artillery_anchor(dict(id=index,route=wire),axis)['point']
+                heading=math.degrees(math.atan2(enemy[0]-point['x'],enemy[1]-point['z']))
+                result.append(dict(id='spg_%d_%s'%(team,route['id']),team=team,
+                    label=labels.route_label(route['id'],'en'),point=[point['x'],point['z']],
+                    radius=16.,heading=heading,priority=5,points=[[point['x'],point['z'],0,0.]]))
+        return result
+    grid = spg_positions._Graph(graph, entry['bounds'])
+    result = []
+    for team in (1, 2):
+        side = entry['spawn_sides'][str(team)]
+        by_zone = {}
+        for zone, cell, index, point in grid.candidates(entry, side, 6.0):
+            by_zone.setdefault(zone['id'], (zone, cell, point))
+        enemy = graph['bases'][2-team]
+        for identity, (zone, cell, point) in sorted(by_zone.items()):
+            heading = math.degrees(math.atan2(enemy[0]-point[0], enemy[1]-point[2]))
+            result.append(dict(id='spg_%d_%s'%(team,identity), team=team,
+                               label='%s / %s'%(identity,cell), point=[point[0],point[2]],
+                               radius=16.0, heading=heading, priority=5,
+                               points=[[point[0],point[2],0,0.0]]))
+    return result
 
 
 def _atomic(path, document):

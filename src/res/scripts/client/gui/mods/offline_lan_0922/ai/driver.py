@@ -635,6 +635,7 @@ class LocalDriver(object):
 		# Local targets may alternate around a prop while the tank makes no
 		# progress toward its actual order. Do not credit that orbit as travel.
 		objective_stalled = False
+		objective_advanced = False
 		if progress_target is not None:
 			progress = state.get('objective_progress')
 			distance = _distance(position, progress_target)
@@ -643,9 +644,15 @@ class LocalDriver(object):
 				progress = {'goal': tuple(progress_target), 'best': distance,
 				            'at': state['clock']}
 				state['objective_progress'] = progress
-			elif distance + 0.5 <= progress['best']:
+			elif distance + 0.08 <= progress['best']:
+				objective_advanced = True
 				progress['best'] = distance
 				progress['at'] = state['clock']
+			elif distance + 0.002 < progress['best']:
+				# Slow uphill travel can take longer than the local stuck timeout
+				# to accumulate 8 cm. Credit its direction while the independent
+				# best-distance clock still bounds sub-threshold oscillation.
+				objective_advanced = True
 			objective_stalled = state['clock'] - progress['at'] >= 8.0
 		if target_distance <= WAYPOINT_ARRIVAL_RADIUS and not objective_stalled:
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)
@@ -688,7 +695,7 @@ class LocalDriver(object):
 			state['last_position'] = (
 				float(position[0]), float(position[2]))
 			state['stuck_time'] = 0.0
-		elif heading_progress:
+		elif heading_progress or objective_advanced:
 			state['stuck_time'] = max(0.0, state['stuck_time'] - step)
 		else:
 			state['stuck_time'] += step
@@ -856,15 +863,14 @@ class LocalDriver(object):
 		# while braking a recovery or sliding downhill; steering remains forward.
 		avoiding = state['steering_reason'] != 'route'
 		throttle = 1.0
-		if (not avoiding and target_distance <= max(8.0, own_half_length * 2.0) and
+		if (target_distance <= max(8.0, own_half_length * 2.0) and
 				abs(delta) > 0.45):
-			# Grid corners can be inside a moving hull's turning circle. Align
-			# before driving at these short route steps, rather than repeatedly
-			# passing the corner and renewing a circular steering command.
+			# Both path corners and native-checked avoidance steps can be inside
+			# the moving hull's turning circle. Align before driving either one.
 			throttle = 0.0
 		climb_grade = ((float(target[1]) - float(position[1])) /
 		               max(0.1, target_distance))
-		if climb_grade > 0.10 and abs(delta) > 0.30 and not avoiding:
+		if climb_grade > 0.10 and abs(delta) > 0.30:
 			# Enter steep route edges square to the slope. Applying full drive
 			# while the hull is still turning makes it circle at the foot of the
 			# climb and repeatedly invalidates the next terrain sample.

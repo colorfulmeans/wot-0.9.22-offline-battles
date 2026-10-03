@@ -31,6 +31,31 @@ class EditorUITests(unittest.TestCase):
         self.assertFalse(self.ui.dirty());self.assertEqual({},self.ui.store.active()['maps'])
         self.assertEqual(41,len(self.ui.map_labels));self.assertTrue(self.ui.graph_cache['08_ruinberg'])
 
+    def test_symmetry_is_visible_beside_base_coordinates_before_route_selection(self):
+        self.assertEqual(self.ui.base_label.master,self.ui.symmetry_check.master)
+        self.assertTrue(self.ui.symmetry_check.winfo_ismapped())
+        self.assertGreater(self.ui.symmetry_check.winfo_x(),self.ui.base_label.winfo_x())
+
+    def test_spg_defaults_are_parking_points_and_editable_itineraries_use_two_colors(self):
+        self.ui.map_var.set(storage.MAP_LABELS['31_airfield']);self.ui.change_map()
+        self.ui.route_class_var.set('SPG');self.ui.change_route_class();self.root.update()
+        ids=self.ui.items.get_children()
+        self.assertTrue(ids);self.assertTrue(all(i.startswith('builtin_positions:') for i in ids))
+        self.assertFalse(self.ui.dirty())
+        self.ui.items.selection_set(ids[0]);self.root.update();self.ui.selected_point=0
+        with mock.patch.object(ui_module.simpledialog,'askfloat',return_value=30):self.ui.edit_point_condition()
+        first=self.ui._selected()['point'];self.click((first[0]-20,first[1]),shift=True)
+        self.assertEqual(30,self.ui._selected()['points'][0][3])
+        self.assertEqual(0,self.ui._selected()['points'][1][3])
+        shapes=[(self.ui.canvas.type(i),self.ui.canvas.itemcget(i,'fill')) for i in self.ui.canvas.find_all()
+                if self.ui.canvas.type(i) in ('rectangle','oval')]
+        self.assertIn(('rectangle',ui_module.CLASS_COLORS['SPG']),shapes)
+        self.assertIn(('oval',ui_module.SPG_MOVE_COLOR),shapes)
+        self.ui.save(True);self.assertFalse(self.error_mock.called,self.error_mock.call_args)
+        self.assertEqual(2,len(self.ui.store.active()['maps']['31_airfield']['positions'][0]['points']))
+        self.ui.reset_builtin();self.assertEqual(1,len(self.ui._selected()['points']))
+        self.assertFalse(self.ui.entry()['positions'])
+
     def test_default_symmetry_reverses_geometry_waits_and_detaches_when_disabled(self):
         source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
         self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
