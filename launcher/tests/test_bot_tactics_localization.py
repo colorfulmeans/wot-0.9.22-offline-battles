@@ -28,8 +28,8 @@ class CatalogTests(unittest.TestCase):
                 self.assertNotIn('锡城', caption)
 
     def test_requested_full_himmelsdorf_name_and_winter_variant(self):
-        self.assertEqual('锡莫尔斯多夫', labels.map_label('04_himmelsdorf', 'zh'))
-        self.assertEqual('锡莫尔斯多夫（冬季）', labels.map_label('86_himmelsdorf_winter', 'zh'))
+        self.assertEqual('锡默尔斯多夫', labels.map_label('04_himmelsdorf', 'zh'))
+        self.assertEqual('锡默尔斯多夫（冬季）', labels.map_label('86_himmelsdorf_winter', 'zh'))
         self.assertEqual('Himmelsdorf', labels.map_label('04_himmelsdorf', 'en'))
         self.assertEqual('Winter Himmelsdorf', labels.map_label('86_himmelsdorf_winter', 'en'))
 

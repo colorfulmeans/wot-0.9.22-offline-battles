@@ -56,7 +56,7 @@ def run(destination):
             ui.set_language('zh'); root.update()
             assert ui.map_var.get() == '鲁别克'
             assert ui.rule_boxes['skill'].cget('values') == ('继承上级设置','新手','普通','老兵','精英')
-            assert labels.map_label('04_himmelsdorf', 'zh') == '锡莫尔斯多夫'
+            assert labels.map_label('04_himmelsdorf', 'zh') == '锡默尔斯多夫'
             assert labels.route_label('waterfall', 'zh') == '瀑布'
             ui.set_language('en'); root.update()
             assert ui.map_var.get() == 'Ruinberg'

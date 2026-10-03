@@ -3,7 +3,7 @@
 
 Keys remain protocol identifiers, never translated configuration data. Chinese
 map names use the mainland legacy names; Himmelsdorf's spelling is the project
-owner's explicitly requested 锡莫尔斯多夫. Winter and removed maps retain their
+owner's explicitly requested 锡默尔斯多夫. Winter and removed maps retain their
 pre-1.0 identity rather than borrowing a modern replacement's title.
 Built-in route names are editor translations, not official tactical routes.
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 MAP_NAMES = {
     '01_karelia': ('卡累利阿', 'Karelia'),
     '02_malinovka': ('马利诺夫卡', 'Malinovka'),
-    '04_himmelsdorf': ('锡莫尔斯多夫', 'Himmelsdorf'),
+    '04_himmelsdorf': ('锡默尔斯多夫', 'Himmelsdorf'),
     '05_prohorovka': ('普罗霍洛夫卡', 'Prokhorovka'),
     '06_ensk': ('安斯克', 'Ensk'),
     '07_lakeville': ('拉斯威利', 'Lakeville'),
@@ -43,7 +43,7 @@ MAP_NAMES = {
     '73_asia_korea': ('神圣之谷', 'Sacred Valley'),
     '83_kharkiv': ('哈尔科夫', 'Kharkov'),
     '84_winter': ('飓风小镇', 'Windstorm'),
-    '86_himmelsdorf_winter': ('锡莫尔斯多夫（冬季）', 'Winter Himmelsdorf'),
+    '86_himmelsdorf_winter': ('锡默尔斯多夫（冬季）', 'Winter Himmelsdorf'),
     '92_stalingrad': ('斯大林格勒', 'Stalingrad'),
     '95_lost_city': ('失落之城', 'Ghost Town'),
     '100_thepit': ('密特朗', 'Mittengard'),
