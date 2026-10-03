@@ -105,7 +105,8 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		combat_mode=None, movement_intent=False):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn', 'reverse_withdraw',
-			'pivot_recovery', 'forward_escape', 'contact_escape', 'wreck_push', 'friendly_yield',
+			'pivot_recovery', 'forward_escape', 'short_forward_escape', 'short_reverse_escape',
+			'contact_escape', 'wreck_push', 'friendly_yield',
 			'nav_wait', 'physical_hold'):
 		return float(turn), float(throttle), False
 	if movement_intent and combat_mode != 'engage':
@@ -757,7 +758,6 @@ class LocalDriver(object):
 						state['recovery_side'] = direction = mirrored
 						recovery_yaw = float(yaw) + direction * RECOVERY_YAW_OFFSET
 					else:
-						# Neither rotation fits and the rear is denied. Hold the
 						forward_blocker = self._reverse_blocked_by_vehicle(
 							position, float(yaw) + math.pi, neighbours,
 							own_half_length, own_half_width)
@@ -766,6 +766,25 @@ class LocalDriver(object):
 								direction_clear, float(yaw), escape_distance)):
 							return {'throttle': 0.72, 'turn': 0.0,
 								'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
+						# A long hull may have room to translate out of a side
+						# contact without room for the full backing manoeuvre.
+						# Recheck a short straight sweep on every decision; retain
+						# braking/cadence distance and the final native hull veto.
+						short_distance = max(2.0, float(stopping_distance or 0.0) +
+							abs(float(speed)) * max(step, float(decision_horizon)))
+						for drive_sign in (-1.0, 1.0):
+							sample_yaw = float(yaw) + (math.pi if drive_sign < 0 else 0.0)
+							if (self._failure_penalty(state, sample_yaw) <= 0.0 and
+									self._clear(direction_clear, sample_yaw, short_distance) and
+									self._reverse_blocked_by_vehicle(
+										position, float(yaw) if drive_sign < 0 else float(yaw) + math.pi,
+										neighbours, own_half_length, own_half_width,
+										maximum_distance=short_distance) is None):
+								return {'throttle': drive_sign * 0.45, 'turn': 0.0,
+									'target_yaw': float(yaw),
+									'recovery_probe_distance': short_distance,
+									'recovery_mode': 'short_reverse_escape' if drive_sign < 0 else 'short_forward_escape'}
+						# Neither translation nor rotation fits. Hold the
 						# pose instead of grinding the corners, and publish the
 						# hull that owns the escape so the queue can clear it.
 						blocked = {

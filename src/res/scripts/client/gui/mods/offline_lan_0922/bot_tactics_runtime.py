@@ -182,7 +182,8 @@ def _manual_candidates(grid, zone, clearance):
     return sorted(candidates)
 
 
-def assign_manual_positions(profile, name, graph, states, mode='regular'):
+def assign_manual_positions(profile, name, graph, states, mode='regular',
+                            actor_ids=None, excluded=(), occupied=()):
     zones = config.map_settings(profile, name).get('positions', ()) if mode == 'regular' else ()
     if not zones:
         return {}, {}
@@ -190,6 +191,8 @@ def assign_manual_positions(profile, name, graph, states, mode='regular'):
     plans, outcomes, reservations, cache = {}, {}, {1: [], 2: []}, {}
     identity = config.digest(profile)
     for state in sorted(states, key=lambda s: (s['team'], s.get('slot', 0), s['id'])):
+        if actor_ids is not None and state['id'] not in actor_ids:
+            continue
         if (state.get('profile') or {}).get('class_tag') != 'SPG':
             continue
         choices = [z for z in zones if z['team'] == state['team']]
@@ -204,6 +207,8 @@ def assign_manual_positions(profile, name, graph, states, mode='regular'):
             if key not in cache:
                 cache[key] = _manual_candidates(grid, zone, clearance)
             for centre_distance, index, p in cache[key]:
+                if not spg_positions.parking_point_available(p, clearance, state['team'], excluded, occupied):
+                    continue
                 if index not in distances:
                     continue
                 if any(math.hypot(p[0]-old[0][0], p[2]-old[0][2]) < clearance+old[1]+3

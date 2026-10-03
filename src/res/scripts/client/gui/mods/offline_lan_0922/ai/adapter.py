@@ -479,7 +479,7 @@ class BotAdapter(object):
         if strategic.get('hull_angle_degrees') is not None:
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))
-        for name in ('forward_blocked_by', 'reverse_blocked_by'):
+        for name in ('forward_blocked_by', 'reverse_blocked_by', 'recovery_probe_distance'):
             if name in local:
                 result[name] = local[name]
         difference = target_yaw - float(state.get('yaw', 0.0))

@@ -227,6 +227,60 @@ class DriverRecoveryFeedbackTests(unittest.TestCase):
         self.assertEqual('reverse_turn', commands[-1]['recovery_mode'])
         self.assertEqual(2, len(scene.hard))
 
+    def test_long_su14_hull_uses_checked_short_translation_when_neither_pivot_fits(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        for available in (-1, 1, 0):
+            with self.subTest(available=available):
+                driver = LocalDriver()
+                driver._state(30, 0, (0., 0., 0.)).update(recovery_time=.85, recovery_side=1.)
+                probes = []
+                def clear(yaw, maximum_distance=None):
+                    probes.append(maximum_distance)
+                    sign = -1 if math.cos(yaw) < 0 else 1
+                    return available == sign and maximum_distance is not None and maximum_distance <= 2.01
+                command = driver.drive(30, 0, (0., 0., 0.), 0., 0., .1,
+                    (20., 0., 20.), (), clear, half_length=5.11772, half_width=1.61594,
+                    pose_clear=lambda yaw: False)
+                self.assertEqual(0., command['turn'])
+                if available:
+                    self.assertEqual(available * .45, command['throttle'])
+                    self.assertEqual(2., command['recovery_probe_distance'])
+                else:
+                    self.assertEqual('blocked', command['recovery_mode'])
+                    self.assertEqual(0., command['throttle'])
+                self.assertIn(5.11772 * 1.6, probes)
+                self.assertIn(2., probes)
+
+    def test_short_escape_reaches_native_motion_and_retires_a_failed_end(self):
+        runtime, scene, commands, unused = self._runtime()
+        original_probe = runtime.direction_probe
+        def short_only(position, yaw, speed=0., descriptor=None, maximum_distance=None, corridor_half_width=None):
+            if maximum_distance is None or maximum_distance > 2.01:
+                return {'clear': False, 'collision': True, 'slope': 0.}
+            return original_probe(position, yaw, speed, descriptor, maximum_distance, corridor_half_width)
+        runtime.direction_probe = short_only
+        with contextlib.redirect_stdout(io.StringIO()):
+            runtime.update(.1, 1.)
+            self.assertEqual('short_reverse_escape', commands[-1]['recovery_mode'])
+            self.assertLess(scene.hard[0][3], 0.)
+            self.assertEqual(0., runtime.states[11]['z'])
+            runtime.update(.1, 1.1)
+            self.assertEqual('short_forward_escape', commands[-1]['recovery_mode'])
+            self.assertGreater(runtime.states[11]['z'], 0.)
+            self.assertEqual(2., commands[-1]['recovery_probe_distance'])
+
+    def test_short_escape_still_checks_the_complete_neighbour_sweep(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        driver = LocalDriver()
+        driver._state(30, 0, (0., 0., 0.)).update(recovery_time=.85, recovery_side=1.)
+        peers = [dict(id=10 + side, position=(0., 0., side * 11.),
+                      half_length=5., half_width=1.6, yaw=0.) for side in (-1, 1)]
+        command = driver.drive(30, 0, (0., 0., 0.), 0., 0., .1,
+            (20., 0., 20.), peers, lambda yaw, maximum_distance=None: True,
+            half_length=5.11772, half_width=1.61594, pose_clear=lambda yaw: False)
+        self.assertEqual('blocked', command['recovery_mode'])
+        self.assertEqual(0., command['throttle'])
+
     def test_curved_recovery_keeps_only_the_unfailed_straight_exit(self):
         from gui.mods.offline_lan_0922.ai.driver import (
             LocalDriver, RECOVERY_YAW_OFFSET)

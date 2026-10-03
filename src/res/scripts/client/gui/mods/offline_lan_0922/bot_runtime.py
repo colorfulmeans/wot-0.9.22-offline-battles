@@ -6404,7 +6404,7 @@ class BotRuntime(object):
                     position[1])
                 for offset in pair))
         return tank_collision.straddled_support(
-            position[1], follow_gap, axis_samples)
+            position[1], follow_gap, axis_samples, interpolate=True)
 
     def _terrain_support(self, state, follow_gap=None):
         """Probe centre first, allowing only straddled support over a hole."""
@@ -6418,12 +6418,18 @@ class BotRuntime(object):
             # drop; the dynamic envelope alone proves no surface continuity.
             support_gap = (None if follow_gap is None else min(
                 float(follow_gap), vehicle_physics.GROUND_FOLLOW_MIN))
+            reference_y = position[1]
+            if state.get('grounded_once') and not state.get('airborne'):
+                reference_y = max(reference_y, _number(state.get(
+                    '_legacy_straddle_reference_y'), reference_y))
+            state['_legacy_straddle_reference_y'] = reference_y
             if (support_gap is not None and
-                    position[1] - centre > support_gap):
+                    reference_y - centre > min(support_gap, 0.01)):
                 bridged = self._straddled_terrain_support(
                     state, position, support_gap)
-                if bridged is not None and bridged > centre:
+                if bridged is not None and bridged > centre + 1.0e-6:
                     return bridged, bridged
+                state['_legacy_straddle_reference_y'] = position[1]
             # The vertical law below always selects centre while it exists;
             # front/back could not affect the realised pose on this branch.
             return centre, centre
@@ -11267,6 +11273,56 @@ class BotRuntime(object):
         self._decision_cache.pop(bot_id, None)
         return True
 
+    def _retry_spg_deployment(self, state, initial, distance, now):
+        """Retire a parking goal only after sustained lack of net progress."""
+        identity = spg_positions.plan_identity(initial)
+        progress = state.get('_spg_deployment_progress')
+        if progress is None or progress['identity'] != identity:
+            state['_spg_deployment_progress'] = dict(
+                identity=identity, best=distance, since=now)
+            return initial
+        if distance < progress['best'] - 0.25:
+            progress.update(best=distance, since=now)
+        if now - progress['since'] < 20.0:
+            return initial
+        progress['since'] = now
+        retries = int(state.get('_spg_parking_retries', 0))
+        if retries >= 3:
+            state['_spg_position_event'] = 'parking_retry_exhausted'
+            return initial
+        state['_spg_parking_retries'] = retries + 1
+        failed = state.setdefault('_spg_failed_parking', [])
+        point = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
+        if point not in failed:
+            failed.append(point)
+        occupied = []
+        for other in self.states.values():
+            plan = other.get('_spg_initial')
+            if other['id'] != state['id'] and other.get('alive', True) and plan is not None:
+                occupied.append((other.get('team'), tuple(plan['point'][axis]
+                    for axis in ('x', 'y', 'z')), plan['clearance']))
+        kwargs = dict(actor_ids=(state['id'],), excluded=failed, occupied=occupied)
+        states = list(self._ordered_states())
+        try:
+            if initial['source'] == 'launcher_manual_v1':
+                plans, unused = bot_tactics_runtime.assign_manual_positions(
+                    self._bot_tactics, initial['map'], self.baked_graph, states, **kwargs)
+            else:
+                plans, unused = spg_positions.assign_initial_positions(
+                    initial['map'], self.baked_graph, states, **kwargs)
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+            plans = {}
+        replacement = plans.get(state['id'])
+        if replacement is None:
+            state['_spg_position_event'] = 'no_safe_alternate_parking'
+            return initial
+        state['_spg_initial'] = replacement
+        state.pop('_spg_deployment_progress', None)
+        state['_spg_position_event'] = 'blocked_deployment_alternate_parking'
+        self._decision_cache.pop(state['id'], None)
+        self._cancel_artillery_intent(state['id'])
+        return replacement
+
     def _artillery_position_order(self, state, order, targets, now):
         """Leave a confirmed muzzle-side obstruction via the existing driver.
 
@@ -11277,6 +11333,8 @@ class BotRuntime(object):
         if str((state.get('profile') or {}).get('class_tag') or '') != 'SPG':
             return order
         mode = order.get('combat_mode')
+        if mode not in ('artillery_hold', 'artillery_deploy'):
+            state.pop('_spg_deployment_progress', None)
         initial = state.get('_spg_initial')
         if initial is not None and mode in ('artillery_hold', 'artillery_deploy'):
             # The new initial goal is not an ordinary route waypoint. In
@@ -11285,6 +11343,13 @@ class BotRuntime(object):
             state.pop('_spg_position', None)
             destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
             arrived = _distance(_position(state), destination) <= initial['radius']
+            if arrived:
+                state.pop('_spg_deployment_progress', None)
+            else:
+                initial = self._retry_spg_deployment(
+                    state, initial, _distance(_position(state), destination), now)
+                destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
+                arrived = _distance(_position(state), destination) <= initial['radius']
             result = dict(order)
             result.update(move_position=destination, route_anchor=destination,
                           route_join=False, throttle_override=0.0 if arrived else None,
@@ -12603,6 +12668,9 @@ class BotRuntime(object):
                     _distance(position, _point(move_position, position)) -
                     ai_driver.WAYPOINT_ARRIVAL_RADIUS)
                 maximum_probe_distance = min(remaining, reactive_horizon)
+            elif command.get('recovery_mode') in ('short_forward_escape', 'short_reverse_escape'):
+                maximum_probe_distance = max(2.0, _number(
+                    command.get('recovery_probe_distance'), 2.0))
             elif command.get('recovery_mode') in (
                     'contact_escape', 'forward_escape', 'wreck_push'):
                 maximum_probe_distance = ai_driver.recovery_probe_distance(

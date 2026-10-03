@@ -92,6 +92,14 @@ when a worker catch-up slice is short. Grounded momentum follows signed
 travel on the supported chassis plane; normal ramp departures, airborne
 gravity and landing damage remain active. Live #1513 playtesting is required.
 
+Blocked artillery deployment first uses collision-checked straight escape
+steps when the hull cannot pivot. After twenty seconds without net progress,
+it can choose another reachable parking position, keeping manual positions
+inside authored regions and respecting other artillery reservations. Retries
+are bounded. Shallow depressions now check opposing chassis support before
+small successive drops can lower a Bot or wreck between the banks; ordinary
+slopes and genuine cliff departures retain their normal support behaviour.
+
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
 spawn groups and the large Grand Battle maps. The current package has neither
