@@ -131,7 +131,7 @@ def canonical(raw):
         if name not in MAPS:
             raise TacticsError('Unknown #1513 map: %s' % name)
         meta = MAPS[name]
-        _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions'),
+        _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions', 'default_routes'),
               ('mode', 'resource_sha256', 'routes', 'positions'))
         if settings['mode'] != 'regular' or settings['resource_sha256'] != meta['resource_sha256']:
             raise TacticsError('Map mode or resource fingerprint mismatch: %s' % name)
@@ -190,7 +190,36 @@ def canonical(raw):
                 entry[kind].append(result)
                 total += 1
             entry[kind].sort(key=lambda a: a['id'])
-        if entry['routes'] or entry['positions']:
+        defaults = settings.get('default_routes', [])
+        if not isinstance(defaults, list) or len(defaults) > sum(
+                len(v) for v in meta['route_ids'].values()):
+            raise TacticsError('Invalid default route collection')
+        seen = set()
+        for route in defaults:
+            _keys(route, ('id', 'team', 'points'), ('id', 'team', 'points'))
+            team = integer(route['team'], 1, 2)
+            identity = _id(route['id'])
+            key = (team, identity)
+            if identity not in meta['route_ids'][str(team)] or key in seen:
+                raise TacticsError('Unknown or duplicate default route')
+            seen.add(key)
+            pts = route['points']
+            if not isinstance(pts, list) or not 1 <= len(pts) <= 16:
+                raise TacticsError('A route must contain 1..16 waypoints')
+            points = []
+            for pt in pts:
+                if not isinstance(pt, (list, tuple)) or len(pt) != 3:
+                    raise TacticsError('Default waypoint must be [x, z, hold]')
+                value = point(pt[:2], meta['bounds']) + [integer(pt[2], 0, 1)]
+                if points and sum((value[i]-points[-1][i])**2 for i in (0, 1)) < 1:
+                    raise TacticsError('Consecutive waypoints need at least one metre separation')
+                points.append(value)
+            entry.setdefault('default_routes', []).append(
+                dict(id=identity, team=team, points=points))
+            total += 1
+        if defaults:
+            entry['default_routes'].sort(key=lambda r: (r['team'], r['id']))
+        if entry['routes'] or entry['positions'] or defaults:
             out['maps'][name] = entry
     if total > 600 or len(dumps(out).encode('utf8')) > MAX_BYTES:
         raise TacticsError('Tactics profile exceeds its bounded size')

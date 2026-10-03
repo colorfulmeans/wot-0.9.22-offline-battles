@@ -85,15 +85,10 @@ class AirfieldDefaultRoadTests(unittest.TestCase):
         cls.graph=json.loads((ROOT/'navgraphs/31_airfield.json').read_text())
         cls.legacy=legacy_baker()
 
-    def test_baker_reproduces_both_teams_without_altering_terrain_or_links(self):
-        g=copy.deepcopy(self.graph); saved=copy.deepcopy(g)
-        for team,routes in g['routes'].items():
-            for route in routes:
-                bases=g['bases'] if team=='1' else list(reversed(g['bases']))
-                route['waypoints']=[p+[False] for p in bases]
-        bake.bake_airfield_road_routes(g,g['routes'],self.legacy)
-        bake.canonicalize_reversible_routes(g,g['routes'])
-        self.assertEqual(saved,g)
+    def test_original_routes_restored_exactly_for_both_teams(self):
+        original=json.loads((ROOT/'tests/fixtures/airfield-original-routes.json').read_text())
+        self.assertEqual(original,self.graph['routes'])
+        self.assertNotIn('bake_airfield_road_routes', (ROOT/'tools/bake_navigation_0922.py').read_text())
 
     def test_all_six_routes_are_connected_and_fit_the_existing_wire(self):
         grid=planning.graph_view('31_airfield',self.graph)
@@ -105,24 +100,6 @@ class AirfieldDefaultRoadTests(unittest.TestCase):
                     self.assertIsNone(self.legacy._route_geometry_issue(route['waypoints']))
         for one,two in zip(self.graph['routes']['1'],self.graph['routes']['2']):
             self.assertEqual(list(reversed(one['waypoints'])),two['waypoints'])
-
-    def test_west_south_opening_goes_east_instead_of_to_the_north_gate(self):
-        route=next(r for r in self.graph['routes']['2'] if r['id']=='south_towns')
-        start,following=route['waypoints'][:2]
-        self.assertGreater(following[0]-start[0],30)
-        self.assertLess(following[1],start[1])
-        a=self.legacy._nearest_node(self.graph,start)[0]
-        b=self.legacy._nearest_node(self.graph,following)[0]
-        path,distance=self.legacy._graph_path(self.graph,a,b)
-        self.assertLess(distance,60)
-        self.assertTrue(all(self.legacy._node_point(self.graph,i)[1] <= -178 for i in path))
-
-    def test_small_rock_and_ridge_centres_are_not_default_route_goals(self):
-        centres=((-295,-65),(-245,-162),(66,82),(380,-18),(80,-300))
-        for route in self.graph['routes']['1']:
-            for p in route['waypoints']:
-                for x,z in centres:
-                    self.assertGreater((p[0]-x)**2+(p[1]-z)**2,20**2)
 
     def test_corner_links_leave_the_three_closed_side_cells_unchanged(self):
         self.assertEqual(4,self.graph['bake']['local_adapter_directed_links_added'])

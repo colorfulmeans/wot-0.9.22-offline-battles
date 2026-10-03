@@ -52,10 +52,18 @@ currently supported regular battle mode is authored. Window zoom/pan/resize
 never changes stored world X/Z coordinates. Himmelsdorf's non-centred bounds
 are covered explicitly.
 
-Original routes are visible but read-only. Copy one to customize it, or create
-an empty route and click to add points. Drag points, Shift-click to insert,
-Delete to remove, and use the hold action to mark a hold waypoint. Undo/redo
-stores document edits, not view changes. Route attributes include allowed
+Original routes can be edited directly: select a built-in route, drag points,
+click to append, Shift-click to insert, or Delete to remove a point. The existing
+16-point communication limit still applies. Edits are saved per map, team and
+route in the profile, and applied on the next round without rewriting installed
+navigation resources. Reset route restores the selected original geometry;
+undo/redo covers these edits. Built-in identities and allocation metadata remain
+unchanged, so normal route assignment and emergency lane changes use the edited
+geometry. A disconnected or unusable edit falls back to its original route and
+is logged; Check map reports its baked validation result before a match.
+
+Copy a route or create an empty custom route for separate allocation rules or
+timed waypoint conditions. Custom route attributes include allowed
 classes, optional 1-based UI slots, capacity, sampling weight, and preferred or
 fixed policy. SPGs are deliberately excluded from ordinary attack-route class
 assignments and use their position library instead.

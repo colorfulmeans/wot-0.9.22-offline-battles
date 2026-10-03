@@ -31,6 +31,36 @@ class EditorUITests(unittest.TestCase):
         self.assertFalse(self.ui.dirty());self.assertEqual({},self.ui.store.active()['maps'])
         self.assertEqual(41,len(self.ui.map_labels));self.assertTrue(self.ui.graph_cache['08_ruinberg'])
 
+    def test_builtin_drag_insert_delete_undo_save_reopen_and_reset(self):
+        graph=copy.deepcopy(self.ui.graph_cache['08_ruinberg'])
+        source=graph['routes']['1'][0]
+        self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
+        self.assertEqual(('builtin',source['id']),self.ui.selection)
+        self.assertFalse(self.ui.dirty());self.assertEqual({},self.ui.document['maps'])
+        original=copy.deepcopy(self.ui._selected()['points'])
+        self.ui.selected_point=1;self.ui.delete_point()
+        self.assertEqual(len(original)-1,len(self.ui._selected()['points']))
+        self.ui.undo();self.assertEqual(original,self.ui._selected()['points']);self.ui.redo()
+        first=self.ui._selected()['points'][0];start=self.ui.view.screen(first)
+        end=self.ui.view.screen((first[0]+8,first[1]-8))
+        self.ui.canvas.event_generate('<ButtonPress-1>',x=int(start[0]),y=int(start[1]))
+        self.ui.canvas.event_generate('<B1-Motion>',x=int(end[0]),y=int(end[1]))
+        self.ui.canvas.event_generate('<ButtonRelease-1>',x=int(end[0]),y=int(end[1]));self.root.update()
+        self.assertNotEqual(original[0][:2],self.ui._selected()['points'][0][:2])
+        self.ui.selected_point=0;self.click(original[1],shift=True)
+        self.assertEqual(len(original),len(self.ui._selected()['points']))
+        self.ui.profile_name.set('Default adjustments');self.ui.save(True);self.root.update()
+        self.assertFalse(self.error_mock.called,self.error_mock.call_args)
+        saved=self.ui.store.active();entry=saved['maps']['08_ruinberg']
+        self.assertEqual([],entry['routes']);self.assertEqual(1,len(entry['default_routes']))
+        self.assertEqual(source['id'],entry['default_routes'][0]['id'])
+        self.ui.adopt(saved);self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
+        self.assertEqual(entry['default_routes'][0]['points'],self.ui._selected()['points'])
+        self.assertEqual(graph,self.ui.graph_cache['08_ruinberg'])
+        self.ui.reset_builtin();self.assertEqual(original,self.ui._selected()['points'])
+        self.assertNotIn('08_ruinberg',self.ui.document['maps'])
+        self.ui.undo();self.assertEqual(entry['default_routes'][0]['points'],self.ui._selected()['points'])
+
     def test_draw_drag_insert_undo_save_reopen_and_apply_route(self):
         self.ui.new_route();self.root.update()
         self.click((-66,306));self.click((-126,246));self.click((-186,186))

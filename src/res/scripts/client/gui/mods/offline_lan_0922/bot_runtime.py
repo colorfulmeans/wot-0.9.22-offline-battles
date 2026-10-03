@@ -2467,6 +2467,12 @@ class BotRuntime(object):
         if (not isinstance(baked_routes, dict) or not any(
                 baked_routes.get(key) for key in (1, 2, '1', '2'))):
             return self.adapter_factory(map_name, round_id)
+        baked_routes, outcomes = bot_tactics_runtime.default_routes(
+            self._bot_tactics, tactical_maps.normalize_map_name(map_name),
+            self.baked_graph)
+        for route_id, status in sorted(outcomes.items()):
+            sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS default route=%s status=%s\n' %
+                             (route_id, status))
         if self.adapter_factory is BotAdapter:
             return self.adapter_factory(map_name, round_id,
                                         baked_routes=baked_routes)

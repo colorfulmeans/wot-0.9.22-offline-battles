@@ -92,6 +92,30 @@ def route_value(route):
             'waypoints': tuple(tuple(p[:3]) for p in route['points'])}
 
 
+def default_routes(profile, name, graph):
+    """Apply editor geometry before the director assigns or restores routes.
+
+    Keep source graphs immutable and retain identities and allocation metadata.
+    Unusable edits fall back independently, just like authored custom routes.
+    """
+    edits = config.map_settings(profile, name).get('default_routes', ())
+    routes = graph.get('routes')
+    if not edits:
+        return routes, {}
+    grid = graph_view(name, graph)
+    result = copy.deepcopy(routes)
+    outcomes = {}
+    for edit in edits:
+        key = '%s:%s' % (edit['team'], edit['id'])
+        source = next((r for r in result.get(str(edit['team']), ())
+                       if r['id'] == edit['id']), None)
+        error = validate_route(grid, edit) if source is not None else 'unknown_default_route'
+        outcomes[key] = error or 'baked_route_connected'
+        if error is None:
+            source['waypoints'] = [list(p) for p in edit['points']]
+    return result, outcomes
+
+
 def assign_routes(profile, name, graph, states, round_id):
     routes = config.map_settings(profile, name).get('routes', ())
     if not routes:
@@ -199,6 +223,10 @@ def authoring_check(profile, name, graph):
     """Cheap UI evidence only; actual vehicle-sized parking is tested on load."""
     grid = graph_view(name, graph)
     messages = []
+    for route in config.map_settings(profile, name).get('default_routes', ()):
+        error = validate_route(grid, route)
+        messages.append(('%s:%s' % (route['team'], route['id']),
+                         error or 'baked_route_connected'))
     for route in config.map_settings(profile, name).get('routes', ()):
         error = validate_route(grid, route)
         messages.append((route['id'], error or 'baked_route_connected'))
