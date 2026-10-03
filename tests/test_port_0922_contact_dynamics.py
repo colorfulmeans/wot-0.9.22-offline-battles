@@ -117,7 +117,7 @@ class GroundContactTests(unittest.TestCase):
         peer['position'] = (10., 0., 0.)
         self.assertFalse(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
         peer.update(position=(2.99, 0., 0.), team=1)
-        self.assertFalse(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
+        self.assertTrue(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
 
     def test_korea_offset_side_contact_selects_checked_separating_end(self):
         """The 181355 Object 212 pose must actively leave the WZ-132."""
@@ -209,7 +209,7 @@ class GroundContactTests(unittest.TestCase):
                 bot_position[2] - forward[1] * 8.0),
         }
         state['neighbours'] = [player, rear]
-        geometry = adapter._enemy_contact(15, state, bot_position)
+        geometry = adapter._hull_contact(15, state, bot_position)
         self.assertIsNone(adapter._contact_escape_plan(
             state, bot_position, lambda *unused: True, geometry))
 

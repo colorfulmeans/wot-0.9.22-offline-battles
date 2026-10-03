@@ -12113,6 +12113,8 @@ class BotRuntime(object):
                         state, previous_command, physics_params)
                 decision_state = {
                     'id': state['id'],
+                    'team': state.get('team', 0),
+                    'collision_shape': state.get('collision_shape'),
                     'slot': int(state.get('slot', 0)),
                     'position': position,
                     'yaw': state['yaw'],
@@ -12471,6 +12473,10 @@ class BotRuntime(object):
                     _distance(position, _point(move_position, position)) -
                     ai_driver.WAYPOINT_ARRIVAL_RADIUS)
                 maximum_probe_distance = min(remaining, reactive_horizon)
+            elif command.get('recovery_mode') in (
+                    'contact_escape', 'forward_escape', 'wreck_push'):
+                maximum_probe_distance = ai_driver.recovery_probe_distance(
+                    state.get('half_length', 3.5))
             elif (travel_sign < 0.0 and reactive_horizon is not None and
                     command.get('recovery_mode') in ('reverse_turn', 'reverse_withdraw')):
                 # Recovery is intentionally a short backing manoeuvre. A wall

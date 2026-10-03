@@ -27,6 +27,11 @@ RECOVERY_YAW_OFFSET = 0.85
 RECOVERY_SWEEP_FRACTIONS = (0.25, 0.50, 0.75, 1.0)
 
 
+def recovery_probe_distance(half_length):
+	"""Terrain reach of one bounded longitudinal escape."""
+	return max(0.5, float(half_length)) * 1.6
+
+
 def _angle_delta(target, current):
 	value = float(target) - float(current)
 	while value > math.pi:
@@ -100,7 +105,7 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		combat_mode=None, movement_intent=False):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn', 'reverse_withdraw',
-			'pivot_recovery', 'forward_escape', 'contact_escape', 'friendly_yield',
+			'pivot_recovery', 'forward_escape', 'contact_escape', 'wreck_push', 'friendly_yield',
 			'nav_wait', 'physical_hold'):
 		return float(turn), float(throttle), False
 	if movement_intent and combat_mode != 'engage':

@@ -7,11 +7,12 @@ for visibility, collision probes, and applying commands to any client entity.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
+from gui.mods.offline_lan_0922 import tank_collision
 
 import math
 
 from gui.mods.offline_lan_0922.ai.driver import (
-    LocalDriver, WAYPOINT_ARRIVAL_RADIUS,
+    LocalDriver, WAYPOINT_ARRIVAL_RADIUS, recovery_probe_distance,
 )
 from gui.mods.offline_lan_0922.ai.planner import BattleDirector
 
@@ -43,6 +44,9 @@ class BotAdapter(object):
                                       baked_routes=baked_routes)
         self.driver = LocalDriver()
         self.navigation_target = navigation_target
+        self._contact_peers = {}
+        self._contact_attempts = {}
+        self._wreck_attempts = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
         return self.director.register(bot_id, team, descriptor, display_name)
@@ -50,6 +54,179 @@ class BotAdapter(object):
     def forget(self, bot_id):
         self.driver.forget(bot_id)
         self.director.agents.pop(int(bot_id), None)
+        self._contact_peers.pop(int(bot_id), None)
+        self._contact_attempts.pop(int(bot_id), None)
+        self._wreck_attempts.pop(int(bot_id), None)
+
+    def _hull_contact(self, bot_id, state, position):
+        """Return geometry for a real hull contact across small gaps."""
+        shape = state.get('collision_shape') or (
+            state.get('half_width', 1.7), state.get('half_length', 3.5),
+            tank_collision.DEFAULT_SHAPE[2], tank_collision.DEFAULT_SHAPE[3])
+        previous = self._contact_peers.get(bot_id)
+        for peer in state.get('neighbours', ()):
+            where = _position(peer.get('position', peer))
+            other_shape = tank_collision._tank_shape(peer)
+            if not tank_collision.vertical_overlap(position[1], shape, where[1], other_shape):
+                continue
+            overlap = tank_collision._obb_overlap(
+                position[0], position[2], state.get('yaw', 0.0), shape,
+                where[0], where[2], peer.get('yaw', 0.0), other_shape)
+            margin = (tank_collision.CONTACT_BROADPHASE_PADDING
+                      if peer.get('id') == previous else tank_collision.POSITION_SLOP)
+            if overlap[2] >= -margin:
+                self._contact_peers[bot_id] = peer.get('id')
+                return {
+                    'peer_id': peer.get('id'),
+                    'normal': overlap[:2],
+                    'peer_position': where,
+                }
+        self._contact_peers.pop(bot_id, None)
+        self._contact_attempts.pop(bot_id, None)
+        return None
+
+    def _contact_escape_plan(self, state, position, direction_clear,
+                             contact):
+        """Select one separating longitudinal exit and prove its full sweep.
+
+        A side contact does not imply that both longitudinal directions are
+        usable.  In particular, driving towards the near end of an offset
+        hull makes the final traffic guard brake, leaving a tactical hold with
+        ``contact_escape`` intent but zero throttle.  Only choose a direct
+        escape when SAT geometry identifies a separating end, and retain the
+        same terrain and complete-vehicle-sweep checks as ordinary recovery.
+        A centred side contact tries both checked ends in bounded episodes.
+        """
+        if not isinstance(contact, dict):
+            return None
+        yaw = float(state.get('yaw', 0.0))
+        forward = math.sin(yaw), math.cos(yaw)
+        normal = contact.get('normal') or (0.0, 0.0)
+        peer_position = contact.get('peer_position')
+        normal_alignment = (forward[0] * float(normal[0]) +
+                            forward[1] * float(normal[1]))
+        longitudinal_offset = 0.0
+        if peer_position is not None:
+            longitudinal_offset = (
+                forward[0] * (float(position[0]) - float(peer_position[0])) +
+                forward[1] * (float(position[2]) - float(peer_position[2])))
+        epsilon = tank_collision.POSITION_SLOP
+        if abs(normal_alignment) > epsilon:
+            preferred = 1.0 if normal_alignment > 0.0 else -1.0
+        elif abs(longitudinal_offset) > epsilon:
+            # The contact is on a side face. Leave through the nearer
+            # longitudinal end instead of compressing the overlap along it.
+            preferred = 1.0 if longitudinal_offset > 0.0 else -1.0
+        else:
+            bot_id = int(state.get('id', 0))
+            attempt = self._contact_attempts.get(bot_id)
+            if (attempt is None or attempt['peer'] != contact.get('peer_id') or
+                    math.hypot(position[0]-attempt['position'][0],
+                               position[2]-attempt['position'][2]) >= 0.5):
+                attempt = dict(peer=contact.get('peer_id'), position=position,
+                               elapsed=0.0)
+                self._contact_attempts[bot_id] = attempt
+            attempt['elapsed'] += max(0.0, float(state.get('dt', 0.0)))
+            preferred = -1.0 if int(attempt['elapsed']/1.5) % 2 == 0 else 1.0
+        shape = state.get('collision_shape') or (
+            state.get('half_width', 1.7), state.get('half_length', 3.5),
+            tank_collision.DEFAULT_SHAPE[2], tank_collision.DEFAULT_SHAPE[3])
+        half_width = float(state.get('half_width', shape[0]))
+        half_length = float(state.get('half_length', shape[1]))
+        neighbours = state.get('neighbours', ())
+        for sign in (preferred, -preferred):
+            heading = yaw + (math.pi if sign < 0.0 else 0.0)
+            if not self.driver._clear(
+                    direction_clear, heading,
+                    recovery_probe_distance(half_length)):
+                continue
+            # ``_reverse_blocked_by_vehicle`` owns the exact longitudinal OBB
+            # sweep. Supplying the opposite hull heading makes its reverse
+            # axis equal this candidate's direction of travel.
+            blocker = self.driver._reverse_blocked_by_vehicle(
+                position, heading + math.pi, neighbours,
+                half_length, half_width)
+            if blocker is not None:
+                continue
+            distance = 2.0 * half_length + WAYPOINT_ARRIVAL_RADIUS
+            target = (
+                position[0] + math.sin(heading) * distance,
+                position[1],
+                position[2] + math.cos(heading) * distance)
+            return target, {
+                'throttle': 0.72 * sign,
+                'brake': False,
+                'turn': 0.0,
+                'target_yaw': yaw,
+                'recovery_mode': 'contact_escape',
+            }
+        return None
+
+    def _wreck_push_plan(self, bot_id, state, position, strategic,
+                         direction_clear):
+        """Spend a bounded motor attempt before avoiding a movable wreck.
+
+        This admits controls only. The normal terrain, hull and contact solver
+        still owns every resulting pose and any displacement of the wreck.
+        Route changes or real wreck movement renew the attempt; yaw oscillation
+        and tiny order changes do not.
+        """
+        if (strategic.get('combat_mode') not in ('route', 'advance') or
+                strategic.get('throttle_override') is not None):
+            return None
+        yaw = float(state.get('yaw', 0.0))
+        length = float(state.get('half_length', 3.5))
+        width = float(state.get('half_width', 1.7))
+        neighbours = state.get('neighbours', ())
+        wreck = next((peer for peer in neighbours
+                      if not peer.get('alive', True) and
+                      self.driver._static_hull_ahead(
+                          position, yaw, [peer], length, width)), None)
+        if wreck is None:
+            return None
+        where = _position(wreck.get('position', wreck))
+        forward = math.sin(yaw), math.cos(yaw)
+        if ((where[0]-position[0])*forward[0] +
+                (where[2]-position[2])*forward[1] <= 0.0):
+            return None
+        goal = _position(strategic.get('move_position'), position)
+        desired = math.atan2(goal[0]-position[0], goal[2]-position[2])
+        error = (desired-yaw+math.pi) % (2.0*math.pi)-math.pi
+        if abs(error) > math.pi/3.0:
+            return None
+        key = (wreck.get('id'), strategic.get('route_id'),
+               strategic.get('route_index'))
+        attempt = self._wreck_attempts.get(bot_id)
+        if (attempt is None or attempt['key'] != key or
+                math.hypot(where[0]-attempt['position'][0],
+                           where[2]-attempt['position'][2]) >= 1.0):
+            attempt = dict(key=key, position=where, elapsed=0.0)
+            self._wreck_attempts[bot_id] = attempt
+        attempt['elapsed'] += max(0.0, float(state.get('dt', 0.0)))
+        if attempt['elapsed'] >= 8.0:
+            return None
+        reach = recovery_probe_distance(length)
+        if not self.driver._clear(direction_clear, yaw, reach):
+            return None
+        living = [peer for peer in neighbours if peer.get('alive', True)]
+        if self.driver._reverse_blocked_by_vehicle(
+                position, yaw+math.pi, living, length, width) is not None:
+            return None
+        # First push squarely, then spend track torque on alternate small turns.
+        # A world wall still vetoes the manoeuvre; wreck contacts spend real
+        # motor force even when the realised rotation is clamped by physics.
+        turn = 0.0
+        if attempt['elapsed'] >= 2.0:
+            side = 1.0 if int(attempt['elapsed']/2.0) % 2 else -1.0
+            sample_yaw = yaw + side*0.25
+            pose_clear = state.get('pose_clear')
+            if (self.driver._clear(direction_clear, sample_yaw, reach) and
+                    (pose_clear is None or pose_clear(sample_yaw))):
+                turn = side*0.4
+        target = (position[0]+forward[0]*reach, position[1],
+                  position[2]+forward[1]*reach)
+        return target, dict(throttle=0.72, turn=turn, target_yaw=yaw,
+                            recovery_mode='wreck_push')
 
     def decide(self, state, direction_clear):
         """Return a deterministic, serializable command for one bot.
@@ -174,10 +351,21 @@ class BotAdapter(object):
         if callable(self.navigation_target):
             target = _position(self.navigation_target(
                 bot_id, position, target, strategic, state), target)
+        contact_plan = self._wreck_push_plan(
+            bot_id, state, position, strategic, direction_clear)
+        contact = self._hull_contact(bot_id, state, position)
+        if contact_plan is None and contact is not None:
+            contact_plan = self._contact_escape_plan(
+                state, position, direction_clear, contact)
+        if contact_plan is not None:
+            target = contact_plan[0]
         stop_at_target = bool(state.get(
             'navigation_stop_at_target',
             strategic.get('combat_mode') not in ('route', 'advance')))
         throttle_override = strategic.get('throttle_override')
+        if contact_plan is not None:
+            throttle_override = None
+            stop_at_target = False
         movement_intent = not (
             throttle_override is not None and
             float(throttle_override) <= 0.0)
@@ -190,7 +378,9 @@ class BotAdapter(object):
             requested_dx * requested_dx + requested_dz * requested_dz > 225.0 and
             target_dx * target_dx + target_dz * target_dz <=
             WAYPOINT_ARRIVAL_RADIUS * WAYPOINT_ARRIVAL_RADIUS)
-        if navigation_wait:
+        if contact_plan is not None:
+            local = contact_plan[1]
+        elif navigation_wait:
             # TerrainNavigator returned the current pose because a resumable A*
             # job is still pending. This is a planner wait, not route arrival and
             # not physical evidence that should advance LocalDriver recovery.

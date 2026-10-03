@@ -58,5 +58,56 @@ class RuntimeWithdrawalTests(unittest.TestCase):
         self.assertFalse(state['hull_aiming'])
 
 
+    def contact_runtime(self, peer_position, mode):
+        descriptor = harness._combat_descriptor(turret_yaw_limits=(-.1, .1))
+        runtime = self.fixture.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: descriptor,
+            direction_probe=lambda *unused: dict(clear=True, slope=0.),
+            ground_probe=lambda *unused: 0., physics_ground_probe=lambda *unused: 0.,
+            spawn_resolver=lambda *unused: ((0., 0., 0.), 0.),
+            baked_graph=harness._flat_open_graph())
+        start = dict(self.fixture.start)
+        start['bots'] = [dict(id=11, team=2, slot=0, name='Bot'),
+                         dict(id=12, team=2, slot=1, name='Wreck')]
+        runtime.battle_start(start)
+        for state in runtime.states.values():
+            state.update(yaw=0., speed=0., grounded_once=True,
+                         collision_shape=(1.5, 3.5, -.8, 2.),
+                         half_length=3.5, half_width=1.5)
+        runtime.states[12].update(alive=False, health=0.,
+                                 x=peer_position[0], y=0., z=peer_position[2])
+        runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[dict(
+            id=11, team=2, combat_mode=mode,
+            move_position=(0., 0., 100.) if mode=='route' else (0., 0., 0.),
+            aim_position=(100., 0., 0.), face_position=(100., 0., 0.),
+            fire_range=500., fire_allowed=False,
+            throttle_override=None if mode=='route' else 0.)]))
+        return runtime
+
+    def test_side_wreck_firing_hold_uses_real_adapter_and_integrated_exit(self):
+        runtime = self.contact_runtime((2.99, 0., 0.), 'engage')
+        modes=set()
+        with contextlib.redirect_stdout(io.StringIO()):
+            for frame in range(1, 81):
+                runtime.update(.05, frame*.05)
+                modes.add(runtime._decision_cache[11][3]['recovery_mode'])
+        self.assertIn('contact_escape', modes)
+        self.assertGreater(abs(runtime.states[11]['z']), 1.)
+
+    def test_front_wreck_push_spends_motor_force_in_contact_solver(self):
+        runtime = self.contact_runtime((0., 0., 6.99), 'route')
+        # A lighter passive body proves that admitted controls reach the real
+        # contact solver. An equal/heavier wreck is allowed to resist the push.
+        runtime.states[12]['mass'] = 1500.
+        modes=set()
+        with contextlib.redirect_stdout(io.StringIO()):
+            for frame in range(1, 61):
+                runtime.update(.05, frame*.05)
+                modes.add(runtime._decision_cache[11][3]['recovery_mode'])
+        self.assertIn('wreck_push', modes)
+        self.assertGreater(runtime.states[11]['z'], .1)
+        self.assertGreater(runtime.states[12]['z'], 7.1)
+
+
 if __name__ == '__main__':
     unittest.main()
