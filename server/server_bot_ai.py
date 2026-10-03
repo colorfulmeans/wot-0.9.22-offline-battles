@@ -45,6 +45,7 @@ COMBAT_RANGE_HYSTERESIS_MIN = 8.0
 COMBAT_RANGE_HYSTERESIS_MAX = 20.0
 RETREAT_ARRIVAL_RADIUS = 6.0
 RETREAT_PROGRESS_TIMEOUT_SECONDS = 10.0
+RETREAT_DEFENSIVE_PAUSE_SECONDS = 15.0
 RETREAT_PROGRESS_EPSILON = 2.0
 ROUTE_ARRIVAL_RADIUS = 13.0
 CLOSE_THREAT_DISTANCE = 50.0
@@ -1792,16 +1793,29 @@ class BotPlanner(object):
               _number(retreat.get("best_distance"), distance)):
             retreat["best_distance"] = distance
             retreat["last_progress_at"] = _number(now)
+        if retreat.get("phase") == "resume":
+            if order.get("target_id") is None:
+                return order
+            self._retreat_states.pop(bot_id, None)
+            return self._apply_retreat_order(
+                order, bot, retreat_point, face_point, now, moving_mode, hold_mode)
         if retreat.get("phase") != "hold" and (
                 distance <= RETREAT_ARRIVAL_RADIUS or
                 _number(now) - _number(retreat.get("last_progress_at")) >=
                 RETREAT_PROGRESS_TIMEOUT_SECONDS):
             retreat["phase"] = "hold"
+            retreat["hold_since"] = _number(now)
             retreat["anchor"] = (
                 target if distance <= RETREAT_ARRIVAL_RADIUS else
                 _point(state))
             retreat["face"] = _point(face_point)
         if retreat.get("phase") == "hold":
+            # A finished withdrawal is a defensive pause, not a permanent
+            # battle-long parking order after the local threat has gone.
+            if (order.get("target_id") is None and _number(now) -
+                    _number(retreat.get("hold_since"), now) >= RETREAT_DEFENSIVE_PAUSE_SECONDS):
+                retreat["phase"] = "resume"
+                return order
             # Keep the established combat mode so the worker continues its
             # normal cover-refresh eligibility.  The explicit phase marks
             # this as a terminal defensive hold rather than an endless drive.

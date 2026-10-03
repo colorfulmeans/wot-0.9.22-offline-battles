@@ -78,6 +78,8 @@ class BotAdapter(object):
                 self._contact_peers[bot_id] = peer.get('id')
                 return {
                     'peer_id': peer.get('id'),
+                    'peer_team': peer.get('team'),
+                    'peer_alive': peer.get('alive', True),
                     'normal': overlap[:2],
                     'peer_position': where,
                 }
@@ -164,7 +166,7 @@ class BotAdapter(object):
 
     def _wreck_push_plan(self, bot_id, state, position, strategic,
                          direction_clear):
-        """Spend a bounded motor attempt before avoiding a movable wreck.
+        """Try local detours before spending a bounded wreck motor attempt.
 
         This admits controls only. The normal terrain, hull and contact solver
         still owns every resulting pose and any displacement of the wreck.
@@ -177,33 +179,38 @@ class BotAdapter(object):
         yaw = float(state.get('yaw', 0.0))
         length = float(state.get('half_length', 3.5))
         width = float(state.get('half_width', 1.7))
+        goal = _position(strategic.get('move_position'), position)
+        desired = math.atan2(goal[0]-position[0], goal[2]-position[2])
         neighbours = state.get('neighbours', ())
         wreck = next((peer for peer in neighbours
                       if not peer.get('alive', True) and
                       self.driver._static_hull_ahead(
-                          position, yaw, [peer], length, width)), None)
+                          position, desired, [peer], length, width)), None)
         if wreck is None:
             return None
         where = _position(wreck.get('position', wreck))
         forward = math.sin(yaw), math.cos(yaw)
-        if ((where[0]-position[0])*forward[0] +
-                (where[2]-position[2])*forward[1] <= 0.0):
-            return None
-        goal = _position(strategic.get('move_position'), position)
-        desired = math.atan2(goal[0]-position[0], goal[2]-position[2])
         error = (desired-yaw+math.pi) % (2.0*math.pi)-math.pi
-        if abs(error) > math.pi/3.0:
-            return None
         key = (wreck.get('id'), strategic.get('route_id'),
                strategic.get('route_index'))
         attempt = self._wreck_attempts.get(bot_id)
         if (attempt is None or attempt['key'] != key or
                 math.hypot(where[0]-attempt['position'][0],
                            where[2]-attempt['position'][2]) >= 1.0):
-            attempt = dict(key=key, position=where, elapsed=0.0)
+            attempt = dict(key=key, position=where, elapsed=0.0,
+                           best_distance=math.hypot(goal[0]-position[0], goal[2]-position[2]))
             self._wreck_attempts[bot_id] = attempt
+        distance = math.hypot(goal[0]-position[0], goal[2]-position[2])
+        if distance + 0.5 <= attempt['best_distance']:
+            attempt['best_distance'] = distance
+            attempt['elapsed'] = 0.0
         attempt['elapsed'] += max(0.0, float(state.get('dt', 0.0)))
-        if attempt['elapsed'] >= 8.0:
+        if attempt['elapsed'] < 6.0:
+            return None
+        if attempt['elapsed'] >= 14.0:
+            return position, dict(throttle=0.0, turn=0.0, target_yaw=yaw,
+                                  recovery_mode='blocked')
+        if abs(error) > math.pi/3.0:
             return None
         reach = recovery_probe_distance(length)
         if not self.driver._clear(direction_clear, yaw, reach):
@@ -216,8 +223,8 @@ class BotAdapter(object):
         # A world wall still vetoes the manoeuvre; wreck contacts spend real
         # motor force even when the realised rotation is clamped by physics.
         turn = 0.0
-        if attempt['elapsed'] >= 2.0:
-            side = 1.0 if int(attempt['elapsed']/2.0) % 2 else -1.0
+        if attempt['elapsed'] >= 8.0:
+            side = 1.0 if int((attempt['elapsed']-6.0)/2.0) % 2 else -1.0
             sample_yaw = yaw + side*0.25
             pose_clear = state.get('pose_clear')
             if (self.driver._clear(direction_clear, sample_yaw, reach) and
@@ -354,7 +361,12 @@ class BotAdapter(object):
         contact_plan = self._wreck_push_plan(
             bot_id, state, position, strategic, direction_clear)
         contact = self._hull_contact(bot_id, state, position)
-        if contact_plan is None and contact is not None:
+        side_contact = bool(contact is not None and abs(
+            math.sin(state.get('yaw', 0.0))*contact['normal'][0] +
+            math.cos(state.get('yaw', 0.0))*contact['normal'][1]) < 0.35)
+        if (contact_plan is None and contact is not None and
+                (side_contact or (strategic.get('throttle_override') is not None and
+                 (not contact['peer_alive'] or contact['peer_team'] != state.get('team'))))):
             contact_plan = self._contact_escape_plan(
                 state, position, direction_clear, contact)
         if contact_plan is not None:
@@ -406,6 +418,7 @@ class BotAdapter(object):
                     stopping_distance=state.get('stopping_distance'),
                     stop_at_target=stop_at_target,
                     decision_horizon=float(state.get('decision_horizon', 0.0)),
+                    progress_target=move_position,
                     pose_clear=state.get('pose_clear'))
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks

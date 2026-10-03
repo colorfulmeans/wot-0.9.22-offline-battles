@@ -553,7 +553,7 @@ class LocalDriver(object):
 	@observed('driver.choose_yaw')
 	def _choose_yaw(self, state, desired_yaw, direction_clear,
 			position=None, neighbours=None,
-			half_length=3.5, half_width=1.7):
+			half_length=3.5, half_width=1.7, pose_clear=None):
 		# Teammate proximity never replaces the route with a repulsion heading.
 		# Crossing priority is coordinated separately; real contact owns overlap.
 		candidates = []
@@ -571,7 +571,8 @@ class LocalDriver(object):
 		# Probe in score order and return the first fully viable direction. Most
 		# frames need one terrain ray set instead of probing all seven candidates.
 		for unused_score, candidate in candidates:
-			if (self._clear(direction_clear, candidate) and
+			if ((pose_clear is None or pose_clear(candidate)) and
+					self._clear(direction_clear, candidate) and
 					not (position is not None and self._static_hull_ahead(
 						position, candidate, neighbours,
 						half_length, half_width))):
@@ -586,7 +587,8 @@ class LocalDriver(object):
 			neighbours, direction_clear, velocity=None,
 			half_length=3.5, half_width=1.7,
 			movement_intent=True, stopping_distance=None,
-			stop_at_target=True, decision_horizon=0.0, pose_clear=None):
+			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
+			progress_target=None):
 		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -610,6 +612,7 @@ class LocalDriver(object):
 		state['last_desired_yaw'] = desired_yaw
 		target_distance = _distance(position, target)
 		if not movement_intent:
+			state.pop('objective_progress', None)
 			# Cover/engagement orders intentionally stop within a tolerance. Do not
 			# reinterpret that commanded hold as a stuck tank 1.8 seconds later.
 			state['stuck_time'] = 0.0
@@ -629,7 +632,22 @@ class LocalDriver(object):
 		displacement = _distance((position[0], 0.0, position[2]),
 		                         (state['last_position'][0], 0.0,
 		                          state['last_position'][1]))
-		if target_distance <= WAYPOINT_ARRIVAL_RADIUS:
+		# Local targets may alternate around a prop while the tank makes no
+		# progress toward its actual order. Do not credit that orbit as travel.
+		objective_stalled = False
+		if progress_target is not None:
+			progress = state.get('objective_progress')
+			distance = _distance(position, progress_target)
+			if (progress is None or _distance(progress['goal'], progress_target) > 2.0 or
+					distance <= WAYPOINT_ARRIVAL_RADIUS):
+				progress = {'goal': tuple(progress_target), 'best': distance,
+				            'at': state['clock']}
+				state['objective_progress'] = progress
+			elif distance + 0.5 <= progress['best']:
+				progress['best'] = distance
+				progress['at'] = state['clock']
+			objective_stalled = state['clock'] - progress['at'] >= 8.0
+		if target_distance <= WAYPOINT_ARRIVAL_RADIUS and not objective_stalled:
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)
 			# is zero and previously produced full throttle until the next order tick.
 			state['stuck_time'] = 0.0
@@ -677,6 +695,8 @@ class LocalDriver(object):
 
 		timing_phase = state['recovery_timing_phase']
 		threshold = self.stuck_seconds + timing_phase * 0.42
+		if objective_stalled:
+			state['stuck_time'] = max(state['stuck_time'], threshold)
 		if state['recovery_time'] > 0.0:
 			state['recovery_time'] = max(0.0, state['recovery_time'] - step)
 			if state['recovery_time'] == 0.0:
@@ -686,6 +706,8 @@ class LocalDriver(object):
 				state['heading_progress_yaw'] = None
 		else:
 			if state['stuck_time'] >= threshold:
+				if progress_target is not None:
+					state['objective_progress']['at'] = state['clock']
 				if state.get('last_clear_yaw') is not None:
 					state['failed_yaws'][self._yaw_key(state['last_clear_yaw'])] = (
 						state['clock'] + self.failure_ttl)
@@ -794,6 +816,7 @@ class LocalDriver(object):
 		if (old_yaw is not None and state['plan_age'] < hold_seconds and
 				abs(_angle_delta(desired_yaw, old_yaw)) < 2.15 and
 				self._failure_penalty(state, old_yaw) <= 0.0 and
+				(pose_clear is None or pose_clear(old_yaw)) and
 				self._clear(direction_clear, old_yaw) and
 				not self._static_hull_ahead(
 					position, old_yaw, neighbours,
@@ -802,7 +825,7 @@ class LocalDriver(object):
 		if chosen_yaw is None:
 			chosen_yaw = self._choose_yaw(
 				state, desired_yaw, direction_clear, position, neighbours,
-				own_half_length, own_half_width)
+				own_half_length, own_half_width, pose_clear)
 			state['plan_age'] = 0.0
 		if chosen_yaw is None:
 			# No forward ray is usable.  Start a timed recovery on the next tick

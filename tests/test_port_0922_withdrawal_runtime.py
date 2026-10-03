@@ -99,9 +99,17 @@ class RuntimeWithdrawalTests(unittest.TestCase):
         # A lighter passive body proves that admitted controls reach the real
         # contact solver. An equal/heavier wreck is allowed to resist the push.
         runtime.states[12]['mass'] = 1500.
+        # Only the straight front corridor is open; both detours and rear
+        # escape are refused before the bounded push becomes available.
+        runtime.navigator.grid.prebaked = False
+        runtime.navigator.grid.obstacle_probe = lambda start, end, width: (
+            abs(end[0]-start[0]) > .01 or end[2] < start[2])
+        runtime.direction_probe = lambda position, yaw, *args: dict(
+            clear=abs(yaw) < .1, slope=0.)
+        runtime.rotation_resolver = lambda *args: False
         modes=set()
         with contextlib.redirect_stdout(io.StringIO()):
-            for frame in range(1, 61):
+            for frame in range(1, 181):
                 runtime.update(.05, frame*.05)
                 modes.add(runtime._decision_cache[11][3]['recovery_mode'])
         self.assertIn('wreck_push', modes)

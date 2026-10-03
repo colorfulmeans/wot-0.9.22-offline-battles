@@ -2009,11 +2009,12 @@ class BotRuntime(object):
                  incoming_lane_probe=None, combat_diagnostics=None,
                  turret_motion_probe=None, turret_hulls_provider=None,
                  artillery_status_probe=None, wreck_rotation_probe=None,
-                 wreck_ground_probe=None):
+                 wreck_ground_probe=None, rotation_resolver=None):
         self.local_player_id = local_player_id
         self.artillery_status_probe = artillery_status_probe
         self._wreck_rotation_probe = wreck_rotation_probe
         self._wreck_ground_probe = wreck_ground_probe
+        self.rotation_resolver = rotation_resolver
         self._combat_diagnostics = combat_diagnostics
         self.descriptor_resolver = descriptor_resolver or (lambda unused: {})
         self.player_descriptor_resolver = player_descriptor_resolver
@@ -12021,6 +12022,19 @@ class BotRuntime(object):
                 # Whether this hull may rotate where it stands is a question
                 # about a rectangle, not about a heading. Answer it from the
                 # shipped graph the navigator already owns.
+                delta = _angle_delta(sample_yaw, state['yaw'])
+                for side, failed in list(state.get('_blocked_rotations', {}).items()):
+                    origin, old_yaw, rejected_delta, until = failed
+                    if (now >= until or _distance(position, origin) > 0.08 or
+                            abs(_angle_delta(state['yaw'], old_yaw)) > 0.02):
+                        del state['_blocked_rotations'][side]
+                    elif delta * side > 0.0 and abs(delta) >= abs(rejected_delta):
+                        return False
+                if tank_collision.rotation_fraction(
+                        position, state['yaw'], sample_yaw,
+                        state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
+                        self._neighbours_for(state, neighbours)) < 1.0:
+                    return False
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
                 if not callable(pose_probe):
@@ -12797,20 +12811,43 @@ class BotRuntime(object):
                         state['_rotation_contact_blocked'] = True
                         state['_contact_motor_turn'] = steer_dir
                         state['rotation_dir'] = 0
-                if (not self._baked_pose_progress_clear(
+                rotation_blocked = (not self._baked_pose_progress_clear(
                         state, position, old_hull_yaw,
                         position, candidate_hull_yaw) or
                         (abs(_angle_delta(candidate_hull_yaw,
                                           old_hull_yaw)) > 1.0e-8 and
                          not self._turret_pose_is_clear(
                              state, position, old_hull_yaw,
-                             position, candidate_hull_yaw))):
+                             position, candidate_hull_yaw)))
+                rotation_block_reason = 'arena_or_turret' if rotation_blocked else None
+                rotation_drive_held = False
+                if (not rotation_blocked and self.rotation_resolver is not None and
+                        not state.get('airborne', False) and
+                        abs(_angle_delta(candidate_hull_yaw, old_hull_yaw)) > 1.0e-8):
+                    rotation_blocked = not bool(timed_call(
+                        self._combat_diagnostics, 'bot.physics', self.rotation_resolver,
+                        state['id'], position, old_hull_yaw, candidate_hull_yaw,
+                        descriptor, step, now, params['rotSpd']))
+                    if rotation_blocked:
+                        rotation_block_reason = 'native_world'
+                if rotation_blocked:
+                    rejected_delta = _angle_delta(candidate_hull_yaw, old_hull_yaw)
+                    if abs(rejected_delta) > 1.0e-8:
+                        side = 1 if rejected_delta > 0.0 else -1
+                        state.setdefault('_blocked_rotations', {})[side] = (
+                            tuple(position), old_hull_yaw, rejected_delta, now + 2.0)
                     # Turning is a pose change even without translation. Keep
                     # the prior legal OBB until the hull first moves far enough
                     # inward to rotate without crossing a red line or turret.
                     turn_speed = 0.0
                     candidate_hull_yaw = old_hull_yaw
                     state['rotation_dir'] = 0
+                    if abs(turn) > 0.01 and abs(throttle) > 0.01:
+                        throttle = 0.0
+                        state['movement_dir'] = 0
+                        state.pop('_contact_motor_turn', None)
+                        self._decision_cache.pop(state['id'], None)
+                        rotation_drive_held = True
                 self._turn_speeds[state['id']] = turn_speed
                 state['yaw'] = candidate_hull_yaw
                 committed_travel_yaw = (
@@ -12891,6 +12928,10 @@ class BotRuntime(object):
                 if trace is not None:
                     trace.update({
                         'dt': step, 'drive_speed': speed,
+                        'rotation_blocked': rotation_blocked,
+                        'rotation_block_reason': rotation_block_reason,
+                        'rotation_drive_held': rotation_drive_held,
+                        'actual_turn_speed': turn_speed,
                         'drive_pitch': slope_pitch, 'throttle': throttle,
                         'baked_veto': committed_corridor is False,
                         'path_clear': bool(path_clear),

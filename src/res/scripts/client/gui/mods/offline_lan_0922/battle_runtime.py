@@ -3764,6 +3764,7 @@ class BattleRuntime(object):
                 motion_report=self._report_bot_destructible_contact,
                 turret_motion_probe=self._turret_motion_is_clear,
                 wreck_rotation_probe=self._resolve_bot_rotation,
+                rotation_resolver=self._resolve_bot_rotation,
                 wreck_ground_probe=self._suspension_ground_y,
                 turret_hulls_provider=self._turret_navigation_hulls,
                 world_receipt_probe=self._direction_world_receipt,

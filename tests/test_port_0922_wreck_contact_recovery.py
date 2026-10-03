@@ -72,9 +72,10 @@ class WreckContactRecoveryTests(unittest.TestCase):
 
     def test_front_wreck_push_is_bounded_then_normal_navigation_resumes(self):
         self.route()
-        commands = [self.decide() for unused in range(90)]
-        self.assertEqual('wreck_push', commands[0]['recovery_mode'])
-        self.assertEqual(0., commands[0]['turn'])
+        commands = [self.decide() for unused in range(160)]
+        self.assertNotEqual('wreck_push', commands[0]['recovery_mode'])
+        first_push=next(c for c in commands if c['recovery_mode']=='wreck_push')
+        self.assertEqual(0., first_push['turn'])
         self.assertTrue(any(c['turn'] > 0. for c in commands if c['recovery_mode']=='wreck_push'))
         self.assertTrue(any(c['turn'] < 0. for c in commands if c['recovery_mode']=='wreck_push'))
         self.assertNotEqual('wreck_push', commands[-1]['recovery_mode'])
@@ -83,7 +84,7 @@ class WreckContactRecoveryTests(unittest.TestCase):
 
     def test_order_and_yaw_jitter_cannot_restart_failed_wreck_attempt(self):
         self.route()
-        for frame in range(100):
+        for frame in range(160):
             self.state['yaw'] = .005 if frame%2 else -.005
             self.order['move_position'] = (.1 if frame%2 else -.1, 0., 100.)
             command = self.decide()
@@ -91,12 +92,16 @@ class WreckContactRecoveryTests(unittest.TestCase):
 
     def test_moved_wreck_and_new_route_allow_fresh_attempt(self):
         self.route()
-        for unused in range(90): self.decide()
+        for unused in range(160): self.decide()
         self.peer['position'] = (0., 0., 9.1)
-        self.assertEqual('wreck_push', self.decide()['recovery_mode'])
-        for unused in range(90): self.decide()
+        self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
+        for unused in range(65): command=self.decide()
+        self.assertEqual('wreck_push', command['recovery_mode'])
+        for unused in range(160): self.decide()
         self.order['route_id'] = 'medium'
-        self.assertEqual('wreck_push', self.decide()['recovery_mode'])
+        self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
+        for unused in range(65): command=self.decide()
+        self.assertEqual('wreck_push', command['recovery_mode'])
 
     def test_push_never_ignores_live_hull_or_world_blocker(self):
         self.route()
@@ -113,8 +118,10 @@ class WreckContactRecoveryTests(unittest.TestCase):
             calls.append(bot)
             return position
         self.adapter.navigation_target=navigation
-        self.assertEqual('wreck_push', self.decide()['recovery_mode'])
-        self.assertEqual([1], calls)
+        self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
+        for unused in range(65): command=self.decide()
+        self.assertEqual('wreck_push', command['recovery_mode'])
+        self.assertEqual([1]*66, calls)
 
     def test_forget_removes_all_recovery_memory(self):
         self.decide()
