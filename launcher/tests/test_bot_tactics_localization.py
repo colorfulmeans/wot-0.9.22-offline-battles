@@ -116,11 +116,11 @@ class LanguageUITests(unittest.TestCase):
     def test_builtin_routes_are_translated_without_changing_ids(self):
         self.ui.map_var.set('喀秋莎'); self.ui.change_map(); self.root.update()
         for key, caption in [('waterfall','瀑布'),('plateau','高原'),('village','村庄')]:
-            self.assertEqual('[内置] '+caption, self.ui.items.item('builtin:'+key,'text'))
+            self.assertEqual('[默认/重型坦克] '+caption, self.ui.items.item('builtin:'+key,'text'))
         self.ui.items.selection_set('builtin:plateau'); self.root.update()
         before=copy.deepcopy(self.ui.document)
         self.ui.set_language('en'); self.root.update()
-        self.assertEqual('[Built-in] Plateau',self.ui.items.item('builtin:plateau','text'))
+        self.assertEqual('[Default/Heavy tank] Plateau',self.ui.items.item('builtin:plateau','text'))
         self.assertEqual(('builtin','plateau'),self.ui.selection)
         self.assertEqual(before,self.ui.document)
 

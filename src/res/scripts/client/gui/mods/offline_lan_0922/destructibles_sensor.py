@@ -2492,14 +2492,20 @@ def _boxes_intersect(left, right):
 		for left_index in range(len(generators))
 		for right_index in range(left_index + 1, len(generators)))
 	for axis in axes:
-		length_squared = _vector_dot(axis, axis)
+		ax, ay, az = axis
+		length_squared = ax * ax + ay * ay + az * az
 		if length_squared <= 1.0e-16:
 			continue
-		left_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in left_half_axes)
-		right_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in right_half_axes)
-		if (abs(_vector_dot(delta, axis)) > left_radius + right_radius +
+		# This hot path runs for every candidate on every physical slice. Keep
+		# the same SAT axes, summation order and tolerance without allocating
+		# two generator frames and making a Python call for every projection.
+		left_radius = 0
+		for hx, hy, hz in left_half_axes:
+			left_radius += abs(ax * hx + ay * hy + az * hz)
+		right_radius = 0
+		for hx, hy, hz in right_half_axes:
+			right_radius += abs(ax * hx + ay * hy + az * hz)
+		if (abs(delta[0] * ax + delta[1] * ay + delta[2] * az) > left_radius + right_radius +
 				1.0e-7 * length_squared ** 0.5):
 			return False
 	return True

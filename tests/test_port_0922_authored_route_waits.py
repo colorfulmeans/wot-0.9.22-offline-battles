@@ -64,6 +64,18 @@ class AuthoredRouteWaitTests(unittest.TestCase):
             with self.subTest(seconds=seconds), self.assertRaises(cfg.TacticsError):
                 cfg.canonical(changed)
 
+    def test_default_scoped_route_waits_without_custom_route_prefix(self):
+        planner,manifest=self.setup_route()
+        route=planner.tactics['maps']['08_ruinberg']['routes'].pop()
+        edit=dict(id=cfg.MAPS['08_ruinberg']['route_ids']['1'][0],team=1,
+                  class_tag='heavyTank',points=route['points'])
+        planner.tactics['maps']['08_ruinberg']['default_routes']=[edit]
+        planner.tactics=cfg.canonical(planner.tactics)
+        manifest[0]['route']['id']=cfg.default_route_id(edit)
+        self.order(planner,manifest,0,10)
+        self.assertEqual('hold',self.order(planner,manifest,0,39.9)['combat_mode'])
+        self.assertEqual(1,self.order(planner,manifest,0,40)['route_index'])
+
 
 if __name__ == '__main__':
     unittest.main()

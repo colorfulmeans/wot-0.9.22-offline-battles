@@ -3717,8 +3717,8 @@ class BotRuntime(object):
             plans = {}
             for raw in message.get('bot_manifest') or ():
                 route = raw.get('route') or {}
-                authored = bot_tactics.route_config(self._bot_tactics, name, route.get('id'))
-                if authored is not None:
+                authored = bot_tactics.route_config(self._bot_tactics, name, route.get('id'), raw.get('team'))
+                if authored is not None and not authored.get('default'):
                     plans[raw['id']] = bot_tactics_runtime.route_value(authored)
             outcomes = dict((actor, 'restored') for actor in plans)
         elif message.get('battle_mode', 'regular') == 'regular':
@@ -3726,6 +3726,21 @@ class BotRuntime(object):
                 self._bot_tactics, name, self.baked_graph, states, self.round_id)
         else:
             plans, outcomes = {}, {}
+        if message.get('battle_mode', 'regular') == 'regular':
+            restored = dict((r['id'], r.get('route') or {})
+                            for r in message.get('bot_manifest') or ()) if restoring else {}
+            catalog = (getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {})
+            for state in states:
+                if state['id'] in plans:continue
+                previous = restored.get(state['id'], state.get('route') or {})
+                config = bot_tactics.route_config(self._bot_tactics, name, previous.get('id'), state['team'])
+                source_id = config['source_id'] if config is not None and config.get('default') else previous.get('id')
+                variant = next((r for r in catalog.get(state['team'], ())
+                                if r.get('_editor_source') == source_id and
+                                r.get('_editor_class') == state['profile'].get('class_tag')), None)
+                if variant is not None:
+                    plans[state['id']] = variant
+                    outcomes[state['id']] = 'class_default'
         for actor, status in sorted(outcomes.items()):
             if actor in plans:
                 self.states[actor]['route'] = plans[actor]
@@ -4617,6 +4632,14 @@ class BotRuntime(object):
             values = route.get(key)
             if isinstance(values, dict):
                 result['route'][key] = dict(values)
+        if not route.get('_editor_source'):
+            catalog = getattr(getattr(self.adapter, 'director', None), 'map_data', {}).get('routes', {})
+            scoped = [r['_editor_class'] for r in catalog.get(state['team'], ())
+                      if r.get('_editor_source') == route.get('id')]
+            if scoped:
+                weights = result['route'].get('class_weights', {})
+                result['route']['class_weights'] = dict((tag, 0.0 if tag in scoped else weights.get(tag, 0.5))
+                                                       for tag in bot_tactics.CLASSES)
         return result
 
     def _player_collision_manifest(self, players):
@@ -6485,6 +6508,13 @@ class BotRuntime(object):
             'requested_throttle': throttle, 'turn': turn,
             'yaw': state.get('yaw'), 'pitch': state.get('pitch'),
             'roll': state.get('roll'), 'shape': state.get('collision_shape'),
+            'close_contacts': [dict(kind=t.get('kind'), id=t.get('network_id'),
+                distance=_distance(position, _point(t.get('position'), _position(t))),
+                direct_visible=t.get('direct_visible'), fresh_visible=t.get('fresh_visible'),
+                lane=self._shot_los_cache.get(self._shot_los_key(state, t)))
+                for t in (cached[4] if cached is not None else ())
+                if t.get('visible') and _distance(position,
+                    _point(t.get('position'), _position(t))) <= spotting.PROXIMITY_SPOT_DISTANCE],
         }
         print('[BOT STALL] id=%s pos=(%.1f,%.1f) mode=%s recovery=%s '
               'traffic=%s intent=%s goal=%s strategic_goal=%s '
@@ -10412,6 +10442,24 @@ class BotRuntime(object):
         return (source_cache[source_id], target_cache[cache_key],
                 target_key)
 
+    def _prioritize_close_lane(self, source, contacts, priorities):
+        """Acquire a directly observed close threat before distant lane work.
+
+        This is scheduling only. A house still denies the static lane and
+        final fire retains its independent native check.
+        """
+        close = [target for target in contacts or ()
+                 if target.get('direct_visible') and target.get('alive', True)
+                 and int(target.get('team', 0)) != int(source.get('team', 0))
+                 and _distance(_position(source), _point(target.get('position'),
+                     _position(target))) <= spotting.PROXIMITY_SPOT_DISTANCE]
+        if not close:return None
+        target = min(close, key=lambda value: _distance(_position(source),
+                     _point(value.get('position'), _position(value))))
+        key = self._shot_los_key(source, target)
+        priorities[key] = -1
+        return key
+
     @timed('bot.lane_service')
     def _service_shot_lane_work(
             self, now, cycle_time, team_visibility, players,
@@ -10481,7 +10529,8 @@ class BotRuntime(object):
                 retire(key, 'cache')
                 return False
             deadline = window_start + self._shot_los_phase(key)
-            if now + 1e-9 < deadline:
+            urgent = selected_priorities.get(key, 2) < 0
+            if now + 1e-9 < deadline and not urgent:
                 if diagnostic is not None:
                     diagnostic.count('lane_attempt_not_due')
                 return False
@@ -10535,7 +10584,7 @@ class BotRuntime(object):
             distance_cache = [target_distance]
             self._refresh_shot_clear(
                 source, target, now, cycle_time, probe_budget,
-                lane_key=key, distance_cache=distance_cache)
+                lane_key=key, distance_cache=distance_cache, urgent=urgent)
             if self._shot_los_deadlines.get(key) == cycle_time:
                 retire(key, ('probe' if self._probe_totals[1] > probes_before
                              else 'distance' if distance_cache[0] is not None
@@ -10728,7 +10777,7 @@ class BotRuntime(object):
 
     def _refresh_shot_clear(self, source, target, now, observation_time,
                             probe_budget=None, lane_key=None,
-                            distance_cache=None):
+                            distance_cache=None, urgent=False):
         """Refresh one pair on a stable phase before its observation."""
         key = (lane_key if lane_key is not None else
                self._shot_los_key(source, target))
@@ -10743,7 +10792,7 @@ class BotRuntime(object):
             self._shot_los_deadlines[key] = observation_time
             self._shot_lane_completed_pairs += 1
             return False
-        if now + 1e-9 < deadline:
+        if now + 1e-9 < deadline and not urgent:
             return False
         value = self._shot_clear(
             source, target, now, force=True, probe_budget=probe_budget,
@@ -12321,6 +12370,8 @@ class BotRuntime(object):
                     entry[2] = observed_target
                     if direct_visible:
                         entry[4].add(int(state['id']))
+            if refresh_shot_lanes:
+                self._prioritize_close_lane(state, contacts, selected_lane_priorities)
             target_id = command.get('target_id')
             if target_id in (targets or {}):
                 # Aim/fire gating retains the observer-specific spotting flag.

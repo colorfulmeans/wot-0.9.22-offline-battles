@@ -31,6 +31,56 @@ class EditorUITests(unittest.TestCase):
         self.assertFalse(self.ui.dirty());self.assertEqual({},self.ui.store.active()['maps'])
         self.assertEqual(41,len(self.ui.map_labels));self.assertTrue(self.ui.graph_cache['08_ruinberg'])
 
+    def test_default_symmetry_reverses_geometry_waits_and_detaches_when_disabled(self):
+        source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
+        self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
+        self.ui.symmetry_var.set(True);self.ui.change_symmetry()
+        self.ui.selected_point=1
+        with mock.patch.object(ui_module.simpledialog,'askfloat',return_value=12.5):
+            self.ui.edit_point_condition()
+        entries=self.ui.entry()['default_routes']
+        own=next(r for r in entries if r['team']==1)
+        peer=next(r for r in entries if r['team']==2)
+        self.assertEqual(list(reversed(own['points'])),peer['points'])
+        self.assertEqual(12.5,own['points'][1][3])
+        self.assertEqual('heavyTank',peer['class_tag'])
+        self.ui.symmetry_var.set(False);self.ui.change_symmetry()
+        original=copy.deepcopy(peer['points'])
+        self.ui.delete_point()
+        self.assertEqual(original,peer['points'])
+        self.ui.undo();self.assertEqual(12.5,self.ui._selected()['points'][1][3])
+        self.assertFalse(self.error_mock.called)
+
+    def test_class_default_edit_does_not_replace_other_class_geometry(self):
+        source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
+        self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
+        self.ui.selected_point=1;self.ui.delete_point()
+        changed=copy.deepcopy(self.ui._selected()['points'])
+        self.ui.route_class_var.set('mediumTank');self.ui.change_route_class()
+        self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
+        self.assertEqual(source['waypoints'],self.ui._selected()['points'])
+        self.ui.route_class_var.set('heavyTank');self.ui.change_route_class()
+        self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
+        self.assertEqual(changed,self.ui._selected()['points'])
+        colors=[self.ui.canvas.itemcget(i,'fill') for i in self.ui.canvas.find_all()
+                if self.ui.canvas.type(i)=='line']
+        self.assertIn(ui_module.CLASS_COLORS['heavyTank'],colors)
+
+    def test_custom_symmetry_updates_from_other_side_and_copy_is_independent(self):
+        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.symmetry_var.set(True);self.ui.change_symmetry()
+        own=self.ui._selected();peer=next(r for r in self.ui.entry()['routes'] if r['id']==own['mirror_id'])
+        self.assertEqual(list(reversed(own['points'])),peer['points'])
+        self.ui.team=2;self.ui._refresh_items()
+        self.ui.items.selection_set('routes:'+peer['id']);self.root.update()
+        self.ui.selected_point=0
+        with mock.patch.object(ui_module.simpledialog,'askfloat',return_value=-1):self.ui.edit_point_condition()
+        self.assertEqual(-1,own['points'][-1][3])
+        self.ui.duplicate_item()
+        self.assertNotIn('mirror_id',self.ui._selected())
+        self.assertNotIn('symmetric',self.ui._selected())
+        storage.contract.canonical(self.ui.document)
+
     def test_builtin_drag_insert_delete_undo_save_reopen_and_reset(self):
         graph=copy.deepcopy(self.ui.graph_cache['08_ruinberg'])
         source=graph['routes']['1'][0]

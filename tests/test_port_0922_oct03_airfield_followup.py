@@ -155,6 +155,53 @@ class AirfieldFollowupTests(unittest.TestCase):
             case.tearDown()
 
 
+class CloseRouteAndAcquisitionTests(unittest.TestCase):
+    def test_short_clear_corner_aligns_before_forward_drive(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        driver=LocalDriver()
+        command=driver.drive(22,5,(0.,0.,0.),0.,0.,.1,(6.,0.,3.),[],
+                             lambda *unused: True,progress_target=(100.,0.,100.))
+        self.assertEqual(0.,command['throttle'])
+        self.assertGreater(command['turn'],0.)
+        aligned=driver.drive(22,5,(0.,0.,0.),command['target_yaw'],0.,.1,
+                            (6.,0.,3.),[],lambda *unused: True,
+                            progress_target=(100.,0.,100.))
+        self.assertGreater(aligned['throttle'],0.)
+
+    def test_close_direct_target_prioritizes_acquisition_without_authorizing_fire(self):
+        from test_port_0922_bot_runtime import _load
+        runtime=_load().BotRuntime(1)
+        source=dict(id=9,team=1,x=193.,y=-14.,z=-225.)
+        target=dict(id=1000001,network_id=1,kind='human',team=2,alive=True,
+                    position=(196.,-14.,-222.),direct_visible=True)
+        priorities={(1,'bot',22):0}
+        self.assertEqual((9,'human',1),runtime._prioritize_close_lane(source,[target],priorities))
+        self.assertEqual(-1,priorities[(9,'human',1)])
+        self.assertEqual({},runtime._shot_los_cache)
+        target['direct_visible']=False
+        self.assertIsNone(runtime._prioritize_close_lane(source,[target],{}))
+        target.update(direct_visible=True,position=(500.,0.,500.))
+        self.assertIsNone(runtime._prioritize_close_lane(source,[target],{}))
+
+    def test_urgent_acquisition_keeps_budget_and_negative_native_receipt(self):
+        from test_port_0922_bot_runtime import _load
+        runtime=_load().BotRuntime(1)
+        source=dict(id=9,team=1,x=193.,y=-14.,z=-225.)
+        target=dict(id=1000001,network_id=1,kind='human',team=2,alive=True,
+                    position=(196.,-14.,-222.))
+        runtime.firing_lane_probe=mock.Mock(return_value=False)
+        key=runtime._shot_los_key(source,target)
+        with mock.patch.object(runtime,'_shot_los_phase',return_value=.9):
+            self.assertFalse(runtime._refresh_shot_clear(source,target,.1,1.,[1]))
+            budget=[0]
+            self.assertFalse(runtime._refresh_shot_clear(source,target,.1,1.,budget,urgent=True))
+            runtime.firing_lane_probe.assert_not_called()
+            budget=[1]
+            self.assertTrue(runtime._refresh_shot_clear(source,target,.1,1.,budget,urgent=True))
+            self.assertEqual([0],budget)
+            self.assertEqual((.1,False),runtime._shot_los_cache[key])
+
+
 class FiringHoldTests(unittest.TestCase):
     def setUp(self):
         self.planner = BotPlanner()

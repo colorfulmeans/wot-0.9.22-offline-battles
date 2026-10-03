@@ -2269,7 +2269,7 @@ class BotPlanner(object):
         """Move at most one adaptable tank toward a pressured route every 4s."""
         protected_ids = set(protected_ids)
         for bot in bots:
-            authored = bot_tactics.route_config(self.tactics, self.tactics_map, (bot.get('route') or {}).get('id'))
+            authored = bot_tactics.route_config(self.tactics, self.tactics_map, (bot.get('route') or {}).get('id'), bot['team'])
             if authored is not None and authored['policy'] == 'fixed':
                 protected_ids.add(bot['id'])
         catalog = self._route_catalog(bots)
@@ -2369,7 +2369,7 @@ class BotPlanner(object):
                 continue
             if bot["id"] in protected_ids:
                 continue
-            target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, target_route)
+            target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, target_route, bot['team'])
             if target_authored is not None and not bot_tactics.matches(target_authored, bot):
                 continue
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
@@ -2433,7 +2433,7 @@ class BotPlanner(object):
         state = bot['state']
         route_id = str(order.get('route_id') or '')
         authored = bot_tactics.route_config(
-            self.tactics, self.tactics_map, route_id)
+            self.tactics, self.tactics_map, route_id, bot['team'])
         if (order.get('combat_mode') not in ('route', 'advance') or
                 order.get('team_command') or
                 order.get('throttle_override') is not None or
@@ -2478,7 +2478,7 @@ class BotPlanner(object):
                     _number(avoided.get(candidate_id)) > _number(now)):
                 continue
             config = bot_tactics.route_config(
-                self.tactics, self.tactics_map, candidate_id)
+                self.tactics, self.tactics_map, candidate_id, bot['team'])
             if config is not None and not bot_tactics.matches(config, bot):
                 continue
             affinity = _number((route.get('class_weights') or {}).get(
@@ -2524,9 +2524,10 @@ class BotPlanner(object):
             return route_id, 0, point, point, False
         route_id = str(route.get("id") or "uploaded_route")
         authored = bot_tactics.route_config(
-            self.tactics, self.tactics_map, route_id)
+            self.tactics, self.tactics_map, route_id, bot['team'], waypoints)
         route_limit = len(waypoints) - 1
-        if stop_before_objective and len(waypoints) > 1 and authored is None:
+        if stop_before_objective and len(waypoints) > 1 and (authored is None or
+                (authored.get('default') and not any(len(p) > 3 for p in authored['points']))):
             route_limit -= 1
         state = self._route_states.get(bot["id"])
         if state is None or state.get("route_id") != route_id:
@@ -2573,7 +2574,8 @@ class BotPlanner(object):
                         break
                     index += 1
             # User point zero is an instruction, not a baked base connector.
-            if authored is not None:
+            if authored is not None and (not authored.get('default') or
+                    any(len(p) == 4 for p in authored['points'])):
                 index = 0
             state = {"index": index, "route_id": route_id,
                      "join_index": index,
@@ -2620,11 +2622,13 @@ class BotPlanner(object):
 
     def _apply_authored_route_order(self, order, bot, route_point):
         """Apply explicit parking/travel instructions without suppressing aim."""
+        route = (self._route_assignments.get(bot['id']) or {}).get('route') or bot.get('route') or {}
         authored = bot_tactics.route_config(
-            self.tactics, self.tactics_map, order.get('route_id'))
+            self.tactics, self.tactics_map, order.get('route_id'), bot['team'], route.get('waypoints'))
         if authored is None:
             return
-        scripted = (bot['profile'].get('class_tag') == 'SPG' or
+        scripted = ((bot['profile'].get('class_tag') == 'SPG' and
+                    (not authored.get('default') or authored.get('class_tag') == 'SPG')) or
                     any(len(point) > 3 for point in authored['points']))
         if not scripted:
             return

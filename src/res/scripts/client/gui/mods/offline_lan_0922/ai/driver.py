@@ -856,6 +856,12 @@ class LocalDriver(object):
 		# while braking a recovery or sliding downhill; steering remains forward.
 		avoiding = state['steering_reason'] != 'route'
 		throttle = 1.0
+		if (not avoiding and target_distance <= max(8.0, own_half_length * 2.0) and
+				abs(delta) > 0.45):
+			# Grid corners can be inside a moving hull's turning circle. Align
+			# before driving at these short route steps, rather than repeatedly
+			# passing the corner and renewing a circular steering command.
+			throttle = 0.0
 		climb_grade = ((float(target[1]) - float(position[1])) /
 		               max(0.1, target_distance))
 		if climb_grade > 0.10 and abs(delta) > 0.30 and not avoiding:

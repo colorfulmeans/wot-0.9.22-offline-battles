@@ -142,7 +142,7 @@ def canonical(raw):
             seen = set()
             for item in settings[kind]:
                 common = ('id', 'label', 'team')
-                allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points')
+                allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points', 'mirror_id', 'symmetric')
                                     if kind == 'routes' else ('point', 'radius', 'heading', 'priority'))
                 _keys(item, allowed, common)
                 identity = _id(item['id'])
@@ -151,6 +151,10 @@ def canonical(raw):
                 seen.add(identity)
                 result = dict(id=identity, label=_text(item['label']), team=integer(item['team'], 1, 2))
                 if kind == 'routes':
+                    if 'mirror_id' in item:result['mirror_id'] = _id(item['mirror_id'])
+                    if 'symmetric' in item:
+                        if type(item['symmetric']) is not bool:raise TacticsError('Symmetry must be boolean')
+                        if item['symmetric']:result['symmetric'] = True
                     tags, slots = item.get('classes', []), item.get('slots', [])
                     if (not isinstance(tags, list) or not tags or len(tags) > len(CLASSES) or
                             any(t not in CLASSES for t in tags) or len(set(tags)) != len(tags)):
@@ -192,14 +196,16 @@ def canonical(raw):
             entry[kind].sort(key=lambda a: a['id'])
         defaults = settings.get('default_routes', [])
         if not isinstance(defaults, list) or len(defaults) > sum(
-                len(v) for v in meta['route_ids'].values()):
+                len(v) for v in meta['route_ids'].values()) * (len(CLASSES) + 1):
             raise TacticsError('Invalid default route collection')
         seen = set()
         for route in defaults:
-            _keys(route, ('id', 'team', 'points'), ('id', 'team', 'points'))
+            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric'), ('id', 'team', 'points'))
             team = integer(route['team'], 1, 2)
             identity = _id(route['id'])
-            key = (team, identity)
+            tag = route.get('class_tag', 'all')
+            if tag not in ('all',) + CLASSES:raise TacticsError('Invalid default route class')
+            key = (team, identity, tag)
             if identity not in meta['route_ids'][str(team)] or key in seen:
                 raise TacticsError('Unknown or duplicate default route')
             seen.add(key)
@@ -208,17 +214,25 @@ def canonical(raw):
                 raise TacticsError('A route must contain 1..16 waypoints')
             points = []
             for pt in pts:
-                if not isinstance(pt, (list, tuple)) or len(pt) != 3:
-                    raise TacticsError('Default waypoint must be [x, z, hold]')
+                if not isinstance(pt, (list, tuple)) or len(pt) not in (3, 4):
+                    raise TacticsError('Default waypoint must be [x, z, hold, optional wait seconds]')
                 value = point(pt[:2], meta['bounds']) + [integer(pt[2], 0, 1)]
+                if len(pt) == 4:
+                    wait = number(pt[3], -1, 3600)
+                    if -1 < wait < 0:raise TacticsError('Use -1 for a permanent hold')
+                    value.append(wait)
                 if points and sum((value[i]-points[-1][i])**2 for i in (0, 1)) < 1:
                     raise TacticsError('Consecutive waypoints need at least one metre separation')
                 points.append(value)
-            entry.setdefault('default_routes', []).append(
-                dict(id=identity, team=team, points=points))
+            result = dict(id=identity, team=team, points=points)
+            if tag != 'all':result['class_tag'] = tag
+            if 'symmetric' in route:
+                if type(route['symmetric']) is not bool:raise TacticsError('Symmetry must be boolean')
+                if route['symmetric']:result['symmetric'] = True
+            entry.setdefault('default_routes', []).append(result)
             total += 1
         if defaults:
-            entry['default_routes'].sort(key=lambda r: (r['team'], r['id']))
+            entry['default_routes'].sort(key=lambda r: (r['team'], r['id'], r.get('class_tag', 'all')))
         if entry['routes'] or entry['positions'] or defaults:
             out['maps'][name] = entry
     if total > 600 or len(dumps(out).encode('utf8')) > MAX_BYTES:
@@ -262,9 +276,30 @@ def map_settings(raw, name):
     return (raw or {}).get('maps', {}).get(name, {})
 
 
-def route_config(raw, name, route_id):
-    return next((r for r in map_settings(raw, name).get('routes', ())
-                 if 'user_' + r['id'] == route_id), None)
+def route_config(raw, name, route_id, team=None, waypoints=None):
+    entry = map_settings(raw, name)
+    custom = next((r for r in entry.get('routes', ()) if 'user_' + r['id'] == route_id), None)
+    if custom is not None:return custom
+    edit = next((r for r in entry.get('default_routes', ())
+                 if default_route_id(r) == route_id and (team is None or r['team'] == team)), None)
+    if edit is None:return None
+    if waypoints is not None:
+        # A rejected global edit retains the original route ID in the manifest.
+        # Its optional waits must not be attached to unrelated fallback nodes.
+        if len(waypoints) != len(edit['points']):return None
+        for actual, expected in zip(waypoints, edit['points']):
+            actual = (actual['x'], actual['z']) if isinstance(actual, dict) else actual[:2]
+            if any(abs(actual[i] - expected[i]) > 0.0001 for i in (0, 1)):return None
+    tag = edit.get('class_tag', 'all')
+    return dict(edit, id=route_id, default=True, source_id=edit['id'],
+                classes=list(CLASSES) if tag == 'all' else [tag],
+                slots=[], policy='preferred')
+
+
+def default_route_id(route):
+    tag = route.get('class_tag', 'all')
+    codes = dict(zip(CLASSES, ('lt', 'mt', 'ht', 'td', 'spg')))
+    return route['id'] if tag == 'all' else 'class_' + codes[tag] + '_' + route['id']
 
 
 def matches(route, state):

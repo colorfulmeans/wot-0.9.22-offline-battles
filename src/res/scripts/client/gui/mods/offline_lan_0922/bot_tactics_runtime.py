@@ -106,13 +106,23 @@ def default_routes(profile, name, graph):
     result = copy.deepcopy(routes)
     outcomes = {}
     for edit in edits:
-        key = '%s:%s' % (edit['team'], edit['id'])
+        key = '%s:%s' % (edit['team'], config.default_route_id(edit))
         source = next((r for r in result.get(str(edit['team']), ())
                        if r['id'] == edit['id']), None)
         error = validate_route(grid, edit) if source is not None else 'unknown_default_route'
         outcomes[key] = error or 'baked_route_connected'
         if error is None:
-            source['waypoints'] = [list(p) for p in edit['points']]
+            if edit.get('class_tag', 'all') == 'all':
+                source['waypoints'] = [list(p[:3]) for p in edit['points']]
+            else:
+                variant = copy.deepcopy(source)
+                variant.update(id=config.default_route_id(edit),
+                               _editor_source=source['id'],
+                               _editor_class=edit['class_tag'],
+                               waypoints=[list(p[:3]) for p in edit['points']],
+                               class_weights=dict((tag, 1.0 if tag == edit['class_tag'] else 0.0)
+                                                  for tag in config.CLASSES))
+                result[str(edit['team'])].append(variant)
     return result, outcomes
 
 
@@ -225,7 +235,7 @@ def authoring_check(profile, name, graph):
     messages = []
     for route in config.map_settings(profile, name).get('default_routes', ()):
         error = validate_route(grid, route)
-        messages.append(('%s:%s' % (route['team'], route['id']),
+        messages.append(('%s:%s' % (route['team'], config.default_route_id(route)),
                          error or 'baked_route_connected'))
     for route in config.map_settings(profile, name).get('routes', ()):
         error = validate_route(grid, route)

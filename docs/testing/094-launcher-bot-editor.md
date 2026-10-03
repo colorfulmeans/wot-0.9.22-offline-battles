@@ -55,18 +55,37 @@ are covered explicitly.
 Original routes can be edited directly: select a built-in route, drag points,
 click to append, Shift-click to insert, or Delete to remove a point. The existing
 16-point communication limit still applies. Edits are saved per map, team and
-route in the profile, and applied on the next round without rewriting installed
+route and vehicle class in the profile, and applied on the next round without rewriting installed
 navigation resources. Reset route restores the selected original geometry;
 undo/redo covers these edits. Built-in identities and allocation metadata remain
 unchanged, so normal route assignment and emergency lane changes use the edited
 geometry. A disconnected or unusable edit falls back to its original route and
 is logged; Check map reports its baked validation result before a match.
 
-Copy a route or create an empty custom route for separate allocation rules or
-timed waypoint conditions. Custom route attributes include allowed
+The class selector chooses the geometry being edited, not just its display.
+All classes supplies shared geometry; a class-specific default edit overrides
+only that class on its original allocated lane. The legend and route lines use
+light green, medium yellow, heavy grey, TD blue and SPG red. The list shows the
+current scope and marks saved edits. In All classes view, scoped overrides are
+also drawn in their class colours.
+
+Enable Route symmetry to share exactly the same coordinates with the opposite
+team in reverse order. Dragging, inserting, deleting and node waits synchronize
+from either side. Turning symmetry off retains both versions for independent
+editing. It reverses traversal, not map coordinates. Resetting a symmetric
+default resets both teams for that class; copying creates an independent route.
+
+Double-click any default or custom node to set its arrival wait: 0 continues,
+a positive number up to 3600 seconds waits, and -1 holds permanently. Conditions
+travel with their nodes when mirrored. The host starts the timer on arrival;
+the worker manifest retains the existing three-field waypoint shape. Combat
+and emergency orders still take precedence over waiting.
+
+Copy a route or create an empty custom route for separate allocation rules.
+Custom route attributes include allowed
 classes, optional 1-based UI slots, capacity, sampling weight, and preferred or
-fixed policy. SPGs are deliberately excluded from ordinary attack-route class
-assignments and use their position library instead.
+fixed policy. SPGs can follow class-specific default/custom scripted routes;
+ordinary unmodified deployment still uses the position library.
 
 Route points are macro intent, not a request to bypass terrain. Initial route
 selection checks baked connectivity and uses a deterministic weighted draw.
