@@ -300,9 +300,18 @@ class BotTacticsEditor:
         self.hold_button.pack(side='left')
         self.wait_button=ttk.Button(actions,text=self.tr('停留条件','Wait condition'),command=self.edit_point_condition)
         self.wait_button.pack(side='left')
+        self.node_legend=ttk.LabelFrame(right,text=self.tr('节点图例','Node legend'))
+        self.node_legend.grid(row=22,column=0,sticky='ew',pady=(5,0))
+        for row,(radius,zh,en) in enumerate(((4,'普通节点','Normal waypoint'),
+                (7,'停留点（编辑中）','Wait point (editing)'),
+                (3,'停留点（未编辑）','Wait point (unselected)'))):
+            marker=tk.Canvas(self.node_legend,width=22,height=20,background='#202529',highlightthickness=0)
+            marker.grid(row=row,column=0,padx=4,pady=1)
+            marker.create_oval(11-radius,10-radius,11+radius,10+radius,fill=CLASS_COLORS['heavyTank'],outline='white')
+            ttk.Label(self.node_legend,text=self.tr(zh,en)).grid(row=row,column=1,sticky='w')
         ttk.Label(right,text=self.tr(
             '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n修改“全部车型”会同步各车型路线，之后单独修改某车型只影响该车型。\n双击节点可设置等待：0继续，-1一直停留。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
-            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared geometry edits update every class; later class edits affect only that class.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=22,column=0,sticky='w',pady=8)
+            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared geometry edits update every class; later class edits affect only that class.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=23,column=0,sticky='w',pady=8)
 
     def checkpoint(self):
         self.undo_stack.append(copy.deepcopy(self.document));self.undo_stack=self.undo_stack[-50:];self.redo_stack=[]
@@ -893,10 +902,7 @@ class BotTacticsEditor:
             if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if chosen else 2,dash=() if chosen else (5,5))
             for i,p in enumerate(pts):
                 self.route_hit_targets.append((('builtin',identity),i,self.view.screen(p)))
-                if chosen or self.route_class_var.get()=='total':
-                    x,y=self.view.screen(p);rr=7 if chosen and i==self.selected_point else 4
-                    c.create_oval(x-rr,y-rr,x+rr,y+rr,fill=color,outline='white')
-                    if chosen:c.create_text(x+10,y-10,text=str(i+1),fill='white',anchor='w')
+                self._draw_route_node(p,i,color,chosen,4,chosen or self.route_class_var.get()=='total')
         for i,p in enumerate(contract.MAPS[self.map_name]['bases'],1):
             x,y=self.view.screen(p);c.create_oval(x-12,y-12,x+12,y+12,outline='#8de3cf' if i==self.team else '#ddaaaa',width=2)
             c.create_text(x,y,text=str(i),fill='white')
@@ -914,10 +920,9 @@ class BotTacticsEditor:
                         coords=[v for p in item['points'] for v in self.view.screen(p)]
                         if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if selected else 2,arrow='last')
                         for i,p in enumerate(item['points']):
-                            x,y=self.view.screen(p);rr=7 if selected and i==self.selected_point else 5
+                            x,y=self.view.screen(p)
                             self.route_hit_targets.append((('routes',identity),i,(x,y)))
-                            c.create_oval(x-rr,y-rr,x+rr,y+rr,fill=color,outline='white' if p[2] else color)
-                            if selected:c.create_text(x+10,y-10,text=str(i+1),fill='white',anchor='w')
+                            self._draw_route_node(p,i,color,selected,5)
                 else:
                     color=CLASS_COLORS['SPG']
                     key=('builtin_positions' if any(p['id']==item['id'] for p in self.spg_defaults) else 'positions',item['id'])
@@ -938,6 +943,20 @@ class BotTacticsEditor:
                 c.create_rectangle(x,12,x+145,38,fill='#202529',outline='')
                 c.create_rectangle(x+5,20,x+15,30,fill=navigation_view.COLORS[key][0],outline='')
                 c.create_text(x+20,25,text=self.tr(zh,en),anchor='w',fill='white')
+
+    def _draw_route_node(self, point, index, color, editing, normal_radius, visible=True):
+        # Only explicit nonzero waits stop route progression; legacy hold flags do not.
+        waiting=len(point)>3 and point[3]!=0
+        if not visible and not waiting:return
+        x,y=self.view.screen(point)
+        if waiting:
+            radius=(10 if index==self.selected_point else 7) if editing else 3
+        else:
+            radius=7 if editing and index==self.selected_point else normal_radius
+        self.canvas.create_oval(x-radius,y-radius,x+radius,y+radius,fill=color,
+            outline='white' if waiting or editing or point[2] else color,
+            tags=('route_wait' if waiting else 'route_node',))
+        if editing:self.canvas.create_text(x+radius+3,y-radius-3,text=str(index+1),fill='white',anchor='w')
 
     def _draw_navigation_grid(self):
         graph=self.graph_cache.get(self.map_name)

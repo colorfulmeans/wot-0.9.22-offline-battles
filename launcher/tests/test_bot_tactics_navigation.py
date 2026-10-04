@@ -4,6 +4,7 @@ import importlib.util
 import os
 import tempfile
 import tkinter as tk
+from tkinter import ttk
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -252,3 +253,37 @@ class NavigationUITests(unittest.TestCase):
         original=next(r for r in e.graph_cache[e.map_name]['routes']['1'] if r['id']==identity)['waypoints']
         self.assertEqual(original,own['points']);self.assertEqual(7,own['priority'])
         self.assertEqual(other_before,next(r for r in e.entry()['default_routes'] if r['team']==2))
+
+    def test_wait_nodes_grow_while_editing_and_remain_visible_unselected(self):
+        e=self.editor;e.route_class_var.set('all');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
+        e.items.selection_set(key);e.select_item();points=e._editable_points()
+        points[0][3:]=[60.];points[1][3:]=[-1.];points[2][3:]=[0.]
+        before=copy.deepcopy(e.document);e.selected_point=0;e.redraw()
+        def radii():
+            return [(e.canvas.coords(i)[2]-e.canvas.coords(i)[0])/2
+                    for i in e.canvas.find_withtag('route_wait')]
+        self.assertEqual([10.,7.],radii())
+        ordinary=e.canvas.find_withtag('route_node');self.assertTrue(ordinary)
+        self.assertEqual(4.,(e.canvas.coords(ordinary[0])[2]-e.canvas.coords(ordinary[0])[0])/2)
+        e.selection=None;e.selected_point=None;e.redraw()
+        self.assertEqual([3.,3.],radii())
+        self.assertEqual(before,e.document)
+        captions=[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)]
+        self.assertEqual(['普通节点','停留点（编辑中）','停留点（未编辑）'],captions)
+        e.set_language('en')
+        self.assertEqual('Node legend',e.node_legend.cget('text'))
+        self.assertIn('Wait point (unselected)',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
+        e.route_class_var.set('total');e.change_route_class();e.redraw()
+        self.assertTrue(radii());self.assertTrue(all(r==3. for r in radii()))
+
+    def test_custom_wait_nodes_use_the_same_editing_and_overview_markers(self):
+        e=self.editor;e.route_class_var.set('all');e.change_route_class();e.new_route()
+        e._selected()['points']=[[-100.,-100.,0,30.],[0.,0.,1,0.],[100.,100.,1,-1.]]
+        e.selected_point=2;e.redraw()
+        def radii():
+            return [(e.canvas.coords(i)[2]-e.canvas.coords(i)[0])/2
+                    for i in e.canvas.find_withtag('route_wait')]
+        self.assertEqual([7.,10.],radii())
+        e.selection=None;e.selected_point=None;e.redraw()
+        self.assertEqual([3.,3.],radii())
