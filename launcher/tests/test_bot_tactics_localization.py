@@ -67,7 +67,7 @@ class LanguageUITests(unittest.TestCase):
         patch = mock.patch.object(ui_module.messagebox, 'showerror')
         self.errors = patch.start(); self.addCleanup(patch.stop)
         self.ui = ui_module.BotTacticsEditor(self.root, store=storage.Store(self.temp.name), language='zh')
-        self.ui.route_class_var.set('heavyTank');self.ui.symmetry_var.set(False)
+        self.ui.route_class_var.set('heavyTank');self.ui.change_route_class();self.ui.symmetry_var.set(False)
         self.root.update()
 
     def choose(self, box, index):

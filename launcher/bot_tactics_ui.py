@@ -218,7 +218,7 @@ class BotTacticsEditor:
         t=LocalizedCombobox(bar,variable=self.team_var,kind='team',values=('1','2'),language=self.language,width=9)
         ttk.Label(bar,text=self.tr('出生队伍','Spawn team')).pack(side='left',padx=6);t.pack(side='left')
         t.bind('<<ComboboxSelected>>',lambda e:self.change_map(),add='+')
-        self.route_class_var = tk.StringVar(value='all')
+        self.route_class_var = tk.StringVar(value='total')
         ttk.Label(bar,text=self.tr('显示车型','Show class')).pack(side='left',padx=6)
         scope = LocalizedCombobox(bar,variable=self.route_class_var,
             kind='class_tag',values=('total','all')+contract.CLASSES,
