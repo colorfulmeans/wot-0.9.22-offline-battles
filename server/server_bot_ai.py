@@ -1774,7 +1774,7 @@ class BotPlanner(object):
         previous = self._previous_target_order(bot["id"], focus)
         if not isinstance(previous, dict) or previous.get(
                 "combat_mode") not in (
-                "advance_contact", "support_hold", "engage", "flank",
+                "advance", "advance_contact", "support_hold", "engage", "flank",
                 "take_cover", "cover_hold", "cover_peek", "cover_return"):
             return False
         for name in (
@@ -1782,6 +1782,8 @@ class BotPlanner(object):
                 "throttle_override", "cover_id", "hull_angle_degrees",
                 "stable_hull_face"):
             if name in previous:
+                if name == "move_position" and previous.get("combat_mode") == "advance":
+                    continue
                 value = previous[name]
                 order[name] = dict(value) if isinstance(value, dict) else value
         if previous.get("combat_mode") == "advance_contact":
@@ -3459,8 +3461,11 @@ class BotPlanner(object):
             self._cover_states.pop(bot["id"], None)
             if range_mode == "advance_contact":
                 self._engage_anchors.pop(bot["id"], None)
-                order["combat_mode"] = "advance_contact"
-                order["move_position"] = dict(focus["position"])
+                # Keep a distant contact as an aiming target while travelling
+                # the assigned lane. Switching to the enemy's position and
+                # back to the route repeatedly resets local navigation progress.
+                order["combat_mode"] = "advance" if route_id else "advance_contact"
+                order["move_position"] = dict(move if route_id else focus["position"])
                 order["throttle_override"] = 0.72
             elif range_mode == "support_hold":
                 order["combat_mode"] = "support_hold"

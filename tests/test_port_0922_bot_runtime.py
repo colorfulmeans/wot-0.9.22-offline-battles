@@ -17980,7 +17980,7 @@ class BotRuntimeTests(unittest.TestCase):
                  route_anchor=(0.0, 0.0, 20.0)),
             {'now': 2.0, 'neighbours': ()})
         self.assertEqual(('route', 2, 'forest', 1), calls[-1][2])
-        self.assertIsNone(calls[-1][3])
+        self.assertEqual((0.0, 0.0, 20.0), calls[-1][3])
 
     def test_route_lane_binding_uses_full_cohort_not_first_update_order(self):
         route = {
@@ -19406,7 +19406,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual((0.0, 0.0, 0.0), navigate.call_args.args[5])
         self.assertTrue(runtime.navigator.paths)
         path = list(runtime.navigator.paths.values())[0]
-        self.assertEqual(live_start, path[0])
+        self.assertEqual((0.0, 0.0, 0.0), path[0])
+        self.assertTrue(runtime.navigator.grid.dry_segment_clear(live_start, path[0], 1.0))
         order = runtime._server_orders[11]
         self.assertEqual((6.0, 1.0, 0.0), order['aim_position'])
         self.assertEqual((7.0, 0.0, 0.0), order['face_position'])

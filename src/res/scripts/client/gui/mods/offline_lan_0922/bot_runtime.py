@@ -8299,9 +8299,14 @@ class BotRuntime(object):
                 bot_id, position, goal, path_key, now, movement_intent)
             target = tuple(escape or goal)
         else:
+            navigation_anchor = anchor
+            if path_key[0] == 'route':
+                # Shared route legs must use the authored segment, rather than
+                # the first Bot's offset pose, as their corridor and cache origin.
+                navigation_anchor = _point(strategic.get('route_anchor'), position)
             target = self.navigator.next_target(
                 bot_id, position, goal, path_key, now,
-                anchor, avoid, lookahead_distance,
+                navigation_anchor, avoid, lookahead_distance,
                 movement_intent=movement_intent)
         terminal = getattr(self.navigator, 'target_is_terminal', None)
         state['navigation_stop_at_target'] = bool(

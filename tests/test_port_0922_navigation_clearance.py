@@ -238,7 +238,7 @@ class BakedClearanceNavigationTests(unittest.TestCase):
         self.assertGreater(
             len(grid._smooth(centred, prefer_clearance=True)), 2)
 
-    def test_only_shared_strategic_routes_request_clearance_bias(self):
+    def test_routes_and_local_rejoins_request_clearance_bias(self):
         self.assertTrue(TerrainNavigator._prefers_baked_clearance(
             ('route', 1, 'lake_road', 7)))
         self.assertTrue(TerrainNavigator._prefers_baked_clearance(
@@ -248,7 +248,7 @@ class BakedClearanceNavigationTests(unittest.TestCase):
                 ('continue', 4, (7, 8), 'route_join', 4, 1),
                 ('local', 4, 'engage', 12),
                 ('join', 4, (7, 8), 'route', 1, 'lake_road', 7)):
-            self.assertFalse(
+            self.assertTrue(
                 TerrainNavigator._prefers_baked_clearance(key), key)
 
 

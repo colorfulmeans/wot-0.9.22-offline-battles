@@ -1732,7 +1732,8 @@ class ServerBotTacticsTests(unittest.TestCase):
                       supported.build_orders(
                           [cautious, ally], [cautious_state, ally_state],
                           [player], 1.0)['orders'])
-        self.assertEqual('advance_contact', orders[12]['combat_mode'])
+        self.assertEqual('advance', orders[12]['combat_mode'])
+        self.assertEqual(100.0, orders[12]['move_position']['z'])
         live_bots = supported._alive_bots(
             [cautious, ally], [cautious_state, ally_state])
         self.assertGreater(supported._ally_support_score(
@@ -1758,7 +1759,8 @@ class ServerBotTacticsTests(unittest.TestCase):
         order = planner.build_orders(
             [cautious], [state], [player], 1.0)['orders'][0]
 
-        self.assertEqual('advance_contact', order['combat_mode'])
+        self.assertEqual('advance', order['combat_mode'])
+        self.assertEqual(100.0, order['move_position']['z'])
         self.assertGreater(order['throttle_override'], 0.0)
         self.assertFalse(order['fire_allowed'])
 

@@ -1243,8 +1243,11 @@ class BattleDirector(object):
 					order['move_position'] = self._fallback_position(agent, position)
 					order['combat_mode'] = 'withdraw'
 				elif distance > profile['desired_range'] * far_ratio:
-					order['move_position'] = contact['position']
-					order['combat_mode'] = 'advance_contact'
+					if order.get('route_id'):
+						order['combat_mode'] = 'advance'
+					else:
+						order['move_position'] = contact['position']
+						order['combat_mode'] = 'advance_contact'
 				elif distance < profile['desired_range'] * close_ratio:
 					# Use the route as a known-safe fallback instead of reversing into
 					# arbitrary geometry. Brawlers with high aggression are less eager.

@@ -1113,14 +1113,21 @@ class TerrainGrid(object):
 
 	def begin_plan(self, start, goal, avoid_points=None, max_expansions=1600,
 			now=0.0, prefer_clearance=False, edge_penalties=None,
-			hard_edge_penalties=None):
+			hard_edge_penalties=None, route_corridor=None):
 		return _TerrainSearch(self._plan_steps(
 			start, goal, avoid_points, max_expansions, now,
-			bool(prefer_clearance), edge_penalties, hard_edge_penalties),
+			bool(prefer_clearance), edge_penalties, hard_edge_penalties,
+			route_corridor),
 			self.static_hull_revision)
 
 	def _plan_steps(self, start, goal, avoid_points, max_expansions, now,
-			prefer_clearance, edge_penalties, hard_edge_penalties):
+			prefer_clearance, edge_penalties, hard_edge_penalties,
+			route_corridor=None):
+		if route_corridor is not None:
+			first, last = route_corridor
+			dx, dz = last[0] - first[0], last[2] - first[2]
+			length_sq = dx * dx + dz * dz
+			width_sq = (self.cell_size * 2.0) ** 2
 		start_cell = self.cell_for(start)
 		goal_cell = self.cell_for(goal)
 		if self.prebaked:
@@ -1221,6 +1228,18 @@ class TerrainGrid(object):
 						self._failed_edge_timed_penalty(edge_key, now))
 				new_cost = (cost_so_far[current] + run + slope_cost +
 				            terrain_penalty + failed_penalty + local_penalty)
+				if route_corridor is not None:
+					# Authored legs express the desired corridor. Grade remains a
+					# hard eligibility check; do not favour a flatter contour over
+					# the user's legal descent. Deviation is a soft cost so a real
+					# obstacle can still be bypassed without a second search.
+					px, unused_y, pz = self.point_for(next_cell, next_y)
+					fraction = (max(0.0, min(1.0,
+						((px - first[0]) * dx + (pz - first[2]) * dz) /
+						length_sq)) if length_sq > 0.0 else 0.0)
+					ox = px - first[0] - fraction * dx
+					oz = pz - first[2] - fraction * dz
+					new_cost += run * (ox * ox + oz * oz) / width_sq - slope_cost
 				if next_cell not in cost_so_far or new_cost < cost_so_far[next_cell]:
 					# An edge that cannot improve this search cannot enter its
 					# result. Spend native queries only on admissible relaxations.
@@ -1888,15 +1907,15 @@ class TerrainNavigator(object):
 
 	@staticmethod
 	def _prefers_baked_clearance(path_key):
-		"""Centre shared route legs, never a bot's spawn or recovery join."""
+		"""Prefer manoeuvring room during route travel and local rejoining."""
 		try:
 			kind = path_key[0]
 		except Exception:
 			return False
-		if kind == 'route':
+		if kind in ('route', 'route_join', 'join', 'recovery', 'local'):
 			return True
 		return (kind == 'continue' and len(path_key) > 3 and
-		        path_key[3] == 'route')
+		        path_key[3] in ('route', 'route_join'))
 
 	def _trim_cache(self, now):
 		if len(self.paths) <= 96:
@@ -2141,7 +2160,10 @@ class TerrainNavigator(object):
 				max_expansions=self.search_max_expansions, now=now,
 				prefer_clearance=self._prefers_baked_clearance(path_key),
 				edge_penalties=edge_penalties,
-				hard_edge_penalties=hard_edge_penalties)
+				hard_edge_penalties=hard_edge_penalties,
+				route_corridor=((tuple(start), tuple(goal))
+				                if 'route' in path_key or 'route_join' in path_key
+				                else None))
 			self.searches[key] = search
 			self.search_times[key] = float(now)
 			combat_count('nav_search_created')
@@ -2438,13 +2460,30 @@ class TerrainNavigator(object):
 					best_index = index
 			state['index'] = best_index
 		index = min(int(state.get('index', 0)), len(path) - 1)
+		# A cached path may be reacquired after combat or a lateral offset.
+		# The closest vertex can lie behind a hull already on its outgoing
+		# edge. Join forward from the real pose instead of reversing to that
+		# vertex; never skip a bend without proving the replacement segment.
+		passed_vertex = False
+		if index + 1 < len(path):
+			first, following = path[index], path[index + 1]
+			dx, dz = following[0] - first[0], following[2] - first[2]
+			passed_vertex = bool(
+				(current[0] - first[0]) * dx +
+				(current[2] - first[2]) * dz > 0.0 and
+				_distance_2d(current, goal) < _distance_2d(first, goal))
+			if (passed_vertex and self._planned_next_segment_clear(
+					current, path, index, now, bot_id)):
+				index += 1
+				passed_vertex = False
 		selected_target = None
 		if (active_key == key and previous_path is path and
 				state.get('last_target') == path[index]):
 			selected_target = state.get('controlled_shallow_target')
 		current_segment_shallow = self.grid.segment_has_baked_hazard(
 			current, path[index], BAKED_SHALLOW_WATER)
-		if (self.grid.segment_penalty(current, path[index], now) > 0.0 or
+		if (passed_vertex or
+				self.grid.segment_penalty(current, path[index], now) > 0.0 or
 				self._bot_edges_penalized(
 					bot_id, current, path[index], now) or
 				(current_segment_shallow and
