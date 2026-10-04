@@ -142,7 +142,7 @@ def canonical(raw):
             seen = set()
             for item in settings[kind]:
                 common = ('id', 'label', 'team')
-                allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points', 'mirror_id', 'symmetric')
+                allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points', 'mirror_id', 'symmetric', 'class_priorities')
                                     if kind == 'routes' else ('point', 'radius', 'heading', 'priority'))
                 _keys(item, allowed, common)
                 identity = _id(item['id'])
@@ -186,6 +186,10 @@ def canonical(raw):
                     result.update(classes=sorted(tags), slots=sorted(slots), policy=policy,
                                   capacity=integer(item.get('capacity', 6), 1, 15),
                                   weight=number(item.get('weight', 1.0), 0.01, 10.0), points=points)
+                    priorities=item.get('class_priorities', {})
+                    if not isinstance(priorities, dict) or any(t not in CLASSES[:-1] for t in priorities):
+                        raise TacticsError('Invalid route priority classes')
+                    if priorities:result['class_priorities']=dict((t, integer(v, 0, 9)) for t,v in priorities.items())
                 else:
                     result.update(point=point(item.get('point'), meta['bounds']),
                                   radius=number(item.get('radius', 12.0), 3.0, 80.0),
@@ -200,7 +204,7 @@ def canonical(raw):
             raise TacticsError('Invalid default route collection')
         seen = set()
         for route in defaults:
-            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric'), ('id', 'team', 'points'))
+            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric', 'priority'), ('id', 'team', 'points'))
             team = integer(route['team'], 1, 2)
             identity = _id(route['id'])
             tag = route.get('class_tag', 'all')
@@ -226,6 +230,9 @@ def canonical(raw):
                 points.append(value)
             result = dict(id=identity, team=team, points=points)
             if tag != 'all':result['class_tag'] = tag
+            if 'priority' in route:
+                if tag not in CLASSES[:-1]:raise TacticsError('Route priority requires a non-artillery vehicle class')
+                result['priority']=integer(route['priority'], 0, 9)
             if 'symmetric' in route:
                 if type(route['symmetric']) is not bool:raise TacticsError('Symmetry must be boolean')
                 if route['symmetric']:result['symmetric'] = True

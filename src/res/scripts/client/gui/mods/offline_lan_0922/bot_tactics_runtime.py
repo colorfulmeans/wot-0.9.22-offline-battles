@@ -116,6 +116,8 @@ def default_routes(profile, name, graph):
             if edit.get('class_tag', 'all') == 'all':
                 source['waypoints'] = [list(p[:3]) for p in edit['points']]
             else:
+                if 'priority' in edit:
+                    source.setdefault('class_priorities', {})[edit['class_tag']]=edit['priority']
                 variant = copy.deepcopy(source)
                 variant.update(id=config.default_route_id(edit),
                                _editor_source=source['id'],
@@ -140,7 +142,11 @@ def assign_routes(profile, name, graph, states, round_id):
         if not applicable:
             continue
         available = []
+        tag=(state.get('profile') or {}).get('class_tag')
+        default_priority=(state.get('route') or {}).get('class_priorities', {}).get(tag,0)
         for route in applicable:
+            priority=route.get('class_priorities', {}).get(tag, 0)
+            if priority < default_priority and route['policy'] != 'fixed':continue
             if errors[route['id']] or usage.get(route['id'], 0) >= route['capacity']:
                 continue
             p = route['points'][0]
@@ -151,11 +157,11 @@ def assign_routes(profile, name, graph, states, round_id):
             # A deterministic weighted draw without global random-state changes.
             seed = '%s:%s:%s:%s' % (config.digest(profile), round_id, state['id'], route['id'])
             rank = -math.log(max(1e-12, random.Random(seed).random())) / route['weight']
-            available.append((rank, route['id'], route))
+            available.append((-priority, rank, route['id'], route))
         if not available:
             outcomes[state['id']] = 'no_usable_user_route'
             continue
-        route = min(available)[2]
+        route = min(available, key=lambda value: value[:3])[3]
         result[state['id']] = route_value(route)
         usage[route['id']] = usage.get(route['id'], 0) + 1
         outcomes[state['id']] = route['policy']

@@ -174,3 +174,35 @@ class NavigationUITests(unittest.TestCase):
         self.assertTrue(e.items.exists(':'.join(e.selection)))
         self.assertEqual('mediumTank',e._selected()['class_tag'])
         self.assertNotEqual(point[:2],e._selected()['points'][1][:2])
+
+    def test_priority_is_editable_by_class_hidden_in_all_and_readonly_in_total(self):
+        e=self.editor;e.map_name='31_airfield';e._load_map()
+        e.route_class_var.set('lightTank');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
+        e.items.selection_set(key);e.select_item();old=copy.deepcopy(e._selected()['points'])
+        e.item_vars['route_priority'].set('8');self.assertTrue(e.update_properties())
+        e.save(True);saved=e.store.active()['maps']['31_airfield']['default_routes']
+        self.assertEqual({('lightTank',8)},{(r['class_tag'],r['priority']) for r in saved})
+        self.assertEqual({1,2},{r['team'] for r in saved});self.assertEqual(old,e._selected()['points'])
+        identity=e._selected()['id']
+        e.route_class_var.set('all');e.change_route_class();e.selection=('builtin',identity);e._refresh_properties();self.root.update()
+        self.assertFalse(e.item_fields['route_priority'][1].winfo_ismapped())
+        e.item_vars['route_priority'].set('9');e.update_properties()
+        self.assertEqual(saved,e.document['maps']['31_airfield']['default_routes'])
+        e.route_class_var.set('total');e.change_route_class();e.selection=('builtin',identity+'@lightTank');e._refresh_properties()
+        self.assertEqual('readonly',str(e.item_fields['route_priority'][1].cget('state')))
+        self.assertEqual('8',e.item_vars['route_priority'].get())
+        self.assertIn('优先级 8',e.items.item('builtin:'+identity+'@lightTank','text'))
+        self.assertIn('优先级 0',e.items.item('builtin:'+identity+'@heavyTank','text'))
+        e.navigation_grid_check.invoke();self.root.update();self.assertIsNotNone(e.navigation_photo)
+
+    def test_custom_route_priority_values_are_independent_for_each_class(self):
+        e=self.editor;e.route_class_var.set('all');e.new_route();item=e._selected()
+        item['points']=[[-100.,-100.,0],[100.,100.,0]];identity=item['id']
+        for tag,value in (('lightTank',8),('heavyTank',2)):
+            e.route_class_var.set(tag);e.change_route_class();e.selection=('routes',identity);e._refresh_properties()
+            e.item_vars['route_priority'].set(str(value));self.assertTrue(e.update_properties())
+        self.assertEqual({'lightTank':8,'heavyTank':2},e._selected()['class_priorities'])
+        e.route_class_var.set('total');e.change_route_class()
+        self.assertIn('优先级 8',e.items.item('routes:'+identity+'@lightTank','text'))
+        self.assertIn('优先级 2',e.items.item('routes:'+identity+'@heavyTank','text'))

@@ -863,6 +863,7 @@ class BattleDirector(object):
 		personality = agent['personality']
 		best = None
 		best_score = -1e18
+		best_priority = -1
 		for route in routes:
 			role_weights = route.get('role_weights', {})
 			risk = _number(route.get('risk', 0.5), 0.5)
@@ -893,7 +894,9 @@ class BattleDirector(object):
 				score -= (float(used) / float(capacity)) * 28.0
 				if used >= capacity:
 					score -= 34.0
-			if score > best_score:
+			priority = 0 if is_artillery else int((route.get('class_priorities') or {}).get(profile.get('class_tag'), 0))
+			if (priority, score) > (best_priority, best_score):
+				best_priority = priority
 				best_score = score
 				best = route
 		if best is not None:

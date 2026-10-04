@@ -278,22 +278,23 @@ class BotTacticsEditor:
             ('label','名称','Label'),('policy','路线模式','Route policy'),('capacity','路线容量','Route capacity'),
             ('weight','路线分配权重','Route weight'),('slots','指定槽位，逗号分隔','Slots, comma-separated'),
             ('radius','炮位区域半径（米）','SPG zone radius (m)'),
-            ('heading','炮位朝向（度，0=北）','SPG heading (deg, 0=N)'),('priority','炮位优先级（0–9）','SPG priority (0–9)')]):
+            ('heading','炮位朝向（度，0=北）','SPG heading (deg, 0=N)'),('priority','炮位优先级（0–9）','SPG priority (0–9)'),
+            ('route_priority','本车型路线优先级（0–9，越大越优先）','Class route priority (0–9, higher first)')]):
             label=ttk.Label(right,text=self.tr(zh,en));label.grid(row=row*2,column=0,sticky='w')
             var=tk.StringVar();self.item_vars[key]=var
             if key=='policy':
                 widget=LocalizedCombobox(right,variable=var,kind='policy',values=('preferred','fixed'),language=self.language,width=26)
             else: widget=ttk.Entry(right,textvariable=var,width=28)
             widget.grid(row=row*2+1,column=0,sticky='ew',pady=(0,4));self.item_fields[key]=(label,widget)
-        types=ttk.Frame(right);types.grid(row=16,column=0,sticky='ew');self.classes_frame=types
+        types=ttk.Frame(right);types.grid(row=18,column=0,sticky='ew');self.classes_frame=types
         self.class_vars={}
         for i,c in enumerate(contract.CLASSES[:-1]):
             var=tk.BooleanVar(value=True);self.class_vars[c]=var
             ttk.Checkbutton(types,text=self.tr(*labels.ENUM_NAMES['class_tag'][c]),variable=var).grid(row=i,column=0,sticky='w')
-        ttk.Button(right,text=self.tr('应用属性到草稿','Update draft properties'),command=self.update_properties).grid(row=17,column=0,sticky='ew',pady=5)
-        self.points=ttk.Combobox(right,state='readonly',width=28);self.points.grid(row=18,column=0,sticky='ew')
+        ttk.Button(right,text=self.tr('应用属性到草稿','Update draft properties'),command=self.update_properties).grid(row=19,column=0,sticky='ew',pady=5)
+        self.points=ttk.Combobox(right,state='readonly',width=28);self.points.grid(row=20,column=0,sticky='ew')
         self.points.bind('<<ComboboxSelected>>',lambda e:self.choose_point())
-        actions=ttk.Frame(right);actions.grid(row=19,column=0,sticky='ew');self.point_actions=actions
+        actions=ttk.Frame(right);actions.grid(row=21,column=0,sticky='ew');self.point_actions=actions
         ttk.Button(actions,text=self.tr('删点','Delete point'),command=self.delete_point).pack(side='left')
         self.hold_button=ttk.Button(actions,text=self.tr('切换驻留点','Toggle hold'),command=self.toggle_hold)
         self.hold_button.pack(side='left')
@@ -301,7 +302,7 @@ class BotTacticsEditor:
         self.wait_button.pack(side='left')
         ttk.Label(right,text=self.tr(
             '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n选“全部车型”则修改通用路线。\n双击节点可设置等待：0继续，-1一直停留。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
-            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nAll classes edits shared defaults.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=20,column=0,sticky='w',pady=8)
+            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nAll classes edits shared defaults.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=22,column=0,sticky='w',pady=8)
 
     def checkpoint(self):
         self.undo_stack.append(copy.deepcopy(self.document));self.undo_stack=self.undo_stack[-50:];self.redo_stack=[]
@@ -412,9 +413,12 @@ class BotTacticsEditor:
                              if r['id']==identity.partition('@')[0]),None)
                 if source is None:return None
                 edit=self._default_edit(source,self._route_scope())
-                return dict(id=source['id'],team=self.team,class_tag=self._route_scope(),
+                result=dict(id=source['id'],team=self.team,class_tag=self._route_scope(),
                             symmetric=bool((edit or {}).get('symmetric',True)),
                             points=copy.deepcopy(edit['points'] if edit else source['waypoints']))
+                if self._route_scope() in contract.CLASSES[:-1]:
+                    result['priority']=(edit or {}).get('priority',0)
+                return result
             item=next((v for v in self.entry()[kind] if v['id']==identity.partition('@')[0]),None)
             return item
         return None
@@ -468,6 +472,7 @@ class BotTacticsEditor:
             if peer is None:peer=dict(id=item['id']);entries.append(peer)
             peer.update(team=other,class_tag=item.get('class_tag','all'),symmetric=True,
                         points=copy.deepcopy(list(reversed(item['points']))))
+            if 'priority' in item:peer['priority']=item['priority']
         else:
             entries=self._ensure_entry()['routes']
             peer=next((r for r in entries if r['id']==item.get('mirror_id')),None)
@@ -532,17 +537,22 @@ class BotTacticsEditor:
             return weights.get(tag, 0.0) > 0.0 if weights else (item.get('role_weights',{}).get('artillery',0)>0 if tag=='SPG' else True)
         return tag in item['classes']
 
+    def _priority_caption(self, value):
+        return self.tr(' [优先级 %d]',' [Priority %d]')%value
+
     def _builtin_caption(self, identity, scope=None):
         scope=self._route_scope() if scope is None else scope
         caption=labels.enum_label('class_tag',scope,self.language)
         marker=self.tr(' 已修改',' edited') if self._default_edit(dict(id=identity),scope) else ''
-        return self.tr('[默认/','[Default/')+caption+'] '+labels.route_label(identity,self.language)+marker
+        edit=self._default_edit(dict(id=identity),scope)
+        priority=self._priority_caption((edit or {}).get('priority',0)) if scope in contract.CLASSES[:-1] else ''
+        return self.tr('[默认/','[Default/')+caption+'] '+labels.route_label(identity,self.language)+marker+priority
 
     def _parking_caption(self, identity):
         edit=next((p for p in self.entry()['positions'] if p['id']==identity),None)
         item=edit or next(p for p in self.spg_defaults if p['id']==identity)
         label=item['label'] if edit else labels.route_label(identity[6:],self.language) if identity[6:] in labels.ROUTE_NAMES else item['label']
-        return self.tr('[默认驻炮点] ','[Default parking] ')+label+(self.tr(' 已修改',' edited') if edit else '')
+        return self.tr('[默认驻炮点] ','[Default parking] ')+label+(self.tr(' 已修改',' edited') if edit else '')+self._priority_caption(item['priority'])
 
     def _refresh_items(self):
         self.items.delete(*self.items.get_children())
@@ -559,7 +569,8 @@ class BotTacticsEditor:
                     for tag in tags:
                         identity=item['id']+'@'+tag if tag else item['id']
                         caption=('['+labels.enum_label('class_tag',tag,self.language)+'] ') if tag else ''
-                        self.items.insert('','end',iid=kind+':'+identity,text=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label'])
+                        priority=self._priority_caption(item.get('class_priorities',{}).get(tag or self.route_class_var.get(),0)) if kind=='routes' and self.route_class_var.get()!='all' else self._priority_caption(item['priority']) if kind=='positions' else ''
+                        self.items.insert('','end',iid=kind+':'+identity,text=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label']+priority)
         if self.route_class_var.get() in ('SPG','all','total'):
             for item in self.spg_defaults:
                 if item['team']!=self.team:continue
@@ -582,9 +593,13 @@ class BotTacticsEditor:
         builtin = self.selection and self.selection[0]=='builtin'
         parking = self.selection and self.selection[0] in ('positions','builtin_positions')
         allowed = {'label','policy','capacity','weight','slots'} if route else {'label','radius','heading','priority'} if item and not builtin else set()
+        if (route or builtin) and self.route_class_var.get()!='all':allowed.add('route_priority')
+        if parking and self.route_class_var.get()=='all':allowed.discard('priority')
         for key, widgets in self.item_fields.items():
             for widget in widgets:
                 widget.grid() if key in allowed else widget.grid_remove()
+        self.item_fields['route_priority'][1].config(state='readonly' if self.route_class_var.get()=='total' else 'normal')
+        self.item_fields['priority'][1].config(state='readonly' if self.route_class_var.get()=='total' else 'normal')
         self.classes_frame.grid() if route and self.route_class_var.get()!='total' else self.classes_frame.grid_remove()
         for widget in (self.points,self.point_actions):
             widget.grid() if route or builtin else widget.grid_remove()
@@ -594,6 +609,8 @@ class BotTacticsEditor:
         self.symmetry_check.config(state='normal' if route or builtin else 'disabled')
         for key,var in self.item_vars.items():
             val=(item or {}).get(key,'')
+            if key=='route_priority' and item:
+                val=item.get('priority',0) if builtin else item.get('class_priorities',{}).get(self._route_scope(),0)
             if key=='slots' and isinstance(val,list):val=','.join(str(v+1) for v in val)
             var.set(str(val))
         for key,var in self.class_vars.items():var.set(key in (item or {}).get('classes',()))
@@ -683,7 +700,15 @@ class BotTacticsEditor:
     def update_properties(self):
         item=self._selected()
         if item is None:return
-        if self.selection[0]=='builtin':return True
+        if self.selection[0]=='builtin':
+            if self.route_class_var.get() in ('all','total'):return True
+            try:
+                priority=int(self.item_vars['route_priority'].get())
+                if not 0<=priority<=9:raise ValueError(self.tr('优先级应为0–9。','Priority must be 0–9.'))
+                if priority==item.get('priority',0):return True
+                self.checkpoint();self._editable_item()['priority']=priority;self._sync_symmetry()
+                self._refresh_items();self.mark();return True
+            except ValueError as e:self.error(e);return False
         try:
             new=copy.deepcopy(item);new['label']=self.item_vars['label'].get()
             kind='positions' if self.selection[0]=='builtin_positions' else self.selection[0]
@@ -691,8 +716,12 @@ class BotTacticsEditor:
                 new.update(policy=self.item_vars['policy'].get(),capacity=int(self.item_vars['capacity'].get()),
                     weight=float(self.item_vars['weight'].get()),classes=[k for k,v in self.class_vars.items() if v.get()],
                     slots=[int(v.strip())-1 for v in self.item_vars['slots'].get().split(',') if v.strip()])
+                if self.route_class_var.get() in contract.CLASSES[:-1]:
+                    priority=int(self.item_vars['route_priority'].get())
+                    if not 0<=priority<=9:raise ValueError(self.tr('优先级应为0–9。','Priority must be 0–9.'))
+                    new.setdefault('class_priorities',{})[self.route_class_var.get()]=priority
             else:
-                new.update(radius=float(self.item_vars['radius'].get()),heading=float(self.item_vars['heading'].get()),priority=int(self.item_vars['priority'].get()))
+                new.update(radius=float(self.item_vars['radius'].get()),heading=float(self.item_vars['heading'].get()),priority=int(self.item_vars['priority'].get()) if self.route_class_var.get()=='SPG' else item['priority'])
             if self.selection[0]=='builtin_positions' and new==item:return True
             # Validate atomically; malformed properties never mutate the draft.
             test=contract.empty();test['maps'][self.map_name]=copy.deepcopy(self.entry())
