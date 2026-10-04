@@ -45,7 +45,7 @@ MAP_NAMES = {
     '84_winter': ('飓风小镇', 'Windstorm'),
     '86_himmelsdorf_winter': ('锡默尔斯多夫（冬季）', 'Winter Himmelsdorf'),
     '92_stalingrad': ('斯大林格勒', 'Stalingrad'),
-    '95_lost_city': ('失落之城', 'Ghost Town'),
+    '95_lost_city': ('失落小镇', 'Ghost Town'),
     '100_thepit': ('密特朗', 'Mittengard'),
     '101_dday': ('诺曼底', 'Overlord'),
     '103_ruinberg_winter': ('鲁别克（冬季）', 'Winterberg'),

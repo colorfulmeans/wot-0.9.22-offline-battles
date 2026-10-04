@@ -11615,7 +11615,14 @@ class BattleRuntime(object):
                 if not callable(callback):
                     raise RuntimeError(
                         '#1513 shot-result feedback boundary is unavailable')
-                if (enemy and critical_count > 0 and not direct_he and
+                internal_destroyed = any(
+                    item.get('state') == 'destroyed' and
+                    (item.get('kind') == 'crew' or
+                     (item.get('kind') == 'device' and item.get('name') not in
+                      ('leftTrackHealth', 'rightTrackHealth', 'gunHealth'))) and
+                    item.get('cause', 'shot') == 'shot'
+                    for item in critical_events)
+                if (enemy and damage <= 0 and shot_result == 2 and internal_destroyed and not direct_he and
                         not external_blast and not bool(event.get('dead'))):
                     from gui.mods.offline_lan_0922 import critical_voice
                     critical_voice.present(self._avatar, callback,

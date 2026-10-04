@@ -271,7 +271,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertFalse(e.canvas.find_withtag('route_node'))
         self.assertEqual(before,e.document)
         captions=[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)]
-        self.assertEqual(['普通节点','停留点（编辑中）','停留点（未编辑）'],captions)
+        self.assertEqual(['普通节点','停留点（编辑中）','停留点（未编辑）','◇ 出生点中心；虚线圈：占领基地范围'],captions)
         e.set_language('en')
         self.assertEqual('Node legend',e.node_legend.cget('text'))
         self.assertIn('Wait point (unselected)',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])

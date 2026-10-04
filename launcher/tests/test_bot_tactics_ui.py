@@ -45,6 +45,7 @@ class EditorUITests(unittest.TestCase):
         self.assertEqual(('33_fjord','北欧峡湾','北欧峡湾'),self.initial_map)
 
     def test_base_snap_is_between_coordinates_and_symmetry_and_resets_on_noop(self):
+        self.assertEqual('路线首尾移至出生点中心',self.ui.base_snap_check.cget('text'))
         self.assertEqual(self.ui.base_label.master,self.ui.base_snap_check.master)
         self.assertLess(self.ui.base_label.winfo_x(),self.ui.base_snap_check.winfo_x())
         self.assertLess(self.ui.base_snap_check.winfo_x(),self.ui.symmetry_check.winfo_x())
@@ -58,13 +59,57 @@ class EditorUITests(unittest.TestCase):
         self.ui.base_snap_check.invoke()
         self.assertFalse(self.ui.base_snap_var.get());self.assertEqual(before,self.ui.document)
 
-    def test_base_snap_default_uses_capture_centres_preserves_waits_and_undo(self):
+    def test_all_map_base_markers_and_snapped_endpoints_use_validated_spawn_centres(self):
+        for name in storage.contract.MAPS:
+            with self.subTest(map=name):
+                self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
+                bases=self.ui.graph_cache[name]['spawn_anchors']
+                self.assertEqual(2,len(self.ui.canvas.find_withtag('spawn_anchor')))
+                self.assertEqual(2,len(self.ui.canvas.find_withtag('capture_base')))
+                for team,centre in enumerate(bases,1):
+                    box=self.ui.canvas.coords('spawn_anchor_'+str(team))
+                    marker=((min(box[::2])+max(box[::2]))/2,(min(box[1::2])+max(box[1::2]))/2)
+                    expected=self.ui.view.screen(centre)
+                    self.assertAlmostEqual(expected[0],marker[0])
+                    self.assertAlmostEqual(expected[1],marker[1])
+                    graph=self.ui.graph_cache[name]
+                    capture=self.ui.canvas.coords('capture_base_'+str(team))
+                    expected_capture=self.ui.view.screen(graph['objective_bases'][team-1])
+                    self.assertAlmostEqual(expected_capture[0],(capture[0]+capture[2])/2)
+                    self.assertAlmostEqual(expected_capture[1],(capture[1]+capture[3])/2)
+                    self.assertAlmostEqual(graph['objective_base_radii'][team-1]*self.ui.view.frame()[2],(capture[2]-capture[0])/2)
+                self.ui.new_route();item=self.ui._editable_item()
+                item['symmetric']=False;item['points']=[[0,0,0],[1,1,0]]
+                self.ui.base_snap_check.invoke()
+                self.assertEqual(bases[self.ui.team-1],item['points'][0][:2])
+                self.assertEqual(bases[2-self.ui.team],item['points'][-1][:2])
+
+    def test_separate_spawn_maps_disable_symmetry_and_never_copy_the_other_team(self):
+        disabled=[]
+        for name in storage.contract.MAPS:
+            self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
+            if not self.ui._supports_route_symmetry():disabled.append(name)
+        self.assertEqual(['100_thepit','63_tundra','95_lost_city'],sorted(disabled))
+        for name in disabled:
+            self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
+            self.ui.new_route();item=self.ui._editable_item()
+            self.assertTrue(self.ui.symmetry_check.instate(['disabled']))
+            self.assertFalse(self.ui.symmetry_var.get())
+            item['points']=[[0,0,0],[1,1,0]];item['symmetric']=True
+            self.ui.base_snap_check.invoke()
+            self.assertFalse(item['symmetric'])
+            self.assertFalse(any(r['team']!=self.ui.team for r in self.ui.entry()['routes']))
+            before=copy.deepcopy(self.ui.document)
+            self.ui.symmetry_var.set(True);self.ui.change_symmetry()
+            self.assertFalse(self.ui.symmetry_var.get());self.assertEqual(before,self.ui.document)
+
+    def test_base_snap_default_uses_spawn_centres_preserves_waits_and_undo(self):
         source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
         self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
         item=self.ui._editable_item();item['points'][0][3:]=[12.0]
         item['points'][-1][3:]=[-1.0];before=copy.deepcopy(self.ui.document)
         old=copy.deepcopy(item['points']);self.ui.base_snap_check.invoke()
-        points=self.ui._selected()['points'];bases=self.ui.graph_cache['08_ruinberg']['objective_bases']
+        points=self.ui._selected()['points'];bases=self.ui.graph_cache['08_ruinberg']['spawn_anchors']
         self.assertEqual(bases[0],points[0][:2]);self.assertEqual(bases[1],points[-1][:2])
         self.assertEqual(old[1:-1],points[1:-1]);self.assertEqual(old[0][2:],points[0][2:])
         self.assertEqual(old[-1][2:],points[-1][2:]);self.assertFalse(self.ui.base_snap_var.get())
@@ -74,7 +119,7 @@ class EditorUITests(unittest.TestCase):
     def test_base_snap_team_two_single_point_and_repeat_click(self):
         self.ui.team_var.set('2');self.ui.change_map();self.ui.new_route();self.root.update()
         item=self.ui._editable_item();item['symmetric']=False;item['points']=[[0.0,0.0,0,7.0]]
-        self.ui.base_snap_check.invoke();bases=self.ui.graph_cache['08_ruinberg']['objective_bases']
+        self.ui.base_snap_check.invoke();bases=self.ui.graph_cache['08_ruinberg']['spawn_anchors']
         self.assertEqual([bases[1]+[0,7.0]],item['points'])
         item['points'].append([100.0,100.0,0]);self.ui.base_snap_check.invoke()
         self.assertEqual(bases[0],item['points'][-1][:2]);self.assertFalse(self.ui.base_snap_var.get())
@@ -83,6 +128,7 @@ class EditorUITests(unittest.TestCase):
         self.ui.route_class_var.set('total');self.ui.change_route_class()
         identity=next(i for i in self.ui.items.get_children() if i.startswith('builtin:') and i.endswith('@heavyTank'))
         self.ui.items.selection_set(identity);self.root.update()
+        self.ui._editable_item()['points'][0][0]+=10.0
         self.ui.base_snap_check.invoke();edits=self.ui.entry()['default_routes']
         own=next(r for r in edits if r['team']==1);peer=next(r for r in edits if r['team']==2)
         self.assertEqual('heavyTank',own['class_tag'])
@@ -282,7 +328,7 @@ class EditorUITests(unittest.TestCase):
         self.ui.new_position();self.root.update();self.click((-106,346));saved=copy.deepcopy(self.ui.entry()['positions'])
         self.ui.map_var.set(storage.MAP_LABELS['35_steppes']);self.ui.change_map();self.root.update()
         self.assertEqual('35_steppes',self.ui.map_name)
-        self.assertIn(str(self.ui.graph_cache['35_steppes']['objective_bases'][self.ui.team-1]),self.ui.base_label.cget('text'))
+        self.assertIn(str(self.ui.graph_cache['35_steppes']['spawn_anchors'][self.ui.team-1]),self.ui.base_label.cget('text'))
         self.ui.map_var.set(storage.MAP_LABELS['08_ruinberg']);self.ui.change_map();self.root.update()
         self.assertEqual(saved,self.ui.entry()['positions'])
 

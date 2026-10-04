@@ -228,7 +228,7 @@ class BotTacticsEditor:
         self.base_label=ttk.Label(base_bar,text='');self.base_label.pack(side='left',padx=8)
         self.base_snap_var=tk.BooleanVar(value=False)
         self.base_snap_check=ttk.Checkbutton(base_bar,
-            text=self.tr('首尾移至基地中心','Move endpoints to base centres'),
+            text=self.tr('路线首尾移至出生点中心','Move route endpoints to spawn centres'),
             variable=self.base_snap_var,command=self.move_route_endpoints_to_bases)
         self.base_snap_check.pack(side='left',padx=(0,12))
         self.symmetry_var=tk.BooleanVar(value=True)
@@ -315,6 +315,8 @@ class BotTacticsEditor:
             marker.grid(row=row,column=0,padx=4,pady=1)
             marker.create_oval(11-radius,10-radius,11+radius,10+radius,fill=CLASS_COLORS['heavyTank'],outline='white')
             ttk.Label(self.node_legend,text=self.tr(zh,en)).grid(row=row,column=1,sticky='w')
+        ttk.Label(self.node_legend,text=self.tr('◇ 出生点中心；虚线圈：占领基地范围',
+            '◇ Spawn centre; dashed circle: capture area'),wraplength=250).grid(row=3,column=0,columnspan=2,sticky='w')
         ttk.Label(right,text=self.tr(
             '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n修改“全部车型”会同步各车型路线，之后单独修改某车型只影响该车型。\n双击节点可设置等待：0继续，-1一直停留。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
             'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared geometry edits update every class; later class edits affect only that class.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=23,column=0,sticky='w',pady=8)
@@ -430,7 +432,7 @@ class BotTacticsEditor:
                 if source is None:return None
                 edit=self._default_edit(source,self._route_scope())
                 result=dict(id=source['id'],label=self._default_name(source['id'],self._route_scope(),'zh'),team=self.team,class_tag=self._route_scope(),
-                            symmetric=bool((edit or {}).get('symmetric',True)),
+                            symmetric=bool((edit or {}).get('symmetric',True)) and self._supports_route_symmetry(),
                             points=copy.deepcopy(edit['points'] if edit else source['waypoints']))
                 if self._route_scope() in contract.CLASSES[:-1]:
                     result['priority']=(edit or {}).get('priority',0)
@@ -450,6 +452,8 @@ class BotTacticsEditor:
 
     def _editable_item(self):
         item=self._selected()
+        if self.selection[0] in ('builtin','routes') and not self._supports_route_symmetry():
+            item['symmetric']=False
         if self.selection[0] in ('positions','builtin_positions'):
             entries=self._ensure_entry()['positions']
             stored=next((p for p in entries if p['id']==item['id']),None)
@@ -489,6 +493,9 @@ class BotTacticsEditor:
         if item is None:item=self._editable_item()
         shared=geometry and self.selection[0]=='builtin' and item.get('class_tag','all')=='all'
         if shared:self._sync_shared_default_geometry(item)
+        if not self._supports_route_symmetry():
+            item['symmetric']=False
+            return
         if not item.get('symmetric'):return
         other=3-self.team
         if self.selection[0]=='builtin':
@@ -512,6 +519,9 @@ class BotTacticsEditor:
             item['mirror_id']=identity
 
     def change_symmetry(self):
+        if not self._supports_route_symmetry():
+            self.symmetry_var.set(False)
+            return
         if not self.selection or self.selection[0] not in ('builtin','routes'):return
         enabled=self.symmetry_var.get();self.checkpoint();item=self._editable_item()
         item['symmetric']=enabled
@@ -524,13 +534,22 @@ class BotTacticsEditor:
                 if r['id']==item.get('mirror_id'):r['symmetric']=False
         self._refresh_properties();self.redraw();self.mark()
 
+    def _supports_route_symmetry(self):
+        graph=self.graph_cache.get(self.map_name) or {}
+        spawns=graph.get('spawn_anchors') or ()
+        bases=graph.get('objective_bases') or ()
+        radii=graph.get('objective_base_radii') or ()
+        return (len(spawns)==len(bases)==len(radii)==2 and all(
+            math.hypot(spawn[0]-base[0],spawn[1]-base[1])<=radius
+            for spawn,base,radius in zip(spawns,bases,radii)))
+
     def move_route_endpoints_to_bases(self):
         # A momentary checkbox is an action, never a saved route constraint.
         self.base_snap_var.set(False)
         if not self.selection or self.selection[0] not in ('builtin','routes'):return
         item=self._selected()
         if item is None or not item.get('points'):return
-        bases=(self.graph_cache.get(self.map_name) or {}).get('objective_bases')
+        bases=(self.graph_cache.get(self.map_name) or {}).get('spawn_anchors')
         if not bases or len(bases)!=2:return
         points=item['points'];own=bases[self.team-1];enemy=bases[2-self.team]
         if list(points[0][:2])==list(own) and (len(points)==1 or list(points[-1][:2])==list(enemy)):return
@@ -546,8 +565,8 @@ class BotTacticsEditor:
         if self.map_name not in self.graph_cache:
             try:self.graph_cache[self.map_name]=storage.graph_data(self.map_name)
             except Exception as e:self.error(e);self.graph_cache[self.map_name]=None
-        bases=(self.graph_cache.get(self.map_name) or {}).get('objective_bases') or meta['bases']
-        self.base_label.config(text=self.tr('本侧基地坐标：','Own base: ')+str(bases[self.team-1]))
+        bases=(self.graph_cache.get(self.map_name) or {}).get('spawn_anchors') or meta['bases']
+        self.base_label.config(text=self.tr('本侧出生点坐标：','Own spawn: ')+str(bases[self.team-1]))
         try:
             if self.map_name not in self.image_cache:
                 try:
@@ -596,7 +615,7 @@ class BotTacticsEditor:
         # Naming never copies geometry, priorities or deletion state.
         edits=self._ensure_entry().setdefault('default_routes',[])
         scope=item.get('class_tag','all')
-        teams=(self.team,3-self.team) if item.get('symmetric') else (self.team,)
+        teams=(self.team,3-self.team) if item.get('symmetric') and self._supports_route_symmetry() else (self.team,)
         for team in teams:
             peer=next((r for r in edits if r['id']==item['id'] and r['team']==team and r.get('class_tag','all')==scope),None)
             if peer is None:
@@ -687,8 +706,12 @@ class BotTacticsEditor:
             widget.grid() if route or builtin else widget.grid_remove()
         self.wait_button.config(state='normal' if route or builtin else 'disabled')
         self.hold_button.config(text=self.tr('切换驻留点','Toggle hold'))
-        if route or builtin:self.symmetry_var.set(bool(item.get('symmetric',True)))
-        self.symmetry_check.config(state='normal' if route or builtin else 'disabled')
+        symmetry_allowed=self._supports_route_symmetry()
+        if not symmetry_allowed:self.symmetry_var.set(False)
+        elif route or builtin:self.symmetry_var.set(bool(item.get('symmetric',True)))
+        self.symmetry_check.config(state='normal' if symmetry_allowed and (route or builtin) else 'disabled',
+            text=self.tr('路线对称','Route symmetry') if symmetry_allowed else
+            self.tr('路线对称（出生点在基地圈外，禁用）','Route symmetry (spawn outside base, disabled)'))
         for key,var in self.item_vars.items():
             val=(item or {}).get(key,'')
             if key=='route_priority' and item:
@@ -1009,9 +1032,18 @@ class BotTacticsEditor:
             for i,p in enumerate(pts):
                 self.route_hit_targets.append((('builtin',identity),i,self.view.screen(p)))
                 self._draw_route_node(p,i,color,chosen,4,chosen)
-        for i,p in enumerate(contract.MAPS[self.map_name]['bases'],1):
-            x,y=self.view.screen(p);c.create_oval(x-12,y-12,x+12,y+12,outline='#8de3cf' if i==self.team else '#ddaaaa',width=2)
-            c.create_text(x,y,text=str(i),fill='white')
+        # Route endpoints use validated spawn anchors, not capture objectives.
+        # Spawn areas and capture circles are separate on several maps.
+        bases=(self.graph_cache.get(self.map_name) or {}).get('spawn_anchors') or ()
+        for i,p in enumerate(bases,1):
+            x,y=self.view.screen(p);c.create_polygon(x,y-9,x+9,y,x,y+9,x-9,y,outline='#8de3cf' if i==self.team else '#ddaaaa',fill='',width=2,tags=('spawn_anchor','spawn_anchor_'+str(i)))
+            c.create_text(x,y-18,text=self.tr('出生','Spawn ')+str(i),fill='white')
+        graph=self.graph_cache.get(self.map_name) or {}
+        scale=self.view.frame()[2]
+        for i,(p,radius) in enumerate(zip(graph.get('objective_bases',()),graph.get('objective_base_radii',())),1):
+            x,y=self.view.screen(p);r=radius*scale
+            c.create_oval(x-r,y-r,x+r,y+r,outline='#8de3cf' if i==self.team else '#ddaaaa',width=2,dash=(6,4),tags=('capture_base','capture_base_'+str(i)))
+            c.create_text(x,y+16,text=self.tr('基地','Base ')+str(i),fill='white')
         defaults=[p for p in self.spg_defaults if not any(v['id']==p['id'] for v in self.entry()['positions'])]
         for kind in ('routes','positions'):
             for item in self.entry()[kind]+(defaults if kind=='positions' else []):
