@@ -137,9 +137,8 @@ class BotTacticsEditor:
             elif kind == 'builtin_positions':
                 text = self._parking_caption(identity)
             else:
-                item = next(v for v in self.entry()[kind] if v['id'] == identity)
-                text = self.tr('路线 ', 'Route ') if kind == 'routes' else self.tr('炮位 ', 'SPG ')
-                text += item['label']  # user-authored names are never translated
+                item = next(v for v in self.entry()[kind] if v['id'] == identity.partition('@')[0])
+                text = self._custom_caption(kind,item,identity.partition('@')[2] or None)
             self.items.item(iid, text=text)
         self.redraw()
 
@@ -425,7 +424,7 @@ class BotTacticsEditor:
                              if r['id']==identity.partition('@')[0]),None)
                 if source is None:return None
                 edit=self._default_edit(source,self._route_scope())
-                result=dict(id=source['id'],team=self.team,class_tag=self._route_scope(),
+                result=dict(id=source['id'],label=self._default_name(source['id'],self._route_scope(),'zh'),team=self.team,class_tag=self._route_scope(),
                             symmetric=bool((edit or {}).get('symmetric',True)),
                             points=copy.deepcopy(edit['points'] if edit else source['waypoints']))
                 if self._route_scope() in contract.CLASSES[:-1]:
@@ -469,7 +468,7 @@ class BotTacticsEditor:
         edit=next((r for r in edits if r['id']==item['id'] and r['team']==self.team and
                    r.get('class_tag','all')==item['class_tag']),None)
         if edit is None:
-            edit=item;edit['points']=[list(p[:2])+[int(bool(p[2]))]+list(p[3:]) for p in item['points']]
+            edit=item;edit.pop('label',None);edit['points']=[list(p[:2])+[int(bool(p[2]))]+list(p[3:]) for p in item['points']]
             edits.append(edit)
         return edit
 
@@ -495,6 +494,7 @@ class BotTacticsEditor:
             peer.update(team=other,class_tag=item.get('class_tag','all'),symmetric=True,
                         points=copy.deepcopy(list(reversed(item['points']))))
             if 'priority' in item:peer['priority']=item['priority']
+            if 'label' in item:peer['label']=item['label']
             peer.pop('disabled',None)
             if shared:self._sync_shared_default_geometry(peer)
         else:
@@ -564,13 +564,40 @@ class BotTacticsEditor:
     def _priority_caption(self, value):
         return self.tr(' [优先级 %d]',' [Priority %d]')%value
 
+    def _default_name(self, identity, scope, language=None):
+        edits=[r for r in self.entry().get('default_routes',()) if r['id']==identity and r['team']==self.team and 'label' in r]
+        edit=next((r for r in edits if r.get('class_tag','all')==scope),
+                  next((r for r in edits if r.get('class_tag','all')=='all'),None))
+        return edit['label'] if edit else labels.route_label(identity,language or self.language)
+
+    def _sync_default_name(self, item):
+        # Naming never copies geometry, priorities or deletion state.
+        edits=self._ensure_entry().setdefault('default_routes',[])
+        scope=item.get('class_tag','all')
+        teams=(self.team,3-self.team) if item.get('symmetric') else (self.team,)
+        for team in teams:
+            peer=next((r for r in edits if r['id']==item['id'] and r['team']==team and r.get('class_tag','all')==scope),None)
+            if peer is None:
+                source=next((r for r in (self.graph_cache.get(self.map_name) or {}).get('routes',{}).get(str(team),()) if r['id']==item['id']),None)
+                if source is None:continue
+                inherited=next((r for r in edits if r['id']==item['id'] and r['team']==team and r.get('class_tag','all')=='all'),None)
+                pts=(inherited or {}).get('points',source['waypoints'])
+                peer=dict(id=item['id'],team=team,class_tag=scope,symmetric=bool(item.get('symmetric')),
+                          points=[list(p[:2])+[int(bool(p[2]))]+list(p[3:]) for p in pts])
+                edits.append(peer)
+            peer['label']=item['label']
+            if scope=='all':
+                for edit in edits:
+                    if edit['id']==item['id'] and edit['team']==team:edit['label']=item['label']
+
     def _builtin_caption(self, identity, scope=None):
-        scope=self._route_scope() if scope is None else scope
+        identity,_,tag=identity.partition('@')
+        scope=scope or tag or self._route_scope()
         caption=labels.enum_label('class_tag',scope,self.language)
         marker=self.tr(' 已修改',' edited') if self._default_edit(dict(id=identity),scope) else ''
         edit=self._default_edit(dict(id=identity),scope)
         priority=self._priority_caption((edit or {}).get('priority',0)) if scope in contract.CLASSES[:-1] else ''
-        name=self.tr('[默认/','[Default/')+caption+'] '+labels.route_label(identity,self.language)+marker
+        name=self.tr('[默认/','[Default/')+caption+'] '+self._default_name(identity,scope)+marker
         return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
 
     def _parking_caption(self, identity):
@@ -579,6 +606,12 @@ class BotTacticsEditor:
         label=item['label'] if edit else labels.route_label(identity[6:],self.language) if identity[6:] in labels.ROUTE_NAMES else item['label']
         name=self.tr('[默认驻炮点] ','[Default parking] ')+label+(self.tr(' 已修改',' edited') if edit else '')
         priority=self._priority_caption(item['priority'])
+        return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
+
+    def _custom_caption(self, kind, item, tag=None):
+        caption=('['+labels.enum_label('class_tag',tag,self.language)+'] ') if tag else ''
+        priority=self._priority_caption(item.get('class_priorities',{}).get(tag or self.route_class_var.get(),0)) if kind=='routes' and self.route_class_var.get()!='all' else self._priority_caption(item['priority']) if kind=='positions' else ''
+        name=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label']
         return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
 
     def _refresh_items(self):
@@ -595,10 +628,7 @@ class BotTacticsEditor:
                     tags=item['classes'] if kind=='routes' and self.route_class_var.get()=='total' else (None,)
                     for tag in tags:
                         identity=item['id']+'@'+tag if tag else item['id']
-                        caption=('['+labels.enum_label('class_tag',tag,self.language)+'] ') if tag else ''
-                        priority=self._priority_caption(item.get('class_priorities',{}).get(tag or self.route_class_var.get(),0)) if kind=='routes' and self.route_class_var.get()!='all' else self._priority_caption(item['priority']) if kind=='positions' else ''
-                        name=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label']
-                        name=priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
+                        name=self._custom_caption(kind,item,tag)
                         self.items.insert('','end',iid=kind+':'+identity,text=name)
         if self.route_class_var.get() in ('SPG','all','total'):
             for item in self.spg_defaults:
@@ -622,7 +652,7 @@ class BotTacticsEditor:
         builtin = self.selection and self.selection[0]=='builtin'
         parking = self.selection and self.selection[0] in ('positions','builtin_positions')
         self.insert_button.config(state='normal' if (route or builtin) and self.selected_point is not None else 'disabled')
-        allowed = {'label','policy','capacity','weight','slots'} if route else {'label','radius','heading','priority'} if item and not builtin else set()
+        allowed = {'label','policy','capacity','weight','slots'} if route else {'label'} if builtin else {'label','radius','heading','priority'} if item else set()
         if (route or builtin) and self.route_class_var.get()!='all':allowed.add('route_priority')
         if parking and self.route_class_var.get()=='all':allowed.discard('priority')
         for key, widgets in self.item_fields.items():
@@ -680,7 +710,7 @@ class BotTacticsEditor:
             source=next((v for v in self.graph_cache[self.map_name].get('routes',{}).get(str(self.team),()) if v['id']==self._route_identity()),None)
             if source:
                 self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
-                new=dict(id=identity,label=labels.route_label(source['id'],self.language)+self.tr(' 副本',' copy'),team=self.team,
+                new=dict(id=identity,label=self._default_name(source['id'],self._route_scope())+self.tr(' 副本',' copy'),team=self.team,
                     classes=list(contract.CLASSES[:-1]) if self._route_scope()=='all' else [self._route_scope()],slots=[],policy='preferred',capacity=source.get('capacity',6),weight=1.0,
                     points=[[float(p[0]),float(p[1]),int(bool(p[2]))]+list(p[3:]) for p in item['points']])
                 self._ensure_entry()['routes'].append(new)
@@ -756,14 +786,19 @@ class BotTacticsEditor:
         item=self._selected()
         if item is None:return
         if self.selection[0]=='builtin':
-            if self.route_class_var.get() in ('all','total'):return True
             try:
-                priority=int(self.item_vars['route_priority'].get())
-                if not 0<=priority<=9:raise ValueError(self.tr('优先级应为0–9。','Priority must be 0–9.'))
-                if priority==item.get('priority',0):return True
-                self.checkpoint();self._editable_item()['priority']=priority;self._sync_symmetry()
+                name=contract._text(self.item_vars['label'].get())
+                priority=item.get('priority',0)
+                if self.route_class_var.get() not in ('all','total'):
+                    priority=int(self.item_vars['route_priority'].get())
+                    if not 0<=priority<=9:raise ValueError(self.tr('优先级应为0–9。','Priority must be 0–9.'))
+                renamed=name!=item['label'];reprioritized=priority!=item.get('priority',0)
+                if not renamed and not reprioritized:return True
+                self.checkpoint();edit=self._editable_item()
+                if reprioritized:edit['priority']=priority;self._sync_symmetry()
+                if renamed:edit['label']=name;self._sync_default_name(edit)
                 self._refresh_items();self.mark();return True
-            except ValueError as e:self.error(e);return False
+            except (ValueError,contract.TacticsError) as e:self.error(e);return False
         try:
             new=copy.deepcopy(item);new['label']=self.item_vars['label'].get()
             kind='positions' if self.selection[0]=='builtin_positions' else self.selection[0]
@@ -1037,7 +1072,7 @@ class BotTacticsEditor:
             doc=contract.canonical(self.document);graph=self.graph_cache.get(self.map_name)
             result=storage.runtime.authoring_check(doc,self.map_name,graph,details=True)
             names={v['id']:labels.enum_label('team',str(v['team']),self.language)+' / '+v['label'] for kind in ('routes','positions') for v in self.entry()[kind]}
-            names.update(('%s:%s'%(r['team'],contract.default_route_id(r)),labels.enum_label('team',str(r['team']),self.language)+' / '+self.tr('[默认] ','[Default] ')+labels.route_label(r['id'],self.language)+' / '+labels.enum_label('class_tag',r.get('class_tag','all'),self.language))
+            names.update(('%s:%s'%(r['team'],contract.default_route_id(r)),labels.enum_label('team',str(r['team']),self.language)+' / '+self.tr('[默认] ','[Default] ')+r.get('label',labels.route_label(r['id'],self.language))+' / '+labels.enum_label('class_tag',r.get('class_tag','all'),self.language))
                          for r in self.entry().get('default_routes',()))
             for team,routes in graph.get('routes',{}).items():
                 for route in routes:

@@ -326,3 +326,33 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual(current,list(reversed(other['points'])))
         e.undo();self.assertEqual(old,e._selected()['points'])
         e.selected_point=2;e.insert_point();self.assertEqual(4,len(e._selected()['points']))
+
+    def test_default_names_edit_in_all_and_total_preserving_geometry_and_priorities(self):
+        e=self.editor;e.route_class_var.set('heavyTank');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:'));identity=key.split(':',1)[1]
+        e.items.selection_set(key);e.select_item();e.item_vars['route_priority'].set('7');e.update_properties()
+        before=copy.deepcopy(e.entry()['default_routes'])
+        e.route_class_var.set('all');e.change_route_class();e.items.selection_set(key);e.select_item()
+        self.assertEqual('normal',str(e.item_fields['label'][1].cget('state')))
+        e.item_vars['label'].set('北侧山口');self.assertTrue(e.update_properties())
+        for old in before:
+            current=next(r for r in e.entry()['default_routes'] if r['team']==old['team'] and r.get('class_tag')==old.get('class_tag'))
+            self.assertEqual(old['points'],current['points']);self.assertEqual(7,current['priority'])
+            self.assertEqual('北侧山口',current['label'])
+        e.route_class_var.set('total');e.change_route_class();total_key=key+'@heavyTank'
+        e.items.selection_set(total_key);e.select_item();e.item_vars['label'].set('重坦山口');e.update_properties()
+        self.assertIn('重坦山口',e.items.item(total_key,'text'))
+        self.assertIn('北侧山口',e.items.item(key+'@lightTank','text'))
+        document=copy.deepcopy(e.document);e.set_language('en')
+        self.assertEqual(document,e.document);self.assertIn('重坦山口',e.items.item(total_key,'text'))
+        self.assertIn('Heavy tank',e.items.item(total_key,'text'));self.assertIn('Priority 7',e.items.item(total_key,'text'))
+        e.save(True);self.assertEqual(e.document,e.store.active())
+
+    def test_default_parking_can_be_named_in_chinese_and_keeps_name_in_english(self):
+        e=self.editor;e.route_class_var.set('SPG');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin_positions:'))
+        e.items.selection_set(key);e.select_item();old=copy.deepcopy(e._selected())
+        e.item_vars['label'].set('南侧支援炮位');self.assertTrue(e.update_properties())
+        self.assertEqual(old['point'],e._selected()['point']);self.assertEqual(old['priority'],e._selected()['priority'])
+        e.set_language('en');self.assertIn('南侧支援炮位',e.items.item(key,'text'))
+        e.save(True);self.assertEqual(e.document,e.store.active())

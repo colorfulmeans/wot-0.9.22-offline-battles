@@ -204,7 +204,7 @@ def canonical(raw):
             raise TacticsError('Invalid default route collection')
         seen = set()
         for route in defaults:
-            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric', 'priority', 'disabled'), ('id', 'team', 'points'))
+            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric', 'priority', 'disabled', 'label'), ('id', 'team', 'points'))
             team = integer(route['team'], 1, 2)
             identity = _id(route['id'])
             tag = route.get('class_tag', 'all')
@@ -229,6 +229,7 @@ def canonical(raw):
                     raise TacticsError('Consecutive waypoints need at least one metre separation')
                 points.append(value)
             result = dict(id=identity, team=team, points=points)
+            if 'label' in route:result['label']=_text(route['label'])
             if tag != 'all':result['class_tag'] = tag
             if 'disabled' in route:
                 if type(route['disabled']) is not bool:raise TacticsError('Disabled must be boolean')
