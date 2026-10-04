@@ -95,16 +95,20 @@ class NavigationUITests(unittest.TestCase):
             self.assertEqual(1,render.call_count)
         self.assertEqual(before,editor.document)
 
-    def test_check_map_includes_unedited_defaults_and_does_not_write_profile(self):
+    def test_check_map_does_not_run_raw_grid_checks_or_write_profile(self):
         editor=self.editor;before=copy.deepcopy(editor.document)
         editor.map_var.set('阿拉曼机场');editor.map_name='31_airfield';editor._load_map()
-        editor.check_map();self.root.update()
+        with mock.patch.object(nav,'check_map',side_effect=AssertionError('raw grid checks disabled')) as raw_check:
+            editor.check_map();self.root.update()
+        raw_check.assert_not_called()
         texts=[]
         def collect(widget):
             if isinstance(widget,tk.Text):texts.append(widget.get('1.0','end'))
             for child in widget.winfo_children():collect(child)
         collect(editor.root)
-        self.assertTrue(any('导航格检查' in text and '队伍 1' in text and '队伍 2' in text for text in texts))
+        self.assertTrue(texts)
+        self.assertTrue(all('导航格检查' not in text and '涉及' not in text for text in texts))
+        self.assertTrue(any('本图没有自定义数据' in text for text in texts))
         self.assertEqual(before,editor.document)
 
     def test_total_view_lists_effective_classes_and_parking_without_generic_line(self):

@@ -925,7 +925,6 @@ class BotTacticsEditor:
             for team,routes in graph.get('routes',{}).items():
                 for route in routes:
                     names.setdefault('%s:%s'%(team,route['id']),labels.enum_label('team',team,self.language)+' / '+self.tr('[默认] ','[Default] ')+labels.route_label(route['id'],self.language))
-            result += navigation_view.check_map(doc,self.map_name,graph,contract)
             lines=[]
             for identity,status,issues in result:
                 lines.append('%s: %s'%(names.get(identity,identity),labels.validation_label(status,self.language)))
@@ -934,12 +933,7 @@ class BotTacticsEditor:
                     coords=' → '.join('X %.1f, Z %.1f'%tuple(p) for p in issue['points'])
                     reason=labels.validation_label(issue.get('reason',issue['status']),self.language)
                     lines.append(self.tr('  节点 %s（%s）：%s','  Node %s (%s): %s')%(nodes,coords,reason))
-                    if issue.get('cell_count'):
-                        cells='; '.join('X %.1f, Z %.1f'%tuple(p) for p in issue['cells'])
-                        lines.append(self.tr('    涉及 %s 个格子，示例：%s','    %s cells; examples: %s')%(issue['cell_count'],cells))
             text='\n'.join(lines) or self.tr('本图没有自定义数据。','No custom data on this map.')
-            text+='\n\n'+self.tr('导航格检查按节点实际位置及两点间直线进行，不吸附到附近格子。直线有问题时，寻路仍可能绕行；缺格也不等于实际不能走。炮位检查中心点，区域内停车空间另行检查。实际车体通行与开炮仍需游戏中验证。',
-                                 'Grid checks use exact nodes and drawn straight segments, without snapping. A* may detour around flagged segments; missing cells do not prove physical blockage. Parking grid checks use the centre; usable space within its radius is checked separately. Native hull and firing checks remain in game.')
             window=tk.Toplevel(self.root);window.title(self.tr('验证结果','Validation'))
             window.geometry('800x500');window.transient(self.root)
             body=ttk.Frame(window);body.pack(fill='both',expand=True,padx=8,pady=8)
