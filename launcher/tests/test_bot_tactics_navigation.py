@@ -268,6 +268,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual(4.,(e.canvas.coords(ordinary[0])[2]-e.canvas.coords(ordinary[0])[0])/2)
         e.selection=None;e.selected_point=None;e.redraw()
         self.assertEqual([3.,3.],radii())
+        self.assertFalse(e.canvas.find_withtag('route_node'))
         self.assertEqual(before,e.document)
         captions=[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)]
         self.assertEqual(['普通节点','停留点（编辑中）','停留点（未编辑）'],captions)
@@ -276,6 +277,9 @@ class NavigationUITests(unittest.TestCase):
         self.assertIn('Wait point (unselected)',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
         e.route_class_var.set('total');e.change_route_class();e.redraw()
         self.assertTrue(radii());self.assertTrue(all(r==3. for r in radii()))
+        self.assertFalse(e.canvas.find_withtag('route_node'))
+        e.selection=next(target[0] for target in e.route_hit_targets if target[0][0]=='builtin')
+        e.redraw();self.assertTrue(e.canvas.find_withtag('route_node'))
 
     def test_custom_wait_nodes_use_the_same_editing_and_overview_markers(self):
         e=self.editor;e.route_class_var.set('all');e.change_route_class();e.new_route()
@@ -287,3 +291,4 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual([7.,10.],radii())
         e.selection=None;e.selected_point=None;e.redraw()
         self.assertEqual([3.,3.],radii())
+        self.assertFalse(e.canvas.find_withtag('route_node'))

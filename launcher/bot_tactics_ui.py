@@ -902,7 +902,7 @@ class BotTacticsEditor:
             if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if chosen else 2,dash=() if chosen else (5,5))
             for i,p in enumerate(pts):
                 self.route_hit_targets.append((('builtin',identity),i,self.view.screen(p)))
-                self._draw_route_node(p,i,color,chosen,4,chosen or self.route_class_var.get()=='total')
+                self._draw_route_node(p,i,color,chosen,4,chosen)
         for i,p in enumerate(contract.MAPS[self.map_name]['bases'],1):
             x,y=self.view.screen(p);c.create_oval(x-12,y-12,x+12,y+12,outline='#8de3cf' if i==self.team else '#ddaaaa',width=2)
             c.create_text(x,y,text=str(i),fill='white')
@@ -922,7 +922,7 @@ class BotTacticsEditor:
                         for i,p in enumerate(item['points']):
                             x,y=self.view.screen(p)
                             self.route_hit_targets.append((('routes',identity),i,(x,y)))
-                            self._draw_route_node(p,i,color,selected,5)
+                            self._draw_route_node(p,i,color,selected,5,selected)
                 else:
                     color=CLASS_COLORS['SPG']
                     key=('builtin_positions' if any(p['id']==item['id'] for p in self.spg_defaults) else 'positions',item['id'])
