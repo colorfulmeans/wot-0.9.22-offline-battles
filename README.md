@@ -51,6 +51,14 @@ baked cells, local fallback rejection counts, the next path points and alignment
 timers, without extra native ground or collision queries. Reproduce the problem
 and export the launcher's error report; no debug switch is required.
 
+The route editor's **Show navigation grid** checkbox sits beside Route symmetry.
+It overlays raw baked height, hazard and link coverage with a colour legend.
+**Check map** also lists raw-cell issues at route nodes and along their drawn
+straight connections, including unedited defaults and class overrides. These
+are static editing hints: A* may take a detour, and missing cells do not prove
+physical blockage. The overlay is off by default and cached in the editor;
+neither feature adds battle-time ground or collision queries.
+
 ## The garage
 
 The 0.9.22 client gets a working offline garage:

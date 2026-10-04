@@ -11,10 +11,12 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 try:
     from . import bot_tactics_store as storage
     from . import bot_tactics_labels as labels, i18n
+    from . import bot_tactics_navigation as navigation_view
 except ImportError:
     import bot_tactics_store as storage
     import bot_tactics_labels as labels
     import i18n
+    import bot_tactics_navigation as navigation_view
 
 contract = storage.contract
 PARAM_LABELS = labels.PARAM_NAMES
@@ -72,6 +74,7 @@ class BotTacticsEditor:
         self.undo_stack = []; self.redo_stack = []
         self.selection = None; self.selected_point = None; self.drag = None
         self.graph_cache = {}; self.image_cache = {}; self.background = None; self.photo = None
+        self.navigation_image_cache = {}; self.navigation_photo = None
         self.root = tk.Toplevel(parent)
         self.root.title(self.tr('Bot 配置与地图战术', 'Bot configuration and map tactics'))
         self.root.geometry('1200x820'); self.root.minsize(1000, 700)
@@ -227,6 +230,11 @@ class BotTacticsEditor:
         self.symmetry_check=ttk.Checkbutton(base_bar,text=self.tr('路线对称','Route symmetry'),
                                            variable=self.symmetry_var,command=self.change_symmetry)
         self.symmetry_check.pack(side='left')
+        self.navigation_grid_var=tk.BooleanVar(value=False)
+        self.navigation_grid_check=ttk.Checkbutton(base_bar,
+            text=self.tr('显示导航网格','Show navigation grid'),
+            variable=self.navigation_grid_var,command=self.redraw)
+        self.navigation_grid_check.pack(side='left',padx=(12,0))
         ttk.Label(bar,text=self.tr('模式：标准战','Mode: standard')).pack(side='right')
         legend=ttk.Frame(parent);legend.pack(fill='x')
         for tag,color in CLASS_COLORS.items():
@@ -757,6 +765,10 @@ class BotTacticsEditor:
             # Draw only the visible crop at high zoom; bounded pixels/memory.
             resized=self.background.resize((max(1,int(w)),max(1,int(h))),Image.Resampling.BILINEAR)
             self.photo=ImageTk.PhotoImage(resized,master=self.root);c.create_image(left,top,image=self.photo,anchor='nw')
+        if self.navigation_grid_var.get():
+            self._draw_navigation_grid()
+        else:
+            self.navigation_photo = None
         c.create_rectangle(left,top,left+w,top+h,outline='#c6cece')
         for i in range(11):
             c.create_line(left+w*i/10,top,left+w*i/10,top+h,fill='#6d787d',dash=(2,6))
@@ -812,6 +824,44 @@ class BotTacticsEditor:
                     c.create_rectangle(x-5,y-5,x+5,y+5,fill=color,outline='white')
                     c.create_line(x,y,x+math.sin(angle)*28,y-math.cos(angle)*28,fill=color,width=2,arrow='last')
                     c.create_text(x+12,y+12,text=item['label'],fill='white',anchor='nw')
+        if self.navigation_grid_var.get():
+            captions = (
+                ('available','有高度及连接','Height and links'),
+                ('missing_ground','缺地面高度','Missing height'),
+                ('navigation_hazard','危险标记','Hazard flag'),
+                ('no_navigation_links','无连接','No links'))
+            for index,(key,zh,en) in enumerate(captions):
+                x=12+index*155
+                c.create_rectangle(x,12,x+145,38,fill='#202529',outline='')
+                c.create_rectangle(x+5,20,x+15,30,fill=navigation_view.COLORS[key][0],outline='')
+                c.create_text(x+20,25,text=self.tr(zh,en),anchor='w',fill='white')
+
+    def _draw_navigation_grid(self):
+        graph=self.graph_cache.get(self.map_name)
+        if not graph:return
+        from PIL import Image,ImageTk
+        if self.map_name not in self.navigation_image_cache:
+            self.navigation_image_cache.clear()
+            self.navigation_image_cache[self.map_name]=navigation_view.overlay_image(graph,self.view.bounds)
+        image=self.navigation_image_cache[self.map_name]
+        cell=graph['cell_size'];ox,oz=graph['origin']
+        left,top=self.view.screen((ox-cell*.5,oz+(graph['height']-.5)*cell))
+        scale=self.view.frame()[2]
+        width=max(1,round(graph['width']*cell*scale))
+        height=max(1,round(graph['height']*cell*scale))
+        # Crop to the visible canvas before scaling; zoom/pan stay bounded.
+        x0=max(0,int(math.floor(-left/width*image.width)))
+        y0=max(0,int(math.floor(-top/height*image.height)))
+        x1=min(image.width,int(math.ceil((self.view.width-left)/width*image.width)))
+        y1=min(image.height,int(math.ceil((self.view.height-top)/height*image.height)))
+        if x1<=x0 or y1<=y0:
+            self.navigation_photo=None;return
+        crop=image.crop((x0,y0,x1,y1))
+        resized=crop.resize((max(1,round((x1-x0)*width/image.width)),
+                             max(1,round((y1-y0)*height/image.height))),Image.Resampling.NEAREST)
+        self.navigation_photo=ImageTk.PhotoImage(resized,master=self.root)
+        self.canvas.create_image(left+x0*width/image.width,top+y0*height/image.height,
+                                 image=self.navigation_photo,anchor='nw')
 
     def check_map(self):
         try:
@@ -820,6 +870,10 @@ class BotTacticsEditor:
             names={v['id']:labels.enum_label('team',str(v['team']),self.language)+' / '+v['label'] for kind in ('routes','positions') for v in self.entry()[kind]}
             names.update(('%s:%s'%(r['team'],contract.default_route_id(r)),labels.enum_label('team',str(r['team']),self.language)+' / '+self.tr('[默认] ','[Default] ')+labels.route_label(r['id'],self.language)+' / '+labels.enum_label('class_tag',r.get('class_tag','all'),self.language))
                          for r in self.entry().get('default_routes',()))
+            for team,routes in graph.get('routes',{}).items():
+                for route in routes:
+                    names.setdefault('%s:%s'%(team,route['id']),labels.enum_label('team',team,self.language)+' / '+self.tr('[默认] ','[Default] ')+labels.route_label(route['id'],self.language))
+            result += navigation_view.check_map(doc,self.map_name,graph,contract)
             lines=[]
             for identity,status,issues in result:
                 lines.append('%s: %s'%(names.get(identity,identity),labels.validation_label(status,self.language)))
@@ -828,9 +882,12 @@ class BotTacticsEditor:
                     coords=' → '.join('X %.1f, Z %.1f'%tuple(p) for p in issue['points'])
                     reason=labels.validation_label(issue.get('reason',issue['status']),self.language)
                     lines.append(self.tr('  节点 %s（%s）：%s','  Node %s (%s): %s')%(nodes,coords,reason))
+                    if issue.get('cell_count'):
+                        cells='; '.join('X %.1f, Z %.1f'%tuple(p) for p in issue['cells'])
+                        lines.append(self.tr('    涉及 %s 个格子，示例：%s','    %s cells; examples: %s')%(issue['cell_count'],cells))
             text='\n'.join(lines) or self.tr('本图没有自定义数据。','No custom data on this map.')
-            text+='\n\n'+self.tr('仅验证烘焙图连通性及通用停车空间。非原版车体/弹道验证；开炮仍需游戏中检查。',
-                                 'Baked connectivity / generic parking only. Native hull and firing-arc checks still run in game.')
+            text+='\n\n'+self.tr('导航格检查按节点实际位置及两点间直线进行，不吸附到附近格子。直线有问题时，寻路仍可能绕行；缺格也不等于实际不能走。炮位检查中心点，区域内停车空间另行检查。实际车体通行与开炮仍需游戏中验证。',
+                                 'Grid checks use exact nodes and drawn straight segments, without snapping. A* may detour around flagged segments; missing cells do not prove physical blockage. Parking grid checks use the centre; usable space within its radius is checked separately. Native hull and firing checks remain in game.')
             window=tk.Toplevel(self.root);window.title(self.tr('验证结果','Validation'))
             window.geometry('800x500');window.transient(self.root)
             body=ttk.Frame(window);body.pack(fill='both',expand=True,padx=8,pady=8)

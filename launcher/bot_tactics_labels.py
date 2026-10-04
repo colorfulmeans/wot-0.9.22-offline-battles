@@ -136,6 +136,10 @@ PARAM_NAMES = {
     'lead_error': ('移动目标提前量误差', 'Lead error fraction'),
 }
 VALIDATION_NAMES = {
+    'navigation_cells_clear': ('导航格检查：节点及直线连接未发现问题', 'Grid check: nodes and straight connections clear'),
+    'navigation_cells_issues': ('导航格检查：发现以下问题', 'Grid check: issues below'),
+    'no_navigation_links': ('该导航格没有相邻连接', 'Navigation cell has no neighbour links'),
+    'navigation_link_missing': ('直线经过的相邻导航格缺少此方向连接，可能需要绕行', 'Straight segment lacks a directed link; a detour may be needed'),
     'baked_route_connected': ('烘焙导航图上路线连通', 'Baked route connected'),
     'generic_parking_found': ('存在通用停车空间', 'Generic parking space found'),
     'no_generic_parking': ('没有通用停车空间', 'No generic parking space'),
