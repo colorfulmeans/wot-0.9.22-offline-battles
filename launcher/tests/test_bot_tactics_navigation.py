@@ -1,5 +1,7 @@
 """Raw navigation visualization and checks stay entirely in the editor."""
 import copy
+import importlib.util
+import os
 import tempfile
 import tkinter as tk
 from types import SimpleNamespace
@@ -9,6 +11,8 @@ from unittest import mock
 import bot_tactics_navigation as nav
 import bot_tactics_store as storage
 import bot_tactics_ui as ui
+
+HAS_PIL = importlib.util.find_spec('PIL') is not None
 
 
 def graph():
@@ -41,6 +45,7 @@ class NavigationDataTests(unittest.TestCase):
             data,[[0.,8.,0],[16.,8.,0]],(0,0,16,16))[0]['reason'])
         self.assertEqual([],nav.route_issues(data,[[16.,8.,0],[0.,8.,0]],(0,0,16,16)))
 
+    @unittest.skipUnless(HAS_PIL, 'requires Pillow')
     def test_display_distinguishes_height_links_and_hazard_with_north_up(self):
         data=graph();data['heights_mm'][20]=None;data['hazards'][0]=4;data['links'][24]=0
         image=nav.overlay_image(data,(0,0,16,16))
@@ -67,6 +72,8 @@ class NavigationDataTests(unittest.TestCase):
         self.assertEqual('outside_bounds',issues[0]['reason'])
 
 
+@unittest.skipUnless(HAS_PIL and (os.name == 'nt' or os.environ.get('DISPLAY')),
+                     'requires Pillow and Tk display')
 class NavigationUITests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
