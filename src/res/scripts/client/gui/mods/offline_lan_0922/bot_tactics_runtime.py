@@ -110,6 +110,9 @@ def default_routes(profile, name, graph):
         key = '%s:%s' % (edit['team'], config.default_route_id(edit))
         source = next((r for r in result.get(str(edit['team']), ())
                        if r['id'] == edit['id']), None)
+        if edit.get('disabled'):
+            outcomes[key]='route_deleted'
+            continue
         error = validate_route(grid, edit) if source is not None else 'unknown_default_route'
         outcomes[key] = error or 'baked_route_connected'
         if error is None:
@@ -126,6 +129,22 @@ def default_routes(profile, name, graph):
                                class_weights=dict((tag, 1.0 if tag == edit['class_tag'] else 0.0)
                                                   for tag in config.CLASSES))
                 result[str(edit['team'])].append(variant)
+    if any(edit.get('disabled') and edit.get('class_tag','all')=='all' for edit in edits):
+        result['_editor_allow_empty']=True
+    for edit in edits:
+        if not edit.get('disabled'):continue
+        team_routes=result.get(str(edit['team']),[])
+        scope=edit.get('class_tag','all')
+        if scope=='all':
+            result[str(edit['team'])]=[r for r in team_routes
+                if r['id']!=edit['id'] and r.get('_editor_source')!=edit['id']]
+        else:
+            result[str(edit['team'])]=[r for r in team_routes
+                if not (r.get('_editor_source')==edit['id'] and r.get('_editor_class')==scope)]
+            for route in result[str(edit['team'])]:
+                if route['id']==edit['id']:
+                    route.setdefault('_editor_disabled_classes',[]).append(scope)
+                    route.setdefault('class_weights',{})[scope]=0.0
     return result, outcomes
 
 
@@ -270,6 +289,7 @@ def authoring_check(profile, name, graph, details=False):
     grid = graph_view(name, graph)
     messages = []
     for route in config.map_settings(profile, name).get('default_routes', ()):
+        if route.get('disabled'):continue
         error = validate_route(grid, route)
         identity = '%s:%s' % (route['team'], config.default_route_id(route))
         messages.append((identity, error or 'baked_route_connected', route_issues(grid, route))

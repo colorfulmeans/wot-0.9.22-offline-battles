@@ -70,3 +70,25 @@ class RoutePriorityTests(unittest.TestCase):
             entry['routes'][0]['class_priorities']['heavyTank']=0
             doc['maps']['31_airfield']=entry
             self.assertEqual({},planning.assign_routes(doc,'31_airfield',graph,states[:1],1)[0])
+
+    def test_deleted_defaults_are_excluded_by_class_and_allow_empty_sides(self):
+        graph,doc=profile();original=copy.deepcopy(graph);north=graph['routes']['1'][0]
+        deletion=edit(north,'lightTank',0);deletion['disabled']=True
+        doc['maps']['31_airfield']['default_routes']=[deletion]
+        routes,status=planning.default_routes(config.canonical(doc),'31_airfield',graph)
+        self.assertIn('route_deleted',status.values())
+        director=BattleDirector('31_airfield',123,baked_routes=routes)
+        self.assertNotIn(north['id'],[director.register_profile(i,1,dict(class_tag='lightTank',roles={} ))['route']['id'] for i in range(1,15)])
+        source=next(r for r in director._routes_for(1) if r['id']==north['id'])
+        self.assertEqual(0.,source['class_weights']['lightTank'])
+        self.assertNotIn('heavyTank',source['_editor_disabled_classes'])
+        entry=doc['maps']['31_airfield'];entry['default_routes']=[]
+        for route in graph['routes']['1']:
+            item=edit(route,'all',0);item.pop('priority');item['disabled']=True;entry['default_routes'].append(item)
+        clean=config.canonical(doc);routes,_=planning.default_routes(clean,'31_airfield',graph)
+        director=BattleDirector('31_airfield',123,baked_routes=routes)
+        self.assertEqual((),director._routes_for(1))
+        self.assertIsNone(director.register_profile(1,1,dict(class_tag='heavyTank',roles={}))['route'])
+        self.assertEqual(original,graph)
+        bad=copy.deepcopy(doc);bad['maps']['31_airfield']['default_routes'][0]['disabled']=1
+        with self.assertRaises(config.TacticsError):config.canonical(bad)

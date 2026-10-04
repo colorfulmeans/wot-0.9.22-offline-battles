@@ -292,3 +292,37 @@ class NavigationUITests(unittest.TestCase):
         e.selection=None;e.selected_point=None;e.redraw()
         self.assertEqual([3.,3.],radii())
         self.assertFalse(e.canvas.find_withtag('route_node'))
+
+    def test_delete_default_route_scopes_total_class_and_shared_views(self):
+        e=self.editor;e.route_class_var.set('total');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:') and k.endswith('@lightTank'))
+        identity=key.split(':',1)[1].split('@',1)[0]
+        e.items.selection_set(key);e.select_item()
+        with mock.patch.object(ui.messagebox,'askyesno',return_value=True):e.delete_item()
+        self.assertFalse(e.items.exists(key))
+        e.route_class_var.set('lightTank');e.change_route_class()
+        self.assertFalse(e.items.exists('builtin:'+identity))
+        e.team=2;e._refresh_items();self.assertFalse(e.items.exists('builtin:'+identity))
+        e.team=1;e._refresh_items();e.route_class_var.set('heavyTank');e.change_route_class()
+        self.assertTrue(e.items.exists('builtin:'+identity))
+        e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
+        with mock.patch.object(ui.messagebox,'askyesno',return_value=True):e.delete_item()
+        e.route_class_var.set('heavyTank');e.change_route_class();self.assertFalse(e.items.exists('builtin:'+identity))
+        e.save(True);self.assertEqual(e.document,e.store.active())
+        e.undo();self.assertTrue(e.items.exists('builtin:'+identity))
+
+    def test_insert_button_places_a_new_point_after_selected_and_mirrors(self):
+        e=self.editor;e.route_class_var.set('lightTank');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:'));e.items.selection_set(key);e.select_item()
+        # Shipped default lanes can already contain sixteen nodes.
+        item=e._editable_item();item['points']=copy.deepcopy(item['points'][:3])
+        old=copy.deepcopy(item['points']);e.selected_point=0;e._refresh_properties()
+        self.assertEqual('normal',str(e.insert_button.cget('state')))
+        e.insert_button.invoke();current=e._selected()['points']
+        self.assertEqual(4,len(current));self.assertEqual(old[0],current[0]);self.assertEqual(old[1:],current[2:])
+        self.assertEqual([(old[0][0]+old[1][0])*.5,(old[0][1]+old[1][1])*.5,0],current[1])
+        self.assertEqual(1,e.selected_point)
+        other=next(r for r in e.entry()['default_routes'] if r['team']==2)
+        self.assertEqual(current,list(reversed(other['points'])))
+        e.undo();self.assertEqual(old,e._selected()['points'])
+        e.selected_point=2;e.insert_point();self.assertEqual(4,len(e._selected()['points']))

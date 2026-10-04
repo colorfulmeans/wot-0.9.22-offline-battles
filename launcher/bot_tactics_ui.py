@@ -296,6 +296,8 @@ class BotTacticsEditor:
         self.points.bind('<<ComboboxSelected>>',lambda e:self.choose_point())
         actions=ttk.Frame(right);actions.grid(row=21,column=0,sticky='ew');self.point_actions=actions
         ttk.Button(actions,text=self.tr('删点','Delete point'),command=self.delete_point).pack(side='left')
+        self.insert_button=ttk.Button(actions,text=self.tr('插入点','Insert point'),command=self.insert_point)
+        self.insert_button.pack(side='left')
         self.hold_button=ttk.Button(actions,text=self.tr('切换驻留点','Toggle hold'),command=self.toggle_hold)
         self.hold_button.pack(side='left')
         self.wait_button=ttk.Button(actions,text=self.tr('停留条件','Wait condition'),command=self.edit_point_condition)
@@ -408,6 +410,7 @@ class BotTacticsEditor:
                 if tag == 'SPG':continue
                 weights = route.get('class_weights') or {}
                 if tag != 'all' and weights and weights.get(tag, 0) <= 0:continue
+                if (self._default_edit(route,tag) or {}).get('disabled'):continue
                 identity = route['id'] + '@' + tag if self.route_class_var.get() == 'total' else route['id']
                 yield route, tag, identity
 
@@ -476,6 +479,7 @@ class BotTacticsEditor:
             if (edit['id']==item['id'] and edit['team']==item['team'] and
                     edit.get('class_tag','all') in contract.CLASSES[:-1]):
                 edit['points']=copy.deepcopy(item['points'])
+                edit.pop('disabled',None)
 
     def _sync_symmetry(self, geometry=False):
         item=self._editable_item()
@@ -491,6 +495,7 @@ class BotTacticsEditor:
             peer.update(team=other,class_tag=item.get('class_tag','all'),symmetric=True,
                         points=copy.deepcopy(list(reversed(item['points']))))
             if 'priority' in item:peer['priority']=item['priority']
+            peer.pop('disabled',None)
             if shared:self._sync_shared_default_geometry(peer)
         else:
             entries=self._ensure_entry()['routes']
@@ -616,6 +621,7 @@ class BotTacticsEditor:
         route = self.selection and self.selection[0]=='routes'
         builtin = self.selection and self.selection[0]=='builtin'
         parking = self.selection and self.selection[0] in ('positions','builtin_positions')
+        self.insert_button.config(state='normal' if (route or builtin) and self.selected_point is not None else 'disabled')
         allowed = {'label','policy','capacity','weight','slots'} if route else {'label','radius','heading','priority'} if item and not builtin else set()
         if (route or builtin) and self.route_class_var.get()!='all':allowed.add('route_priority')
         if parking and self.route_class_var.get()=='all':allowed.discard('priority')
@@ -694,7 +700,25 @@ class BotTacticsEditor:
     def delete_item(self):
         item=self._selected()
         if item is None:return
-        if self.selection[0] in ('builtin','builtin_positions'):return
+        if self.selection[0]=='builtin':
+            if not messagebox.askyesno(self.tr('删除默认路线','Delete default route'),
+                    self._builtin_caption(self.selection[1])+'?',parent=self.root):return
+            self.checkpoint();scope=self._route_scope();identity=item['id']
+            teams=(self.team,3-self.team) if item.get('symmetric') else (self.team,)
+            edits=self._ensure_entry().setdefault('default_routes',[])
+            for team in teams:
+                target=next((r for r in edits if r['id']==identity and r['team']==team and r.get('class_tag','all')==scope),None)
+                if target is None:
+                    target=copy.deepcopy(item);target['team']=team
+                    target['points']=[list(p[:2])+[int(bool(p[2]))]+list(p[3:]) for p in target['points']]
+                    if team!=self.team:target['points'].reverse()
+                    edits.append(target)
+                target['disabled']=True
+                if scope=='all':
+                    for edit in edits:
+                        if edit['id']==identity and edit['team']==team:edit['disabled']=True
+            self.selection=None;self.selected_point=None;self._refresh_items();self.mark();return
+        if self.selection[0]=='builtin_positions':return
         if not messagebox.askyesno(self.tr('删除','Delete'),item['label']+'?',parent=self.root):return
         self.checkpoint()
         if self.selection[0]=='routes':item=self._editable_item()
@@ -769,7 +793,7 @@ class BotTacticsEditor:
         except (ValueError,contract.TacticsError) as e:self.error(e);return False
 
     def choose_point(self):
-        self.selected_point=self.points.current();self.redraw()
+        self.selected_point=self.points.current();self._refresh_properties();self.redraw()
 
     def delete_point(self):
         item=self._selected()
@@ -779,6 +803,29 @@ class BotTacticsEditor:
             self.checkpoint();del self._editable_points()[self.selected_point]
             if parking:self._editable_item()['point']=self._editable_points()[0][:2]
             self._sync_symmetry(geometry=True);self.selected_point=None;self._refresh_properties();self.redraw();self.mark()
+
+    def insert_point(self):
+        item=self._selected()
+        if item is None or self.selection[0] not in ('builtin','routes') or self.selected_point is None:return
+        points=item['points'];index=self.selected_point
+        if index>=len(points):return
+        if len(points)>=16:
+            self.error(self.tr('每条路线最多16个点。','A route allows at most 16 points.'));return
+        current=points[index]
+        if index+1<len(points):
+            following=points[index+1]
+            if math.hypot(following[0]-current[0],following[1]-current[1])<2:
+                self.error(self.tr('相邻点距离不足2米，请先拉开距离。','Separate adjacent points by at least two metres first.'));return
+            new=[(current[0]+following[0])*.5,(current[1]+following[1])*.5,0]
+        else:
+            bounds=self.view.bounds
+            choices=((10,0),(-10,0),(0,10),(0,-10))
+            new=next(([current[0]+dx,current[1]+dz,0] for dx,dz in choices
+                if bounds[0]<=current[0]+dx<=bounds[2] and bounds[1]<=current[1]+dz<=bounds[3]),None)
+            if new is None:return
+        self.checkpoint();self._editable_points().insert(index+1,new)
+        self._sync_symmetry(geometry=True);self.selected_point=index+1
+        self._refresh_properties();self.redraw();self.mark()
 
     def toggle_hold(self):
         item=self._selected()

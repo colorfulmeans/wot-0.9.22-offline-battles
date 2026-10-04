@@ -204,7 +204,7 @@ def canonical(raw):
             raise TacticsError('Invalid default route collection')
         seen = set()
         for route in defaults:
-            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric', 'priority'), ('id', 'team', 'points'))
+            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric', 'priority', 'disabled'), ('id', 'team', 'points'))
             team = integer(route['team'], 1, 2)
             identity = _id(route['id'])
             tag = route.get('class_tag', 'all')
@@ -230,6 +230,9 @@ def canonical(raw):
                 points.append(value)
             result = dict(id=identity, team=team, points=points)
             if tag != 'all':result['class_tag'] = tag
+            if 'disabled' in route:
+                if type(route['disabled']) is not bool:raise TacticsError('Disabled must be boolean')
+                if route['disabled']:result['disabled']=True
             if 'priority' in route:
                 if tag not in CLASSES[:-1]:raise TacticsError('Route priority requires a non-artillery vehicle class')
                 result['priority']=integer(route['priority'], 0, 9)
@@ -310,7 +313,7 @@ def default_route_id(route):
 
 
 def matches(route, state):
-    return (route['team'] == state.get('team') and
+    return (not route.get('disabled') and route['team'] == state.get('team') and
             (state.get('profile') or {}).get('class_tag') in route['classes'] and
             (not route['slots'] or state.get('slot') in route['slots']))
 

@@ -761,10 +761,12 @@ def _map_data_with_baked_routes(map_data, baked_routes):
 			if 'class_weights' in route:
 				route['class_weights'] = dict(
 					route.get('class_weights', {}) or {})
+			for tag in route.get('_editor_disabled_classes', ()):
+				route.setdefault('class_weights', {})[tag] = 0.0
 			route['waypoints'] = tuple(waypoints)
 			converted.append(route)
 		routes[team] = tuple(converted)
-	if not routes.get(1) or not routes.get(2):
+	if (not routes.get(1) or not routes.get(2)) and not baked_routes.get('_editor_allow_empty'):
 		return map_data
 	result['routes'] = routes
 	# Baked routes already carry their team orientation and graph-validated
@@ -841,7 +843,8 @@ class BattleDirector(object):
 		# Class edits replace the geometry after ordinary lane allocation, so
 		# the original capacity/role distribution is not multiplied by variants.
 		routes = tuple(r for r in self._routes_for(agent['team'])
-		               if not r.get('_editor_source'))
+		               if not r.get('_editor_source') and
+		               agent['profile'].get('class_tag') not in r.get('_editor_disabled_classes', ()))
 		if not routes:
 			return None
 		profile = agent['profile']
