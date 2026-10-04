@@ -546,13 +546,16 @@ class BotTacticsEditor:
         marker=self.tr(' 已修改',' edited') if self._default_edit(dict(id=identity),scope) else ''
         edit=self._default_edit(dict(id=identity),scope)
         priority=self._priority_caption((edit or {}).get('priority',0)) if scope in contract.CLASSES[:-1] else ''
-        return self.tr('[默认/','[Default/')+caption+'] '+labels.route_label(identity,self.language)+marker+priority
+        name=self.tr('[默认/','[Default/')+caption+'] '+labels.route_label(identity,self.language)+marker
+        return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
 
     def _parking_caption(self, identity):
         edit=next((p for p in self.entry()['positions'] if p['id']==identity),None)
         item=edit or next(p for p in self.spg_defaults if p['id']==identity)
         label=item['label'] if edit else labels.route_label(identity[6:],self.language) if identity[6:] in labels.ROUTE_NAMES else item['label']
-        return self.tr('[默认驻炮点] ','[Default parking] ')+label+(self.tr(' 已修改',' edited') if edit else '')+self._priority_caption(item['priority'])
+        name=self.tr('[默认驻炮点] ','[Default parking] ')+label+(self.tr(' 已修改',' edited') if edit else '')
+        priority=self._priority_caption(item['priority'])
+        return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
 
     def _refresh_items(self):
         self.items.delete(*self.items.get_children())
@@ -570,7 +573,9 @@ class BotTacticsEditor:
                         identity=item['id']+'@'+tag if tag else item['id']
                         caption=('['+labels.enum_label('class_tag',tag,self.language)+'] ') if tag else ''
                         priority=self._priority_caption(item.get('class_priorities',{}).get(tag or self.route_class_var.get(),0)) if kind=='routes' and self.route_class_var.get()!='all' else self._priority_caption(item['priority']) if kind=='positions' else ''
-                        self.items.insert('','end',iid=kind+':'+identity,text=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label']+priority)
+                        name=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label']
+                        name=priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
+                        self.items.insert('','end',iid=kind+':'+identity,text=name)
         if self.route_class_var.get() in ('SPG','all','total'):
             for item in self.spg_defaults:
                 if item['team']!=self.team:continue

@@ -192,7 +192,7 @@ class NavigationUITests(unittest.TestCase):
         e.route_class_var.set('total');e.change_route_class();e.selection=('builtin',identity+'@lightTank');e._refresh_properties()
         self.assertEqual('readonly',str(e.item_fields['route_priority'][1].cget('state')))
         self.assertEqual('8',e.item_vars['route_priority'].get())
-        self.assertIn('优先级 8',e.items.item('builtin:'+identity+'@lightTank','text'))
+        self.assertTrue(e.items.item('builtin:'+identity+'@lightTank','text').startswith('[优先级 8]'))
         self.assertIn('优先级 0',e.items.item('builtin:'+identity+'@heavyTank','text'))
         e.navigation_grid_check.invoke();self.root.update();self.assertIsNotNone(e.navigation_photo)
 
