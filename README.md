@@ -580,3 +580,5 @@ and bundled runtimes.
 ### Static navigation review removal test
 
 This test branch removes broad native static-edge review and its live missing-cell/link repair machinery for every map. The rebuilt Airfield graph is retained; the other 40 graphs are unchanged and are not represented as newly baked. Local displaced-hull connector checks, moving-vehicle avoidance, wreck costs, per-Bot contact recovery and final physical collision remain. Native gameplay and performance require testing on the exact client.
+
+The route editor offers All class routes above All vehicle classes. It shows effective per-class coloured routes and red SPG parking, without a separate shared-default line. Selecting a coloured route scopes edits to that vehicle class; overlapping routes can be selected by class in the list. All vehicle classes edits shared defaults in black. This view changes no battle-side navigation work.

@@ -53,7 +53,7 @@ class CatalogTests(unittest.TestCase):
             self.assertNotIn('_', labels.route_label(key, 'en'))
 
     def test_behavior_and_policy_catalogs_cover_runtime_identifiers(self):
-        self.assertEqual({'all'} | set(storage.contract.CLASSES), set(labels.ENUM_NAMES['class_tag']))
+        self.assertEqual({'total', 'all'} | set(storage.contract.CLASSES), set(labels.ENUM_NAMES['class_tag']))
         self.assertEqual({''} | set(storage.contract.SKILLS), set(labels.ENUM_NAMES['skill']))
         self.assertEqual(set(storage.contract.PARAMETERS) | {'skill', 'crew_level'}, set(labels.PARAM_NAMES))
         self.assertEqual({'preferred', 'fixed'}, set(labels.ENUM_NAMES['policy']))

@@ -61,6 +61,7 @@ class LocalizedCombobox(ttk.Combobox):
 
 
 CLASS_COLORS = dict(zip(contract.CLASSES, ('#25a627', '#b1962d', '#a5a5a5', '#2c62aa', '#c83346')))
+CLASS_COLORS['all'] = '#000000'
 
 
 class BotTacticsEditor:
@@ -220,7 +221,7 @@ class BotTacticsEditor:
         self.route_class_var = tk.StringVar(value='all')
         ttk.Label(bar,text=self.tr('显示车型','Show class')).pack(side='left',padx=6)
         scope = LocalizedCombobox(bar,variable=self.route_class_var,
-            kind='class_tag',values=('all',)+contract.CLASSES,
+            kind='class_tag',values=('total','all')+contract.CLASSES,
             language=self.language,width=13)
         scope.pack(side='left')
         scope.bind('<<ComboboxSelected>>',lambda e:self.change_route_class(),add='+')
@@ -299,8 +300,8 @@ class BotTacticsEditor:
         self.wait_button=ttk.Button(actions,text=self.tr('停留条件','Wait condition'),command=self.edit_point_condition)
         self.wait_button.pack(side='left')
         ttk.Label(right,text=self.tr(
-            '选择车型后，默认路线修改只用于该车型。\n选“全部车型”则修改通用路线。\n双击节点可设置等待：0继续，-1一直停留。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
-            'Class selection scopes default-route edits to that class.\nAll classes edits shared defaults.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=20,column=0,sticky='w',pady=8)
+            '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n选“全部车型”则修改通用路线。\n双击节点可设置等待：0继续，-1一直停留。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
+            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nAll classes edits shared defaults.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=20,column=0,sticky='w',pady=8)
 
     def checkpoint(self):
         self.undo_stack.append(copy.deepcopy(self.document));self.undo_stack=self.undo_stack[-50:];self.redo_stack=[]
@@ -381,6 +382,25 @@ class BotTacticsEditor:
     def _ensure_entry(self):
         return self.document['maps'].setdefault(self.map_name, self.entry())
 
+    def _route_scope(self):
+        if self.route_class_var.get() == 'total' and self.selection:
+            return self.selection[1].partition('@')[2] or 'all'
+        return self.route_class_var.get()
+
+    def _route_identity(self):
+        return self.selection[1].partition('@')[0]
+
+    def _builtin_views(self):
+        graph = self.graph_cache.get(self.map_name) or {}
+        tags = contract.CLASSES[:-1] if self.route_class_var.get() == 'total' else (self.route_class_var.get(),)
+        for route in graph.get('routes', {}).get(str(self.team), ()):
+            for tag in tags:
+                if tag == 'SPG':continue
+                weights = route.get('class_weights') or {}
+                if tag != 'all' and weights and weights.get(tag, 0) <= 0:continue
+                identity = route['id'] + '@' + tag if self.route_class_var.get() == 'total' else route['id']
+                yield route, tag, identity
+
     def _selected(self):
         if self.selection:
             kind,identity=self.selection
@@ -389,13 +409,13 @@ class BotTacticsEditor:
                             copy.deepcopy(next((p for p in self.spg_defaults if p['id']==identity),None)))
             if kind=='builtin':
                 source=next((r for r in (self.graph_cache.get(self.map_name) or {}).get('routes',{}).get(str(self.team),())
-                             if r['id']==identity),None)
+                             if r['id']==identity.partition('@')[0]),None)
                 if source is None:return None
-                edit=self._default_edit(source)
-                return dict(id=identity,team=self.team,class_tag=self.route_class_var.get(),
+                edit=self._default_edit(source,self._route_scope())
+                return dict(id=source['id'],team=self.team,class_tag=self._route_scope(),
                             symmetric=bool((edit or {}).get('symmetric',True)),
                             points=copy.deepcopy(edit['points'] if edit else source['waypoints']))
-            item=next((v for v in self.entry()[kind] if v['id']==identity),None)
+            item=next((v for v in self.entry()[kind] if v['id']==identity.partition('@')[0]),None)
             return item
         return None
 
@@ -403,7 +423,7 @@ class BotTacticsEditor:
         return self._editable_item()['points']
 
     def _default_edit(self, source, scope=None):
-        scope=self.route_class_var.get() if scope is None else scope
+        scope=self._route_scope() if scope is None else scope
         edits=[r for r in self.entry().get('default_routes',()) if r['id']==source['id'] and r['team']==self.team]
         return next((r for r in edits if r.get('class_tag','all')==scope),
                     next((r for r in edits if r.get('class_tag','all')=='all'),None))
@@ -415,7 +435,20 @@ class BotTacticsEditor:
             stored=next((p for p in entries if p['id']==item['id']),None)
             if stored is None:entries.append(item);stored=item
             return stored
-        if self.selection[0]!='builtin':return item
+        if self.selection[0]!='builtin':
+            scope=self._route_scope()
+            if self.selection[0]=='routes' and self.route_class_var.get()=='total' and len(item['classes'])>1:
+                entries=self._ensure_entry()['routes']
+                peer=next((r for r in entries if r['id']==item.get('mirror_id')),None)
+                new=copy.deepcopy(item);new['id']='r_'+uuid.uuid4().hex[:12];new['classes']=[scope]
+                new.pop('mirror_id',None)
+                item['classes'].remove(scope)
+                if peer is not None:
+                    other=copy.deepcopy(peer);other['id']='r_'+uuid.uuid4().hex[:12];other['classes']=[scope]
+                    peer['classes'].remove(scope)
+                    other['mirror_id']=new['id'];new['mirror_id']=other['id'];entries.append(other)
+                entries.append(new);self.selection=('routes',new['id']+'@'+scope);item=new
+            return item
         edits=self._ensure_entry().setdefault('default_routes',[])
         edit=next((r for r in edits if r['id']==item['id'] and r['team']==self.team and
                    r.get('class_tag','all')==item['class_tag']),None)
@@ -489,7 +522,7 @@ class BotTacticsEditor:
     def _visible_for_class(self, kind, item):
         if kind=='routes' and item.get('classes')==['SPG']:return False
         tag = self.route_class_var.get()
-        if tag == 'all':
+        if tag in ('all','total'):
             return True
         if kind == 'positions':
             return tag == 'SPG'
@@ -499,9 +532,10 @@ class BotTacticsEditor:
             return weights.get(tag, 0.0) > 0.0 if weights else (item.get('role_weights',{}).get('artillery',0)>0 if tag=='SPG' else True)
         return tag in item['classes']
 
-    def _builtin_caption(self, identity):
-        caption=labels.enum_label('class_tag',self.route_class_var.get(),self.language)
-        marker=self.tr(' 已修改',' edited') if self._default_edit(dict(id=identity)) else ''
+    def _builtin_caption(self, identity, scope=None):
+        scope=self._route_scope() if scope is None else scope
+        caption=labels.enum_label('class_tag',scope,self.language)
+        marker=self.tr(' 已修改',' edited') if self._default_edit(dict(id=identity),scope) else ''
         return self.tr('[默认/','[Default/')+caption+'] '+labels.route_label(identity,self.language)+marker
 
     def _parking_caption(self, identity):
@@ -521,16 +555,17 @@ class BotTacticsEditor:
             for item in self.entry()[kind]:
                 if item['team']==self.team and self._visible_for_class(kind,item):
                     if kind=='positions' and any(p['id']==item['id'] for p in self.spg_defaults):continue
-                    self.items.insert('','end',iid=kind+':'+item['id'],text=(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label'])
-        if self.route_class_var.get() in ('SPG','all'):
+                    tags=item['classes'] if kind=='routes' and self.route_class_var.get()=='total' else (None,)
+                    for tag in tags:
+                        identity=item['id']+'@'+tag if tag else item['id']
+                        caption=('['+labels.enum_label('class_tag',tag,self.language)+'] ') if tag else ''
+                        self.items.insert('','end',iid=kind+':'+identity,text=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label'])
+        if self.route_class_var.get() in ('SPG','all','total'):
             for item in self.spg_defaults:
                 if item['team']!=self.team:continue
                 self.items.insert('','end',iid='builtin_positions:'+item['id'],text=self._parking_caption(item['id']))
-        graph=self.graph_cache.get(self.map_name)
-        if graph:
-            for route in graph.get('routes',{}).get(str(self.team),()):
-                if not self._visible_for_class('builtin',route):continue
-                self.items.insert('','end',iid='builtin:'+route['id'],text=self._builtin_caption(route['id']))
+        for route,tag,identity in self._builtin_views():
+            self.items.insert('','end',iid='builtin:'+identity,text=self._builtin_caption(route['id'],tag))
         if self.selection and self.items.exists(':'.join(self.selection)):
             self.items.selection_set(':'.join(self.selection))
         else:self.selection=None
@@ -550,7 +585,7 @@ class BotTacticsEditor:
         for key, widgets in self.item_fields.items():
             for widget in widgets:
                 widget.grid() if key in allowed else widget.grid_remove()
-        self.classes_frame.grid() if route else self.classes_frame.grid_remove()
+        self.classes_frame.grid() if route and self.route_class_var.get()!='total' else self.classes_frame.grid_remove()
         for widget in (self.points,self.point_actions):
             widget.grid() if route or builtin else widget.grid_remove()
         self.wait_button.config(state='normal' if route or builtin else 'disabled')
@@ -572,6 +607,8 @@ class BotTacticsEditor:
         else:self.points.set('')
 
     def new_route(self):
+        if self.route_class_var.get()=='total':
+            self.error(self.tr('请先选择具体车型或全部车型，再新建路线。','Choose a vehicle class or All classes before creating a route.'));return
         if self.route_class_var.get()=='SPG':return self.new_position()
         self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
         scope=self.route_class_var.get()
@@ -593,19 +630,25 @@ class BotTacticsEditor:
     def duplicate_item(self):
         item=self._selected()
         if self.selection and self.selection[0]=='builtin':
-            source=next((v for v in self.graph_cache[self.map_name].get('routes',{}).get(str(self.team),()) if v['id']==self.selection[1]),None)
+            source=next((v for v in self.graph_cache[self.map_name].get('routes',{}).get(str(self.team),()) if v['id']==self._route_identity()),None)
             if source:
                 self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
                 new=dict(id=identity,label=labels.route_label(source['id'],self.language)+self.tr(' 副本',' copy'),team=self.team,
-                    classes=list(contract.CLASSES[:-1]) if self.route_class_var.get()=='all' else [self.route_class_var.get()],slots=[],policy='preferred',capacity=source.get('capacity',6),weight=1.0,
+                    classes=list(contract.CLASSES[:-1]) if self._route_scope()=='all' else [self._route_scope()],slots=[],policy='preferred',capacity=source.get('capacity',6),weight=1.0,
                     points=[[float(p[0]),float(p[1]),int(bool(p[2]))]+list(p[3:]) for p in item['points']])
-                self._ensure_entry()['routes'].append(new);self.selection=('routes',identity);self._refresh_items();self.mark()
+                self._ensure_entry()['routes'].append(new)
+                identity += '@'+new['classes'][0] if self.route_class_var.get()=='total' else ''
+                self.selection=('routes',identity);self._refresh_items();self.mark()
             return
         if item is None:return
-        self.checkpoint();new=copy.deepcopy(item);new['id']=('r_' if self.selection[0]=='routes' else 'p_')+uuid.uuid4().hex[:12];new['label']+=self.tr(' 副本',' copy')
+        self.checkpoint();new=copy.deepcopy(item)
+        if self.selection[0]=='routes' and self.route_class_var.get()=='total':new['classes']=[self._route_scope()]
+        new['id']=('r_' if self.selection[0]=='routes' else 'p_')+uuid.uuid4().hex[:12];new['label']+=self.tr(' 副本',' copy')
         new.pop('mirror_id',None);new.pop('symmetric',None)
         kind='positions' if self.selection[0]=='builtin_positions' else self.selection[0]
-        self._ensure_entry()[kind].append(new);self.selection=(kind,new['id']);self._refresh_items();self.mark()
+        self._ensure_entry()[kind].append(new)
+        identity=new['id']+'@'+new['classes'][0] if kind=='routes' and self.route_class_var.get()=='total' else new['id']
+        self.selection=(kind,identity);self._refresh_items();self.mark()
 
     def delete_item(self):
         item=self._selected()
@@ -613,6 +656,7 @@ class BotTacticsEditor:
         if self.selection[0] in ('builtin','builtin_positions'):return
         if not messagebox.askyesno(self.tr('删除','Delete'),item['label']+'?',parent=self.root):return
         self.checkpoint()
+        if self.selection[0]=='routes':item=self._editable_item()
         if item.get('symmetric'):
             self.entry()['routes'][:]=[r for r in self.entry()['routes'] if r['id']!=item.get('mirror_id')]
         self.entry()[self.selection[0]].remove(item);self.selection=None;self._refresh_items();self.mark()
@@ -625,8 +669,8 @@ class BotTacticsEditor:
             return
         if not self.selection or self.selection[0]!='builtin':return
         edits=self.entry().get('default_routes',[])
-        scope=self.route_class_var.get();item=self._selected()
-        remaining=[r for r in edits if not (r['id']==self.selection[1] and r.get('class_tag','all')==scope and
+        scope=self._route_scope();item=self._selected()
+        remaining=[r for r in edits if not (r['id']==self._route_identity() and r.get('class_tag','all')==scope and
                    (r['team']==self.team or item.get('symmetric')))]
         if remaining==edits:return
         self.checkpoint()
@@ -655,7 +699,11 @@ class BotTacticsEditor:
             test['maps'][self.map_name][kind]=[new]
             test['maps'][self.map_name]['positions' if kind=='routes' else 'routes']=[]
             contract.canonical(test)
-            self.checkpoint();item=self._editable_item();item.clear();item.update(new)
+            self.checkpoint();item=self._editable_item()
+            if kind=='routes' and self.route_class_var.get()=='total':
+                new.update(id=item['id'],classes=item['classes'])
+                if 'mirror_id' in item:new['mirror_id']=item['mirror_id']
+            item.clear();item.update(new)
             if self.selection[0]=='routes':self._sync_symmetry()
             self._refresh_items();self.mark();return True
         except (ValueError,contract.TacticsError) as e:self.error(e);return False
@@ -705,7 +753,14 @@ class BotTacticsEditor:
         return 'break'
 
     def press(self,event):
-        self.canvas.focus_set();item=self._selected()
+        self.canvas.focus_set()
+        if self.route_class_var.get()=='total' and not event.state & 1:
+            targets=[v for v in self.route_hit_targets if math.hypot(v[2][0]-event.x,v[2][1]-event.y)<10]
+            if targets:
+                target=min(targets,key=lambda v:(v[0]!=self.selection,math.hypot(v[2][0]-event.x,v[2][1]-event.y)))
+                self.selection=target[0];self.selected_point=target[1]
+                self.items.selection_set(':'.join(self.selection));self._refresh_properties()
+        item=self._selected()
         if item is None:return
         p=self.view.world(event.x,event.y)
         parking=self.selection[0] in ('positions','builtin_positions')
@@ -736,7 +791,7 @@ class BotTacticsEditor:
         self.redraw()
 
     def release(self,event):
-        if self.drag:self.drag=None;self._refresh_properties();self.mark()
+        if self.drag:self.drag=None;self._refresh_items();self.mark()
 
     def cursor(self,event):
         if hasattr(self,'view'):
@@ -776,28 +831,21 @@ class BotTacticsEditor:
             if i<10:
                 c.create_text(left+w*(i+.5)/10,top-12,text='1234567890'[i],fill='white')
                 c.create_text(left-12,top+h*(i+.5)/10,text='ABCDEFGHJK'[i],fill='white')
-        # Draw effective defaults, retaining the immutable source graph.
-        graph=self.graph_cache.get(self.map_name)
-        if graph:
-            for r in graph.get('routes',{}).get(str(self.team),()):
-                if not self._visible_for_class('builtin',r):continue
-                edit=self._default_edit(r)
-                pts=edit['points'] if edit else r.get('waypoints',())
-                chosen=self.selection==('builtin',r['id'])
-                color=CLASS_COLORS.get(self.route_class_var.get(),'#a5a5a5')
-                coords=[v for p in pts for v in self.view.screen(p)]
-                if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if chosen else 1,dash=() if chosen else (5,5))
-                if chosen:
-                    for i,p in enumerate(pts):
-                        x,y=self.view.screen(p);rr=7 if i==self.selected_point else 5
-                        c.create_oval(x-rr,y-rr,x+rr,y+rr,fill=color,outline='white',width=2 if i==self.selected_point else 1)
-                        c.create_text(x+10,y-10,text=str(i+1),fill='white',anchor='w')
-                if self.route_class_var.get()=='all':
-                    for scoped in self.entry().get('default_routes',()):
-                        tag=scoped.get('class_tag','all')
-                        if scoped['team']!=self.team or scoped['id']!=r['id'] or tag=='all':continue
-                        coords=[v for p in scoped['points'] for v in self.view.screen(p)]
-                        if len(coords)>=4:c.create_line(*coords,fill=CLASS_COLORS[tag],width=2,arrow='last')
+        # Total view draws effective class routes, without a separate all-class line.
+        self.route_hit_targets=[]
+        for r,tag,identity in sorted(self._builtin_views(),key=lambda v:self.selection==('builtin',v[2])):
+            edit=self._default_edit(r,tag)
+            pts=edit['points'] if edit else r.get('waypoints',())
+            chosen=self.selection==('builtin',identity)
+            color=CLASS_COLORS[tag]
+            coords=[v for p in pts for v in self.view.screen(p)]
+            if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if chosen else 2,dash=() if chosen else (5,5))
+            for i,p in enumerate(pts):
+                self.route_hit_targets.append((('builtin',identity),i,self.view.screen(p)))
+                if chosen or self.route_class_var.get()=='total':
+                    x,y=self.view.screen(p);rr=7 if chosen and i==self.selected_point else 4
+                    c.create_oval(x-rr,y-rr,x+rr,y+rr,fill=color,outline='white')
+                    if chosen:c.create_text(x+10,y-10,text=str(i+1),fill='white',anchor='w')
         for i,p in enumerate(contract.MAPS[self.map_name]['bases'],1):
             x,y=self.view.screen(p);c.create_oval(x-12,y-12,x+12,y+12,outline='#8de3cf' if i==self.team else '#ddaaaa',width=2)
             c.create_text(x,y,text=str(i),fill='white')
@@ -806,19 +854,23 @@ class BotTacticsEditor:
             for item in self.entry()[kind]+(defaults if kind=='positions' else []):
                 if item['team']!=self.team or not self._visible_for_class(kind,item):continue
                 chosen=self.selection==(kind,item['id']) or self.selection==('builtin_positions',item['id'])
-                tag='SPG' if kind=='positions' else self.route_class_var.get()
-                if tag=='all' and len(item.get('classes',()))==1:tag=item['classes'][0]
-                color=CLASS_COLORS.get(tag,'#a5a5a5')
                 if kind=='routes':
-                    coords=[v for p in item['points'] for v in self.view.screen(p)]
-                    if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if chosen else 2,arrow='last')
-                    for i,p in enumerate(item['points']):
-                        x,y=self.view.screen(p);rr=7 if chosen and i==self.selected_point else 5
-                        node_color=color
-                        draw=c.create_oval
-                        draw(x-rr,y-rr,x+rr,y+rr,fill=node_color,outline='white' if p[2] else node_color)
-                        c.create_text(x+10,y-10,text=str(i+1),fill='white',anchor='w')
+                    tags=item['classes'] if self.route_class_var.get()=='total' else (self.route_class_var.get(),)
+                    for tag in sorted(tags,key=lambda tag:self.selection==('routes',item['id']+'@'+tag)):
+                        identity=item['id']+'@'+tag if self.route_class_var.get()=='total' else item['id']
+                        selected=self.selection==('routes',identity)
+                        color=CLASS_COLORS[tag]
+                        coords=[v for p in item['points'] for v in self.view.screen(p)]
+                        if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if selected else 2,arrow='last')
+                        for i,p in enumerate(item['points']):
+                            x,y=self.view.screen(p);rr=7 if selected and i==self.selected_point else 5
+                            self.route_hit_targets.append((('routes',identity),i,(x,y)))
+                            c.create_oval(x-rr,y-rr,x+rr,y+rr,fill=color,outline='white' if p[2] else color)
+                            if selected:c.create_text(x+10,y-10,text=str(i+1),fill='white',anchor='w')
                 else:
+                    color=CLASS_COLORS['SPG']
+                    key=('builtin_positions' if any(p['id']==item['id'] for p in self.spg_defaults) else 'positions',item['id'])
+                    self.route_hit_targets.append((key,0,self.view.screen(item['point'])))
                     x,y=self.view.screen(item['point']);radius=item['radius']*scale;angle=math.radians(item['heading'])
                     c.create_oval(x-radius,y-radius,x+radius,y+radius,outline=color,width=2)
                     c.create_rectangle(x-5,y-5,x+5,y+5,fill=color,outline='white')

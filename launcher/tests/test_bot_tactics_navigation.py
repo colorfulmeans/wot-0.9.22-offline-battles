@@ -106,3 +106,67 @@ class NavigationUITests(unittest.TestCase):
         collect(editor.root)
         self.assertTrue(any('导航格检查' in text and '队伍 1' in text and '队伍 2' in text for text in texts))
         self.assertEqual(before,editor.document)
+
+    def test_total_view_lists_effective_classes_and_parking_without_generic_line(self):
+        e=self.editor;e.map_name='31_airfield';e._load_map()
+        before=copy.deepcopy(e.document)
+        e.route_class_var.set('total');e.change_route_class()
+        keys=e.items.get_children()
+        for tag in storage.contract.CLASSES[:-1]:
+            self.assertTrue(any(k.startswith('builtin:') and k.endswith('@'+tag) for k in keys),tag)
+        self.assertTrue(any(k.startswith('builtin_positions:') for k in keys))
+        self.assertFalse(any(k.endswith('@all') for k in keys))
+        fills=[e.canvas.itemcget(i,'fill') for i in e.canvas.find_all() if e.canvas.type(i)=='line']
+        self.assertNotIn('#000000',fills)
+        self.assertEqual(before,e.document)
+        e.route_class_var.set('all');e.change_route_class()
+        fills=[e.canvas.itemcget(i,'fill') for i in e.canvas.find_all() if e.canvas.type(i)=='line']
+        self.assertIn('#000000',fills)
+        self.assertEqual('#a5a5a5',ui.CLASS_COLORS['heavyTank'])
+
+    def test_total_drag_edits_only_selected_class_and_reversed_team(self):
+        e=self.editor;e.map_name='31_airfield';e._load_map()
+        e.route_class_var.set('total');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:') and k.endswith('@heavyTank'))
+        e.items.selection_set(key);e.select_item()
+        original=copy.deepcopy(e._selected()['points'])
+        e.checkpoint();e._editable_points()[1][0]+=5;e._sync_symmetry();e._refresh_items()
+        edits=e.entry()['default_routes']
+        self.assertEqual({'heavyTank'},{r['class_tag'] for r in edits})
+        own=next(r for r in edits if r['team']==1);peer=next(r for r in edits if r['team']==2)
+        self.assertEqual(own['points'],list(reversed(peer['points'])))
+        e.route_class_var.set('mediumTank');e.change_route_class()
+        e.selection=('builtin',own['id'])
+        self.assertEqual(original,e._selected()['points'])
+        storage.contract.canonical(e.document)
+        e.route_class_var.set('total');e.change_route_class();e.selection=('builtin',own['id']+'@heavyTank')
+        e.reset_builtin();self.assertFalse(e.entry().get('default_routes'))
+
+    def test_total_shared_custom_route_edit_splits_class_and_its_mirror(self):
+        e=self.editor;e.route_class_var.set('all');e.new_route()
+        item=e._selected();item['points']=[[-100.,-100.,0],[100.,100.,0]];e._sync_symmetry()
+        old_id=item['id'];e.route_class_var.set('total');e.change_route_class()
+        e.selection=('routes',old_id+'@lightTank')
+        e.checkpoint();e._editable_points()[0][0]+=7;e._sync_symmetry();e._refresh_items()
+        entries=e.entry()['routes'];self.assertEqual(4,len(entries))
+        for r in entries:
+            if r['id']==old_id:
+                self.assertNotIn('lightTank',r['classes']);self.assertEqual(-100.,r['points'][0][0])
+        selected=e._selected();self.assertEqual(['lightTank'],selected['classes'])
+        self.assertEqual(-93.,selected['points'][0][0])
+        other=next(r for r in entries if r['id']==selected['mirror_id'])
+        self.assertEqual(selected['points'],list(reversed(other['points'])))
+        storage.contract.canonical(e.document)
+
+    def test_total_canvas_can_select_and_drag_colored_node(self):
+        e=self.editor;e.map_name='31_airfield';e._load_map()
+        e.route_class_var.set('total');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:') and k.endswith('@mediumTank'))
+        e.items.selection_set(key);e.select_item()
+        point=e._selected()['points'][1];x,y=e.view.screen(point)
+        e.press(SimpleNamespace(x=x,y=y,state=0))
+        self.assertEqual(tuple(key.split(':',1)),e.selection)
+        e.motion(SimpleNamespace(x=x+10,y=y));e.release(None)
+        self.assertTrue(e.items.exists(':'.join(e.selection)))
+        self.assertEqual('mediumTank',e._selected()['class_tag'])
+        self.assertNotEqual(point[:2],e._selected()['points'][1][:2])

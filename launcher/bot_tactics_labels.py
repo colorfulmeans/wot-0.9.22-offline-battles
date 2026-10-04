@@ -110,6 +110,7 @@ ROUTE_NAMES.update({
 
 ENUM_NAMES = {
     'class_tag': {
+        'total': ('总路线', 'All class routes'),
         'all': ('全部车型', 'All vehicle classes'),
         'lightTank': ('轻型坦克', 'Light tank'),
         'mediumTank': ('中型坦克', 'Medium tank'),
