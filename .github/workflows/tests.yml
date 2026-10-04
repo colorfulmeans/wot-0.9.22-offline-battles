@@ -22,6 +22,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client
         run: |
+          python -m unittest test_port_0922_authored_route_progress test_port_0922_navigation_clearance
           python -m unittest test_port_0922_sheridan_ingress test_port_0922_capture_coordinate_audit
           python -m unittest test_port_0922_vehicle_physics test_port_0922_physics_regressions release097.test_096_contact_steering5
           python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_bot_motion_preserves_partial_steering_input

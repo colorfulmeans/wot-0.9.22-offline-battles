@@ -6,6 +6,52 @@ from gui.mods.offline_lan_0922.prebaked_navigation import load_graph
 
 
 class AuthoredRouteProgressTests(unittest.TestCase):
+    def test_latest_authored_descent_finishes_within_one_bounded_search(self):
+        navigator = TerrainNavigator(lambda *unused: None,
+            baked_graph=load_graph('29_el_hallouf', str(fixtures.ROOT)))
+        start = (-131.5, 58.6, -294.697)
+        goal = (29.276, 0.0, -180.313)
+        search = navigator.grid.begin_plan(start, goal, max_expansions=4096,
+            prefer_clearance=True, route_corridor=(start, goal))
+        # Check completed planning, not a temporary forward fallback. The
+        # shipped overwritten corridor vector exhausted all 4096 expansions.
+        for unused in range(512):
+            if search.step(1):
+                break
+        self.assertTrue(search.done)
+        self.assertLess(_distance_2d(search.result[-1], goal), 0.01)
+        for first, last in zip(search.result, search.result[1:]):
+            self.assertTrue(navigator.grid.dry_segment_clear(first, last, 1.0))
+
+    def test_eligible_slope_does_not_pay_a_comfort_surcharge(self):
+        graph = fixtures.BotAiPortTests._baked_graph(12, 3)
+        # A legal 0.30-grade bump in the middle lane has a longer flat bypass.
+        for x in range(3, 9):
+            graph['heights_mm'][12 + x] = 1200
+        navigator = TerrainNavigator(lambda *unused: None, baked_graph=graph)
+        navigator.grid._smooth = lambda path, *args: path
+        for start, goal in [((10.0, 0.0, 24.0), (54.0, 0.0, 24.0)),
+                            ((54.0, 0.0, 24.0), (10.0, 0.0, 24.0))]:
+            for corridor in [None, (start, goal)]:
+                search = navigator.grid.begin_plan(start, goal,
+                    prefer_clearance=False, route_corridor=corridor)
+                while not search.done:
+                    search.step(256)
+                self.assertTrue(search.result)
+                self.assertTrue(all(point[2] == 24.0 for point in search.result))
+
+    def test_live_ground_planning_does_not_zigzag_across_a_legal_plane(self):
+        navigator = TerrainNavigator(lambda x, z, hint: x * 0.30,
+            bounds=(0.0, 0.0, 44.0, 8.0), cell_size=4.0)
+        navigator.grid._smooth = lambda path, *args: path
+        for start, goal in [((0.0, 0.0, 4.0), (44.0, 13.2, 4.0)),
+                            ((44.0, 13.2, 4.0), (0.0, 0.0, 4.0))]:
+            search = navigator.grid.begin_plan(start, goal)
+            while not search.done:
+                search.step(256)
+            self.assertTrue(search.result)
+            self.assertTrue(all(point[2] == 4.0 for point in search.result))
+
     def test_reported_centurion_pose_selects_a_forward_supported_descent(self):
         navigator = TerrainNavigator(lambda *unused: None,
             baked_graph=load_graph('29_el_hallouf', str(fixtures.ROOT)))

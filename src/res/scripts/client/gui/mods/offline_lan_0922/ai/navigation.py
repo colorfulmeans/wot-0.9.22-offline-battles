@@ -914,8 +914,8 @@ class TerrainGrid(object):
 	def _baked_search_edges(self, cell):
 		"""Share immutable directed-edge inputs across this map's Bot searches.
 
-		Keep run and slope cost separate so A* retains its exact floating-point
-		addition order. Wrecks, expiring failures, per-Bot vetoes and avoid points
+		Eligible terrain carries distance cost without a slope comfort surcharge.
+		Wrecks, expiring failures, per-Bot vetoes and avoid points
 		are live search inputs and never enter this cache.
 		"""
 		cached = self._baked_search_edge_cache.get(cell)
@@ -923,22 +923,14 @@ class TerrainGrid(object):
 			combat_count('nav_baked_edges_reused')
 			return cached
 		combat_count('nav_baked_edges_built')
-		current_y = self._baked_cell_height(cell)
-		grade_divisor = max(0.05, self._baked_max_grade)
 		edges = []
 		for unused_dx, unused_dz, length_scale, next_cell, next_y in \
 				self._baked_neighbours(cell):
 			run = self.cell_size * length_scale
-			delta_y = next_y - current_y
-			slope = abs(delta_y) / max(run, 0.1)
-			slope_ratio = slope / grade_divisor
-			slope_cost = run * slope_ratio * slope_ratio * 6.0
-			if delta_y < 0.0:
-				slope_cost *= 1.25
 			edge_key = ((cell, next_cell) if cell < next_cell else
 			            (next_cell, cell))
 			edges.append((
-				next_cell, next_y, run, slope_cost,
+				next_cell, next_y, run, 0.0,
 				self._penalty(next_cell, None, False),
 				self._penalty(next_cell, None, True), edge_key))
 		cached = tuple(edges)
@@ -1125,8 +1117,9 @@ class TerrainGrid(object):
 			route_corridor=None):
 		if route_corridor is not None:
 			first, last = route_corridor
-			dx, dz = last[0] - first[0], last[2] - first[2]
-			length_sq = dx * dx + dz * dz
+			corridor_dx = last[0] - first[0]
+			corridor_dz = last[2] - first[2]
+			length_sq = corridor_dx * corridor_dx + corridor_dz * corridor_dz
 			width_sq = (self.cell_size * 2.0) ** 2
 		start_cell = self.cell_for(start)
 		goal_cell = self.cell_for(goal)
@@ -1177,12 +1170,10 @@ class TerrainGrid(object):
 			if self.prebaked:
 				neighbours = self._baked_search_edges(current)
 			else:
-				grade_divisor = max(
-					0.05, min(self.max_grade_up, self.max_grade_down))
 				neighbours = self._NEIGHBOURS
 			for edge in neighbours:
 				if self.prebaked:
-					(next_cell, next_y, run, slope_cost,
+					(next_cell, next_y, run, unused_slope_cost,
 					 plain_penalty, clearance_penalty, edge_key) = edge
 					terrain_penalty = (clearance_penalty if prefer_clearance else
 					                   plain_penalty)
@@ -1204,13 +1195,6 @@ class TerrainGrid(object):
 						               (current[0], current[1] + offset_z)) is None):
 							continue
 					run = self.cell_size * length_scale
-					delta_y = next_y - current_y
-					slope = abs(delta_y) / max(run, 0.1)
-					slope_ratio = slope / grade_divisor
-					# Descending retains the greater cost of the copied planner.
-					slope_cost = run * slope_ratio * slope_ratio * 6.0
-					if delta_y < 0.0:
-						slope_cost *= 1.25
 					terrain_penalty = 0.0
 				if (hard_edge_penalties and
 						edge_key in hard_edge_penalties):
@@ -1226,7 +1210,9 @@ class TerrainGrid(object):
 					failed_penalty = max(
 						self._static_hull_edges.get(edge_key, 0.0),
 						self._failed_edge_timed_penalty(edge_key, now))
-				new_cost = (cost_so_far[current] + run + slope_cost +
+				# Grade eligibility belongs to the graph/native edge check, not
+				# a comfort surcharge that can turn a legal slope into a detour.
+				new_cost = (cost_so_far[current] + run +
 				            terrain_penalty + failed_penalty + local_penalty)
 				if route_corridor is not None:
 					# Authored legs express the desired corridor. Grade remains a
@@ -1235,11 +1221,12 @@ class TerrainGrid(object):
 					# obstacle can still be bypassed without a second search.
 					px, unused_y, pz = self.point_for(next_cell, next_y)
 					fraction = (max(0.0, min(1.0,
-						((px - first[0]) * dx + (pz - first[2]) * dz) /
+						((px - first[0]) * corridor_dx +
+						 (pz - first[2]) * corridor_dz) /
 						length_sq)) if length_sq > 0.0 else 0.0)
-					ox = px - first[0] - fraction * dx
-					oz = pz - first[2] - fraction * dz
-					new_cost += run * (ox * ox + oz * oz) / width_sq - slope_cost
+					ox = px - first[0] - fraction * corridor_dx
+					oz = pz - first[2] - fraction * corridor_dz
+					new_cost += run * (ox * ox + oz * oz) / width_sq
 				if next_cell not in cost_so_far or new_cost < cost_so_far[next_cell]:
 					# An edge that cannot improve this search cannot enter its
 					# result. Spend native queries only on admissible relaxations.
