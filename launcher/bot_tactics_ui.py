@@ -301,8 +301,8 @@ class BotTacticsEditor:
         self.wait_button=ttk.Button(actions,text=self.tr('停留条件','Wait condition'),command=self.edit_point_condition)
         self.wait_button.pack(side='left')
         ttk.Label(right,text=self.tr(
-            '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n选“全部车型”则修改通用路线。\n双击节点可设置等待：0继续，-1一直停留。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
-            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nAll classes edits shared defaults.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=22,column=0,sticky='w',pady=8)
+            '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n修改“全部车型”会同步各车型路线，之后单独修改某车型只影响该车型。\n双击节点可设置等待：0继续，-1一直停留。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
+            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared geometry edits update every class; later class edits affect only that class.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=22,column=0,sticky='w',pady=8)
 
     def checkpoint(self):
         self.undo_stack.append(copy.deepcopy(self.document));self.undo_stack=self.undo_stack[-50:];self.redo_stack=[]
@@ -461,8 +461,17 @@ class BotTacticsEditor:
             edits.append(edit)
         return edit
 
-    def _sync_symmetry(self):
+    def _sync_shared_default_geometry(self, item):
+        # Shared edits replace class geometry, while retaining class priorities.
+        for edit in self.entry().get('default_routes',()):
+            if (edit['id']==item['id'] and edit['team']==item['team'] and
+                    edit.get('class_tag','all') in contract.CLASSES[:-1]):
+                edit['points']=copy.deepcopy(item['points'])
+
+    def _sync_symmetry(self, geometry=False):
         item=self._editable_item()
+        shared=geometry and self.selection[0]=='builtin' and item.get('class_tag','all')=='all'
+        if shared:self._sync_shared_default_geometry(item)
         if not item.get('symmetric'):return
         other=3-self.team
         if self.selection[0]=='builtin':
@@ -473,6 +482,7 @@ class BotTacticsEditor:
             peer.update(team=other,class_tag=item.get('class_tag','all'),symmetric=True,
                         points=copy.deepcopy(list(reversed(item['points']))))
             if 'priority' in item:peer['priority']=item['priority']
+            if shared:self._sync_shared_default_geometry(peer)
         else:
             entries=self._ensure_entry()['routes']
             peer=next((r for r in entries if r['id']==item.get('mirror_id')),None)
@@ -692,8 +702,15 @@ class BotTacticsEditor:
         if not self.selection or self.selection[0]!='builtin':return
         edits=self.entry().get('default_routes',[])
         scope=self._route_scope();item=self._selected()
-        remaining=[r for r in edits if not (r['id']==self._route_identity() and r.get('class_tag','all')==scope and
-                   (r['team']==self.team or item.get('symmetric')))]
+        remaining=copy.deepcopy([r for r in edits if not (r['id']==self._route_identity() and r.get('class_tag','all')==scope and
+                   (r['team']==self.team or item.get('symmetric')))])
+        if scope=='all':
+            graph=self.graph_cache.get(self.map_name) or {}
+            for edit in remaining:
+                if (edit['id']!=item['id'] or edit.get('class_tag','all') not in contract.CLASSES[:-1] or
+                        (edit['team']!=self.team and not item.get('symmetric'))):continue
+                source=next((r for r in graph.get('routes',{}).get(str(edit['team']),()) if r['id']==item['id']),None)
+                if source:edit['points']=[list(p[:2])+[int(bool(p[2]))]+list(p[3:]) for p in source['waypoints']]
         if remaining==edits:return
         self.checkpoint()
         if remaining:self.entry()['default_routes']=remaining
@@ -752,14 +769,14 @@ class BotTacticsEditor:
             if parking and len(item['points'])==1:return
             self.checkpoint();del self._editable_points()[self.selected_point]
             if parking:self._editable_item()['point']=self._editable_points()[0][:2]
-            self._sync_symmetry();self.selected_point=None;self._refresh_properties();self.redraw();self.mark()
+            self._sync_symmetry(geometry=True);self.selected_point=None;self._refresh_properties();self.redraw();self.mark()
 
     def toggle_hold(self):
         item=self._selected()
         if item is not None and self.selected_point is not None and self.selected_point<len(item.get('points',())):
             self.checkpoint();p=self._editable_points()[self.selected_point];p[2]=int(not p[2])
             if self.selection[0] in ('routes','builtin'):p[3:]=[-1.0 if p[2] else 0.0]
-            self._sync_symmetry();self._refresh_properties();self.redraw();self.mark()
+            self._sync_symmetry(geometry=True);self._refresh_properties();self.redraw();self.mark()
 
     def edit_point_condition(self,event=None):
         if self.selection and self.selection[0] in ('positions','builtin_positions'):return
@@ -782,7 +799,7 @@ class BotTacticsEditor:
             self.error(self.tr('请输入 -1 或 0–3600 秒。','Enter -1 or 0–3600 seconds.'));return
         self.checkpoint();point=self._editable_points()[self.selected_point];point[3:]=[seconds]
         point[2]=int(seconds!=0) if self.selection[0] in ('routes','builtin') else int(point[2] or seconds!=0)
-        self._sync_symmetry()
+        self._sync_symmetry(geometry=True)
         self.drag=None;self._refresh_properties();self.mark()
         return 'break'
 
@@ -810,7 +827,7 @@ class BotTacticsEditor:
             pts=self._editable_points()
             pts.insert(nearest,list(p)+([0,0.0] if parking else [0]))
             if parking:self._editable_item()['point']=pts[0][:2]
-            self._sync_symmetry()
+            self._sync_symmetry(geometry=True)
         self.selected_point=nearest;self.drag=('route',nearest);self._refresh_properties();self.redraw();self.mark()
 
     def motion(self,event):
@@ -821,7 +838,7 @@ class BotTacticsEditor:
             self._editable_item()['point']=p;self.redraw();return
         self._editable_points()[self.drag[1]][:2]=p
         if self.selection[0] in ('positions','builtin_positions'):self._editable_item()['point']=self._editable_points()[0][:2]
-        if self.drag[0]!='position':self._sync_symmetry()
+        if self.drag[0]!='position':self._sync_symmetry(geometry=True)
         self.redraw()
 
     def release(self,event):
