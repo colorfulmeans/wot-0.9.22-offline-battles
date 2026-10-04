@@ -25,6 +25,8 @@ def build():
                              route_ids=dict((team, [r['id'] for r in routes])
                                             for team, routes in graph['routes'].items()),
                              resource_sha256=hashlib.sha256(raw).hexdigest())
+        if graph.get('capture_coordinate_previous_sha256'):
+            entries[name]['capture_coordinate_previous_sha256'] = graph['capture_coordinate_previous_sha256']
     if len(entries) != 41:
         raise RuntimeError('Expected the pinned 41-map registry')
     return entries

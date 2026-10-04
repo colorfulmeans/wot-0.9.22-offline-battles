@@ -25,6 +25,9 @@ import struct
 import sys
 import zipfile
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              'src', 'res', 'scripts', 'client'))
+
 from packed_xml import (TYPE_ELEMENT, TYPE_STRING, TYPE_VECTOR, read_packed_xml)
 from space_bin_0922 import (CompiledSpace, CompiledSpaceError,
                             UnsafeBakeInputError, describe_space)
@@ -2525,7 +2528,9 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
         obstacles = compiled_navigation_obstacles(compiled, vfs, legacy)
         vehicle_envelope = representative_vehicle_chassis_envelope(
             client_root)
-        bases = tuple(tuple(point) for point in inspection['ctf_bases'])
+        from gui.mods.offline_lan_0922.capture_circles import standard_circles_from_space
+        standard_circles = standard_circles_from_space(space_data)
+        bases = tuple(tuple(point[0]) for point in standard_circles)
         stock_spawns = tuple(tuple(team) for team in inspection['ctf_spawn_points'])
         navigation_starts = tuple((team[0] if team else bases[index])
                                   for index, team in enumerate(stock_spawns))
@@ -2664,8 +2669,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
             spawn_config['anchors'] = tuple(spawn_anchors)
             graph['bases'] = [list(point) for point in spawn_anchors]
             graph['objective_bases'] = [list(point) for point in bases]
-            graph['objective_base_radii'] = ctf_base_radii(
-                compiled.sections['WTCP']._data['control_points'], bases)
+            graph['objective_base_radii'] = [point[1] for point in standard_circles]
             graph['ctf_spawn_points'] = [[list(point) for point in team]
                                          for team in stock_spawns]
             graph['spawn_anchors'] = [list(point) for point in spawn_anchors]

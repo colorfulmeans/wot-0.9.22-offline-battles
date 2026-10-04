@@ -76,7 +76,9 @@ class CompiledSpace0922Test(unittest.TestCase):
             config_dir = Path(temporary) / 'mods/configs/offline_lan_0922'
             nav_dir = config_dir / 'navgraphs'
             nav_dir.mkdir(parents=True)
-            shutil.copy2(ROOT / 'navgraphs/63_tundra.json', nav_dir)
+            legacy_graph = dict(graph)
+            legacy_graph.pop('objective_base_radii', None)
+            (nav_dir / '63_tundra.json').write_text(json.dumps(legacy_graph))
             with mock.patch.object(prebaked_navigation, 'mod_dir',
                                    return_value=str(config_dir)):
                 loaded = prebaked_navigation.load_graph('63_tundra')

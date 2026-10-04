@@ -636,6 +636,7 @@ class LocalDriver(object):
 		state['last_desired_yaw'] = desired_yaw
 		target_distance = _distance(position, target)
 		if not movement_intent:
+			state['translation_progress_at'] = state['clock']
 			state.pop('objective_progress', None)
 			# Cover/engagement orders intentionally stop within a tolerance. Do not
 			# reinterpret that commanded hold as a stuck tank 1.8 seconds later.
@@ -656,6 +657,9 @@ class LocalDriver(object):
 		displacement = _distance((position[0], 0.0, position[2]),
 		                         (state['last_position'][0], 0.0,
 		                          state['last_position'][1]))
+		if displacement >= 0.08 or 'translation_progress_at' not in state:
+			state['translation_progress_at'] = state['clock']
+		translation_stalled = state['clock'] - state['translation_progress_at'] >= 8.0
 		# Local targets may alternate around a prop while the tank makes no
 		# progress toward its actual order. Do not credit that orbit as travel.
 		objective_stalled = False
@@ -791,6 +795,16 @@ class LocalDriver(object):
 					position, yaw, neighbours,
 					own_half_length, own_half_width)
 			if not reverse_clear or reverse_blocker is not None:
+				if objective_stalled or translation_stalled:
+					# A slope may permit a short straight exit while rejecting
+					# the full backing sweep. Prefer proved translation after
+					# eight seconds without progress, even if a pivot still fits.
+					# Repeated pivots alone cannot clear an erased ingress cell.
+					escape = self._short_escape(state, position, yaw, speed, step,
+						decision_horizon, stopping_distance, neighbours, direction_clear,
+						own_half_length, own_half_width)
+					if escape is not None:
+						return escape
 				if self._failure_penalty(state, float(yaw)) > 0.0:
 					escape = self._short_escape(state, position, yaw, speed, step,
 						decision_horizon, stopping_distance, neighbours, direction_clear,

@@ -1712,6 +1712,48 @@ class TerrainNavigator(object):
 				bot_id, state, current, target, now)
 		return False
 
+	def _stationary_ingress_escape(self, bot_id, state, current, goal, now,
+			movement_intent, avoid_points):
+		"""Keep physical no-progress evidence across path and combat replans.
+
+		An erased starting cell can repeatedly snap A* to the same nearby entry.
+		Changing search keys or rotating the hull does not reach that entry. Give
+		one fully checked short detour a bounded lease before selecting it again.
+		This never changes shared terrain or bypasses the native motion veto.
+		"""
+		tracker = state.get('ingress_progress')
+		if (tracker is None or not movement_intent or
+				_distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS or
+				_distance_2d(current, tracker['position']) >= 1.0):
+			state['ingress_progress'] = {'position': tuple(current), 'at': float(now)}
+			state.pop('ingress_escape', None)
+			return None
+		escape = state.get('ingress_escape')
+		if escape is not None:
+			target = escape['target']
+			if (float(now) < escape['until'] and
+					_distance_2d(current, target) > WAYPOINT_ARRIVAL_RADIUS and
+					self.grid.dry_segment_clear(current, target, now) and
+					not self._bot_edges_penalized(bot_id, current, target, now)):
+				return target
+			state.pop('ingress_escape', None)
+		if float(now) - tracker['at'] < MACRO_STALL_SECONDS:
+			return None
+		tracker['at'] = float(now)
+		# Alternate the bounded escape fan after an unsuccessful lease. Use the
+		# real strategic goal, rather than the repeatedly rejected entry point.
+		attempt = int(state.get('ingress_replans', 0)) + 1
+		state['ingress_replans'] = attempt
+		target = self.grid.safe_local_target(
+			current, goal, now, avoid_points,
+			1.0 if (int(bot_id) + attempt) % 2 else -1.0,
+			self._active_planning_edge_penalties(bot_id, now),
+			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}))
+		if target is not None:
+			state['ingress_escape'] = {'target': tuple(target), 'until': float(now) + 8.0}
+			return tuple(target)
+		return None
+
 	@staticmethod
 	def _path_owner(path_key):
 		try:
@@ -2231,6 +2273,14 @@ class TerrainNavigator(object):
 			         'blocked_step_tracker': None,
 			         'blocked_step_escalated_until': 0.0}
 			self.bot_states[bot_id] = state
+		ingress = self._stationary_ingress_escape(
+			bot_id, state, current, goal, now, movement_intent, avoid_points)
+		if ingress is not None:
+			state['last_target'] = ingress
+			state['navigation_status'] = 'safe'
+			state['target_is_terminal'] = False
+			self._set_fallback_mode(bot_id, 'safe_local')
+			return ingress
 		path_identity = tuple(path_key)
 		planned_goal = state.get('planned_goal')
 		if (state.get('request_path_key') == path_identity and
