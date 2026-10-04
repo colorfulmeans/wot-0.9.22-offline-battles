@@ -226,6 +226,11 @@ class BotTacticsEditor:
         scope.bind('<<ComboboxSelected>>',lambda e:self.change_route_class(),add='+')
         base_bar=ttk.Frame(parent);base_bar.pack(fill='x',pady=3)
         self.base_label=ttk.Label(base_bar,text='');self.base_label.pack(side='left',padx=8)
+        self.base_snap_var=tk.BooleanVar(value=False)
+        self.base_snap_check=ttk.Checkbutton(base_bar,
+            text=self.tr('首尾移至基地中心','Move endpoints to base centres'),
+            variable=self.base_snap_var,command=self.move_route_endpoints_to_bases)
+        self.base_snap_check.pack(side='left',padx=(0,12))
         self.symmetry_var=tk.BooleanVar(value=True)
         self.symmetry_check=ttk.Checkbutton(base_bar,text=self.tr('路线对称','Route symmetry'),
                                            variable=self.symmetry_var,command=self.change_symmetry)
@@ -519,13 +524,30 @@ class BotTacticsEditor:
                 if r['id']==item.get('mirror_id'):r['symmetric']=False
         self._refresh_properties();self.redraw();self.mark()
 
+    def move_route_endpoints_to_bases(self):
+        # A momentary checkbox is an action, never a saved route constraint.
+        self.base_snap_var.set(False)
+        if not self.selection or self.selection[0] not in ('builtin','routes'):return
+        item=self._selected()
+        if item is None or not item.get('points'):return
+        bases=(self.graph_cache.get(self.map_name) or {}).get('objective_bases')
+        if not bases or len(bases)!=2:return
+        points=item['points'];own=bases[self.team-1];enemy=bases[2-self.team]
+        if list(points[0][:2])==list(own) and (len(points)==1 or list(points[-1][:2])==list(enemy)):return
+        self.checkpoint();points=self._editable_points()
+        points[0][:2]=list(own)
+        if len(points)>1:points[-1][:2]=list(enemy)
+        self._sync_symmetry(geometry=True)
+        self._refresh_properties();self.redraw();self.mark()
+
     def _load_map(self):
         meta=contract.MAPS[self.map_name]
         self.view=storage.ViewTransform(meta['bounds'],700,600)
-        self.base_label.config(text=self.tr('本侧基地坐标：','Own base: ')+str(meta['bases'][self.team-1]))
         if self.map_name not in self.graph_cache:
             try:self.graph_cache[self.map_name]=storage.graph_data(self.map_name)
             except Exception as e:self.error(e);self.graph_cache[self.map_name]=None
+        bases=(self.graph_cache.get(self.map_name) or {}).get('objective_bases') or meta['bases']
+        self.base_label.config(text=self.tr('本侧基地坐标：','Own base: ')+str(bases[self.team-1]))
         try:
             if self.map_name not in self.image_cache:
                 try:

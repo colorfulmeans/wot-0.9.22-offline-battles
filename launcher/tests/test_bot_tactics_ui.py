@@ -44,6 +44,55 @@ class EditorUITests(unittest.TestCase):
         self.assertEqual(('total',True),self.initial_defaults)
         self.assertEqual(('33_fjord','北欧峡湾','北欧峡湾'),self.initial_map)
 
+    def test_base_snap_is_between_coordinates_and_symmetry_and_resets_on_noop(self):
+        self.assertEqual(self.ui.base_label.master,self.ui.base_snap_check.master)
+        self.assertLess(self.ui.base_label.winfo_x(),self.ui.base_snap_check.winfo_x())
+        self.assertLess(self.ui.base_snap_check.winfo_x(),self.ui.symmetry_check.winfo_x())
+        before=copy.deepcopy(self.ui.document)
+        self.ui.base_snap_check.invoke()
+        self.assertFalse(self.ui.base_snap_var.get());self.assertEqual(before,self.ui.document)
+        self.ui.new_route();self.root.update();before=copy.deepcopy(self.ui.document)
+        self.ui.base_snap_check.invoke()
+        self.assertFalse(self.ui.base_snap_var.get());self.assertEqual(before,self.ui.document)
+        self.ui.new_position();self.root.update();before=copy.deepcopy(self.ui.document)
+        self.ui.base_snap_check.invoke()
+        self.assertFalse(self.ui.base_snap_var.get());self.assertEqual(before,self.ui.document)
+
+    def test_base_snap_default_uses_capture_centres_preserves_waits_and_undo(self):
+        source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
+        self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
+        item=self.ui._editable_item();item['points'][0][3:]=[12.0]
+        item['points'][-1][3:]=[-1.0];before=copy.deepcopy(self.ui.document)
+        old=copy.deepcopy(item['points']);self.ui.base_snap_check.invoke()
+        points=self.ui._selected()['points'];bases=self.ui.graph_cache['08_ruinberg']['objective_bases']
+        self.assertEqual(bases[0],points[0][:2]);self.assertEqual(bases[1],points[-1][:2])
+        self.assertEqual(old[1:-1],points[1:-1]);self.assertEqual(old[0][2:],points[0][2:])
+        self.assertEqual(old[-1][2:],points[-1][2:]);self.assertFalse(self.ui.base_snap_var.get())
+        self.assertIn(str(bases[0]),self.ui.base_label.cget('text'))
+        self.ui.undo();self.assertEqual(before,self.ui.document)
+
+    def test_base_snap_team_two_single_point_and_repeat_click(self):
+        self.ui.team_var.set('2');self.ui.change_map();self.ui.new_route();self.root.update()
+        item=self.ui._editable_item();item['symmetric']=False;item['points']=[[0.0,0.0,0,7.0]]
+        self.ui.base_snap_check.invoke();bases=self.ui.graph_cache['08_ruinberg']['objective_bases']
+        self.assertEqual([bases[1]+[0,7.0]],item['points'])
+        item['points'].append([100.0,100.0,0]);self.ui.base_snap_check.invoke()
+        self.assertEqual(bases[0],item['points'][-1][:2]);self.assertFalse(self.ui.base_snap_var.get())
+
+    def test_base_snap_total_class_respects_symmetry_and_saved_geometry(self):
+        self.ui.route_class_var.set('total');self.ui.change_route_class()
+        identity=next(i for i in self.ui.items.get_children() if i.startswith('builtin:') and i.endswith('@heavyTank'))
+        self.ui.items.selection_set(identity);self.root.update()
+        self.ui.base_snap_check.invoke();edits=self.ui.entry()['default_routes']
+        own=next(r for r in edits if r['team']==1);peer=next(r for r in edits if r['team']==2)
+        self.assertEqual('heavyTank',own['class_tag'])
+        self.assertEqual(list(reversed(own['points'])),peer['points'])
+        self.assertTrue(all(r['class_tag']=='heavyTank' for r in edits))
+        self.ui.profile_name.set('Base endpoints');self.ui.save(True)
+        saved=self.ui.store.active()['maps']['08_ruinberg']['default_routes']
+        expected=storage.contract.canonical(self.ui.document)['maps']['08_ruinberg']['default_routes']
+        self.assertEqual(expected,saved)
+
     def test_spg_defaults_only_allow_repositioning_parking(self):
         self.ui.map_var.set(storage.MAP_LABELS['31_airfield']);self.ui.change_map()
         self.ui.route_class_var.set('SPG');self.ui.change_route_class();self.root.update()
@@ -232,7 +281,8 @@ class EditorUITests(unittest.TestCase):
     def test_map_switch_keeps_world_points_and_shows_different_base(self):
         self.ui.new_position();self.root.update();self.click((-106,346));saved=copy.deepcopy(self.ui.entry()['positions'])
         self.ui.map_var.set(storage.MAP_LABELS['35_steppes']);self.ui.change_map();self.root.update()
-        self.assertEqual('35_steppes',self.ui.map_name);self.assertIn('-342',self.ui.base_label.cget('text'))
+        self.assertEqual('35_steppes',self.ui.map_name)
+        self.assertIn(str(self.ui.graph_cache['35_steppes']['objective_bases'][self.ui.team-1]),self.ui.base_label.cget('text'))
         self.ui.map_var.set(storage.MAP_LABELS['08_ruinberg']);self.ui.change_map();self.root.update()
         self.assertEqual(saved,self.ui.entry()['positions'])
 
