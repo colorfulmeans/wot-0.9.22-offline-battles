@@ -176,7 +176,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual('mediumTank',e._selected()['class_tag'])
         self.assertNotEqual(point[:2],e._selected()['points'][1][:2])
 
-    def test_priority_is_editable_by_class_hidden_in_all_and_readonly_in_total(self):
+    def test_priority_is_editable_by_class_and_total_but_hidden_in_all(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
         e.route_class_var.set('lightTank');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
@@ -191,7 +191,7 @@ class NavigationUITests(unittest.TestCase):
         e.item_vars['route_priority'].set('9');e.update_properties()
         self.assertEqual(saved,e.document['maps']['31_airfield']['default_routes'])
         e.route_class_var.set('total');e.change_route_class();e.selection=('builtin',identity+'@lightTank');e._refresh_properties()
-        self.assertEqual('readonly',str(e.item_fields['route_priority'][1].cget('state')))
+        self.assertEqual('normal',str(e.item_fields['route_priority'][1].cget('state')))
         self.assertEqual('8',e.item_vars['route_priority'].get())
         self.assertTrue(e.items.item('builtin:'+identity+'@lightTank','text').startswith('[优先级 8]'))
         self.assertIn('优先级 0',e.items.item('builtin:'+identity+'@heavyTank','text'))
@@ -355,4 +355,27 @@ class NavigationUITests(unittest.TestCase):
         e.item_vars['label'].set('南侧支援炮位');self.assertTrue(e.update_properties())
         self.assertEqual(old['point'],e._selected()['point']);self.assertEqual(old['priority'],e._selected()['priority'])
         e.set_language('en');self.assertIn('南侧支援炮位',e.items.item(key,'text'))
+        e.save(True);self.assertEqual(e.document,e.store.active())
+
+    def test_total_priorities_update_only_selected_class_and_parking(self):
+        e=self.editor;e.route_class_var.set('all');e.change_route_class();e.new_route()
+        item=e._selected();item['points']=[[-100.,-100.,0],[100.,100.,0]];identity=item['id']
+        before=copy.deepcopy(item);e.route_class_var.set('total');e.change_route_class()
+        key='routes:'+identity+'@lightTank';e.items.selection_set(key);e.select_item()
+        e.item_vars['route_priority'].set('9');self.assertTrue(e.update_properties())
+        item=next(r for r in e.entry()['routes'] if r['id']==identity)
+        self.assertEqual(before['classes'],item['classes']);self.assertEqual(before['points'],item['points'])
+        self.assertEqual({'lightTank':9},item['class_priorities'])
+        self.assertTrue(e.items.exists('routes:'+identity+'@heavyTank'))
+        e.item_vars['route_priority'].set('10');before=copy.deepcopy(e.document)
+        with mock.patch.object(e,'error'):self.assertFalse(e.update_properties())
+        self.assertEqual(before,e.document)
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:') and k.endswith('@heavyTank'))
+        e.items.selection_set(key);e.select_item();e.item_vars['route_priority'].set('6');e.update_properties()
+        self.assertIn('优先级 6',e.items.item(key,'text'))
+        key=next(k for k in e.items.get_children() if k.startswith('builtin_positions:'))
+        e.items.selection_set(key);e.select_item();point=copy.deepcopy(e._selected()['point'])
+        self.assertEqual('normal',str(e.item_fields['priority'][1].cget('state')))
+        e.item_vars['priority'].set('8');self.assertTrue(e.update_properties())
+        self.assertEqual(8,e._selected()['priority']);self.assertEqual(point,e._selected()['point'])
         e.save(True);self.assertEqual(e.document,e.store.active())

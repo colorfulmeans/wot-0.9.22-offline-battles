@@ -480,8 +480,8 @@ class BotTacticsEditor:
                 edit['points']=copy.deepcopy(item['points'])
                 edit.pop('disabled',None)
 
-    def _sync_symmetry(self, geometry=False):
-        item=self._editable_item()
+    def _sync_symmetry(self, geometry=False, item=None):
+        if item is None:item=self._editable_item()
         shared=geometry and self.selection[0]=='builtin' and item.get('class_tag','all')=='all'
         if shared:self._sync_shared_default_geometry(item)
         if not item.get('symmetric'):return
@@ -658,8 +658,8 @@ class BotTacticsEditor:
         for key, widgets in self.item_fields.items():
             for widget in widgets:
                 widget.grid() if key in allowed else widget.grid_remove()
-        self.item_fields['route_priority'][1].config(state='readonly' if self.route_class_var.get()=='total' else 'normal')
-        self.item_fields['priority'][1].config(state='readonly' if self.route_class_var.get()=='total' else 'normal')
+        self.item_fields['route_priority'][1].config(state='normal')
+        self.item_fields['priority'][1].config(state='normal')
         self.classes_frame.grid() if route and self.route_class_var.get()!='total' else self.classes_frame.grid_remove()
         for widget in (self.points,self.point_actions):
             widget.grid() if route or builtin else widget.grid_remove()
@@ -789,7 +789,7 @@ class BotTacticsEditor:
             try:
                 name=contract._text(self.item_vars['label'].get())
                 priority=item.get('priority',0)
-                if self.route_class_var.get() not in ('all','total'):
+                if self._route_scope() in contract.CLASSES[:-1]:
                     priority=int(self.item_vars['route_priority'].get())
                     if not 0<=priority<=9:raise ValueError(self.tr('优先级应为0–9。','Priority must be 0–9.'))
                 renamed=name!=item['label'];reprioritized=priority!=item.get('priority',0)
@@ -806,24 +806,26 @@ class BotTacticsEditor:
                 new.update(policy=self.item_vars['policy'].get(),capacity=int(self.item_vars['capacity'].get()),
                     weight=float(self.item_vars['weight'].get()),classes=[k for k,v in self.class_vars.items() if v.get()],
                     slots=[int(v.strip())-1 for v in self.item_vars['slots'].get().split(',') if v.strip()])
-                if self.route_class_var.get() in contract.CLASSES[:-1]:
+                if self._route_scope() in contract.CLASSES[:-1]:
                     priority=int(self.item_vars['route_priority'].get())
                     if not 0<=priority<=9:raise ValueError(self.tr('优先级应为0–9。','Priority must be 0–9.'))
-                    new.setdefault('class_priorities',{})[self.route_class_var.get()]=priority
+                    new.setdefault('class_priorities',{})[self._route_scope()]=priority
             else:
-                new.update(radius=float(self.item_vars['radius'].get()),heading=float(self.item_vars['heading'].get()),priority=int(self.item_vars['priority'].get()) if self.route_class_var.get()=='SPG' else item['priority'])
+                new.update(radius=float(self.item_vars['radius'].get()),heading=float(self.item_vars['heading'].get()),priority=int(self.item_vars['priority'].get()) if self.route_class_var.get() in ('SPG','total') else item['priority'])
             if self.selection[0]=='builtin_positions' and new==item:return True
             # Validate atomically; malformed properties never mutate the draft.
             test=contract.empty();test['maps'][self.map_name]=copy.deepcopy(self.entry())
             test['maps'][self.map_name][kind]=[new]
             test['maps'][self.map_name]['positions' if kind=='routes' else 'routes']=[]
             contract.canonical(test)
-            self.checkpoint();item=self._editable_item()
-            if kind=='routes' and self.route_class_var.get()=='total':
+            priority_only=kind=='routes' and self.route_class_var.get()=='total' and {k:v for k,v in new.items() if k!='class_priorities'}=={k:v for k,v in item.items() if k!='class_priorities'}
+            self.checkpoint()
+            if not priority_only:item=self._editable_item()
+            if kind=='routes' and self.route_class_var.get()=='total' and not priority_only:
                 new.update(id=item['id'],classes=item['classes'])
                 if 'mirror_id' in item:new['mirror_id']=item['mirror_id']
             item.clear();item.update(new)
-            if self.selection[0]=='routes':self._sync_symmetry()
+            if self.selection[0]=='routes':self._sync_symmetry(item=item)
             self._refresh_items();self.mark();return True
         except (ValueError,contract.TacticsError) as e:self.error(e);return False
 
