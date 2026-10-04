@@ -81,7 +81,7 @@ class BotTacticsEditor:
         self.root.geometry('1200x820'); self.root.minsize(1000, 700)
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self._build()
-        self.map_name = '08_ruinberg'; self.team = 1
+        self.map_name = '33_fjord'; self.team = 1
         self._load_map(); self._refresh_rules(); self._refresh_profiles()
         self.root.bind('<Control-z>', lambda e: self.undo())
         self.root.bind('<Control-y>', lambda e: self.redo())
@@ -210,7 +210,7 @@ class BotTacticsEditor:
         bar=ttk.Frame(parent);bar.pack(fill='x',pady=4)
         names=sorted(contract.MAPS)
         self.map_labels={labels.map_label(n,self.language):n for n in names}
-        self.map_var=tk.StringVar(value=labels.map_label('08_ruinberg',self.language))
+        self.map_var=tk.StringVar(value=labels.map_label('33_fjord',self.language))
         box=ttk.Combobox(bar,textvariable=self.map_var,values=sorted(self.map_labels),state='readonly',width=35)
         self.map_box=box
         box.pack(side='left');box.bind('<<ComboboxSelected>>',lambda e:self.change_map())

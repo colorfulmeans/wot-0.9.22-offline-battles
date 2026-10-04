@@ -67,6 +67,7 @@ class LanguageUITests(unittest.TestCase):
         patch = mock.patch.object(ui_module.messagebox, 'showerror')
         self.errors = patch.start(); self.addCleanup(patch.stop)
         self.ui = ui_module.BotTacticsEditor(self.root, store=storage.Store(self.temp.name), language='zh')
+        self.ui.map_var.set(storage.MAP_LABELS['08_ruinberg']);self.ui.change_map()
         self.ui.route_class_var.set('heavyTank');self.ui.change_route_class();self.ui.symmetry_var.set(False)
         self.root.update()
 
@@ -201,11 +202,11 @@ class MainLanguageTests(unittest.TestCase):
                 editor.profile_name.set('未保存测试')
                 app.language_choice.set('English');app._language_selected();app.root.update()
                 self.assertEqual('en',editor.language)
-                self.assertEqual('Ruinberg',editor.map_var.get())
+                self.assertEqual('Fjords',editor.map_var.get())
                 self.assertEqual('未保存测试',editor.profile_name.get())
                 with mock.patch.object(i18n,'detect_system_language',return_value='zh'):
                     app.language_choice.set('Auto / 自动');app._language_selected();app.root.update()
-                self.assertEqual('zh',editor.language);self.assertEqual('鲁别克',editor.map_var.get())
+                self.assertEqual('zh',editor.language);self.assertEqual('北欧峡湾',editor.map_var.get())
                 editor.root.destroy()
                 app.language_choice.set('English');app._language_selected();app.root.update()
                 app.bot_tactics_button.invoke();app.root.update()

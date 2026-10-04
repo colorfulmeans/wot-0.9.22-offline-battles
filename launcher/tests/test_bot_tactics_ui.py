@@ -21,6 +21,8 @@ class EditorUITests(unittest.TestCase):
         self.errors=mock.patch.object(ui_module.messagebox,'showerror');self.error_mock=self.errors.start();self.addCleanup(self.errors.stop)
         self.ui=ui_module.BotTacticsEditor(self.root,store=storage.Store(self.temp.name))
         self.initial_defaults=(self.ui.route_class_var.get(),self.ui.symmetry_var.get())
+        self.initial_map=(self.ui.map_name,self.ui.map_var.get(),self.ui.map_box.cget('values')[0])
+        self.ui.map_var.set(storage.MAP_LABELS['08_ruinberg']);self.ui.change_map()
         self.ui.route_class_var.set('heavyTank');self.ui.change_route_class();self.ui.symmetry_var.set(False)
         self.ui.book.select(1);self.root.update()
 
@@ -40,6 +42,7 @@ class EditorUITests(unittest.TestCase):
 
     def test_initial_defaults_show_total_routes_with_symmetry_enabled(self):
         self.assertEqual(('total',True),self.initial_defaults)
+        self.assertEqual(('33_fjord','北欧峡湾','北欧峡湾'),self.initial_map)
 
     def test_spg_defaults_only_allow_repositioning_parking(self):
         self.ui.map_var.set(storage.MAP_LABELS['31_airfield']);self.ui.change_map()
