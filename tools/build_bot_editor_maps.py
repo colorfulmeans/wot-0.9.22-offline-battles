@@ -27,6 +27,8 @@ def build():
                              resource_sha256=hashlib.sha256(raw).hexdigest())
         if graph.get('capture_coordinate_previous_sha256'):
             entries[name]['capture_coordinate_previous_sha256'] = graph['capture_coordinate_previous_sha256']
+        if graph.get('terrain_edge_previous_sha256'):
+            entries[name]['terrain_edge_previous_sha256'] = graph['terrain_edge_previous_sha256']
     if len(entries) != 41:
         raise RuntimeError('Expected the pinned 41-map registry')
     return entries

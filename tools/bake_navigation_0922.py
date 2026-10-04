@@ -2444,7 +2444,121 @@ def bake_spawn_formations(graph, anchors, map_name, obstacles,
     }
 
 
-def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
+def continuous_terrain_edge_clearance(terrain, obstacles, x, z, ground_y,
+                                    legacy, original):
+    """Retain continuous terrain shoulders while rejecting unsupported lips.
+
+    This is node eligibility, not permission to climb a slope: links retain
+    the original directional grade, collision and water checks. Bridge decks
+    retain the pinned support check. The existing chassis ground clearance
+    bounds downward deviation from the local tangent, sampled every metre.
+    """
+    if original(terrain, obstacles, x, z, ground_y):
+        return True
+    if obstacles.surface_height(x, z) is not None:
+        return False
+    neighbours = [legacy._ground_height(terrain, obstacles, x + dx, z + dz)
+                  for dx, dz in ((-1, 0), (1, 0), (0, -1), (0, 1))]
+    if any(value is None for value in neighbours):
+        return False
+    gx = (neighbours[1] - neighbours[0]) * .5
+    gz = (neighbours[3] - neighbours[2]) * .5
+    for angle in range(0, 360, 45):
+        dx, dz = math.sin(math.radians(angle)), math.cos(math.radians(angle))
+        for radius in range(1, 7):
+            sx, sz = x + dx * radius, z + dz * radius
+            height = legacy._ground_height(terrain, obstacles, sx, sz)
+            if height is None or not math.isfinite(height):
+                return False
+            if terrain.water_depth(sx, sz, height) > legacy.WATER_DEPTH_LIMIT:
+                return False
+            expected = ground_y + radius * (gx * dx + gz * dz)
+            if expected - height > legacy.VEHICLE_GROUND_CLEARANCE:
+                return False
+    return True
+
+
+def refine_terrain_edges(graph, terrain, obstacles, legacy):
+    """Recheck every cliff-eroded cell without replacing validated topology.
+
+    Do not reclassify building footprints, deep water or authored lower bridge
+    layers. Only newly proved cells and their independently proved reversible
+    links are added. Disconnected candidates are discarded before publishing.
+    """
+    import copy
+    from collections import deque
+    result = copy.deepcopy(graph)
+    width, height = result['width'], result['height']
+    candidates = set()
+    for index, hazard in enumerate(graph['hazards']):
+        if graph['heights_mm'][index] is not None or hazard != legacy.HAZARD_EDGE:
+            continue
+        x, z = _graph_cell_point(result, (index % width, index // width))
+        ground = legacy._ground_height(terrain, obstacles, x, z)
+        if ground is None or not math.isfinite(ground):
+            continue
+        if (terrain.water_depth(x, z, ground) > legacy.WATER_DEPTH_LIMIT or
+                obstacles.blocked(x, z, ground, margin=legacy.VEHICLE_HALF_WIDTH)):
+            continue
+        if not continuous_terrain_edge_clearance(
+                terrain, obstacles, x, z, ground, legacy, legacy._has_safe_edge_clearance):
+            continue
+        result['heights_mm'][index] = int(round(ground * 1000))
+        result['hazards'][index] = 0
+        candidates.add(index)
+    directions = [tuple(value) for value in result['directions']]
+    for index in candidates:
+        cell = (index % width, index // width)
+        x, z = _graph_cell_point(result, cell)
+        start = (x, result['heights_mm'][index] / 1000., z)
+        for bit, (dx, dz) in enumerate(directions):
+            nx, nz = cell[0] + dx, cell[1] + dz
+            if not (0 <= nx < width and 0 <= nz < height):
+                continue
+            following = nz * width + nx
+            if result['heights_mm'][following] is None:
+                continue
+            if dx and dz and (result['heights_mm'][cell[1]*width+nx] is None or
+                              result['heights_mm'][nz*width+cell[0]] is None):
+                continue
+            ex, ez = _graph_cell_point(result, (nx, nz))
+            end = (ex, result['heights_mm'][following] / 1000., ez)
+            if (legacy._segment_clear(terrain, obstacles, start, end) and
+                    legacy._segment_clear(terrain, obstacles, end, start)):
+                result['links'][index] |= 1 << bit
+                result['links'][following] |= 1 << directions.index((-dx, -dz))
+    connected = set()
+    queue = deque()
+    for index in candidates:
+        cell = (index % width, index // width)
+        if any(result['links'][index] & (1 << bit) and
+               (cell[1]+dz)*width+cell[0]+dx not in candidates
+               for bit, (dx, dz) in enumerate(directions)):
+            connected.add(index)
+            queue.append(index)
+    while queue:
+        index = queue.popleft()
+        cell = (index % width, index // width)
+        for bit, (dx, dz) in enumerate(directions):
+            following = (cell[1]+dz)*width+cell[0]+dx
+            if result['links'][index] & (1 << bit) and following in candidates and following not in connected:
+                connected.add(following)
+                queue.append(following)
+    for index in candidates - connected:
+        result['heights_mm'][index] = None
+        result['hazards'][index] = graph['hazards'][index]
+        result['links'][index] = graph['links'][index]
+    result['bake']['edge_clearance_policy'] = 'continuous-terrain-tangent-v1'
+    result['bake']['edge_continuity_sample_metres'] = 1.0
+    result['bake']['edge_continuity_tolerance_metres'] = legacy.VEHICLE_GROUND_CLEARANCE
+    result['bake']['continuous_terrain_nodes_added'] = len(connected)
+    if result.get('bases') and result.get('routes'):
+        result['bake']['continuous_terrain_validation'] = legacy.validate_graph(
+            result, dict(bases=result['bases']))
+    return result
+
+
+def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_graph=None):
     """Bake a #1513 CTF map with compiled BSP collision and BWWa water cells."""
     if os.path.basename(NAVIGATION_BAKER) != 'bake_navigation.py':
         raise AssertionError('unexpected mature baker path')
@@ -2526,6 +2640,13 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0):
 
         terrain = TargetTerrain()
         obstacles = compiled_navigation_obstacles(compiled, vfs, legacy)
+        if existing_graph is not None:
+            if existing_graph.get('map') != map_name:
+                raise ValueError('terrain refinement map mismatch')
+            graph = refine_terrain_edges(existing_graph, terrain, obstacles, legacy)
+            if output:
+                legacy.write_graph(output, graph)
+            return graph
         vehicle_envelope = representative_vehicle_chassis_envelope(
             client_root)
         from gui.mods.offline_lan_0922.capture_circles import standard_circles_from_space
@@ -2744,9 +2865,15 @@ def main(argv=None):
     parser.add_argument('--output', help='Write deterministic inspection JSON')
     parser.add_argument('--bake', action='store_true',
                         help='Bake and strictly validate the selected standard map')
+    parser.add_argument('--refine-existing',
+                        help='Recheck terrain edges in an existing validated graph')
     args = parser.parse_args(argv)
     try:
-        if args.bake:
+        if args.refine_existing:
+            with open(args.refine_existing, encoding='utf-8') as stream:
+                existing = json.load(stream)
+            result = bake_map_graph(args.client, args.map, args.output, existing_graph=existing)
+        elif args.bake:
             result = bake_map_graph(args.client, args.map, args.output)
         else:
             result = inspect_client_map(args.client, args.map)

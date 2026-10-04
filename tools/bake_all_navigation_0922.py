@@ -24,9 +24,17 @@ import bake_navigation_0922 as baker
 import navigation_graph_schema as schema
 
 
-def _bake_one(client_root, output_root, map_name):
+def _bake_one(client_root, output_root, map_name, existing_root=None):
     path = os.path.join(output_root, map_name + '.json')
-    graph = baker.bake_map_graph(client_root, map_name, path)
+    existing = None
+    if existing_root:
+        with open(os.path.join(existing_root, map_name + '.json'), 'rb') as stream:
+            previous = stream.read()
+        existing = json.loads(previous)
+    graph = baker.bake_map_graph(client_root, map_name, existing_graph=existing)
+    if existing is not None:
+        graph['terrain_edge_previous_sha256'] = hashlib.sha256(previous).hexdigest()
+    baker._legacy_baker().write_graph(path, graph)
     schema.validate_graph(graph, map_name)
     bake = graph.get('bake', {})
     if (bake.get('navigation_collision_policy') != baker.NAVIGATION_COLLISION_POLICY or
@@ -57,7 +65,7 @@ def _write_manifest(output_root, digests):
             manifest, indent=2, sort_keys=True) + '\n').encode('utf-8'))
 
 
-def bake_all(client_root, output_root, jobs=1):
+def bake_all(client_root, output_root, jobs=1, existing_root=None):
     client_root = os.path.abspath(client_root)
     output_root = os.path.abspath(output_root)
     parent = os.path.dirname(output_root)
@@ -77,7 +85,7 @@ def bake_all(client_root, output_root, jobs=1):
         with ProcessPoolExecutor(max_workers=jobs) as executor:
             futures = {
                 executor.submit(
-                    _bake_one, client_root, staging, map_name): map_name
+                    _bake_one, client_root, staging, map_name, existing_root): map_name
                 for map_name in schema.SUPPORTED_MAPS
             }
             for future in as_completed(futures):
@@ -109,9 +117,11 @@ def main(argv=None):
                         help='Destination navgraphs directory')
     parser.add_argument('--jobs', type=int, default=1,
                         help='Parallel map bakes (default: 1)')
+    parser.add_argument('--refine-existing-dir',
+                        help='Refine cliff-eroded terrain in a validated map batch')
     args = parser.parse_args(argv)
     try:
-        digests = bake_all(args.client, args.output_dir, args.jobs)
+        digests = bake_all(args.client, args.output_dir, args.jobs, args.refine_existing_dir)
     except (OSError, ValueError, baker.CompiledSpaceError) as error:
         print('FAILED navigation batch: %s' % error, file=sys.stderr)
         return 1
