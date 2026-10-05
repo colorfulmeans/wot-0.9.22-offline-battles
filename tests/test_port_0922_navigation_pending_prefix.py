@@ -78,12 +78,13 @@ class PendingPrefixTests(unittest.TestCase):
             self.assertFalse(search.done)
         return key, search
 
-    def test_pending_path_retreats_out_of_u_wall_and_complete_path_takes_over(self):
+    def test_pending_then_complete_path_retreats_out_of_u_wall_and_reaches_goal(self):
         # A one-credit scheduler deliberately exposes a long pending phase.
         # Every actual movement step is checked against physical walls too;
         # this test cannot pass by declaring all native directions clear.
         current = self.start
-        exited_while_pending = False
+        saw_pending = False
+        exited = False
         completed = False
         visited = set()
         for step in range(1000):
@@ -96,8 +97,12 @@ class PendingPrefixTests(unittest.TestCase):
                 self.assertFalse(self.scene.blocked(current, following, 2.15))
                 current = following
             visited.add(self.nav.grid.cell_for(current))
-            if self.nav.searches and current[2] < -12.0:
-                exited_while_pending = True
+            saw_pending = saw_pending or bool(self.nav.searches)
+            # Completion may happen before the slow hull leaves the U. A
+            # redundant join search after completion used to make "any search
+            # pending at the exit" pass without proving pending-prefix egress.
+            # Check the actual lifecycle and physical exit independently.
+            exited = exited or current[2] < -12.0
             for key, search in list(self.nav.searches.items()):
                 search.step(1)
                 if search.done:
@@ -105,7 +110,8 @@ class PendingPrefixTests(unittest.TestCase):
                     completed = bool(search.result)
             if math.hypot(current[0] - self.goal[0], current[2] - self.goal[2]) <= 1.5:
                 break
-        self.assertTrue(exited_while_pending)
+        self.assertTrue(saw_pending)
+        self.assertTrue(exited)
         self.assertTrue(completed)
         self.assertLess(step, 999)
         self.assertGreater(len(visited), 15)

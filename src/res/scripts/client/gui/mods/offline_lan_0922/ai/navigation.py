@@ -2524,12 +2524,20 @@ class TerrainNavigator(object):
 					best_index = index
 			state['index'] = best_index
 		index = min(int(state.get('index', 0)), len(path) - 1)
+		following_selected_target = bool(
+			active_key == key and previous_path is path and
+			state.get('last_target') == path[index])
 		# A cached path may be reacquired after combat or a lateral offset.
 		# The closest vertex can lie behind a hull already on its outgoing
 		# edge. Join forward from the real pose instead of reversing to that
 		# vertex; never skip a bend without proving the replacement segment.
 		passed_vertex = False
-		if index + 1 < len(path):
+		# This projection is a join heuristic, not arrival at an active bend.
+		# A hull beside its setup can be slightly past the outgoing edge's
+		# perpendicular plane while still needing to reach the setup. Trying
+		# that unchecked next edge then reacquiring the same cached join resets
+		# progress and alternates neighbouring targets on a slope.
+		if not following_selected_target and index + 1 < len(path):
 			first, following = path[index], path[index + 1]
 			dx, dz = following[0] - first[0], following[2] - first[2]
 			passed_vertex = bool(

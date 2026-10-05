@@ -174,3 +174,27 @@ from the editor, assignment and position schema. The user's experimental local
 active/draft profiles and their backups were explicitly authorized for deletion;
 account, garage and save data are outside that cleanup scope. No configuration
 migration or silent itinerary-ignoring compatibility path is introduced.
+
+## Follow-up: report 20261005-212211, active slope bend ownership
+
+Build 100's Pz.58 repeatedly changed its local index from 1 to 0 at the
+El Halluf south slope lip. The route and strategic goal did not change.
+Projection onto a bend's outgoing edge incorrectly treated a hull slightly
+beside its setup as having passed the active target. The next segment was
+unproved, so reacquiring the same cached join reset progress to an earlier
+vertex. Keep the selected target until the ordinary arrival test advances it;
+retain projection-based forward joins when reacquiring a different path.
+
+Replay the reported poses and local path against the real El Halluf bake with
+unavailable ground failing closed. Thirty alternating poses retain index 1,
+reaching its setup advances to index 2, and the warmed replay adds no ground
+queries. New walls, edge penalties and unplanned shallow water still reject
+that target. The U-wall lifecycle replay has the same physical trajectory and
+511-step arrival as the parent, without its redundant later join job. Correct
+the old test's misleading "any job pending at the exit" assertion: that job
+was not the original plan. Pending phase, physical exit, collision-free steps,
+completion and arrival are now checked independently.
+
+Slope support, hull pose, vehicle physics, graph resources and authored routes
+are unchanged. These tests prove target ownership and bounded query behaviour;
+the exact Windows client must confirm the observed circling is resolved.

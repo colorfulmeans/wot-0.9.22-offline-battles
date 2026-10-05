@@ -15,6 +15,79 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 
 
 class ClimbApproachNavigationTests(unittest.TestCase):
+    def _el_halluf_active_bend(self):
+        # Build 100, report 20261005-212211: Pz.58 at the south slope lip.
+        # Replay its sampled poses/path against the current baked graph.
+        # Unavailable native ground fails closed; this is not a world replay.
+        graph = json.loads((PORT_ROOT / 'navgraphs/29_el_hallouf.json').read_text())
+        calls = []
+        nav = TerrainNavigator(lambda *args: calls.append(args),
+                               lambda *args: False, baked_graph=graph)
+        path = ((-70.,45.685,-266.), (-74.,46.576,-266.),
+                (-74.,44.112,-258.), (-54.,37.938,-254.),
+                (-50.,33.99,-246.), (-34.,27.178,-238.),
+                (-14.,18.223,-214.))
+        poses = ((-71.37210003185253,45.97560119628906,-265.938209573189),
+                 (-71.73911070797317,46.06977081298828,-265.9727960732439))
+        goal = (29.276,0.,-180.313)
+        request = ('route',2,'class_mt_south_valley',2)
+        base = nav._cache_key(request, goal)
+        nav.paths[base] = path
+        nav.path_times[base] = 0.
+        nav.begin_frame(.1)
+        try:
+            self.assertEqual(path[1], nav.next_target(21,path[0],goal,request,0.))
+        finally:
+            nav.end_frame()
+        key = nav._cache_key(('join',21,nav.grid.cell_for(poses[0])) + request,goal)
+        nav.paths[key] = path
+        nav.path_times[key] = 0.
+        nav.bot_states[21].update(path_key=key,index=1,last_target=path[1])
+        return nav,path,poses,goal,request,calls
+
+    def test_reported_active_bend_keeps_progress_until_its_setup_is_reached(self):
+        nav,path,poses,goal,request,calls = self._el_halluf_active_bend()
+        def target(position, now):
+            nav.begin_frame(.1)
+            try:
+                return nav.next_target(21,position,goal,request,now)
+            finally:
+                nav.end_frame()
+        # Crossing the outgoing edge's perpendicular plane by a few cm is
+        # not arrival: the actual setup remains more than 2 m to the side.
+        self.assertEqual(path[1], target(poses[0],1.))
+        before = len(calls)
+        for tick in range(30):
+            self.assertEqual(path[1], target(poses[tick % 2],1.1+tick*.1))
+            self.assertEqual(1, nav.bot_states[21]['index'])
+        self.assertEqual(before,len(calls))
+        self.assertEqual(path[2],target(path[1],4.2))
+        self.assertEqual(2,nav.bot_states[21]['index'])
+
+    def test_active_bend_does_not_keep_a_newly_blocked_or_unplanned_ford_target(self):
+        for obstruction in ('wall','penalty','unplanned_shallow'):
+            with self.subTest(obstruction=obstruction):
+                nav,path,poses,goal,request,calls = self._el_halluf_active_bend()
+                if obstruction == 'wall':
+                    original = nav.grid.segment_clear
+                    nav.grid.segment_clear = lambda start,end: (
+                        end != path[1] and original(start,end))
+                elif obstruction == 'penalty':
+                    nav.bot_failed_edges[21] = dict((edge,(100.,240.)) for edge in
+                        nav.grid._edge_keys_for_segment(poses[1],path[1]))
+                else:
+                    original = nav.grid.segment_has_baked_hazard
+                    nav.grid.segment_has_baked_hazard = lambda start,end,mask: (
+                        (start == poses[1] and end == path[1]) or
+                        original(start,end,mask))
+                nav.begin_frame(.1)
+                try:
+                    selected = nav.next_target(21,poses[1],goal,request,1.)
+                finally:
+                    nav.end_frame()
+                self.assertNotEqual(path[1],selected)
+                self.assertFalse(nav.bot_states[21].get('controlled_shallow_target'))
+
     def test_unknown_native_edge_is_shared_only_until_next_worker_frame(self):
         calls = []
         loaded = [False]
