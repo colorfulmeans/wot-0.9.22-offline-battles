@@ -7890,3 +7890,33 @@ exercises normal install, forced reinstall and startup repair against default
 and named external slots, including legacy state and rotated backups. The
 746 launcher tests pass (14 platform/environment skips). Product reset stays
 behind its separate confirmation and is not invoked by installation or repair.
+
+## Bounded legacy Bot slope reattachment (October 6 report)
+
+Report 20261006-001822 uses launcher build 104 on the exact #1513 client.
+T-54 Bot 22 remains near (-66.50, 39.782, -252.50) with repeated centre support
+40.629, support limit 0.6 and support rollback; nearby/contact lists are empty.
+The log begins after burial, so it does not establish its initial writer.
+The legacy attitude sampler previously applied one half-step then suppressed
+further convergence at an unchanged sampling anchor. Continue convergence using
+the accepted cached pitch/roll target, without additional ground columns.
+Rejected native pose samples also consume the existing five-attempt frame cap.
+
+After one second of exceptional support rejection, a nearly stationary hull
+may prove its current four-end footprint. All ends must exist, remain inside
+the existing 0.55 grade, agree with the centre within 0.1 m at both midpoints,
+and include a lower supported end. The repair depth is bounded by the smaller
+chassis half-span at that same grade. Raised decks, steps, cliffs and missing
+support fail closed. The existing native full-body pose sweep must accept the
+height correction; snapshot rollback includes the cached attitude target.
+Height correction creates no upward velocity and leaves landing/airborne laws
+unchanged. Reuse the proved footprint for the scheduled attitude update.
+
+Only one exceptional footprint may be sampled across the whole Bot roster per
+control update (at most four added columns); each hull retries at most once per
+second. Normal centre support and staggered pose budgets remain unchanged.
+Engine-free regressions cover the reported height gap on a continuous slope,
+cached convergence, native pose denial, steps/decks/cliffs/missing support,
+retry/shared budget bounds and all 29 rejected poses under the frame cap.
+These checks do not prove native slope shape or Windows frame pacing; repeat
+T-54's actual El Halluf descent with the resulting launcher package.

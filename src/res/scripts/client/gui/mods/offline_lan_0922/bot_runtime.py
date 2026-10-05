@@ -236,6 +236,7 @@ _BOT_SUSPENSION_STATE_FIELDS = (
     'ground_height', '_spring_ground_memory', '_pseudo_ground_memory',
     '_suspension_ground_plane', '_suspension_support_vertical_speed',
     '_suspension_support_gradient', 'slide_speed', 'air_lateral_x', 'air_lateral_z',
+    'pose_sample', '_slope_pose_target',
 )
 
 # Route groups lease these lateral lanes without moving an existing member.
@@ -6786,28 +6787,32 @@ class BotRuntime(object):
         travel = SLOPE_SAMPLE_METRES[tier]
         turn = SLOPE_SAMPLE_RADIANS[tier]
         marker = state.get('pose_sample')
+        new_target = None
         if (isinstance(marker, (list, tuple)) and len(marker) == 3 and
                 abs(x - marker[0]) < travel and
                 abs(z - marker[1]) < travel and
                 abs(yaw - marker[2]) < turn):
-            return False
-
-        def probe(sample_x, sample_z, hint):
-            self._probe_totals[3] += 1
-            probe_started = self._probe_started()
-            try:
-                return self._physics_ground_probe(sample_x, sample_z, hint)
-            finally:
-                self._probe_finished(3, probe_started)
+            target = state.get('_slope_pose_target')
+            if target is None:
+                return False
+            terrain_pitch = self._terrain_pitch(state)
+            if max(abs(target[0] - terrain_pitch),
+                   abs(target[1] - state.get('roll', 0.0))) < 0.001:
+                return False
+            state['_slope_pose_attempt'] = state.get('_slope_pose_attempt', 0) + 1
+            pitch = terrain_pitch + (target[0] - terrain_pitch) * 0.5
+            roll = state.get('roll', 0.0) + (target[1] - state.get('roll', 0.0)) * 0.5
+        else:
+            state['_slope_pose_attempt'] = state.get('_slope_pose_attempt', 0) + 1
+            pitch, roll = slope_pose(
+                self._ground_probe_at, (x, state['y'], z), yaw,
+                state.get('half_length', 3.5), state.get('half_width', 1.7),
+                self._terrain_pitch(state), state.get('roll', 0.0))
+            new_target = (
+                pitch * 2.0 - self._terrain_pitch(state),
+                roll * 2.0 - state.get('roll', 0.0))
 
         suspension_pitch = state.get('suspension_pitch', 0.0)
-        terrain_pitch = state.get(
-            'terrain_pitch', state.get('pitch', 0.0) - suspension_pitch)
-        pitch, roll = slope_pose(
-            probe, (x, state['y'], z), yaw,
-            state.get('half_length', 3.5),
-            state.get('half_width', 1.7),
-            terrain_pitch, state.get('roll', 0.0))
         if self._turret_motion_probe is not None:
             before = self._turret_state_pose(state)
             after = dict(before)
@@ -6819,6 +6824,8 @@ class BotRuntime(object):
         state['terrain_pitch'] = pitch
         state['pitch'] = pitch + suspension_pitch
         state['roll'] = roll
+        if new_target is not None:
+            state['_slope_pose_target'] = new_target
         state['pose_sample'] = (x, z, yaw)
         return True
 
@@ -7041,6 +7048,53 @@ class BotRuntime(object):
             previous_support = support
         return abs(float(centre) - previous_support) <= \
             maximum_segment_rise
+
+    def _repair_embedded_slope(self, state, centre, tick_pose, step):
+        """Prove an existing shallow burial without admitting a new step.
+
+        Spend at most four columns per control frame across all hulls, and
+        retry a rejected footprint no more than once per second per hull.
+        The normal native full-body pose sweep still owns the final commit.
+        """
+        state['_support_repair_elapsed'] = state.get('_support_repair_elapsed', 0.0) + max(0.0, step)
+        if (state['_support_repair_elapsed'] < 1.0 or
+                getattr(self, '_support_repair_budget', 1) <= 0 or
+                not isinstance(tick_pose, (list, tuple)) or len(tick_pose) < 3 or
+                self._turret_motion_probe is None or state.get('airborne') or
+                self._tick_horizontal_travel(state, tick_pose) > 0.35):
+            return False
+        length = max(1.5, _number(state.get('half_length'), 3.5))
+        width = max(0.3, _number(state.get('half_width'), 1.7))
+        rise = float(centre) - state['y']
+        if rise <= 0.0 or rise > min(length, width) * 0.55 + 0.02:
+            return False
+        self._support_repair_budget = 0
+        state['_support_repair_elapsed'] = 0.0
+        pairs = tank_collision.chassis_span_offsets(state['yaw'], width, length)
+        values = []
+        for pair in pairs:
+            for dx, dz in pair:
+                value = self._ground_probe_at(state['x'] + dx, state['z'] + dz, centre)
+                if value is None or abs(float(value) - centre) > math.hypot(dx, dz) * 0.55 + 0.02:
+                    return False
+                values.append(float(value))
+        # A raised deck/step has no lower supporting end or its midpoint
+        # disagrees with the centre. A continuous slope has both.
+        if (min(values) > state['y'] + 0.02 or
+                abs((values[0] + values[1]) * 0.5 - centre) > 0.1 or
+                abs((values[2] + values[3]) * 0.5 - centre) > 0.1):
+            return False
+        pitch = -math.atan2(values[0] - values[1], 2.0 * length) * 0.9
+        roll = math.atan2(values[2] - values[3], 2.0 * width) * 0.9
+        tilt = math.hypot(pitch, roll)
+        if tilt > 0.61:
+            pitch, roll = pitch * 0.61 / tilt, roll * 0.61 / tilt
+        state['_slope_pose_target'] = (pitch, roll)
+        # Reuse this proof for the scheduled attitude update; do not sample
+        # the same footprint again immediately after the height correction.
+        state['pose_sample'] = (state['x'], state['z'], state['yaw'])
+        return True
+
     def _update_suspension_vertical_motion(
             self, state, step, params, tick_pose=None,
             attempted_yaw=None, suspension_motion_pose=None):
@@ -7456,12 +7510,17 @@ class BotRuntime(object):
                 tank_collision.support_rise_is_obstacle(
                     state.get('y'), centre, max_climb))
             support_rise_continuous = False
+            embedded_repaired = False
             if support_rise_obstacle:
                 horizontal_travel = self._tick_horizontal_travel(
                     state, tick_pose)
                 support_rise_continuous = \
                     self._support_rise_follows_tick_path(
                         state, centre, tick_pose, horizontal_travel)
+                if not support_rise_continuous:
+                    embedded_repaired = self._repair_embedded_slope(
+                        state, centre, tick_pose, step)
+                    support_rise_continuous = embedded_repaired
                 if support_rise_continuous:
                     # A ram/contact correction may move sideways while the
                     # longitudinal speed is zero. Settle only the exact rise
@@ -7472,10 +7531,13 @@ class BotRuntime(object):
                         0.0, float(centre) - _number(tick_pose[1]))
                     max_climb = max(
                         max_climb, proved_support_rise)
+            else:
+                state.pop('_support_repair_elapsed', None)
             if trace is not None:
                 trace.update({'support_limit': max_climb,
                               'support_rise_obstacle': support_rise_obstacle,
-                              'support_rise_continuous': support_rise_continuous})
+                              'support_rise_continuous': support_rise_continuous,
+                              'embedded_slope_repair': embedded_repaired})
             com_gap = state['y'] - ground
             land_y = ground if centre is None else centre
             if not state.get('grounded_once', False):
@@ -13820,6 +13882,8 @@ class BotRuntime(object):
             state['push_z'] = 0.0
             self._turn_speeds[bot_id] = 0.0
         ordered_states = self._ordered_states()
+        if refresh_control:
+            self._support_repair_budget = 1
         slope_candidates = []
         support_blocked_by_id = {}
         pose_rollback_by_id = {}
@@ -13940,7 +14004,10 @@ class BotRuntime(object):
             while (visited < len(slope_candidates) and
                    sampled < MAX_SLOPE_POSE_SAMPLES_PER_FRAME):
                 index = (start + visited) % len(slope_candidates)
-                if self._update_slope_pose(slope_candidates[index]):
+                candidate = slope_candidates[index]
+                attempt = candidate.get('_slope_pose_attempt', 0)
+                changed = self._update_slope_pose(candidate)
+                if changed or candidate.get('_slope_pose_attempt', 0) != attempt:
                     sampled += 1
                 visited += 1
             self._slope_pose_cursor = (
