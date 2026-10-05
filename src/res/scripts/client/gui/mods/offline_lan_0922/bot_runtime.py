@@ -6826,7 +6826,7 @@ class BotRuntime(object):
         state['roll'] = roll
         if new_target is not None:
             state['_slope_pose_target'] = new_target
-        state['pose_sample'] = (x, z, yaw)
+            state['pose_sample'] = (x, z, yaw)
         return True
 
     def _passive_motion_status(self, state, position, yaw, speed,

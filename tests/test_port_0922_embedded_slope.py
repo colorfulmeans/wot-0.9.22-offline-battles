@@ -54,6 +54,17 @@ class EmbeddedSlopeTests(unittest.TestCase):
         self.assertEqual(0., self.state['vertical_speed'])
         self.assertNotIn('_slope_pose_target', self.state)
         self.assertNotIn('pose_sample', self.state)
+
+    def test_cached_convergence_does_not_move_ground_sampling_anchor(self):
+        self.state['y'] = 40.62900161743164
+        self.assertTrue(self.runtime._update_slope_pose(self.state))
+        anchor = self.state['pose_sample']
+        self.state['x'] = 2.
+        self.assertTrue(self.runtime._update_slope_pose(self.state))
+        self.assertEqual(anchor, self.state['pose_sample'])
+        self.state['x'] = 5.
+        self.assertTrue(self.runtime._update_slope_pose(self.state))
+        self.assertEqual(8, len(self.calls))
     def test_step_deck_cliff_and_missing_support_still_reject(self):
         for kind in ('step', 'deck', 'cliff', 'missing'):
             with self.subTest(kind=kind):
