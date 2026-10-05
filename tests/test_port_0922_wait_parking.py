@@ -1,0 +1,83 @@
+"""Independent waypoint parking leases through canonical server orders."""
+import copy
+import unittest
+import test_port_0922_authored_route_waits as authored_waits
+from test_port_0922_server_bot_ai import _bot, _state, _route
+from test_port_0922_bot_tactics_editor import cfg
+from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+
+
+class WaitParkingTests(unittest.TestCase):
+    def setup_parking(self, places=None):
+        planner, manifest = authored_waits.AuthoredRouteWaitTests().setup_route('AT-SPG')
+        route=planner.tactics['maps']['08_ruinberg']['routes'][0]
+        route['points']=[[0,0,1,0,places or [[0,0,10],[20,0,20],[40,0,30]]],[100,0,0]]
+        planner.tactics=cfg.canonical(planner.tactics)
+        wire=_route('user_'+route['id'],[(0,0,1),(100,0,0)])
+        manifest=[_bot(i,1,i-11,copy.deepcopy(wire),'AT-SPG') for i in range(11,15)]
+        return planner,manifest
+
+    def orders(self, planner, manifest, states, now):
+        return {o['id']:o for o in planner.build_orders(manifest,states,[],now)['orders']}
+
+    def test_three_distinct_stable_places_and_fourth_queues(self):
+        p,m=self.setup_parking();states=[_state(i,1,-100-(i-11)*15,0) for i in range(11,15)]
+        first=self.orders(p,m,states,1)
+        self.assertEqual([0,20,40],[first[i]['move_position']['x'] for i in range(11,14)])
+        self.assertEqual('queue',first[14]['parking_phase'])
+        self.assertEqual(0,first[14]['throttle_override'])
+        self.assertEqual(-145,first[14]['move_position']['x'])
+        again=self.orders(p,m,list(reversed(states)),2)
+        self.assertEqual([first[i]['move_position'] for i in range(11,15)],
+                         [again[i]['move_position'] for i in range(11,15)])
+
+    def test_one_metre_arrival_and_individual_clocks(self):
+        p,m=self.setup_parking();m=m[:3]
+        states=[_state(11,1,-1.01,0),_state(12,1,20,0),_state(13,1,40,0)]
+        first=self.orders(p,m,states,10)
+        self.assertEqual('approach',first[11]['parking_phase'])
+        self.assertEqual(1,first[11]['arrival_radius'])
+        self.assertEqual('waiting',first[12]['parking_phase'])
+        self.assertEqual('waiting',first[13]['parking_phase'])
+        states[0]['x']=-1
+        self.assertEqual('waiting',self.orders(p,m,states,15)[11]['parking_phase'])
+        self.assertEqual(0,self.orders(p,m,states,24.9)[11]['route_index'])
+        at25=self.orders(p,m,states,25)
+        self.assertEqual([1,0,0],[at25[i]['route_index'] for i in range(11,14)])
+        at30=self.orders(p,m,states,30)
+        self.assertEqual([1,1,0],[at30[i]['route_index'] for i in range(11,14)])
+        self.assertEqual(1,self.orders(p,m,states,40)[13]['route_index'])
+
+    def test_completed_hull_must_depart_before_slot_is_reused(self):
+        p,m=self.setup_parking([[0,0,5]])
+        states=[_state(11,1,0,0),_state(12,1,-40,0)]
+        m=m[:2];self.orders(p,m,states,1)
+        self.assertEqual('queue',self.orders(p,m,states,6)[12]['parking_phase'])
+        self.assertEqual('queue',self.orders(p,m,states,7)[12]['parking_phase'])
+        states[0]['x']=11
+        self.assertEqual('approach',self.orders(p,m,states,8)[12]['parking_phase'])
+
+    def test_dead_owner_releases_lease_but_wreck_position_stays_occupied(self):
+        p,m=self.setup_parking([[0,0,5]])
+        states=[_state(11,1,0,0),_state(12,1,-40,0)]
+        self.orders(p,m[:2],states,1);states[0]['alive']=False;states[0]['health']=0
+        self.assertEqual('queue',self.orders(p,m[:2],states,2)[12]['parking_phase'])
+        states[0]['x']=12
+        self.assertEqual('approach',self.orders(p,m[:2],states,3)[12]['parking_phase'])
+        p.reset();self.assertEqual({},p._wait_claims)
+
+    def test_schema_rejects_four_slots_nonfinite_times_and_duplicate_positions(self):
+        p,m=self.setup_parking();raw=p.tactics
+        for slots in ([[0,0,1]]*4, [[0,0,float('nan')]], [[0,0,1],[0,0,2]]):
+            changed=copy.deepcopy(raw);changed['maps']['08_ruinberg']['routes'][0]['points'][0][4]=slots
+            with self.assertRaises(cfg.TacticsError):cfg.canonical(changed)
+
+    def test_driver_does_not_claim_arrival_or_latch_brake_at_one_point_two_metres(self):
+        driver=LocalDriver()
+        result=driver.drive(11,0,(0,0,0),0,0,.1,(0,0,1.2),[],lambda *args:True,
+            stopping_distance=0,arrival_radius=1)
+        self.assertNotEqual('arrived',result['recovery_mode'])
+        self.assertGreater(result['throttle'],0)
+
+
+if __name__=='__main__':unittest.main()

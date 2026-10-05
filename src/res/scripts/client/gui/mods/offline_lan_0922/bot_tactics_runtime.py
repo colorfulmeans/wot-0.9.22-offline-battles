@@ -80,6 +80,10 @@ def validate_route(grid, route):
             return 'waypoint_unusable'
         if previous is not None and not _route_reachable(grid, previous, target):
             return 'waypoints_disconnected'
+        for place in config.waiting_positions(point):
+            parked = grid.closest((place[0], 0, place[1]))
+            if parked is None:return 'wait_place_unusable'
+            if not _route_reachable(grid, grid.point(target), parked):return 'wait_place_disconnected'
         previous = grid.point(target)
     return None
 
@@ -280,6 +284,14 @@ def route_issues(grid, route):
         elif previous is not None and not _route_reachable(grid, previous, target):
             issues.append(dict(status='waypoints_disconnected', nodes=[index, index + 1],
                                points=[list(route['points'][index-1][:2]), list(point[:2])]))
+        for slot, place in enumerate(config.waiting_positions(point)):
+            parked = grid.closest((place[0], 0, place[1]))
+            status = ('wait_place_unusable' if parked is None else
+                      'wait_place_disconnected' if target is not None and
+                      not _route_reachable(grid, grid.point(target), parked) else None)
+            if status:
+                issues.append(dict(status=status, nodes=[index + 1],
+                                   points=[list(place[:2])], wait_slot=slot + 1))
         previous = grid.point(target) if target is not None else None
     return issues
 

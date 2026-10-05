@@ -4542,7 +4542,7 @@ class BotRuntime(object):
                 if isinstance(point, (dict, list, tuple)):
                     order[name] = _boundary_point(point)
             for name in ('desired_range', 'fire_range',
-                         'throttle_override', 'hull_angle_degrees'):
+                         'throttle_override', 'hull_angle_degrees', 'arrival_radius'):
                 if order.get(name) is not None:
                     order[name] = _number(order[name])
             for name in ('id', 'team', 'target_id', 'route_index',
@@ -4596,6 +4596,8 @@ class BotRuntime(object):
                 'siege_time_left_ms', 'siege_transition_total_ms',
                 'equipment_states', 'stun_end_server_time_ms')
         result = dict((key, state[key]) for key in keys)
+        result['profile'] = dict(result['profile'], parking_radius=math.hypot(
+            float(state.get('half_length', 3.5)), float(state.get('half_width', 1.7))))
         # The rating rides the manifest so a takeover installs the same
         # gunner rather than re-rolling one from a preset mid-round.  The
         # tier name rides with it because saved launcher profiles, the room
@@ -6568,7 +6570,8 @@ class BotRuntime(object):
                 'traffic_mode', 'move_position', 'target_yaw', 'brake')},
             'strategic': {key: strategic.get(key) for key in (
                 'combat_mode', 'move_position', 'route_id', 'route_index',
-                'route_anchor', 'route_join', 'target_id')},
+                'route_anchor', 'route_join', 'target_id', 'parking_phase',
+                'parking_slot', 'arrival_radius')},
             'motion_diagnostic': 'stationary' if stationary_due else 'local_roaming',
             'local_roaming': None if stationary_due else dict(
                 anchor=roaming[0], elapsed=now - roaming[1],

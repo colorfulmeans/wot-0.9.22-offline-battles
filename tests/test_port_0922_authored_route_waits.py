@@ -59,7 +59,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         planner, manifest = self.setup_route('SPG', 5)
         self.order(planner, manifest, 0, 1)
         released = self.order(planner, manifest, 0, 6)
-        self.assertEqual(('route', 100), (
+        self.assertEqual(('parking_approach', 100), (
             released['combat_mode'], released['move_position']['x']))
         self.assertIsNone(released['throttle_override'])
 

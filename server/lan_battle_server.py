@@ -4909,7 +4909,8 @@ class BattleState:
         for key, default, maximum in (("desired_range", 180.0, 2000.0),
                                       ("fire_range", 500.0, 2500.0),
                                       ("speed", 0.0, 200.0),
-                                      ("armor", 0.0, 10000.0)):
+                                      ("armor", 0.0, 10000.0),
+                                      ("parking_radius", math.hypot(3.5, 1.7), 20.0)):
             profile[key] = round(_clamp(_finite_float(raw.get(key), default), 0.0, maximum), 3)
         profile["shells"] = []
         shells = raw.get("shells") or []

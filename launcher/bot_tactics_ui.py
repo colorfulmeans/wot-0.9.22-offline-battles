@@ -74,6 +74,7 @@ class BotTacticsEditor:
         self.original = copy.deepcopy(self.document)
         self.undo_stack = []; self.redo_stack = []
         self.selection = None; self.selected_point = None; self.drag = None
+        self.wait_edit = False; self.selected_wait = None
         self.graph_cache = {}; self.image_cache = {}; self.background = None; self.photo = None
         self.navigation_image_cache = {}; self.navigation_photo = None
         self.root = tk.Toplevel(parent)
@@ -257,8 +258,18 @@ class BotTacticsEditor:
                               ('导入底图','Load image',self.load_background)]:
             ttk.Button(tools,text=self.tr(zh,en),command=command).pack(side='left',padx=1,pady=5)
         body=ttk.Panedwindow(parent,orient='horizontal');body.pack(fill='both',expand=True)
-        left=ttk.Frame(body,width=185);centre=ttk.Frame(body);right=ttk.Frame(body,width=260)
+        left=ttk.Frame(body,width=185);centre=ttk.Frame(body);right=ttk.Frame(body,width=280)
         body.add(left,weight=0);body.add(centre,weight=1);body.add(right,weight=0)
+        # Keep the waiting controls and legend reachable on smaller displays.
+        properties=tk.Canvas(right,width=260,highlightthickness=0)
+        scrollbar=ttk.Scrollbar(right,orient='vertical',command=properties.yview)
+        scrollbar.pack(side='right',fill='y');properties.pack(side='left',fill='both',expand=True)
+        properties.configure(yscrollcommand=scrollbar.set)
+        right=ttk.Frame(properties,width=260)
+        properties_window=properties.create_window(0,0,anchor='nw',window=right)
+        right.bind('<Configure>',lambda e:properties.configure(scrollregion=properties.bbox('all')))
+        properties.bind('<Configure>',lambda e:properties.itemconfigure(properties_window,width=e.width))
+        self.properties_canvas=properties
         self.items=ttk.Treeview(left,show='tree',height=16,selectmode='browse');self.items.column('#0',width=175)
         self.items.pack(fill='both',expand=True);self.items.bind('<<TreeviewSelect>>',self.select_item)
         self.canvas=tk.Canvas(centre,background='#202529',highlightthickness=0)
@@ -273,7 +284,7 @@ class BotTacticsEditor:
         self.canvas.bind('<Button-5>',lambda e:self.wheel(e,-1))
         self.canvas.bind('<ButtonPress-2>',self.pan_start)
         self.canvas.bind('<B2-Motion>',self.pan_move)
-        self.canvas.bind('<Delete>',lambda e:self.delete_point())
+        self.canvas.bind('<Delete>',self.delete_selected_point)
         self.canvas.bind('<Motion>',self.cursor)
         self.coords=tk.StringVar(value='');ttk.Label(centre,textvariable=self.coords).pack(anchor='w')
         self.map_status=ttk.Label(centre,text='',wraplength=520);self.map_status.pack(anchor='w')
@@ -303,23 +314,42 @@ class BotTacticsEditor:
         self.insert_button=ttk.Button(actions,text=self.tr('插入点','Insert point'),command=self.insert_point)
         self.insert_button.pack(side='left')
         self.hold_button=ttk.Button(actions,text=self.tr('切换驻留点','Toggle hold'),command=self.toggle_hold)
-        self.hold_button.pack(side='left')
-        self.wait_button=ttk.Button(actions,text=self.tr('停留条件','Wait condition'),command=self.edit_point_condition)
+        # Independent waits are edited in the panel below, not a hold toggle.
+        self.wait_button=ttk.Button(actions,text=self.tr('添加等待点','Add wait point'),command=self.edit_point_condition)
         self.wait_button.pack(side='left')
+        self.wait_panel=ttk.LabelFrame(right,text=self.tr('等待点编辑','Wait point editor'))
+        self.wait_panel.grid(row=22,column=0,sticky='ew',pady=(5,0))
+        self.wait_edit_var=tk.BooleanVar(value=False)
+        self.wait_edit_check=ttk.Checkbutton(self.wait_panel,text=self.tr('编辑等待点（最多3个）','Edit wait points (maximum 3)'),
+            variable=self.wait_edit_var,command=self.change_wait_edit)
+        self.wait_edit_check.pack(anchor='w')
+        self.wait_list=ttk.Combobox(self.wait_panel,state='readonly',width=28)
+        self.wait_list.pack(fill='x');self.wait_list.bind('<<ComboboxSelected>>',self.choose_wait)
+        self.wait_list.bind('<Delete>',lambda event:self.delete_wait_point())
+        ttk.Label(self.wait_panel,text=self.tr('本等待点停留秒数（-1一直停留）','Wait seconds for this place (-1 stays)')).pack(anchor='w')
+        self.wait_seconds=tk.StringVar(value='120')
+        self.wait_entry=ttk.Entry(self.wait_panel,textvariable=self.wait_seconds,width=12)
+        self.wait_entry.pack(fill='x');self.wait_entry.bind('<Return>',self.update_wait_time)
+        actions_wait=ttk.Frame(self.wait_panel);actions_wait.pack(fill='x')
+        self.wait_apply=ttk.Button(actions_wait,text=self.tr('设置时间','Set time'),command=self.update_wait_time);self.wait_apply.pack(side='left')
+        self.wait_delete=ttk.Button(actions_wait,text=self.tr('删除等待点','Delete wait point'),command=self.delete_wait_point);self.wait_delete.pack(side='left')
+        ttk.Label(self.wait_panel,text=self.tr('勾选后点击地图添加或拖动；选中后 Delete 删除。',
+            'When enabled, click to add or drag; Delete removes the selected place.'),wraplength=250).pack(anchor='w')
         self.node_legend=ttk.LabelFrame(right,text=self.tr('节点图例','Node legend'))
-        self.node_legend.grid(row=22,column=0,sticky='ew',pady=(5,0))
+        self.node_legend.grid(row=23,column=0,sticky='ew',pady=(5,0))
         for row,(radius,zh,en) in enumerate(((4,'普通节点','Normal waypoint'),
-                (7,'停留点（编辑中）','Wait point (editing)'),
-                (3,'停留点（未编辑）','Wait point (unselected)'))):
+                (7,'大圆点：等待点组（点击展开）','Large circle: wait group (click to expand)'),
+                (4,'展开的小方点：独立等待点','Expanded squares: individual wait places'))):
             marker=tk.Canvas(self.node_legend,width=22,height=20,background='#202529',highlightthickness=0)
             marker.grid(row=row,column=0,padx=4,pady=1)
-            marker.create_oval(11-radius,10-radius,11+radius,10+radius,fill=CLASS_COLORS['heavyTank'],outline='white')
+            draw=marker.create_rectangle if row==2 else marker.create_oval
+            draw(11-radius,10-radius,11+radius,10+radius,fill=CLASS_COLORS['heavyTank'],outline='white')
             ttk.Label(self.node_legend,text=self.tr(zh,en)).grid(row=row,column=1,sticky='w')
         ttk.Label(self.node_legend,text=self.tr('◇ 出生点中心；虚线圈：占领基地范围',
             '◇ Spawn centre; dashed circle: capture area'),wraplength=250).grid(row=3,column=0,columnspan=2,sticky='w')
         ttk.Label(right,text=self.tr(
-            '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n修改“全部车型”会同步各车型路线，之后单独修改某车型只影响该车型。\n双击节点可设置等待：0继续，-1一直停留。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
-            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared geometry edits update every class; later class edits affect only that class.\nDouble-click sets wait: 0 continues, -1 holds.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=23,column=0,sticky='w',pady=8)
+            '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n修改“全部车型”会同步各车型路线，之后单独修改某车型只影响该车型。\n选中或双击大点展开等待点；右侧编辑各点时间。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
+            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared geometry edits update every class; later class edits affect only that class.\nSelect or double-click a large node to expand wait places; edit times on the right.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=24,column=0,sticky='w',pady=8)
 
     def checkpoint(self):
         self.undo_stack.append(copy.deepcopy(self.document));self.undo_stack=self.undo_stack[-50:];self.redo_stack=[]
@@ -684,8 +714,11 @@ class BotTacticsEditor:
 
     def select_item(self,event=None):
         values=self.items.selection()
-        self.selection=tuple(values[0].split(':',1)) if values else None
-        self.selected_point=None;self._refresh_properties();self.redraw()
+        selected=tuple(values[0].split(':',1)) if values else None
+        if selected!=self.selection:
+            self.selection=selected;self.selected_point=None
+            self.selected_wait=None;self.wait_edit=False
+        self._refresh_properties();self.redraw()
 
     def _refresh_properties(self):
         item=self._selected()
@@ -727,6 +760,7 @@ class BotTacticsEditor:
         if self.selected_point is not None and self.selected_point<len(pts):self.points.current(self.selected_point)
         elif parking and pts:self.points.current(0);self.selected_point=0
         else:self.points.set('')
+        self._refresh_wait_panel()
 
     def new_route(self):
         if self.route_class_var.get()=='total':
@@ -825,7 +859,7 @@ class BotTacticsEditor:
         else:self.entry().pop('default_routes',None)
         if not self.entry()['routes'] and not self.entry()['positions'] and not remaining:
             self.document['maps'].pop(self.map_name,None)
-        self.selected_point=None;self._refresh_properties();self.redraw();self.mark()
+        self.selected_point=None;self.selected_wait=None;self.wait_edit=False;self._refresh_properties();self.redraw();self.mark()
 
     def update_properties(self):
         item=self._selected()
@@ -875,7 +909,7 @@ class BotTacticsEditor:
         except (ValueError,contract.TacticsError) as e:self.error(e);return False
 
     def choose_point(self):
-        self.selected_point=self.points.current();self._refresh_properties();self.redraw()
+        self.selected_point=self.points.current();self.selected_wait=None;self.wait_edit=False;self._refresh_properties();self.redraw()
 
     def delete_point(self):
         item=self._selected()
@@ -884,7 +918,7 @@ class BotTacticsEditor:
             if parking and len(item['points'])==1:return
             self.checkpoint();del self._editable_points()[self.selected_point]
             if parking:self._editable_item()['point']=self._editable_points()[0][:2]
-            self._sync_symmetry(geometry=True);self.selected_point=None;self._refresh_properties();self.redraw();self.mark()
+            self._sync_symmetry(geometry=True);self.selected_point=None;self.selected_wait=None;self.wait_edit=False;self._refresh_properties();self.redraw();self.mark()
 
     def insert_point(self):
         item=self._selected()
@@ -916,33 +950,104 @@ class BotTacticsEditor:
             if self.selection[0] in ('routes','builtin'):p[3:]=[-1.0 if p[2] else 0.0]
             self._sync_symmetry(geometry=True);self._refresh_properties();self.redraw();self.mark()
 
+    def _wait_point(self):
+        item=self._selected();index=self.selected_point
+        if (item is None or not self.selection or self.selection[0] not in ('routes','builtin') or
+                index is None or not 0<=index<len(item.get('points',()))):return None
+        return item['points'][index]
+
+    def _refresh_wait_panel(self):
+        point=self._wait_point()
+        if point is None:self.wait_edit=False;self.selected_wait=None
+        places=contract.waiting_positions(point) if point is not None else []
+        self.wait_edit_var.set(self.wait_edit)
+        self.wait_edit_check.config(state='normal' if point is not None else 'disabled')
+        self.wait_list.config(values=[self.tr('等待点 %d：%gs','Wait place %d: %gs')%(i+1,p[2]) for i,p in enumerate(places)])
+        if self.selected_wait is not None and self.selected_wait<len(places):
+            self.wait_list.current(self.selected_wait);self.wait_seconds.set(str(places[self.selected_wait][2]))
+        else:self.selected_wait=None;self.wait_list.set('')
+        enabled=self.wait_edit and self.selected_wait is not None
+        for widget in (self.wait_entry,self.wait_apply,self.wait_delete):widget.config(state='normal' if enabled else 'disabled')
+        self.wait_list.config(state='readonly' if self.wait_edit else 'disabled')
+
+    def change_wait_edit(self):
+        self.wait_edit=bool(self.wait_edit_var.get()) and self._wait_point() is not None
+        self.drag=None;self._refresh_wait_panel();self.redraw()
+
     def edit_point_condition(self,event=None):
-        if self.selection and self.selection[0] in ('positions','builtin_positions'):return
-        item=self._selected()
-        if item is None or not item.get('points'):return
         if event is not None:
-            self.selected_point=next((i for i,p in enumerate(item['points'])
-                if math.hypot(*(a-b for a,b in zip(self.view.screen(p),
-                    (event.x,event.y))))<10),None)
-        if self.selected_point is None:
-            if self.selection[0] in ('positions','builtin_positions'):self.selected_point=0
-            else:return
-        point=item['points'][self.selected_point]
-        seconds=simpledialog.askfloat(self.tr('停留条件','Wait condition'),
-            self.tr('到达后停留秒数：0=前往下一个点，-1=一直停留。\n驻炮点等待时可开火。只有一个点或已到最后一点时继续驻炮。\nShift+点击地图可添加后续移动点。','Seconds after arrival: 0 = next point, -1 = stay.\nParking can fire while waiting. The last point stays parked.\nShift-click the map to add a subsequent movement point.'),
-            parent=self.root,initialvalue=point[3] if len(point)>3 else 0,
-            minvalue=-1,maxvalue=3600)
-        if seconds is None:return
-        if not math.isfinite(seconds) or -1<seconds<0:
-            self.error(self.tr('请输入 -1 或 0–3600 秒。','Enter -1 or 0–3600 seconds.'));return
-        self.checkpoint();point=self._editable_points()[self.selected_point];point[3:]=[seconds]
-        point[2]=int(seconds!=0) if self.selection[0] in ('routes','builtin') else int(point[2] or seconds!=0)
-        self._sync_symmetry(geometry=True)
-        self.drag=None;self._refresh_properties();self.mark()
+            item=self._selected()
+            if item is None:return
+            index=next((i for i,p in enumerate(item.get('points',()))
+                if math.hypot(*(a-b for a,b in zip(self.view.screen(p),(event.x,event.y))))<12),None)
+            if index is None:return
+            if self.wait_edit and index==self.selected_point:
+                self._press_wait(event)
+                return 'break'
+            self.selected_point=index;self.selected_wait=None
+        if self._wait_point() is None:return
+        self.wait_edit=True;self.drag=None;self._refresh_properties();self.redraw()
+        self.root.update_idletasks()
+        region=self.properties_canvas.bbox('all')
+        if region and region[3]>self.properties_canvas.winfo_height():
+            self.properties_canvas.yview_moveto(float(self.wait_panel.winfo_y())/region[3])
+        self.wait_panel.focus_set()
         return 'break'
+
+    def _store_wait_places(self, places):
+        point=self._editable_points()[self.selected_point]
+        point[3:]=[0.0,copy.deepcopy(places)] if places else []
+        point[2]=int(bool(places));self._sync_symmetry(geometry=True)
+
+    def choose_wait(self,event=None):
+        self.selected_wait=self.wait_list.current();self._refresh_wait_panel();self.redraw()
+
+    def update_wait_time(self,event=None):
+        point=self._wait_point()
+        if not self.wait_edit or point is None or self.selected_wait is None:return
+        try:
+            seconds=contract.number(float(self.wait_seconds.get()),-1,3600)
+            if -1<seconds<0:raise ValueError()
+        except (ValueError,contract.TacticsError):
+            self.error(self.tr('请输入 -1 或 0–3600 秒。','Enter -1 or 0–3600 seconds.'));return False
+        places=copy.deepcopy(contract.waiting_positions(point))
+        if self.selected_wait>=len(places):return
+        if places[self.selected_wait][2]!=seconds:
+            self.checkpoint();places[self.selected_wait][2]=seconds;self._store_wait_places(places);self.mark()
+        self._refresh_properties();return True
+
+    def delete_wait_point(self):
+        point=self._wait_point()
+        if not self.wait_edit or point is None or self.selected_wait is None:return
+        places=copy.deepcopy(contract.waiting_positions(point))
+        if not 0<=self.selected_wait<len(places):return
+        self.checkpoint();del places[self.selected_wait];self._store_wait_places(places)
+        self.selected_wait=None;self.drag=None;self._refresh_properties();self.mark()
+        return 'break'
+
+    def delete_selected_point(self,event=None):
+        if self.wait_edit:self.delete_wait_point()
+        else:self.delete_point()
+        return 'break'
+
+    def _press_wait(self,event):
+        point=self._wait_point()
+        if point is None:return
+        places=copy.deepcopy(contract.waiting_positions(point))
+        selected=next((i for i,p in enumerate(places) if math.hypot(*(a-b for a,b in
+            zip(self.view.screen(p),(event.x,event.y))))<10),None)
+        if selected is None:
+            if len(places)>=3:
+                self.error(self.tr('每个路线节点最多3个等待点。','A route node allows at most 3 wait places.'));return
+            p=list(self.view.world(event.x,event.y))
+            if any(math.hypot(p[0]-q[0],p[1]-q[1])<1 for q in places):return
+            self.checkpoint();places.append(p+[120.0]);selected=len(places)-1;self._store_wait_places(places)
+        else:self.checkpoint()
+        self.selected_wait=selected;self.drag=('wait',selected);self._refresh_properties();self.mark()
 
     def press(self,event):
         self.canvas.focus_set()
+        if self.wait_edit:return self._press_wait(event)
         if self.route_class_var.get()=='total' and not event.state & 1:
             targets=[v for v in self.route_hit_targets if math.hypot(v[2][0]-event.x,v[2][1]-event.y)<10]
             if targets:
@@ -966,12 +1071,15 @@ class BotTacticsEditor:
             pts.insert(nearest,list(p)+([0,0.0] if parking else [0]))
             if parking:self._editable_item()['point']=pts[0][:2]
             self._sync_symmetry(geometry=True)
-        self.selected_point=nearest;self.drag=('route',nearest);self._refresh_properties();self.redraw();self.mark()
+        self.selected_point=nearest;self.selected_wait=None;self.drag=('route',nearest);self._refresh_properties();self.redraw();self.mark()
 
     def motion(self,event):
         item=self._selected()
         if item is None or self.drag is None:return
         p=list(self.view.world(event.x,event.y))
+        if self.drag[0]=='wait':
+            places=copy.deepcopy(contract.waiting_positions(self._wait_point()))
+            places[self.drag[1]][:2]=p;self._store_wait_places(places);self.redraw();return
         if self.drag[0]=='position':
             self._editable_item()['point']=p;self.redraw();return
         self._editable_points()[self.drag[1]][:2]=p
@@ -1084,17 +1192,25 @@ class BotTacticsEditor:
 
     def _draw_route_node(self, point, index, color, editing, normal_radius, visible=True):
         # Only explicit nonzero waits stop route progression; legacy hold flags do not.
-        waiting=len(point)>3 and point[3]!=0
+        places=contract.waiting_positions(point)
+        waiting=bool(places)
         if not visible and not waiting:return
         x,y=self.view.screen(point)
         if waiting:
-            radius=(10 if index==self.selected_point else 7) if editing else 3
+            radius=10 if editing and index==self.selected_point else 7
         else:
             radius=7 if editing and index==self.selected_point else normal_radius
         self.canvas.create_oval(x-radius,y-radius,x+radius,y+radius,fill=color,
             outline='white' if waiting or editing or point[2] else color,
             tags=('route_wait' if waiting else 'route_node',))
         if editing:self.canvas.create_text(x+radius+3,y-radius-3,text=str(index+1),fill='white',anchor='w')
+        if editing and index==self.selected_point:
+            for slot,place in enumerate(places):
+                px,py=self.view.screen(place);size=6 if self.selected_wait==slot else 4
+                self.canvas.create_line(x,y,px,py,fill=color,dash=(2,3),tags=('wait_connector',))
+                self.canvas.create_rectangle(px-size,py-size,px+size,py+size,fill=color,outline='white',tags=('wait_place',))
+                caption='%d: %s'%(slot+1,self.tr('一直停留','Stay') if place[2]<0 else '%gs'%place[2])
+                self.canvas.create_text(px+size+3,py-size-3,text=caption,fill='white',anchor='w',tags=('wait_caption',))
 
     def _draw_navigation_grid(self):
         graph=self.graph_cache.get(self.map_name)
@@ -1168,6 +1284,7 @@ class BotTacticsEditor:
         except Exception as e:self.error(e)
 
     def save(self,apply=False):
+        if self.wait_edit and self.selected_wait is not None and self.update_wait_time() is False:return
         if self._selected() is not None and not self.update_properties():
             return
         try:

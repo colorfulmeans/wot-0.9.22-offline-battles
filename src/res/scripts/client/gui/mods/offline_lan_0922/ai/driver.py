@@ -607,7 +607,7 @@ class LocalDriver(object):
 			half_length=3.5, half_width=1.7,
 			movement_intent=True, stopping_distance=None,
 			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
-			progress_target=None, turn_speed_limit=None):
+			progress_target=None, turn_speed_limit=None, arrival_radius=None):
 		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -617,6 +617,7 @@ class LocalDriver(object):
 		planner's remaining wall time would leave recovery and route leases
 		permanently behind after every slow callback.
 		"""
+		arrival = WAYPOINT_ARRIVAL_RADIUS if arrival_radius is None else max(0.1, float(arrival_radius))
 		state = self._state(bot_id, team_slot, position)
 		alignment = state.get('alignment_target')
 		if (not movement_intent or float(speed) < -0.05 or
@@ -668,7 +669,7 @@ class LocalDriver(object):
 			progress = state.get('objective_progress')
 			distance = _distance(position, progress_target)
 			if (progress is None or _distance(progress['goal'], progress_target) > 2.0 or
-					distance <= WAYPOINT_ARRIVAL_RADIUS):
+					distance <= arrival):
 				progress = {'goal': tuple(progress_target), 'best': distance,
 				            'at': state['clock']}
 				state['objective_progress'] = progress
@@ -698,7 +699,7 @@ class LocalDriver(object):
 						progress['alignment_best'] = error
 						progress['at'] = state['clock']
 			objective_stalled = state['clock'] - progress['at'] >= 8.0
-		if target_distance <= WAYPOINT_ARRIVAL_RADIUS and not objective_stalled:
+		if target_distance <= arrival and not objective_stalled:
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)
 			# is zero and previously produced full throttle until the next order tick.
 			state['stuck_time'] = 0.0
@@ -981,7 +982,7 @@ class LocalDriver(object):
 			              round(float(target[2]), 2))
 			if state.get('braking_target') not in (None, target_key):
 				state['braking_target'] = None
-			if (target_distance <= WAYPOINT_ARRIVAL_RADIUS +
+			if (target_distance <= arrival +
 					brake_distance + reaction_distance):
 				state['braking_target'] = target_key
 			if state.get('braking_target') == target_key:
@@ -989,7 +990,7 @@ class LocalDriver(object):
 				# produced ``stopping_distance``. If tuning or a slope leaves the
 				# hull stopped short, release the latch and approach again.
 				if (abs(float(speed)) <= 0.35 and
-						target_distance > WAYPOINT_ARRIVAL_RADIUS + 0.5):
+						target_distance > arrival + (0.5 if arrival_radius is None else 0.0)):
 					state['braking_target'] = None
 				else:
 					throttle = 0.0

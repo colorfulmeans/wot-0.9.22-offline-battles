@@ -94,8 +94,12 @@ class DefaultRouteTests(unittest.TestCase):
             'fire_seq','shell_index','next_shell_index','ammo_remaining','ammo_reload_pending',
             'reload_time','reload_duration','clip','clip_size','siege_state','siege_time_left_ms',
             'siege_transition_total_ms','equipment_states','stun_end_server_time_ms')}
-        state.update(id=11,team=1,profile={},route=route)
+        state.update(id=11,team=1,profile={},route=route,half_length=6,half_width=2.5)
         manifest=runtime._manifest_entry(state)
+        from lan_battle_server import BattleState
+        self.assertEqual(6.5,manifest['profile']['parking_radius'])
+        self.assertEqual(6.5,BattleState._sanitize_bot_profile(manifest['profile'])['parking_radius'])
+        self.assertNotIn('parking_radius',state['profile'])
         catalog=BotPlanner._route_catalog([manifest])
         self.assertEqual([(p[0],p[1]) for p in expected],
                          [(p['x'],p['z']) for p in catalog[route['id']]['waypoints']])

@@ -98,6 +98,39 @@ def point(raw, bounds):
             round(number(raw[1], bounds[1], bounds[3]), 4)]
 
 
+def waiting_positions(waypoint):
+    """Independent single-vehicle parking places attached to one route gate."""
+    if len(waypoint) > 4:
+        return waypoint[4]
+    return [list(waypoint[:2]) + [waypoint[3]]] if len(waypoint) > 3 and waypoint[3] else []
+
+
+def waypoint(raw, bounds):
+    if not isinstance(raw, (list, tuple)) or len(raw) not in (3, 4, 5):
+        raise TacticsError('Waypoint must contain geometry and optional waits')
+    value = point(raw[:2], bounds) + [integer(raw[2], 0, 1)]
+    if len(raw) > 3:
+        seconds = number(raw[3], -1, 3600)
+        if -1 < seconds < 0:raise TacticsError('Use -1 for a permanent hold')
+        value.append(seconds)
+    if len(raw) > 4:
+        if raw[3] != 0:raise TacticsError('Independent parking replaces the gate wait')
+        if not isinstance(raw[4], list) or not 1 <= len(raw[4]) <= 3:
+            raise TacticsError('A waypoint allows one to three parking places')
+        places = []
+        for place in raw[4]:
+            if not isinstance(place, (list, tuple)) or len(place) != 3:
+                raise TacticsError('Parking place must be [x, z, wait seconds]')
+            seconds = number(place[2], -1, 3600)
+            if -1 < seconds < 0:raise TacticsError('Use -1 for a permanent hold')
+            parked = point(place[:2], bounds) + [seconds]
+            if any(sum((parked[i]-other[i])**2 for i in (0,1)) < 1 for other in places):
+                raise TacticsError('Parking places need at least one metre separation')
+            places.append(parked)
+        value.append(places)
+    return value
+
+
 def canonical(raw):
     _keys(raw, ('schema', 'client', 'name', 'behavior', 'maps'),
           ('schema', 'client', 'name', 'behavior', 'maps'))
@@ -174,14 +207,7 @@ def canonical(raw):
                         raise TacticsError('A route must contain 1..16 waypoints')
                     points = []
                     for pt in pts:
-                        if not isinstance(pt, (list, tuple)) or len(pt) not in (3, 4):
-                            raise TacticsError('Waypoint must be [x, z, hold, optional wait seconds]')
-                        value = point(pt[:2], meta['bounds']) + [integer(pt[2], 0, 1)]
-                        if len(pt) == 4:
-                            wait = number(pt[3], -1, 3600)
-                            if -1 < wait < 0:
-                                raise TacticsError('Use -1 for a permanent hold')
-                            value.append(wait)
+                        value = waypoint(pt, meta['bounds'])
                         if points and sum((value[i] - points[-1][i]) ** 2 for i in (0, 1)) < 1:
                             raise TacticsError('Consecutive waypoints need at least one metre separation')
                         points.append(value)
@@ -220,13 +246,7 @@ def canonical(raw):
                 raise TacticsError('A route must contain 1..16 waypoints')
             points = []
             for pt in pts:
-                if not isinstance(pt, (list, tuple)) or len(pt) not in (3, 4):
-                    raise TacticsError('Default waypoint must be [x, z, hold, optional wait seconds]')
-                value = point(pt[:2], meta['bounds']) + [integer(pt[2], 0, 1)]
-                if len(pt) == 4:
-                    wait = number(pt[3], -1, 3600)
-                    if -1 < wait < 0:raise TacticsError('Use -1 for a permanent hold')
-                    value.append(wait)
+                value = waypoint(pt, meta['bounds'])
                 if points and sum((value[i]-points[-1][i])**2 for i in (0, 1)) < 1:
                     raise TacticsError('Consecutive waypoints need at least one metre separation')
                 points.append(value)

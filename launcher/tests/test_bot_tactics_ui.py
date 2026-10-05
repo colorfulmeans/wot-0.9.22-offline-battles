@@ -31,6 +31,32 @@ class EditorUITests(unittest.TestCase):
         self.ui.canvas.event_generate('<ButtonPress-1>',x=int(x),y=int(y),state=1 if shift else 0)
         self.ui.canvas.event_generate('<ButtonRelease-1>',x=int(x),y=int(y));self.root.update()
 
+    def test_wait_panel_three_places_individual_times_delete_and_collapse(self):
+        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.selected_point=0;self.ui.edit_point_condition()
+        self.assertTrue(self.ui.wait_edit)
+        self.assertLess(int(self.ui.point_actions.grid_info()['row']),int(self.ui.wait_panel.grid_info()['row']))
+        self.assertLess(int(self.ui.wait_panel.grid_info()['row']),int(self.ui.node_legend.grid_info()['row']))
+        for point,seconds in [((-66,306),10),((-46,306),20),((-26,306),30)]:
+            self.click(point);self.ui.wait_seconds.set(str(seconds));self.ui.update_wait_time()
+        self.assertEqual([10,20,30],[p[2] for p in self.ui._wait_point()[4]])
+        before=copy.deepcopy(self.ui.document);self.click((-6,306))
+        self.assertTrue(self.error_mock.called);self.assertEqual(before,self.ui.document)
+        self.assertEqual(3,len(self.ui.canvas.find_withtag('wait_place')))
+        self.ui.wait_edit_var.set(False);self.ui.change_wait_edit()
+        self.ui.selected_point=None;self.ui.redraw()
+        self.assertEqual(0,len(self.ui.canvas.find_withtag('wait_place')))
+        self.assertEqual(1,len(self.ui.canvas.find_withtag('route_wait')))
+        self.ui.selected_point=0;self.ui.edit_point_condition()
+        self.ui.selected_wait=1;self.ui.delete_selected_point()
+        self.assertEqual([10,30],[p[2] for p in self.ui._wait_point()[4]])
+        self.assertEqual(2,len(self.ui._selected()['points']))
+        self.ui.selected_wait=0;self.ui.delete_wait_point()
+        self.ui.selected_wait=0;self.ui.delete_wait_point()
+        self.assertEqual(3,len(self.ui._wait_point()))
+        self.ui.undo();self.ui.selected_point=0;self.assertEqual(1,len(self.ui._wait_point()[4]))
+        storage.contract.canonical(self.ui.document)
+
     def test_opening_does_not_create_dirty_or_active_map_entries(self):
         self.assertFalse(self.ui.dirty());self.assertEqual({},self.ui.store.active()['maps'])
         self.assertEqual(41,len(self.ui.map_labels));self.assertTrue(self.ui.graph_cache['08_ruinberg'])
@@ -163,19 +189,20 @@ class EditorUITests(unittest.TestCase):
         self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
         self.ui.symmetry_var.set(True);self.ui.change_symmetry()
         self.ui.selected_point=1
-        with mock.patch.object(ui_module.simpledialog,'askfloat',return_value=12.5):
-            self.ui.edit_point_condition()
+        self.ui.edit_point_condition()
+        self.click(self.ui._selected()['points'][1][:2])
+        self.ui.wait_seconds.set('12.5');self.ui.update_wait_time()
         entries=self.ui.entry()['default_routes']
         own=next(r for r in entries if r['team']==1)
         peer=next(r for r in entries if r['team']==2)
         self.assertEqual(list(reversed(own['points'])),peer['points'])
-        self.assertEqual(12.5,own['points'][1][3])
+        self.assertEqual(12.5,own['points'][1][4][0][2])
         self.assertEqual('heavyTank',peer['class_tag'])
         self.ui.symmetry_var.set(False);self.ui.change_symmetry()
         original=copy.deepcopy(peer['points'])
         self.ui.delete_point()
         self.assertEqual(original,peer['points'])
-        self.ui.undo();self.assertEqual(12.5,self.ui._selected()['points'][1][3])
+        self.ui.undo();self.assertEqual(12.5,self.ui._selected()['points'][1][4][0][2])
         self.assertFalse(self.error_mock.called)
 
     def test_class_default_edit_does_not_replace_other_class_geometry(self):
@@ -201,8 +228,9 @@ class EditorUITests(unittest.TestCase):
         self.ui.team=2;self.ui._refresh_items()
         self.ui.items.selection_set('routes:'+peer['id']);self.root.update()
         self.ui.selected_point=0
-        with mock.patch.object(ui_module.simpledialog,'askfloat',return_value=-1):self.ui.edit_point_condition()
-        self.assertEqual(-1,own['points'][-1][3])
+        self.ui.edit_point_condition();self.click(self.ui._selected()['points'][0][:2])
+        self.ui.wait_seconds.set('-1');self.ui.update_wait_time()
+        self.assertEqual(-1,own['points'][-1][4][0][2])
         self.ui.duplicate_item()
         self.assertNotIn('mirror_id',self.ui._selected())
         self.assertNotIn('symmetric',self.ui._selected())
@@ -292,11 +320,11 @@ class EditorUITests(unittest.TestCase):
         point=self.ui._selected()['points'][0]
         x,y=self.ui.view.screen(point)
         event=type('Event',(),dict(x=x,y=y))()
-        with mock.patch.object(ui_module.simpledialog,'askfloat',return_value=25):
-            self.ui.edit_point_condition(event)
+        self.ui.edit_point_condition(event)
+        self.click(point[:2]);self.ui.wait_seconds.set('25');self.ui.update_wait_time()
         self.ui.profile_name.set('Timed route');self.ui.save(False)
         saved=self.ui.store.read('Timed route')
-        self.assertEqual(25,saved['maps']['08_ruinberg']['routes'][0]['points'][0][3])
+        self.assertEqual(25,saved['maps']['08_ruinberg']['routes'][0]['points'][0][4][0][2])
         self.ui.adopt(saved)
         self.assertEqual(saved,self.ui.document)
 

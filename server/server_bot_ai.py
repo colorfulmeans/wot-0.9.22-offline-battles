@@ -200,6 +200,7 @@ class BotPlanner(object):
         self._last_orders = None
         self._last_order_signature = None
         self._route_states = {}
+        self._wait_claims = {}
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
         self._route_assignments = {}
@@ -232,6 +233,7 @@ class BotPlanner(object):
         self._last_orders = None
         self._last_order_signature = None
         self._route_states = {}
+        self._wait_claims = {}
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
         self._route_assignments = {}
@@ -714,6 +716,7 @@ class BotPlanner(object):
 
     def build_orders(self, manifest, bot_states, players, now,
                      defense=None, team_orders=None):
+        self._wait_bodies = list(bot_states or ()) + list(players or ())
         known_targets = self.known_targets(bot_states, players)
         contacts = self._prune_contacts(known_targets, now)
         bots = self._alive_bots(manifest, bot_states, self.tactics)
@@ -854,6 +857,18 @@ class BotPlanner(object):
 
     def _prune_tactical_state(self, bots, known_targets, now):
         live_bots = dict((bot["id"], bot) for bot in bots)
+        largest_radius = max([math.hypot(3.5, 1.7)] + [
+            _number(bot.get('profile', {}).get('parking_radius'), math.hypot(3.5, 1.7))
+            for bot in bots])
+        for key, claim in list(self._wait_claims.items()):
+            owner = live_bots.get(claim['bot_id'])
+            stage = self._route_states.get(claim['bot_id'], {})
+            departed = (owner is not None and claim.get('departing') and
+                math.hypot(_number(owner['state'].get('x'))-claim['point'][0],
+                           _number(owner['state'].get('z'))-claim['point'][1]) > claim['radius'] + largest_radius + 2.0)
+            changed = stage.get('route_id') != key[1] or stage.get('index') != key[2]
+            if owner is None or departed or (changed and not claim.get('departing')):
+                self._wait_claims.pop(key, None)
         for states in (self._wreck_route_progress, self._wreck_route_avoid):
             for bot_id in list(states):
                 if bot_id not in live_bots:
@@ -2619,7 +2634,7 @@ class BotPlanner(object):
                     index += 1
             # User point zero is an instruction, not a baked base connector.
             if authored is not None and (not authored.get('default') or
-                    any(len(p) == 4 for p in authored['points'])):
+                    any(len(p) > 3 for p in authored['points'])):
                 index = 0
             state = {"index": index, "route_id": route_id,
                      "join_index": index,
@@ -2638,23 +2653,22 @@ class BotPlanner(object):
         # tactics pass; otherwise a short next segment makes LocalDriver stop
         # at it until the following planner tick.
         state["holding"] = False
-        while _route_point_reached(bx, bz, waypoints, index, route_limit):
-            authored_point = (authored['points'][index]
-                              if authored is not None else ())
-            seconds = authored_point[3] if len(authored_point) > 3 else 0.0
-            if seconds:
-                # A timed parking instruction must be reached physically;
-                # passing a macro gate's forward corridor is insufficient.
-                if math.hypot(point['x'] - bx, point['z'] - bz) > ROUTE_ARRIVAL_RADIUS:
+        state.pop('parking_phase', None)
+        state.pop('parking_slot', None)
+        while True:
+            authored_point = authored['points'][index] if authored is not None else ()
+            places = bot_tactics.waiting_positions(authored_point)
+            if places:
+                completed, parking = self._wait_parking(bot, state, route_id, index, places, now)
+                if not completed:
+                    point = parking
                     break
-                arrived = state.setdefault("arrived", {}).setdefault(index, now)
-                if seconds < 0 or now - arrived < seconds:
-                    state["holding"] = True
-                    break
+            elif not _route_point_reached(bx, bz, waypoints, index, route_limit):
+                break
             if index >= route_limit:
                 break
             index += 1
-            state["index"] = index
+            state['index'] = index
             point = _point(waypoints[index])
         route_join = (state.get("join_index") == index and
                       isinstance(state.get("join_anchor"), dict))
@@ -2663,6 +2677,55 @@ class BotPlanner(object):
         else:
             anchor = _point(waypoints[max(0, index - 1)])
         return route_id, index, point, anchor, route_join
+
+    def _wait_parking(self, bot, state, route_id, index, places, now):
+        """Lease one stable parking goal per hull, with individual arrival clocks."""
+        bot_id = bot['id']
+        radius = max(0.5, _number(bot.get('profile', {}).get('parking_radius'), math.hypot(3.5, 1.7)))
+        stage = (bot['team'], route_id, index)
+        completed = state.setdefault('parking_completed', set())
+        if index in completed:return True, None
+        key = next((key for key, claim in self._wait_claims.items()
+                    if key[:3] == stage and claim['bot_id'] == bot_id), None)
+        if key is None:
+            for slot, place in enumerate(places):
+                candidate = stage + (slot,)
+                if candidate in self._wait_claims:continue
+                # A corpse or hull still departing is physically occupied.
+                if any(body.get('id') != bot_id and not body.get('alive', True) and body.get('world_pose') is True and
+                       math.hypot(place[0]-_number(body.get('x')), place[1]-_number(body.get('z'))) < 10.0
+                       for body in getattr(self, '_wait_bodies', ())):continue
+                # Separate reservations also protect crossing class routes.
+                if any(claim['bot_id'] != bot_id and
+                       math.hypot(place[0]-claim['point'][0], place[1]-claim['point'][1]) < radius + claim['radius'] + 2.0
+                       for claim in self._wait_claims.values()):continue
+                key = candidate
+                self._wait_claims[key] = dict(bot_id=bot_id, point=list(place[:2]), radius=radius)
+                break
+        if key is None:
+            state['holding'] = True
+            state['parking_phase'] = 'queue'
+            # Do not converge onto an occupied place. Freeze the queue goal.
+            return False, state.setdefault('queue_anchor', _point(bot['state']))
+        state.pop('queue_anchor', None)
+        state['parking_slot'] = key[3]
+        state['parking_phase'] = 'approach'
+        place = places[key[3]]
+        goal = dict(x=place[0], y=_number(bot['state'].get('y')), z=place[1])
+        distance = math.hypot(goal['x']-_number(bot['state'].get('x')),
+                              goal['z']-_number(bot['state'].get('z')))
+        if distance > 1.0:return False, goal
+        arrived = state.setdefault('parking_arrived', {}).setdefault(index, now)
+        if place[2] < 0 or now-arrived < place[2]:
+            state['holding'] = True
+            state['parking_phase'] = 'waiting'
+            return False, goal
+        completed.add(index)
+        state.pop('parking_phase', None)
+        state.pop('parking_slot', None)
+        # Keep the lease until the hull has driven clear of the parking place.
+        self._wait_claims[key]['departing'] = True
+        return True, None
 
     def _apply_authored_route_order(self, order, bot, route_point):
         """Apply explicit parking/travel instructions without suppressing aim."""
@@ -2677,8 +2740,13 @@ class BotPlanner(object):
         if not scripted:
             return
         holding = (self._route_states.get(bot['id']) or {}).get('holding', False)
+        state = self._route_states.get(bot['id']) or {}
+        phase = state.get('parking_phase')
         order['move_position'] = dict(route_point)
-        order['combat_mode'] = 'hold' if holding else 'route'
+        order['parking_phase'] = phase
+        order['parking_slot'] = state.get('parking_slot')
+        order['arrival_radius'] = 1.0 if phase == 'approach' else None
+        order['combat_mode'] = 'hold' if holding else 'parking_approach' if phase == 'approach' else 'route'
         order['throttle_override'] = 0.0 if holding else None
 
     def _retreat_point(self, bot, route_anchor):

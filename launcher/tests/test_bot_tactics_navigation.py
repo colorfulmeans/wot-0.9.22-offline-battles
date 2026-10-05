@@ -267,16 +267,16 @@ class NavigationUITests(unittest.TestCase):
         ordinary=e.canvas.find_withtag('route_node');self.assertTrue(ordinary)
         self.assertEqual(4.,(e.canvas.coords(ordinary[0])[2]-e.canvas.coords(ordinary[0])[0])/2)
         e.selection=None;e.selected_point=None;e.redraw()
-        self.assertEqual([3.,3.],radii())
+        self.assertEqual([7.,7.],radii())
         self.assertFalse(e.canvas.find_withtag('route_node'))
         self.assertEqual(before,e.document)
         captions=[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)]
-        self.assertEqual(['普通节点','停留点（编辑中）','停留点（未编辑）','◇ 出生点中心；虚线圈：占领基地范围'],captions)
+        self.assertEqual(['普通节点','大圆点：等待点组（点击展开）','展开的小方点：独立等待点','◇ 出生点中心；虚线圈：占领基地范围'],captions)
         e.set_language('en')
         self.assertEqual('Node legend',e.node_legend.cget('text'))
-        self.assertIn('Wait point (unselected)',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
+        self.assertIn('Expanded squares: individual wait places',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
         e.route_class_var.set('total');e.change_route_class();e.redraw()
-        self.assertTrue(radii());self.assertTrue(all(r==3. for r in radii()))
+        self.assertTrue(radii());self.assertTrue(all(r==7. for r in radii()))
         self.assertFalse(e.canvas.find_withtag('route_node'))
         e.selection=next(target[0] for target in e.route_hit_targets if target[0][0]=='builtin')
         e.redraw();self.assertTrue(e.canvas.find_withtag('route_node'))
@@ -290,7 +290,7 @@ class NavigationUITests(unittest.TestCase):
                     for i in e.canvas.find_withtag('route_wait')]
         self.assertEqual([7.,10.],radii())
         e.selection=None;e.selected_point=None;e.redraw()
-        self.assertEqual([3.,3.],radii())
+        self.assertEqual([7.,7.],radii())
         self.assertFalse(e.canvas.find_withtag('route_node'))
 
     def test_delete_default_route_scopes_total_class_and_shared_views(self):

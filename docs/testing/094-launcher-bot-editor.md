@@ -75,11 +75,18 @@ from either side. Turning symmetry off retains both versions for independent
 editing. It reverses traversal, not map coordinates. Resetting a symmetric
 default resets both teams for that class; copying creates an independent route.
 
-Double-click any default or custom node to set its arrival wait: 0 continues,
-a positive number up to 3600 seconds waits, and -1 holds permanently. Conditions
-travel with their nodes when mirrored. The host starts the timer on arrival;
-the worker manifest retains the existing three-field waypoint shape. Combat
-and emergency orders still take precedence over waiting.
+Select or double-click a default or custom node, then enable the waiting-place
+editor below the route-point actions. Click the map to add up to three independent
+parking places, drag them to adjust positions, and set each duration separately:
+0 continues, up to 3600 seconds waits, and -1 holds permanently. Delete removes
+the selected parking place without deleting its parent route node. Unselected
+groups appear as one large circle; only the selected parent expands its places.
+Waiting places travel with their parent when mirrored. Existing single-point
+waits retain their position and duration. The host leases one place per Bot,
+starts its timer within 1 m, and retains occupancy until the departing hull is
+clear. Extra Bots wait for an available place instead of converging on it.
+Place parking positions far enough apart for the intended vehicle hulls; nearby
+reservations cannot be occupied concurrently. A waiting Bot can still aim and fire.
 
 Copy a route or create an empty custom route for separate allocation rules.
 Custom route attributes include allowed
