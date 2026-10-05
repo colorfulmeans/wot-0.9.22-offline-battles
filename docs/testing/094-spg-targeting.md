@@ -79,3 +79,35 @@ identity, Windows launcher tests and server readiness are separate gates.
 Native acceptance remains: SPGs engaging stationary/moving received targets on
 Steppes, Ruinberg nearby walls and alternate-position behavior, no shooting
 through solid cover or friendlies, and removal of targets after radio loss.
+
+## Follow-up: report 20261005-224253, M12 exact-launch failure lifecycle
+
+Build 102's third El Halluf round contains two M12s. Team 1 fired nine times;
+team 2 reached its parking position with ammunition and ready fire orders but
+never fired. Its gate samples include 93 completed exact-path world failures,
+including hits about 504 and 647 metres from the gun. These were reported as
+`exact_launch_pending`: the native adapter returned the same `None` for pending
+and completed failure, leaving the runtime's frozen nominal aim alive. The
+same failed random parabola was repeatedly checked while the target moved.
+
+The adapter now publishes an explicit terminal failure from the existing queue
+receipt. The runtime cancels that intent and its stale aim caches immediately,
+without spending ammunition, changing reload or advancing the fire sequence.
+The next attempt obtains a freshly proved nominal solution. A still-current
+world-blocked family is excluded for the existing planning-success cooldown;
+another legal family can be proved, or lane admission becomes false so the
+existing target planner can select another received contact. Target displacement
+over the existing 1.5 m aim-staleness threshold, source pose changes, a fired
+sequence, cooldown expiry or round reset clear that exclusion. Pending alternate
+planning/launch work and a completed clear alternate keep their family ownership
+through the cooldown, so long native queues cannot cause low/high ping-pong.
+Timeouts and unresolved probes release the hold without claiming world geometry.
+
+The same deterministic random draw and next fire sequence are retained. There
+is no endpoint compensation, random reroll, cover bypass, native-ray budget
+increase, cadence change, parking relocation, route/save mutation or slope-pose
+change. Gate records distinguish terminal failures from genuine pending work.
+The new end-to-end Python regressions exercise both queues, the native adapter
+boundary and runtime intent cleanup, including movement, alternate arcs, timeout,
+cooldown and reset. Native M12 firing and frame pacing on #1513 remain Windows
+acceptance requirements.

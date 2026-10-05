@@ -89,7 +89,7 @@ jobs:
                             for x in code.co_consts),
                       code.co_names, code.co_varnames, code.co_freevars,
                       code.co_cellvars, code.co_firstlineno, code.co_lnotab)
-          paths = ['ai/adapter.py', 'ai/driver.py', 'ai/planner.py', 'ai/traffic.py', 'bot_runtime.py', 'bot_state_codec.py', 'battle_runtime.py', 'vehicle_physics.py', 'destructibles_sensor.py', 'bot_tactics.py', 'bot_tactics_runtime.py', 'bot_editor_maps.py']
+          paths = ['artillery_controller.py', 'ai/adapter.py', 'ai/driver.py', 'ai/planner.py', 'ai/traffic.py', 'bot_runtime.py', 'bot_state_codec.py', 'battle_runtime.py', 'vehicle_physics.py', 'destructibles_sensor.py', 'bot_tactics.py', 'bot_tactics_runtime.py', 'bot_editor_maps.py']
           prefix = 'res/scripts/client/gui/mods/offline_lan_0922/'
           with zipfile.ZipFile(glob.glob('dist/*.wotmod')[0]) as mod:
               assert mod.testzip() is None

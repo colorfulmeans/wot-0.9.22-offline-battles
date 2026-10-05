@@ -41,7 +41,7 @@ jobs:
           python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_contact_escape_final_probe_uses_the_admitted_short_sweep
           python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_authored_wait_cancels_friendly_reposition_without_translation
           python -m unittest test_port_0922_wreck_route_switch test_port_0922_bot_state_codec test_port_0922_server_bot_ai test_port_0922_authored_route_waits test_port_0922_wait_parking test_port_0922_radio_routes
-          python -m unittest test_port_0922_artillery_controller test_port_0922_spg_tracking
+          python -m unittest test_port_0922_artillery_controller test_port_0922_spg_tracking test_port_0922_spg_failed_launch
           python -m unittest test_port_0922_gameplay_followup.AimProgressTests
           python -m unittest test_port_0922_airfield_routes_loading test_port_0922_bot_tactics_editor test_port_0922_default_route_editor test_port_0922_route_priorities
       - name: Compile changed client code under Python 2.7

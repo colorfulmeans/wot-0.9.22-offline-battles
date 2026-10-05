@@ -25167,6 +25167,17 @@ class BattleRuntime(object):
             source, target, descriptor, int(shell_index), int(fire_seq),
             origin, float(shot_yaw), float(shot_pitch),
             float(flight_time), float(now))
+        if ready and receipt is None:
+            failure = self._artillery.status(
+                source, target, int(shell_index), now).get('launch') or {}
+            if failure.get('state') == 'failed':
+                self._artillery.reject_launch_arc(
+                    source, target, int(shell_index),
+                    source.get('_artillery_arc') if
+                    failure.get('reason') == 'world_blocked' else None,
+                    source.get('_artillery_planned_target'), now)
+                return dict(failure, launch_failed=True,
+                            fire_seq=int(fire_seq), shell_index=int(shell_index))
         return receipt if ready and isinstance(receipt, dict) else None
 
     def _bot_artillery_friendly_lane(

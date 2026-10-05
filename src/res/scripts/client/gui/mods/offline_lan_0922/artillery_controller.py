@@ -10,6 +10,7 @@ from gui.mods.offline_lan_0922 import shot_geometry
 
 
 STRATEGIC_MAXIMUM_STEP = 0.20
+TARGET_REPLAN_METRES = 1.5
 
 
 def _value(value, name, default=None):
@@ -112,6 +113,7 @@ class ArtilleryController(object):
         self._planning_keys = {}
         self._launch_keys = {}
         self._launch_receipts = {}
+        self._rejected_arcs = {}
 
     def reset(self):
         self.queue.reset()
@@ -119,6 +121,7 @@ class ArtilleryController(object):
         self._planning_keys = {}
         self._launch_keys = {}
         self._launch_receipts = {}
+        self._rejected_arcs = {}
 
     @staticmethod
     def _key(source, target, shell_index):
@@ -151,7 +154,8 @@ class ArtilleryController(object):
         an arbitrarily old family alive by moving a little each frame.
         """
         previous = self._planning_keys.get(slot)
-        if previous is None or previous[:4] != key[:4]:
+        if (previous is None or previous[:4] != key[:4] or
+                previous[6:] != key[6:]):
             return key
         moved = sum((key[4][index] - previous[4][index]) ** 2
                     for index in range(3))
@@ -160,6 +164,63 @@ class ArtilleryController(object):
         if moved <= 0.05 ** 2 and turned <= 0.001:
             return previous
         return key
+
+    def _planning_key(self, source, target, shell_index, now):
+        key = self._key(source, target, shell_index)
+        slot = self._planning_slot(source, target, shell_index)
+        rejected = self._rejected_arcs.get(slot)
+        retained_key = self._planning_keys.get(slot)
+        retained_result = self.queue.results.get(retained_key)
+        launch_key = self._launch_keys.get(slot[0])
+        # A bounded alternate-family proof can outlive the short retry
+        # cooldown. Let that work finish and be consumed instead of resetting
+        # it to the failed low family when the cooldown expires.
+        active_alternate = (
+            (launch_key is not None and launch_key[1:5] == slot) or
+            retained_key in self.queue.jobs or
+            retained_key in self.queue.waiting or
+            (retained_result is not None and
+             retained_result[0] > float(now) and
+             retained_result[1] is not None))
+        if rejected is not None and (
+                (float(now) >= rejected['until'] and not active_alternate) or
+                key != rejected['key'] or
+                int(source.get('fire_seq', 0)) != rejected['fire_seq'] or
+                sum((_position(target)[index] - rejected['target'][index]) ** 2
+                    for index in range(3)) > TARGET_REPLAN_METRES ** 2):
+            self._rejected_arcs.pop(slot, None)
+            rejected = None
+        return key + (tuple(sorted(rejected['arcs'])) if rejected else (),)
+
+    def reject_launch_arc(self, source, target, shell_index, arc,
+                          planned_target, now):
+        """Retire a failed launch; exclude only its still-current arc family.
+
+        A moving target needs a fresh nominal solution, not a blacklist made
+        from an obsolete random path. Static failures briefly remove the
+        failed family from lane admission, allowing a high arc or another
+        target under the existing planner and native-ray budget.
+        """
+        slot = self._planning_slot(source, target, shell_index)
+        self._replace_planning_key(slot, None)
+        if arc not in ('low', 'high') or planned_target is None:
+            return
+        position = _position(target)
+        if sum((position[index] - planned_target[index]) ** 2
+               for index in range(3)) > TARGET_REPLAN_METRES ** 2:
+            return
+        key = self._key(source, target, shell_index)
+        previous = self._rejected_arcs.get(slot)
+        arcs = set(previous['arcs']) if (
+            previous is not None and previous['key'] == key and
+            int(source.get('fire_seq', 0)) == previous['fire_seq'] and
+            sum((position[index] - previous['target'][index]) ** 2
+                for index in range(3)) <= TARGET_REPLAN_METRES ** 2) else set()
+        arcs.add(arc)
+        self._rejected_arcs[slot] = dict(
+            key=key, target=position, arcs=arcs,
+            fire_seq=int(source.get('fire_seq', 0)),
+            until=float(now) + self.queue.success_ttl)
 
     def _replace_planning_key(self, slot, key):
         previous = self._planning_keys.get(slot)
@@ -258,7 +319,7 @@ class ArtilleryController(object):
         except (TypeError, ValueError, OverflowError):
             return True, None
         try:
-            key = self._key(source, target, shell_index)
+            key = self._planning_key(source, target, shell_index, now)
         except (TypeError, ValueError, OverflowError):
             self._replace_planning_key(slot, None)
             return True, None
@@ -266,6 +327,8 @@ class ArtilleryController(object):
         self._replace_planning_key(slot, key)
         candidates = self._candidates(
             source, target, descriptor, shell_index)
+        candidates = tuple(candidate for candidate in candidates
+                           if candidate.get('arc') not in key[6])
         return self.queue.request(
             key, candidates, _position(target), float(now))
 
@@ -273,7 +336,7 @@ class ArtilleryController(object):
         if not isinstance(source, dict) or not isinstance(target, dict):
             return False, None
         try:
-            key = self._key(source, target, shell_index)
+            key = self._planning_key(source, target, shell_index, now)
         except (TypeError, ValueError, OverflowError):
             return False, None
         try:
@@ -497,7 +560,8 @@ class ArtilleryController(object):
         if not isinstance(source, dict) or not isinstance(target, dict):
             return output
         slot = self._planning_slot(source, target, shell_index)
-        key = self._settled_planning_key(slot, self._key(source, target, shell_index))
+        key = self._settled_planning_key(
+            slot, self._planning_key(source, target, shell_index, now))
         if self._planning_keys.get(slot) != key:
             output['planning'] = {'state': 'pose_changed'}
         else:

@@ -10050,6 +10050,8 @@ class BotRuntime(object):
             'fire_seq': fire_seq,
             'physical': physical,
             'solution': solution,
+            'target_position': _point(
+                target.get('position'), _position(target)),
             'shot_yaw': shot_yaw,
             'shot_pitch': shot_pitch,
             'created': _number(now),
@@ -11177,21 +11179,33 @@ class BotRuntime(object):
         shot_yaw = intent['shot_yaw']
         shot_pitch = intent['shot_pitch']
         flight_time = intent['solution']['flight_time']
+        probe_source = _copy_runtime_state(state)
+        probe_source['_artillery_arc'] = intent['solution'].get('arc')
+        probe_source['_artillery_planned_target'] = intent['target_position']
+        state.pop('_spg_launch_failure', None)
         if not self._probe_timing_enabled():
             value = self.artillery_launch_probe(
-                _copy_runtime_state(state), dict(target), descriptor,
+                probe_source, dict(target), descriptor,
                 int(shell_index),
                 fire_seq, shot_yaw, shot_pitch, flight_time, _number(now))
         else:
             probe_started = self._probe_started()
             try:
                 value = self.artillery_launch_probe(
-                    _copy_runtime_state(state), dict(target), descriptor,
+                    probe_source, dict(target), descriptor,
                     int(shell_index),
                     fire_seq, shot_yaw, shot_pitch, flight_time,
                     _number(now))
             finally:
                 self._probe_finished(1, probe_started)
+        if (isinstance(value, dict) and value.get('launch_failed') is True and
+                value.get('fire_seq') == fire_seq and
+                value.get('shell_index') == int(shell_index)):
+            state['_spg_launch_failure'] = dict(value)
+            self._cancel_artillery_intent(state['id'])
+            self._ballistic_solution_cache.pop(state['id'], None)
+            self._spg_aim_solutions.pop(state['id'], None)
+            return None
         receipt = self._validated_artillery_receipt(
             value, descriptor, shell_index, fire_seq,
             shot_yaw, shot_pitch, flight_time)
@@ -11569,7 +11583,10 @@ class BotRuntime(object):
         elif not publish or not local_fresh:
             reason = 'control_cadence'
         else:
-            reason = launch_stage or 'gunner_or_selected_lane'
+            failure = state.get('_spg_launch_failure')
+            reason = ('exact_launch_failed_' + str(failure.get('reason'))
+                      if failure and launch_stage == 'exact_launch_pending'
+                      else launch_stage or 'gunner_or_selected_lane')
         print('[SPG FIRE GATE] %s' % json.dumps({
             'id': state['id'], 'vehicle': state.get('vehicle'), 'reason': reason,
             'mode': command.get('combat_mode'), 'target': target_key,
@@ -11581,6 +11598,7 @@ class BotRuntime(object):
             'reload': state.get('reload_time'), 'clip': state.get('clip'),
             'ammo': state.get('ammo_remaining'), 'fire_seq': state.get('fire_seq'),
             'planning': planning, 'launch': status.get('launch'),
+            'launch_failure': state.get('_spg_launch_failure'),
             'intent': state['id'] in self._artillery_intents,
             'reproof': state['id'] in self._artillery_reproofs,
             'position_event': state.get('_spg_position_event'),
