@@ -8,6 +8,31 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 
 
 class WaitParkingTests(unittest.TestCase):
+    def test_map_check_reports_each_wait_slot_and_its_directed_exit(self):
+        from gui.mods.offline_lan_0922 import bot_tactics_runtime as planning
+        graph=dict(game_version=planning.spg_positions.CATALOG['game_version'],
+            map='08_ruinberg',width=3,height=2,cell_size=4.,origin=[0,0],
+            bounds=cfg.MAPS['08_ruinberg']['bounds'],heights_mm=[0,0,0,0,0,None],
+            links=[5,1,0,0,0,0],hazards=[0]*6,
+            directions=[[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]])
+        p,m=self.setup_parking([[0,4,10],[4,4,20],[8,4,30]])
+        route=p.tactics['maps']['08_ruinberg']['routes'][0]
+        route['points'][1]=[8,0,0]
+        rows=planning.authoring_check(p.tactics,'08_ruinberg',graph,details=True)
+        row=next(row for row in rows if row[0]==route['id'])
+        self.assertEqual('wait_place_disconnected',row[1])
+        self.assertEqual([(1,'wait_place_exit_disconnected'),
+            (2,'wait_place_disconnected'),(2,'wait_place_exit_disconnected'),
+            (3,'wait_place_unusable')],[(i['wait_slot'],i['status']) for i in row[2]])
+        self.assertEqual([1,2],row[2][0]['nodes'])
+        self.assertEqual([[0,4],[8,0]],row[2][0]['points'])
+        # Admission remains unchanged; the additional directed exit is UI evidence.
+        route['points'][0][4]=[[0,4,10]]
+        row=next(row for row in planning.authoring_check(p.tactics,'08_ruinberg',graph,details=True)
+                 if row[0]==route['id'])
+        self.assertEqual('wait_place_exit_disconnected',row[1])
+        self.assertIsNone(planning.validate_route(planning.graph_view('08_ruinberg',graph),route))
+
     def setup_parking(self, places=None):
         planner, manifest = authored_waits.AuthoredRouteWaitTests().setup_route('AT-SPG')
         route=planner.tactics['maps']['08_ruinberg']['routes'][0]

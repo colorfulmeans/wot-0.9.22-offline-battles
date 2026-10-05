@@ -292,6 +292,13 @@ def route_issues(grid, route):
             if status:
                 issues.append(dict(status=status, nodes=[index + 1],
                                    points=[list(place[:2])], wait_slot=slot + 1))
+            if parked is not None and index + 1 < len(route['points']):
+                following = route['points'][index + 1]
+                exit_target = grid.closest((following[0], 0, following[1]))
+                if exit_target is not None and not _route_reachable(grid, grid.point(parked), exit_target):
+                    issues.append(dict(status='wait_place_exit_disconnected',
+                        nodes=[index + 1, index + 2],
+                        points=[list(place[:2]),list(following[:2])],wait_slot=slot + 1))
         previous = grid.point(target) if target is not None else None
     return issues
 
@@ -304,11 +311,13 @@ def authoring_check(profile, name, graph, details=False):
         if route.get('disabled'):continue
         error = validate_route(grid, route)
         identity = '%s:%s' % (route['team'], config.default_route_id(route))
-        messages.append((identity, error or 'baked_route_connected', route_issues(grid, route))
+        issues = route_issues(grid, route) if details else []
+        messages.append((identity, error or (issues[0]['status'] if issues else 'baked_route_connected'), issues)
                         if details else (identity, error or 'baked_route_connected'))
     for route in config.map_settings(profile, name).get('routes', ()):
         error = validate_route(grid, route)
-        messages.append((route['id'], error or 'baked_route_connected', route_issues(grid, route))
+        issues = route_issues(grid, route) if details else []
+        messages.append((route['id'], error or (issues[0]['status'] if issues else 'baked_route_connected'), issues)
                         if details else (route['id'], error or 'baked_route_connected'))
     for zone in config.map_settings(profile, name).get('positions', ()):
         # Generic radius is explicitly not a claim about a particular vehicle.

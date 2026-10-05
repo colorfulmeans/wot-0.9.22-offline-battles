@@ -148,6 +148,7 @@ VALIDATION_NAMES = {
     'waypoint_unusable': ('路径点不可用', 'Waypoint unusable'),
     'wait_place_unusable': ('等待点不可用', 'Wait place unusable'),
     'wait_place_disconnected': ('等待点与路线不连通', 'Wait place disconnected from route'),
+    'wait_place_exit_disconnected': ('等待点无法连通后续路线点', 'Wait place cannot reach the next route node'),
     'waypoints_disconnected': ('路径点之间不连通', 'Waypoints disconnected'),
     'outside_bounds': ('超出地图或导航栅格边界', 'Outside arena or navigation grid'),
     'missing_ground': ('该导航格缺少地面高度', 'Navigation cell has no ground height'),

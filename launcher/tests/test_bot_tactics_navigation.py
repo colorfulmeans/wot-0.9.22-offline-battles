@@ -112,6 +112,21 @@ class NavigationUITests(unittest.TestCase):
         self.assertTrue(any('本图没有自定义数据' in text for text in texts))
         self.assertEqual(before,editor.document)
 
+    def test_check_map_names_wait_place_parent_coordinates_and_reason(self):
+        e=self.editor;before=copy.deepcopy(e.document)
+        result=[('wait-test','wait_place_unusable',[dict(status='wait_place_unusable',
+            nodes=[3],points=[[12.5,-34.5]],wait_slot=2)])]
+        with mock.patch.object(storage.runtime,'authoring_check',return_value=result):
+            e.check_map();self.root.update()
+        texts=[]
+        def collect(widget):
+            if isinstance(widget,tk.Text):texts.append(widget.get('1.0','end'))
+            for child in widget.winfo_children():collect(child)
+        collect(e.root)
+        self.assertTrue(any('节点 3 / 等待点 2' in text and 'X 12.5, Z -34.5' in text
+                            and '等待点不可用' in text for text in texts))
+        self.assertEqual(before,e.document)
+
     def test_total_view_lists_effective_classes_and_parking_without_generic_line(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
         before=copy.deepcopy(e.document)

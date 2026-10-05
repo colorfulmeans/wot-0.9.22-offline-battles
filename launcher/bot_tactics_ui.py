@@ -1278,7 +1278,11 @@ class BotTacticsEditor:
                     nodes=' → '.join(str(n) for n in issue['nodes'])
                     coords=' → '.join('X %.1f, Z %.1f'%tuple(p) for p in issue['points'])
                     reason=labels.validation_label(issue.get('reason',issue['status']),self.language)
-                    lines.append(self.tr('  节点 %s（%s）：%s','  Node %s (%s): %s')%(nodes,coords,reason))
+                    if issue.get('wait_slot') is not None:
+                        lines.append(self.tr('  节点 %s / 等待点 %d（%s）：%s',
+                            '  Node %s / wait place %d (%s): %s')%(nodes,issue['wait_slot'],coords,reason))
+                    else:
+                        lines.append(self.tr('  节点 %s（%s）：%s','  Node %s (%s): %s')%(nodes,coords,reason))
             text='\n'.join(lines) or self.tr('本图没有自定义数据。','No custom data on this map.')
             window=tk.Toplevel(self.root);window.title(self.tr('验证结果','Validation'))
             window.geometry('800x500');window.transient(self.root)

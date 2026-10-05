@@ -97,6 +97,10 @@ Temporary route reassignment joins a new lane near the current position instead
 of replaying deployment from point zero. Returning to a scripted route restores
 progress and completed waits; an interrupted unfinished wait reacquires its place
 and starts a new arrival clock. Round reset and vehicle removal clear this history.
+Check map reports each invalid waiting place by route, parent node, place number
+and coordinates. It checks usable positions, entry from the parent and directed
+exit to the following route node. These editor checks do not measure firing lanes
+or change runtime route admission or navigation-grid display settings.
 
 Copy a route or create an empty custom route for separate allocation rules.
 Custom route attributes include allowed
