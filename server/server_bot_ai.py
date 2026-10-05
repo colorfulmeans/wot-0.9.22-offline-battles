@@ -1849,9 +1849,10 @@ class BotPlanner(object):
         bz = _number(state.get("z"))
         distance = math.hypot(target["x"] - bx, target["z"] - bz)
         face = _point(face_point)
+        fire_range = _number(bot.get("profile", {}).get("fire_range"))
         local_threat = bool(order.get("target_id") is not None and
-            math.hypot(face["x"] - bx, face["z"] - bz) <=
-            _number(bot.get("profile", {}).get("fire_range")) * 1.15)
+            (fire_range <= 0.0 or
+             math.hypot(face["x"] - bx, face["z"] - bz) <= fire_range * 1.15))
         local_threat = local_threat or self._recent_hit(bot_id, now) is not None
         if (not isinstance(retreat, dict) or
                 retreat.get("moving_mode") != moving_mode):
