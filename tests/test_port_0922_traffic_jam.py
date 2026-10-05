@@ -20,6 +20,16 @@ def hold(own):
 
 
 class ParkedTrafficTests(unittest.TestCase):
+    def test_authored_wait_never_yields_position_but_keeps_aim_and_fire(self):
+        order=dict(hold(self.parked),parking_phase='waiting',turn=.5)
+        for now in (0.,PARKED_JAM_SECONDS,20.):
+            result=self.tick(now,order=order)
+            self.assertEqual(0.,result['throttle'])
+            self.assertEqual(.5,result['turn'])
+            self.assertFalse(result['movement_intent'])
+            self.assertTrue(result['fire_allowed'])
+            self.assertEqual(99,result['target_id'])
+
     def setUp(self):
         self.traffic = TrafficCoordinator()
         self.mover = body(25, 0., 0., speed=0.)

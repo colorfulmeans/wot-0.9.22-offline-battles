@@ -159,6 +159,7 @@ class TerrainGrid(object):
 		self._failed_edges = {}
 		self._static_hull_edges = {}
 		self._static_hull_key = None
+		self._static_hull_padding = None
 		self.static_hull_revision = 0
 		self._native_review_cells = set()
 		self._native_review_seeds = set()
@@ -432,14 +433,15 @@ class TerrainGrid(object):
 		return max(self._static_hull_edges.get(key, 0.0),
 		           self._failed_edge_timed_penalty(key, now))
 
-	def set_static_hulls(self, hulls):
+	def set_static_hulls(self, hulls, clearance=0.0):
 		"""Publish the destroyed hulls that now occupy baked navigation cells.
 
 		A wreck is physical geometry that can be pushed. Marking the graph
 		edges it currently occupies routes later searches
 		around it, refuses the direct shortcut, and drops the cached paths that
-		used to run through it. Only the cells the hull box really overlaps are
-		marked, so a wide road keeps every column the wreck does not occupy.
+		used to run through it. The caller's chassis half-width expands the box
+		for centreline searches; native hull sweeps still check the final motion.
+		Unchanged occupied edges do not invalidate routes again.
 
 		Returns whether the published set changed.
 		"""
@@ -448,14 +450,18 @@ class TerrainGrid(object):
 			 round(float(hull[3]), 3), round(float(hull[4]), 2),
 			 round(float(hull[5]), 2))
 			for hull in hulls or ()))
-		if key == self._static_hull_key:
+		padding = round(max(0.0, float(clearance)), 3)
+		if key == self._static_hull_key and padding == self._static_hull_padding:
 			return False
 		self._static_hull_key = key
+		self._static_hull_padding = padding
 		edges = {}
 		half_extent = self.cell_size * 0.5
 		for unused_id, x, z, yaw, half_length, half_width in key:
-			half_length = max(0.5, half_length)
-			half_width = max(0.3, half_width)
+			# Paths describe hull centres. A centreline skimming a wreck still
+			# collides unless the travelling hull's width is included.
+			half_length = max(0.5, half_length) + padding
+			half_width = max(0.3, half_width) + padding
 			sine = math.sin(yaw)
 			cosine = math.cos(yaw)
 			radius = math.sqrt(half_length * half_length +

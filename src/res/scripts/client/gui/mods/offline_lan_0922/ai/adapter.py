@@ -360,13 +360,14 @@ class BotAdapter(object):
         if callable(self.navigation_target):
             target = _position(self.navigation_target(
                 bot_id, position, target, strategic, state), target)
-        contact_plan = self._wreck_push_plan(
-            bot_id, state, position, strategic, direction_clear)
+        parked = strategic.get('parking_phase') in ('waiting', 'queue')
+        contact_plan = (None if parked else self._wreck_push_plan(
+            bot_id, state, position, strategic, direction_clear))
         contact = self._hull_contact(bot_id, state, position)
         side_contact = bool(contact is not None and abs(
             math.sin(state.get('yaw', 0.0))*contact['normal'][0] +
             math.cos(state.get('yaw', 0.0))*contact['normal'][1]) < 0.35)
-        if (contact_plan is None and contact is not None and
+        if (not parked and contact_plan is None and contact is not None and
                 (side_contact or (strategic.get('throttle_override') is not None and
                  (not contact['peer_alive'] or contact['peer_team'] != state.get('team'))))):
             contact_plan = self._contact_escape_plan(
@@ -479,6 +480,8 @@ class BotAdapter(object):
             'recovery_mode': recovery_mode,
             'movement_intent': movement_intent,
         }
+        if strategic.get('parking_phase') is not None:
+            result['parking_phase'] = strategic['parking_phase']
         if strategic.get('hull_angle_degrees') is not None:
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))

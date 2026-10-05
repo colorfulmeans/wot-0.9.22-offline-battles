@@ -496,6 +496,23 @@ class ArenaRectangleClipTests(unittest.TestCase):
 
 
 class StaticHullNavigationTests(unittest.TestCase):
+    def test_el_halluf_e3_centreline_needs_its_installed_width_around_wz_wreck(self):
+        graph=prebaked_navigation.load_graph('29_el_hallouf',str(PORT_ROOT))
+        grid=TerrainGrid(lambda *unused:0., obstacle_probe=lambda *unused:False,baked_graph=graph)
+        wreck=((24,-107.3865118374,-212.6340347494,.7122862294,3.6386919022,1.6741000414),)
+        path=((-98.,35.016,-214.),(-102.,36.245,-214.),(-102.,37.301,-218.),
+              (-106.,38.552,-218.),(-106.,39.767,-222.))
+        grid.set_static_hulls(wreck)
+        self.assertFalse(grid.path_crosses_static_hull(path))
+        grid.set_static_hulls(wreck,clearance=1.8657310009)
+        self.assertTrue(grid.path_crosses_static_hull(path))
+        revision=grid.static_hull_revision
+        self.assertFalse(grid.set_static_hulls(wreck,clearance=1.8657310009))
+        self.assertEqual(revision,grid.static_hull_revision)
+        detour=grid.plan(path[0],(-167.115,0.,-263.719),now=719.,max_expansions=5000)
+        self.assertTrue(detour)
+        self.assertFalse(grid.path_crosses_static_hull(detour))
+
     """A destroyed hull is exact static geometry the graph has to carry."""
 
     @staticmethod

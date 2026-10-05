@@ -184,10 +184,11 @@ class EditorUITests(unittest.TestCase):
         self.ui.reset_builtin();self.assertFalse(self.ui.entry()['positions'])
         self.ui.new_route();self.assertEqual('positions',self.ui.selection[0])
 
-    def test_default_symmetry_reverses_geometry_waits_and_detaches_when_disabled(self):
+    def test_wait_editor_detaches_symmetry_but_retains_both_route_geometries(self):
         source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
         self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
         self.ui.symmetry_var.set(True);self.ui.change_symmetry()
+        geometry=copy.deepcopy(self.ui._selected()['points'])
         self.ui.selected_point=1
         self.ui.edit_point_condition()
         self.click(self.ui._selected()['points'][1][:2])
@@ -195,10 +196,15 @@ class EditorUITests(unittest.TestCase):
         entries=self.ui.entry()['default_routes']
         own=next(r for r in entries if r['team']==1)
         peer=next(r for r in entries if r['team']==2)
-        self.assertEqual(list(reversed(own['points'])),peer['points'])
+        self.assertEqual(list(reversed(geometry)),peer['points'])
+        self.assertEqual([p[:2] for p in geometry],[p[:2] for p in own['points']])
+        self.assertFalse(own['symmetric']);self.assertFalse(peer['symmetric'])
+        self.assertFalse(self.ui.symmetry_var.get())
+        self.assertEqual('disabled',str(self.ui.symmetry_check.cget('state')))
         self.assertEqual(12.5,own['points'][1][4][0][2])
         self.assertEqual('heavyTank',peer['class_tag'])
-        self.ui.symmetry_var.set(False);self.ui.change_symmetry()
+        self.ui.wait_edit_var.set(False);self.ui.change_wait_edit()
+        self.assertEqual('normal',str(self.ui.symmetry_check.cget('state')))
         original=copy.deepcopy(peer['points'])
         self.ui.delete_point()
         self.assertEqual(original,peer['points'])
@@ -230,7 +236,9 @@ class EditorUITests(unittest.TestCase):
         self.ui.selected_point=0
         self.ui.edit_point_condition();self.click(self.ui._selected()['points'][0][:2])
         self.ui.wait_seconds.set('-1');self.ui.update_wait_time()
-        self.assertEqual(-1,own['points'][-1][4][0][2])
+        self.assertEqual(3,len(own['points'][-1]))
+        self.assertEqual(-1,self.ui._selected()['points'][0][4][0][2])
+        self.assertFalse(own['symmetric']);self.assertFalse(self.ui._selected()['symmetric'])
         self.ui.duplicate_item()
         self.assertNotIn('mirror_id',self.ui._selected())
         self.assertNotIn('symmetric',self.ui._selected())

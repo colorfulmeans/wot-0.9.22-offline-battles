@@ -70,7 +70,7 @@ current scope and marks saved edits. In All classes view, scoped overrides are
 also drawn in their class colours.
 
 Enable Route symmetry to share exactly the same coordinates with the opposite
-team in reverse order. Dragging, inserting, deleting and node waits synchronize
+team in reverse order. Dragging, inserting and deleting route nodes synchronize
 from either side. Turning symmetry off retains both versions for independent
 editing. It reverses traversal, not map coordinates. Resetting a symmetric
 default resets both teams for that class; copying creates an independent route.
@@ -81,12 +81,17 @@ parking places, drag them to adjust positions, and set each duration separately:
 0 continues, up to 3600 seconds waits, and -1 holds permanently. Delete removes
 the selected parking place without deleting its parent route node. Unselected
 groups appear as one large circle; only the selected parent expands its places.
-Waiting places travel with their parent when mirrored. Existing single-point
+Entering the waiting-place editor unchecks and disables Route symmetry, keeping
+the opposite team's current geometry and waits. Leaving this editor enables the
+checkbox again; it remains unchecked until explicitly enabled. Normal route-node
+editing still supports symmetry. Existing single-point
 waits retain their position and duration. The host leases one place per Bot,
 starts its timer within 1 m, and retains occupancy until the departing hull is
 clear. Extra Bots wait for an available place instead of converging on it.
 Place parking positions far enough apart for the intended vehicle hulls; nearby
-reservations cannot be occupied concurrently. A waiting Bot can still aim and fire.
+reservations cannot be occupied concurrently. A waiting Bot can still rotate its
+hull, aim and fire, but contact escape and friendly repositioning cannot translate
+it out of its place. Automatic route reinforcement cannot cancel an active wait.
 
 Copy a route or create an empty custom route for separate allocation rules.
 Custom route attributes include allowed

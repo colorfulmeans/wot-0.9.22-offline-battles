@@ -2428,6 +2428,10 @@ class BotPlanner(object):
                 continue
             if bot["id"] in protected_ids:
                 continue
+            if self._route_states.get(bot['id'], {}).get('parking_phase') in (
+                    'approach', 'waiting', 'queue'):
+                # Rebalancing cannot discard an authored parking timer/lease.
+                continue
             target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, target_route, bot['team'])
             if target_authored is not None and not bot_tactics.matches(target_authored, bot):
                 continue

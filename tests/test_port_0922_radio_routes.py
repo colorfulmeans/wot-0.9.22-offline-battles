@@ -8,6 +8,14 @@ from server_bot_ai import BotPlanner
 
 
 class RadioRouteTests(unittest.TestCase):
+    def test_route_reinforcement_cannot_cancel_an_authored_wait(self):
+        for phase in ('approach','waiting','queue'):
+            planner,manifest,states,players,unused=self._fixture((11,))
+            planner._route_assignments[11]=dict(route=manifest[0]['route'],until=0.)
+            planner._route_states[11]=dict(parking_phase=phase)
+            orders=self._orders(planner,manifest,states,players,1.)
+            self.assertEqual('left',orders[11]['route_id'])
+
     def _fixture(self, recipients=(), lease=10.0, legacy=False):
         planner = BotPlanner()
         left = fixture._route('left', [(-300, 0, False), (-300, 300, True)])

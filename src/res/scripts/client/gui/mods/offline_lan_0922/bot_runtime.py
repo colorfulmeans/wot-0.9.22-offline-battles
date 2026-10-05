@@ -9530,7 +9530,11 @@ class BotRuntime(object):
                 _number(raw.get('yaw')), shape[1], shape[0]))
         if self._turret_hulls_provider is not None:
             hulls.extend(self._turret_hulls_provider())
-        publish(hulls)
+        # One shared centreline clearance uses the installed travelling hulls,
+        # not an invented vehicle class size. Local motion keeps its full sweep.
+        clearance = max([0.0] + [_number(state.get('half_width'), 1.7)
+            for state in self.states.values() if state.get('alive', True)])
+        publish(hulls, clearance=clearance)
 
     @staticmethod
     def _target_velocity(target):
@@ -11569,6 +11573,10 @@ class BotRuntime(object):
     def _friendly_reposition_order(self, state, targets, now):
         """Return an ordinary lane escape plus whether its lease expired."""
         bot_id = int(state['id'])
+        order = self._server_orders.get(bot_id) or {}
+        if order.get('parking_phase') in ('waiting', 'queue'):
+            self._clear_friendly_reposition(bot_id)
+            return None, False
         marker = self._friendly_repositions.get(bot_id)
         if marker is None:
             return None, False

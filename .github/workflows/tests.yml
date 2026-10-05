@@ -22,7 +22,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client
         run: |
-          python -m unittest test_port_0922_authored_route_progress test_port_0922_navigation_clearance test_port_0922_slope_shortcuts
+          python -m unittest test_port_0922_authored_route_progress test_port_0922_navigation_clearance test_port_0922_navigation.StaticHullNavigationTests test_port_0922_slope_shortcuts
           python -m unittest test_port_0922_sheridan_ingress test_port_0922_capture_coordinate_audit
           python -m unittest test_port_0922_vehicle_physics test_port_0922_physics_regressions release097.test_096_contact_steering5
           python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_bot_motion_preserves_partial_steering_input
@@ -37,6 +37,7 @@ jobs:
           python -m unittest test_port_0922_withdrawal_runtime test_port_0922_wreck_contact_recovery test_port_0922_oct03_bot_egress test_port_0922_bot_rotation_drive test_port_0922_airfield_spawn test_port_0922_oct03_airfield_followup test_port_0922_bot_destructible_approach test_port_0922_destructibles test_port_0922_tree_followup test_port_0922_foliage_baker test_port_0922_foliage
           python -m unittest test_port_0922_contact_dynamics.GroundContactTests.test_hostile_side_contact_overrides_firing_hold_and_preserves_combat_target test_port_0922_contact_dynamics.GroundContactTests.test_korea_offset_side_contact_selects_checked_separating_end
           python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_contact_escape_final_probe_uses_the_admitted_short_sweep
+          python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_authored_wait_cancels_friendly_reposition_without_translation
           python -m unittest test_port_0922_wreck_route_switch test_port_0922_bot_state_codec test_port_0922_server_bot_ai test_port_0922_authored_route_waits test_port_0922_wait_parking test_port_0922_radio_routes
           python -m unittest test_port_0922_artillery_controller test_port_0922_spg_tracking
           python -m unittest test_port_0922_gameplay_followup.AimProgressTests

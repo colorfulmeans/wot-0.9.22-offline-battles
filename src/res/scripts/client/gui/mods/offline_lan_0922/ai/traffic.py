@@ -197,6 +197,11 @@ class TrafficCoordinator(object):
         it. The original hold/target is restored after separation or a fixed
         deadline, which cannot be renewed while the same pair stays wedged.
         """
+        if command.get('parking_phase') in ('waiting', 'queue'):
+            self._parked.pop(bot_id, None)
+            for pair in list(self._jams):
+                if pair[0] == bot_id:self._jams.pop(pair, None)
+            return None
         parked_hold = (command.get('recovery_mode') == 'arrived' and
                        command.get('combat_mode') not in
                        ('physical_hold', 'nav_wait'))

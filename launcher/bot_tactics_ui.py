@@ -549,6 +549,9 @@ class BotTacticsEditor:
             item['mirror_id']=identity
 
     def change_symmetry(self):
+        if self.wait_edit:
+            self.symmetry_var.set(False)
+            return
         if not self._supports_route_symmetry():
             self.symmetry_var.set(False)
             return
@@ -742,7 +745,8 @@ class BotTacticsEditor:
         symmetry_allowed=self._supports_route_symmetry()
         if not symmetry_allowed:self.symmetry_var.set(False)
         elif route or builtin:self.symmetry_var.set(bool(item.get('symmetric',True)))
-        self.symmetry_check.config(state='normal' if symmetry_allowed and (route or builtin) else 'disabled',
+        if self.wait_edit:self.symmetry_var.set(False)
+        self.symmetry_check.config(state='normal' if symmetry_allowed and (route or builtin) and not self.wait_edit else 'disabled',
             text=self.tr('路线对称','Route symmetry') if symmetry_allowed else
             self.tr('路线对称（出生点在基地圈外，禁用）','Route symmetry (spawn outside base, disabled)'))
         for key,var in self.item_vars.items():
@@ -972,7 +976,23 @@ class BotTacticsEditor:
 
     def change_wait_edit(self):
         self.wait_edit=bool(self.wait_edit_var.get()) and self._wait_point() is not None
-        self.drag=None;self._refresh_wait_panel();self.redraw()
+        if self.wait_edit:self._detach_wait_symmetry()
+        self.drag=None;self._refresh_properties();self.redraw()
+
+    def _detach_wait_symmetry(self, checkpoint=True):
+        """Parking places belong to this team; keep the peer's existing draft."""
+        item=self._selected()
+        if item is None or not item.get('symmetric',True):return
+        if checkpoint:self.checkpoint()
+        item=self._editable_item();item['symmetric']=False
+        if self.selection[0]=='builtin':
+            for peer in self.entry().get('default_routes',()):
+                if peer['id']==item['id'] and peer.get('class_tag','all')==item.get('class_tag','all'):
+                    peer['symmetric']=False
+        else:
+            for peer in self.entry().get('routes',()):
+                if peer['id']==item.get('mirror_id'):peer['symmetric']=False
+        self.symmetry_var.set(False);self.mark()
 
     def edit_point_condition(self,event=None):
         if event is not None:
@@ -986,6 +1006,7 @@ class BotTacticsEditor:
                 return 'break'
             self.selected_point=index;self.selected_wait=None
         if self._wait_point() is None:return
+        self._detach_wait_symmetry()
         self.wait_edit=True;self.drag=None;self._refresh_properties();self.redraw()
         self.root.update_idletasks()
         region=self.properties_canvas.bbox('all')
@@ -995,6 +1016,7 @@ class BotTacticsEditor:
         return 'break'
 
     def _store_wait_places(self, places):
+        self._detach_wait_symmetry(checkpoint=False)
         point=self._editable_points()[self.selected_point]
         point[3:]=[0.0,copy.deepcopy(places)] if places else []
         point[2]=int(bool(places));self._sync_symmetry(geometry=True)

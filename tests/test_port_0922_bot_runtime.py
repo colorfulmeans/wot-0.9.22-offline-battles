@@ -12232,6 +12232,16 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([(11, 2), (11, 2)], [
             item[:2] for item in probes])
 
+    def test_authored_wait_cancels_friendly_reposition_without_translation(self):
+        runtime=self.runtime
+        runtime.battle_start(self.start)
+        for phase in ('waiting','queue'):
+            runtime._server_orders[11]={'parking_phase':phase}
+            runtime._friendly_repositions[11]={'until':99.}
+            self.assertEqual((None,False),runtime._friendly_reposition_order(
+                runtime.states[11],{},1.))
+            self.assertNotIn(11,runtime._friendly_repositions)
+
     def test_blocked_friendly_lane_repositions_through_safe_driver(self):
         final_probes = []
 

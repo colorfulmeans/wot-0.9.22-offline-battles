@@ -31,6 +31,22 @@ class WreckContactRecoveryTests(unittest.TestCase):
         self.order.update(combat_mode='route', throttle_override=None,
                           move_position=(0., 0., 100.), route_id='heavy', route_index=2)
 
+    def test_authored_wait_keeps_hull_aim_and_fire_without_contact_translation(self):
+        self.order.update(combat_mode='hold',parking_phase='waiting')
+        for unused in range(40):
+            command=self.decide()
+            self.assertEqual(0.,command['throttle'])
+            self.assertFalse(command['movement_intent'])
+            self.assertEqual(9,command['target_id'])
+            self.assertTrue(command['fire_allowed'])
+            self.assertNotEqual(0.,command['turn'])
+            turn,throttle,active=combat_hull_aim(
+                0.,math.pi/2,-.1,.1,command['turn'],command['throttle'],
+                command['recovery_mode'],combat_mode='hold',movement_intent=False)
+            self.assertTrue(active)
+            self.assertNotEqual(0.,turn)
+            self.assertEqual(0.,throttle)
+
     def test_side_hug_tries_both_gears_for_wreck_enemy_and_friend(self):
         for alive, team in ((False, 1), (False, 2), (True, 1), (True, 2)):
             self.setUp()
