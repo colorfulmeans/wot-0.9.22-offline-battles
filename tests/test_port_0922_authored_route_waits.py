@@ -1,13 +1,71 @@
 """Timed and permanent authored waypoint orders through the real server."""
 import copy
+import math
 import unittest
 
 from test_port_0922_bot_tactics_editor import cfg, planning, profile
 from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state, _bot_contact
 from gui.mods.offline_lan_0922.ai.planner import build_vehicle_profile
+from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+from gui.mods.offline_lan_0922.ai.driver import combat_hull_aim
 
 
 class AuthoredRouteWaitTests(unittest.TestCase):
+    def test_armoured_td_acquires_distant_proved_target_while_parked(self):
+        planner, manifest = self.setup_route('AT-SPG', 60)
+        manifest[0]['profile'] = build_vehicle_profile(dict(
+            type=dict(name='Tortoise', tags=('AT-SPG',)),
+            physics=dict(speedLimits=(5.56, 2.78)),
+            hull=dict(primaryArmor=(273.1, 152.4, 101.6)),
+            turret=dict(primaryArmor=0.), gun=dict(shots=())))
+        manifest.append(_bot(7, 2, 0,
+            _route('enemy', [(400, 0, 0), (500, 0, 0)]), 'mediumTank'))
+        own = _state(11, 1, 0, 0)
+        enemy = _state(7, 2, 400, 0)
+        contact = _bot_contact(7, 400, 0, [11])
+        def order(now):
+            planner.report_contacts([contact],
+                planner.known_targets([own, enemy], []), now)
+            return next(row for row in planner.build_orders(
+                manifest, [own, enemy], [], now)['orders'] if row['id'] == 11)
+        self.assertEqual('hold', order(1)['combat_mode'])
+        waiting = order(2)
+        self.assertEqual(7, waiting['target_id'])
+        self.assertTrue(waiting['fire_allowed'])
+        self.assertEqual('waiting', waiting['parking_phase'])
+        self.assertEqual(0., waiting['throttle_override'])
+        self.assertEqual(0., waiting['move_position']['x'])
+        self.assertEqual(400., waiting['aim_position']['x'])
+        command = BotAdapter('08_ruinberg', 1).decide_with_order(dict(
+            id=11, slot=0, team=1, position=(0., 0., 0.), yaw=0.,
+            speed=0., dt=.1, neighbours=[], half_width=1.5,
+            half_length=3.5, pose_clear=lambda yaw: True), waiting,
+            lambda *args: True)
+        self.assertFalse(command['movement_intent'])
+        turn, throttle, active = combat_hull_aim(
+            0., math.pi/2, -.3491, .3491, command['turn'],
+            command['throttle'], command['recovery_mode'],
+            combat_mode=command['combat_mode'], movement_intent=False)
+        self.assertTrue(active)
+        self.assertNotEqual(0., turn)
+        self.assertEqual(0., throttle)
+        # A lost native lane cannot keep authorizing fire from this stop.
+        contact['shootable_by_bot_ids'] = []
+        self.assertFalse(order(3)['fire_allowed'])
+
+    def test_parking_reach_does_not_expand_travel_or_hidden_contact_pursuit(self):
+        planner, manifest = self.setup_route('AT-SPG', 60)
+        bot = manifest[0]
+        bot['profile'].update(desired_range=115., fire_range=450.,
+                              roles=dict(scout=.08, flanker=.02))
+        self.assertEqual(340., planner._engagement_range(bot, dict(visible=True)))
+        for phase in ('waiting', 'queue'):
+            planner._route_states[11] = dict(parking_phase=phase)
+            self.assertEqual(450., planner._engagement_range(bot, dict(visible=True)))
+            self.assertEqual(240., planner._engagement_range(bot, dict(visible=False)))
+        planner._route_states[11] = dict(parking_phase='approach')
+        self.assertEqual(340., planner._engagement_range(bot, dict(visible=True)))
+
     def test_finished_wait_restores_combat_then_resumes_authored_route(self):
         planner,manifest=self.setup_route('AT-SPG',5)
         route=planner.tactics['maps']['08_ruinberg']['routes'][0]

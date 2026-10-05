@@ -1586,8 +1586,7 @@ class BotPlanner(object):
                           _number(smallest))
         return covered_damage >= max(1.0, _number(contact.get("health"), 1.0))
 
-    @staticmethod
-    def _engagement_range(bot, contact):
+    def _engagement_range(self, bot, contact):
         """Keep nearby combat primary without pulling an entire team off-route."""
         profile = bot.get("profile") if isinstance(bot.get("profile"), dict) else {}
         roles = profile.get("roles") if isinstance(profile.get("roles"), dict) else {}
@@ -1607,6 +1606,15 @@ class BotPlanner(object):
         else:
             distance = max(240.0, min(420.0,
                                      desired * 1.5 + mobility * 210.0))
+        route_state = self._route_states.get(bot['id']) or {}
+        if (contact.get('visible') and
+                (route_state.get('holding') or
+                 route_state.get('parking_phase') in ('waiting', 'queue'))):
+            # An authored stop cannot close the preferred fighting distance.
+            # Keep locally proved targets in its existing firing envelope
+            # available for stationary hull laying, without extending travel
+            # pursuit or turning shared visibility into permission to fire.
+            distance = max(distance, _number(profile.get('fire_range'), distance))
         return distance
 
     def _recent_hit(self, bot_id, now):

@@ -119,6 +119,36 @@ The unrelated historical SPG target-lease assertion remains a known baseline
 failure in full Tests; the dedicated gameplay gate stays separate.
 
 
+## October 5, 20:36 parked TD acquisition
+
+Report 20261005-203602 uses launcher build 98. Tortoise waits with no selected
+target for roughly 50 seconds while reported enemies are 355-424 m away. Its
+450 m firing envelope was restored, but its short preferred fighting distance
+still leaves ordinary acquisition at 340 m. Later target acquisition produces
+checked hull turning and six shots during the same wait; this is not evidence
+of a physical parking yaw lock.
+
+An authored holding/waiting/queued vehicle may now acquire visible, locally
+proved targets through at least its existing firing envelope. Normal travel,
+parking approach, hidden-contact pursuit, ammunition/readiness gates, installed
+gun limits and native rotation collision checks remain unchanged. The end-to-end
+regression acquires a proved 400 m target with the production armoured TD
+profile, keeps translation at zero, and drives limited-traverse hull laying.
+Loss of lane proof disables fire; separate checks bound the travel and hidden
+contact envelopes. These deterministic checks do not replace native gameplay
+acceptance of the new package.
+
+The profile armour threshold is 120 mm using the greatest hull/turret
+primary-armor value; it is a heuristic, not an official TD subclass. It adds
+0.18 to brawler preference and subtracts 0.08 from sniper preference, and for
+TDs changes preferred distance from 255 to 115 m. Both TD categories retain
+450 m firing range and the same installed-gun aiming/collision rules. Other
+profile preferred/fire ranges are HT 72/260, MT 135/340, LT 175/320 m. Ordinary
+visible acquisition is max(340, min(560, preferred*2 + mobility*300)); remembered
+contact acquisition is max(240, min(420, preferred*1.5 + mobility*210)), where
+mobility is max(scout, flanker). These are AI policy distances, not spotting
+or projectile physics limits.
+
 ## October 3, 17:10 report and editor simplification
 
 Report 20261003-171033 uses build 61 and contains one current Airfield worker
