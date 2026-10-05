@@ -8193,17 +8193,90 @@ class BotRuntime(object):
         own['_radio_ground_goal'] = (key, result)
         return result
 
+    def _occupied_route_target(self, bot_id, position, goal, now, direct_only=False):
+        """A bounded temporary bypass of an occupied travel point, never a wait."""
+        own = self.states.get(int(bot_id))
+        grid = getattr(self.navigator, 'grid', None)
+        if own is None or grid is None or not getattr(grid, 'prebaked', False):
+            return None
+        if math.hypot(goal[0]-position[0], goal[2]-position[2]) > 32.0:
+            return None
+        # Inspect physical bodies at tactical cadence, not on every steering
+        # sample. Moving traffic remains the driver's job; only an actual
+        # occupied endpoint needs this temporary navigation destination.
+        key = (grid.cell_for(goal), bool(direct_only))
+        cache = own.setdefault('_occupied_route_targets', {})
+        cached = cache.get(key)
+        if cached is not None and now < cached[0]:
+            if cached[2]:own['route_wreck_blocked'] = True
+            if not direct_only:own['_occupied_route_point'] = cached[2]
+            return cached[1]
+        radius = math.hypot(own.get('half_length', 3.5), own.get('half_width', 1.7))
+        index = grid._baked_index(grid.cell_for(goal))
+        height = grid._baked_cell_height(grid.cell_for(goal)) if index is not None else None
+        if height is None:
+            cache[key] = (now+TACTICAL_REFRESH_SECONDS, None, False)
+            return None
+        bodies = self._physical_parking_occupancy(own)
+        physical = [entry for entry in bodies if entry[0] is None and
+                    abs(entry[1][1]-height) <= max(3.0, radius)]
+        def occupied(point):
+            return any(math.hypot(point[0]-body[1][0], point[2]-body[1][2]) <
+                       radius+body[2]+0.5 for body in physical)
+        def corridor_available(point):
+            dx, dz = point[0]-position[0], point[2]-position[2]
+            length2 = max(0.01, dx*dx+dz*dz)
+            for unused_team, body, other_radius in physical:
+                bx, bz = body[0]-position[0], body[2]-position[2]
+                fraction = max(0.0, min(1.0, (bx*dx+bz*dz)/length2))
+                if math.hypot(bx-dx*fraction, bz-dz*fraction) < radius+other_radius+0.5:
+                    # Existing close contact may leave only an outward escape.
+                    if bx*dx+bz*dz > 0.0:return False
+            return True
+        result = None
+        blocked = occupied(goal)
+        if blocked:
+            dx, dz = goal[0]-position[0], goal[2]-position[2]
+            length = max(0.01, math.hypot(dx, dz))
+            forward = (dx/length, dz/length)
+            for reach in (8.0, 12.0):
+                for ox, oz in ((-forward[1], forward[0]), (forward[1], -forward[0]),
+                               forward, (-forward[0], -forward[1])):
+                    x, z = goal[0]+ox*reach, goal[2]+oz*reach
+                    y = grid._baked_cell_height(grid.cell_for((x, height, z)))
+                    if y is None:
+                        continue
+                    point = (x, y, z)
+                    if (occupied(point) or not corridor_available(point) or grid.point_has_baked_hazard(point,
+                            BAKED_FATAL_HAZARDS | BAKED_SHALLOW_WATER)):
+                        continue
+                    if direct_only and not grid.dry_segment_clear(position, point, now):
+                        continue
+                    result = point
+                    break
+                if result is not None:break
+            own['route_wreck_blocked'] = True
+        if not direct_only:own['_occupied_route_point'] = blocked
+        if len(cache) >= 4:cache.clear()
+        cache[key] = (now+TACTICAL_REFRESH_SECONDS, result, blocked)
+        return result
+
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
         mode = strategic.get('combat_mode', 'route')
         authority_state = self.states.get(int(bot_id))
         if authority_state is not None:
             authority_state['route_wreck_blocked'] = False
+            authority_state['_occupied_route_point'] = False
         stop_at_goal = mode not in ('route', 'advance')
         if self.navigator is None:
             state['navigation_stop_at_target'] = stop_at_goal
             return goal
         grid = getattr(self.navigator, 'grid', None)
+        occupied_goal = None
+        if mode in ('route', 'advance') and strategic.get('throttle_override') is None:
+            occupied_goal = self._occupied_route_target(
+                bot_id, position, goal, float(state.get('now', 0.0)))
         # Publish exact static-hull evidence, not a guess from a stalled pose.
         # Local A* gets the first opportunity to bypass it; the server may
         # abandon this macro lane only after sustained lack of progress.
@@ -8229,7 +8302,10 @@ class BotRuntime(object):
                                crosses(remaining))
                 receipt = (evidence_key, now + 1.0, blocked)
                 authority_state['_route_wreck_receipt'] = receipt
-            authority_state['route_wreck_blocked'] = receipt[2]
+            authority_state['route_wreck_blocked'] = receipt[2] or authority_state.get('_occupied_route_point', False)
+        if occupied_goal is not None:
+            goal = occupied_goal
+            if authority_state is not None:authority_state['route_wreck_blocked'] = True
         if strategic.get('move_area_bounds') is not None:
             grounded = self._radio_ground_goal(bot_id, position, goal, strategic, grid)
             if grounded is None:
@@ -8278,6 +8354,9 @@ class BotRuntime(object):
             path_key = ('local', int(bot_id), mode,
                         strategic.get('target_id'))
             anchor = None
+        if occupied_goal is not None:
+            path_key = ('local', int(bot_id), 'occupied_route', strategic.get('route_id'),
+                        route_index, grid.cell_for(goal))
         # Moving hulls are not terrain. The simultaneous tank-contact solver
         # keeps them solid and LocalDriver separates an existing overlap. Feeding
         # every live neighbour back into the navigation fallback made a moving
@@ -8335,6 +8414,11 @@ class BotRuntime(object):
         if mode in ('route', 'advance') and anchor is None:
             target = self._route_lane_target(
                 bot_id, position, goal, target, strategic, now)
+        if mode in ('route', 'advance') and strategic.get('throttle_override') is None:
+            bypass = self._occupied_route_target(bot_id, position, target, now, True)
+            if bypass is not None:
+                target = bypass
+                state['navigation_stop_at_target'] = False
         return target
 
     def _player_neighbours(self, players):
@@ -11377,34 +11461,74 @@ class BotRuntime(object):
         self._decision_cache.pop(bot_id, None)
         return True
 
-    def _retry_spg_deployment(self, state, initial, distance, now):
+    def _physical_parking_occupancy(self, state):
+        """Reuse current bodies and descriptor caches; do not query terrain."""
+        occupied = []
+        for other in self.states.values():
+            if other['id'] == state['id']:
+                continue
+            shape = other.get('collision_shape') or tank_collision.DEFAULT_SHAPE
+            occupied.append((None, _position(other), math.hypot(shape[0], shape[1])))
+            plan = other.get('_spg_initial')
+            if other.get('alive', True) and plan is not None:
+                occupied.append((other.get('team'), tuple(plan['point'][axis]
+                    for axis in ('x', 'y', 'z')), plan['clearance']))
+        for raw in getattr(self, '_contact_players', ()):
+            if raw.get('world_pose') is False or raw.get('participating') is False:
+                continue
+            shape = self._player_collision_profile(raw)['shape']
+            occupied.append((None, _position(raw), math.hypot(shape[0], shape[1])))
+        return occupied
+
+    def _spg_displaced_hold(self, state, initial):
+        """Adopt a supported pose inside the authored area after first arrival."""
+        pose = _position(state)
+        if state.get('airborne') or state.get('_overturned'):
+            return False
+        if initial['source'] == 'launcher_manual_v1':
+            zones = bot_tactics.map_settings(self._bot_tactics, initial['map']).get('positions', ())
+            zone = next((zone for zone in zones if zone['id'] == initial['zone']), None)
+            if zone is None or math.hypot(pose[0]-zone['point'][0], pose[2]-zone['point'][1]) > zone['radius']-2.0:
+                return False
+        elif not spg_positions.point_in_cell(pose, initial['cell'],
+                spg_positions.CATALOG['maps'][initial['map']]['bounds'], initial['radius']):
+            return False
+        try:
+            cached = getattr(self, '_spg_parking_grid', None)
+            if cached is None or cached[0] is not self.baked_graph:
+                cached = self._spg_parking_grid = (self.baked_graph,
+                    bot_tactics_runtime.graph_view(initial['map'], self.baked_graph))
+            grid = cached[1]
+            index = grid.closest(pose)
+            return (index is not None and grid.parking_clear(index, initial['clearance']) and
+                    abs(pose[1]-grid.point(index)[1]) <= 1.5)
+        except (KeyError, IndexError, TypeError, ValueError):
+            return False
+
+    def _retry_spg_deployment(self, state, initial, distance, now, occupied=None):
         """Retire a parking goal only after sustained lack of net progress."""
         identity = spg_positions.plan_identity(initial)
         progress = state.get('_spg_deployment_progress')
-        if progress is None or progress['identity'] != identity:
+        obstructed = occupied is not None
+        if not obstructed and (progress is None or progress['identity'] != identity):
             state['_spg_deployment_progress'] = dict(
                 identity=identity, best=distance, since=now)
             return initial
-        if distance < progress['best'] - 0.25:
+        if not obstructed and distance < progress['best'] - 0.25:
             progress.update(best=distance, since=now)
-        if now - progress['since'] < 20.0:
+        if not obstructed and now - progress['since'] < 20.0:
             return initial
-        progress['since'] = now
+        if not obstructed:progress['since'] = now
         retries = int(state.get('_spg_parking_retries', 0))
-        if retries >= 3:
+        if not obstructed and retries >= 3:
             state['_spg_position_event'] = 'parking_retry_exhausted'
             return initial
-        state['_spg_parking_retries'] = retries + 1
+        if not obstructed:state['_spg_parking_retries'] = retries + 1
         failed = state.setdefault('_spg_failed_parking', [])
         point = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
-        if point not in failed:
+        if not obstructed and point not in failed:
             failed.append(point)
-        occupied = []
-        for other in self.states.values():
-            plan = other.get('_spg_initial')
-            if other['id'] != state['id'] and other.get('alive', True) and plan is not None:
-                occupied.append((other.get('team'), tuple(plan['point'][axis]
-                    for axis in ('x', 'y', 'z')), plan['clearance']))
+        if occupied is None:occupied = self._physical_parking_occupancy(state)
         kwargs = dict(actor_ids=(state['id'],), excluded=failed, occupied=occupied)
         states = list(self._ordered_states())
         try:
@@ -11421,7 +11545,8 @@ class BotRuntime(object):
                               if other['id'] == state['id'] else other for other in states]
             if initial['source'] == 'launcher_manual_v1':
                 plans, unused = bot_tactics_runtime.assign_manual_positions(
-                    self._bot_tactics, initial['map'], self.baked_graph, states, **kwargs)
+                    self._bot_tactics, initial['map'], self.baked_graph, states,
+                    preferred_zone=initial['zone'], **kwargs)
             else:
                 plans, unused = spg_positions.assign_initial_positions(
                     initial['map'], self.baked_graph, states, **kwargs)
@@ -11432,6 +11557,7 @@ class BotRuntime(object):
             state['_spg_position_event'] = 'no_safe_alternate_parking'
             return initial
         state['_spg_initial'] = replacement
+        state.pop('_spg_arrived_identity', None)
         state.pop('_spg_deployment_progress', None)
         state['_spg_position_event'] = 'blocked_deployment_alternate_parking'
         self._decision_cache.pop(state['id'], None)
@@ -11457,7 +11583,48 @@ class BotRuntime(object):
             # heuristic or stop fifteen metres short of its usable area.
             state.pop('_spg_position', None)
             destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
+            identity = spg_positions.plan_identity(initial)
+            queue = False
+            if now >= state.get('_spg_parking_check_at', -1e9):
+                state['_spg_parking_check_at'] = now + TACTICAL_REFRESH_SECONDS
+                if state.get('_spg_arrived_identity') == identity:
+                    state['_spg_displaced_safe'] = self._spg_displaced_hold(state, initial)
+                    if (not state['_spg_displaced_safe'] and
+                            _distance(_position(state), destination) > initial['radius']):
+                        state.pop('_spg_arrived_identity', None)
+                # An arrived hull already occupies its own firing area. A
+                # neighbour touching it must not trigger self-eviction.
+                if state.get('_spg_arrived_identity') != identity:
+                    occupied = self._physical_parking_occupancy(state)
+                    blocked = not spg_positions.parking_point_available(
+                        destination, initial['clearance'], state['team'], (), occupied)
+                    state['_spg_parking_occupied'] = blocked
+                    if blocked and now >= state.get('_spg_occupied_retry_at', -1e9):
+                        state['_spg_occupied_retry_at'] = now + 5.0
+                        initial = self._retry_spg_deployment(state, initial,
+                            _distance(_position(state), destination), now, occupied)
+                        destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
+                        identity = spg_positions.plan_identity(initial)
+                        state['_spg_parking_occupied'] = not spg_positions.parking_point_available(
+                            destination, initial['clearance'], state['team'], (), occupied)
+                else:
+                    state['_spg_parking_occupied'] = False
+            queue = state.get('_spg_parking_occupied', False)
             arrived = _distance(_position(state), destination) <= initial['radius']
+            if (state.get('_spg_arrived_identity') == identity and
+                    state.get('_spg_displaced_safe') and not state.get('airborne') and
+                    not state.get('_overturned')):
+                destination = _position(state)
+                arrived = True
+            if arrived and not queue:
+                state['_spg_arrived_identity'] = identity
+                state['_spg_parking_occupied'] = queue = False
+            if queue:
+                result = dict(order)
+                result.update(move_position=_position(state), route_anchor=_position(state),
+                    route_join=False, throttle_override=0.0, combat_mode='artillery_hold')
+                state['_spg_position_event'] = 'occupied_parking_queue'
+                return result
             if arrived:
                 state.pop('_spg_deployment_progress', None)
             else:
@@ -12705,7 +12872,8 @@ class BotRuntime(object):
                 target is not None and
                 command.get('combat_mode') != 'base_defense',
                 combat_mode=command.get('combat_mode'),
-                movement_intent=command.get('movement_intent', True))
+                movement_intent=command.get('movement_intent', True),
+                withdrawal_aim=command.get('withdrawal_aim', False))
             state['hull_aiming'] = bool(hull_aiming)
             # Cached strategic orders cannot justify driving into a hull that
             # moved into the corridor since the last decision. Keep physics as

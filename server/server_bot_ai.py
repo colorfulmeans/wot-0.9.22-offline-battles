@@ -718,7 +718,12 @@ class BotPlanner(object):
 
     def build_orders(self, manifest, bot_states, players, now,
                      defense=None, team_orders=None):
-        self._wait_bodies = list(bot_states or ()) + list(players or ())
+        radii = dict((row['id'], _number(row.get('profile', {}).get(
+            'parking_radius'), math.hypot(3.5, 1.7))) for row in manifest or ())
+        self._wait_bodies = [dict(row, parking_kind='bot',
+            parking_radius=radii.get(row['id'], math.hypot(3.5, 1.7)))
+            for row in bot_states or ()] + [dict(row, parking_kind='human')
+            for row in players or ()]
         known_targets = self.known_targets(bot_states, players)
         contacts = self._prune_contacts(known_targets, now)
         bots = self._alive_bots(manifest, bot_states, self.tactics)
@@ -1882,6 +1887,8 @@ class BotPlanner(object):
                 "phase": "withdraw",
                 "best_distance": distance,
                 "last_progress_at": _number(now),
+                "face": dict(face),
+                "hold_mode": hold_mode,
             }
             self._retreat_states[bot_id] = retreat
         elif (distance + RETREAT_PROGRESS_EPSILON <
@@ -1925,6 +1932,7 @@ class BotPlanner(object):
             order["tactical_phase"] = "withdraw"
             order["move_position"] = target
             order["throttle_override"] = None
+            order['face_position'] = dict(retreat['face'])
         return order
 
     def _assign_targets(self, bots, contacts, now):
@@ -2513,25 +2521,26 @@ class BotPlanner(object):
         point = _point(state)
         goal = _point(order.get('move_position') or {})
         distance = math.hypot(goal['x'] - point['x'], goal['z'] - point['z'])
-        if distance <= 15.0:
-            self._wreck_route_progress.pop(bot_id, None)
-            return
         key = (route_id, order.get('route_index'))
         progress = self._wreck_route_progress.get(bot_id)
         if (progress is None or progress['key'] != key or
                 math.hypot(goal['x'] - progress['goal']['x'],
                            goal['z'] - progress['goal']['z']) > 2.0):
             progress = None
-        if progress is not None:
-            moved = math.hypot(point['x'] - progress['point']['x'],
-                               point['z'] - progress['point']['z'])
-            if progress['distance'] - distance >= 2.0 or moved >= 8.0:
-                progress = None
         if progress is None:
             self._wreck_route_progress[bot_id] = {
                 'key': key, 'goal': goal, 'point': point,
-                'distance': distance, 'since': _number(now)}
+                'distance': distance, 'detour_best': 0.0, 'since': _number(now)}
             return
+        moved = math.hypot(point['x'] - progress['point']['x'],
+                           point['z'] - progress['point']['z'])
+        if (progress['distance'] - distance >= 2.0 or
+                moved >= progress.get('detour_best', 0.0) + 8.0):
+            # Credit new territory or a new best approach, never another visit
+            # to a previously reached side of the same blocked hull.
+            progress['distance'] = min(progress['distance'], distance)
+            progress['detour_best'] = max(progress.get('detour_best', 0.0), moved)
+            progress['since'] = _number(now)
         if _number(now) - progress['since'] < WRECK_ROUTE_WAIT_SECONDS:
             return
         avoided = self._wreck_route_avoid.setdefault(bot_id, {})
@@ -2699,6 +2708,21 @@ class BotPlanner(object):
             anchor = _point(waypoints[max(0, index - 1)])
         return route_id, index, point, anchor, route_join
 
+    def _wait_place_occupied(self, bot_id, place, radius, height):
+        """Physical occupancy includes humans, with distinct identity domains."""
+        for body in getattr(self, '_wait_bodies', ()):
+            if (body.get('parking_kind') == 'bot' and body.get('id') == bot_id or
+                    body.get('world_pose') is not True):
+                continue
+            shape = body.get('collision_shape')
+            other_radius = (math.hypot(shape[0], shape[1]) if shape else
+                _number(body.get('parking_radius'), math.hypot(3.5, 1.7)))
+            if (abs(_number(body.get('y')) - height) <= max(3.0, radius) and
+                    math.hypot(place[0]-_number(body.get('x')),
+                               place[1]-_number(body.get('z'))) < radius + other_radius + 0.5):
+                return True
+        return False
+
     def _wait_parking(self, bot, state, route_id, index, places, now):
         """Lease one stable parking goal per hull, with individual arrival clocks."""
         bot_id = bot['id']
@@ -2708,14 +2732,38 @@ class BotPlanner(object):
         if index in completed:return True, None
         key = next((key for key, claim in self._wait_claims.items()
                     if key[:3] == stage and claim['bot_id'] == bot_id), None)
+        pose = bot['state']
+        arrived = state.setdefault('parking_arrived', {}).get(index)
+        arrival = state.get('parking_pose', {}).get(index)
+        if arrived is not None and arrival is not None:
+            # One metre admits the initial arrival only. A small external shove
+            # must not restart the clock or demand an exact coordinate return.
+            displaced = math.hypot(_number(pose.get('x'))-arrival['x'],
+                                   _number(pose.get('z'))-arrival['z'])
+            safe = (not pose.get('airborne') and displaced <= radius * 2.0 and
+                    abs(_number(pose.get('y'))-arrival['y']) <=
+                    1.0 + displaced * math.tan(math.radians(27.5)))
+            duration = state['parking_duration'][index]
+            if duration >= 0 and now-arrived >= duration:
+                completed.add(index)
+                state.pop('parking_phase', None)
+                state.pop('parking_slot', None)
+                if key is not None:self._wait_claims[key]['departing'] = True
+                return True, None
+            if safe:
+                state['holding'] = True
+                state['parking_phase'] = 'waiting'
+                if key is not None:self._wait_claims[key]['point'] = [_number(pose.get('x')), _number(pose.get('z'))]
+                return False, _point(pose)
+        if key is not None and self._wait_place_occupied(
+                bot_id, places[key[3]], radius, _number(pose.get('y'))):
+            self._wait_claims.pop(key, None)
+            key = None
         if key is None:
             for slot, place in enumerate(places):
                 candidate = stage + (slot,)
                 if candidate in self._wait_claims:continue
-                # A corpse or hull still departing is physically occupied.
-                if any(body.get('id') != bot_id and not body.get('alive', True) and body.get('world_pose') is True and
-                       math.hypot(place[0]-_number(body.get('x')), place[1]-_number(body.get('z'))) < 10.0
-                       for body in getattr(self, '_wait_bodies', ())):continue
+                if self._wait_place_occupied(bot_id, place, radius, _number(pose.get('y'))):continue
                 # Separate reservations also protect crossing class routes.
                 if any(claim['bot_id'] != bot_id and
                        math.hypot(place[0]-claim['point'][0], place[1]-claim['point'][1]) < radius + claim['radius'] + 2.0
@@ -2737,7 +2785,9 @@ class BotPlanner(object):
                               goal['z']-_number(bot['state'].get('z')))
         if distance > 1.0:return False, goal
         arrived = state.setdefault('parking_arrived', {}).setdefault(index, now)
-        if place[2] < 0 or now-arrived < place[2]:
+        state.setdefault('parking_pose', {})[index] = _point(pose)
+        duration = state.setdefault('parking_duration', {}).setdefault(index, place[2])
+        if duration < 0 or now-arrived < duration:
             state['holding'] = True
             state['parking_phase'] = 'waiting'
             return False, goal
@@ -3382,6 +3432,12 @@ class BotPlanner(object):
         if focus is None:
             self._engage_anchors.pop(bot["id"], None)
             self._combat_states.pop(bot["id"], None)
+            retreat = self._retreat_states.get(bot['id'])
+            if retreat is not None and retreat.get('phase') in ('withdraw', 'hold'):
+                self._apply_retreat_order(order, bot, retreat['target_point'],
+                    retreat['face'], now, retreat['moving_mode'], retreat['hold_mode'])
+                self._firing_holds.pop(bot['id'], None)
+                return order
             if (capture_screen and
                     self._capture_staged(bot, route_index) and
                     math.hypot(move["x"] - _number(state.get("x")),
@@ -3422,6 +3478,12 @@ class BotPlanner(object):
                                  bot["id"] in (observers or ()))
         self._set_target(
             order, bot, focus, profile, personality, locally_shootable)
+        retreat = self._retreat_states.get(bot['id'])
+        if retreat is not None and retreat.get('phase') == 'withdraw':
+            self._apply_retreat_order(order, bot, retreat['target_point'],
+                focus['position'], now, retreat['moving_mode'], retreat['hold_mode'])
+            self._firing_holds.pop(bot['id'], None)
+            return order
         bx = _number(state.get("x"))
         bz = _number(state.get("z"))
         distance = math.hypot(focus["position"]["x"] - bx,

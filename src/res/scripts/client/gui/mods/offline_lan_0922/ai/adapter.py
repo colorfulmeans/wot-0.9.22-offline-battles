@@ -339,6 +339,7 @@ class BotAdapter(object):
                     distance <= max(WAYPOINT_ARRIVAL_RADIUS, braking_distance))
         return {'throttle': 0.0 if stopping else -0.72,
                 'turn': 0.0 if stopping else -max(-0.5, min(0.5, error / 0.58)),
+                'withdrawal_aim': goal_distance <= 30.0 and exposed,
                 'target_yaw': face_yaw, 'recovery_mode': 'reverse_withdraw'}
 
     @observed('driver.order')
@@ -484,6 +485,7 @@ class BotAdapter(object):
             'target_yaw': target_yaw,
             'recovery_mode': recovery_mode,
             'movement_intent': movement_intent,
+            'withdrawal_aim': bool(local.get('withdrawal_aim', False)),
         }
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']

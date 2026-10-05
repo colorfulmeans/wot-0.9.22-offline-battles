@@ -212,7 +212,7 @@ def _manual_candidates(grid, zone, clearance):
 
 
 def assign_manual_positions(profile, name, graph, states, mode='regular',
-                            actor_ids=None, excluded=(), occupied=()):
+                            actor_ids=None, excluded=(), occupied=(), preferred_zone=None):
     zones = config.map_settings(profile, name).get('positions', ()) if mode == 'regular' else ()
     if not zones:
         return {}, {}
@@ -243,11 +243,12 @@ def assign_manual_positions(profile, name, graph, states, mode='regular',
                 if any(math.hypot(p[0]-old[0][0], p[2]-old[0][2]) < clearance+old[1]+3
                        for old in reservations[state['team']]):
                     continue
-                candidates.append((-zone['priority'], centre_distance, distances[index], zone['id'], p, zone))
+                candidates.append((0 if preferred_zone is None or zone['id'] == preferred_zone else 1,
+                    -zone['priority'], centre_distance, distances[index], zone['id'], p, zone))
         if not candidates:
             outcomes[state['id']] = 'manual_no_reachable_parking_space'
             continue
-        unused_a, unused_b, unused_c, unused_id, p, zone = min(candidates)
+        unused_preferred, unused_a, unused_b, unused_c, unused_id, p, zone = min(candidates)
         angle = math.radians(zone['heading']); bounds = config.MAPS[name]['bounds']
         face = (max(bounds[0], min(bounds[2], p[0]+math.sin(angle)*100)), p[1],
                 max(bounds[1], min(bounds[3], p[2]+math.cos(angle)*100)))

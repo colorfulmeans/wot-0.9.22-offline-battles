@@ -396,7 +396,9 @@ def parking_point_available(point, clearance, team, excluded, occupied):
         if math.hypot(point[0] - old[0], point[2] - old[2]) < max(12.0, clearance * 2):
             return False
     for other_team, old, radius in occupied or ():
-        if other_team == team and math.hypot(point[0] - old[0], point[2] - old[2]) < clearance + radius + RESERVATION_GAP:
+        if other_team is None and abs(point[1] - old[1]) > max(3.0, radius):
+            continue
+        if other_team in (None, team) and math.hypot(point[0] - old[0], point[2] - old[2]) < clearance + radius + RESERVATION_GAP:
             return False
     return True
 

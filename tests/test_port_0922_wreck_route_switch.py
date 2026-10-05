@@ -55,6 +55,25 @@ class WreckRouteSwitchTests(unittest.TestCase):
             orders = self.orders(now)
         self.assertEqual('rail', orders[17]['route_id'])
 
+    def test_repeated_eight_metre_orbit_does_not_renew_detour_credit(self):
+        self.orders(0)
+        self.states[0]['x'] = 111
+        self.orders(5)
+        for now in range(6, 25):
+            self.states[0]['x'] = 111 if now % 2 else 120
+            self.orders(now)
+        self.assertEqual('rail', self.orders(25)[17]['route_id'])
+
+    def test_proved_obstruction_close_to_waypoint_can_still_change_lane(self):
+        self.states[0].update(x=190, z=-64)
+        self.planner._route_states[17] = dict(route_id='banana', index=1)
+        bot = self.planner._alive_bots(self.manifest, self.states)[0]
+        order = dict(route_id='banana', route_index=1, combat_mode='route',
+                     move_position=self.lane['waypoints'][1])
+        self.planner._reroute_wreck_stall(order, bot, self.manifest, 0)
+        self.planner._reroute_wreck_stall(order, bot, self.manifest, 20)
+        self.assertEqual('rail', order['route_id'])
+
     def test_missing_wreck_evidence_or_immobilization_never_switches(self):
         self.states[0]['route_wreck_blocked'] = False
         self.states[1]['critical'] = {'destroyed': ['leftTrackHealth']}

@@ -111,3 +111,64 @@ The new end-to-end Python regressions exercise both queues, the native adapter
 boundary and runtime intent cleanup, including movement, alternate arcs, timeout,
 cooldown and reset. Native M12 firing and frame pacing on #1513 remain Windows
 acceptance requirements.
+
+
+## Occupied parking and external displacement
+
+The October 5 23:09 report ran test build 102. WZ-111G repeatedly approached
+the same authored waiting place while the player occupied it. T25/2 later
+returned and completed its wait; periodic motion records do not capture the
+instant of the player's shove. Tortoise fired before taking damage, then lost
+its retreat endpoint after the six-second damage memory expired. No native
+gameplay acceptance is claimed by the engine-stub tests below.
+
+## Behavior
+
+- Waiting-place admission accounts for current humans, live Bots and wrecks,
+  with chassis-derived radii and separate identity domains. An approaching
+  hull relinquishes an occupied lease. It uses another free authored slot or
+  holds a stable queue pose, retaining normal target and fire permissions.
+- The one-metre arrival tolerance only starts the clock. Small displacement
+  within two chassis radii, consistent with the admitted terrain grade and
+  not airborne, holds the current pose. The original timer runs continuously;
+  a larger or unsafe shove requires deployment again without resetting it.
+- SPGs check occupancy on the existing one-second tactical cadence. Occupied
+  goals retry selection at most once per five seconds, preferring another
+  graph-checked location in the same manual zone. If all valid destinations
+  are occupied, they hold the current position and recheck after bodies leave.
+- An arrived SPG may remain at a displaced pose only inside its manual zone
+  or sourced cell, with baked footprint clearance and matching ground height.
+  This does not move an authored zone or skip any ballistic/launch checks.
+- A committed retreat retains its endpoint through target or recent-hit
+  expiry until arrival or the existing no-progress timeout. The existing
+  defensive pause then permits route resumption when the local threat ends.
+- A short, checked reverse withdrawal can make a small fixed-gun correction
+  while keeping reverse throttle. Long travel and recovery retain steering
+  ownership; gun traverse, elevation, line-of-fire and reload gates still apply.
+
+## Validation and real-client follow-up
+
+`test_port_0922_parking_displacement` covers occupied/reoccupied waiting
+leases, full occupancy and release, chassis size, separate floors, displaced
+wait clocks, same-zone SPG reselection, bounded queue checks, supported SPG
+displacement, retreat expiry/arrival/pause, and a limited-traverse hull which
+actually reverses, aims and fires through the production worker.
+
+On the exact #1513 client, repeat the Grille 15/WZ-111G blocked-wait setup,
+push T25/2 after its clock starts, occupy/push an SPG inside and outside its
+authored zone, and observe Tortoise under fire. Verify there is no deliberate
+player shoving, no timer reset, no six-second route reversal, and continued
+normal firing whenever the installed gun can physically bear. No additional
+native terrain rays, authored coordinates, saves or suspension settings are
+changed by this fix.
+
+The 23:48 report ran build 103. Object 268 v4 had completed its wait and
+repeatedly approached a corpse-blocked route corridor before switching lanes.
+Only a new best approach or new radial detour territory now renews the stall
+clock; revisiting opposite sides of the same obstruction does not. A physical
+obstruction close to a travel waypoint no longer disables the fallback timer.
+Nearby occupied travel targets receive a bounded, temporary baked-ground bypass
+using current chassis footprints. This leaves the authored point and one-metre
+wait admission untouched, restores the ordinary goal after the blocker leaves,
+and adds no native terrain probes. Regression cases also cover a corpse entering
+an already leased wait, all wait slots occupied by corpses, and a vacated slot.

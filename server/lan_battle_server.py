@@ -14684,7 +14684,9 @@ class BattleState:
                 team_orders = self._active_team_commands_locked()
                 self.bot_orders = self.bot_planner.build_orders(
                     self.bot_manifest, list(self.bot_states.values()),
-                    [self._public_player(p, include_outfits=False)
+                    [dict(self._public_player(p, include_outfits=False),
+                          collision_shape=self.human_collision_profiles.get(
+                              p.player_id, {}).get('shape'))
                      for p in self.players.values()
                      if p.connected and p.participating],
                     time.monotonic(), self._bot_defense_context(),
