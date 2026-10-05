@@ -1781,33 +1781,98 @@ class TerrainNavigator(object):
 		A failed A* result can remain cached across many driver decisions. Moving
 		the local endpoint with the hull on every one makes its two-metre escape
 		an endlessly moving target and changes steering at coarse-cell borders.
-		Reuse only the endpoint selected for this exact route/recovery intent;
-		a later normal path or macro escape owns its own ``last_target``.
+		The issued leg owns steering across asynchronous path completion.
+		Only realised progress renews its finite lease, never a new path receipt.
 		"""
 		target = state.get('local_fallback_target')
+		intent_matches = state.get('local_fallback_intent') == self._local_fallback_intent(goal, state)
+		if (target is not None and intent_matches and
+				(_distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS or
+				 self._local_fallback_passed(current, target, state))):
+			state['local_completed_target'] = (tuple(target), self._local_fallback_intent(goal, state))
 		if (target is not None and state.get('last_target', target) == target and
-				state.get('local_fallback_intent') ==
-				self._local_fallback_intent(goal, state) and
+				intent_matches and
 				_distance_2d(current, target) > WAYPOINT_ARRIVAL_RADIUS and
 				not self._local_fallback_passed(current, target, state) and
-				not self._bot_edges_penalized(bot_id, current, target, now) and
-				self.grid.dry_segment_clear(current, target, now)):
-			return tuple(target)
+				not self._bot_edges_penalized(bot_id, current, target, now)):
+			revision = self.grid._native_proof_revision
+			clear = self.grid.dry_segment_clear(current, target, now)
+			deferred = revision != self.grid._native_proof_revision
+			if not clear and not deferred:
+				state['local_target_end_reason'] = 'unsafe'
+			else:
+				remaining = _distance_2d(current, target)
+				best = state.get('local_target_best_distance', remaining)
+				if best - remaining >= MACRO_PROGRESS_METRES:
+					state['local_target_best_distance'] = remaining
+					state['local_target_progress_at'] = float(now)
+				if float(now) - float(state.get('local_target_progress_at', now)) < MACRO_STALL_SECONDS:
+					if deferred:
+						# Unknown proof pauses motion without yielding ownership to
+						# another cached path or recording a fictional obstacle.
+						state['navigation_status'] = 'pending'
+						return tuple(current)
+					self._observe_macro_progress(bot_id, state, current, goal, now)
+					state['last_target'] = tuple(target)
+					return tuple(target)
+				state['local_target_end_reason'] = 'timeout'
+				state['local_target_retired'] = (tuple(target), float(now) + MACRO_STALL_SECONDS)
+			self._observe_macro_progress(bot_id, state, current, goal, now)
 		if target is not None and state.get('last_target') == target:
 			# Pending-path bridging must not resurrect a consumed local point.
 			state.pop('last_target', None)
 		state.pop('local_fallback_target', None)
 		state.pop('local_fallback_intent', None)
 		state.pop('local_fallback_start', None)
+		state.pop('local_target_progress_at', None)
+		state.pop('local_target_best_distance', None)
+		state.pop('local_target_best_heading', None)
 		return None
 
-	def _remember_local_fallback(self, target, goal, state, start=None):
+	def _remember_local_fallback(self, target, goal, state, start=None, now=None):
+		if state.get('local_fallback_target') != tuple(target):
+			state.pop('local_target_best_heading', None)
+			state['local_target_progress_at'] = float(now if now is not None else state.get('macro_progress_at', 0.0))
+			state['local_target_best_distance'] = _distance_2d(start, target) if start is not None else float('inf')
 		state['local_fallback_target'] = tuple(target)
 		state['local_fallback_intent'] = self._local_fallback_intent(goal, state)
 		state['local_fallback_episode'] = self._local_fallback_intent(goal, state)
 		state['local_fallback_start'] = tuple(start) if start is not None else None
 
+	def retained_local_target(self, bot_id, current, goal, path_key, now, movement_intent=True, yaw=None):
+		"""Let the runtime's direct shortcut respect an already issued local leg."""
+		state = self.bot_states.get(int(bot_id))
+		if state is None:
+			return None
+		planned = state.get('planned_goal') or goal
+		if (not movement_intent or state.get('request_path_key') != tuple(path_key) or
+				_distance_2d(planned, goal) >= self.grid.cell_size * 2.0):
+			state.pop('local_fallback_target', None)
+			return None
+		target = state.get('local_fallback_target')
+		if target is not None and yaw is not None:
+			origin = state.get('local_fallback_start') or current
+			heading = math.atan2(target[0] - origin[0], target[2] - origin[2])
+			error = abs((heading - float(yaw) + math.pi) % (2.0 * math.pi) - math.pi)
+			best = state.get('local_target_best_heading')
+			if best is None or best - error >= 0.02:
+				state['local_target_best_heading'] = error
+				if best is not None:
+					state['local_target_progress_at'] = float(now)
+		return self._retained_local_fallback(bot_id, current, planned, now, state)
+
+	def remember_runtime_target(self, bot_id, current, goal, target, now):
+		"""Publish the final proved bypass, rather than its pre-offset A* vertex."""
+		state = self.bot_states.get(int(bot_id))
+		if state is not None:
+			self._remember_local_fallback(target, state.get('planned_goal') or goal, state, current, now)
+			state['last_target'] = tuple(target)
+
 	def _local_fallback_origin(self, current, goal, state):
+		completed = state.get('local_completed_target')
+		if (completed is not None and completed[1] == self._local_fallback_intent(goal, state) and
+				_distance_2d(current, completed[0]) <= self.grid.cell_size):
+			return completed[0]
 		target = state.get('local_fallback_target')
 		if (target is not None and state.get('last_target', target) == target and
 				state.get('local_fallback_intent') == self._local_fallback_intent(goal, state) and
@@ -1851,7 +1916,10 @@ class TerrainNavigator(object):
 			# for this decision, then retry from the hull on the next one.
 			return tuple(current)
 		if fallback is not None:
-			self._remember_local_fallback(fallback, goal, state, current)
+			retired = state.get('local_target_retired')
+			if retired is not None and float(now) < retired[1] and _distance_2d(fallback, retired[0]) <= WAYPOINT_ARRIVAL_RADIUS:
+				return None
+			self._remember_local_fallback(fallback, goal, state, current, now)
 		return fallback
 
 	@staticmethod
@@ -1985,6 +2053,7 @@ class TerrainNavigator(object):
 			return None
 		state['pending_prefix_index'] = index
 		state['pending_prefix_target'] = target
+		self._remember_local_fallback(target, goal, state, current, now)
 		state.pop('retired_prefix', None)
 		state['last_target'] = target
 		state['local_fallback_episode'] = intent
@@ -2389,6 +2458,9 @@ class TerrainNavigator(object):
 		prefix = state.get('pending_prefix') or ()
 		prefix_index = int(state.get('pending_prefix_index', 0))
 		return {
+			'local_target': state.get('local_fallback_target'),
+			'local_target_end_reason': state.get('local_target_end_reason'),
+			'local_target_progress_age_ms': int(max(0.0, float(now) - float(state.get('local_target_progress_at', now))) * 1000.0),
 			'current_cell': cell,
 			'current_cell_height': self.grid._baked_cell_height(cell),
 			'pending_ms': (int(max(0.0, float(now) -
@@ -2511,6 +2583,10 @@ class TerrainNavigator(object):
 
 	def _bot_edges_penalized(self, bot_id, start, end, now):
 		"""True when this bot's own escalation covers any edge of the segment."""
+		retired = self.bot_states.get(int(bot_id), {}).get('local_target_retired')
+		if (retired is not None and float(now) < retired[1] and
+				_distance_2d(end, retired[0]) <= WAYPOINT_ARRIVAL_RADIUS):
+			return True
 		penalties = self._active_planning_edge_penalties(bot_id, now)
 		return bool(penalties and any(
 			edge in penalties
@@ -3152,6 +3228,9 @@ class TerrainNavigator(object):
 		request_transition = bool(had_request and request_changed)
 		allow_pending_last_target = True
 		if request_changed:
+			state.pop('local_fallback_target', None)
+			state.pop('local_target_retired', None)
+			state.pop('local_completed_target', None)
 			combat_count('nav_request_changed' if had_request else
 			             'nav_request_first')
 			# A new route segment or combat target is not evidence that the previous
@@ -3182,7 +3261,15 @@ class TerrainNavigator(object):
 			state.pop('controlled_shallow_target', None)
 			self._reset_macro_progress(
 				state, current, state.get('last_target'), now)
-		elif movement_intent:
+		if not movement_intent:
+			state.pop('local_fallback_target', None)
+		elif not request_changed:
+			retained = self._retained_local_fallback(bot_id, current, goal, now, state)
+			if retained is not None:
+				state['navigation_status'] = 'pending' if retained == tuple(current) else 'safe'
+				state['target_is_terminal'] = False
+				return retained
+		if not request_changed and movement_intent:
 			self._observe_macro_progress(bot_id, state, current, goal, now)
 		else:
 			# A tactical throttle hold may retain a distant movement order. Keep its

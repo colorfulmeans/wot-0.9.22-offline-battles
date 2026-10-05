@@ -103,6 +103,122 @@ class NavigationWaitLifecycleTests(unittest.TestCase):
         self.assertNotIn(key, nav.paths)
         self.assertIsNone(nav.bot_states[11].get('pending_prefix_search'))
 
+    def issued_exit(self):
+        nav = self.navigator_type(lambda *args: 0.0, baked_graph=fixtures._flat_open_graph())
+        current, goal, local = (0.0, 0.0, 0.0), (0.0, 0.0, 30.0), (3.0, 0.0, 5.0)
+        request = ('local', 11, 'route')
+        nav.next_target(11, current, goal, request, 0.0)
+        state = nav.bot_states[11]
+        nav._remember_local_fallback(local, goal, state, current)
+        state['last_target'] = local
+        return nav, current, goal, local, request
+
+    def test_complete_path_cannot_steal_unfinished_local_exit(self):
+        nav, current, goal, local, request = self.issued_exit()
+        for frame in range(1, 21):
+            pose = (0.1 * (frame % 2), 0.0, 0.0)
+            self.assertEqual(local, nav.next_target(11, pose, goal, request, frame * 0.1))
+        # Finishing the fixed leg permits the ready complete path immediately.
+        self.assertNotEqual(local, nav.next_target(11, local, goal, request, 2.1))
+
+    def test_safety_veto_and_new_order_retire_local_exit(self):
+        nav, current, goal, local, request = self.issued_exit()
+        original = nav.grid.dry_segment_clear
+        with mock.patch.object(nav.grid, 'dry_segment_clear',
+                side_effect=lambda a, b, *args: False if b == local else original(a, b, *args)):
+            self.assertNotEqual(local, nav.next_target(11, current, goal, request, 0.1))
+        nav, current, goal, local, request = self.issued_exit()
+        self.assertNotEqual(local, nav.next_target(
+            11, current, (0.0, 0.0, -30.0), ('local', 11, 'retreat'), 0.1))
+
+    def test_stalled_exit_times_out_without_reselecting_that_same_endpoint(self):
+        nav, current, goal, local, request = self.issued_exit()
+        self.assertEqual(local, nav.next_target(11, current, goal, request, 1.0))
+        target = nav.next_target(11, current, goal, request, 13.0)
+        self.assertNotEqual(local, target)
+        self.assertEqual('timeout', nav.bot_states[11]['local_target_end_reason'])
+        self.assertTrue(nav.bot_segment_penalized(11, current, local, 13.1))
+        self.assertFalse(nav.bot_segment_penalized(12, current, local, 13.1))
+        self.assertFalse(nav.bot_segment_penalized(11, current, local, 26.0))
+
+    def test_tactical_hold_retires_local_exit_and_keeps_motion_disabled(self):
+        nav, current, goal, local, request = self.issued_exit()
+        nav.next_target(11, current, goal, request, 0.1, movement_intent=False)
+        self.assertIsNone(nav.bot_states[11].get('local_fallback_target'))
+
+    def test_slow_real_alignment_renews_lease_but_heading_oscillation_does_not(self):
+        nav, current, goal, local, request = self.issued_exit()
+        for frame in range(25):
+            yaw = -1.0 + frame * 0.04
+            self.assertEqual(local, nav.retained_local_target(
+                11, current, goal, request, float(frame), yaw=yaw))
+        nav, current, goal, local, request = self.issued_exit()
+        for frame in range(12):
+            nav.retained_local_target(11, current, goal, request, float(frame),
+                                      yaw=-1.0 + 0.01 * (frame % 2))
+        self.assertIsNone(nav.retained_local_target(
+            11, current, goal, request, 13.0, yaw=-1.0))
+
+    def test_runtime_lane_translation_applies_once_to_the_actual_issued_leg(self):
+        runtime = self.module.BotRuntime(1)
+        nav = self.navigator_type(lambda *args: 0.0, baked_graph=fixtures._flat_open_graph())
+        runtime.navigator = nav
+        runtime.states = {11: {'id': 11, 'team': 1}}
+        goal, local = (0.0, 0.0, 30.0), (3.0, 0.0, 5.0)
+        strategic = {'combat_mode': 'route', 'route_id': 'south', 'route_index': 1}
+        with mock.patch.object(runtime, '_route_lane_target', return_value=local) as lane:
+            for frame in range(20):
+                result = runtime._navigation_target(11, (0.1 * (frame % 2), 0.0, 0.0),
+                    goal, strategic, {'now': frame * 0.1, 'yaw': 0.0, 'speed': 0.0})
+                self.assertEqual(local, result)
+            self.assertEqual(1, lane.call_count)
+
+    def test_short_direct_shortcut_cannot_steal_an_issued_exit(self):
+        nav, current, goal, local, request = self.issued_exit()
+        runtime = self.module.BotRuntime(1)
+        runtime.navigator = nav
+        runtime.states = {11: {'id': 11, 'team': 1}}
+        short_goal = (0.0, 0.0, 14.0)
+        nav.next_target(11, current, short_goal, ('local', 11, 'engage', 22), 0.0)
+        nav._remember_local_fallback(local, short_goal, nav.bot_states[11], current, 0.0)
+        nav.bot_states[11]['last_target'] = local
+        self.assertEqual(local, runtime._navigation_target(11, current, short_goal,
+            {'combat_mode': 'engage', 'target_id': 22}, {'now': 1.0, 'yaw': 0.0}))
+
+    def test_deferred_native_proof_pauses_without_surrendering_target(self):
+        nav, current, goal, local, request = self.issued_exit()
+        def defer(*unused):
+            nav.grid._native_proof_revision += 1
+            return False
+        with mock.patch.object(nav.grid, 'dry_segment_clear', side_effect=defer):
+            self.assertEqual(current, nav.next_target(11, current, goal, request, 1.0))
+            self.assertEqual(local, nav.bot_states[11]['local_fallback_target'])
+            self.assertEqual('pending', nav.bot_states[11]['navigation_status'])
+        self.assertEqual(local, nav.next_target(11, current, goal, request, 1.1))
+
+    def test_consumed_exit_remains_fixed_origin_for_the_next_short_leg(self):
+        nav, current, goal, local, request = self.issued_exit()
+        arrived = (2.9, 0.0, 5.0)
+        nav._retained_local_fallback(11, arrived, goal, 1.0, nav.bot_states[11])
+        self.assertEqual(local, nav._local_fallback_origin(arrived, goal, nav.bot_states[11]))
+
+    def test_occupied_gate_bypass_does_not_rotate_with_refreshing_hull_pose(self):
+        runtime = self.module.BotRuntime(1)
+        runtime.navigator = self.navigator_type(lambda *args: 0.0,
+                                                baked_graph=fixtures._flat_open_graph())
+        runtime.states = {11: {'id': 11, 'team': 1, 'half_length': 3.5, 'half_width': 1.7}}
+        goal = (0.0, 0.0, 10.0)
+        with mock.patch.object(runtime, '_physical_parking_occupancy',
+                return_value=[(None, goal, 3.5)]):
+            first = runtime._occupied_route_target(11, (0.0, 0.0, 0.0), goal, 0.0, True)
+            self.assertIsNotNone(first)
+            for frame in range(1, 30):
+                self.assertEqual(first, runtime._occupied_route_target(
+                    11, (0.2 * (frame % 2), 0.0, 0.0), goal, float(frame), True))
+            with mock.patch.object(runtime.navigator.grid, 'dry_segment_clear', return_value=False):
+                self.assertIsNone(runtime._occupied_route_target(
+                    11, (0.0, 0.0, 0.0), goal, 31.0, True))
+
 
 if __name__ == '__main__':
     unittest.main()

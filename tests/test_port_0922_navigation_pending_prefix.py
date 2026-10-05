@@ -126,6 +126,17 @@ class PendingPrefixTests(unittest.TestCase):
                 self.assertEqual(first, self.target(self.start, 0.1 + tick * 0.01))
             self.assertEqual(1, copy.call_count)
 
+    def test_completed_search_keeps_the_issued_prefix_until_arrival(self):
+        key, search = self.available_prefix()
+        first = self.target(self.start, 0.1)
+        while not search.done:
+            search.step(256)
+        self.assertTrue(search.result)
+        self.nav._finish_search(key, search, 0.2)
+        for tick in range(1, 20):
+            self.assertEqual(first, self.target(self.start, 0.2 + tick * 0.1))
+        self.assertNotEqual(first, self.target(first, 2.3))
+
     def test_pending_prefix_rechecks_new_wall_water_and_bot_penalty(self):
         for changed in ('wall', 'water', 'penalty'):
             with self.subTest(changed=changed):

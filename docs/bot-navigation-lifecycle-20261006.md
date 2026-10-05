@@ -58,3 +58,39 @@ vehicles, collision clearance, slope descent and frame pacing. Physics support
 coefficients and authored user routes are unchanged. Live joins add bounded
 native proof only for local missing-support exits and already issued local
 targets; this is not a claim of zero additional terrain queries.
+
+## Test108 repeated local target replacement
+
+Report `033050-3c56a774c2a4` identifies installed and bundled build
+`colorfulmeans-37360095958-1`. Panther 8.8 and M60 still change short local
+targets while attempting the same authored medium-tank lane. Test108 did not
+resolve this class of steering ownership failure. Its fixed-endpoint helper
+was reached only from fallback selection; ready paths and runtime lane/bypass
+transforms could replace the endpoint before that helper ran.
+
+An issued local leg now precedes ready-path admission and the short direct
+shortcut. Pending prefixes and the final runtime-transformed destination use
+the same ownership record. Lane offsets apply once; an occupied gate keeps a
+fixed candidate across occupancy refreshes, with fresh body/corridor checks.
+A consumed short leg remains the next fallback's fixed origin. New commands,
+stops, arrival, passed endpoints, proved unsafe geometry and private penalties
+still retire ownership.
+
+The existing 12-second no-progress budget applies to the local leg. Only at
+least 0.2 m closer travel or improved alignment toward its fixed heading can
+renew it; source changes and heading oscillation cannot. A timed-out endpoint
+is suppressed privately for 12 seconds, including ready-path and direct
+admission, without changing shared terrain. Deferred native proof pauses the
+vehicle and retains the endpoint rather than caching a wall or yielding it to
+another path. Cached diagnostics expose the current endpoint, progress age and
+unsafe/timeout termination receipt.
+
+Two new behavioral regressions fail against unchanged test108 source: ready
+paths steal an unfinished exit, and runtime lane translation repeats on every
+decision. Additional checks cover completion of a real incremental search,
+arrival continuation, direct shortcuts, stop/new-order retirement, new
+obstacles, fixed occupied-gate candidates, useful slow alignment, oscillation,
+private timeout expiry and deferred native proof. The selected Bot CI checks
+and all 161 Python 2.7 source compilations pass locally. This is controlled
+lifecycle validation; the report's native BSP collision and mutual-contact
+episode still require #1513 Windows playtesting.

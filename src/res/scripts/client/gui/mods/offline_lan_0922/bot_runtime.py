@@ -8311,10 +8311,20 @@ class BotRuntime(object):
         result = None
         blocked = occupied(goal)
         if blocked:
+            leg = own.get('_occupied_route_leg')
+            # One endpoint belongs to the occupied gate, rather than to each
+            # refreshed hull pose. Navigation/server attempt budgets retire a
+            # stalled intent; pose-dependent regeneration cannot renew them.
+            if (leg is not None and leg[0] == key and
+                    _distance(position, leg[1]) > ai_driver.WAYPOINT_ARRIVAL_RADIUS and
+                    not occupied(leg[1]) and corridor_available(leg[1]) and
+                    (not direct_only or grid.dry_segment_clear(position, leg[1], now))):
+                result = leg[1]
             dx, dz = goal[0]-position[0], goal[2]-position[2]
             length = max(0.01, math.hypot(dx, dz))
             forward = (dx/length, dz/length)
             for reach in (8.0, 12.0):
+                if result is not None:break
                 for ox, oz in ((-forward[1], forward[0]), (forward[1], -forward[0]),
                                forward, (-forward[0], -forward[1])):
                     x, z = goal[0]+ox*reach, goal[2]+oz*reach
@@ -8330,6 +8340,7 @@ class BotRuntime(object):
                     if direct_only and not grid.dry_segment_clear(position, point, now):
                         continue
                     result = point
+                    own['_occupied_route_leg'] = (key, point)
                     break
                 if result is not None:break
             own['route_wreck_blocked'] = True
@@ -8490,7 +8501,13 @@ class BotRuntime(object):
             and not driver_state.get('traffic_waiting', False)
             and int(bot_id) not in self._artillery_intents
             and int(bot_id) not in self._artillery_reproofs)
-        if direct_target:
+        retain = getattr(self.navigator, 'retained_local_target', None)
+        retained = retain(bot_id, position, goal, path_key, now, movement_intent,
+                          state.get('yaw')) if callable(retain) else None
+        if retained is not None:
+            target = retained
+            direct_target = False
+        elif direct_target:
             escape = self.navigator.observe_direct_target(
                 bot_id, position, goal, path_key, now, movement_intent)
             target = tuple(escape or goal)
@@ -8509,14 +8526,18 @@ class BotRuntime(object):
             stop_at_goal and
             ((direct_target and tuple(target) == tuple(goal)) or
              (not direct_target and callable(terminal) and terminal(bot_id))))
-        if mode in ('route', 'advance') and anchor is None:
+        selected_target = tuple(target)
+        if retained is None and mode in ('route', 'advance') and anchor is None:
             target = self._route_lane_target(
                 bot_id, position, goal, target, strategic, now)
-        if mode in ('route', 'advance') and strategic.get('throttle_override') is None:
+        if retained is None and mode in ('route', 'advance') and strategic.get('throttle_override') is None:
             bypass = self._occupied_route_target(bot_id, position, target, now, True)
             if bypass is not None:
                 target = bypass
                 state['navigation_stop_at_target'] = False
+        remember = getattr(self.navigator, 'remember_runtime_target', None)
+        if movement_intent and tuple(target) != selected_target and callable(remember):
+            remember(bot_id, position, goal, target, now)
         state['navigation_status'] = getattr(self.navigator, 'bot_states', {}).get(
             int(bot_id), {}).get('navigation_status', 'pending')
         return target
