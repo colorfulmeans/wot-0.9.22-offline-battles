@@ -102,7 +102,7 @@ def waiting_positions(waypoint):
     """Independent single-vehicle parking places attached to one route gate."""
     if len(waypoint) > 4:
         return waypoint[4]
-    return [list(waypoint[:2]) + [waypoint[3]]] if len(waypoint) > 3 and waypoint[3] else []
+    return []
 
 
 def waypoint(raw, bounds):
@@ -115,8 +115,8 @@ def waypoint(raw, bounds):
         value.append(seconds)
     if len(raw) > 4:
         if raw[3] != 0:raise TacticsError('Independent parking replaces the gate wait')
-        if not isinstance(raw[4], list) or not 1 <= len(raw[4]) <= 3:
-            raise TacticsError('A waypoint allows one to three parking places')
+        if not isinstance(raw[4], list) or not 0 <= len(raw[4]) <= 3:
+            raise TacticsError('A waypoint allows zero to three parking places')
         places = []
         for place in raw[4]:
             if not isinstance(place, (list, tuple)) or len(place) != 3:

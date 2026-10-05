@@ -273,7 +273,7 @@ class NavigationUITests(unittest.TestCase):
         e=self.editor;e.route_class_var.set('all');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
         e.items.selection_set(key);e.select_item();points=e._editable_points()
-        points[0][3:]=[60.];points[1][3:]=[-1.];points[2][3:]=[0.]
+        points[0][3:]=[0.,[list(points[0][:2])+[60.]]];points[1][3:]=[0.,[list(points[1][:2])+[-1.]]];points[2][3:]=[0.]
         before=copy.deepcopy(e.document);e.selected_point=0;e.redraw()
         def radii():
             return [(e.canvas.coords(i)[2]-e.canvas.coords(i)[0])/2
@@ -298,7 +298,7 @@ class NavigationUITests(unittest.TestCase):
 
     def test_custom_wait_nodes_use_the_same_editing_and_overview_markers(self):
         e=self.editor;e.route_class_var.set('all');e.change_route_class();e.new_route()
-        e._selected()['points']=[[-100.,-100.,0,30.],[0.,0.,1,0.],[100.,100.,1,-1.]]
+        e._selected()['points']=[[-100.,-100.,0,0.,[[-100.,-100.,30.]]],[0.,0.,1,0.],[100.,100.,1,0.,[[100.,100.,-1.]]]]
         e.selected_point=2;e.redraw()
         def radii():
             return [(e.canvas.coords(i)[2]-e.canvas.coords(i)[0])/2

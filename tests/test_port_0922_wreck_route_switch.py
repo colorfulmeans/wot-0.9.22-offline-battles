@@ -25,54 +25,78 @@ class WreckRouteSwitchTests(unittest.TestCase):
         return {o['id']: o for o in self.planner.build_orders(
             self.manifest, self.states, [], now)['orders']}
 
-    def test_reported_vk_and_t95_switch_only_after_twenty_seconds(self):
-        self.assertEqual('banana', self.orders(0)[17]['route_id'])
-        self.assertEqual('banana', self.orders(19.9)[24]['route_id'])
-        orders = self.orders(20)
-        for bot_id in (17, 24):
-            self.assertEqual('rail', orders[bot_id]['route_id'])
-            self.assertEqual('wreck_stall', orders[bot_id]['route_switch_reason'])
-            self.assertNotEqual(self.lane['waypoints'][1],
-                                orders[bot_id]['move_position'])
-        # The alternative remains available even after its original Bot dies.
-        self.states[2].update(alive=False, health=0)
-        self.assertEqual('rail', self.orders(200)[17]['route_id'])
+    def test_skip_blocked_gate_then_change_route_after_next_attempt(self):
+        first=self.orders(0)
+        self.orders(19.9)
+        skipped=self.orders(20)
+        for bot_id in (17,24):
+            self.assertEqual('banana',skipped[bot_id]['route_id'])
+            self.assertEqual(first[bot_id]['route_index']+1,skipped[bot_id]['route_index'])
+            self.assertEqual('blocked_timeout',skipped[bot_id]['route_point_skip_reason'])
+            self.assertEqual(dict(x=self.states[0 if bot_id==17 else 1]['x'],y=0.,
+                                  z=self.states[0 if bot_id==17 else 1]['z']),
+                             skipped[bot_id]['route_anchor'])
+            self.assertTrue(skipped[bot_id]['route_join'])
+        self.assertEqual('banana',self.orders(39.9)[17]['route_id'])
+        changed=self.orders(40)
+        for bot_id in (17,24):
+            self.assertEqual('rail',changed[bot_id]['route_id'])
+            self.assertEqual('wreck_stall',changed[bot_id]['route_switch_reason'])
 
-    def test_real_progress_and_detour_travel_restart_the_wait(self):
+    def test_recovery_orbits_do_not_extend_attempt_budget(self):
         self.orders(0)
-        self.states[0]['z'] -= 4
-        self.states[1]['x'] -= 9  # A legitimate bypass can initially go away.
-        self.orders(19)
-        self.assertEqual('banana', self.orders(20)[17]['route_id'])
-        self.assertEqual('banana', self.orders(20)[24]['route_id'])
-        self.assertEqual('rail', self.orders(39)[17]['route_id'])
+        for now in range(1,21):
+            self.states[0]['x']=111 if now%2 else 120
+            self.states[0]['yaw']=now*.3
+            orders=self.orders(now)
+        self.assertEqual(2,orders[17]['route_index'])
+        self.assertEqual('banana',orders[17]['route_id'])
+        self.assertEqual('rail',self.orders(40)[17]['route_id'])
 
-    def test_jitter_or_chassis_turn_does_not_count_as_progress(self):
-        self.orders(0)
-        for now in range(1, 21):
-            self.states[0]['x'] = 120 + (0.5 if now % 2 else -0.5)
-            self.states[0]['yaw'] = now * 0.3
-            orders = self.orders(now)
-        self.assertEqual('rail', orders[17]['route_id'])
+    def test_actual_progress_past_next_gate_resets_skip_sequence(self):
+        self.lane['waypoints'].append(dict(x=-200,y=0,z=-280))
+        self.orders(0);self.orders(20)
+        self.states[0].update(x=0,z=-280,route_wreck_blocked=False)
+        self.assertEqual(3,self.orders(21)[17]['route_index'])
+        self.assertNotIn('blocked_skip_to',self.planner._route_states[17])
 
-    def test_repeated_eight_metre_orbit_does_not_renew_detour_credit(self):
-        self.orders(0)
-        self.states[0]['x'] = 111
-        self.orders(5)
-        for now in range(6, 25):
-            self.states[0]['x'] = 111 if now % 2 else 120
-            self.orders(now)
-        self.assertEqual('rail', self.orders(25)[17]['route_id'])
+    def test_second_blocked_gate_changes_route_instead_of_skipping_again(self):
+        self.lane['waypoints'].append(dict(x=-200,y=0,z=-280))
+        self.orders(0);self.orders(20)
+        self.assertEqual('rail',self.orders(40)[17]['route_id'])
 
-    def test_proved_obstruction_close_to_waypoint_can_still_change_lane(self):
-        self.states[0].update(x=190, z=-64)
-        self.planner._route_states[17] = dict(route_id='banana', index=1)
-        bot = self.planner._alive_bots(self.manifest, self.states)[0]
-        order = dict(route_id='banana', route_index=1, combat_mode='route',
-                     move_position=self.lane['waypoints'][1])
-        self.planner._reroute_wreck_stall(order, bot, self.manifest, 0)
-        self.planner._reroute_wreck_stall(order, bot, self.manifest, 20)
-        self.assertEqual('rail', order['route_id'])
+    def test_reaching_next_gate_allows_a_fresh_skip_on_later_obstruction(self):
+        self.lane['waypoints'].extend([dict(x=-200,y=0,z=-280),dict(x=-400,y=0,z=-280)])
+        self.orders(0);self.orders(20)
+        self.states[0].update(x=0,z=-280,route_wreck_blocked=False)
+        self.orders(21)
+        self.states[0]['route_wreck_blocked']=True
+        self.orders(22)
+        skipped=self.orders(42)[17]
+        self.assertEqual(('banana',4),(skipped['route_id'],skipped['route_index']))
+        self.assertEqual('blocked_timeout',skipped['route_point_skip_reason'])
+
+    def test_cleared_blocker_resets_next_gate_attempt_clock(self):
+        self.orders(0);self.orders(20)
+        self.states[0]['route_wreck_blocked']=False
+        self.orders(30)
+        self.states[0]['route_wreck_blocked']=True
+        self.orders(40)
+        self.assertEqual('banana',self.orders(59.9)[17]['route_id'])
+        self.assertEqual('rail',self.orders(60)[17]['route_id'])
+
+    def test_proved_obstruction_close_to_gate_skips_without_returning(self):
+        self.states[0].update(x=190,z=-64)
+        self.planner._route_states[17]=dict(route_id='banana',index=1)
+        bot=self.planner._alive_bots(self.manifest,self.states)[0]
+        order=dict(route_id='banana',route_index=1,combat_mode='route',
+                   move_position=self.lane['waypoints'][1])
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,0)
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,20)
+        self.assertEqual(('banana',2),(order['route_id'],order['route_index']))
+        self.assertEqual(-64,order['route_anchor']['z'])
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,40)
+        self.assertEqual('rail',order['route_id'])
 
     def test_missing_wreck_evidence_or_immobilization_never_switches(self):
         self.states[0]['route_wreck_blocked'] = False
@@ -84,6 +108,7 @@ class WreckRouteSwitchTests(unittest.TestCase):
     def test_no_suitable_route_holds_and_does_not_oscillate(self):
         self.bypass['class_weights'] = {'heavyTank': 0, 'AT-SPG': 0}
         self.orders(0)
+        self.orders(20)
         self.assertEqual('banana', self.orders(100)[17]['route_id'])
         self.bypass['class_weights'] = {'heavyTank': 1, 'AT-SPG': 1}
         orders = self.orders(120)

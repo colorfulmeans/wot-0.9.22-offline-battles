@@ -36,7 +36,7 @@ class WaitParkingTests(unittest.TestCase):
     def setup_parking(self, places=None):
         planner, manifest = authored_waits.AuthoredRouteWaitTests().setup_route('AT-SPG')
         route=planner.tactics['maps']['08_ruinberg']['routes'][0]
-        route['points']=[[0,0,1,0,places or [[0,0,10],[20,0,20],[40,0,30]]],[100,0,0]]
+        route['points']=[[0,0,1,0,places if places is not None else [[0,0,10],[20,0,20],[40,0,30]]],[100,0,0]]
         planner.tactics=cfg.canonical(planner.tactics)
         wire=_route('user_'+route['id'],[(0,0,1),(100,0,0)])
         manifest=[_bot(i,1,i-11,copy.deepcopy(wire),'AT-SPG') for i in range(11,15)]
@@ -45,13 +45,13 @@ class WaitParkingTests(unittest.TestCase):
     def orders(self, planner, manifest, states, now):
         return {o['id']:o for o in planner.build_orders(manifest,states,[],now)['orders']}
 
-    def test_three_distinct_stable_places_and_fourth_queues(self):
+    def test_three_distinct_places_and_fourth_uses_parent_gate(self):
         p,m=self.setup_parking();states=[_state(i,1,-100-(i-11)*15,0) for i in range(11,15)]
         first=self.orders(p,m,states,1)
         self.assertEqual([0,20,40],[first[i]['move_position']['x'] for i in range(11,14)])
-        self.assertEqual('queue',first[14]['parking_phase'])
-        self.assertEqual(0,first[14]['throttle_override'])
-        self.assertEqual(-145,first[14]['move_position']['x'])
+        self.assertNotIn('parking_phase',first[14])
+        self.assertIsNone(first[14]['throttle_override'])
+        self.assertEqual(0,first[14]['move_position']['x'])
         again=self.orders(p,m,list(reversed(states)),2)
         self.assertEqual([first[i]['move_position'] for i in range(11,15)],
                          [again[i]['move_position'] for i in range(11,15)])
@@ -77,19 +77,49 @@ class WaitParkingTests(unittest.TestCase):
         p,m=self.setup_parking([[0,0,5]])
         states=[_state(11,1,0,0),_state(12,1,-40,0)]
         m=m[:2];self.orders(p,m,states,1)
-        self.assertEqual('queue',self.orders(p,m,states,6)[12]['parking_phase'])
-        self.assertEqual('queue',self.orders(p,m,states,7)[12]['parking_phase'])
+        self.assertNotIn('parking_phase',self.orders(p,m,states,6)[12])
+        self.assertNotIn('parking_phase',self.orders(p,m,states,7)[12])
         states[0]['x']=11
-        self.assertEqual('approach',self.orders(p,m,states,8)[12]['parking_phase'])
+        m.append(dict(m[1],id=13,slot=2));states.append(_state(13,1,-80,0))
+        self.assertEqual('approach',self.orders(p,m,states,8)[13]['parking_phase'])
+        self.assertNotIn('parking_phase',self.orders(p,m,states,9)[12])
 
     def test_dead_owner_releases_lease_but_wreck_position_stays_occupied(self):
         p,m=self.setup_parking([[0,0,5]])
         states=[_state(11,1,0,0),_state(12,1,-40,0)]
         self.orders(p,m[:2],states,1);states[0]['alive']=False;states[0]['health']=0
-        self.assertEqual('queue',self.orders(p,m[:2],states,2)[12]['parking_phase'])
+        self.assertNotIn('parking_phase',self.orders(p,m[:2],states,2)[12])
         states[0]['x']=12
-        self.assertEqual('approach',self.orders(p,m[:2],states,3)[12]['parking_phase'])
+        states.append(_state(13,1,-80,0))
+        self.assertEqual('approach',self.orders(p,m[:3],states,3)[13]['parking_phase'])
         p.reset();self.assertEqual({},p._wait_claims)
+
+    def test_zero_small_slots_and_old_parent_duration_do_not_wait(self):
+        p,m=self.setup_parking([])
+        p.tactics['maps']['08_ruinberg']['routes'][0]['points'][0]=[0,0,1,120]
+        states=[_state(11,1,-40,0)]
+        order=self.orders(p,m[:1],states,1)[11]
+        self.assertEqual(0,order['route_index'])
+        self.assertEqual(0,order['move_position']['x'])
+        self.assertNotIn('parking_phase',order)
+        states[0]['x']=0
+        self.assertEqual(1,self.orders(p,m[:1],states,2)[11]['route_index'])
+
+    def test_full_parking_group_still_uses_blocked_parent_gate_timeout(self):
+        p,m=self.setup_parking([[0,0,10]])
+        states=[_state(11,1,-40,0)]
+        states[0].update(world_pose=True,route_wreck_blocked=True)
+        player=dict(_state(1,1,0,0),alive=False,health=0,world_pose=True)
+        def order(now):
+            return p.build_orders(m[:1],states,[player],now)['orders'][0]
+        first=order(0)
+        self.assertEqual(0,first['route_index'])
+        self.assertEqual(0,first['move_position']['x'])
+        self.assertNotIn('parking_phase',first)
+        skipped=order(20)
+        self.assertEqual(1,skipped['route_index'])
+        self.assertEqual('blocked_timeout',skipped['route_point_skip_reason'])
+        self.assertEqual(-40,skipped['route_anchor']['x'])
 
     def test_schema_rejects_four_slots_nonfinite_times_and_duplicate_positions(self):
         p,m=self.setup_parking();raw=p.tactics

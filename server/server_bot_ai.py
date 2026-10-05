@@ -2499,28 +2499,19 @@ class BotPlanner(object):
         self._route_states.pop(donor["id"], None)
 
     def _reroute_wreck_stall(self, order, bot, manifest, now):
-        """Abandon a corpse-blocked macro lane after local recovery stalls.
-
-        The worker proves the obstruction against installed wreck hulls. A
-        turning chassis or queued path is not progress; advancing toward the
-        gate or travelling a real detour is. Holds and combat never count.
-        """
+        """Bound each blocked gate attempt; skip once before changing lanes."""
         bot_id = bot['id']
         state = bot['state']
         route_id = str(order.get('route_id') or '')
-        authored = bot_tactics.route_config(
-            self.tactics, self.tactics_map, route_id, bot['team'])
         if (order.get('combat_mode') not in ('route', 'advance') or
                 order.get('team_command') or
                 order.get('throttle_override') is not None or
                 not state.get('route_wreck_blocked') or
-                not self._route_donor_eligible(bot) or
-                (authored is not None and authored['policy'] == 'fixed')):
+                not self._route_donor_eligible(bot)):
             self._wreck_route_progress.pop(bot_id, None)
             return
         point = _point(state)
         goal = _point(order.get('move_position') or {})
-        distance = math.hypot(goal['x'] - point['x'], goal['z'] - point['z'])
         key = (route_id, order.get('route_index'))
         progress = self._wreck_route_progress.get(bot_id)
         if (progress is None or progress['key'] != key or
@@ -2529,19 +2520,36 @@ class BotPlanner(object):
             progress = None
         if progress is None:
             self._wreck_route_progress[bot_id] = {
-                'key': key, 'goal': goal, 'point': point,
-                'distance': distance, 'detour_best': 0.0, 'since': _number(now)}
+                'key': key, 'goal': goal, 'since': _number(now)}
             return
-        moved = math.hypot(point['x'] - progress['point']['x'],
-                           point['z'] - progress['point']['z'])
-        if (progress['distance'] - distance >= 2.0 or
-                moved >= progress.get('detour_best', 0.0) + 8.0):
-            # Credit new territory or a new best approach, never another visit
-            # to a previously reached side of the same blocked hull.
-            progress['distance'] = min(progress['distance'], distance)
-            progress['detour_best'] = max(progress.get('detour_best', 0.0), moved)
-            progress['since'] = _number(now)
+        # A moving recovery orbit still has a finite attempt budget. Only
+        # consuming the gate or clearing the physical blocker ends this attempt.
         if _number(now) - progress['since'] < WRECK_ROUTE_WAIT_SECONDS:
+            return
+        route_state = self._route_states.get(bot_id) or {}
+        route = (self._route_assignments.get(bot_id) or {}).get('route') or bot.get('route') or {}
+        waypoints = route.get('waypoints') or []
+        index = _integer(order.get('route_index'))
+        if route_state.get('blocked_skip_to') != index and index + 1 < len(waypoints):
+            next_index = index + 1
+            route_state.update(index=next_index, blocked_skip_to=next_index,
+                               join_index=next_index, join_anchor=dict(point))
+            # Abandon the blocked gate's parking lease as well as its geometry.
+            route_state.setdefault('parking_completed', set()).add(index)
+            for claim_key, claim in list(self._wait_claims.items()):
+                if claim['bot_id'] == bot_id and claim_key[:3] == (bot['team'], route_id, index):
+                    self._wait_claims.pop(claim_key, None)
+            self._route_states[bot_id] = route_state
+            new_id, new_index, move, anchor, join = self._route(bot, now)
+            order.update(route_id=new_id, route_index=new_index,
+                         move_position=move, face_position=dict(move),
+                         route_anchor=anchor, route_join=join,
+                         route_point_skip_reason='blocked_timeout',
+                         previous_route_index=index)
+            self._apply_authored_route_order(order, bot, move)
+            self._wreck_route_progress[bot_id] = {
+                'key': (new_id, new_index), 'goal': _point(move),
+                'since': _number(now)}
             return
         avoided = self._wreck_route_avoid.setdefault(bot_id, {})
         avoided[route_id] = _number(now) + WRECK_ROUTE_AVOID_SECONDS
@@ -2615,6 +2623,8 @@ class BotPlanner(object):
             if saved is not None:
                 state = dict(index=saved['index'],route_id=route_id,
                     parking_completed=set(saved.get('parking_completed', ())),
+                    parking_skipped=set(saved.get('parking_skipped', ())),
+                    blocked_skip_to=saved.get('blocked_skip_to'),
                     join_index=saved['index'],join_anchor=_point(bot['state']))
                 self._route_states[bot['id']] = state
         if state is None or state.get("route_id") != route_id:
@@ -2693,6 +2703,9 @@ class BotPlanner(object):
                 if not completed:
                     point = parking
                     break
+                if (index in state.get('parking_skipped', ()) and
+                        not _route_point_reached(bx, bz, waypoints, index, route_limit)):
+                    break
             elif not _route_point_reached(bx, bz, waypoints, index, route_limit):
                 break
             if index >= route_limit:
@@ -2700,6 +2713,9 @@ class BotPlanner(object):
             index += 1
             state['index'] = index
             point = _point(waypoints[index])
+        if (state.get('blocked_skip_to') != index or
+                state.get('parking_phase') == 'waiting'):
+            state.pop('blocked_skip_to', None)
         route_join = (state.get("join_index") == index and
                       isinstance(state.get("join_anchor"), dict))
         if route_join:
@@ -2772,11 +2788,14 @@ class BotPlanner(object):
                 self._wait_claims[key] = dict(bot_id=bot_id, point=list(place[:2]), radius=radius)
                 break
         if key is None:
-            state['holding'] = True
-            state['parking_phase'] = 'queue'
-            # Do not converge onto an occupied place. Freeze the queue goal.
-            return False, state.setdefault('queue_anchor', _point(bot['state']))
-        state.pop('queue_anchor', None)
+            # No queue: this hull travels through the parent gate normally.
+            # Do not reacquire a slot later while crossing this same gate.
+            completed.add(index)
+            state.setdefault('parking_skipped', set()).add(index)
+            state['holding'] = False
+            state.pop('parking_phase', None)
+            state.pop('parking_slot', None)
+            return True, None
         state['parking_slot'] = key[3]
         state['parking_phase'] = 'approach'
         place = places[key[3]]

@@ -7920,3 +7920,30 @@ cached convergence, native pose denial, steps/decks/cliffs/missing support,
 retry/shared budget bounds and all 29 rejected poses under the frame cap.
 These checks do not prove native slope shape or Windows frame pacing; repeat
 T-54's actual El Halluf descent with the resulting launcher package.
+
+
+### Bounded route gate attempts and optional parking places (2026-10-06)
+
+A route gate remains ordinary travel geometry. Only its explicit small parking
+places replace that gate for the vehicle holding a place lease. Empty groups and
+fully occupied/reserved groups use the parent gate without stopping or queueing;
+a declined group is not reacquired while that vehicle traverses the same gate.
+Completed real parking still advances without requiring a return to the parent.
+Legacy parent duration fields alone no longer create a parking place.
+
+Worker-proved player/wreck blockage has a twenty-second attempt budget. On the
+first timeout the planner abandons the gate and targets its successor, with a
+connector anchored at the current hull pose instead of the rejected gate. If that
+successor also remains blocked for twenty seconds, the planner selects a suitable
+alternative route. Reaching the successor clears the skip sequence. Clearing the
+blocker resets the attempt clock; chassis oscillation does not extend it. Holds,
+combat, explicit team commands and proved immobilization do not consume attempts.
+A blocked terminal gate has no successor and can change lanes after its budget.
+Without a suitable alternative, retry selection remains bounded by that budget.
+All bookkeeping uses the existing server planning pass and worker collision proof;
+this change adds no native terrain queries or higher-frequency planning.
+
+Focused tests cover consecutive blocked gates, actual progress, recovery orbits,
+player/wreck/reservation occupancy, empty groups, parent-gate fallback and retained
+individual arrival clocks. Exact-client gameplay remains the acceptance boundary
+for collision clearance and movement feel.

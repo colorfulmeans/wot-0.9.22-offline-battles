@@ -32,21 +32,26 @@ class WaitDisplacementTests(unittest.TestCase):
         self.assertEqual(0, self.orders(1)['parking_slot'])
         self.assertEqual(1, self.orders(2, [self.human()])['parking_slot'])
 
-    def test_wreck_entering_an_existing_lease_reassigns_and_full_wrecks_queue(self):
+    def test_wreck_entering_lease_reassigns_and_full_group_uses_parent(self):
         self.assertEqual(0, self.orders(1)['parking_slot'])
         wreck = dict(self.human(), alive=False, health=0)
         self.assertEqual(1, self.orders(2, [wreck])['parking_slot'])
         wrecks = [dict(wreck, id=i, x=x) for i, x in enumerate((0, 20, 40), 1)]
-        self.assertEqual('queue', self.orders(3, wrecks)['parking_phase'])
-        self.assertEqual(1, self.orders(4, wrecks[::2])['parking_slot'])
+        full = self.orders(3, wrecks)
+        self.assertNotIn('parking_phase', full)
+        self.assertEqual(0, full['move_position']['x'])
+        self.assertIsNone(full['throttle_override'])
+        self.assertNotIn('parking_slot', self.orders(4, wrecks[::2]))
 
-    def test_all_occupied_queue_then_player_leaving_releases_destination(self):
+    def test_all_occupied_uses_parent_without_later_reacquiring_slot(self):
         players = [self.human(x, i) for i, x in enumerate((0, 20, 40), 1)]
         order = self.orders(1, players)
-        self.assertEqual('queue', order['parking_phase'])
-        self.assertEqual(-40, order['move_position']['x'])
-        self.assertEqual(0, order['throttle_override'])
-        self.assertEqual(1, self.orders(2, players[::2])['parking_slot'])
+        self.assertNotIn('parking_phase', order)
+        self.assertEqual(0, order['move_position']['x'])
+        self.assertIsNone(order['throttle_override'])
+        self.assertNotIn('parking_slot', self.orders(2, players[::2]))
+        self.states[0]['x']=0
+        self.assertEqual(1,self.orders(3,players[::2])['route_index'])
 
     def test_chassis_size_and_separate_floor_affect_occupancy(self):
         human = self.human(-10)

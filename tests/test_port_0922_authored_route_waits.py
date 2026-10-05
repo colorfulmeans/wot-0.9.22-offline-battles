@@ -246,7 +246,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         raw = profile()
         route = raw['maps']['08_ruinberg']['routes'][0]
         route.update(classes=[class_tag], points=[
-            [0, 0, 1, seconds], [100, 0, 1, -1]])
+            [0, 0, 1, 0, [[0, 0, seconds]]], [100, 0, 1, 0, [[100, 0, -1]]]])
         planner = BotPlanner()
         planner.tactics = cfg.canonical(raw)
         planner.tactics_map = '08_ruinberg'
@@ -314,7 +314,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
     def test_rounded_manifest_keeps_scoped_default_waits(self):
         planner, manifest = self.setup_route('AT-SPG', 120)
         route = planner.tactics['maps']['08_ruinberg']['routes'].pop()
-        route['points'] = [[0.1234, 0.2345, 1, 120], [100.5678, 0.3456, 0]]
+        route['points'] = [[0.1234, 0.2345, 1, 0, [[0.1234, 0.2345, 120]]], [100.5678, 0.3456, 0]]
         edit = dict(id=cfg.MAPS['08_ruinberg']['route_ids']['1'][0], team=1,
                     class_tag='AT-SPG', points=route['points'])
         planner.tactics['maps']['08_ruinberg']['default_routes'] = [edit]
