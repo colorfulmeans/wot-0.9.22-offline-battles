@@ -47,6 +47,51 @@ class WreckContactRecoveryTests(unittest.TestCase):
             self.assertNotEqual(0.,turn)
             self.assertEqual(0.,throttle)
 
+    def test_wait_anchor_does_not_reverse_hull_on_target_loss(self):
+        # Reported Foch: the anchor lies 0.4 m behind the already aimed hull.
+        # The same rule applies to a queued vehicle and to either hull type.
+        for phase in ('waiting', 'queue'):
+            self.setUp()
+            self.state.update(position=(-114.6, 58.1062, -290.2),
+                              yaw=1.17, neighbours=[], pose_clear=lambda yaw: True)
+            self.order.update(combat_mode='hold', parking_phase=phase,
+                              move_position=(-114.183, 58.1062, -290.2396))
+            self.order.update(target_id=None, aim_position=None,
+                              face_position=None, fire_allowed=False)
+            command = self.decide()
+            self.assertEqual(0., command['turn'])
+            self.assertEqual(1.17, command['target_yaw'])
+            self.assertEqual(0., command['throttle'])
+            self.assertFalse(command['movement_intent'])
+            # Reacquisition remains free to aim through the rear hemisphere;
+            # parking is not a hull-yaw lock or a firing prohibition.
+            self.order.update(target_id=9, aim_position=(-300., 50., -400.),
+                              face_position=(-300., 50., -400.), fire_allowed=True)
+            command = self.decide()
+            self.assertNotEqual(0., command['turn'])
+            self.assertTrue(command['fire_allowed'])
+            turn, throttle, active = combat_hull_aim(
+                1.17, command['target_yaw'], -.1, .1,
+                command['turn'], command['throttle'], command['recovery_mode'],
+                combat_mode='hold', movement_intent=False)
+            self.assertTrue(active)
+            self.assertNotEqual(0., turn)
+            self.assertEqual(0., throttle)
+            # Another proof gap must not create a parking-facing turn.
+            self.state['yaw'] = command['target_yaw']
+            self.order.update(target_id=None, aim_position=None,
+                              face_position=None, fire_allowed=False)
+            self.assertEqual(0., self.decide()['turn'])
+
+    def test_parked_explicit_facing_and_ordinary_arrival_still_turn(self):
+        self.order.update(combat_mode='hold', parking_phase='waiting')
+        self.assertNotEqual(0., self.decide()['turn'])
+        self.order.update(parking_phase=None, target_id=None,
+                          aim_position=None, face_position=None,
+                          move_position=(.4, 0., -.1))
+        self.state.update(neighbours=[], pose_clear=lambda yaw: True)
+        self.assertNotEqual(0., self.decide()['turn'])
+
     def test_side_hug_tries_both_gears_for_wreck_enemy_and_friend(self):
         for alive, team in ((False, 1), (False, 2), (True, 1), (True, 2)):
             self.setUp()

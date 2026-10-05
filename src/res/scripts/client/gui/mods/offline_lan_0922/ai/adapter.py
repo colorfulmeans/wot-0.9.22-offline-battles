@@ -347,6 +347,12 @@ class BotAdapter(object):
         aim_position = strategic.get('aim_position')
         move_position = strategic.get('move_position')
         face_position = strategic.get('face_position')
+        parked = strategic.get('parking_phase') in ('waiting', 'queue')
+        if parked and face_position is None and aim_position is None:
+            # A parking coordinate is a translation anchor, not a facing
+            # order. Losing a target must not turn the hull back toward the
+            # sub-metre offset to that anchor and undo fixed-gun laying.
+            face_position = position
         if aim_position is not None:
             aim_position = _position(aim_position, position)
         if move_position is not None:
@@ -360,7 +366,6 @@ class BotAdapter(object):
         if callable(self.navigation_target):
             target = _position(self.navigation_target(
                 bot_id, position, target, strategic, state), target)
-        parked = strategic.get('parking_phase') in ('waiting', 'queue')
         contact_plan = (None if parked else self._wreck_push_plan(
             bot_id, state, position, strategic, direction_clear))
         contact = self._hull_contact(bot_id, state, position)
