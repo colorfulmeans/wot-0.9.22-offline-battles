@@ -17,6 +17,7 @@ from collections import deque
 
 from gui.mods.offline_lan_0922.ai.driver import (
 	FIRST_CANDIDATE_OFFSET, WAYPOINT_ARRIVAL_RADIUS)
+from gui.mods.offline_lan_0922.vehicle_physics import SLIP_THRESHOLD_TAN
 
 
 SQRT_TWO = math.sqrt(2.0)
@@ -154,6 +155,7 @@ class TerrainGrid(object):
 		self._corridor_cache = {}
 		self._edge_cache = {}
 		self._segment_cache = {}
+		self._slope_corridor_cache = {}
 		self._failed_edges = {}
 		self._static_hull_edges = {}
 		self._static_hull_key = None
@@ -678,7 +680,13 @@ class TerrainGrid(object):
 			return True
 		if self.prebaked:
 			if not self._baked_corridor(start, end)[0]:
-				return False
+				# A diagonal can exceed the old 0.38 bake grade even when both
+				# orthogonal ways round the same supported square are legal.
+				# Merge only a bounded, dry square corridor with a fresh native
+				# ground/collision proof inside the exact client's full-grip range.
+				return (self._supported_slope_corridor(start, end) and
+				        self._native_segment_clear(
+					        start, end, SLIP_THRESHOLD_TAN))
 			return (not self._needs_native_review(start, end) or
 			        self._native_segment_clear(start, end))
 		start_key = self._point_key(start)
@@ -758,20 +766,83 @@ class TerrainGrid(object):
 			cell in self._native_review_cells for cell in
 			self._baked_segment_cells(start, end, require_height=False)))
 
-	def _native_segment_clear(self, start, end):
+	def _supported_slope_corridor(self, start, end):
+		"""Admit only dry diagonal stairs whose two reversible sides exist.
+
+		The native proof still owns height continuity and hull collision. This
+		bounded geometry predicate never opens missing cardinal links or holes.
+		"""
+		if (not callable(self.ground_probe) or
+				not callable(self.obstacle_probe) or
+				_distance_2d(start, end) > self.cell_size * 12.0):
+			return False
+		key = (self.cell_for(start), self.cell_for(end))
+		if key in self._slope_corridor_cache:
+			return self._slope_corridor_cache[key]
+		cells = self._baked_segment_cells(start, end, require_height=False)
+		clear = bool(cells)
+		for cell in cells:
+			index = self._baked_index(cell)
+			if index is None or self._baked_hazards[index]:
+				clear = False
+				break
+		if clear:
+			for first, last in zip(cells, cells[1:]):
+				if self._baked_edge_height(first, last) is not None:
+					continue
+				if first[0] == last[0] or first[1] == last[1]:
+					clear = False
+					break
+				corners = ((last[0], first[1]), (first[0], last[1]))
+				for corner in corners:
+					index = self._baked_index(corner)
+					if (index is None or self._baked_hazards[index] or
+							self._baked_edge_height(first, corner) is None or
+							self._baked_edge_height(corner, last) is None or
+							self._baked_edge_height(last, corner) is None or
+							self._baked_edge_height(corner, first) is None):
+						clear = False
+						break
+				if not clear:
+					break
+				# Every corner gradient must retain native full longitudinal grip.
+				heights = [self._baked_cell_height(c) for c in
+				           (first, corners[0], corners[1], last)]
+				for centre, side_a, side_b in ((0, 1, 2), (1, 0, 3),
+				                               (2, 0, 3), (3, 1, 2)):
+					grade_sq = sum((heights[side] - heights[centre]) ** 2
+					               for side in (side_a, side_b)) / self.cell_size ** 2
+					if grade_sq > SLIP_THRESHOLD_TAN ** 2:
+						clear = False
+						break
+				if not clear:
+					break
+		if len(self._slope_corridor_cache) >= MAX_BAKED_CORRIDOR_CACHE:
+			self._slope_corridor_cache.clear()
+		self._slope_corridor_cache[key] = clear
+		return clear
+
+	def _native_segment_clear(self, start, end, slope_limit=None):
 		'''Prove an affected local segment without using cached baked heights.'''
 		distance = _distance_2d(start, end)
 		# Long shortcuts must use the bounded A* edges through this region.
 		if distance > self.cell_size * 12.0:
 			return False
 		key = (self._point_key(start), self._point_key(end))
+		grade_limit = min(self.max_grade_up, self.max_grade_down)
+		if slope_limit is not None:
+			grade_limit = min(float(slope_limit), SLIP_THRESHOLD_TAN)
+			key += (grade_limit,)
 		if key in self._native_review_cache:
 			return self._native_review_cache[key]
 		pending = self._native_review_pending
 		exact_key = (tuple(start), tuple(end))
 		if pending is not None and exact_key in pending:
 			return False
-		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
+		step_size = self.cell_size * 0.42
+		if slope_limit is not None:
+			step_size = min(1.0, step_size)
+		steps = max(1, int(math.ceil(distance / step_size)))
 		previous = None
 		first = None
 		clear = True
@@ -789,7 +860,7 @@ class TerrainGrid(object):
 				point = (x, float(y), z)
 				if previous is not None and abs(point[1] - previous[1]) > (
 						_distance_2d(point, previous) *
-						min(self.max_grade_up, self.max_grade_down)):
+						grade_limit):
 					clear = False
 					break
 				if first is None:

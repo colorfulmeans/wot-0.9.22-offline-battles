@@ -7,6 +7,22 @@ from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state
 
 
 class AuthoredRouteWaitTests(unittest.TestCase):
+    def test_distant_known_enemy_cannot_pin_completed_withdrawal_forever(self):
+        planner = BotPlanner()
+        bot = _bot(11, 2, 0, _route('lane', [(0, 0, 0), (100, 0, 0)]), 'lightTank')
+        bot['state'] = _state(11, 2, 0, 0)
+        bot['profile']['fire_range'] = 320.0
+        def order(now, enemy=400):
+            value = dict(target_id=15, combat_mode='route',
+                         move_position={'x':100,'y':0,'z':0}, throttle_override=None)
+            return planner._apply_retreat_order(value, bot,
+                {'x':0,'y':0,'z':0}, {'x':enemy,'y':0,'z':0}, now,
+                'low_health_retreat', 'low_health_defend')
+        self.assertEqual('low_health_retreat', order(0)['combat_mode'])
+        self.assertEqual('route', order(15)['combat_mode'])
+        self.assertEqual('route', order(16)['combat_mode'])
+        self.assertEqual('low_health_retreat', order(17, 100)['combat_mode'])
+
     def setup_route(self, class_tag='heavyTank', seconds=30):
         raw = profile()
         route = raw['maps']['08_ruinberg']['routes'][0]
@@ -75,6 +91,23 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         self.order(planner,manifest,0,10)
         self.assertEqual('hold',self.order(planner,manifest,0,39.9)['combat_mode'])
         self.assertEqual(1,self.order(planner,manifest,0,40)['route_index'])
+
+    def test_rounded_manifest_keeps_scoped_default_waits(self):
+        planner, manifest = self.setup_route('AT-SPG', 120)
+        route = planner.tactics['maps']['08_ruinberg']['routes'].pop()
+        route['points'] = [[0.1234, 0.2345, 1, 120], [100.5678, 0.3456, 0]]
+        edit = dict(id=cfg.MAPS['08_ruinberg']['route_ids']['1'][0], team=1,
+                    class_tag='AT-SPG', points=route['points'])
+        planner.tactics['maps']['08_ruinberg']['default_routes'] = [edit]
+        planner.tactics = cfg.canonical(planner.tactics)
+        manifest[0]['route'] = _route(cfg.default_route_id(edit),
+            [(round(p[0], 3), round(p[1], 3), p[2]) for p in edit['points']])
+        self.assertEqual('hold', self.order(planner, manifest, 0, 10)['combat_mode'])
+        self.assertEqual('hold', self.order(planner, manifest, 0, 129.9)['combat_mode'])
+        self.assertEqual(1, self.order(planner, manifest, 0, 130)['route_index'])
+        manifest[0]['route']['waypoints'][0]['x'] += 0.01
+        self.assertIsNone(cfg.route_config(planner.tactics, '08_ruinberg',
+            cfg.default_route_id(edit), 1, manifest[0]['route']['waypoints']))
 
 
 if __name__ == '__main__':

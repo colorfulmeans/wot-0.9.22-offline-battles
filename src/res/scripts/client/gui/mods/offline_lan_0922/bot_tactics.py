@@ -302,7 +302,9 @@ def route_config(raw, name, route_id, team=None, waypoints=None):
         if len(waypoints) != len(edit['points']):return None
         for actual, expected in zip(waypoints, edit['points']):
             actual = (actual['x'], actual['z']) if isinstance(actual, dict) else actual[:2]
-            if any(abs(actual[i] - expected[i]) > 0.0001 for i in (0, 1)):return None
+            # Uploaded manifest coordinates are rounded to three decimals.
+            # Accept that serialization error, not a different fallback lane.
+            if any(abs(actual[i] - expected[i]) > 0.000501 for i in (0, 1)):return None
     tag = edit.get('class_tag', 'all')
     return dict(edit, id=route_id, default=True, source_id=edit['id'],
                 classes=list(CLASSES) if tag == 'all' else [tag],

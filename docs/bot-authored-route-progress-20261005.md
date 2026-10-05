@@ -62,3 +62,41 @@ The six route regressions, 101 server tests and 28 other targeted join,
 clearance and ingress checks pass locally; client navigation compiles under
 Python 2.7. Native gameplay remains pending and the existing general artillery
 target-lease failure is not claimed fixed.
+
+
+## Residual downhill stair geometry and report 132255
+
+Build 89 fixed the authored corridor cost but retained the legacy 0.38-grade
+link eligibility. The reported M46 path alternated 4 m cardinal edges; the
+23.86-degree diagonal was absent although native longitudinal grip remains
+full through 27.5 degrees. The runtime now admits bounded (48 m maximum)
+shortcut proofs across dry squares only when both reversible cardinal paths
+already exist and every corner gradient remains within the existing native
+full-grip threshold. Actual ground is sampled at at most 1 m intervals and the
+native hull corridor must be clear. Missing ground, cardinal links, corners,
+water, collision and discontinuities still veto. A* topology, map fingerprints
+and authored profiles are unchanged. Proof caches retain the existing bounds.
+
+The exact installed #1513 terrain and compiled static obstacle audit admitted
+both the reported diagonal and its longer downhill chord. A fixture sampled
+from that terrain verifies the complete smoothed output, not merely one
+forward target. Native game driving remains the user acceptance boundary.
+
+Report 132255 also proved that four-decimal edited default route coordinates
+were rounded to three decimals in the manifest. The old 0.0001 matching tolerance
+rejected the route identity and its 120-second waits. Matching now accepts only
+the maximum three-decimal serialization error (0.000501 m); different fallback
+lanes still reject. The regression exercises arrival, the complete 120-second
+wait and release, for a scoped default TD route.
+
+The late M41 Bulldog and LTTB were in low-health withdrawal terminals, with
+zero throttle and no collision. Their distant known targets were beyond the
+320 m light-tank firing envelope, so firing was withheld while target identity
+kept the defensive hold alive. A completed withdrawal now resumes after the
+existing 15-second defensive pause when there is no target within the existing
+1.15 firing-range threat envelope and no recent hit. A nearby threat still
+restarts withdrawal. Target identity alone no longer pins the terminal forever.
+
+Validation: targeted navigation, authored waiting and server regressions pass;
+Python 2.7 compilation passes for changed client modules. No physical tank
+coefficients, navgraph resources or saved profiles were changed.

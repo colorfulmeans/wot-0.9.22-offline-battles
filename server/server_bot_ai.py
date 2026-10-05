@@ -1848,6 +1848,11 @@ class BotPlanner(object):
         bx = _number(state.get("x"))
         bz = _number(state.get("z"))
         distance = math.hypot(target["x"] - bx, target["z"] - bz)
+        face = _point(face_point)
+        local_threat = bool(order.get("target_id") is not None and
+            math.hypot(face["x"] - bx, face["z"] - bz) <=
+            _number(bot.get("profile", {}).get("fire_range")) * 1.15)
+        local_threat = local_threat or self._recent_hit(bot_id, now) is not None
         if (not isinstance(retreat, dict) or
                 retreat.get("moving_mode") != moving_mode):
             retreat = {
@@ -1863,7 +1868,7 @@ class BotPlanner(object):
             retreat["best_distance"] = distance
             retreat["last_progress_at"] = _number(now)
         if retreat.get("phase") == "resume":
-            if order.get("target_id") is None:
+            if not local_threat:
                 return order
             self._retreat_states.pop(bot_id, None)
             return self._apply_retreat_order(
@@ -1881,7 +1886,7 @@ class BotPlanner(object):
         if retreat.get("phase") == "hold":
             # A finished withdrawal is a defensive pause, not a permanent
             # battle-long parking order after the local threat has gone.
-            if (order.get("target_id") is None and _number(now) -
+            if (not local_threat and _number(now) -
                     _number(retreat.get("hold_since"), now) >= RETREAT_DEFENSIVE_PAUSE_SECONDS):
                 retreat["phase"] = "resume"
                 return order
