@@ -6572,6 +6572,21 @@ class BotRuntime(object):
                 'combat_mode', 'move_position', 'route_id', 'route_index',
                 'route_anchor', 'route_join', 'target_id', 'parking_phase',
                 'parking_slot', 'arrival_radius')},
+            # Reuse current state at the existing bounded stall cadence.
+            # These distinguish strategic range/readiness denial from a
+            # rendered gun-elevation or physical alignment problem.
+            'firing': dict(
+                order_fire=bool(strategic.get('fire_allowed')),
+                command_fire=bool(command.get('fire_allowed')),
+                fire_range=command.get('fire_range'),
+                gun_aligned=state.get('gun_aligned'),
+                gun_pitch=state.get('gun_pitch'),
+                desired_gun_pitch=state.get('desired_gun_pitch'),
+                turret_yaw=state.get('turret_yaw'),
+                aim_yaw=state.get('aim_yaw'),
+                clip=state.get('clip'),
+                ammo_reload_pending=state.get('ammo_reload_pending'),
+                reload=state.get('reload_time'), fire_seq=state.get('fire_seq')),
             'motion_diagnostic': 'stationary' if stationary_due else 'local_roaming',
             'local_roaming': None if stationary_due else dict(
                 anchor=roaming[0], elapsed=now - roaming[1],

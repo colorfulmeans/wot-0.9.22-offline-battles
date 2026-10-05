@@ -16836,6 +16836,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.runtime.battle_start(self.start)
         self.assertFalse(self.runtime.debug_logging)
         state = self.runtime.states[11]
+        state.update(gun_pitch=.08, desired_gun_pitch=.08,
+                     gun_aligned=True, reload_time=0., fire_seq=0)
         order = {'movement_intent': True, 'recovery_mode': 'drive',
                  'combat_mode': 'route', 'traffic_mode': 'yield',
                  'move_position': (0.0, 0.0, 200.0)}
@@ -16863,6 +16865,11 @@ class BotRuntimeTests(unittest.TestCase):
         evidence = state['_motion_stall_pending']['navigation']
         self.assertEqual(path, evidence['path_near_target'])
         self.assertEqual('safe', evidence['navigation_status'])
+        firing = state['_motion_stall_pending']['firing']
+        self.assertTrue(firing['gun_aligned'])
+        self.assertFalse(firing['command_fire'])
+        self.assertEqual((.08, .08, 0.), (
+            firing['gun_pitch'], firing['desired_gun_pitch'], firing['reload']))
 
     def test_stall_diagnostic_includes_arrival_wait_and_physical_hold(self):
         from contextlib import redirect_stdout

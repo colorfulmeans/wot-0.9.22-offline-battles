@@ -3,10 +3,49 @@ import copy
 import unittest
 
 from test_port_0922_bot_tactics_editor import cfg, planning, profile
-from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state
+from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state, _bot_contact
+from gui.mods.offline_lan_0922.ai.planner import build_vehicle_profile
 
 
 class AuthoredRouteWaitTests(unittest.TestCase):
+    def test_armoured_td_wait_can_fire_at_reported_el_halluf_distance(self):
+        # Tortoise's relative target position in report 20261005-200028.
+        # Build the production profile rather than hiding its range reduction
+        # behind the server fixture's generic 520 m profile.
+        planner, manifest = self.setup_route('AT-SPG', 60)
+        manifest[0]['profile'] = build_vehicle_profile(dict(
+            type=dict(name='Tortoise', tags=('AT-SPG',)),
+            physics=dict(speedLimits=(5.56, 2.78)),
+            hull=dict(primaryArmor=228.6), turret=dict(primaryArmor=0.),
+            gun=dict(shots=())))
+        self.assertEqual(115., manifest[0]['profile']['desired_range'])
+        contact=_bot_contact(7,308.966,136.48,[11])
+        manifest.append(_bot(7,2,0,_route('enemy',[(0,0,0),(100,0,0)]),'mediumTank'))
+        enemy=_state(7,2,308.966,136.48)
+        state=_state(11, 1, 0, 0)
+        def order(now):
+            planner.report_contacts([contact],planner.known_targets([state,enemy],[]),now)
+            return next(row for row in planner.build_orders(
+                manifest, [state,enemy], [], now)['orders'] if row['id']==11)
+        waiting=order(1)
+        self.assertEqual('hold', waiting['combat_mode'])
+        self.assertEqual(0., waiting['throttle_override'])
+        self.assertEqual(7, waiting['target_id'])
+        self.assertTrue(waiting['fire_allowed'])
+        self.assertEqual(450., manifest[0]['profile']['fire_range'])
+        self.assertEqual(450., waiting['fire_range'])
+        # This profile correction neither bypasses lane/readiness gates nor
+        # turns the existing TD envelope into unlimited firing reach.
+        contact['shootable_by_bot_ids']=[]
+        self.assertFalse(order(2)['fire_allowed'])
+        contact['shootable_by_bot_ids']=[11]
+        state['reload_time']=5.
+        self.assertFalse(order(3)['fire_allowed'])
+        state['reload_time']=0.
+        contact.update(x=490., z=0.)
+        enemy.update(x=490., z=0.)
+        self.assertFalse(order(4)['fire_allowed'])
+
     def test_el_halluf_tortoise_reinforcement_joins_without_returning_to_base(self):
         planner=BotPlanner()
         south=dict(id='south_valley',team=2,class_tag='AT-SPG',points=[

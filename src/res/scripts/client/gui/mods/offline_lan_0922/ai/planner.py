@@ -609,8 +609,9 @@ def build_vehicle_profile(descriptor):
 	}
 	desired_range, fire_range = desired_ranges[class_tag]
 	if armor >= 120.0 and class_tag == 'AT-SPG':
+		# Armour changes preferred fighting distance, not permission to fire
+		# from an authored position at a proved target within the TD envelope.
 		desired_range = 115.0
-		fire_range = 320.0
 
 	dominant = 'support'
 	dominant_score = -1.0
