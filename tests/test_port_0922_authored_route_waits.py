@@ -8,6 +8,39 @@ from gui.mods.offline_lan_0922.ai.planner import build_vehicle_profile
 
 
 class AuthoredRouteWaitTests(unittest.TestCase):
+    def test_finished_wait_restores_combat_then_resumes_authored_route(self):
+        planner,manifest=self.setup_route('AT-SPG',5)
+        route=planner.tactics['maps']['08_ruinberg']['routes'][0]
+        route['points'][1]=[300,0,0]
+        planner.tactics=cfg.canonical(planner.tactics)
+        wire=planning.route_value(route)
+        manifest[0]['route']=_route(wire['id'],wire['waypoints'])
+        manifest.append(_bot(7,2,0,_route('enemy',[(150,0,0),(300,0,0)]),'mediumTank'))
+        own=_state(11,1,0,0);enemy=_state(7,2,150,0)
+        contact=_bot_contact(7,150,0,[11])
+        def order(now):
+            planner.report_contacts([contact],planner.known_targets([own,enemy],[]),now)
+            return next(row for row in planner.build_orders(
+                manifest,[own,enemy],[],now)['orders'] if row['id']==11)
+        self.assertEqual('hold',order(1)['combat_mode'])
+        released=order(6)
+        self.assertEqual(1,released['route_index'])
+        self.assertIsNone(released.get('parking_phase'))
+        self.assertEqual('engage',released['combat_mode'])
+        self.assertEqual(7,released['target_id'])
+        self.assertTrue(released['fire_allowed'])
+        self.assertEqual(0.,released['throttle_override'])
+        self.assertEqual(0.,released['move_position']['x'])
+        # Combat does not reset the completed parking timer or erase the
+        # next waypoint. Loss of the firing target resumes the same route.
+        contact.update(visible=False,time_left=0.)
+        resumed=order(7)
+        self.assertEqual('route',resumed['combat_mode'])
+        self.assertEqual(1,resumed['route_index'])
+        self.assertEqual(300.,resumed['move_position']['x'])
+        self.assertIsNone(resumed['throttle_override'])
+        self.assertFalse(resumed['fire_allowed'])
+
     def test_armoured_td_wait_can_fire_at_reported_el_halluf_distance(self):
         # Tortoise's relative target position in report 20261005-200028.
         # Build the production profile rather than hiding its range reduction

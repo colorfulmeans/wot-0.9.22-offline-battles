@@ -2763,6 +2763,13 @@ class BotPlanner(object):
         holding = (self._route_states.get(bot['id']) or {}).get('holding', False)
         state = self._route_states.get(bot['id']) or {}
         phase = state.get('parking_phase')
+        if (not holding and phase not in ('approach', 'waiting', 'queue') and
+                bot['profile'].get('class_tag') != 'SPG'):
+            # The authored route already supplies normal travel waypoints.
+            # Once a wait ends, restore ordinary combat/retreat ownership;
+            # replacing an engage order with route mode also disables the
+            # worker's stationary fixed-gun hull laying.
+            return
         order['move_position'] = dict(route_point)
         order['parking_phase'] = phase
         order['parking_slot'] = state.get('parking_slot')
