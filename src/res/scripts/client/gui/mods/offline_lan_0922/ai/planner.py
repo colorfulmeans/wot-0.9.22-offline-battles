@@ -593,7 +593,9 @@ def build_vehicle_profile(descriptor):
 		roles['scout'] = min(1.0, roles['scout'] + 0.08)
 	elif speed and speed < 9.0:
 		roles['flanker'] = max(0.0, roles['flanker'] - 0.16)
-	if armor >= 120.0:
+	# All TDs share the sniper policy. Armour remains physical/profile data,
+	# but does not turn an armoured TD into a short-range tactical subtype.
+	if armor >= 120.0 and class_tag != 'AT-SPG':
 		roles['brawler'] = min(1.0, roles['brawler'] + 0.18)
 		roles['sniper'] = max(0.0, roles['sniper'] - 0.08)
 
@@ -608,10 +610,6 @@ def build_vehicle_profile(descriptor):
 		'SPG': (650.0, 1250.0),
 	}
 	desired_range, fire_range = desired_ranges[class_tag]
-	if armor >= 120.0 and class_tag == 'AT-SPG':
-		# Armour changes preferred fighting distance, not permission to fire
-		# from an authored position at a proved target within the TD envelope.
-		desired_range = 115.0
 
 	dominant = 'support'
 	dominant_score = -1.0

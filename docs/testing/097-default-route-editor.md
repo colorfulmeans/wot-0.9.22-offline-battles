@@ -126,24 +126,28 @@ target for roughly 50 seconds while reported enemies are 355-424 m away. Its
 450 m firing envelope was restored, but its short preferred fighting distance
 still leaves ordinary acquisition at 340 m. Later target acquisition produces
 checked hull turning and six shots during the same wait; this is not evidence
-of a physical parking yaw lock.
+of a physical parking yaw lock. The early logs do not establish continuous
+native lane proof for every enemy, so distance alone is not a complete proof
+of the whole observed delay.
 
-An authored holding/waiting/queued vehicle may now acquire visible, locally
-proved targets through at least its existing firing envelope. Normal travel,
-parking approach, hidden-contact pursuit, ammunition/readiness gates, installed
-gun limits and native rotation collision checks remain unchanged. The end-to-end
+The final user-directed policy unifies all TDs with the existing light-armour
+sniper profile, rather than changing target-acquisition rules only at authored
+parking places. The interim parking-specific acquisition extension is removed.
+The same unchanged acquisition formula now uses 255 m preferred distance for
+every TD, during travel, parking approach, waiting and queueing. The end-to-end
 regression acquires a proved 400 m target with the production armoured TD
 profile, keeps translation at zero, and drives limited-traverse hull laying.
-Loss of lane proof disables fire; separate checks bound the travel and hidden
-contact envelopes. These deterministic checks do not replace native gameplay
-acceptance of the new package.
+Loss of lane proof disables fire. These deterministic checks do not replace
+native gameplay acceptance; packaging is paused at the user's request.
 
-The profile armour threshold is 120 mm using the greatest hull/turret
-primary-armor value; it is a heuristic, not an official TD subclass. It adds
-0.18 to brawler preference and subtracts 0.08 from sniper preference, and for
-TDs changes preferred distance from 255 to 115 m. Both TD categories retain
-450 m firing range and the same installed-gun aiming/collision rules. Other
-profile preferred/fire ranges are HT 72/260, MT 135/340, LT 175/320 m. Ordinary
+TD armour no longer changes brawler/sniper preferences or preferred distance.
+Every TD retains base brawler 0.32, sniper 0.92, preferred distance 255 m and
+firing range 450 m. Descriptor speed still adjusts mobility preferences, and
+actual armour remains in the profile for physical/target data. Both TD armour
+categories use the same installed-gun aiming/collision rules. Other classes
+retain their existing 120 mm armour preference adjustment (+0.18 brawler,
+-0.08 sniper). Other profile preferred/fire ranges are HT 72/260, MT 135/340,
+LT 175/320 m. Ordinary
 visible acquisition is max(340, min(560, preferred*2 + mobility*300)); remembered
 contact acquisition is max(240, min(420, preferred*1.5 + mobility*210)), where
 mobility is max(scout, flanker). These are AI policy distances, not spotting

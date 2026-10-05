@@ -53,18 +53,54 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         contact['shootable_by_bot_ids'] = []
         self.assertFalse(order(3)['fire_allowed'])
 
-    def test_parking_reach_does_not_expand_travel_or_hidden_contact_pursuit(self):
+    def test_td_sniper_reach_is_the_same_during_travel_and_parking(self):
         planner, manifest = self.setup_route('AT-SPG', 60)
         bot = manifest[0]
-        bot['profile'].update(desired_range=115., fire_range=450.,
-                              roles=dict(scout=.08, flanker=.02))
-        self.assertEqual(340., planner._engagement_range(bot, dict(visible=True)))
-        for phase in ('waiting', 'queue'):
+        bot['profile'] = build_vehicle_profile(dict(
+            type=dict(tags=('AT-SPG',)), physics=dict(speedLimits=(5.56, 2.78)),
+            hull=dict(primaryArmor=273.1), turret=dict(primaryArmor=0.),
+            gun=dict(shots=())))
+        for phase in (None, 'approach', 'waiting', 'queue'):
             planner._route_states[11] = dict(parking_phase=phase)
-            self.assertEqual(450., planner._engagement_range(bot, dict(visible=True)))
-            self.assertEqual(240., planner._engagement_range(bot, dict(visible=False)))
-        planner._route_states[11] = dict(parking_phase='approach')
-        self.assertEqual(340., planner._engagement_range(bot, dict(visible=True)))
+            self.assertEqual(534., planner._engagement_range(bot, dict(visible=True)))
+            self.assertAlmostEqual(399.3, planner._engagement_range(bot, dict(visible=False)))
+
+    def test_td_armour_changes_no_sniper_roles_or_distance_policy(self):
+        # Exercise both sides of the old threshold and hull/turret armour
+        # sources at slow, ordinary, and fast descriptor speeds.
+        for speed in (5.56, 10., 16.67):
+            def profile_for(hull, turret):
+                return build_vehicle_profile(dict(type=dict(tags=('AT-SPG',)),
+                    physics=dict(speedLimits=(speed, 2.78)),
+                    hull=dict(primaryArmor=hull), turret=dict(primaryArmor=turret),
+                    gun=dict(shots=())))
+            reference = profile_for(80., 0.)
+            for hull, turret in ((119.9, 0.), (120., 0.),
+                                 ((273.1, 152.4, 101.6), 0.), (80., 200.)):
+                value = profile_for(hull, turret)
+                self.assertEqual(reference['roles'], value['roles'])
+                self.assertEqual('sniper', value['dominant_role'])
+                self.assertEqual(255., value['desired_range'])
+                self.assertEqual(450., value['fire_range'])
+                self.assertGreaterEqual(value['armor'], 119.9)
+
+    def test_turreted_classes_keep_their_existing_armour_preferences(self):
+        for tag, preferred, fire in (('heavyTank',72.,260.),
+                                     ('mediumTank',135.,340.),
+                                     ('lightTank',175.,320.)):
+            def profile_for(armor):
+                return build_vehicle_profile(dict(type=dict(tags=(tag,)),
+                    physics=dict(speedLimits=(10., 2.78)),
+                    hull=dict(primaryArmor=armor), turret=dict(primaryArmor=0.),
+                    gun=dict(shots=())))
+            light = profile_for(80.)
+            heavy = profile_for(200.)
+            self.assertEqual((preferred, fire),
+                (heavy['desired_range'], heavy['fire_range']))
+            self.assertAlmostEqual(min(1., light['roles']['brawler'] + .18),
+                                   heavy['roles']['brawler'])
+            self.assertAlmostEqual(max(0., light['roles']['sniper'] - .08),
+                                   heavy['roles']['sniper'])
 
     def test_finished_wait_restores_combat_then_resumes_authored_route(self):
         planner,manifest=self.setup_route('AT-SPG',5)
@@ -109,7 +145,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
             physics=dict(speedLimits=(5.56, 2.78)),
             hull=dict(primaryArmor=228.6), turret=dict(primaryArmor=0.),
             gun=dict(shots=())))
-        self.assertEqual(115., manifest[0]['profile']['desired_range'])
+        self.assertEqual(255., manifest[0]['profile']['desired_range'])
         contact=_bot_contact(7,308.966,136.48,[11])
         manifest.append(_bot(7,2,0,_route('enemy',[(0,0,0),(100,0,0)]),'mediumTank'))
         enemy=_state(7,2,308.966,136.48)
