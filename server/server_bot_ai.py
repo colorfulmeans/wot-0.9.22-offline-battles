@@ -200,6 +200,7 @@ class BotPlanner(object):
         self._last_orders = None
         self._last_order_signature = None
         self._route_states = {}
+        self._route_history = {}
         self._wait_claims = {}
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
@@ -233,6 +234,7 @@ class BotPlanner(object):
         self._last_orders = None
         self._last_order_signature = None
         self._route_states = {}
+        self._route_history = {}
         self._wait_claims = {}
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
@@ -876,6 +878,9 @@ class BotPlanner(object):
         for bot_id in list(self._route_states):
             if bot_id not in live_bots:
                 del self._route_states[bot_id]
+        for bot_id in list(self._route_history):
+            if bot_id not in live_bots:
+                del self._route_history[bot_id]
         for bot_id in list(self._route_assignments):
             if bot_id not in live_bots:
                 del self._route_assignments[bot_id]
@@ -2588,11 +2593,21 @@ class BotPlanner(object):
         route_id = str(route.get("id") or "uploaded_route")
         authored = bot_tactics.route_config(
             self.tactics, self.tactics_map, route_id, bot['team'], waypoints)
+        scripted = authored is not None and (not authored.get('default') or
+                    any(len(p) > 3 for p in authored['points']))
         route_limit = len(waypoints) - 1
         if stop_before_objective and len(waypoints) > 1 and (authored is None or
                 (authored.get('default') and not any(len(p) > 3 for p in authored['points']))):
             route_limit -= 1
         state = self._route_states.get(bot["id"])
+        history = self._route_history.setdefault(bot['id'], {})
+        if scripted and (state is None or state.get('route_id') != route_id):
+            saved = history.get(route_id)
+            if saved is not None:
+                state = dict(index=saved['index'],route_id=route_id,
+                    parking_completed=set(saved.get('parking_completed', ())),
+                    join_index=saved['index'],join_anchor=_point(bot['state']))
+                self._route_states[bot['id']] = state
         if state is None or state.get("route_id") != route_id:
             bx = _number(bot["state"].get("x"))
             bz = _number(bot["state"].get("z"))
@@ -2637,8 +2652,7 @@ class BotPlanner(object):
                         break
                     index += 1
             # User point zero is an instruction, not a baked base connector.
-            if authored is not None and (not authored.get('default') or
-                    any(len(p) > 3 for p in authored['points'])):
+            if not history and scripted:
                 index = 0
             state = {"index": index, "route_id": route_id,
                      "join_index": index,
@@ -2646,6 +2660,9 @@ class BotPlanner(object):
                                      "y": _number(bot["state"].get("y")),
                                      "z": bz}}
             self._route_states[bot["id"]] = state
+        # The pinned route geometry is immutable for this round. Keep progress
+        # and completed waits when temporary assignments retire the active state.
+        history[route_id] = state
         index = min(max(0, _integer(state.get("index"))), route_limit)
         state["index"] = index
         point = _point(waypoints[index])

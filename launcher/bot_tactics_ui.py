@@ -743,7 +743,7 @@ class BotTacticsEditor:
         self.wait_button.config(state='normal' if route or builtin else 'disabled')
         self.hold_button.config(text=self.tr('切换驻留点','Toggle hold'))
         symmetry_allowed=self._supports_route_symmetry()
-        if not symmetry_allowed:self.symmetry_var.set(False)
+        if not symmetry_allowed or parking or self.route_class_var.get()=='SPG':self.symmetry_var.set(False)
         elif route or builtin:self.symmetry_var.set(bool(item.get('symmetric',True)))
         if self.wait_edit:self.symmetry_var.set(False)
         self.symmetry_check.config(state='normal' if symmetry_allowed and (route or builtin) and not self.wait_edit else 'disabled',

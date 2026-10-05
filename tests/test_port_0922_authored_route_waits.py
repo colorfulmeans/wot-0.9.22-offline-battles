@@ -7,6 +7,45 @@ from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state
 
 
 class AuthoredRouteWaitTests(unittest.TestCase):
+    def test_el_halluf_tortoise_reinforcement_joins_without_returning_to_base(self):
+        planner=BotPlanner()
+        south=dict(id='south_valley',team=2,class_tag='AT-SPG',points=[
+            [-338,-322,0],[-250.9676,-285.2171,0],
+            [-166.1757,-261.7527,1,0,[[-166.0415,-267.8015,60]]],
+            [-12.0186,-147.7669,0],[302,318,0]])
+        north=dict(id='north_ridge',team=2,class_tag='AT-SPG',points=[
+            [-338,-322,0],[-346,-254,0],[-410,-158,0],[-450,-58,0],
+            [-427.1585,268.6057,1,0,[[-414.2972,251.824,60]]],[302,318,0]])
+        raw=cfg.empty()
+        raw['maps']['29_el_hallouf']=dict(mode='regular',
+            resource_sha256=cfg.MAPS['29_el_hallouf']['resource_sha256'],
+            default_routes=[south,north],routes=[],positions=[])
+        planner.tactics=cfg.canonical(raw);planner.tactics_map='29_el_hallouf'
+        def wire(edit):
+            return _route(cfg.default_route_id(edit),[(round(p[0],3),round(p[1],3),p[2]) for p in edit['points']])
+        bot=_bot(24,2,8,wire(south),'AT-SPG')
+        bot['state']=_state(24,2,-338,-322)
+        self.assertEqual(1,planner._route(bot,1)[1])
+        bot['state'].update(x=-166.766416,z=-267.885747)
+        self.assertEqual(2,planner._route(bot,10)[1])
+        self.assertEqual('waiting',planner._route_states[24]['parking_phase'])
+        self.assertEqual(3,planner._route(bot,70)[1])
+        planner._route_assignments[24]=dict(route=wire(north),until=110.)
+        planner._route_states.pop(24)
+        joined=planner._route(bot,74)
+        self.assertEqual(('class_td_north_ridge',1),joined[:2])
+        self.assertEqual(-346,joined[2]['x'])
+        planner._route_assignments[24]=dict(route=wire(south),until=0.)
+        planner._route_states.pop(24)
+        resumed=planner._route(bot,110)
+        self.assertEqual(('class_td_south_valley',3),resumed[:2])
+        self.assertNotIn('parking_phase',planner._route_states[24])
+        self.assertEqual({2},planner._route_states[24]['parking_completed'])
+        planner.reset(2)
+        self.assertEqual({},planner._route_history)
+        bot['state'].update(x=-338,z=-322)
+        self.assertEqual(1,planner._route(bot,1)[1])
+
     def test_distant_known_enemy_cannot_pin_completed_withdrawal_forever(self):
         planner = BotPlanner()
         bot = _bot(11, 2, 0, _route('lane', [(0, 0, 0), (100, 0, 0)]), 'lightTank')
@@ -22,6 +61,20 @@ class AuthoredRouteWaitTests(unittest.TestCase):
         self.assertEqual('route', order(15)['combat_mode'])
         self.assertEqual('route', order(16)['combat_mode'])
         self.assertEqual('low_health_retreat', order(17, 100)['combat_mode'])
+
+    def test_unfinished_wait_does_not_count_time_spent_on_another_assignment(self):
+        planner,manifest=self.setup_route('AT-SPG',30)
+        bot=dict(manifest[0],state=_state(11,1,0,0))
+        planner._route(bot,10)
+        self.assertEqual(10,planner._route_states[11]['parking_arrived'][0])
+        planner._route_states.pop(11)
+        planner._route(bot,100)
+        self.assertEqual('waiting',planner._route_states[11]['parking_phase'])
+        self.assertEqual(100,planner._route_states[11]['parking_arrived'][0])
+        planner._route(bot,130)
+        self.assertEqual({0},planner._route_states[11]['parking_completed'])
+        planner._prune_tactical_state([],{},131)
+        self.assertEqual({},planner._route_history)
 
     def setup_route(self, class_tag='heavyTank', seconds=30):
         raw = profile()

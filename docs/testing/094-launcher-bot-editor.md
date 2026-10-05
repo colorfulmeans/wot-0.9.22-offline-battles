@@ -84,14 +84,19 @@ groups appear as one large circle; only the selected parent expands its places.
 Entering the waiting-place editor unchecks and disables Route symmetry, keeping
 the opposite team's current geometry and waits. Leaving this editor enables the
 checkbox again; it remains unchecked until explicitly enabled. Normal route-node
-editing still supports symmetry. Existing single-point
-waits retain their position and duration. The host leases one place per Bot,
+editing still supports symmetry. Artillery parking also displays Route symmetry
+disabled and unchecked. Existing single-point waits retain their position and
+duration. The host leases one place per Bot,
 starts its timer within 1 m, and retains occupancy until the departing hull is
 clear. Extra Bots wait for an available place instead of converging on it.
 Place parking positions far enough apart for the intended vehicle hulls; nearby
 reservations cannot be occupied concurrently. A waiting Bot can still rotate its
 hull, aim and fire, but contact escape and friendly repositioning cannot translate
 it out of its place. Automatic route reinforcement cannot cancel an active wait.
+Temporary route reassignment joins a new lane near the current position instead
+of replaying deployment from point zero. Returning to a scripted route restores
+progress and completed waits; an interrupted unfinished wait reacquires its place
+and starts a new arrival clock. Round reset and vehicle removal clear this history.
 
 Copy a route or create an empty custom route for separate allocation rules.
 Custom route attributes include allowed

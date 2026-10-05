@@ -167,11 +167,14 @@ class EditorUITests(unittest.TestCase):
 
     def test_spg_defaults_only_allow_repositioning_parking(self):
         self.ui.map_var.set(storage.MAP_LABELS['31_airfield']);self.ui.change_map()
+        self.ui.symmetry_var.set(True)
         self.ui.route_class_var.set('SPG');self.ui.change_route_class();self.root.update()
         ids=self.ui.items.get_children()
         self.assertTrue(ids);self.assertTrue(all(i.startswith('builtin_positions:') for i in ids))
         self.assertFalse(self.ui.dirty())
         self.ui.items.selection_set(ids[0]);self.root.update()
+        self.assertEqual('disabled',str(self.ui.symmetry_check.cget('state')))
+        self.assertFalse(self.ui.symmetry_var.get())
         self.assertFalse(self.ui.point_actions.winfo_ismapped())
         first=self.ui._selected()['point'];x,y=self.ui.view.screen(first)
         self.click(self.ui.view.world(x-30,y),shift=True)
