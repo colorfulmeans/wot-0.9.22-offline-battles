@@ -24,6 +24,8 @@ class ClimbApproachNavigationTests(unittest.TestCase):
                     # connector; the target behind remains the safe bend.
                     graph['heights_mm'][2 * graph['width'] + 2] = None
                 def ground(x, z, hint):
+                    if blocked and 6.0 <= x < 10.0 and 6.0 <= z < 10.0:
+                        return None
                     return 0.0 if 0.0 <= x <= 80.0 and 0.0 <= z <= 80.0 else None
                 nav = TerrainNavigator(ground, lambda *unused: False, baked_graph=graph)
                 path = ((0., 0., 0.), (4., 0., 4.), (8., 0., 8.))
@@ -158,12 +160,18 @@ class ClimbApproachNavigationTests(unittest.TestCase):
             cell = grid.cell_for((raw[0], 0.0, raw[1]))
             endpoints.append(grid.point_for(cell, grid._baked_cell_height(cell)))
         start, goal = endpoints
-        path = grid.plan(start, goal, prefer_clearance=True)
+        # Exercise the historical authored bend against current terrain data.
+        # A fresh A* route may legitimately select a different ridge corridor.
+        bend = []
+        for x, z in ((366.0, 6.0), (366.0, 14.0), (370.0, 22.0)):
+            cell = grid.cell_for((x, 0.0, z))
+            bend.append(grid.point_for(cell, grid._baked_cell_height(cell)))
+        path = (start,) + tuple(bend) + (goal,)
         pivot = next(index for index, point in enumerate(path)
                      if point[0] == 366.0 and point[2] == 14.0)
         key = ('route', 1, 'north_ridge', 1)
         cache_key = navigator._cache_key(
-            navigator._native_path_key(key, native_capability), goal)
+            key, goal)
         navigator.paths[cache_key] = path
         navigator.path_times[cache_key] = 0.0
         return graph, navigator, path, pivot, key
@@ -331,7 +339,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         # its setup, the old navigator issued a 3.12 m safe-local step,
         # then targeted the setup behind the hull on the next decision.
         for now, z in ((1.0, 12.6), (1.1, 15.72)):
-            current = (366.0, path[pivot][1], z)
+            current = (path[pivot][0], path[pivot][1], z)
             self.assertGreater(math.hypot(
                 path[-1][0] - current[0], path[-1][2] - current[2]), 15.0)
             selected = runtime._navigation_target(
@@ -355,7 +363,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         unused_graph, navigator, path, pivot, key = self._fjord_route()
         # Inside the grid's 2.2 m advancement radius but outside the driver's
         # 1.5 m arrival radius: the uphill setup has not been reached yet.
-        current = (366.0, path[pivot][1], 12.4)
+        current = (path[pivot][0], path[pivot][1], 12.4)
 
         selected = navigator.next_target(7, current, path[-1], key, 1.0)
 
@@ -366,7 +374,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         for blocker in ('collision', 'penalty'):
             with self.subTest(blocker=blocker):
                 unused_graph, navigator, path, pivot, key = self._fjord_route()
-                current = (366.0, path[pivot][1], 12.6)
+                current = (path[pivot][0], path[pivot][1], 12.6)
                 next_point = path[pivot + 1]
                 if blocker == 'collision':
                     original = navigator.grid.segment_clear
@@ -395,7 +403,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         self.assertEqual(next_point, selected)
         self.assertEqual(next_point,
                          navigator.bot_states[7]['controlled_shallow_target'])
-        current = (366.0, path[pivot][1], 16.5)
+        current = (path[pivot][0], path[pivot][1], 16.5)
 
         selected = navigator.next_target(7, current, path[-1], key, 1.1)
 
@@ -438,7 +446,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         cache_key = navigator._cache_key(replacement_key, path[-1])
         navigator.paths[cache_key] = replacement
         navigator.path_times[cache_key] = 1.0
-        current = (366.0, path[pivot][1], 16.5)
+        current = (path[pivot][0], path[pivot][1], 16.5)
         self.assertFalse(navigator.grid.live_shortcut_preserves_climb_approach(
             current, replacement, 0, 1))
 

@@ -101,6 +101,14 @@ def _direction_probe(position, yaw, speed=0.0, descriptor=None,
     return {'clear': True, 'collision': False, 'slope': 0.0}
 
 
+def _obstacle_probe(first, last, unused_width):
+    # The worker supplies both direction and segment probes. A refusal must
+    # reach A* and smoothing as well as the driver, through the same scene.
+    dx, dz = last[0] - first[0], last[2] - first[2]
+    return _direction_probe(first, math.atan2(dx, dz),
+                            maximum_distance=math.hypot(dx, dz))['collision']
+
+
 class WreckRouteTests(unittest.TestCase):
     def setUp(self):
         self._gui_modules = dict(
@@ -138,7 +146,8 @@ class WreckRouteTests(unittest.TestCase):
             baked_graph=_corridor_graph(),
             control_seconds=0.1,
             visibility_probe=lambda *unused: False,
-            firing_lane_probe=lambda *unused: False)
+            firing_lane_probe=lambda *unused: False,
+            obstacle_probe=_obstacle_probe)
         runtime.battle_start({
             'round_id': 1, 'map': '01_karelia', 'bot_authority_id': 1,
             'bots': [{

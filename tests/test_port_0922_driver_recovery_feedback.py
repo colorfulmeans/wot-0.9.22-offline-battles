@@ -110,7 +110,7 @@ class DriverRecoveryFeedbackTests(unittest.TestCase):
                 scene.world, scene.math, 1, _Vector(*position), yaw, speed,
                 desc, False, dt, True, False, commit_enabled=commit_enabled,
                 motion_yaw=motion_yaw, trace=trace)
-            if status == 'hard':
+            if status == 'hard' and commit_enabled:
                 scene.hard.append((now, position, yaw, speed, trace))
                 runtime.states[bot]['_world_contact_trace'] = trace
             return status

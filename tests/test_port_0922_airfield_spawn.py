@@ -183,13 +183,15 @@ class AirfieldSpawnTests(unittest.TestCase):
         state = dict(id=25, slot=9, team=2, position=(-295.6, 0., -176.9),
                      yaw=0., speed=0., dt=.1, neighbours=[], half_length=3.6,
                      half_width=1.8, pose_clear=lambda unused: True)
+        state['navigation_recovery_allowed'] = True
         order = dict(combat_mode='route', move_position=(-318., 0., -134.),
                      throttle_override=None)
         commands = [adapter.decide_with_order(state, order, lambda *unused: True)
                     for unused in range(120)]
-        self.assertTrue(all(c['recovery_mode'] == 'nav_wait' for c in commands[:70]))
+        self.assertTrue(all(c['recovery_mode'] == 'nav_wait' for c in commands[:35]))
         self.assertTrue(any(c['throttle'] != 0. or c['turn'] != 0.
-                            for c in commands[85:]))
+                            for c in commands[35:70]))
+        self.assertTrue(all(c['recovery_mode'] == 'nav_wait' for c in commands[85:]))
         for unused in range(30):
             command = adapter.decide_with_order(state, order, lambda *unused: False)
             self.assertEqual(0., command['throttle'])

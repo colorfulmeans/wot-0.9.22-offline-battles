@@ -22,6 +22,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client
         run: |
+          python -m unittest test_port_0922_navigation_wait_recovery test_port_0922_navigation_wait_runtime test_port_0922_navigation_wait_lifecycle test_port_0922_wreck_route test_port_0922_navigation_pending_prefix test_port_0922_airfield_live_egress test_port_0922_driver_arrival test_port_0922_driver_recovery_feedback
+          python -m unittest test_port_0922_ai test_port_0922_navigation test_port_0922_bot_navigation_reports
           python -m unittest test_port_0922_authored_route_progress test_port_0922_navigation_clearance test_port_0922_navigation.StaticHullNavigationTests test_port_0922_slope_shortcuts
           python -m unittest test_port_0922_navigation.ClimbApproachNavigationTests.test_reported_active_bend_keeps_progress_until_its_setup_is_reached test_port_0922_navigation.ClimbApproachNavigationTests.test_active_bend_does_not_keep_a_newly_blocked_or_unplanned_ford_target test_port_0922_navigation_pending_prefix.PendingPrefixTests.test_pending_then_complete_path_retreats_out_of_u_wall_and_reaches_goal
           python -m unittest test_port_0922_downhill_navigation test_port_0922_navigation.ClimbApproachNavigationTests.test_owned_overshot_point_advances_only_through_a_proved_forward_link

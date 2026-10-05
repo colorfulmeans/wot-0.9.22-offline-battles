@@ -6539,6 +6539,17 @@ class BotRuntime(object):
             getattr(nav, 'bot_direct_progress', {}).get(int(state['id']), {}).get(
                 'local_fallback') or {})
         navigation['pending_jobs'] = len(getattr(nav, 'searches', {}))
+        search_receipt = getattr(nav, 'bot_search_diagnostics', None)
+        if callable(search_receipt):
+            navigation['search_receipt'] = search_receipt(state['id'], position, now)
+        grid = getattr(nav, 'grid', None)
+        if grid is not None:
+            navigation['current_cell'] = grid.cell_for(position)
+            navigation['current_cell_height'] = grid._baked_cell_height(
+                navigation['current_cell']) if grid.prebaked else None
+            navigation['native_review_cells'] = len(grid._native_review_cells)
+        navigation['pending_ms'] = int(max(0.0, now - _number(
+            nav_state.get('pending_since'), now)) * 1000.0)
         search_times = getattr(nav, 'search_times', {})
         navigation['oldest_job_age'] = max(0.0, now - min(search_times.values())) if search_times else 0.0
         grid = getattr(nav, 'grid', None)
@@ -6554,13 +6565,13 @@ class BotRuntime(object):
                         links=grid._baked_links[flat] if flat is not None else None,
                         hazards=grid._baked_hazards[flat] if flat is not None else None))
             navigation['nearby_cells'] = cells
-        driver_state = getattr(getattr(self.adapter, 'driver', None), 'states', {}).get(int(state['id']), {})
+        driver_state = getattr(getattr(getattr(self, 'adapter', None), 'driver', None), 'states', {}).get(int(state['id']), {})
         driver_trace = {key: driver_state.get(key) for key in (
             'clock', 'stuck_time', 'recovery_time', 'recovery_count',
             'alignment_target', 'heading_progress_yaw', 'best_heading_error')}
         driver_trace['objective_progress'] = dict(driver_state.get('objective_progress') or {})
         driver_trace['navigation_wait'] = dict(
-            getattr(self.adapter, '_navigation_waits', {}).get(int(state['id']), {}) or {})
+            driver_state.get('navigation_wait') or {})
         # Finish this rare diagnostic after every authority gate has run.
         # The control verdict alone cannot explain a later pose rollback.
         state['_motion_stall_pending'] = {
@@ -6627,7 +6638,7 @@ class BotRuntime(object):
                   strategic.get('target_kind'), strategic.get('target_id'),
                   command.get('fire_allowed'), state.get('gun_aligned'),
                   state.get('fire_seq'), state.get('reload_time'),
-                  self._shot_los_cache.get((state['id'],
+                  getattr(self, '_shot_los_cache', {}).get((state['id'],
                       strategic.get('target_kind'), strategic.get('target_id')))))
 
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
@@ -6707,7 +6718,8 @@ class BotRuntime(object):
     @observed('bot.corridor_hazards')
     def _planner_corridor_clear(self, position, yaw, speed,
                                 wet_escape=False, allow_shallow=False,
-                                hazard_only=False, maximum_distance=None):
+                                hazard_only=False, maximum_distance=None,
+                                native_capability=None):
         """Rank one candidate through the validated baked static corridor.
 
         ``True`` admits a planner candidate and ``False`` rejects a known fatal
@@ -6716,7 +6728,8 @@ class BotRuntime(object):
         ambiguous corridor negative. This result is never stored in the native
         motion cache and can never authorize a realised step.
         """
-        if wet_escape:
+        if (wet_escape or (native_capability is not None and
+                native_capability != self.navigation_planning_capability())):
             return None
         navigator = self.navigator
         grid = getattr(navigator, 'grid', None)
@@ -8279,7 +8292,7 @@ class BotRuntime(object):
         if height is None:
             cache[key] = (now+TACTICAL_REFRESH_SECONDS, None, False)
             return None
-        bodies = self._physical_parking_occupancy(own)
+        bodies = self._physical_parking_occupancy(own, travel=True)
         physical = [entry for entry in bodies if entry[0] is None and
                     abs(entry[1][1]-height) <= max(3.0, radius)]
         def occupied(point):
@@ -8309,6 +8322,8 @@ class BotRuntime(object):
                     if y is None:
                         continue
                     point = (x, y, z)
+                    if math.hypot(x-position[0], z-position[2]) <= ai_driver.WAYPOINT_ARRIVAL_RADIUS:
+                        continue
                     if (occupied(point) or not corridor_available(point) or grid.point_has_baked_hazard(point,
                             BAKED_FATAL_HAZARDS | BAKED_SHALLOW_WATER)):
                         continue
@@ -8322,6 +8337,27 @@ class BotRuntime(object):
         if len(cache) >= 4:cache.clear()
         cache[key] = (now+TACTICAL_REFRESH_SECONDS, result, blocked)
         return result
+
+    @staticmethod
+    def navigation_planning_capability(bot_id=None, direction=1.0):
+        """Static route geometry is independent of mounted gear and drive sign."""
+        return (('ignore_destructibles', 1), None, None)
+
+    def _navigation_recovery_allowed(self, bot_id, position):
+        """Allow a pending-path backout only with local obstruction evidence."""
+        navigator = self.navigator
+        grid = getattr(navigator, 'grid', None)
+        if getattr(grid, 'prebaked', False):
+            try:
+                if (grid._inside(float(position[0]), float(position[2])) and
+                        grid._baked_cell_height(grid.cell_for(position)) is None):
+                    return True
+            except (AttributeError, TypeError, ValueError):
+                pass
+        nav_state = getattr(navigator, 'bot_states', {}).get(int(bot_id), {})
+        return bool(nav_state.get('hard_contact_episode') or
+                    nav_state.get('blocked_step_tracker') or
+                    self._hard_contact_grinds.get(int(bot_id), 0) > 0)
 
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
@@ -8481,6 +8517,8 @@ class BotRuntime(object):
             if bypass is not None:
                 target = bypass
                 state['navigation_stop_at_target'] = False
+        state['navigation_status'] = getattr(self.navigator, 'bot_states', {}).get(
+            int(bot_id), {}).get('navigation_status', 'pending')
         return target
 
     def _player_neighbours(self, players):
@@ -11523,11 +11561,17 @@ class BotRuntime(object):
         self._decision_cache.pop(bot_id, None)
         return True
 
-    def _physical_parking_occupancy(self, state):
+    def _physical_parking_occupancy(self, state, travel=False):
         """Reuse current bodies and descriptor caches; do not query terrain."""
         occupied = []
         for other in self.states.values():
             if other['id'] == state['id']:
+                continue
+            # Moving route followers use local traffic/contact avoidance. Their
+            # temporary stop must not turn the next A* corner into a parking goal.
+            if travel and other.get('alive', True) and not (
+                    (getattr(self, '_server_orders', {}).get(other['id']) or {}).get(
+                        'parking_phase') == 'waiting' or other.get('_spg_initial')):
                 continue
             shape = other.get('collision_shape') or tank_collision.DEFAULT_SHAPE
             occupied.append((None, _position(other), math.hypot(shape[0], shape[1])))
@@ -12235,6 +12279,9 @@ class BotRuntime(object):
             if self._fixed_control:
                 self._begin_visibility_frame()
                 visibility_frame_open = True
+            navigator_tick = getattr(self.navigator, 'tick', None)
+            if callable(navigator_tick):
+                navigator_tick(now)
             try:
                 if not self._fixed_control:
                     elapsed = self._accumulator
@@ -12576,7 +12623,11 @@ class BotRuntime(object):
                 except Exception:
                     return True
 
-            def sample_clear(sample_yaw, maximum_distance=None):
+            def sample_clear(sample_yaw, maximum_distance=None, drive_direction=1.0):
+                bounded_recovery = maximum_distance is not None
+                if maximum_distance is None:
+                    maximum_distance = decision_state.get(
+                        'navigation_probe_distance') if decision_state is not None else None
                 # A short manoeuvre asks about the space it actually enters.
                 # Ranking a five-metre backing escape against the fifteen to
                 # twenty metre travel horizon rejects every gateway, alley and
@@ -12591,8 +12642,10 @@ class BotRuntime(object):
                     allow_shallow=(callable(controlled_shallow) and
                                    controlled_shallow(
                                        state['id'], position, sample_yaw)))
-                if advisory is not None:
-                    return bool(advisory)
+                if advisory is False:
+                    return False
+                if advisory is True and not bounded_recovery:
+                    return True
                 sample = planner_sample_direction(
                     sample_yaw, maximum_distance)
                 # Exhausting the soft-static recast budget is not a wall. Keep
@@ -12601,7 +12654,7 @@ class BotRuntime(object):
                 if (sample is None or
                         (isinstance(sample, dict) and
                          sample.get('deferred', False))):
-                    return True
+                    return not bounded_recovery
                 return self._probe_is_clear(sample)
 
             if decision_cache_valid and not decision_due:
@@ -12679,6 +12732,8 @@ class BotRuntime(object):
                     'half_length': state.get('half_length', 3.5),
                     'half_width': state.get('half_width', 1.7),
                     'stopping_distance': stopping_distance,
+                    'navigation_recovery_allowed': self._navigation_recovery_allowed(
+                        state['id'], position),
                     'decision_horizon': decision_horizon,
                     'turn_speed_limit': (physics_params.get('rotSpd')
                                          if physics_params is not None else None),
@@ -12713,6 +12768,8 @@ class BotRuntime(object):
                         self._combat_diagnostics, 'bot.planner_driver',
                         self.adapter.decide,
                         decision_state, sample_clear)
+                if command.pop('navigation_replan', False):
+                    self.navigator.request_replan(state['id'], position, now)
                 self._report_blocked_planner(
                     position, command, planner_probe_samples)
                 command = timed_call(
@@ -13301,7 +13358,12 @@ class BotRuntime(object):
                                 position[1],
                                 position[2] + math.cos(travel_yaw) *
                                 edge_length)
-                    report_blocked(state['id'], position, blocked_target, now)
+                    stable_report = getattr(self.navigator, 'report_blocked_corridor', None)
+                    if callable(stable_report):
+                        stable_report(state['id'], position,
+                            command['move_position'], travel_yaw, now)
+                    else:
+                        report_blocked(state['id'], position, blocked_target, now)
             steer_dir = 0
             if abs(turn) > 0.01:
                 # LocalDriver already inverts reverse recovery steering for the
@@ -13599,9 +13661,18 @@ class BotRuntime(object):
                             self.navigator, 'report_blocked_plan', None)
                         if callable(review):
                             review(position, contact_target)
-                        report_contact(
-                            state['id'], position,
-                            contact_target, now)
+                        stable_report = getattr(self.navigator, 'report_hard_contact', None)
+                        if callable(stable_report):
+                            stable_report(state['id'], position,
+                                command.get('move_position'),
+                                realised_contact_yaw if realised_contact_yaw is not None else travel_yaw,
+                                now)
+                        else:
+                            report_contact(state['id'], position, contact_target, now)
+                elif path_clear and abs(speed) > 0.05:
+                    clear_contact = getattr(self.navigator, 'clear_blocked_contact', None)
+                    if callable(clear_contact):
+                        clear_contact(state['id'])
                 elif motion_status in ('soft', 'cap_crushed'):
                     self._hard_contact_grinds[state['id']] = 1
                 if resolved_motion and callable(self.motion_report):

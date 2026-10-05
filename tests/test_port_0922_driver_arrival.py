@@ -109,13 +109,13 @@ class DriverArrivalTests(unittest.TestCase):
             self.assertIsNotNone(result[0])
             self.assertLessEqual(result[1], WAYPOINT_ARRIVAL_RADIUS)
 
-    def test_unknown_traverse_preserves_existing_route_behavior(self):
-        # This same fixed, unobstructed point still has no arrival after the
-        # observation window when the caller cannot supply physical curvature.
+    def test_unknown_traverse_uses_bounded_near_corner_alignment(self):
+        # The geometry-based near-corner gate also prevents an orbit when
+        # physical curvature is unavailable to the adapter.
         result = self._follow((-5.0, 0.0, 0.0), rate=20.0, duration=20.0,
                               known_rate=False)
-        self.assertIsNone(result[0])
-        self.assertGreater(result[1], WAYPOINT_ARRIVAL_RADIUS)
+        self.assertIsNotNone(result[0])
+        self.assertLessEqual(result[1], WAYPOINT_ARRIVAL_RADIUS)
 
     def test_aligned_route_does_not_stop_at_every_waypoint(self):
         reached, unused_distance, unused_maximum, commands, unused_adapter = (
@@ -193,7 +193,8 @@ class DriverArrivalTests(unittest.TestCase):
         command = self._orbit_command(
             driver, direction_clear=lambda heading, *unused: heading > -1.4)
         self.assertEqual(command['recovery_mode'], 'avoid')
-        self.assertEqual(command['throttle'], 1.0)
+        self.assertEqual(command['throttle'], 0.0)
+        self.assertTrue(command['brake'])
         self.assertIsNone(driver.states[17].get('alignment_target'))
 
     def test_local_target_probe_keeps_leading_hull_and_decision_travel(self):

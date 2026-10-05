@@ -47,7 +47,6 @@ class BotAdapter(object):
         self._contact_peers = {}
         self._contact_attempts = {}
         self._wreck_attempts = {}
-        self._navigation_waits = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
         return self.director.register(bot_id, team, descriptor, display_name)
@@ -58,7 +57,6 @@ class BotAdapter(object):
         self._contact_peers.pop(int(bot_id), None)
         self._contact_attempts.pop(int(bot_id), None)
         self._wreck_attempts.pop(int(bot_id), None)
-        self._navigation_waits.pop(int(bot_id), None)
 
     def _hull_contact(self, bot_id, state, position):
         """Return geometry for a real hull contact across small gaps."""
@@ -399,38 +397,29 @@ class BotAdapter(object):
             requested_dx * requested_dx + requested_dz * requested_dz > 225.0 and
             target_dx * target_dx + target_dz * target_dz <=
             WAYPOINT_ARRIVAL_RADIUS * WAYPOINT_ARRIVAL_RADIUS)
-        if navigation_wait:
-            wait = self._navigation_waits.get(bot_id)
-            distance = math.hypot(requested_dx, requested_dz)
-            if (wait is None or math.hypot(
-                    wait['goal'][0] - move_position[0],
-                    wait['goal'][2] - move_position[2]) > 2.0):
-                wait = {'goal': move_position, 'best': distance, 'elapsed': 0.0}
-                self._navigation_waits[bot_id] = wait
-            elif distance + 0.5 <= wait['best']:
-                wait['best'] = distance
-                wait['elapsed'] = 0.0
-            wait['elapsed'] += max(0.0, float(state.get('dt', 0.0)))
-            if wait['elapsed'] >= 8.0:
-                # A resumable search gets a short quiet window. It cannot park
-                # an actor forever: let the existing native-checked driver
-                # escape locally while the search continues on later ticks.
-                target = move_position
-                navigation_wait = False
-        else:
-            self._navigation_waits.pop(bot_id, None)
+        # Runtime supplies the producer status. A close bypass is not an A* wait.
+        navigation_wait = navigation_wait and state.get(
+            'navigation_status', 'pending') in ('pending', 'blocked')
+        # A centreline endpoint never removes the leading half of the hull.
+        state['navigation_probe_distance'] = max(
+            math.hypot(target_dx, target_dz),
+            float(state.get('half_length', 3.5)) + max(0.5,
+            abs(float(state.get('speed', 0.0))) *
+            max(0.0, float(state.get('decision_horizon', state.get('dt', 0.0))))))
+        if not movement_intent:
+            state.pop('navigation_probe_distance', None)
+        if not navigation_wait:
+            self.driver.end_navigation_wait(bot_id)
         if contact_plan is not None:
             local = contact_plan[1]
         elif navigation_wait:
-            # TerrainNavigator returned the current pose because a resumable A*
-            # job is still pending. This is a planner wait, not route arrival and
-            # not physical evidence that should advance LocalDriver recovery.
-            local = {
-                'throttle': 0.0,
-                'turn': 0.0,
-                'target_yaw': float(state.get('yaw', 0.0)),
-                'recovery_mode': 'nav_wait',
-            }
+            local = self.driver.wait_for_navigation(
+                bot_id, int(state['slot']), position,
+                float(state.get('yaw', 0.0)), float(state.get('speed', 0.0)),
+                float(state.get('dt', 0.0)), state.get('neighbours', ()),
+                direction_clear, half_length=float(state.get('half_length', 3.5)),
+                half_width=float(state.get('half_width', 1.7)),
+                recovery_allowed=bool(state.get('navigation_recovery_allowed')))
         else:
             local = self._reverse_withdrawal(
                 state, strategic, position, target, move_position, direction_clear)
@@ -492,7 +481,8 @@ class BotAdapter(object):
         if strategic.get('hull_angle_degrees') is not None:
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))
-        for name in ('forward_blocked_by', 'reverse_blocked_by', 'recovery_probe_distance'):
+        for name in ('forward_blocked_by', 'reverse_blocked_by', 'recovery_probe_distance',
+                     'navigation_recovery', 'navigation_replan'):
             if name in local:
                 result[name] = local[name]
         difference = target_yaw - float(state.get('yaw', 0.0))
@@ -505,4 +495,7 @@ class BotAdapter(object):
                 abs(difference) < 0.65):
             result['throttle'] = max(
                 -1.0, min(1.0, float(throttle_override)))
+        if throttle_override is not None and float(throttle_override) == 0.0:
+            result['throttle'] = 0.0
+            result['brake'] = True
         return result

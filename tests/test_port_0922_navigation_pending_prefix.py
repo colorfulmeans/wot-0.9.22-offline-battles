@@ -311,7 +311,7 @@ class PendingRecoveryLifecycleTests(unittest.TestCase):
         self.navigator = TerrainNavigator(lambda *unused: 0.0, cell_size=4.0)
         # Require A* while giving the pending driver a short valid endpoint.
         self.navigator.grid.dry_segment_clear = lambda *unused: False
-        self.navigator.grid.safe_local_target = lambda current, *unused: (
+        self.navigator.grid.safe_local_target = lambda current, *unused, **kwargs: (
             current[0] + 2.08, 0.0, current[2])
         self.current = (0.0, 0.0, 0.0)
         self.goal = (100.0, 0.0, 100.0)

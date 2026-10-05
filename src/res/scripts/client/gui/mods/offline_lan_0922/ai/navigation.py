@@ -164,6 +164,10 @@ class TerrainGrid(object):
 		self._native_review_cells = set()
 		self._native_review_seeds = set()
 		self._native_review_cache = {}
+		self._native_review_edges = self._native_review_cache
+		self._native_proof_revision = 0
+		self._proof_deferred = False
+		self._live_join_targets = set()
 		self._native_review_pending = None
 
 	def _install_baked_graph(self, graph):
@@ -616,6 +620,13 @@ class TerrainGrid(object):
 		is only for raw goals, smoothing and reactive shortcuts which have not
 		been selected by that planner.
 		"""
+		if (self.prebaked and self._baked_corridor(start, end)[1] is None and
+				_distance_2d(start, end) <= 24.0 and
+				(self._baked_cell_height(self.cell_for(start)) is None or
+				 tuple(end) in self._live_join_targets)):
+			return (self.segment_penalty(start, end, now) <= 0.0 and
+				self._inside(float(end[0]), float(end[2])) and
+				self._live_baked_egress_clear(start, end))
 		return (self.segment_penalty(start, end, now) <= 0.0 and
 		        not self.segment_has_baked_hazard(
 		            start, end, BAKED_SHALLOW_WATER) and
@@ -685,14 +696,22 @@ class TerrainGrid(object):
 		if distance < 0.25:
 			return True
 		if self.prebaked:
+			# Only short joins from an unsupported cell bypass erosion. Test the
+			# actual hull pose and both shoulders every time; never modify the bake.
+			if self._baked_cell_height(self.cell_for(start)) is None:
+				return self._live_baked_egress_clear(start, end)
 			if not self._baked_corridor(start, end)[0]:
 				# A diagonal can exceed the old 0.38 bake grade even when both
 				# orthogonal ways round the same supported square are legal.
 				# Merge only a bounded, dry square corridor with a fresh native
 				# ground/collision proof inside the exact client's full-grip range.
-				return (self._supported_slope_corridor(start, end) and
-				        self._native_segment_clear(
-					        start, end, SLIP_THRESHOLD_TAN))
+				if self._supported_slope_corridor(start, end):
+					return self._native_segment_clear(start, end, SLIP_THRESHOLD_TAN)
+				if (self._baked_cell_height(self.cell_for(end)) is None and
+						_distance_2d(start, end) <= 24.0 and
+						tuple(end) in self._live_join_targets):
+					return self._live_baked_egress_clear(start, end)
+				return False
 			return (not self._needs_native_review(start, end) or
 			        self._native_segment_clear(start, end))
 		start_key = self._point_key(start)
@@ -728,7 +747,12 @@ class TerrainGrid(object):
 			previous = current
 		if clear and self.obstacle_probe is not None:
 			try:
-				if self.obstacle_probe(grounded_start, previous, 2.15):
+				revision = self._native_proof_revision
+				blocked = self.obstacle_probe(grounded_start, previous, 2.15)
+				if blocked == 'deferred' or revision != self._native_proof_revision:
+					self._proof_deferred = True
+					return False
+				if blocked:
 					clear = False
 			except Exception:
 				# Collision-query failure is unknown terrain, not proof that a
@@ -782,6 +806,9 @@ class TerrainGrid(object):
 				not callable(self.obstacle_probe) or
 				_distance_2d(start, end) > self.cell_size * 12.0):
 			return False
+		if (self._baked_cell_height(self.cell_for(end)) is not None and
+				self.point_has_baked_hazard(end, 2)):
+			return False
 		key = (self.cell_for(start), self.cell_for(end))
 		if key in self._slope_corridor_cache:
 			return self._slope_corridor_cache[key]
@@ -828,6 +855,108 @@ class TerrainGrid(object):
 		self._slope_corridor_cache[key] = clear
 		return clear
 
+	def invalidate_native_review(self):
+		"""Retire collision receipts after geometry changes, preserving terrain."""
+		self._native_proof_revision += 1
+		self._native_review_cache.clear()
+		self._segment_cache.clear()
+		self._edge_cache.clear()
+
+	def _probe_obstacle(self, start, end, width, native_capability=None, evidence=None):
+		if native_capability is None:
+			return self.obstacle_probe(start, end, width)
+		return self.obstacle_probe(start, end, width, native_capability, evidence)
+
+
+	def _live_baked_egress_clear(self, start, end, native_capability=None,
+			evidence=None):
+		"""Prove a real exit from an eroded occupied cell, without snapping it.
+
+		Baked corridors may start at the nearest supported graph cell. Their
+		native edge review must not turn the missing height of the *occupied*
+		cell into a collision: that would reject every possible exit before
+		calling the native probe. Check the original continuous segment instead.
+		This is planning only; the driver and full hull sweep still own motion.
+		"""
+		if (not callable(self.ground_probe) or
+				not callable(self.obstacle_probe) or
+				self.segment_has_motion_hazard(
+					start, end, 1 | BAKED_SHALLOW_WATER)):
+			combat_count('nav_live_egress_hazard_or_unavailable')
+			return False
+		if (self._baked_cell_height(self.cell_for(end)) is not None and
+				self.point_has_baked_hazard(end, 2)):
+			return False
+		distance = _distance_2d(start, end)
+		# Edge erosion is advisory only for this bounded native-proved join.
+		# Water remains a veto. Never fill missing baked heights or erase a
+		# footprint globally: a wall, cliff or unsupported shoulder must fail
+		# the actual support/width proof below on every use.
+		if distance > 24.0:
+			combat_count('nav_live_egress_requires_local_join')
+			return False
+		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
+		grade = SLIP_THRESHOLD_TAN
+		lateral_x = (float(end[2]) - float(start[2])) / max(distance, 0.001)
+		lateral_z = (float(start[0]) - float(end[0])) / max(distance, 0.001)
+		for side in (-2.15, 2.15):
+			shoulder_start = (start[0] + lateral_x * side, start[1],
+				start[2] + lateral_z * side)
+			shoulder_end = (end[0] + lateral_x * side, end[1],
+				end[2] + lateral_z * side)
+			if self.segment_has_motion_hazard(
+					shoulder_start, shoulder_end, 1 | BAKED_SHALLOW_WATER):
+				return False
+		try:
+			start_y = self.ground_probe(
+				float(start[0]), float(start[2]), float(start[1]))
+			if (start_y is None or math.isnan(float(start_y)) or
+					math.isinf(float(start_y))):
+				combat_count('nav_live_egress_missing_support')
+				return False
+			previous = (float(start[0]), float(start_y), float(start[2]))
+			grounded_start = previous
+			for index in range(1, steps + 1):
+				fraction = float(index) / float(steps)
+				x = float(start[0]) + (float(end[0]) - float(start[0])) * fraction
+				z = float(start[2]) + (float(end[2]) - float(start[2])) * fraction
+				# Use the existing native, same-layer, water-aware support probe.
+				# _ground() deliberately reads only the bake in this grid.
+				y = self.ground_probe(x, z, previous[1])
+				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
+					combat_count('nav_live_egress_missing_support')
+					return False
+				y = float(y)
+				run = math.hypot(x - previous[0], z - previous[2])
+				if abs(y - previous[1]) > run * grade:
+					combat_count('nav_live_egress_grade')
+					return False
+				for side in (-2.15, 2.15):
+					shoulder = self.ground_probe(
+						x + lateral_x * side, z + lateral_z * side, y)
+					if (shoulder is None or math.isnan(float(shoulder)) or
+							math.isinf(float(shoulder)) or
+							abs(float(shoulder) - y) > abs(side) * grade):
+						combat_count('nav_live_egress_shoulder')
+						return False
+				previous = (x, y, z)
+			# Sweep from the actual hull position, never the snapped cell centre.
+			# Do not cache a live exit as an immutable graph edge: doors and
+			# wrecks can change between requests.
+			revision = self._native_proof_revision
+			blocked = self._probe_obstacle(
+				grounded_start, previous, 2.15, native_capability, evidence)
+			if blocked == 'deferred' or revision != self._native_proof_revision:
+				return None
+			if blocked:
+				combat_count('nav_live_egress_obstacle')
+				return False
+		except Exception:
+			combat_count('nav_live_egress_probe_failed')
+			return False
+		combat_count('nav_live_egress_clear')
+		return True
+
 	def _native_segment_clear(self, start, end, slope_limit=None):
 		'''Prove an affected local segment without using cached baked heights.'''
 		distance = _distance_2d(start, end)
@@ -844,6 +973,7 @@ class TerrainGrid(object):
 		pending = self._native_review_pending
 		exact_key = (tuple(start), tuple(end))
 		if pending is not None and exact_key in pending:
+			self._proof_deferred = True
 			return False
 		step_size = self.cell_size * 0.42
 		if slope_limit is not None:
@@ -862,6 +992,7 @@ class TerrainGrid(object):
 				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
 					if pending is not None:
 						pending.add(exact_key)
+					self._proof_deferred = True
 					return False
 				point = (x, float(y), z)
 				if previous is not None and abs(point[1] - previous[1]) > (
@@ -873,7 +1004,12 @@ class TerrainGrid(object):
 					first = point
 				previous = point
 			if clear:
-				clear = not self.obstacle_probe(first, previous, 2.15)
+				revision = self._native_proof_revision
+				blocked = self.obstacle_probe(first, previous, 2.15)
+				if blocked == 'deferred' or revision != self._native_proof_revision:
+					self._proof_deferred = True
+					return False
+				clear = not blocked
 		except Exception:
 			if pending is not None:
 				pending.add(exact_key)
@@ -950,6 +1086,8 @@ class TerrainGrid(object):
 		else:
 			end = (x, end_y, z)
 			result = end_y if self.segment_clear(start, end) else None
+		if self._proof_deferred:
+			return 'deferred'
 		self._edge_cache[key] = result
 		return result
 
@@ -1114,6 +1252,26 @@ class TerrainGrid(object):
 		if abs(dx) + abs(dz) < 0.1:
 			return None
 		desired_yaw = math.atan2(dx, dz)
+		if self.prebaked and self._baked_cell_height(self.cell_for(current)) is None:
+			cell = self.cell_for(current)
+			candidates = []
+			for oz in range(-2, 3):
+				for ox in range(-2, 3):
+					key = (cell[0] + ox, cell[1] + oz)
+					y = self._baked_cell_height(key)
+					if y is not None:
+						point = self.point_for(key, y)
+						if _distance_2d(current, point) > WAYPOINT_ARRIVAL_RADIUS:
+							candidates.append((_distance_2d(current, point), point))
+			# At most one nearby candidate receives a full native query per decision.
+			for unused_distance, point in sorted(candidates)[:1]:
+				candidate_yaw = math.atan2(point[0] - current[0], point[2] - current[2])
+				delta = (candidate_yaw - desired_yaw + math.pi) % (2.0 * math.pi) - math.pi
+				if abs(delta) < max(0.0, float(minimum_offset)):
+					continue
+				if (not self.path_has_edge_penalty((current, point), edge_penalties) and
+						self.dry_segment_clear(current, point, now)):
+					return point
 		side = 1.0 if float(side_preference) >= 0.0 else -1.0
 		offsets = (0.0, side * 0.45, -side * 0.45,
 		           side * 0.85, -side * 0.85,
@@ -1121,6 +1279,7 @@ class TerrainGrid(object):
 		           side * 1.75, -side * 1.75)
 		distances = (self.cell_size * 0.78, self.cell_size * 0.52)
 		best = None
+		native_candidates = 0
 		for distance in distances:
 			for offset in offsets:
 				if abs(offset) < max(0.0, float(minimum_offset)):
@@ -1132,6 +1291,19 @@ class TerrainGrid(object):
 					diagnostic['attempted'] += 1
 				y = self._ground(x, z, float(current[1]))
 				if y is None:
+					# A streaming/eroded cell is unknown, not automatically a wall.
+					# Prove a short actual-pose step without publishing graph terrain.
+					if (self.prebaked and native_candidates < 3 and
+							callable(self.obstacle_probe)):
+						native_candidates += 1
+						candidate = (x, float(current[1]), z)
+						if (not self.path_has_edge_penalty((current, candidate), edge_penalties) and
+								self._inside(x, z) and
+								self._live_baked_egress_clear(current, candidate)):
+							if len(self._live_join_targets) >= 64:
+								self._live_join_targets.pop()
+							self._live_join_targets.add(candidate)
+							return candidate
 					if diagnostic is not None:
 						diagnostic['missing_ground'] += 1
 					continue
@@ -1178,20 +1350,23 @@ class TerrainGrid(object):
 			edge_penalties, hard_edge_penalties)
 		while not search.done:
 			search.step(256)
-		return search.result
+			if search.progress.get('deferred'):
+				return None
+		return None if search.progress.get('deferred') else search.result
 
 	def begin_plan(self, start, goal, avoid_points=None, max_expansions=1600,
 			now=0.0, prefer_clearance=False, edge_penalties=None,
 			hard_edge_penalties=None, route_corridor=None):
+		progress = {}
 		return _TerrainSearch(self._plan_steps(
 			start, goal, avoid_points, max_expansions, now,
 			bool(prefer_clearance), edge_penalties, hard_edge_penalties,
-			route_corridor),
-			self.static_hull_revision)
+			route_corridor, progress),
+			self.static_hull_revision, progress)
 
 	def _plan_steps(self, start, goal, avoid_points, max_expansions, now,
 			prefer_clearance, edge_penalties, hard_edge_penalties,
-			route_corridor=None):
+			route_corridor=None, progress=None):
 		if route_corridor is not None:
 			first, last = route_corridor
 			corridor_dx = last[0] - first[0]
@@ -1257,7 +1432,14 @@ class TerrainGrid(object):
 				else:
 					offset_x, offset_z, length_scale = edge
 					next_cell = (current[0] + offset_x, current[1] + offset_z)
+					self._proof_deferred = False
 					next_y = self._edge(current, current_y, next_cell)
+					while next_y == 'deferred':
+						progress['deferred'] = True
+						yield None
+						self._proof_deferred = False
+						next_y = self._edge(current, current_y, next_cell)
+					progress.pop('deferred', None)
 					if next_y is None:
 						continue
 					edge_key = tuple(sorted((current, next_cell)))
@@ -1310,9 +1492,17 @@ class TerrainGrid(object):
 					if self.prebaked:
 						start_point = self.point_for(current, current_y)
 						end_point = self.point_for(next_cell, next_y)
-						if (self._needs_native_review(start_point, end_point) and
-								not self._native_segment_clear(start_point, end_point)):
-							continue
+						if self._needs_native_review(start_point, end_point):
+							self._proof_deferred = False
+							clear = self._native_segment_clear(start_point, end_point)
+							while self._proof_deferred:
+								progress['deferred'] = True
+								yield None
+								self._proof_deferred = False
+								clear = self._native_segment_clear(start_point, end_point)
+							progress.pop('deferred', None)
+							if not clear:
+								continue
 					cost_so_far[next_cell] = new_cost
 					came_from[next_cell] = current
 					heights[next_cell] = next_y
@@ -1364,6 +1554,10 @@ class TerrainGrid(object):
 				not self.path_has_edge_penalty(
 					(path[-1], goal_point), hard_edge_penalties)):
 			path.append(goal_point)
+		# Expose only the selected complete chain, never an exploration branch.
+		progress['selected_path'] = tuple(path)
+		progress['revision'] = int(progress.get('revision', 0)) + 1
+		yield None
 		yield self._smooth(
 			tuple(path), now, prefer_clearance, hard_edge_penalties)
 
@@ -1398,12 +1592,18 @@ class TerrainGrid(object):
 class _TerrainSearch(object):
 	"""Small resumable A* task so collision probes are spread across frames."""
 
-	def __init__(self, generator, hull_revision):
+	def __init__(self, generator, hull_revision, progress=None):
+		self.progress = progress if progress is not None else {}
+		self.steps = 0
 		self.generator = generator
 		self.hull_revision = hull_revision
 		self.done = False
 		self.result = None
 		self.last_frame = None
+
+	def proved_prefix(self, grid):
+		return self.progress.get('selected_path', ()) if not self.done else ()
+
 
 	def step(self, budget):
 		if self.done:
@@ -1411,9 +1611,12 @@ class _TerrainSearch(object):
 		for _unused in range(max(1, int(budget))):
 			try:
 				value = next(self.generator)
+				self.steps += 1
 			except StopIteration:
 				self.done = True
 				self.result = ()
+				break
+			if self.progress.get('deferred'):
 				break
 			if value is not None:
 				self.done = True
@@ -1523,7 +1726,330 @@ class TerrainNavigator(object):
 				for state in self.bot_direct_progress.values()),
 		}
 
+	def invalidate_native_planning(self):
+		"""Cancel receipts/jobs whose collision evidence belongs to old geometry."""
+		self.grid.invalidate_native_review()
+		for state in self.bot_states.values():
+			self._clear_pending_prefix(state)
+		self.searches.clear()
+		self.search_times.clear()
+		self.paths.clear()
+		self.path_times.clear()
+		self.path_hull_revisions.clear()
+
+
+	@staticmethod
+	def _clear_temporary_progress(state):
+		for name in ('local_fallback_episode', 'temporary_visited_cells',
+		             'temporary_visited_order', 'temporary_stalled'):
+			state.pop(name, None)
+
+	def _temporary_path_repeats(self, state, path, start=0):
+		# Visited terrain is not forbidden. A proved prefix may retrace old
+		# intermediate legs whenever its remaining chain reaches new terrain;
+		# completed paths bypass this temporary-search check altogether.
+		visited = state.get('temporary_visited_cells', ())
+		return bool(state.get('temporary_stalled') and path and
+			all(self.grid.cell_for(path[offset]) in visited
+				for offset in range(start, len(path))))
+
+	@staticmethod
+	def _local_fallback_intent(goal, state):
+		return (state.get('request_key'),
+		        int(state.get('replan_generation', 0)), tuple(goal))
+
+	def _local_fallback_passed(self, current, target, state):
+		"""Consume a short leg crossed between decisions, within its local width.
+
+		This only retires an old steering target. The next leg must still be
+		proved from the actual hull pose, including support and native walls.
+		"""
+		origin = state.get('local_fallback_start')
+		if origin is None:
+			return False
+		dx, dz = target[0] - origin[0], target[2] - origin[2]
+		length = math.hypot(dx, dz)
+		if length < 0.1:
+			return False
+		past_x, past_z = current[0] - target[0], current[2] - target[2]
+		return bool(past_x * dx + past_z * dz >= 0.0 and
+			abs(past_x * dz - past_z * dx) <= length * self.grid.cell_size)
+
+	def _retained_local_fallback(self, bot_id, current, goal, now, state):
+		"""Keep one proved short waypoint until reached or physically retired.
+
+		A failed A* result can remain cached across many driver decisions. Moving
+		the local endpoint with the hull on every one makes its two-metre escape
+		an endlessly moving target and changes steering at coarse-cell borders.
+		Reuse only the endpoint selected for this exact route/recovery intent;
+		a later normal path or macro escape owns its own ``last_target``.
+		"""
+		target = state.get('local_fallback_target')
+		if (target is not None and state.get('last_target', target) == target and
+				state.get('local_fallback_intent') ==
+				self._local_fallback_intent(goal, state) and
+				_distance_2d(current, target) > WAYPOINT_ARRIVAL_RADIUS and
+				not self._local_fallback_passed(current, target, state) and
+				not self._bot_edges_penalized(bot_id, current, target, now) and
+				self.grid.dry_segment_clear(current, target, now)):
+			return tuple(target)
+		if target is not None and state.get('last_target') == target:
+			# Pending-path bridging must not resurrect a consumed local point.
+			state.pop('last_target', None)
+		state.pop('local_fallback_target', None)
+		state.pop('local_fallback_intent', None)
+		state.pop('local_fallback_start', None)
+		return None
+
+	def _remember_local_fallback(self, target, goal, state, start=None):
+		state['local_fallback_target'] = tuple(target)
+		state['local_fallback_intent'] = self._local_fallback_intent(goal, state)
+		state['local_fallback_episode'] = self._local_fallback_intent(goal, state)
+		state['local_fallback_start'] = tuple(start) if start is not None else None
+
+	def _local_fallback_origin(self, current, goal, state):
+		target = state.get('local_fallback_target')
+		if (target is not None and state.get('last_target', target) == target and
+				state.get('local_fallback_intent') == self._local_fallback_intent(goal, state) and
+				_distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS):
+			# Arrival consumes a waypoint within a radius, not at its exact
+			# centre. Start the next leg at that fixed waypoint; regenerating a
+			# two-metre fan at the hull every 0.58 m can keep rounding into the
+			# same baked cell forever. The realised connector is proved below.
+			return tuple(target)
+		return tuple(current)
+
+	def _new_local_fallback(self, bot_id, current, origin, goal, now,
+			avoid_points, state):
+		fallback = self.grid.safe_local_target(
+			origin, goal, now, avoid_points,
+			1.0 if (int(bot_id) % 2) else -1.0,
+			self._active_planning_edge_penalties(bot_id, now),
+			0.0, diagnostic=state.setdefault('local_fallback', {}))
+		if fallback is not None and self._temporary_path_repeats(state, (fallback,)):
+			return tuple(current)
+		connector_clear = True
+		if fallback is not None and origin != tuple(current):
+			connector_clear = bool(
+				not self._bot_edges_penalized(bot_id, current, fallback, now) and
+				self.grid.dry_segment_clear(current, fallback, now))
+			if connector_clear and self.grid.prebaked:
+				# Centre-to-centre baked edge receipts cannot prove the diagonal
+				# from an off-centre hull still inside the arrival disk.
+				try:
+					revision = self.grid._native_proof_revision
+					blocked = self.grid._probe_obstacle(current, fallback, 2.15,
+						state.get('native_capability'))
+					connector_clear = not blocked and revision == self.grid._native_proof_revision
+				except Exception:
+					connector_clear = False
+		if not connector_clear:
+			state.pop('local_fallback_target', None)
+			state.pop('local_fallback_intent', None)
+			state.pop('local_fallback_start', None)
+			# The next leg is not admissible from the realised hull pose. Hold
+			# for this decision, then retry from the hull on the next one.
+			return tuple(current)
+		if fallback is not None:
+			self._remember_local_fallback(fallback, goal, state, current)
+		return fallback
+
+	@staticmethod
+	def _clear_pending_prefix(state):
+		if state.get('last_target') == state.get('pending_prefix_target'):
+			state.pop('last_target', None)
+		for name in ('pending_prefix', 'pending_prefix_search',
+		             'pending_prefix_intent', 'pending_prefix_index',
+		             'pending_prefix_revision', 'pending_prefix_target',
+		             'retired_prefix'):
+			state.pop(name, None)
+
+	def _retire_pending_prefix(self, state):
+		# Losing a connector is not permission to replay this tree's old legs.
+		# Retain the issued boundary across the independent local escape. A
+		# completed route or a different search may still require a backtrack.
+		path = state.get('pending_prefix')
+		receipt = state.get('retired_prefix')
+		if receipt is None and path:
+			index = min(int(state.get('pending_prefix_index', 0)), len(path) - 1)
+			receipt = (state.get('pending_prefix_search'),
+				state.get('pending_prefix_intent'), tuple(path[index]))
+		self._clear_pending_prefix(state)
+		if receipt is not None:
+			state['retired_prefix'] = receipt
+
+	def _pending_search_target(self, bot_id, current, goal, now, state,
+			search_key, lookahead_distance):
+		"""Follow a selected dry route while its smoothing pass is pending.
+
+		Exploration itself exposes no path. Once the search connects to its
+		destination, keep any issued leg stable until arrival or a real veto.
+		Only the owner of the private search may consume its local connector.
+		"""
+		search = self.searches.get(search_key)
+		native_capability = state.get('native_capability')
+		intent = self._local_fallback_intent(goal, state)
+		retired = state.get('retired_prefix')
+		if retired is not None and (retired[0] is not search or retired[1] != intent):
+			state.pop('retired_prefix', None)
+			retired = None
+		if (state.get('pending_prefix_search') is not search or
+				state.get('pending_prefix_intent') != intent):
+			if retired is None:
+				self._clear_pending_prefix(state)
+		if (search is None or search.done or
+				self._path_owner(search_key[0]) != int(bot_id)):
+			# Shared route trees begin at the authored route anchor. Until they
+			# finish, an early prefix can still lie behind this consuming hull.
+			# Only the owner of a live-position search may drive its partial tree.
+			return None
+		path = state.get('pending_prefix')
+		index = int(state.get('pending_prefix_index', 0))
+		reached = bool(path and
+			_distance_2d(current, path[-1]) <= WAYPOINT_ARRIVAL_RADIUS)
+		if path is None or reached:
+			revision = search.progress.get('revision', 0)
+			if revision != state.get('pending_prefix_revision'):
+				candidate = search.proved_prefix(self.grid)
+				minimum_index = 0
+				if retired is not None:
+					if not candidate or retired[2] not in candidate:
+						return None
+					minimum_index = candidate.index(retired[2]) + 1
+					if minimum_index >= len(candidate):
+						return None
+				# A popped A* node is an explored branch, not a chosen route.
+				# At an issued tip, only extend its admitted parent chain. The
+				# next heap branch can join tens of metres behind the hull; using
+				# its nearest node sent Object 244 back across the slope. Keep
+				# this reached tip while the live search proves an onward leg or
+				# finishes a route (which may legitimately require a backtrack).
+				if not reached or (candidate and path[-1] in candidate):
+					path = candidate
+				state['pending_prefix_search'] = search
+				state['pending_prefix_intent'] = intent
+				state['pending_prefix_revision'] = revision
+				state['pending_prefix'] = path or None
+				if path:
+					index = max(minimum_index, self._path_entry_index(
+						bot_id, current, path, now))
+					if ((index == 0 and _distance_2d(current, path[0]) >
+							self.grid.cell_size * 2.0) or
+							(index == len(path) - 1 and _distance_2d(current, path[index]) >
+							 WAYPOINT_ARRIVAL_RADIUS)):
+						# Local motion may already have passed this young tree. A
+						# legal return segment is not a reason to revisit its root;
+						# wait for a proved onward leg near the actual hull instead.
+						state['pending_prefix'] = None
+						if state.get('last_target') in (path[0],
+								state.get('pending_prefix_target')):
+							state.pop('last_target', None)
+						return None
+			if not path:
+				return None
+		if self._temporary_path_repeats(state, path, index):
+			# Keep the healthy search and its frame budget. A later prefix with
+			# an onward leg can replace this exhausted local excursion immediately.
+			state['pending_prefix'] = None
+			if state.get('last_target') == state.get('pending_prefix_target'):
+				state.pop('last_target', None)
+			return None
+		# A pending search has not selected a complete ford route. Its prefix
+		# may use only dry edges; full A* completion owns shallow-water grants.
+		connector_clear = (False if self._bot_edges_penalized(
+			bot_id, current, path[index], now) else
+			self.grid.dry_segment_clear(current, path[index], now))
+		if connector_clear is None:
+			return tuple(current)
+		if not connector_clear:
+			state['pending_prefix_index'] = index
+			self._retire_pending_prefix(state)
+			return None
+		while (index + 1 < len(path) and
+				_distance_2d(current, path[index]) <= WAYPOINT_ARRIVAL_RADIUS and
+				self._planned_next_segment_clear(
+					current, path, index, now, bot_id)):
+			index += 1
+		index = self._lookahead_index(
+			current, path, index, search_key[0], now, lookahead_distance, bot_id)
+		target = tuple(path[index])
+		if (index + 1 < len(path) and
+				_distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS):
+			# The next edge can become inadmissible after A* proved this prefix,
+			# or be unreachable from the hull's realised arrival offset. Issuing
+			# the reached point again makes the adapter wait forever and prevents
+			# the fully checked local fallback below from finding another exit.
+			# Retire only this consumer's prefix, retaining the healthy search.
+			state['pending_prefix_index'] = index
+			self._retire_pending_prefix(state)
+			return None
+		state['pending_prefix_index'] = index
+		state['pending_prefix_target'] = target
+		state.pop('retired_prefix', None)
+		state['last_target'] = target
+		state['local_fallback_episode'] = intent
+		state.pop('controlled_shallow_target', None)
+		state['navigation_status'] = 'pending'
+		state['target_is_terminal'] = False
+		self._set_fallback_mode(bot_id, 'pending')
+		return target
+
+	def _path_entry_index(self, bot_id, current, path, now):
+		"""Attach to the forward end of the occupied leg, not its old vertex."""
+		best = min(range(len(path)), key=lambda index: _distance_2d(current, path[index]))
+		best_distance = _distance_2d(current, path[best])
+		for index in range(len(path) - 1):
+			first, second = path[index:index + 2]
+			dx, dz = second[0] - first[0], second[2] - first[2]
+			length_sq = dx * dx + dz * dz
+			if length_sq < 0.01:
+				continue
+			along = ((current[0] - first[0]) * dx +
+				         (current[2] - first[2]) * dz) / length_sq
+			if not 0.0 < along < 1.0:
+				continue
+			distance = math.hypot(current[0] - first[0] - along * dx,
+				current[2] - first[2] - along * dz)
+			if (distance >= best_distance or
+					distance > 24.0 or
+					(distance > WAYPOINT_ARRIVAL_RADIUS and
+					 _distance_2d(current, second) > 24.0) or
+					self.grid.segment_has_baked_hazard(current, second, BAKED_SHALLOW_WATER) or
+					self._bot_edges_penalized(bot_id, current, second, now)):
+				continue
+			if index == 0 and distance <= WAYPOINT_ARRIVAL_RADIUS:
+				# A hull already occupying the first leg has consumed its source.
+				# The vector back to an asynchronous search origin is not an
+				# incoming climb approach. Preserve every later real setup bend.
+				clear = (self.grid.live_shortcut_preserves_climb_approach(
+					current, path, 0, 1) and
+					self.grid.dry_segment_clear(current, second, now))
+			else:
+				clear = self._planned_current_segment_clear(
+					current, path, index + 1, now)
+			if not clear:
+				continue
+			best, best_distance = index + 1, distance
+		if (best == 0 and len(path) > 1 and
+				_distance_2d(current, path[0]) <= min(8.0, self.grid.cell_size * 2.0) and
+				not self._bot_edges_penalized(bot_id, current, path[1], now) and
+				not self.grid.segment_has_baked_hazard(current, path[1], BAKED_SHALLOW_WATER) and
+				self._planned_current_segment_clear(
+					current, path, 1, now)):
+			# A small sideways drift at a source does not require another A*.
+			# Enter its first proved leg directly; a genuinely displaced hull
+			# instead gets the live join below, never a return to the source.
+			best = 1
+		return best
+
 	@observed('nav.fallback')
+	def _safe_fallback_target(self, bot_id, current, goal, now, avoid_points, state):
+		origin = self._local_fallback_origin(current, goal, state)
+		retained = self._retained_local_fallback(bot_id, current, goal, now, state)
+		if retained is not None:
+			return retained
+		return self._new_local_fallback(bot_id, current, origin, goal, now, avoid_points, state)
+
 	def _fallback_target(self, bot_id, current, goal, now, avoid_points, state,
 			allow_safe_local=True):
 		"""Keep moving without treating an unproved long segment as drivable.
@@ -1545,11 +2071,8 @@ class TerrainNavigator(object):
 				not self.grid.segment_clear(current, ford)):
 			state.pop('controlled_shallow_target', None)
 		if allow_safe_local:
-			fallback = self.grid.safe_local_target(
-				current, goal, now, avoid_points,
-				1.0 if (int(bot_id) % 2) else -1.0,
-				self._active_planning_edge_penalties(bot_id, now),
-				diagnostic=state.setdefault('local_fallback', {}))
+			fallback = self._safe_fallback_target(
+				bot_id, current, goal, now, avoid_points, state)
 			if fallback is not None:
 				state['last_target'] = tuple(fallback)
 				state['navigation_status'] = 'safe'
@@ -1585,6 +2108,12 @@ class TerrainNavigator(object):
 		collision and no remembered failed edge; ``None`` from that search still
 		means the only safe action is to hold.
 		"""
+		search_key = state.get('path_key')
+		if search_key not in self.searches:
+			search_key = state.get('request_key')
+		prefix = self._pending_search_target(bot_id, current, goal, now, state, search_key, None)
+		if prefix is not None:
+			return prefix
 		last_target = state.get('last_target')
 		if allow_last_target and last_target is not None:
 			last_target = tuple(last_target)
@@ -1609,11 +2138,8 @@ class TerrainNavigator(object):
 		if (goal is not None and
 				(immediate_safe_local or
 				 float(now) - float(started) >= PENDING_PROGRESS_SECONDS)):
-			fallback = self.grid.safe_local_target(
-				current, goal, now, avoid_points,
-				1.0 if (int(bot_id) % 2) else -1.0,
-				self._active_planning_edge_penalties(bot_id, now),
-				diagnostic=state.setdefault('local_fallback', {}))
+			fallback = self._safe_fallback_target(
+				bot_id, current, goal, now, avoid_points, state)
 			if fallback is not None:
 				state['last_target'] = tuple(fallback)
 				state['navigation_status'] = 'pending'
@@ -1640,13 +2166,16 @@ class TerrainNavigator(object):
 		return (_distance_2d(target, goal) +
 		        PENDING_INTENT_PROGRESS_METRES < _distance_2d(current, goal))
 
-	def _reset_macro_progress(self, state, current, target, now):
+	def _reset_macro_progress(self, state, current, target, now, kind='path'):
 		state['macro_progress_at'] = float(now)
+		state['macro_progress_kind'] = kind
 		state['macro_progress_position'] = tuple(current)
 		state['macro_progress_target'] = (
 			tuple(target) if target is not None else None)
 		state['macro_progress_path_key'] = state.get('path_key')
 		state['macro_progress_index'] = int(state.get('index', 0))
+		state['macro_progress_prefix_search'] = state.get('pending_prefix_search')
+		state['macro_progress_prefix_index'] = state.get('pending_prefix_index')
 
 	def observe_direct_target(self, bot_id, current, goal, path_key, now,
 			movement_intent=True):
@@ -1759,26 +2288,58 @@ class TerrainNavigator(object):
 	def _observe_macro_progress(self, bot_id, state, current, goal, now):
 		"""Observe progress along the issued path target, not arbitrary motion."""
 		target = state.get('last_target')
+		fallback = bool(state.get('local_fallback_episode') ==
+			self._local_fallback_intent(goal, state))
+		if fallback:
+			# A retry's new tree and each two-metre fallback are still the same
+			# unfinished route. Count actual entry into new terrain, including a
+			# necessary retreat, rather than renew the deadline when A* changes
+			# its tip or a short waypoint is reached inside the same local loop.
+			visited = state.setdefault('temporary_visited_cells', set())
+			order = state.setdefault('temporary_visited_order', deque())
+			cell = self.grid.cell_for(current)
+			new_cell = cell not in visited
+			if new_cell:
+				visited.add(cell)
+				order.append(cell)
+				while len(order) > MAX_BAKED_SEARCH_EDGE_CACHE:
+					visited.discard(order.popleft())
+			if (new_cell or state.get('macro_progress_kind') != 'temporary' or
+					_distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS):
+				state['temporary_stalled'] = False
+				self._reset_macro_progress(state, current, goal, now, 'temporary')
+			elif (not state.get('temporary_stalled') and
+					float(now) - float(state.get('macro_progress_at', now)) >=
+					MACRO_STALL_SECONDS):
+				state['temporary_stalled'] = True
+				state['macro_progress_replans'] = int(
+					state.get('macro_progress_replans', 0)) + 1
+			return bool(state.get('temporary_stalled'))
+		kind = 'path'
 		if (state.get('macro_replan_active') and
 				state.get('macro_escape_target') is None and
 				not self._active_macro_edge_penalties(bot_id, now)):
 			self._finish_macro_replan(bot_id, state)
-			self._reset_macro_progress(state, current, target, now)
+			self._reset_macro_progress(state, current, target, now, kind)
 			return False
 		if (target is None or
 				_distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS or
 				_distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS):
-			self._reset_macro_progress(state, current, target, now)
+			self._reset_macro_progress(state, current, target, now, kind)
 			return False
 		tracked_target = state.get('macro_progress_target')
-		path_changed = (
+		path_changed = not fallback and (
 			state.get('macro_progress_path_key') != state.get('path_key') or
 			int(state.get('macro_progress_index', 0)) !=
-			int(state.get('index', 0)))
+			int(state.get('index', 0)) or
+			state.get('macro_progress_prefix_search') is not
+			state.get('pending_prefix_search') or
+			state.get('macro_progress_prefix_index') != state.get('pending_prefix_index'))
 		if (tracked_target is None or path_changed or
+				state.get('macro_progress_kind', 'path') != kind or
 				_distance_2d(tracked_target, target) >
 				MACRO_TARGET_CHANGE_METRES):
-			self._reset_macro_progress(state, current, target, now)
+			self._reset_macro_progress(state, current, target, now, kind)
 			return False
 		reference = state.get('macro_progress_position') or current
 		progress = (_distance_2d(reference, target) -
@@ -1787,13 +2348,69 @@ class TerrainNavigator(object):
 		if progress >= MACRO_PROGRESS_METRES:
 			if state.get('macro_replan_active'):
 				self._finish_macro_replan(bot_id, state)
-			self._reset_macro_progress(state, current, target, now)
+			self._reset_macro_progress(state, current, target, now, kind)
 			return False
 		if (float(now) - float(state.get('macro_progress_at', now)) >=
 				MACRO_STALL_SECONDS):
+			cached = self.paths.get(state.get('path_key'))
+			if cached and (self.grid.path_has_penalty(cached, now) is None or
+					self.grid.segment_clear(current, target) is None):
+				# The deadline can expire on the first deferred frame, before
+				# next_target reaches its normal cached-path validation below.
+				# Missing proof is not a reason to start a new escape/search.
+				self._reset_macro_progress(state, current, target, now, kind)
+				return False
 			return self._start_macro_replan(
 				bot_id, state, current, target, now)
 		return False
+
+	def bot_search_diagnostics(self, bot_id, current, now):
+		"""Explain a wait without running more ground or collision probes."""
+		state = self.bot_states.get(int(bot_id), {})
+		request = state.get('request_key')
+		searches = []
+		for key, search in self.searches.items():
+			if key != request and self._path_owner(key[0]) != int(bot_id):
+				continue
+			searches.append({
+				'key': key,
+				'start': getattr(search, 'progress', {}).get('start'),
+				'goal': getattr(search, 'progress', {}).get('goal'),
+				'expanded': int(getattr(search, 'progress', {}).get('revision', 0)),
+				'native_refusal': getattr(search, 'progress', {}).get('native_refusal'),
+				'age_ms': int(max(0.0, float(now) -
+					self.search_times.get(key, float(now))) * 1000.0),
+				'steps': int(getattr(search, 'steps', 0)),
+				'last_step_age_ms': (int(max(0.0, float(now) -
+					search.last_frame) * 1000.0)
+					if search.last_frame is not None else None),
+			})
+		cell = self.grid.cell_for(current)
+		prefix = state.get('pending_prefix') or ()
+		prefix_index = int(state.get('pending_prefix_index', 0))
+		return {
+			'current_cell': cell,
+			'current_cell_height': self.grid._baked_cell_height(cell),
+			'pending_ms': (int(max(0.0, float(now) -
+				state['pending_since']) * 1000.0)
+				if state.get('pending_since') is not None else 0),
+			'searches': sorted(searches, key=lambda item: repr(item['key'])),
+			'pending_prefix_start': (state['pending_prefix'][0]
+				if state.get('pending_prefix') else None),
+			'pending_prefix_target': state.get('pending_prefix_target'),
+			'pending_prefix_index': prefix_index,
+			'pending_prefix_length': len(prefix),
+			'pending_prefix_near_target': prefix[
+				max(0, prefix_index):max(0, prefix_index) + 3],
+			'macro_progress_age_ms': int(max(0.0, float(now) -
+				float(state.get('macro_progress_at', now))) * 1000.0),
+			'macro_progress_kind': state.get('macro_progress_kind'),
+			'macro_progress_replans': int(state.get('macro_progress_replans', 0)),
+			'native_capability': (state['native_capability'][0]
+				if state.get('native_capability') is not None else None),
+			'path_native_refusal': getattr(self, 'path_native_refusals', {}).get(state.get('path_key')),
+			'native_review_cells': len(self.grid._native_review_cells),
+		}
 
 	def _stationary_ingress_escape(self, bot_id, state, current, goal, now,
 			movement_intent, avoid_points):
@@ -1804,6 +2421,14 @@ class TerrainNavigator(object):
 		one fully checked short detour a bounded lease before selecting it again.
 		This never changes shared terrain or bypasses the native motion veto.
 		"""
+		# This episode repairs entry from an erased cell. On ordinary supported
+		# ground the macro progress monitor already owns the same stall; running
+		# both creates competing temporary goals at the same deadline.
+		if (self.grid.prebaked and
+				self.grid._baked_cell_height(self.grid.cell_for(current)) is not None and
+				not state.get('ingress_escape')):
+			state.pop('ingress_progress', None)
+			return None
 		tracker = state.get('ingress_progress')
 		if (tracker is None or not movement_intent or
 				_distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS or
@@ -1937,6 +2562,7 @@ class TerrainNavigator(object):
 			state.get('replan_generation', 0)) + 1
 		state['blocked_step_replans'] = int(
 			state.get('blocked_step_replans', 0)) + 1
+		state['blocked_step_replan'] = True
 		state['blocked_step_escalated_until'] = now + 2.0
 		state['blocked_step_tracker'] = None
 		state['path_key'] = None
@@ -1962,6 +2588,8 @@ class TerrainNavigator(object):
 				self.path_times.pop(key, None)
 				self.path_hull_revisions.pop(key, None)
 		# In-flight searches may have already admitted edges through that wall.
+		for search in self.searches.values():
+			self._retire_pending_prefixes(search)
 		self.searches.clear()
 		self.search_times.clear()
 		return True
@@ -1990,7 +2618,18 @@ class TerrainNavigator(object):
 			self.path_times.pop(key, None)
 			self.path_hull_revisions.pop(key, None)
 
+	def _retire_pending_prefixes(self, search):
+		for state in self.bot_states.values():
+			if state.get('pending_prefix_search') is search:
+				self._clear_pending_prefix(state)
+
+
 	def _finish_search(self, key, search, now):
+		# A native callback may retire or replace this job while it is stepping.
+		if self.searches.get(key) is not search:
+			self._retire_pending_prefixes(search)
+			return
+		self._retire_pending_prefixes(search)
 		path = search.result or ()
 		self.searches.pop(key, None)
 		self.search_times.pop(key, None)
@@ -2005,6 +2644,123 @@ class TerrainNavigator(object):
 		else:
 			combat_count('nav_search_failed')
 			self.search_failed += 1
+
+	def clear_blocked_contact(self, bot_id):
+		"""End one physical-contact episode without removing a proved veto."""
+		state = self.bot_states.get(int(bot_id))
+		if state is None:
+			return False
+		changed = bool(
+			state.get('blocked_step_tracker') is not None or
+			state.get('hard_contact_episode') is not None)
+		state['blocked_step_tracker'] = None
+		state.pop('hard_contact_episode', None)
+		return changed
+
+	def report_hard_contact(self, bot_id, current, target,
+			realised_yaw, now):
+		"""Report a physical blocker against stable navigation intent.
+
+		The driver deliberately remembers the realised hull heading so its
+		short-range candidate fan widens after a collision.  That heading is
+		not a stable navigation edge, however: a wedged hull can wag across a
+		coarse-cell boundary forever and give ``report_blocked_step`` a new key
+		on every attempt.  Prefer the current navigation target, whose first
+		grid edge is stable, only while realised travel is closing on it.  A
+		reverse recovery or a target inside the occupied cell instead pins the
+		first realised direction for the lifetime of its own contact episode;
+		it must never penalise the clear forward route for a rear collision.
+		"""
+		bot_id = int(bot_id)
+		state = self.bot_states.get(bot_id)
+		if state is None or target is None:
+			return False
+		try:
+			target = tuple(target)
+			origin_cell = self.grid.cell_for(current)
+			target_cell = self.grid.cell_for(target)
+			yaw = float(realised_yaw)
+		except Exception:
+			return False
+		dx = float(target[0]) - float(current[0])
+		dz = float(target[2]) - float(current[2])
+		use_navigation_target = bool(
+			self.grid._edge_cells_for_segment(current, target) is not None and
+			math.sin(yaw) * dx + math.cos(yaw) * dz > 0.0)
+		episode = state.get('hard_contact_episode')
+		same_episode = bool(
+			isinstance(episode, dict) and
+			episode.get('origin_cell') == origin_cell and
+			episode.get('target_cell') == target_cell and
+			episode.get('target') == target and
+			episode.get('uses_navigation_target') ==
+			use_navigation_target)
+		if not same_episode:
+			report_target = target if use_navigation_target else None
+			if report_target is None:
+				# Two cell widths cross a rounded cell boundary even from a corner
+				# and at a diagonal heading.  This point exists only to identify the
+				# first reverse/recovery edge; it is never issued as a driving target.
+				distance = max(1.0, float(self.grid.cell_size)) * 2.0
+				report_target = (
+					float(current[0]) + math.sin(yaw) * distance,
+					float(current[1]),
+					float(current[2]) + math.cos(yaw) * distance)
+				if self.grid._edge_cells_for_segment(
+						current, report_target) is None:
+					return False
+			episode = {
+				'origin_cell': origin_cell,
+				'target_cell': target_cell,
+				'target': target,
+				'report_target': report_target,
+				'uses_navigation_target': use_navigation_target,
+			}
+			state['hard_contact_episode'] = episode
+			state['blocked_step_tracker'] = None
+		return self.report_blocked_step(
+			bot_id, current, episode['report_target'], now)
+
+	def report_blocked_corridor(self, bot_id, current, target,
+			realised_yaw, now):
+		"""Accumulate a terrain veto on one stable semantic route edge.
+
+		A steep/world probe is sampled along the driver's realised heading,
+		which may wag while the hull is stationary.  It is the same identity
+		problem as a hard contact: when that heading still closes on the route
+		target, pin the navigation first edge; when recovery travels away from
+		it, pin a separate realised edge.  Reusing the episode state also keeps
+		hard and terrain evidence for the same continuously blocked corridor
+		from restarting one another's verdict count.
+		"""
+		return self.report_hard_contact(
+			bot_id, current, target, realised_yaw, now)
+
+	def request_replan(self, bot_id, current, now):
+		"""Retire only this Bot's followers after one checked wait recovery."""
+		bot_id = int(bot_id)
+		self._cancel_bot_searches(bot_id)
+		for key in list(self.paths):
+			if self._path_owner(key[0]) == bot_id:
+				self.paths.pop(key, None)
+				self.path_times.pop(key, None)
+				self.path_hull_revisions.pop(key, None)
+		self.bot_direct_progress.pop(bot_id, None)
+		self.fallback_modes.pop(bot_id, None)
+		state = self.bot_states.get(bot_id)
+		if state is None:
+			return False
+		for name in ('last_target', 'local_fallback_target', 'controlled_shallow_target',
+				'macro_escape_target', 'macro_escape_until', 'pending_since'):
+			state.pop(name, None)
+		state.update(path_key=None, index=0, last_position=tuple(current),
+			progress_time=float(now), recovery=0, recovery_until=0.0,
+			recovery_start=tuple(current), replan_active=True,
+			macro_replan_active=False, target_is_terminal=False,
+			navigation_status='pending',
+			replan_generation=int(state.get('replan_generation', 0)) + 1)
+		self._reset_macro_progress(state, current, None, now)
+		return True
 
 	def _cancel_bot_searches(self, bot_id, keep_key=None, kind=None):
 		"""Discard superseded private jobs without touching shared route plans."""
@@ -2021,6 +2777,7 @@ class TerrainNavigator(object):
 			if (owned and key != keep_key and
 					(kind is None or path_key[0] == kind)):
 				combat_count('nav_search_superseded')
+				self._retire_pending_prefixes(self.searches.get(key))
 				self.searches.pop(key, None)
 				self.search_times.pop(key, None)
 
@@ -2114,7 +2871,7 @@ class TerrainNavigator(object):
 			processed += 1
 			if search.done:
 				self._finish_search(key, search, now)
-			else:
+			elif not search.progress.get('deferred'):
 				queue.append(key)
 		self.search_credit = max(0.0, self.search_credit - processed)
 		self.search_frame_budget = max(
@@ -2139,9 +2896,11 @@ class TerrainNavigator(object):
 			self.grid.trim_caches()
 
 	@observed('nav.path')
-	def _path(self, path_key, start, goal, now, avoid_points):
+	def _path(self, path_key, start, goal, now, avoid_points, native_capability=None):
 		key = self._cache_key(path_key, goal)
 		owner = self._path_owner(path_key)
+		if native_capability is not None and native_capability[0] != ('ignore_destructibles', 1):
+			raise ValueError('unsupported navigation collision policy')
 		if owner is not None:
 			# Join and continuation keys include the Bot's current cell. A
 			# pending safe-local fallback can therefore move into a new cell
@@ -2359,6 +3118,12 @@ class TerrainNavigator(object):
 			         'blocked_step_tracker': None,
 			         'blocked_step_escalated_until': 0.0}
 			self.bot_states[bot_id] = state
+		if (state.get('blocked_step_replan') and
+				not self._active_bot_edge_penalties(bot_id, now)):
+			state.pop('blocked_step_replan', None)
+			self._finish_macro_replan(bot_id, state)
+			state.pop('last_target', None)
+			self._reset_macro_progress(state, current, None, now)
 		ingress = self._stationary_ingress_escape(
 			bot_id, state, current, goal, now, movement_intent, avoid_points)
 		if ingress is not None:
@@ -2449,6 +3214,7 @@ class TerrainNavigator(object):
 			state['progress_time'] = float(now)
 			state['recovery'] = 0
 			state['recovery_until'] = 0.0
+			self._cancel_bot_searches(bot_id, kind='recovery')
 			state['replan_active'] = False
 			state['recovery_start'] = None
 		plan_start = tuple(anchor or current)
@@ -2505,6 +3271,9 @@ class TerrainNavigator(object):
 		if active_key is not None and active_key != key:
 			active_path = self.paths.get(active_key)
 			if (active_path and
+					not (self.path_hull_revisions.get(active_key) !=
+					     self.grid.static_hull_revision and
+					     self.grid.path_crosses_static_hull(active_path)) and
 					not self.grid.path_has_penalty(active_path, now)):
 				# A join/recovery/continuation path starts at this hull's real
 				# position. Follow it to completion instead of replacing it with
@@ -2514,15 +3283,8 @@ class TerrainNavigator(object):
 				self.path_times[key] = float(now)
 		if state.get('path_key') != key:
 			state['path_key'] = key
-			state['index'] = 0
-			best_index = 0
-			best_distance = 1e18
-			for index, point in enumerate(path):
-				distance = _distance_2d(current, point)
-				if distance < best_distance:
-					best_distance = distance
-					best_index = index
-			state['index'] = best_index
+			state['index'] = self._path_entry_index(bot_id, current, path, now)
+			self._clear_temporary_progress(state)
 		index = min(int(state.get('index', 0)), len(path) - 1)
 		following_selected_target = bool(
 			active_key == key and previous_path is path and
