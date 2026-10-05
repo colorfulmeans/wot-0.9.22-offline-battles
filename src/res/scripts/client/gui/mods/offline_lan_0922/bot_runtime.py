@@ -2700,7 +2700,8 @@ class BotRuntime(object):
                 return False
             if result.get('water', False):
                 return False
-            return abs(_number(result.get('slope', 0.0))) <= 0.55
+            return (abs(_number(result.get('slope', 0.0))) <=
+                    vehicle_physics.SLIP_THRESHOLD_TAN)
         return bool(result)
 
     @observed('bot.parameters')

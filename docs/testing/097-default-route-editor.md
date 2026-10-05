@@ -198,3 +198,38 @@ completion and arrival are now checked independently.
 Slope support, hull pose, vehicle physics, graph resources and authored routes
 are unchanged. These tests prove target ownership and bounded query behaviour;
 the exact Windows client must confirm the observed circling is resolved.
+
+## Follow-up: report 20261005-220536, descending direction admission
+
+Build 101's Patton (21:59:31) and Skorpion (22:01:40, 22:01:59 and
+22:02:05) recorded clear-of-collision, dry direction samples with grades
+between -0.385 and -0.427, but path_clear was false. The direction producer
+still rejected descent below -0.38 (about 20.8 degrees), independently of
+the continuous-slope links now accepted by navigation. That false blocker
+stopped drive, penalised the local edge and activated avoidance/recovery.
+The prior active-bend ownership fix did not remove this separate gate.
+
+Direction production and Bot admission now use the existing navigation
+continuous-slope limit, vehicle_physics.SLIP_THRESHOLD_TAN. The original two
+ground samples cover the admitted vertical range; short capped probes still
+reuse their shared endpoint. Six chassis corridor rays, water rejection,
+missing-ground failure and native collision ownership remain unchanged.
+There is no new sampling loop, ground query or runtime cadence change.
+
+The existing dry-path lookahead already advances past an owned vertex when
+the forward connector is proved. A new regression confirms this behavior and
+retains the vertex if the forward cell has no support. Therefore the proposed
+extra projection change is unnecessary for this dry-slope report and is not
+included. Remove the false grade veto at its producer instead of bypassing the
+resulting edge penalties. The reported Skorpion path contains a lateral
+staircase; without a proved forward link, this change does not promise to
+remove every turn in that path.
+
+Finite plane regressions cover the report's descending grades, 0.50 grades
+in both directions, 4/15/20 m probe caps and the unchanged one/two-ground,
+six-ray budget. Steeper grades, missing support, walls and water still reject
+travel. Owned-vertex regressions cover both clear and missing forward links,
+and the previous thirty-pose ownership replay still adds no warmed queries.
+Slope support, presentation pose, physics coefficients, graph resources and
+user-authored routes are unchanged. Native Windows descent and frame pacing
+remain the user's acceptance boundary.

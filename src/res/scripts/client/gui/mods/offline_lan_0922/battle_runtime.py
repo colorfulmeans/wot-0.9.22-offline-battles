@@ -5787,6 +5787,11 @@ class BattleRuntime(object):
         # needs it to distinguish climbing from descending; taking ``abs``
         # here made every clear descent behave like an uphill pull.
         maximum_slope = 0.0
+        # Match the continuous-slope admission used by navigation. The old
+        # asymmetric 0.48/-0.38 gate rejected an already planned descent and
+        # fed a false blocked edge into recovery. Keep the same two samples,
+        # but let their vertical casts cover the whole admitted grade.
+        grade_limit = vehicle_physics.SLIP_THRESHOLD_TAN
         for height, distance in (
                 (0.7, near_distance), (1.5, far_distance)):
             nx = x + sine * distance
@@ -5798,8 +5803,8 @@ class BattleRuntime(object):
             # has no slope against which to compare even that tiny difference.
             next_y = previous_y
             if run > 0.0:
-                probe_up = max(4.5, run * 0.52)
-                probe_down = max(5.0, run * 0.45)
+                probe_up = max(4.5, run * grade_limit + 0.02)
+                probe_down = max(5.0, run * grade_limit + 0.02)
                 ground_trace = {}
                 try:
                     ground_start = self._vector((nx, previous_y + probe_up, nz))
@@ -5831,7 +5836,7 @@ class BattleRuntime(object):
                 slope = delta / max(0.1, run)
                 if abs(slope) > abs(maximum_slope):
                     maximum_slope = slope
-                if delta > run * 0.48 or delta < -run * 0.38:
+                if abs(delta) > run * grade_limit:
                     self._record_navigation_hit(
                         ground_trace, ground_start, ground_end, ground)
                     ground_trace['previous_y'] = previous_y

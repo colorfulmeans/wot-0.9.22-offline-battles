@@ -15,6 +15,29 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 
 
 class ClimbApproachNavigationTests(unittest.TestCase):
+    def test_owned_overshot_point_advances_only_through_a_proved_forward_link(self):
+        for blocked in (False, True):
+            with self.subTest(blocked=blocked):
+                graph = StaticHullNavigationTests._flat_graph()
+                if blocked:
+                    # A genuine missing destination cell forbids the forward
+                    # connector; the target behind remains the safe bend.
+                    graph['heights_mm'][2 * graph['width'] + 2] = None
+                def ground(x, z, hint):
+                    return 0.0 if 0.0 <= x <= 80.0 and 0.0 <= z <= 80.0 else None
+                nav = TerrainNavigator(ground, lambda *unused: False, baked_graph=graph)
+                path = ((0., 0., 0.), (4., 0., 4.), (8., 0., 8.))
+                current, goal, request = (9., 0., 5.), path[-1], ('route', 2, 'overshoot', 1)
+                nav.next_target(23, path[0], goal, request, 0.)
+                key = nav._cache_key(request, goal)
+                nav.paths[key] = path
+                nav.path_times[key] = 0.
+                nav.bot_states[23].update(path_key=key, index=1, last_target=path[1])
+                target = nav.next_target(23, current, goal, request, .1,
+                                         lookahead_distance=1.)
+                self.assertEqual(path[1] if blocked else path[2], target)
+                self.assertEqual(1 if blocked else 2, nav.bot_states[23]['index'])
+
     def _el_halluf_active_bend(self):
         # Build 100, report 20261005-212211: Pz.58 at the south slope lip.
         # Replay its sampled poses/path against the current baked graph.
