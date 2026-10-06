@@ -172,3 +172,24 @@ parking, cooldown, arrival/resumption, repeated failure through pending work,
 single random failure, stale-target evidence, reload/radio/target gates and base
 defense. Replaying the captured T92 proof/gate sequence now reaches the retry
 condition; this does not prove the alternate site's native firing clearance.
+
+
+## Test112 repeated relocation with stale server deployment mode
+
+Report 153208 proves test111's team1 T92 moved once at 15:27:28, reached its
+adopted point, then accumulated over 109 seconds of ready failure without a
+second move or shot. The worker's decision was artillery_hold at the new point;
+the server still ordered artillery_deploy toward the original manifest anchor.
+The retry hook required the server's hold mode, so it stopped observing eligible
+relocation requests after the first worker-owned move.
+
+Retry now uses the recent locally arrived failure episode under either ordinary
+SPG hold/deployment order. It still requires current target/fire permission,
+matching position-plan identity and fire sequence, an unchanged ground pose,
+two independent proofs, the existing ready-time threshold and cooldown. Shoves,
+airborne/overturned hulls, actual shots and non-artillery defense orders cannot
+reuse the old failure episode. No firing, ray-budget, parking geometry, priority
+or authored coordinate policy is changed. A regression issues the old server
+anchor after a successful first relocation and verifies a second deployment
+with firing paused, rather than merely calling the retry helper in isolation.
+The old source fails that regression; the corrected source passes.

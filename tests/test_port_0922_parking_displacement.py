@@ -412,6 +412,36 @@ class SPGFirePositionTests(unittest.TestCase):
         self.assertEqual('fire_position_no_safe_alternate',state['_spg_position_event'])
 
 
+    def test_server_old_deployment_order_does_not_block_second_local_relocation(self):
+        fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
+        self.fail_for_30_seconds(fixture)
+        runtime._artillery_position_order(state,order,{99:target},30.0)
+        first=state['_spg_initial']
+        state.update(first['point'])
+        runtime._artillery_position_order(state,order,{99:target},31.0)
+        for now in range(40,71):self.observe(fixture,float(now))
+        # Report 153208: the server still orders its original anchor while
+        # the worker is holding at the adopted new firing point.
+        stale=dict(order,combat_mode='artillery_deploy')
+        result=runtime._artillery_position_order(state,stale,{99:target},76.0)
+        # Use a fresh completed refusal after the existing 45-second cooldown.
+        self.observe(fixture,76.0)
+        result=runtime._artillery_position_order(state,stale,{99:target},76.1)
+        self.assertIsNot(first,state['_spg_initial'])
+        self.assertEqual('artillery_deploy',result['combat_mode'])
+        self.assertFalse(result['fire_allowed'])
+        self.assertIsNone(result['target_id'])
+
+    def test_displaced_or_successful_bot_cannot_use_old_position_failure(self):
+        for change in ('displaced','shot','airborne'):
+            fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
+            original=state['_spg_initial'];self.fail_for_30_seconds(fixture)
+            if change=='displaced':state['x']+=5.0
+            elif change=='shot':state['fire_seq']+=1
+            else:state['airborne']=True
+            self.assertIs(original,runtime._retry_spg_fire_position(state,original,30.1))
+
+
     def test_relocation_does_not_override_base_defense(self):
         fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
         original=state['_spg_initial'];self.fail_for_30_seconds(fixture)

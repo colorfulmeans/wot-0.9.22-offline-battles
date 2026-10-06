@@ -11805,8 +11805,12 @@ class BotRuntime(object):
     def _retry_spg_fire_position(self, state, initial, now):
         """Select another checked parking point without new ballistic queries."""
         episode = state.get('_spg_fire_position_failure')
-        if (episode is None or episode['elapsed'] < 30.0 or
-                len(episode['proofs']) < 2 or
+        if (episode is None or
+                episode['identity'] != spg_positions.plan_identity(initial) or
+                episode['fire_seq'] != int(state.get('fire_seq', 0)) or
+                state.get('airborne') or state.get('_overturned') or
+                _distance(episode['origin'], _position(state)) > 2.0 or
+                episode['elapsed'] < 30.0 or len(episode['proofs']) < 2 or
                 now - episode['last_failure'] > 2.0 or
                 now < state.get('_spg_fire_position_retry_at', -1e9)):
             return initial
@@ -11862,7 +11866,10 @@ class BotRuntime(object):
             state.pop('_spg_deployment_progress', None)
         initial = state.get('_spg_initial')
         if initial is not None and mode in ('artillery_hold', 'artillery_deploy'):
-            if (mode == 'artillery_hold' and order.get('fire_allowed') and
+            # The server retains its original anchor after worker-owned
+            # relocation and may still call this deployment. The fresh local
+            # arrival/failure episode, not that stale mode, owns another retry.
+            if (order.get('fire_allowed') and
                     targets.get(order.get('target_id')) is not None):
                 initial = self._retry_spg_fire_position(state, initial, now)
             # The new initial goal is not an ordinary route waypoint. In
