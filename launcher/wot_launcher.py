@@ -832,7 +832,7 @@ class LauncherWindow(object):
         self.shop_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
         self.personal_missions_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
         self.customizations_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
-        for panel in (self.account_panel, self.shop_panel, self.personal_missions_panel, self.customizations_panel):
+        for panel in (self.account_panel, self.shop_panel, self.customizations_panel, self.personal_missions_panel):
             self.save_tabs.add(panel)
         self.edit_customizations_button = tk.Button(self.customizations_panel, command=self._open_customizations)
         self.edit_customizations_button.pack(fill='x')
@@ -1174,7 +1174,7 @@ class LauncherWindow(object):
         self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
         self.edit_customizations_button.config(text=self._t('Edit preset style inventory...'))
         for panel, label in ((self.account_panel, 'Account'), (self.shop_panel, 'Garage vehicles'),
-                             (self.personal_missions_panel, 'Personal missions'), (self.customizations_panel, 'Coatings')):
+                             (self.customizations_panel, 'Coatings'), (self.personal_missions_panel, 'Personal missions')):
             self.save_tabs.tab(panel, text=self._t(label))
         self.shop_panel.config(text=self._t("Garage vehicles"))
         self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
