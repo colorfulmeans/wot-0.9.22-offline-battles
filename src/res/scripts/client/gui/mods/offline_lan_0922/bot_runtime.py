@@ -6683,6 +6683,10 @@ class BotRuntime(object):
                 'shape': other.get('collision_shape'),
             })
         trace.update({
+            'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
+            'gun_angle_rejected': [
+                {'target': key, 'seconds_left': max(0.0, deadline - now)}
+                for key, deadline in sorted((state.get('_gun_angle_rejected') or {}).items())],
             'nearby': sorted(nearby, key=lambda item: item['id']),
             'final': position, 'speed_final': state.get('speed', 0.0),
             'support_rollback': bool(support_rollback),
@@ -10077,6 +10081,7 @@ class BotRuntime(object):
     def _local_ballistic_solution(self, state, target, descriptor,
                                   shell_index):
         """Solve the ordinary low arc and moving-target lead without BSP."""
+        state.pop('_gun_angle_refusal', None)
         physical = _shot_ballistics(descriptor, shell_index)
         if target is None or physical is None:
             return None
@@ -10116,7 +10121,10 @@ class BotRuntime(object):
             aim_position[0] - start[0], aim_position[2] - start[2])
         if not self._world_solution_reachable(
                 state, descriptor, yaw, pitch):
+            state['_gun_angle_refusal'] = self._artillery_target_identity(target)
             return None
+        identity = self._artillery_target_identity(target)
+        (state.get('_gun_angle_rejected') or {}).pop(identity, None)
         return {
             'aim_position': aim_position, 'yaw': yaw, 'pitch': pitch,
             'flight_time': flight_time, 'arc': 'low',
@@ -11263,7 +11271,8 @@ class BotRuntime(object):
                 # means team-spotted without a local firing lane; the server
                 # rejects omission rather than guessing.
                 'shootable_by_bot_ids': sorted(
-                    actor for actor in shootable if self._radio_network.contact(
+                    actor for actor in shootable if not self._gun_angle_rejected(
+                        self.states.get(int(actor), {}), key[1:], now) and self._radio_network.contact(
                         ('bot', int(actor)), key[1:], now)[1]),
                 # Positive evidence only: an absent id is unknown, not safe.
                 'threatened_bot_ids': sorted(set(
@@ -12081,6 +12090,106 @@ class BotRuntime(object):
             'position_failure_proofs': len((state.get('_spg_fire_position_failure') or {}).get('proofs', ())),
             'position_retry_seconds': max(0.0, round(state.get('_spg_fire_position_retry_at', now) - now, 3)),
         }, separators=(',', ':')))
+
+    @staticmethod
+    def _gun_angle_rejected(state, identity, now):
+        rejected = state.get('_gun_angle_rejected') or {}
+        for key, deadline in tuple(rejected.items()):
+            if now >= deadline:
+                rejected.pop(key, None)
+        return identity in rejected
+
+    def _gun_angle_route_order(self, state, order):
+        """Continue the current forward node, never a stale combat anchor."""
+        route = state.get('route') or {}
+        if route.get('id') != order.get('route_id'):
+            catalog = (getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {})
+            route = next((row for row in catalog.get(state.get('team'), ())
+                          if row.get('id') == order.get('route_id')), {})
+        points = route.get('waypoints') or ()
+        index = int(order.get('route_index', 0))
+        if not 0 <= index < len(points):
+            return order
+        point = self._route_waypoint_xz(points[index])
+        result = dict(order)
+        result.update(target_id=None, aim_position=None, face_position=None,
+                      move_position=(point[0], state.get('y', 0.0), point[1]),
+                      combat_mode='route', fire_allowed=False)
+        result.pop('throttle_override', None)
+        return result
+
+    def _gun_angle_order(self, state, order, targets, now, direction_clear):
+        """Bound ordinary mechanical-angle recovery; parking and SPGs own theirs.
+
+        Two seconds of real hull facing, then at most four seconds at one
+        checked eight-metre destination. Failed pairs become locally
+        unshootable for eight seconds, without hiding their spotting evidence.
+        Actual gun solving and native motion remain authoritative throughout.
+        """
+        eligible = ((state.get('profile') or {}).get('class_tag') != 'SPG' and
+                    not order.get('parking_phase') and
+                    order.get('combat_mode') in ('engage', 'support_hold', 'cover_hold', 'hold'))
+        position = _position(state)
+        if not eligible:
+            state.pop('_gun_angle_adjustment', None)
+            if order.get('parking_phase'):
+                state.pop('_gun_angle_rejected', None)
+            return order
+        target = targets.get(order.get('target_id'))
+        identity = self._artillery_target_identity(target)
+        if identity is not None and self._gun_angle_rejected(state, identity, now):
+            return self._gun_angle_route_order(state, order)
+        refusal = state.get('_gun_angle_refusal')
+        if identity is None or refusal != identity:
+            state.pop('_gun_angle_adjustment', None)
+            return order
+        # Do not interrupt an existing approach, retreat or cover move.
+        goal = _point(order.get('move_position'), position)
+        marker = state.get('_gun_angle_adjustment')
+        if marker is None and (abs(_number(state.get('speed'))) > 1.0 or
+                               _distance(position, goal) > ai_driver.WAYPOINT_ARRIVAL_RADIUS):
+            return order
+        if marker is None:
+            marker = {'start': now, 'destination': None,
+                      'selected': False}
+            state['_gun_angle_adjustment'] = marker
+        elapsed = now - marker['start']
+        result = dict(order)
+        result.update(move_position=position,
+                      face_position=_point(target.get('position'), _position(target)),
+                      fire_allowed=False, arrival_radius=1.0)
+        result.pop('throttle_override', None)
+        if elapsed < 2.0:
+            return result
+        if elapsed < 6.0 and not marker['selected']:
+            # A shared tick budget prevents simultaneous slope holds from
+            # multiplying native clearance queries. Deferred selection does
+            # not extend this Bot's absolute six-second deadline.
+            if getattr(self, '_gun_angle_candidate_tick', None) != now:
+                self._gun_angle_candidate_tick = now
+                marker['selected'] = True
+                yaw = _number(state.get('yaw'))
+                for candidate_yaw in (yaw, yaw + math.pi):
+                    if direction_clear(candidate_yaw, 8.0):
+                        marker['destination'] = (
+                            position[0] + math.sin(candidate_yaw) * 8.0,
+                            position[1], position[2] + math.cos(candidate_yaw) * 8.0)
+                        marker['reverse'] = candidate_yaw != yaw
+                        break
+        destination = marker['destination']
+        if elapsed < 6.0 and destination is not None:
+            result.update(move_position=destination,
+                          combat_mode='withdraw' if marker['reverse'] else 'gun_angle_adjust',
+                          throttle_override=0.72)
+            return result
+        if elapsed < 6.0 and not marker['selected']:
+            return result
+        rejected = state.setdefault('_gun_angle_rejected', {})
+        if len(rejected) >= 8:
+            rejected.pop(min(rejected, key=rejected.get), None)
+        rejected[identity] = now + 8.0
+        state.pop('_gun_angle_adjustment', None)
+        return self._gun_angle_route_order(state, order)
 
     def _friendly_reposition_order(self, state, targets, now):
         """Return an ordinary lane escape plus whether its lease expired."""
@@ -12963,6 +13072,8 @@ class BotRuntime(object):
                         position)
                     server_order = self._artillery_position_order(
                         state, server_order, targets, now)
+                    server_order = self._gun_angle_order(
+                        state, server_order, targets, now, sample_clear)
                     command = timed_call(
                         self._combat_diagnostics, 'bot.planner_driver',
                         decide_with_order,
