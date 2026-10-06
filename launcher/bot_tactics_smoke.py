@@ -20,9 +20,12 @@ def run(destination):
                 raise AssertionError(str(error))
             ui.error = fail
             root.update(); ui.book.select(1); root.update()
+            ui.map_var.set('Ruinberg'); ui.change_map()
+            ui.route_class_var.set('heavyTank'); ui.change_route_class(); root.update()
             graph = storage.graph_data('08_ruinberg')
             # Actual canvas callbacks, not directly constructing the profile.
             ui.new_route(); root.update()
+            assert ui._selected()['class_priorities'] == {'heavyTank': 5}
             for point in graph['routes']['1'][0]['waypoints'][:4]:
                 x, y = ui.view.screen(point)
                 ui.canvas.event_generate('<ButtonPress-1>', x=int(x), y=int(y))
