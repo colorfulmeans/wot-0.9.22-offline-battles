@@ -5127,6 +5127,8 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			candidate[:5])
 		if _destructible_isolated_1513(chunk_id, item_index):
 			continue
+		if auth.is_destroyed(chunk_id, item_index, mat_kind):
+			continue
 		if proposal_only:
 			exact_token.add((chunk_id, item_index, mat_kind))
 			requires_commit = True
@@ -5166,6 +5168,10 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		_publish_catalog_once_1513(
 				event_kind, chunk_id, item_index, point, yaw, vel,
 				mat_kind if event_kind == 'module' else None)
+		if kind == 'structure':
+			exact_token.update(_crush_structure_dependencies_1513(
+				spaceID, chunk_id, item_index, mat_kind, candidate[3],
+				point, yaw, vel, now))
 		accepted_now = True
 		used_kinetic_speed = used_kinetic_speed or used_cap
 		_diagnostic_contact_1513(
@@ -5704,6 +5710,41 @@ def LOG_DEBUG(*unused_args):
 	pass
 
 
+def _crush_structure_dependencies_1513(spaceID, chunkID, itemIndex,
+		matKind, filename, point, yaw, speed, now):
+	"""Complete authored collapse dependencies after an accepted hull crush.
+
+	The stock cache already expands the dependency closure. Publish each
+	module separately so streamed replicas replay the same native sequence.
+	Projectile contacts deliberately retain their individual stage order.
+	"""
+	import AreaDestructibles
+	desc = _runtime_material_descriptor_1513(
+		AreaDestructibles, filename, chunkID, itemIndex)
+	if desc is None:
+		return ()
+	modules = desc.get('modules') or {}
+	dependencies = (desc.get('destroyDepends') or {}).get(matKind, ())
+	if (not isinstance(dependencies, (tuple, list, set, frozenset)) or
+			len(dependencies) > 13 or
+			any(type(value) not in _INTEGER_TYPES or value not in modules
+				for value in dependencies)):
+		return ()
+	authority = _get_destr_authority()
+	accepted = []
+	for dependency in sorted(set(dependencies) - set((matKind,))):
+		if authority.is_destroyed(chunkID, itemIndex, dependency):
+			continue
+		if not authority.destroy_module(
+				spaceID, chunkID, itemIndex, dependency, point, False):
+			raise RuntimeError('native crush dependency was not accepted')
+		note_destroyed('module', chunkID, itemIndex, dependency, now)
+		_publish_catalog_once_1513(
+			'module', chunkID, itemIndex, point, yaw, speed, dependency)
+		accepted.append((chunkID, itemIndex, dependency))
+	return tuple(accepted)
+
+
 def _get_destr_authority():
 	from gui.mods.offline_lan_0922 import destructibles_authority
 	return destructibles_authority
@@ -6014,6 +6055,9 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 		# returning the accepted physical result.
 		_publish_catalog_once_1513(
 			_event_kind, chunkID, itemIndex, hitPt, yaw, vel, _event_mat)
+		if typ == AreaDestructibles.DESTR_TYPE_STRUCTURE:
+			_crush_structure_dependencies_1513(
+				spaceID, chunkID, itemIndex, matKind, fname, hitPt, yaw, vel, _now)
 	return True
 
 
@@ -7271,6 +7315,10 @@ def _fell_trees_near(
 						 else 'column'),
 						cid, _ti, _object_pos, fall_yaw, vel,
 						_mat_kind)
+				if _ttyp == structure_type:
+					_st['felled'].update(_crush_structure_dependencies_1513(
+						spaceID, cid, _ti, _mat_kind, _tfn, _object_pos,
+						fall_yaw, vel, BigWorld.time()))
 				LOG_DEBUG('DestrTree: FELLED', cid, _ti, 'type', _ttyp,
 					'hp', _thp, 'mass', _tmass, _tfn)
 		if registration_only:

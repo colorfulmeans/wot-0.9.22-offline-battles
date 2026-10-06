@@ -7788,6 +7788,41 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 _ItemMatrix(scale=2.0),
                 types.SimpleNamespace(Vector3=_Vector)))
 
+    def test_structure_crush_completes_dependencies_but_shots_keep_stages(self):
+        for shot in (False, True):
+            with self.subTest(shot=shot):
+                bigworld, math_module, area, cache, authority, unused = self._direction_catalog_fixture(kind='structure')
+                area.g_cache.getDescByFilename=lambda unused: dict(type=4,
+                    modules={73:{'health':80},74:{'health':80},75:{'health':80}},
+                    destroyDepends={73:set((74,))})
+                filename=destructibles_sensor.g_offh_destr_instances[(22,37)]['filename']
+                published=[];destructibles_sensor.set_event_sink(lambda event: published.append(event) or True)
+                with mock.patch.dict(sys.modules,{'BigWorld':bigworld,'Math':math_module,
+                        'AreaDestructibles':area,'DestructiblesCache':cache}), \
+                        mock.patch.object(destructibles_sensor,'_get_destr_authority',return_value=authority):
+                    self.assertTrue(destructibles_sensor._try_destroy_destructible(
+                        1,_mat_info_1513(True,_Vector(0,0,4),_Vector(0,0,-1),73,filename,22,37),
+                        0.0,20.0,shot))
+                self.assertEqual([73] if shot else [73,74],
+                    [call.args[3] for call in authority.destroy_module.call_args_list])
+                self.assertEqual([73] if shot else [73,74],[e['mat_kind'] for e in published])
+                self.assertTrue(all(e['is_shot']==shot for e in published))
+
+    def test_structure_crush_dependency_dedup_and_invalid_module_are_safe(self):
+        bigworld, math_module, area, cache, authority, unused = self._direction_catalog_fixture(kind='structure')
+        desc=dict(type=4,modules={73:{'health':80},74:{'health':80}},destroyDepends={73:set((74,))})
+        area.g_cache.getDescByFilename=lambda unused:desc
+        filename=destructibles_sensor.g_offh_destr_instances[(22,37)]['filename']
+        authority.is_destroyed.return_value=True
+        with mock.patch.dict(sys.modules,{'AreaDestructibles':area}), \
+                mock.patch.object(destructibles_sensor,'_get_destr_authority',return_value=authority):
+            self.assertEqual((),destructibles_sensor._crush_structure_dependencies_1513(
+                1,22,37,73,filename,_Vector(),0.0,20.0,10.0))
+            authority.is_destroyed.return_value=False;desc['destroyDepends']={73:{99}}
+            self.assertEqual((),destructibles_sensor._crush_structure_dependencies_1513(
+                1,22,37,73,filename,_Vector(),0.0,20.0,10.0))
+        authority.destroy_module.assert_not_called()
+
     def test_direct_material_contact_uses_stock_low_and_high_speed_gate(self):
         filename = 'direct-fence.model'
         hit = _Vector(0, 0, 1)
