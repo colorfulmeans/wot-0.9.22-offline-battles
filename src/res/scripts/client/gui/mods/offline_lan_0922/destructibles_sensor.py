@@ -5714,7 +5714,9 @@ def _crush_structure_dependencies_1513(spaceID, chunkID, itemIndex,
 		matKind, filename, point, yaw, speed, now):
 	"""Complete authored collapse dependencies after an accepted hull crush.
 
-	The stock cache already expands the dependency closure. Publish each
+	A hull crush can hit either stage of a dependent panel. Include reverse
+	links so a hit on its later module also removes the intact earlier skin.
+	Publish each
 	module separately so streamed replicas replay the same native sequence.
 	Projectile contacts deliberately retain their individual stage order.
 	"""
@@ -5724,12 +5726,33 @@ def _crush_structure_dependencies_1513(spaceID, chunkID, itemIndex,
 	if desc is None:
 		return ()
 	modules = desc.get('modules') or {}
-	dependencies = (desc.get('destroyDepends') or {}).get(matKind, ())
-	if (not isinstance(dependencies, (tuple, list, set, frozenset)) or
-			len(dependencies) > 13 or
-			any(type(value) not in _INTEGER_TYPES or value not in modules
-				for value in dependencies)):
+	links = (desc.get('destroyDepends') or {},
+		desc.get('inversedDestroyDepends') or {})
+	if matKind not in modules or len(modules) > 13:
 		return ()
+	dependencies = set((matKind,))
+	pending = [matKind]
+	root_health = modules[matKind].get('health')
+	while pending:
+		current = pending.pop()
+		for reverse, table in enumerate(links):
+			if not isinstance(table, dict):return ()
+			adjacent = table.get(current, ())
+			if (not isinstance(adjacent, (tuple, list, set, frozenset)) or
+					len(adjacent) > 13 or
+					any(type(value) not in _INTEGER_TYPES or value not in modules
+						for value in adjacent)):
+				return ()
+			for value in adjacent:
+				if reverse:
+					# Equal-strength stages share the accepted kinetic gate.
+					# A weak panel cannot authorize crushing its stronger support.
+					health = modules[value].get('health')
+					if (not isinstance(root_health, _INTEGER_TYPES + (float,)) or
+							not isinstance(health, _INTEGER_TYPES + (float,)) or
+							not 0 <= health <= root_health):continue
+				if value not in dependencies:
+					dependencies.add(value);pending.append(value)
 	authority = _get_destr_authority()
 	accepted = []
 	for dependency in sorted(set(dependencies) - set((matKind,))):
