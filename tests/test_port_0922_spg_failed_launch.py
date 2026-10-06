@@ -58,7 +58,7 @@ class FailedLaunchTests(unittest.TestCase):
         self.align(low)
         self.assertIsNone(self.receipt(low, 1.0))
         original = self.runtime._artillery_intents[11]
-        self.prove(1.0, lambda first, second: second)
+        self.prove(1.0, lambda first, second: tuple(first[i] + .1*(second[i]-first[i]) for i in range(3)))
         self.assertIsNone(self.receipt(low, 1.05))
         self.assertEqual('world_blocked', self.source['_spg_launch_failure']['reason'])
         self.assertNotIn(11, self.runtime._artillery_intents)
@@ -92,7 +92,7 @@ class FailedLaunchTests(unittest.TestCase):
             self.source, self.target, self.descriptor, 0)[0]
         self.align(low)
         self.assertIsNone(self.receipt(low, 2.0))
-        self.prove(2.0, lambda first, second: second)
+        self.prove(2.0, lambda first, second: tuple(first[i] + .1*(second[i]-first[i]) for i in range(3)))
         self.target['position'] = (10.0, 0.0, 200.0)
         self.assertIsNone(self.receipt(low, 2.05))
         self.assertEqual({}, self.controller._rejected_arcs)
@@ -177,12 +177,36 @@ class FailedLaunchTests(unittest.TestCase):
             self.source, self.target, self.descriptor, 0, 23.02)
         self.align(high)
         self.assertIsNone(self.receipt(high, 23.03))
-        self.prove(26.0, lambda first, second: second)
+        self.prove(26.0, lambda first, second: tuple(first[i] + .1*(second[i]-first[i]) for i in range(3)))
         self.assertIsNone(self.receipt(high, 26.02))
         self.assertEqual((True, None), self.controller.request(
             self.source, self.target, self.descriptor, 0, 26.03))
         self.assertEqual(('high', 'low'), self.controller._planning_key(
             self.source, self.target, 0, 26.03)[6])
+
+    def test_remote_dispersed_impact_reaches_runtime_fire_with_original_random_angles(self):
+        self.controller.request(self.source,self.target,self.descriptor,0,1.0)
+        self.prove(1.0,lambda a,b:None)
+        low=self.runtime._ballistic_solution(self.source,self.target,self.descriptor,0,1.01)
+        self.align(low);self.assertIsNone(self.receipt(low,1.02))
+        original=dict(self.runtime._artillery_intents[11])
+        def terrain(a,b):
+            return tuple((a[i]+b[i])*.5 for i in range(3)) if b[2]>100 else None
+        self.prove(1.03,terrain)
+        receipt=self.receipt(low,1.05)
+        self.assertIsNotNone(receipt)
+        self.assertIn('terminal_impact',receipt)
+        self.assertEqual(original['shot_yaw'],receipt['shot_yaw'])
+        self.assertEqual(original['shot_pitch'],receipt['shot_pitch'])
+        self.assertFalse(self.controller._rejected_arcs)
+        self.assertTrue(self.runtime._fire(self.source,self.gun,1.0,self.descriptor,launch_receipt=receipt))
+        self.assertEqual(1,self.source['fire_seq'])
+        # Friendly-lane checks use the actual landing point for HE splash.
+        captured=[]
+        self.battle._bot_friendly_path_verdict=lambda source,path,radius:(captured.append((path,radius)) or {'clear':False})
+        result=self.battle._bot_artillery_friendly_lane(self.source,self.target,self.descriptor,0,receipt)
+        self.assertFalse(result['clear'])
+        self.assertEqual(receipt['terminal_impact']['point'],captured[0][0][-1])
 
 
 if __name__ == '__main__':

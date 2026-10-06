@@ -728,5 +728,68 @@ class ArtilleryControllerTests(unittest.TestCase):
             for receipt in completed.values()))
 
 
+
+class DispersedImpactTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):cls.module=_load()
+
+    def prepare(self):
+        controller=self.module.ArtilleryController(maximum_step=0.12)
+        source=dict(id=15,x=0.,y=0.,z=0.,yaw=0.,pitch=0.,roll=0.,fire_seq=0)
+        target=dict(kind='human',network_id=2,position=(0.,0.,650.),speed=0.)
+        descriptor=_descriptor(pitch=(-math.pi/4,0.))
+        descriptor.gun.shots[0].speed=395.
+        descriptor.gun.shots[0].gravity=155.
+        candidate=controller._candidates(source,target,descriptor,0)[0]
+        controller.request(source,target,descriptor,0,0.)
+        for frame in range(100):controller.advance(frame*.0001,4,lambda a,b:None)
+        self.assertIsNotNone(controller.solution(source,target,descriptor,0,.02))
+        args=(source,target,descriptor,0,1,(0.,1.5,0.),.01,-candidate['pitch']-.025,candidate['flight_time'])
+        controller.request_launch(*(args+(.03,)))
+        return controller,args
+
+    def test_remote_impact_admits_frozen_shot_without_rejecting_nominal_family(self):
+        controller,args=self.prepare();queries=[];hits=[]
+        def impact(a,b):
+            queries.append((a,b))
+            if b[2]>400:
+                hit=tuple((a[i]+b[i])*.5 for i in range(3));hits.append(hit);return hit
+            return None
+        for frame in range(100):
+            controller.advance(.04+frame*.001,4,impact)
+            ready,receipt=controller.request_launch(*(args+(.04+frame*.001,)))
+            if ready:break
+        self.assertTrue(ready);self.assertIsNotNone(receipt)
+        self.assertEqual(hits[0],receipt['path'][-1])
+        self.assertEqual(hits[0],receipt['terminal_impact']['point'])
+        self.assertEqual(len(queries),receipt['proof_chords'])
+        self.assertEqual(args[6],receipt['shot_yaw']);self.assertEqual(args[7],receipt['shot_pitch'])
+        self.assertEqual(args[8],receipt['flight_time'])
+        self.assertFalse(controller._rejected_arcs)
+        self.assertIsNotNone(controller.solution(*args[:3],0,.2))
+        count=len(queries)
+        self.assertIs(receipt,controller.request_launch(*(args+(.2,)))[1])
+        self.assertEqual(count,len(queries))
+
+    def test_muzzle_false_nonfinite_and_off_segment_hits_still_fail(self):
+        for kind in ('muzzle','unknown','nan','off_segment'):
+            with self.subTest(kind=kind):
+                controller,args=self.prepare()
+                def obstacle(a,b):
+                    if kind=='muzzle':return tuple(a[i]+.1*(b[i]-a[i]) for i in range(3))
+                    if kind=='unknown':return False
+                    if kind=='nan':return (float('nan'),0.,100.)
+                    return (1000.,0.,1000.)
+                controller.advance(.05,4,obstacle)
+                self.assertEqual((True,None),controller.request_launch(*(args+(.06,))))
+
+    def test_nominal_queue_still_rejects_remote_world_obstruction(self):
+        controller,args=self.prepare();source,target,descriptor=args[:3]
+        controller.reset();controller.request(source,target,descriptor,0,1.)
+        for frame in range(100):
+            controller.advance(1.+frame*.001,4,lambda a,b:b if b[2]>400 else None)
+        self.assertEqual((True,None),controller.result(source,target,0,1.2))
+
+
 if __name__ == '__main__':
     unittest.main()

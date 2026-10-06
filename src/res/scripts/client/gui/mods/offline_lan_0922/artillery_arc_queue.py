@@ -5,6 +5,7 @@ The #1513 BigWorld BSP query must stay on the game thread.  This queue spreads
 the sampled chords of each candidate trajectory across rendered frames while
 preserving a strict native-ray budget.  A candidate is published only after
 every required chord is clear (or its terminal chord reaches the target).
+Exact dispersed launches may instead finish at a proved remote world impact.
 """
 
 import math
@@ -31,7 +32,9 @@ class ArcProbeQueue(object):
     """Resolve caller-ordered trajectory candidates under a ray quota."""
 
     def __init__(self, max_jobs=8, success_ttl=2.5, failure_ttl=0.75,
-                 max_job_age=4.0, target_slop=7.0, max_waiting=64):
+                 max_job_age=4.0, target_slop=7.0, max_waiting=64,
+                 allow_remote_impact=False):
+        self.allow_remote_impact = bool(allow_remote_impact)
         self.max_jobs = max(1, int(max_jobs))
         self.success_ttl = max(0.05, float(success_ttl))
         self.failure_ttl = max(0.05, float(failure_ttl))
@@ -189,11 +192,42 @@ class ArcProbeQueue(object):
         job['chord'] = 0
         self.order.append(key)
 
+    def _remote_impact_receipt(self, solution, chord, hit):
+        """A dispersed shot may terminate on scenery after muzzle clearance."""
+        if not self.allow_remote_impact or solution.get('arc') != 'exact_launch':
+            return None
+        path = solution['path']
+        try:
+            point = _coords(hit)
+            if any(math.isnan(v) or math.isinf(v) for v in point):
+                return None
+            first, last = path[chord], path[chord + 1]
+            delta = tuple(last[i] - first[i] for i in range(3))
+            length2 = sum(v*v for v in delta)
+            if length2 <= 0.0:
+                return None
+            fraction = sum((point[i]-first[i])*delta[i] for i in range(3)) / length2
+            if not -0.0001 <= fraction <= 1.0001:
+                return None
+            closest = tuple(first[i] + fraction*delta[i] for i in range(3))
+            if _distance(point, closest) > 0.1 or _distance(point, path[0]) <= 25.0:
+                return None
+        except (TypeError, ValueError, IndexError, AttributeError, OverflowError):
+            return None
+        result = dict(solution)
+        # Bound friendly-lane and splash checks to the first actual impact,
+        # without changing the frozen muzzle, velocity or aim flight time.
+        result['path'] = tuple(path[:chord + 1]) + (point,)
+        result['proof_chords'] = chord + 1
+        result['terminal_impact'] = dict(point=point, chord=chord)
+        return result
+
     def advance(self, now, ray_budget, probe):
         """Probe at most ``ray_budget`` actual chords in fair rotation.
 
         ``probe(first, second)`` returns ``None`` for a clear chord or a world
         hit position.  A terminal hit within ``target_slop`` is a valid arrival.
+        The exact-launch queue can retain a first remote impact as termination.
         Probe exceptions and malformed hits fail closed for that candidate.
         The return value is the exact number of probe calls attempted.
         """
@@ -232,6 +266,11 @@ class ArcProbeQueue(object):
                     self._complete(key, now, solution)
                 else:
                     self.order.append(key)
+                continue
+
+            impact = self._remote_impact_receipt(solution, chord, hit)
+            if impact is not None:
+                self._complete(key, now, impact)
                 continue
 
             try:

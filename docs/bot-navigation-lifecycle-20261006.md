@@ -193,3 +193,36 @@ or authored coordinate policy is changed. A regression issues the old server
 anchor after a successful first relocation and verifies a second deployment
 with firing paused, rather than merely calling the retry helper in isolation.
 The old source fails that regression; the corrected source passes.
+
+
+## Test113 dispersed SPG first-impact admission
+
+Report 155012 on test112 shows Conqueror GC changing firing positions normally
+and firing twice at short range, while distant nominal lanes become clear then
+fail exact dispersed launch proof. A random path's early world impact was
+rejected unless its last chord landed within seven metres of its sampled
+terminal. That refusal could also reject the entire nominal low family, leaving
+no candidate for a gun whose high root exceeds its real elevation limits.
+
+The exact-launch queue can now finish at a finite world impact more than 25 m
+from the muzzle when the hit lies on the actual checked chord. All earlier
+chords must be proved first. The immutable receipt retains muzzle, velocity,
+random angles, flight time, sequence, shell and full binding key; only the
+internal checked/friendly path ends at that first hit. Friendly body and HE
+splash checks therefore use the real landing point. The ordinary projectile
+simulation still performs collision and produces impact, explosion and damage;
+the admission receipt never fabricates a hit or bypasses scenery.
+
+Nominal family planning retains its complete obstruction proof. Muzzle-side
+hits, opaque/False replies (including retained-wreck vetoes), query exceptions,
+nonfinite points and off-chord replies cannot become remote-impact receipts.
+No ray quota, gun limit, random sample or projectile law is relaxed. Cached
+launch diagnostics expose the recorded terminal impact. Near-wall lifecycle
+fixtures now place their blocker about 5 m away rather than at the end of a
+50 m first chord, preserving the intended near-obstruction contract.
+
+New regressions prove original random-angle runtime firing, first-hit path
+truncation, pinned receipt reuse, unchanged nominal-family admission and the
+remaining muzzle/unknown/malformed checks. Existing exact friendly-body/splash
+and projectile terminal tests remain mandatory. Native #1513 landing effects
+and GC gameplay still require testing with the new package.

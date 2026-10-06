@@ -106,7 +106,7 @@ class ArtilleryController(object):
         # their exact key until that key changes or the controller resets.
         self.launch_queue = ArcProbeQueue(
             max_jobs=8, success_ttl=0.35, failure_ttl=0.25,
-            max_job_age=40.0)
+            max_job_age=40.0, allow_remote_impact=True)
         self.maximum_step = max(0.04, min(0.20, float(maximum_step)))
         self.origin_resolver = (
             origin_resolver if callable(origin_resolver) else None)
@@ -554,7 +554,8 @@ class ArtilleryController(object):
         if isinstance(source, dict):
             launch_key = self._launch_keys.get(int(source.get('id', 0)))
             if launch_key in self._launch_receipts:
-                output['launch'] = {'state': 'clear'}
+                output['launch'] = {'state': 'clear',
+                    'terminal_impact': self._launch_receipts[launch_key].get('terminal_impact')}
             elif launch_key is not None:
                 output['launch'] = self.launch_queue.status(launch_key, now)
         if not isinstance(source, dict) or not isinstance(target, dict):
