@@ -45,6 +45,27 @@ class RoutePriorityTests(unittest.TestCase):
         self.assertEqual(original,graph)
         self.assertEqual(1,len([r for r in routes['1'] if r['id']==north['id']]))
 
+    def test_implicit_default_five_outranks_four_but_explicit_six_wins(self):
+        graph,doc=profile();central=graph['routes']['1'][1]
+        for priority,expected in ((4,False),(6,True)):
+            doc['maps']['31_airfield']['default_routes']=[edit(central,'lightTank',priority)]
+            routes,unused=planning.default_routes(config.canonical(doc),'31_airfield',graph)
+            director=BattleDirector('31_airfield',123,baked_routes=routes)
+            chosen=director.register_profile(1,1,dict(class_tag='lightTank',roles={'scout':1.0}))['route']
+            self.assertEqual(expected,chosen['id'] in (central['id'],'class_lt_'+central['id']))
+
+    def test_custom_default_five_matches_a_current_baked_route_and_four_does_not(self):
+        graph,doc=profile()
+        route=dict(id='join',label='Join',team=1,classes=['lightTank'],slots=[],policy='preferred',
+                   capacity=1,weight=1.,points=[[-100.,-100.,0],[100.,100.,0]])
+        doc['maps']['31_airfield']['routes']=[route]
+        states=[dict(id=1,team=1,slot=0,x=0.,y=0.,z=0.,profile=dict(class_tag='lightTank'),route={'id':'baked'})]
+        with mock.patch.object(planning,'graph_view') as grid,mock.patch.object(planning,'validate_route',return_value=None),mock.patch.object(planning,'_route_reachable',return_value=True):
+            grid.return_value.closest.return_value=1
+            self.assertIn(1,planning.assign_routes(config.canonical(doc),'31_airfield',graph,states,1)[0])
+            route['class_priorities']={'lightTank':4}
+            self.assertEqual({},planning.assign_routes(config.canonical(doc),'31_airfield',graph,states,1)[0])
+
     def test_invalid_geometry_does_not_install_priority(self):
         graph,doc=profile();doc['maps']['31_airfield']['default_routes']=[edit(graph['routes']['1'][0],'lightTank',9)]
         graph=copy.deepcopy(graph);graph['links']=[0]*len(graph['links'])

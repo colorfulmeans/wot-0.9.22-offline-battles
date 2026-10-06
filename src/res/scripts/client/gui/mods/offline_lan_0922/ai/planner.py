@@ -13,6 +13,7 @@ import math
 import random
 
 from gui.mods.offline_lan_0922.ai import maps as bot_ai_maps
+from gui.mods.offline_lan_0922.bot_tactics import DEFAULT_ROUTE_PRIORITY
 
 
 CONTACT_MEMORY_SECONDS = 7.0
@@ -896,7 +897,7 @@ class BattleDirector(object):
 				score -= (float(used) / float(capacity)) * 28.0
 				if used >= capacity:
 					score -= 34.0
-			priority = 0 if is_artillery else int((route.get('class_priorities') or {}).get(profile.get('class_tag'), 0))
+			priority = 0 if is_artillery else int((route.get('class_priorities') or {}).get(profile.get('class_tag'), DEFAULT_ROUTE_PRIORITY))
 			if (priority, score) > (best_priority, best_score):
 				best_priority = priority
 				best_score = score

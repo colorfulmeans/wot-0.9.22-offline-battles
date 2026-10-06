@@ -47,6 +47,7 @@ class EditorUITests(unittest.TestCase):
         self.ui.selected_point=None;self.ui.redraw()
         self.assertEqual(0,len(self.ui.canvas.find_withtag('wait_place')))
         self.assertEqual(1,len(self.ui.canvas.find_withtag('route_wait')))
+
         self.ui.selected_point=0;self.ui.edit_point_condition()
         self.ui.selected_wait=1;self.ui.delete_selected_point()
         self.assertEqual([10,30],[p[2] for p in self.ui._wait_point()[4]])
@@ -56,6 +57,13 @@ class EditorUITests(unittest.TestCase):
         self.assertEqual(3,len(self.ui._wait_point()))
         self.ui.undo();self.ui.selected_point=0;self.assertEqual(1,len(self.ui._wait_point()[4]))
         storage.contract.canonical(self.ui.document)
+
+    def test_new_route_defaults_to_five_for_each_declared_vehicle_class(self):
+        self.ui.new_route()
+        self.assertEqual({'heavyTank':5},self.ui._selected()['class_priorities'])
+        self.ui.route_class_var.set('all');self.ui.change_route_class();self.ui.new_route()
+        self.assertEqual({tag:5 for tag in storage.contract.CLASSES[:-1]},
+                         self.ui._selected()['class_priorities'])
 
     def test_opening_does_not_create_dirty_or_active_map_entries(self):
         self.assertFalse(self.ui.dirty());self.assertEqual({},self.ui.store.active()['maps'])

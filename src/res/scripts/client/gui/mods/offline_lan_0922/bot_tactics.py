@@ -20,6 +20,7 @@ SCHEMA = 1
 CLIENT = '0.9.22.0.1-cn-1513'
 MAX_BYTES = 512 * 1024
 CLASSES = ('lightTank', 'mediumTank', 'heavyTank', 'AT-SPG', 'SPG')
+DEFAULT_ROUTE_PRIORITY = 5
 SKILLS = ('rookie', 'regular', 'veteran', 'elite')
 PARAMETERS = {
     'reaction_seconds': (0.0, 5.0), 'patience_seconds': (0.0, 10.0),

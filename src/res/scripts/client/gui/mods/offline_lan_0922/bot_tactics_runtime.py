@@ -166,9 +166,11 @@ def assign_routes(profile, name, graph, states, round_id):
             continue
         available = []
         tag=(state.get('profile') or {}).get('class_tag')
-        default_priority=(state.get('route') or {}).get('class_priorities', {}).get(tag,0)
+        current_route = state.get('route') or {}
+        default_priority = current_route.get('class_priorities', {}).get(
+            tag, config.DEFAULT_ROUTE_PRIORITY) if current_route else 0
         for route in applicable:
-            priority=route.get('class_priorities', {}).get(tag, 0)
+            priority=route.get('class_priorities', {}).get(tag, config.DEFAULT_ROUTE_PRIORITY)
             if priority < default_priority and route['policy'] != 'fixed':continue
             if errors[route['id']] or usage.get(route['id'], 0) >= route['capacity']:
                 continue

@@ -465,7 +465,7 @@ class BotTacticsEditor:
                             symmetric=bool((edit or {}).get('symmetric',True)) and self._supports_route_symmetry(),
                             points=copy.deepcopy(edit['points'] if edit else source['waypoints']))
                 if self._route_scope() in contract.CLASSES[:-1]:
-                    result['priority']=(edit or {}).get('priority',0)
+                    result['priority']=(edit or {}).get('priority',contract.DEFAULT_ROUTE_PRIORITY)
                 return result
             item=next((v for v in self.entry()[kind] if v['id']==identity.partition('@')[0]),None)
             return item
@@ -670,7 +670,7 @@ class BotTacticsEditor:
         caption=labels.enum_label('class_tag',scope,self.language)
         marker=self.tr(' 已修改',' edited') if self._default_edit(dict(id=identity),scope) else ''
         edit=self._default_edit(dict(id=identity),scope)
-        priority=self._priority_caption((edit or {}).get('priority',0)) if scope in contract.CLASSES[:-1] else ''
+        priority=self._priority_caption((edit or {}).get('priority',contract.DEFAULT_ROUTE_PRIORITY)) if scope in contract.CLASSES[:-1] else ''
         name=self.tr('[默认/','[Default/')+caption+'] '+self._default_name(identity,scope)+marker
         return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
 
@@ -684,7 +684,7 @@ class BotTacticsEditor:
 
     def _custom_caption(self, kind, item, tag=None):
         caption=('['+labels.enum_label('class_tag',tag,self.language)+'] ') if tag else ''
-        priority=self._priority_caption(item.get('class_priorities',{}).get(tag or self.route_class_var.get(),0)) if kind=='routes' and self.route_class_var.get()!='all' else self._priority_caption(item['priority']) if kind=='positions' else ''
+        priority=self._priority_caption(item.get('class_priorities',{}).get(tag or self.route_class_var.get(),contract.DEFAULT_ROUTE_PRIORITY)) if kind=='routes' and self.route_class_var.get()!='all' else self._priority_caption(item['priority']) if kind=='positions' else ''
         name=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label']
         return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
 
@@ -752,7 +752,7 @@ class BotTacticsEditor:
         for key,var in self.item_vars.items():
             val=(item or {}).get(key,'')
             if key=='route_priority' and item:
-                val=item.get('priority',0) if builtin else item.get('class_priorities',{}).get(self._route_scope(),0)
+                val=item.get('priority',contract.DEFAULT_ROUTE_PRIORITY) if builtin else item.get('class_priorities',{}).get(self._route_scope(),contract.DEFAULT_ROUTE_PRIORITY)
             if key=='slots' and isinstance(val,list):val=','.join(str(v+1) for v in val)
             var.set(str(val))
         for key,var in self.class_vars.items():var.set(key in (item or {}).get('classes',()))
@@ -773,7 +773,7 @@ class BotTacticsEditor:
         self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
         scope=self.route_class_var.get()
         self._ensure_entry()['routes'].append(dict(id=identity,label=self.tr('新路线','New route'),team=self.team,
-            classes=list(contract.CLASSES[:-1]) if scope=='all' else [scope],slots=[],policy='preferred',capacity=6,weight=1.0,points=[],symmetric=self.symmetry_var.get()))
+            classes=list(contract.CLASSES[:-1]) if scope=='all' else [scope],class_priorities={tag:contract.DEFAULT_ROUTE_PRIORITY for tag in (contract.CLASSES[:-1] if scope=='all' else (scope,))},slots=[],policy='preferred',capacity=6,weight=1.0,points=[],symmetric=self.symmetry_var.get()))
         self.selection=('routes',identity);self._refresh_items();self.mark()
         self.status.set(self.tr('在地图上点击添加路径点；最多16个。','Click the map to add up to 16 route points.'))
 
@@ -871,11 +871,11 @@ class BotTacticsEditor:
         if self.selection[0]=='builtin':
             try:
                 name=contract._text(self.item_vars['label'].get())
-                priority=item.get('priority',0)
+                priority=item.get('priority',contract.DEFAULT_ROUTE_PRIORITY)
                 if self._route_scope() in contract.CLASSES[:-1]:
                     priority=int(self.item_vars['route_priority'].get())
                     if not 0<=priority<=9:raise ValueError(self.tr('优先级应为0–9。','Priority must be 0–9.'))
-                renamed=name!=item['label'];reprioritized=priority!=item.get('priority',0)
+                renamed=name!=item['label'];reprioritized=priority!=item.get('priority',contract.DEFAULT_ROUTE_PRIORITY)
                 if not renamed and not reprioritized:return True
                 self.checkpoint();edit=self._editable_item()
                 if reprioritized:edit['priority']=priority;self._sync_symmetry()
