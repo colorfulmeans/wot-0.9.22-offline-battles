@@ -5399,6 +5399,50 @@ ARTEFACT_PRICES = {
     'wetCombatPack_class2': (600000, 0, False),
 }
 
+# Exact #1513 customization price-group names.
+CUSTOMIZATION_GROUP_PRICES = {
+    '23feb camo notInShop': (0, 500, True),
+    '23feb inscriptions notInShop': (0, 50, True),
+    '23feb style': (0, 1000, True),
+    'NY style notInShop': (0, 750, True),
+    'Rostelecom style notInShop': (0, 750, True),
+    'WG Fest style notInShop': (0, 750, True),
+    'custom paint': (0, 20, False),
+    'custom paint notInShop': (0, 1, True),
+    'effect free': (0, 300, False),
+    'effect gold': (0, 300, False),
+    'effect gold notInShop': (0, 1, True),
+    'historical paint': (0, 20, False),
+    'historical paint notInShop': (0, 1, True),
+    'legacy IGR notInShop': (0, 1, True),
+    'legacy camo china': (0, 50, False),
+    'legacy camo czech': (0, 50, False),
+    'legacy camo france': (0, 50, False),
+    'legacy camo germany': (0, 50, False),
+    'legacy camo japan': (0, 50, False),
+    'legacy camo poland': (0, 50, False),
+    'legacy camo sweden': (0, 50, False),
+    'legacy camo uk': (0, 50, False),
+    'legacy camo usa': (0, 50, False),
+    'legacy camo ussr': (0, 50, False),
+    'legacy emblems': (0, 50, False),
+    'legacy inscriptions china': (0, 50, False),
+    'legacy inscriptions common': (0, 50, False),
+    'legacy inscriptions czech': (0, 50, False),
+    'legacy inscriptions france': (0, 50, False),
+    'legacy inscriptions germany': (0, 50, False),
+    'legacy inscriptions japan': (0, 50, False),
+    'legacy inscriptions poland': (0, 50, False),
+    'legacy inscriptions sweden': (0, 50, False),
+    'legacy inscriptions uk': (0, 50, False),
+    'legacy inscriptions usa': (0, 50, False),
+    'legacy inscriptions ussr': (0, 50, False),
+    'legacy notInShop': (0, 1, True),
+    'rented style': (75000, 0, False),
+    'special style notInShop': (0, 750, True),
+    'style gold': (0, 750, False),
+}
+
 
 def _price(table, key):
     return table.get(key)

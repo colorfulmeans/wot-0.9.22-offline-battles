@@ -961,6 +961,10 @@ class GarageStore(object):
                 _log('CREW_SERVICE legacy_unattributed receipt=%s; no invented service history' % receipt_id)
         crew = None
         if not training:
+            result['customization_rental_used'] = _contained(
+                refused, 'customization rental',
+                lambda: state.consume_customization_rental(vehicle_type_compact_descr),
+                GarageError)
             crew = _contained(
                 refused, 'crew experience',
                 lambda: state.award_battle_crew_xp(

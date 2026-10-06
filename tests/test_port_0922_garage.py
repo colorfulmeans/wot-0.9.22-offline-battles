@@ -98,7 +98,7 @@ SNAPSHOT = {
     'shopItemPrices': dict(
         (compact_descr, {'credits': 0, 'gold': 0})
         for compact_descr in (2002, 2003, 2004, 2005, 2006, 2007,
-                              10010, 10011, 9001, 9002, 11001, 50001)),
+                              10010, 10011, 9001, 9002, 11001, 50001, 12001, 12007)),
     'unlockItemCompactDescrs': set(),
     'shopNationCount': 9,
     'customizationItemCount': 1,
@@ -405,6 +405,7 @@ def _modules():
 class _ParsedOutfit(object):
     def __init__(self, descriptor):
         self.descriptor = descriptor
+        self.styleId = int(descriptor.split(b':')[1]) if descriptor.startswith(b'style:') else 0
 
     def makeCompDescr(self):
         return self.descriptor
@@ -431,6 +432,62 @@ class _Customizations(object):
 
 
 class GarageStateTests(unittest.TestCase):
+
+    def test_customization_purchase_charges_each_copy_and_sale_matches_stock(self):
+        self.state._customizations = _Customizations
+        self.state._snapshot['shopItemPrices'][12001] = {'gold': 50}
+        before = self.state._wallet()['gold']
+        credits = self.state._wallet()['credits']
+        self.state.buy_customizations(9, [12001, 3])
+        self.assertEqual(before-150,self.state._wallet()['gold'])
+        self.state.sell_customization(9,12001,2)
+        self.assertEqual(before-150,self.state._wallet()['gold'])
+        self.assertEqual(credits+20000,self.state._wallet()['credits'])
+        self.assertEqual(1,self.state.snapshot()['customizationItems'][1][1][50001])
+
+    def test_customization_unbound_purchase_and_insufficient_batch_are_atomic(self):
+        self.state._customizations = _Customizations
+        self.state._snapshot['shopItemPrices'].update({12001:{'gold':50},12002:{'gold':100}})
+        self.state._wallet()['gold']=100
+        before=copy.deepcopy(self.state.snapshot())
+        with self.assertRaises(self.garage.GarageError):
+            self.state.buy_customizations(0,[12001,1,12002,1])
+        self.assertEqual(before,self.state.snapshot())
+        self.state.buy_customizations(0,[12001,1])
+        self.assertEqual(1,self.state.snapshot()['customizationItems'][1][1][0])
+        self.assertEqual(50,self.state._wallet()['gold'])
+
+    def test_unknown_or_exclusive_customization_cannot_be_purchased_for_free(self):
+        self.state._customizations = _Customizations
+        before=copy.deepcopy(self.state.snapshot())
+        with self.assertRaises(self.garage.GarageError):self.state.buy_customizations(9,[12099,1])
+        self.assertEqual(before,self.state.snapshot())
+        self.state._snapshot['notInShopItems']={12001}
+        with self.assertRaises(self.garage.GarageError):self.state.buy_customizations(9,[12001,1])
+
+    def test_rented_style_charges_once_counts_battles_and_expires(self):
+        self.state._customizations = _Customizations
+        style=types.SimpleNamespace(compactDescr=12007,rentCount=100)
+        self.state._vehicles_module().g_cache=types.SimpleNamespace(
+            customization20=lambda:types.SimpleNamespace(styles={7:style}))
+        self.state._snapshot['shopItemPrices'][12007]={'credits':75000}
+        self.state._wallet()['credits']=150000
+        self.state.apply_style(9,7)
+        self.assertEqual(75000,self.state._wallet()['credits'])
+        self.state._record(9)['outfits'][15]=(b'style:7',False)
+        self.assertFalse(self.state.consume_customization_rental(50001))
+        self.assertEqual(100,self.state.snapshot()['customizationItems'][1][7][50001])
+        self.state._record(9)['outfits'][15]=(b'style:7',True)
+        self.assertEqual(100,self.state.snapshot()['customizationItems'][1][7][50001])
+        self.state.apply_style(9,7)
+        self.assertEqual(75000,self.state._wallet()['credits'])
+        with self.assertRaises(self.garage.GarageError):self.state.sell_customization(9,12007,1)
+        for unused in range(99):self.assertTrue(self.state.consume_customization_rental(50001))
+        self.assertEqual(1,self.state.snapshot()['customizationItems'][1][7][50001])
+        self.state.consume_customization_rental(50001)
+        self.assertNotIn(15,self.state._record(9)['outfits'])
+        self.state.apply_style(9,7)
+        self.assertEqual(0,self.state._wallet()['credits'])
 
     def setUp(self):
         unused_requests, unused_commands, self.garage = _request_modules()
@@ -1794,7 +1851,8 @@ class FittingRequestTests(unittest.TestCase):
     def _customization_state(self):
         vehicles, tankmen = _modules()
         vehicles.g_cache = types.SimpleNamespace(
-            customization20=lambda: types.SimpleNamespace(styles={7: object()}))
+            customization20=lambda: types.SimpleNamespace(styles={7: types.SimpleNamespace(
+                compactDescr=12007, rentCount=0)}))
         self.state = self.garage.GarageState(
             SNAPSHOT, vehicles_module=vehicles, tankmen_module=tankmen,
             customizations_module=_Customizations)
@@ -3358,6 +3416,33 @@ class GaragePersistenceTests(unittest.TestCase):
         fresh = copy.deepcopy(SNAPSHOT) if fresh is None else fresh
         self._store().apply(fresh)
         return fresh
+
+    def test_rental_battle_counter_survives_restart_and_duplicate_receipt(self):
+        vehicles,tankmen=_modules()
+        vehicles.g_cache=types.SimpleNamespace(customization20=lambda:types.SimpleNamespace(
+            styles={7:types.SimpleNamespace(compactDescr=12007,rentCount=100)}))
+        state=self.garage.GarageState(SNAPSHOT,vehicles_module=vehicles,
+            tankmen_module=tankmen,customizations_module=_Customizations)
+        state.snapshot()['shopItemPrices'][12007]={'credits':75000}
+        state._wallet()['credits']=150000
+        state.apply_style(9,7)
+        store=self._store()
+        # Battle settlement constructs its own staged GarageState.
+        with mock.patch.dict(sys.modules,{'gui.mods.offline_lan_0922.account_rpc.garage':self.garage}), \
+                mock.patch.object(self.garage.GarageState,'_customizations_module',
+                               return_value=_Customizations):
+            store.apply_battle_crew_xp(state.snapshot(),'rental:training',50001,0,0,
+                vehicles_module=vehicles,tankmen_module=tankmen,training=True)
+            self.assertEqual(100,state.snapshot()['customizationItems'][1][7][50001])
+            first=store.apply_battle_crew_xp(state.snapshot(),'rental:1',50001,0,0,
+                vehicles_module=vehicles,tankmen_module=tankmen)
+            duplicate=store.apply_battle_crew_xp(state.snapshot(),'rental:1',50001,0,0,
+                vehicles_module=vehicles,tankmen_module=tankmen)
+        self.assertTrue(first['customization_rental_used'],first)
+        self.assertFalse(duplicate['applied'])
+        restored=self._restart()
+        self.assertEqual(99,restored['customizationItems'][1][7][50001])
+        self.assertEqual(75000,restored['wallet']['credits'])
 
     @staticmethod
     def _matching_snapshot():

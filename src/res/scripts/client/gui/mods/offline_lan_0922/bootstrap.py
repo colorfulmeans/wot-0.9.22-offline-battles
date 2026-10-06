@@ -12,6 +12,7 @@ from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922 import instance_guard
 from gui.mods.offline_lan_0922 import vehicle_blacklist
 from gui.mods.offline_lan_0922 import vehicle_records
+from gui.mods.offline_lan_0922 import price_catalogue
 from gui.mods.offline_lan_0922.account_rpc import data, economy
 from gui.mods.offline_lan_0922.vehicle_records import (
     STOCKED_ITEM_TYPES,
@@ -847,12 +848,12 @@ def _selected_vehicle(config, restore_saved=True):
                 'paints', 'camouflages', 'decals', 'modifications', 'styles'):
             collection = getattr(customization_cache, collection_name)
             for item in collection.values():
-                shop_item_prices[item.compactDescr] = {
-                    # Keep zero-price appearance items credit-denominated.
-                    # Money's weighted currency chooser prefers gold when
-                    # both zero-valued keys are present.
-                    'credits': 0,
-                }
+                price = price_catalogue.CUSTOMIZATION_GROUP_PRICES.get(item.priceGroup)
+                if price is None:
+                    raise ValueError('unknown customization price group %r' % item.priceGroup)
+                shop_item_prices[item.compactDescr] = price_catalogue.money(price)
+                if price[2]:
+                    not_in_shop_items.add(item.compactDescr)
                 unlock_item_compact_descrs.add(item.compactDescr)
                 customization_count += 1
         if customization_count <= 0:

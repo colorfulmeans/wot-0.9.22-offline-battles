@@ -494,11 +494,11 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 raise KeyError(name)
 
         customization = types.SimpleNamespace(
-            paints={12001: types.SimpleNamespace(compactDescr=12001)},
-            camouflages={12002: types.SimpleNamespace(compactDescr=12002)},
-            decals={12003: types.SimpleNamespace(compactDescr=12003)},
-            modifications={12004: types.SimpleNamespace(compactDescr=12004)},
-            styles={12005: types.SimpleNamespace(compactDescr=12005)})
+            paints={12001: types.SimpleNamespace(compactDescr=12001, priceGroup='historical paint')},
+            camouflages={12002: types.SimpleNamespace(compactDescr=12002, priceGroup='legacy camo ussr')},
+            decals={12003: types.SimpleNamespace(compactDescr=12003, priceGroup='legacy emblems')},
+            modifications={12004: types.SimpleNamespace(compactDescr=12004, priceGroup='effect gold')},
+            styles={12005: types.SimpleNamespace(compactDescr=12005, priceGroup='style gold')})
         optional_devices = dict(
             (9000 + index, types.SimpleNamespace(
                 compactDescr=9000 + index, tags=frozenset()))
@@ -1894,9 +1894,9 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertTrue(
             {12001, 12002, 12003, 12004, 12005}.issubset(
                 selected['shopItemPrices']))
-        for compact_descr in (12001, 12002, 12003, 12004, 12005):
+        for compact_descr, gold in ((12001,20),(12002,50),(12003,50),(12004,300),(12005,750)):
             self.assertEqual(
-                {'credits': 0}, selected['shopItemPrices'][compact_descr])
+                {'gold': gold}, selected['shopItemPrices'][compact_descr])
         self.assertEqual(3, len(selected['vehicles']))
         self.assertEqual([1, 2, 3], [
             record['id'] for record in selected['vehicles']])
