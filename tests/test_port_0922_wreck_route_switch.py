@@ -171,6 +171,12 @@ class WreckRouteEvidenceTests(unittest.TestCase):
         self.grid.set_static_hulls([(2, 60, 40, 0, 5, 2)])
         self.assertFalse(self.prove(now=0.2))
 
+    def test_parking_approach_reports_wrecks_but_arrived_wait_does_not(self):
+        self.assertTrue(self.prove('parking_approach'))
+        self.assertFalse(self.prove('hold', .1))
+        self.grid.set_static_hulls([])
+        self.assertFalse(self.prove('parking_approach', 1.1))
+
     def test_corner_lane_detects_wreck_outside_straight_goal_ray(self):
         self.assertFalse(self.grid.path_crosses_static_hull(
             [(60, 0, 0), (0, 0, 100)]))

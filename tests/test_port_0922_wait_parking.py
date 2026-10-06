@@ -121,6 +121,35 @@ class WaitParkingTests(unittest.TestCase):
         self.assertEqual('blocked_timeout',skipped['route_point_skip_reason'])
         self.assertEqual(-40,skipped['route_anchor']['x'])
 
+    def test_blocked_parking_approach_declines_slot_then_bounds_parent_gate(self):
+        p,m=self.setup_parking([[0,20,120]])
+        states=[dict(_state(11,1,-100,0),world_pose=True,route_wreck_blocked=True)]
+        first=self.orders(p,m[:1],states,0)[11]
+        self.assertEqual('parking_approach',first['combat_mode'])
+        self.assertEqual(20,first['move_position']['z'])
+        self.assertEqual('parking_approach',self.orders(p,m[:1],states,19.9)[11]['combat_mode'])
+        declined=self.orders(p,m[:1],states,20)[11]
+        self.assertEqual('blocked_approach_timeout',declined['parking_skip_reason'])
+        self.assertEqual('route',declined['combat_mode'])
+        self.assertIsNone(declined['parking_phase'])
+        self.assertIsNone(declined['arrival_radius'])
+        self.assertEqual(0,declined['move_position']['z'])
+        self.assertFalse(any(c['bot_id']==11 for c in p._wait_claims.values()))
+        # A vacated slot must not restart the failed parking approach.
+        self.assertNotEqual('parking_approach',self.orders(p,m[:1],states,30)[11]['combat_mode'])
+        skipped=self.orders(p,m[:1],states,40)[11]
+        self.assertEqual(1,skipped['route_index'])
+        self.assertEqual('blocked_timeout',skipped['route_point_skip_reason'])
+
+    def test_arrived_wait_does_not_expire_from_old_blockage_evidence(self):
+        p,m=self.setup_parking([[0,0,120]])
+        states=[dict(_state(11,1,0,0),world_pose=True,route_wreck_blocked=True)]
+        self.assertEqual('waiting',self.orders(p,m[:1],states,0)[11]['parking_phase'])
+        held=self.orders(p,m[:1],states,30)[11]
+        self.assertEqual('waiting',held['parking_phase'])
+        self.assertEqual('hold',held['combat_mode'])
+        self.assertNotIn('parking_skip_reason',held)
+
     def test_schema_rejects_four_slots_nonfinite_times_and_duplicate_positions(self):
         p,m=self.setup_parking();raw=p.tactics
         for slots in ([[0,0,1]]*4, [[0,0,float('nan')]], [[0,0,1],[0,0,2]]):

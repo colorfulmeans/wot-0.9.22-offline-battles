@@ -2503,7 +2503,7 @@ class BotPlanner(object):
         bot_id = bot['id']
         state = bot['state']
         route_id = str(order.get('route_id') or '')
-        if (order.get('combat_mode') not in ('route', 'advance') or
+        if (order.get('combat_mode') not in ('route', 'advance', 'parking_approach') or
                 order.get('team_command') or
                 order.get('throttle_override') is not None or
                 not state.get('route_wreck_blocked') or
@@ -2530,18 +2530,45 @@ class BotPlanner(object):
         route = (self._route_assignments.get(bot_id) or {}).get('route') or bot.get('route') or {}
         waypoints = route.get('waypoints') or []
         index = _integer(order.get('route_index'))
-        if route_state.get('blocked_skip_to') != index and index + 1 < len(waypoints):
-            next_index = index + 1
-            route_state.update(index=next_index, blocked_skip_to=next_index,
-                               join_index=next_index, join_anchor=dict(point))
-            # Abandon the blocked gate's parking lease as well as its geometry.
+        if order.get('combat_mode') == 'parking_approach':
+            # The small parking place is optional. Decline it first and use
+            # its ordinary parent gate, including when it is the last gate.
             route_state.setdefault('parking_completed', set()).add(index)
+            route_state.setdefault('parking_skipped', set()).add(index)
+            route_state.pop('parking_phase', None)
+            route_state.pop('parking_slot', None)
             for claim_key, claim in list(self._wait_claims.items()):
                 if claim['bot_id'] == bot_id and claim_key[:3] == (bot['team'], route_id, index):
                     self._wait_claims.pop(claim_key, None)
             self._route_states[bot_id] = route_state
             new_id, new_index, move, anchor, join = self._route(bot, now)
             order.update(route_id=new_id, route_index=new_index,
+                         combat_mode='route', parking_phase=None,
+                         parking_slot=None, arrival_radius=None,
+                         move_position=move, face_position=dict(move),
+                         route_anchor=anchor, route_join=join,
+                         parking_skip_reason='blocked_approach_timeout')
+            self._apply_authored_route_order(order, bot, move)
+            self._wreck_route_progress[bot_id] = {
+                'key': (new_id, new_index), 'goal': _point(move),
+                'since': _number(now)}
+            return
+        if route_state.get('blocked_skip_to') != index and index + 1 < len(waypoints):
+            next_index = index + 1
+            route_state.update(index=next_index, blocked_skip_to=next_index,
+                               join_index=next_index, join_anchor=dict(point))
+            # Abandon the blocked gate's parking lease as well as its geometry.
+            route_state.setdefault('parking_completed', set()).add(index)
+            route_state.pop('parking_phase', None)
+            route_state.pop('parking_slot', None)
+            for claim_key, claim in list(self._wait_claims.items()):
+                if claim['bot_id'] == bot_id and claim_key[:3] == (bot['team'], route_id, index):
+                    self._wait_claims.pop(claim_key, None)
+            self._route_states[bot_id] = route_state
+            new_id, new_index, move, anchor, join = self._route(bot, now)
+            order.update(route_id=new_id, route_index=new_index,
+                         combat_mode='route', parking_phase=None,
+                         parking_slot=None, arrival_radius=None,
                          move_position=move, face_position=dict(move),
                          route_anchor=anchor, route_join=join,
                          route_point_skip_reason='blocked_timeout',
@@ -2587,6 +2614,8 @@ class BotPlanner(object):
         self._wreck_route_progress.pop(bot_id, None)
         new_id, index, move, anchor, join = self._route(bot, now)
         order.update(route_id=new_id, route_index=index,
+                     combat_mode='route', parking_phase=None,
+                     parking_slot=None, arrival_radius=None,
                      move_position=move, face_position=dict(move),
                      route_anchor=anchor, route_join=join,
                      route_switch_reason='wreck_stall',

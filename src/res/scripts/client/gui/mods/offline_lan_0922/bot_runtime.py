@@ -8442,7 +8442,7 @@ class BotRuntime(object):
         # abandon this macro lane only after sustained lack of progress.
         crosses = getattr(grid, 'path_crosses_static_hull', None)
         if (authority_state is not None and callable(crosses) and
-                mode in ('route', 'advance') and
+                mode in ('route', 'advance', 'parking_approach') and
                 strategic.get('throttle_override') is None):
             evidence_key = (strategic.get('route_id'),
                             strategic.get('route_index'), tuple(goal),

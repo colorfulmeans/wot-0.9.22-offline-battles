@@ -256,3 +256,29 @@ and automatic burst continuation retain their owners. Controlled checks cover
 separate yaw/pitch arrival and all four retreat modes with denial, no physical
 progress, progress reset and fallback latching. Native gameplay acceptance
 requires the next test package.
+
+
+## Test115 blocked approach to optional waiting places
+
+Report 175026 on test114 shows team2 T110E4 near wreck17 while travelling
+to a small waiting place about 100 m away. Recovery count rises from 12 to
+19 near the wreck before the round ends. Both worker static-hull evidence
+and the server's bounded gate attempt excluded parking_approach, so the
+ordinary timeout could not retire this optional destination.
+
+Worker parking approaches now publish the existing cached static-hull lane
+evidence. The server admits this phase to the existing 20-second attempt
+budget. Expiry releases the small-place lease and permanently declines that
+wait for the current gate, then uses its ordinary parent travel point. This
+also handles a wait at the final gate. If the parent remains blocked, the
+existing bounded skip-successor/change-route sequence applies. Resumed travel
+clears stale parking phase, slot and one-metre arrival metadata. Arrived waits
+remain excluded and retain normal timers and attack behavior. No parking
+coordinates, physics, collision vetoes or search budgets change.
+
+Controlled checks exercise worker evidence, approaching/arrived separation,
+lease release, parent fallback without reacquisition and subsequent parent
+timeout. The capture's independent performance hotspot remains motion/world
+collision and repeated ground/destructible work; this patch does not claim
+to solve that separate performance problem. Native wreck clearance still
+requires testing the next package.
