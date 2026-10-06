@@ -54,6 +54,25 @@ class StyleInventoryTests(unittest.TestCase):
         store.save_ledger._write_state(self.path, {'vehicles':{'101':{}},'ledger':{}})
         self.assertEqual({'101':100}, self.read()['4']['1'])
 
+    def test_style_receipts_include_actual_deltas_and_noop_save_does_not_repeat(self):
+        for garage in (False,True):
+            with self.subTest(garage=garage):
+                if garage:store.save_ledger._write_state(self.path,{'vehicles':{'101':{}},'ledger':{}})
+                stock={'4':{'128':{'101':2}}}
+                store.write_inventory(self.slot,self.game,stock,root=self.root,is_running=lambda:False)
+                path=self.path if garage else store.save_slots.metadata_path(self.slot,self.game,root=self.root)
+                saved=store.save_ledger._read_state(path)
+                notices=(saved['ledger']['personalMissions']['notifications'] if garage else saved['initial_account_notifications'])
+                self.assertEqual([{'phase':'granted','rewards':[{'kind':'style','id':128,'count':2}]}],notices[0]['settlement']['account_changes'])
+                store.write_inventory(self.slot,self.game,stock,root=self.root,is_running=lambda:False)
+                saved=store.save_ledger._read_state(path)
+                repeated=saved['ledger']['personalMissions']['notifications'] if garage else saved['initial_account_notifications']
+                self.assertEqual(notices,repeated)
+                store.write_inventory(self.slot,self.game,{},root=self.root,is_running=lambda:False)
+                saved=store.save_ledger._read_state(path)
+                rows=saved['ledger']['personalMissions']['notifications'] if garage else saved['initial_account_notifications']
+                self.assertEqual('revoked',rows[-1]['settlement']['account_changes'][0]['phase'])
+
     def test_initial_edit_survives_and_version_prevents_replenishing_used_stock(self):
         stock = self.read(); stock['4']['1']['101'] = 17
         store.write_inventory(self.slot, self.game, stock, root=self.root, is_running=lambda:False)

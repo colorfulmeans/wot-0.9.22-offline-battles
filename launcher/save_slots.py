@@ -336,7 +336,7 @@ def rename_slot(slot_id, name, game_root=None, environment=None, root=None):
 
 
 def set_earnings_percent(slot_id, percent, game_root=None, environment=None,
-                         root=None):
+                         root=None, is_running=None):
     """Change what one save multiplies its battle earnings by.
 
     Unlike the balances, this lives in the launcher's own ``save.json`` rather
@@ -352,6 +352,32 @@ def set_earnings_percent(slot_id, percent, game_root=None, environment=None,
             raise SaveSlotError("The save could not be changed: %s" % error)
     path = os.path.join(record["path"], METADATA_NAME)
     metadata = _read_metadata(path) or {}
+    import copy
+    try:
+        from . import save_ledger
+    except ImportError:
+        import save_ledger
+    previous_metadata = copy.deepcopy(metadata)
+    metadata_existed = os.path.isfile(path)
+    ledger_path = save_ledger.ledger_path(slot_id, game_root, environment, root)
+    ledger_state = save_ledger._read_state(ledger_path)
+    if ledger_state is not None:
+        if is_running is None:
+            try:
+                from . import core
+            except ImportError:
+                import core
+            is_running = core.game_is_running
+        if is_running():raise SaveSlotError('Close World of Tanks before changing a save\'s earnings.')
+    changed = record['earnings_percent'] != percent
+    if changed:
+        rewards = [{'kind':'earnings_percent','before':record['earnings_percent'],'count':percent}]
+        if ledger_state is None:
+            save_ledger.queue_account_changes(metadata,[{'phase':'updated','rewards':rewards}],False)
+        else:
+            ledger = ledger_state.get('ledger')
+            if not isinstance(ledger,dict):raise SaveSlotError('The save is not in the expected format.')
+            save_ledger.queue_account_changes(ledger,[{'phase':'updated','rewards':rewards}])
     metadata.update({
         "schema": METADATA_SCHEMA,
         "id": slot_id,
@@ -364,6 +390,14 @@ def set_earnings_percent(slot_id, percent, game_root=None, environment=None,
         _write_metadata(path, metadata)
     except (IOError, OSError) as error:
         raise SaveSlotError("The save could not be changed: %s" % error)
+    if changed and ledger_state is not None:
+        try:
+            save_ledger._write_state(ledger_path,ledger_state)
+        except save_ledger.SaveLedgerError as error:
+            # Do not report a successful multiplier edit without its receipt.
+            if metadata_existed:_write_metadata(path,previous_metadata)
+            else:os.remove(path)
+            raise SaveSlotError("The save could not be changed: %s" % error)
     return read_slot(slot_id, game_root, environment, root)
 
 

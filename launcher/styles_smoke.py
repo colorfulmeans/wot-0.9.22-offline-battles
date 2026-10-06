@@ -24,6 +24,10 @@ def run(destination, game_root, translate=lambda value: value):
                 save_dialog=parent, _save_slot_id='default',
                 game_root=SimpleNamespace(get=lambda: game_root))
             dialog = ui.CustomizationsDialog(owner)
+            def captions(widget):
+                return ([str(widget.cget('text'))] if isinstance(widget,tk.Button) else []) + [
+                    caption for child in widget.winfo_children() for caption in captions(child)]
+            assert translate('Save changes') in captions(dialog.window)
             dialog.window.geometry('+10000+10000')
             root.update()
             assert len(dialog.table.get_children()) == 27
@@ -37,13 +41,25 @@ def run(destination, game_root, translate=lambda value: value):
             dialog.save()
             restored = original_read('default', game_root, dialog.styles, dialog.vehicles, root=temp)
             assert restored == dialog.inventory
+            metadata=store.save_slots.metadata_path('default',game_root,root=temp)
+            rows=store.save_ledger._read_state(metadata)['initial_account_notifications']
+            assert any(reward['kind']=='style' for row in rows
+                       for change in row['settlement']['account_changes'] for reward in change['rewards'])
+            store.save_ledger.write_balances('default',dict(credits=123,gold=456,freeXP=789,crystal=42),
+                game_root=game_root,root=temp,is_running=lambda:False)
+            store.save_slots.set_earnings_percent('default',250,game_root=game_root,root=temp,is_running=lambda:False)
+            rows=store.save_ledger._read_state(metadata)['initial_account_notifications']
+            kinds={reward['kind'] for row in rows for change in row['settlement']['account_changes']
+                   for reward in change['rewards']}
+            assert {'style','credits','gold','freeXP','crystal','earnings_percent'} <= kinds
             label = next(k for k,v in dialog.vehicle_by_label.items() if v is not None and not store.compatible(chosen, v))
             dialog.vehicle.set(label); dialog.refresh()
             assert not dialog.table.exists('128')
             dialog.close()
             store.read_inventory, store.write_inventory = original_read, original_write
             report.update(ok=True, styles=27, hidden=9, compatible_add=True, atomic_save=True,
-                          target_filter=True, temporary_save_only=True)
+                          target_filter=True, temporary_save_only=True, save_caption=translate('Save changes'),
+                          customization_wallet_earnings_receipts=True)
     except Exception:
         report['error'] = traceback.format_exc()
     finally:

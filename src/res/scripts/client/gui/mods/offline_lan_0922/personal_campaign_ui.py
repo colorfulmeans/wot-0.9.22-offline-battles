@@ -75,6 +75,16 @@ def _badge_name(identifier):
     return None
 
 
+def _style_name(identifier):
+    try:
+        from items import vehicles
+        from helpers import i18n
+        style = vehicles.g_cache.customization20().styles[int(identifier)]
+        return _label(i18n.makeString(style.userString))
+    except Exception:
+        return tr('Style %d') % int(identifier)
+
+
 def queue_notification(snapshot, settlement):
     """Commit the notice with its assets; native delivery happens in lobby."""
     if not messages(settlement):
@@ -145,6 +155,12 @@ def _payout_parts(rows):
             # The reward ledger currently accepts camouflage only and stores
             # the native numeric customization type rather than its XML name.
             parts.append(tr('Camouflage: %d') % int(row.get('count', 0)))
+        elif kind == 'style':
+            parts.append(tr('Style inventory: %s x%d') %
+                         (_style_name(row['id']),int(row.get('count',0))))
+        elif kind == 'earnings_percent':
+            parts.append(tr('Battle earnings multiplier: %d%% -> %d%%') %
+                         (int(row['before']),int(row['count'])))
         elif kind == 'premium':
             # Revocation may remove only the unconsumed part of a grant.
             # The receipt's exact seconds override any rounded day count.
@@ -269,7 +285,8 @@ def messages(settlement):
     for row in settlement.get('account_changes', ()):
         rewards = _paid_parts(row.get('rewards', ()))
         if rewards:
-            title = ('Account assets removed: %s.' if row.get('phase') == 'revoked'
+            title = ('Account settings updated: %s.' if row.get('phase') == 'updated' else
+                     'Account assets removed: %s.' if row.get('phase') == 'revoked'
                      else 'Account assets received: %s.')
             lines.append(tr(title) % u', '.join(rewards))
     return lines

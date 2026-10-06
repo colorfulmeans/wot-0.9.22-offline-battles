@@ -209,7 +209,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual('normal',str(e.item_fields['route_priority'][1].cget('state')))
         self.assertEqual('8',e.item_vars['route_priority'].get())
         self.assertTrue(e.items.item('builtin:'+identity+'@lightTank','text').startswith('[优先级 8]'))
-        self.assertIn('优先级 0',e.items.item('builtin:'+identity+'@heavyTank','text'))
+        self.assertIn('优先级 5',e.items.item('builtin:'+identity+'@heavyTank','text'))
         e.navigation_grid_check.invoke();self.root.update();self.assertIsNotNone(e.navigation_photo)
 
     def test_custom_route_priority_values_are_independent_for_each_class(self):
@@ -218,7 +218,7 @@ class NavigationUITests(unittest.TestCase):
         for tag,value in (('lightTank',8),('heavyTank',2)):
             e.route_class_var.set(tag);e.change_route_class();e.selection=('routes',identity);e._refresh_properties()
             e.item_vars['route_priority'].set(str(value));self.assertTrue(e.update_properties())
-        self.assertEqual({'lightTank':8,'heavyTank':2},e._selected()['class_priorities'])
+        self.assertEqual({'lightTank':8,'mediumTank':5,'heavyTank':2,'AT-SPG':5},e._selected()['class_priorities'])
         e.route_class_var.set('total');e.change_route_class()
         self.assertIn('优先级 8',e.items.item('routes:'+identity+'@lightTank','text'))
         self.assertIn('优先级 2',e.items.item('routes:'+identity+'@heavyTank','text'))
@@ -380,7 +380,7 @@ class NavigationUITests(unittest.TestCase):
         e.item_vars['route_priority'].set('9');self.assertTrue(e.update_properties())
         item=next(r for r in e.entry()['routes'] if r['id']==identity)
         self.assertEqual(before['classes'],item['classes']);self.assertEqual(before['points'],item['points'])
-        self.assertEqual({'lightTank':9},item['class_priorities'])
+        self.assertEqual({'lightTank':9,'mediumTank':5,'heavyTank':5,'AT-SPG':5},item['class_priorities'])
         self.assertTrue(e.items.exists('routes:'+identity+'@heavyTank'))
         e.item_vars['route_priority'].set('10');before=copy.deepcopy(e.document)
         with mock.patch.object(e,'error'):self.assertFalse(e.update_properties())

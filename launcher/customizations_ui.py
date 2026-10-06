@@ -52,7 +52,7 @@ class CustomizationsDialog(object):
         self.feedback.grid(row=4, column=0, columnspan=2, sticky='we')
         actions = tk.Frame(frame)
         actions.grid(row=5, column=0, columnspan=2, sticky='we', pady=(8, 0))
-        tk.Button(actions, text=tr('Save'), command=self.save).pack(side='left', expand=True, fill='x')
+        tk.Button(actions, text=tr('Save changes'), command=self.save).pack(side='left', expand=True, fill='x')
         tk.Button(actions, text=tr('Close'), command=self.close).pack(side='left', expand=True, fill='x')
         frame.grid_columnconfigure(1, weight=1)
         frame.grid_rowconfigure(1, weight=1)

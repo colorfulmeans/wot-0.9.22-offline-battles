@@ -209,6 +209,7 @@ _CHINESE = {
     "Balances saved, but the earnings multiplier could not be saved: %s":
         "余额已保存，但收益倍数保存失败：%s",
     "Save changes": "保存",
+    "Close World of Tanks before changing a save's earnings.": "修改存档收益倍率前，请先关闭游戏。",
     "Nation": "国家",
     "Vehicle type": "类型",
     "All": "全部",

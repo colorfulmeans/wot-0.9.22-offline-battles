@@ -167,8 +167,21 @@ def add_style(inventory, style, vehicles, copies):
 def write_inventory(slot_id, game_root, inventory, environment=None, root=None, is_running=None):
     if (core.game_is_running if is_running is None else is_running)():
         raise save_ledger.SaveLedgerError('Close World of Tanks before changing style inventory.')
-    path, state, container, key, unused = _target(slot_id, game_root, environment, root)
-    container[key] = _inventory(inventory)
+    path, state, container, key, has_garage = _target(slot_id, game_root, environment, root)
+    previous = _inventory(container.get(key, {}))
+    updated = _inventory(inventory)
+    changes = []
+    before = previous.get(str(STYLE_TYPE), {})
+    after = updated.get(str(STYLE_TYPE), {})
+    for phase, sign in (('granted', 1), ('revoked', -1)):
+        rewards = []
+        for identifier in sorted(set(before) | set(after), key=int):
+            delta = sign * (sum(after.get(identifier, {}).values()) -
+                            sum(before.get(identifier, {}).values()))
+            if delta > 0:rewards.append({'kind':'style','id':int(identifier),'count':delta})
+        if rewards:changes.append({'phase':phase,'rewards':rewards})
+    container[key] = updated
     container['styleStockVersion'] = STOCK_VERSION
+    save_ledger.queue_account_changes(container, changes, has_garage)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     save_ledger._write_state(path, state)
