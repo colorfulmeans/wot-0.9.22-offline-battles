@@ -718,10 +718,36 @@ class LocalDriver(object):
 						self._reverse_blocked_by_vehicle(
 							position, float(yaw) if sign < 0 else float(yaw) + math.pi,
 							neighbours, half_length, half_width, maximum_distance=distance) is None):
+					state['short_translation_escape'] = dict(start=tuple(position),
+						yaw=float(yaw), sign=sign, distance=distance,
+						until=state['clock'] + 4.0)
 					return dict(throttle=sign * 0.45, turn=0.0, target_yaw=float(yaw),
 						recovery_probe_distance=distance,
 						recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
 		return None
+
+	def _retained_short_escape(self, state, position, yaw, neighbours,
+			direction_clear, half_length, half_width):
+		escape = state.get('short_translation_escape')
+		if escape is None:
+			return None
+		sign = escape['sign']
+		heading = escape['yaw'] + (math.pi if sign < 0 else 0.0)
+		travelled = ((position[0]-escape['start'][0])*math.sin(heading) +
+			(position[2]-escape['start'][2])*math.cos(heading))
+		remaining = max(0.0, escape['distance'] - travelled)
+		if (remaining <= 0.05 or state['clock'] >= escape['until'] or
+				abs(_angle_delta(yaw, escape['yaw'])) > 0.30 or
+				self._failure_penalty(state, heading) > 0.0 or
+				not self._clear(direction_clear, heading, remaining) or
+				self._reverse_blocked_by_vehicle(position,
+					yaw if sign < 0 else yaw + math.pi, neighbours,
+					half_length, half_width, remaining) is not None):
+			state.pop('short_translation_escape', None)
+			return None
+		return dict(throttle=sign * 0.45, turn=0.0, target_yaw=escape['yaw'],
+			recovery_probe_distance=remaining,
+			recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
 
 	def _retained_translation_escape(self, state, position, yaw, neighbours,
 			direction_clear, half_length, half_width):
@@ -778,6 +804,7 @@ class LocalDriver(object):
 		state['last_desired_yaw'] = desired_yaw
 		target_distance = _distance(position, target)
 		if not movement_intent:
+			state.pop('short_translation_escape', None)
 			state.pop('translation_escape', None)
 			state['translation_progress_at'] = state['clock']
 			state.pop('objective_progress', None)
@@ -842,6 +869,7 @@ class LocalDriver(object):
 						progress['at'] = state['clock']
 			objective_stalled = state['clock'] - progress['at'] >= 8.0
 		if target_distance <= arrival and not objective_stalled:
+			state.pop('short_translation_escape', None)
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)
 			# is zero and previously produced full throttle until the next order tick.
 			state['stuck_time'] = 0.0
@@ -860,6 +888,10 @@ class LocalDriver(object):
 			}
 
 		translation = self._retained_translation_escape(state, position, yaw,
+			neighbours, direction_clear, own_half_length, own_half_width)
+		if translation is not None:
+			return translation
+		translation = self._retained_short_escape(state, position, yaw,
 			neighbours, direction_clear, own_half_length, own_half_width)
 		if translation is not None:
 			return translation

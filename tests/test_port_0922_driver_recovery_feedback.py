@@ -348,5 +348,34 @@ class DriverRecoveryFeedbackTests(unittest.TestCase):
         self.assertEqual(-1.0, command['turn'])
 
 
+
+class ShortEscapeLeaseTests(unittest.TestCase):
+    def test_straight_short_escape_keeps_direction_until_distance_or_timeout(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        driver = LocalDriver()
+        state = driver._state(99, 0, (0.0, 0.0, 0.0))
+        command = driver._short_escape(state, (0.0, 0.0, 0.0), 0.0,
+            0.0, 0.1, 0.1, 0.0, [], lambda *args: True, 3.5, 1.7)
+        self.assertLess(command['throttle'], 0.0)
+        state['clock'] += 0.1
+        command = driver._retained_short_escape(state, (0.0, 0.0, -0.5),
+            0.0, [], lambda *args: True, 3.5, 1.7)
+        self.assertLess(command['throttle'], 0.0)
+        self.assertEqual(0.0, command['turn'])
+        self.assertAlmostEqual(1.5, command['recovery_probe_distance'])
+        state['clock'] = 4.0
+        self.assertIsNone(driver._retained_short_escape(state, (0.0, 0.0, -0.5),
+            0.0, [], lambda *args: True, 3.5, 1.7))
+        self.assertNotIn('short_translation_escape', state)
+
+    def test_new_collision_veto_retires_short_escape_immediately(self):
+        from gui.mods.offline_lan_0922.ai.driver import LocalDriver
+        driver = LocalDriver()
+        state = driver._state(99, 0, (0.0, 0.0, 0.0))
+        driver._short_escape(state, (0.0, 0.0, 0.0), 0.0,
+            0.0, 0.1, 0.1, 0.0, [], lambda *args: True, 3.5, 1.7)
+        self.assertIsNone(driver._retained_short_escape(state, (0.0, 0.0, 0.0),
+            0.0, [], lambda *args: False, 3.5, 1.7))
+
 if __name__ == '__main__':
     unittest.main()

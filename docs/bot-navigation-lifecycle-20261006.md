@@ -94,3 +94,46 @@ private timeout expiry and deferred native proof. The selected Bot CI checks
 and all 161 Python 2.7 source compilations pass locally. This is controlled
 lifecycle validation; the report's native BSP collision and mutual-contact
 episode still require #1513 Windows playtesting.
+
+
+## Test110 failed retry and deferred proof audit
+
+Private route retries now start at the realised vehicle position; shared
+route geometry retains its authored anchor. An unselected pending tree far
+behind the hull cannot become a return order. Deferred collision evidence
+pauses the existing path without changing its index or issued endpoint.
+Replanning retires the owner's stalled marker, temporary visit history and
+completed local origin, while retaining unrelated searches and real contact
+vetoes. Partial cached paths expire after eight seconds so a completed retry
+can replace them.
+
+A near corner remains required until arrival or a proved passed connector.
+Short straight escapes retain one direction for their checked distance, with
+a four-second deadline and fresh obstacle vetoes, rather than selecting front
+and rear anew every decision. The six Panther II/M36/SU-122-44 dead-end cases
+at 5 and 15 FPS pass with full hull collision checks and unchanged 120-second
+arrival assertions. Their fixtures now use the production search budget and
+actual issued local sweep lengths rather than inconsistent inflated rays.
+
+Planning interfaces accept the shared static soft-object policy explicitly.
+Unsupported per-vehicle kinetic planning policies are rejected with a clear
+ValueError; this does not restore the retired policy of making crushable props
+hard route obstacles for some vehicles. Callback arities are inspected before
+calling them, so a TypeError in a callback body cannot duplicate a native call.
+Mounted forward/reverse numeric snapshots are refreshed on descriptor changes
+and battle manifests. Same-map new rounds invalidate old paths and native
+receipts. Diagnostics retain bounded search origin, goal, refusal and step
+records; invalidation and cache trimming remove their receipts too.
+
+Report 120135 on build109 exposed a second failure: an unproved fallback to
+the current pose was labelled safe and the driver reported arrival forever.
+It is now pending and enters the adapter's existing bounded navigation wait.
+A rejected connector also retires the completed origin before the next retry.
+This covers the M46/T34-3 pause mechanism; native mountain clearance for the
+reported WZ-111G still requires testing in the exact Windows collision scene.
+
+The final Bot selection includes the previously omitted retry/replan/motion
+and callback wiring suites. All 1,323 selected checks pass locally. The
+historical full repository suite is not claimed green: obsolete vehicle-scoped
+planning fixtures are distinct from the current shared-policy contract.
+Packaging separately checks exact source and compiled Python 2.7 payloads.

@@ -219,6 +219,23 @@ class NavigationWaitLifecycleTests(unittest.TestCase):
                 self.assertIsNone(runtime._occupied_route_target(
                     11, (0.0, 0.0, 0.0), goal, 31.0, True))
 
+    def test_failed_current_pose_fallback_is_pending_not_terminal_arrival(self):
+        nav, current, goal, local, request = self.issued_exit()
+        state = nav.bot_states[11]
+        state.pop('local_fallback_target', None)
+        with mock.patch.object(nav, '_safe_fallback_target', return_value=current):
+            self.assertEqual(current, nav._fallback_target(11, current, goal, 1.0, None, state))
+        self.assertEqual('pending', state['navigation_status'])
+        self.assertFalse(state['target_is_terminal'])
+
+    def test_unreachable_completed_origin_is_retired_before_another_exit(self):
+        nav, current, goal, local, request = self.issued_exit()
+        state = nav.bot_states[11]
+        state['local_completed_target'] = local
+        with mock.patch.object(nav.grid, 'safe_local_target', return_value=goal), mock.patch.object(nav.grid, 'dry_segment_clear', return_value=False):
+            self.assertEqual(current, nav._new_local_fallback(11, current, local, goal, 1.0, None, state))
+        self.assertNotIn('local_completed_target', state)
+
 
 if __name__ == '__main__':
     unittest.main()

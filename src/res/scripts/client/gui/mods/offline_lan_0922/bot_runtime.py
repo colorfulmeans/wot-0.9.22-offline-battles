@@ -18,7 +18,7 @@ from gui.mods.offline_lan_0922.ai import maps as tactical_maps
 from gui.mods.offline_lan_0922.ai import driver as ai_driver
 from gui.mods.offline_lan_0922.ai import planner as ai_planner
 from gui.mods.offline_lan_0922.ai.navigation import (
-    BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, TerrainNavigator)
+    BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, TerrainNavigator, STATIC_PLANNING_POLICY)
 from gui.mods.offline_lan_0922 import critical_damage
 from gui.mods.offline_lan_0922 import ballistics
 from gui.mods.offline_lan_0922 import bot_gunnery
@@ -2492,17 +2492,31 @@ class BotRuntime(object):
                 corridor_half_width))
 
     def _probe_direction(self, position, yaw, speed=0.0, descriptor=None,
-                         maximum_distance=None, corridor_half_width=None):
+                         maximum_distance=None, corridor_half_width=None,
+                         native_capability=None):
         """Return one canonical direction sample for planning and physics."""
         self._probe_totals[4] += 1
         probe_started = self._probe_started()
         try:
-            result = self.direction_probe(
-                position, yaw, speed, descriptor, maximum_distance,
-                corridor_half_width)
+            if native_capability is None:
+                native_capability = self.navigation_planning_capability()
+            callback = self.direction_probe
+            receipt = getattr(self, '_direction_callback_abi', None)
+            if receipt is None or receipt[0] is not callback:
+                function = getattr(callback, '__func__', getattr(callback, 'im_func', callback))
+                function = getattr(function, '__wrapped__', function)
+                code = getattr(function, '__code__', getattr(function, 'func_code', None))
+                count = 7 if native_capability is not None else 6
+                if code is not None and not code.co_flags & 4:
+                    count = code.co_argcount - (1 if getattr(callback, '__self__', getattr(callback, 'im_self', None)) is not None else 0)
+                receipt = (callback, count)
+                self._direction_callback_abi = receipt
+            arguments = (position, yaw, speed, descriptor, maximum_distance,
+                         corridor_half_width, native_capability)
+            result = callback(*arguments[:receipt[1]])
         except Exception:
             return {'clear': False, 'collision': True,
-                    'water': False, 'slope': 0.0}
+                    'water': False, 'slope': 0.0, 'probe_failed': True}
         finally:
             self._probe_finished(4, probe_started)
         return result
@@ -2856,6 +2870,7 @@ class BotRuntime(object):
         descriptor = siege_mechanics.active_descriptor(pair, siege_state)
         previous = self._descriptors.get(bot_id)
         self._descriptors[bot_id] = descriptor
+        self._refresh_navigation_crush_profiles(bot_id)
         if previous is descriptor:
             return False
         if state is not None:
@@ -3279,6 +3294,10 @@ class BotRuntime(object):
         self._bot_skill_pins = self._lineup_skill_pins(message)
         round_id = message.get('round_id')
         if round_id != self.round_id:
+            if self.navigator is not None:
+                self.navigator.invalidate_native_planning()
+                self.navigator.bot_states.clear()
+            self._navigation_crush_profiles = {}
             self.round_id = round_id
             self.states = {}
             self._accumulator = 0.0
@@ -3515,6 +3534,7 @@ class BotRuntime(object):
             self._bot_ratings[bot_id] = rating
             crew_level = self.bot_crew_level(bot_id)
             self._descriptor_pairs[bot_id] = descriptor_pair
+            self._refresh_navigation_crush_profiles(bot_id)
             half_length, half_width = _hull_dimensions(descriptor)
             self._descriptors[bot_id] = descriptor
             self._suspension_params.pop(bot_id, None)
@@ -8352,7 +8372,38 @@ class BotRuntime(object):
     @staticmethod
     def navigation_planning_capability(bot_id=None, direction=1.0):
         """Static route geometry is independent of mounted gear and drive sign."""
-        return (('ignore_destructibles', 1), None, None)
+        return STATIC_PLANNING_POLICY
+
+    def _refresh_navigation_crush_profiles(self, bot_id=None):
+        """Publish mounted travel mass/speed without changing static routing."""
+        cache = getattr(self, '_navigation_crush_profiles', None)
+        if cache is None:
+            cache = self._navigation_crush_profiles = {}
+        identities = (int(bot_id),) if bot_id is not None else tuple(self.states)
+        for identity in tuple(cache):
+            if identity not in self.states:
+                cache.pop(identity, None)
+        for identity in identities:
+            pair = self._descriptor_pairs.get(identity)
+            descriptor = pair[0] if pair is not None else self._descriptors.get(identity)
+            physics = getattr(descriptor, 'physics', {})
+            try:
+                mass = float(physics['weight'])
+                forward, reverse = [float(v) for v in physics['speedLimits']]
+                if any(math.isnan(v) or math.isinf(v) or v <= 0 for v in (mass, forward, reverse)):
+                    raise ValueError('invalid mounted travel inputs')
+                values = ((('stock1513', mass, forward), mass, forward),
+                          (('stock1513', mass, -reverse), mass, -reverse))
+                if cache.get(identity) != values:
+                    cache[identity] = values
+            except (KeyError, TypeError, ValueError):
+                cache.pop(identity, None)
+
+    def navigation_crush_capability(self, bot_id, direction=1.0):
+        # Descriptor installation refreshes snapshots; no per-frame world
+        # queries or descriptor scans belong in this accessor.
+        pair = getattr(self, '_navigation_crush_profiles', {}).get(int(bot_id))
+        return pair[1 if direction < 0 else 0] if pair is not None else None
 
     def _navigation_recovery_allowed(self, bot_id, position):
         """Allow a pending-path backout only with local obstruction evidence."""

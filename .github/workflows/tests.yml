@@ -22,6 +22,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client
         run: |
+          python -m unittest test_port_0922_navigation_retry_intent test_port_0922_navigation_replan test_port_0922_navigation_retry_motion test_port_0922_navigation_capability_wiring
           python -m unittest test_port_0922_navigation_wait_recovery test_port_0922_navigation_wait_runtime test_port_0922_navigation_wait_lifecycle test_port_0922_wreck_route test_port_0922_navigation_pending_prefix test_port_0922_airfield_live_egress test_port_0922_driver_arrival test_port_0922_driver_recovery_feedback
           python -m unittest test_port_0922_ai test_port_0922_navigation test_port_0922_bot_navigation_reports
           python -m unittest test_port_0922_authored_route_progress test_port_0922_navigation_clearance test_port_0922_navigation.StaticHullNavigationTests test_port_0922_slope_shortcuts
