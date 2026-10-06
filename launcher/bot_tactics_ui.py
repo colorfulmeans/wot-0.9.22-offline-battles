@@ -327,7 +327,7 @@ class BotTacticsEditor:
         self.wait_list.pack(fill='x');self.wait_list.bind('<<ComboboxSelected>>',self.choose_wait)
         self.wait_list.bind('<Delete>',lambda event:self.delete_wait_point())
         ttk.Label(self.wait_panel,text=self.tr('本等待点停留秒数（-1一直停留）','Wait seconds for this place (-1 stays)')).pack(anchor='w')
-        self.wait_seconds=tk.StringVar(value='120')
+        self.wait_seconds=tk.StringVar(value='60')
         self.wait_entry=ttk.Entry(self.wait_panel,textvariable=self.wait_seconds,width=12)
         self.wait_entry.pack(fill='x');self.wait_entry.bind('<Return>',self.update_wait_time)
         actions_wait=ttk.Frame(self.wait_panel);actions_wait.pack(fill='x')
@@ -1063,7 +1063,7 @@ class BotTacticsEditor:
                 self.error(self.tr('每个路线节点最多3个等待点。','A route node allows at most 3 wait places.'));return
             p=list(self.view.world(event.x,event.y))
             if any(math.hypot(p[0]-q[0],p[1]-q[1])<1 for q in places):return
-            self.checkpoint();places.append(p+[120.0]);selected=len(places)-1;self._store_wait_places(places)
+            self.checkpoint();places.append(p+[60.0]);selected=len(places)-1;self._store_wait_places(places)
         else:self.checkpoint()
         self.selected_wait=selected;self.drag=('wait',selected);self._refresh_properties();self.mark()
 
