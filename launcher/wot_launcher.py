@@ -25,11 +25,13 @@ if __package__ in (None, ""):
     import save_ledger
     import save_personal_missions
     import personal_missions_ui
+    import customizations_ui
     import replay_launch
     import save_slots
     import vehicle_editor_ui
     import vehicle_overlays
 else:
+    from . import customizations_ui
     from . import (
         bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
@@ -53,6 +55,29 @@ LAUNCHER_VERSION = "0.9.7"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
+    'Coatings': '涂装',
+    'Edit preset style inventory...': '编辑预设风格库存…',
+    'All compatible vehicles': '全部适用车辆',
+    'Vehicle': '车辆',
+    'Preset style': '预设风格',
+    'Style type': '风格类型',
+    'Inventory': '库存',
+    'Compatible vehicles': '适用车辆数',
+    'Copies per compatible vehicle': '每辆适用车添加份数',
+    'Add selected styles': '添加所选风格',
+    'Fill all styles': '补齐全部风格',
+    'Includes hidden preset styles. Only compatible vehicles receive stock. Each rental copy grants its original battle count. Save with the game closed; changes apply on next launch.':
+        '包含隐藏预设风格，只给适用车辆添加库存。租赁风格每份提供原版场次。请关闭游戏后保存，下次启动游戏生效。',
+    'Hidden': '隐藏', 'Rental': '租赁', 'Permanent': '永久',
+    'battles': '场', 'copies': '份',
+    'Select at least one preset style.': '请至少选择一个预设风格。',
+    'Inventory changed. Click Save to apply.': '库存已调整，点击“保存”后生效。',
+    'Style inventory saved.': '风格库存已保存。',
+    'Close World of Tanks before changing style inventory.': '请关闭坦克世界后再修改风格库存。',
+    'Enter a quantity between 1 and 100000.': '请输入 1～100000 之间的份数。',
+    'This style cannot be installed on the selected vehicle.': '所选车辆无法安装此风格。',
+    'The style inventory quantity is too large.': '风格库存数量过大。',
+    'The style inventory is not in the expected format.': '存档中的风格库存格式不正确。',
     "Replay": "录像回放",
     "Replay file": "录像文件",
     "Select replay...": "选择录像…",
@@ -801,12 +826,16 @@ class LauncherWindow(object):
         self.save_dialog.withdraw()
         self.save_dialog.transient(self.root)
         self.save_dialog.protocol("WM_DELETE_WINDOW", self._close_save_dialog)
-        self.account_panel = tk.LabelFrame(self.save_dialog, padx=10, pady=10)
-        self.account_panel.pack(fill="x", padx=12, pady=(12, 6))
-        self.shop_panel = tk.LabelFrame(self.save_dialog, padx=10, pady=10)
-        self.shop_panel.pack(fill="x", padx=12, pady=6)
-        self.personal_missions_panel = tk.LabelFrame(self.save_dialog, padx=10, pady=10)
-        self.personal_missions_panel.pack(fill="x", padx=12, pady=6)
+        self.save_tabs = self._ttk.Notebook(self.save_dialog)
+        self.save_tabs.pack(fill='both', expand=True, padx=12, pady=12)
+        self.account_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
+        self.shop_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
+        self.personal_missions_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
+        self.customizations_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
+        for panel in (self.account_panel, self.shop_panel, self.personal_missions_panel, self.customizations_panel):
+            self.save_tabs.add(panel)
+        self.edit_customizations_button = tk.Button(self.customizations_panel, command=self._open_customizations)
+        self.edit_customizations_button.pack(fill='x')
         self.edit_personal_missions_button = tk.Button(
             self.personal_missions_panel, command=self._open_personal_missions)
         self.edit_personal_missions_button.pack(fill="x")
@@ -1143,6 +1172,10 @@ class LauncherWindow(object):
         self.edit_badges_button.config(text=self._t("Edit account badges..."))
         self.personal_missions_panel.config(text=self._t("Personal missions"))
         self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
+        self.edit_customizations_button.config(text=self._t('Edit preset style inventory...'))
+        for panel, label in ((self.account_panel, 'Account'), (self.shop_panel, 'Garage vehicles'),
+                             (self.personal_missions_panel, 'Personal missions'), (self.customizations_panel, 'Coatings')):
+            self.save_tabs.tab(panel, text=self._t(label))
         self.shop_panel.config(text=self._t("Garage vehicles"))
         self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
         self.buy_gold_vehicle_button.config(text=self._t("Add to garage"))
@@ -1537,6 +1570,9 @@ class LauncherWindow(object):
 
     def _open_personal_missions(self):
         return self._open_personal_editor(personal_missions_ui.PersonalMissionsDialog)
+
+    def _open_customizations(self):
+        return self._open_personal_editor(customizations_ui.CustomizationsDialog)
 
     def _open_account_badges(self):
         return self._open_personal_editor(personal_missions_ui.BadgesDialog)
@@ -3730,6 +3766,16 @@ def _serve(argv):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if '--verify-style-editor' in argv:
+        index = argv.index('--verify-style-editor')
+        if index + 2 >= len(argv):
+            return 2
+        if __package__ in (None, ''):
+            import styles_smoke
+        else:
+            from . import styles_smoke
+        return styles_smoke.run(argv[index + 1], argv[index + 2],
+                                lambda text: _CHINESE.get(text, text))
     if core.SERVE_FLAG in argv:
         return _serve(argv)
     if '--verify-bot-editor' in argv:

@@ -26,6 +26,12 @@ original vehicle profile. Playback does not award battle rewards.
 Use the launcher's built-in vehicle editor and error-report controls. The player
 download contains no loose test scripts or historical diagnostic packages.
 
+Customize save -> Coatings edits preset-style inventory, including hidden styles.
+Select one vehicle or all compatible vehicles, add copies or fill missing styles,
+then Save with the game closed. One rental copy grants its original battle count.
+Fully unlocked saves receive one copy per compatible vehicle on their first style
+stock initialization, including existing saves; later use/sales are not replenished.
+
 English release notes:
 https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v0.9.7
 

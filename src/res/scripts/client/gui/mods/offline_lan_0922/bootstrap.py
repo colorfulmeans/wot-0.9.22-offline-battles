@@ -693,6 +693,29 @@ def _next_tankman_id(snapshot):
     return max(used) + 1
 
 
+def _grant_default_styles(snapshot, styles, vehicle_types):
+    """One owned copy per compatible hull; rentals own their native battle count.
+
+    Persist the version with inventory so use/sales are never replenished on
+    later starts. Hidden price groups affect shop offers, not granted ownership.
+    """
+    if int(snapshot.get('styleStockVersion', 0)) >= 1:
+        return
+    stock = snapshot.setdefault('customizationItems', {}).setdefault(4, {})
+    for style_id, style in styles.items():
+        bindings = stock.setdefault(int(style_id), {})
+        restriction = getattr(style, 'filter', None)
+        count = max(1, int(getattr(style, 'rentCount', 0)))
+        for record in snapshot.get('vehicles') or ():
+            compact_descr = int(record['vehicleTypeCompactDescr'])
+            vehicle_type = vehicle_types.get(compact_descr)
+            if vehicle_type is None:
+                continue
+            if restriction is None or restriction.matchVehicleType(vehicle_type):
+                bindings[compact_descr] = max(int(bindings.get(compact_descr, 0)), count)
+    snapshot['styleStockVersion'] = 1
+
+
 def _selected_vehicle(config, restore_saved=True):
     try:
         import nations
@@ -734,6 +757,7 @@ def _selected_vehicle(config, restore_saved=True):
         # would drop every real price on the floor and publish the whole shop
         # at no cost, which is what the loops below only fill gaps in.
         vehicle_type_compact_descrs = set()
+        style_vehicle_types = {}
         unlock_item_compact_descrs = set()
         next_tankman_id = 100001
         default_settings = default_vehicle_settings()
@@ -760,6 +784,7 @@ def _selected_vehicle(config, restore_saved=True):
             next_tankman_id = built['nextTankmanID']
             record = built['record']
             vehicle_int_compact_descr = built['vehicleTypeCompactDescr']
+            style_vehicle_types[vehicle_int_compact_descr] = built['descriptor'].type
 
             for item_type, items in record['inventoryItems'].items():
                 published_items = inventory_items.setdefault(item_type, {})
@@ -924,6 +949,7 @@ def _selected_vehicle(config, restore_saved=True):
         if restore_saved:
             result['wallet'].update(port_config.save_slot_initial_wallet())
             result.update(port_config.save_slot_initial_personal_progress())
+            result.update(port_config.save_slot_initial_customizations())
         if not career:
             # A sandbox has researched everything, so its tech tree is elite
             # by the same derived rule a career uses rather than by assertion.
@@ -935,6 +961,8 @@ def _selected_vehicle(config, restore_saved=True):
             _deliver_launcher_purchases(
                 result, vehicles, tankmen, default_settings)
             _settle_launcher_campaign(result, vehicles, tankmen)
+        if not career:
+            _grant_default_styles(result, customization_cache.styles, style_vehicle_types)
         return result
     except Exception:
         # _run_once owns startup error reporting.  Returning an empty snapshot

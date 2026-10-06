@@ -640,6 +640,21 @@ def save_slot_initial_wallet(slot=None, user_data_dir=None):
     return result
 
 
+def save_slot_initial_customizations(slot=None, user_data_dir=None):
+    """Launcher-edited initial inventory; a persisted garage takes priority."""
+    path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)
+    try:
+        with open(path, 'rb') as stream:
+            value = json.load(stream)
+        if not isinstance(value, dict):
+            return {}
+        from gui.mods.offline_lan_0922.account_rpc.garage_store import _customization_inventory
+        return {'customizationItems': _customization_inventory(value.get('initial_customizations')),
+                'styleStockVersion': max(0, int(value.get('styleStockVersion', 0)))}
+    except (IOError, OSError, TypeError, ValueError):
+        return {}
+
+
 def save_slot_initial_personal_progress(slot=None, user_data_dir=None):
     """Starting campaign state; an existing garage ledger takes priority."""
     path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)

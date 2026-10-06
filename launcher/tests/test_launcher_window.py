@@ -1292,7 +1292,11 @@ class WindowTest(unittest.TestCase):
         self._saves_root()
         self.assertNotIn(self.window.account_panel, self.window.tools_tabs.tabs)
         self.assertNotIn(self.window.shop_panel, self.window.tools_tabs.tabs)
-        self.assertEqual(self.window.save_dialog, self.window.account_panel.master)
+        self.assertEqual(self.window.save_tabs, self.window.account_panel.master)
+        self.assertEqual(self.window.save_dialog, self.window.save_tabs.master)
+        self.assertIn(self.window.customizations_panel, self.window.save_tabs.tabs)
+        self.assertEqual(self.window._open_customizations,
+                         self.window.edit_customizations_button.options['command'])
         self.assertTrue(self.window._open_save_dialog())
         self.assertTrue(self.window.save_dialog.options['visible'])
         self.assertTrue(self.window.save_dialog.options['grabbed'])

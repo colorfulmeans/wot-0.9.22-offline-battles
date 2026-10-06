@@ -566,7 +566,15 @@ def inventory(selected_vehicle=None, validate=True, only_vehicles=None,
                     continue
                 serialized[season] = (compact_descr, bool(enabled))
             if serialized:
+                if delta:
+                    # synchronizeDicts recursively merges outfit seasons.
+                    # Omission would retain the previous ALL-season style or
+                    # an outfit replaced by this complete vehicle layout.
+                    for season in (1, 2, 4, 8, 15):
+                        serialized.setdefault(season, None)
                 customization_outfits[int(vehicle_type)] = serialized
+            elif delta:
+                customization_outfits[int(vehicle_type)] = None
 
         all_tankmen.update(tankmen)
         # This foreign key is the vehicle inventory id, not its type id.

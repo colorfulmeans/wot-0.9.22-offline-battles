@@ -1309,8 +1309,16 @@ class GarageState(object):
         ``CustomizationOutfit`` is the stock serializer for that reference.
         """
         style_id = _int(style_id)
-        if style_id <= 0:
-            raise GarageError('a style request needs a positive style id')
+        if style_id < 0:
+            raise GarageError('a style request cannot use a negative style id')
+        if style_id == 0:
+            # #1513 StyleApplier sends zero when its style is None. Uninstall
+            # the ALL-season reference without selling owned/rented inventory.
+            record = self._record(vehicle_inventory_id, touch=False)
+            record.setdefault('outfits', {}).pop(CUSTOMIZATION_ALL_SEASONS, None)
+            self._touched.add(_int(vehicle_inventory_id))
+            self.revision += 1
+            return record
         try:
             styles = self._vehicles_module().g_cache.customization20().styles
             if style_id not in styles:

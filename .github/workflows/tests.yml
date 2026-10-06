@@ -53,12 +53,12 @@ jobs:
       - name: Check customization economy and durable rental settlement
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-          PYTHONPATH: tests:server:src/res/scripts/client
+          PYTHONPATH: tests:server:src/res/scripts/client:launcher:launcher/tests
         run: |
-          python -m unittest test_port_0922_garage test_port_0922_account_rpc test_port_0922_economy test_port_0922_economy_payloads test_port_0922_postbattle test_port_0922_bootstrap_lifecycle.BootstrapLifecycleTests.test_the_shop_publishes_the_baked_price_of_every_item
+          python -m unittest test_port_0922_garage test_port_0922_account_rpc test_port_0922_economy test_port_0922_economy_payloads test_port_0922_postbattle test_save_customizations test_port_0922_default_styles test_port_0922_bootstrap_lifecycle.BootstrapLifecycleTests.test_the_shop_publishes_the_baked_price_of_every_item
       - name: Compile changed client code under Python 2.7
         run: |
-          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; root='src/res/scripts/client/gui/mods/offline_lan_0922'; paths=['bootstrap.py','price_catalogue.py','account_rpc/garage.py','account_rpc/garage_store.py','artillery_controller.py','artillery_arc_queue.py','ai/adapter.py','ai/driver.py','ai/navigation.py','ai/planner.py','ai/traffic.py','bot_runtime.py','bot_state_codec.py','battle_runtime.py','vehicle_physics.py','destructibles_sensor.py','bot_tactics.py','bot_tactics_runtime.py','bot_editor_maps.py','spg_positions.py','tank_collision.py']; [compile(open(os.path.join(root,p),'rb').read(),p,'exec') for p in paths]; print('Changed client code compiles under Python 2.7')"
+          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; root='src/res/scripts/client/gui/mods/offline_lan_0922'; paths=['config.py','bootstrap.py','price_catalogue.py','account_rpc/garage.py','account_rpc/garage_store.py','artillery_controller.py','artillery_arc_queue.py','ai/adapter.py','ai/driver.py','ai/navigation.py','ai/planner.py','ai/traffic.py','bot_runtime.py','bot_state_codec.py','battle_runtime.py','vehicle_physics.py','destructibles_sensor.py','bot_tactics.py','bot_tactics_runtime.py','bot_editor_maps.py','spg_positions.py','tank_collision.py']; [compile(open(os.path.join(root,p),'rb').read(),p,'exec') for p in paths]; print('Changed client code compiles under Python 2.7')"
   test:
     needs: windows-server
     runs-on: ubuntu-latest

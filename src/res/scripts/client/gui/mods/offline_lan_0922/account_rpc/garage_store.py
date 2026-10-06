@@ -256,6 +256,7 @@ def _ledger_payload(snapshot):
         'personalMissions': personal_fields,
         'accountBadges': data.account_badges(snapshot.get('accountBadges')),
         'customizations': _customization_inventory(snapshot.get('customizationItems')),
+        'styleStockVersion': max(0, _int_value(snapshot.get('styleStockVersion'))),
         'offlineServices': offline_services.saved_fields(snapshot),
     }
 
@@ -412,6 +413,7 @@ def _apply_ledger(staged, stored):
         _restore_campaign_crew_ids(staged)
     if 'customizations' in ledger:
         staged['customizationItems'] = _customization_inventory(ledger['customizations'])
+    staged['styleStockVersion'] = max(0, _int_value(ledger.get('styleStockVersion')))
     if 'accountBadges' in ledger:
         staged['accountBadges'] = data.account_badges(ledger['accountBadges'])
     return True

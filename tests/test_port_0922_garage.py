@@ -1930,6 +1930,27 @@ class FittingRequestTests(unittest.TestCase):
             (b'style:7', True),
             self.state.snapshot()['vehicles'][0]['outfits'][15])
 
+    def test_cmd_116_zero_removes_style_without_charging_or_destroying_stock(self):
+        self._customization_state()
+        self._dispatch(self.commands.CMD_VEH_APPLY_STYLE, (77, 9, 7))
+        before = copy.deepcopy(self.state.snapshot())
+        for unused in range(2):
+            result = self._dispatch(self.commands.CMD_VEH_APPLY_STYLE, (77, 9, 0))
+            result.before_response(lambda: None)
+            self.assertEqual(self.commands.RES_SUCCESS, result.result_id)
+            self.assertNotIn(15, self.state.snapshot()['vehicles'][0]['outfits'])
+            self.assertIsNone(self.pushed[-1]['inventory'][12][2][50001])
+        self.assertEqual(before['wallet'], self.state.snapshot()['wallet'])
+        self.assertEqual(before['customizationItems'], self.state.snapshot()['customizationItems'])
+
+    def test_negative_style_id_is_rejected_without_removing_current_style(self):
+        self._customization_state()
+        self._dispatch(self.commands.CMD_VEH_APPLY_STYLE, (77, 9, 7))
+        before = copy.deepcopy(self.state.snapshot())
+        result = self._dispatch(self.commands.CMD_VEH_APPLY_STYLE, (77, 9, -1))
+        self.assertEqual(self.commands.RES_FAILURE, result.result_id)
+        self.assertEqual(before, self.state.snapshot())
+
     def test_custom_outfit_replaces_the_style_that_would_mask_it(self):
         self._customization_state()
         self._dispatch(self.commands.CMD_VEH_APPLY_STYLE, (77, 9, 7))
@@ -1937,11 +1958,13 @@ class FittingRequestTests(unittest.TestCase):
         result = self._dispatch(
             self.commands.CMD_VEH_APPLY_OUTFIT,
             ([77, 9, 2], [b'outfit:summer']))
+        result.before_response(lambda: None)
 
         self.assertEqual(self.commands.RES_SUCCESS, result.result_id)
         self.assertEqual(
             {2: (b'outfit:summer', True)},
             self.state.snapshot()['vehicles'][0]['outfits'])
+        self.assertIsNone(self.pushed[-1]['inventory'][12][2][50001][15])
 
     def test_equip_optdev_skips_the_leading_shop_revision(self):
         result = self._dispatch(
@@ -3416,6 +3439,20 @@ class GaragePersistenceTests(unittest.TestCase):
         fresh = copy.deepcopy(SNAPSHOT) if fresh is None else fresh
         self._store().apply(fresh)
         return fresh
+
+    def test_style_removal_and_stock_initialization_marker_survive_restart(self):
+        state=self._state()
+        state.snapshot()['vehicles'][0]['outfits']={15:(b'style:7',True)}
+        state.snapshot()['customizationItems']={4:{7:{50001:1}}}
+        state.snapshot()['styleStockVersion']=1
+        wallet=copy.deepcopy(state.snapshot().get('wallet'))
+        state.apply_style(9,0)
+        store=self._store();store.mark_dirty();self.assertTrue(store.flush(state.snapshot()))
+        restored=self._restart()
+        self.assertNotIn(15,restored['vehicles'][0].get('outfits',{}))
+        self.assertEqual({4:{7:{50001:1}}},restored['customizationItems'])
+        self.assertEqual(1,restored['styleStockVersion'])
+        if wallet is not None:self.assertEqual(wallet,restored['wallet'])
 
     def test_rental_battle_counter_survives_restart_and_duplicate_receipt(self):
         vehicles,tankmen=_modules()
