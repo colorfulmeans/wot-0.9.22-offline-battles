@@ -462,7 +462,7 @@ class BotTacticsEditor:
                 if source is None:return None
                 edit=self._default_edit(source,self._route_scope())
                 result=dict(id=source['id'],label=self._default_name(source['id'],self._route_scope(),'zh'),team=self.team,class_tag=self._route_scope(),
-                            symmetric=bool((edit or {}).get('symmetric',True)) and self._supports_route_symmetry(),
+                            symmetric=bool(edit.get('symmetric',False)) if edit else self._default_route_symmetry(),
                             points=copy.deepcopy(edit['points'] if edit else source['waypoints']))
                 if self._route_scope() in contract.CLASSES[:-1]:
                     result['priority']=(edit or {}).get('priority',contract.DEFAULT_ROUTE_PRIORITY)
@@ -482,8 +482,6 @@ class BotTacticsEditor:
 
     def _editable_item(self):
         item=self._selected()
-        if self.selection[0] in ('builtin','routes') and not self._supports_route_symmetry():
-            item['symmetric']=False
         if self.selection[0] in ('positions','builtin_positions'):
             entries=self._ensure_entry()['positions']
             stored=next((p for p in entries if p['id']==item['id']),None)
@@ -523,9 +521,6 @@ class BotTacticsEditor:
         if item is None:item=self._editable_item()
         shared=geometry and self.selection[0]=='builtin' and item.get('class_tag','all')=='all'
         if shared:self._sync_shared_default_geometry(item)
-        if not self._supports_route_symmetry():
-            item['symmetric']=False
-            return
         if not item.get('symmetric'):return
         other=3-self.team
         if self.selection[0]=='builtin':
@@ -552,9 +547,6 @@ class BotTacticsEditor:
         if self.wait_edit:
             self.symmetry_var.set(False)
             return
-        if not self._supports_route_symmetry():
-            self.symmetry_var.set(False)
-            return
         if not self.selection or self.selection[0] not in ('builtin','routes'):return
         enabled=self.symmetry_var.get();self.checkpoint();item=self._editable_item()
         item['symmetric']=enabled
@@ -567,7 +559,7 @@ class BotTacticsEditor:
                 if r['id']==item.get('mirror_id'):r['symmetric']=False
         self._refresh_properties();self.redraw();self.mark()
 
-    def _supports_route_symmetry(self):
+    def _default_route_symmetry(self):
         graph=self.graph_cache.get(self.map_name) or {}
         spawns=graph.get('spawn_anchors') or ()
         bases=graph.get('objective_bases') or ()
@@ -613,6 +605,7 @@ class BotTacticsEditor:
         except (OSError,ValueError,ImportError,TypeError) as e:
             self.background=None;label=str(e)
         self.map_status.config(text=self._translated_text(label))
+        self.symmetry_var.set(self._default_route_symmetry())
         self.selection=None;self.selected_point=None;self._refresh_items();self.redraw()
 
     def change_map(self):
@@ -648,7 +641,7 @@ class BotTacticsEditor:
         # Naming never copies geometry, priorities or deletion state.
         edits=self._ensure_entry().setdefault('default_routes',[])
         scope=item.get('class_tag','all')
-        teams=(self.team,3-self.team) if item.get('symmetric') and self._supports_route_symmetry() else (self.team,)
+        teams=(self.team,3-self.team) if item.get('symmetric') else (self.team,)
         for team in teams:
             peer=next((r for r in edits if r['id']==item['id'] and r['team']==team and r.get('class_tag','all')==scope),None)
             if peer is None:
@@ -742,13 +735,11 @@ class BotTacticsEditor:
             widget.grid() if route or builtin else widget.grid_remove()
         self.wait_button.config(state='normal' if route or builtin else 'disabled')
         self.hold_button.config(text=self.tr('切换驻留点','Toggle hold'))
-        symmetry_allowed=self._supports_route_symmetry()
-        if not symmetry_allowed or parking or self.route_class_var.get()=='SPG':self.symmetry_var.set(False)
-        elif route or builtin:self.symmetry_var.set(bool(item.get('symmetric',True)))
+        if parking or self.route_class_var.get()=='SPG':self.symmetry_var.set(False)
+        elif route or builtin:self.symmetry_var.set(bool(item.get('symmetric',False)))
         if self.wait_edit:self.symmetry_var.set(False)
-        self.symmetry_check.config(state='normal' if symmetry_allowed and (route or builtin) and not self.wait_edit else 'disabled',
-            text=self.tr('路线对称','Route symmetry') if symmetry_allowed else
-            self.tr('路线对称（出生点在基地圈外，禁用）','Route symmetry (spawn outside base, disabled)'))
+        self.symmetry_check.config(state='normal' if (route or builtin) and not self.wait_edit else 'disabled',
+            text=self.tr('路线对称','Route symmetry'))
         for key,var in self.item_vars.items():
             val=(item or {}).get(key,'')
             if key=='route_priority' and item:

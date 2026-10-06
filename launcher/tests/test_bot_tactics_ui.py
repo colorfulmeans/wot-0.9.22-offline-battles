@@ -118,24 +118,42 @@ class EditorUITests(unittest.TestCase):
                 self.assertEqual(bases[self.ui.team-1],item['points'][0][:2])
                 self.assertEqual(bases[2-self.ui.team],item['points'][-1][:2])
 
-    def test_separate_spawn_maps_disable_symmetry_and_never_copy_the_other_team(self):
+    def test_separate_spawn_maps_default_off_but_allow_explicit_symmetry(self):
         disabled=[]
         for name in storage.contract.MAPS:
             self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
-            if not self.ui._supports_route_symmetry():disabled.append(name)
+            if not self.ui._default_route_symmetry():disabled.append(name)
+            self.assertEqual(self.ui._default_route_symmetry(),self.ui.symmetry_var.get())
         self.assertEqual(['100_thepit','63_tundra','95_lost_city'],sorted(disabled))
         for name in disabled:
             self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
             self.ui.new_route();item=self.ui._editable_item()
-            self.assertTrue(self.ui.symmetry_check.instate(['disabled']))
+            self.assertFalse(self.ui.symmetry_check.instate(['disabled']))
             self.assertFalse(self.ui.symmetry_var.get())
-            item['points']=[[0,0,0],[1,1,0]];item['symmetric']=True
+            item['points']=[[0,0,0],[1,1,0]]
             self.ui.base_snap_check.invoke()
             self.assertFalse(item['symmetric'])
             self.assertFalse(any(r['team']!=self.ui.team for r in self.ui.entry()['routes']))
-            before=copy.deepcopy(self.ui.document)
             self.ui.symmetry_var.set(True);self.ui.change_symmetry()
-            self.assertFalse(self.ui.symmetry_var.get());self.assertEqual(before,self.ui.document)
+            self.assertTrue(self.ui.symmetry_var.get())
+            peer=next(r for r in self.ui.entry()['routes'] if r['team']!=self.ui.team)
+            self.assertEqual(list(reversed(item['points'])),peer['points'])
+
+    def test_builtin_symmetry_default_and_saved_off_survive_roundtrip(self):
+        for name in ('08_ruinberg','95_lost_city'):
+            self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
+            source=self.ui.graph_cache[name]['routes']['1'][0]
+            self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
+            self.assertEqual(name=='08_ruinberg',self.ui.symmetry_var.get())
+            self.assertFalse(self.ui.symmetry_check.instate(['disabled']))
+            self.ui.symmetry_var.set(True);self.ui.change_symmetry()
+            own=self.ui._editable_item()
+            peer=next(r for r in self.ui.entry()['default_routes'] if r['team']==2)
+            self.assertEqual(list(reversed(own['points'])),peer['points'])
+            self.ui.symmetry_var.set(False);self.ui.change_symmetry()
+            self.ui.document=storage.contract.canonical(self.ui.document)
+            self.ui._refresh_properties()
+            self.assertFalse(self.ui.symmetry_var.get())
 
     def test_base_snap_default_uses_spawn_centres_preserves_waits_and_undo(self):
         source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
