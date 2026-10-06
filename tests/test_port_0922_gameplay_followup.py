@@ -231,6 +231,32 @@ class AimProgressTests(unittest.TestCase):
     def tearDown(self):
         self.fixture.tearDown()
 
+    def test_snapshot_waits_for_physical_yaw_and_pitch_slew_completion(self):
+        runtime = self.fixture.runtime
+        runtime.battle_start(self.fixture.start)
+        descriptor = bot_fixture._combat_descriptor(turret_speed=1.0)
+        runtime._descriptors[11] = descriptor
+        runtime._gun_yaw_limits[11] = (-math.pi, math.pi, False)
+        state = runtime.states[11]
+        target = dict(id=2, kind='human', network_id=2, alive=True,
+                      position=(100., 0., 400.))
+        for yaw_error, pitch_error in ((.05, 0.), (0., .03), (.05, .03)):
+            with self.subTest(yaw=yaw_error, pitch=pitch_error):
+                state.update(x=0., y=0., z=0., yaw=0., pitch=0., roll=0.,
+                             turret_yaw=0., aim_yaw=0., gun_pitch=0.)
+                command = {'_ballistic_solution': dict(
+                    aim_position=target['position'], yaw=yaw_error,
+                    pitch=pitch_error, flight_time=1.)}
+                runtime._update_gun_aim(state, command, target, .001)
+                self.assertFalse(state['gun_aligned'])
+                for unused in range(200):
+                    runtime._update_gun_aim(state, command, target, .01)
+                    if state['gun_aligned']:
+                        break
+                self.assertTrue(state['gun_aligned'])
+                self.assertAlmostEqual(yaw_error, state['turret_yaw'])
+                self.assertAlmostEqual(pitch_error, state['gun_pitch'])
+
     def test_limited_turret_crosses_the_legal_front_arc_instead_of_rear_stop(self):
         runtime = self.fixture.runtime
         runtime.battle_start(self.fixture.start)

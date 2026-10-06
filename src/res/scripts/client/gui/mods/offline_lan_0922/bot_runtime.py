@@ -10699,8 +10699,12 @@ class BotRuntime(object):
         state['gun_aligned'] = bool(
             not planning_pending and pitch_limits is not None and
             target is not None and
-            abs(_angle_delta(raw_relative, state['turret_yaw'])) <= 0.06 and
-            abs(raw_pitch - state['gun_pitch']) <= 0.04)
+            # A slew tolerance is not dispersion: 0.06 radians of traverse
+            # error puts the centre of a 400 m shot 24 m off target. Require
+            # completion of the physical slew before the gunner/dispersion
+            # policy admits a snapshot. Limits remain compared to RAW intent.
+            abs(_angle_delta(raw_relative, state['turret_yaw'])) <= 1.0e-6 and
+            abs(raw_pitch - state['gun_pitch']) <= 1.0e-6)
         return desired_yaw, horizontal
 
     @staticmethod

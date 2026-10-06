@@ -101,6 +101,40 @@ class WithdrawalTests(unittest.TestCase):
             0., 1., -.1, .1, -.2, -.72, 'reverse_withdraw', True,
             combat_mode='low_health_retreat', movement_intent=True))
 
+    def test_denied_reverse_expires_and_local_recovery_keeps_ownership(self):
+        for mode in ('withdraw', 'low_health_retreat', 'under_fire_withdraw',
+                     'crossfire_withdraw'):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.order['combat_mode'] = mode
+                rear_denied = lambda yaw, *unused: math.cos(yaw) > .1
+                self.assertEqual('blocked', self.decide(rear_denied)['recovery_mode'])
+                for unused in range(85):
+                    result = self.decide(rear_denied)
+                self.assertNotEqual('blocked', result['recovery_mode'])
+                self.assertTrue(self.adapter._withdrawal_attempts[11]['fallback'])
+                # A transient clear rear ray must not restart the failed owner.
+                self.assertNotEqual('reverse_withdraw', self.decide()['recovery_mode'])
+                self.state['position'] = (0., 0., 3.)
+                self.assertNotEqual('reverse_withdraw', self.decide()['recovery_mode'])
+                self.state['position'] = (0., 0., -2.1)
+                self.assertEqual('reverse_withdraw', self.decide()['recovery_mode'])
+
+    def test_clear_reverse_without_actual_translation_also_expires(self):
+        for unused in range(85):
+            result = self.decide()
+        self.assertNotEqual('reverse_withdraw', result['recovery_mode'])
+        self.adapter.forget(11)
+        self.assertNotIn(11, self.adapter._withdrawal_attempts)
+
+    def test_real_reverse_progress_and_explicit_hold_reset_attempt(self):
+        for unused in range(150):
+            self.state['position'] = (0., 0., self.state['position'][2] - .1)
+            self.assertEqual('reverse_withdraw', self.decide()['recovery_mode'])
+        self.order['throttle_override'] = 0.
+        self.decide()
+        self.assertNotIn(11, self.adapter._withdrawal_attempts)
+
 
 if __name__ == '__main__':
     unittest.main()

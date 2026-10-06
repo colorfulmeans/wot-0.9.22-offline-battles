@@ -47,6 +47,7 @@ class BotAdapter(object):
         self._contact_peers = {}
         self._contact_attempts = {}
         self._wreck_attempts = {}
+        self._withdrawal_attempts = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
         return self.director.register(bot_id, team, descriptor, display_name)
@@ -57,6 +58,7 @@ class BotAdapter(object):
         self._contact_peers.pop(int(bot_id), None)
         self._contact_attempts.pop(int(bot_id), None)
         self._wreck_attempts.pop(int(bot_id), None)
+        self._withdrawal_attempts.pop(int(bot_id), None)
 
     def _hull_contact(self, bot_id, state, position):
         """Return geometry for a real hull contact across small gaps."""
@@ -300,6 +302,29 @@ class BotAdapter(object):
                    float(strategic.get('fire_range', 0.0)))
         if goal_distance > 30.0 and not exposed:
             return None
+        # Backing bypasses LocalDriver.drive, including its progress clock.
+        # Bound this owner independently so a denied rear sweep cannot hold
+        # the tank forever or repeatedly steal control from local recovery.
+        bot_id = int(state.get('id', 0))
+        attempt = self._withdrawal_attempts.get(bot_id)
+        if (attempt is None or math.hypot(
+                destination[0] - attempt['goal'][0],
+                destination[2] - attempt['goal'][2]) > 2.0):
+            attempt = {'goal': tuple(destination), 'position': tuple(position),
+                       'distance': goal_distance, 'age': 0.0, 'fallback': False}
+            self._withdrawal_attempts[bot_id] = attempt
+        moved = math.hypot(position[0] - attempt['position'][0],
+                           position[2] - attempt['position'][2])
+        progressed = (goal_distance + 2.0 <= attempt['distance']
+                      if attempt['fallback'] else moved >= 0.08)
+        if progressed:
+            attempt.update(position=tuple(position), distance=goal_distance,
+                           age=0.0, fallback=False)
+        attempt['age'] += max(0.0, float(state.get('dt', 0.0)))
+        if attempt['age'] >= 8.0:
+            attempt['fallback'] = True
+        if attempt['fallback']:
+            return None
         yaw = float(state.get('yaw', 0.0))
         travel_yaw = math.atan2(dx, dz)
         # atan2 is the rear travel heading; the desired hull faces opposite it.
@@ -388,6 +413,10 @@ class BotAdapter(object):
         movement_intent = not (
             throttle_override is not None and
             float(throttle_override) <= 0.0)
+        if (not movement_intent or strategic.get('combat_mode') not in (
+                'withdraw', 'low_health_retreat', 'under_fire_withdraw',
+                'crossfire_withdraw')):
+            self._withdrawal_attempts.pop(bot_id, None)
         requested_dx = float(move_position[0]) - float(position[0])
         requested_dz = float(move_position[2]) - float(position[2])
         target_dx = float(target[0]) - float(position[0])

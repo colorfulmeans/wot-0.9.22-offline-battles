@@ -226,3 +226,33 @@ truncation, pinned receipt reuse, unchanged nominal-family admission and the
 remaining muzzle/unknown/malformed checks. Existing exact friendly-body/splash
 and projectile terminal tests remain mandatory. Native #1513 landing effects
 and GC gameplay still require testing with the new package.
+
+
+## Test114 bounded reverse ownership and completed snapshot slew
+
+Report 172035 uses test113. Team2 Object268 repeatedly returns a zero-input
+blocked withdrawal near (97.5, -34.5), despite clear realised-motion reports
+and no nearby hulls. Its local driver clock scarcely advances while macro
+replans accumulate. Team2 Waffentrager E100 P also enters this branch during
+withdrawal, then fires and reaches its low-health retreat hold. The reverse
+adapter returns before LocalDriver.drive, so rear-sweep/pose refusals bypass
+the driver's translation timeout indefinitely. This is not an authored wait.
+
+The adapter now owns a bounded reverse progress episode. Eight seconds without
+actual translation, including continuous rear denial, hands the order to the
+normal safety-checked driver. The fallback remains latched until two metres
+of progress toward the withdrawal destination or a changed destination/ended withdrawal; a transient rear-clear
+reply cannot steal recovery control back. Normal successful backing resets
+the progress clock. Forget and explicit hold clean up the episode. No terrain
+probe, physics, graph or collision veto is relaxed.
+
+The firing gate previously admitted 0.06 rad traverse and 0.04 rad elevation
+error. At 400 m those separate centre-line errors can exceed 24 m and 16 m.
+Runtime now requires the slew to reach its raw requested local angles to
+numerical precision before applying existing gunner reaction/laying and
+dynamic dispersion rules. A snapshot can still fire before fully shrinking
+the aiming circle; gun limits, difficulty bias, dispersion, friendly safety
+and automatic burst continuation retain their owners. Controlled checks cover
+separate yaw/pitch arrival and all four retreat modes with denial, no physical
+progress, progress reset and fallback latching. Native gameplay acceptance
+requires the next test package.
