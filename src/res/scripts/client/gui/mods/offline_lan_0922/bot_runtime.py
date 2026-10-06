@@ -11458,6 +11458,7 @@ class BotRuntime(object):
                 value.get('fire_seq') == fire_seq and
                 value.get('shell_index') == int(shell_index)):
             state['_spg_launch_failure'] = dict(value)
+            state['_spg_launch_failure_target'] = self._observer_target_key(target)
             self._cancel_artillery_intent(state['id'])
             self._ballistic_solution_cache.pop(state['id'], None)
             self._spg_aim_solutions.pop(state['id'], None)
@@ -11707,7 +11708,9 @@ class BotRuntime(object):
         if not obstructed and point not in failed:
             failed.append(point)
         if occupied is None:occupied = self._physical_parking_occupancy(state)
-        kwargs = dict(actor_ids=(state['id'],), excluded=failed, occupied=occupied)
+        kwargs = dict(actor_ids=(state['id'],), excluded=failed +
+            [point for point, until in state.get('_spg_fire_failed_parking', ()) if until > now],
+            occupied=occupied)
         states = list(self._ordered_states())
         try:
             origin = state.get('_spg_selection_origin')
@@ -11742,6 +11745,109 @@ class BotRuntime(object):
         self._cancel_artillery_intent(state['id'])
         return replacement
 
+    def _observe_spg_fire_position(self, state, command, target, planning,
+                                   gun_state, ammo_state, reload_factor, now,
+                                   launch=None):
+        """Track ready time after independent completed firing-lane failures."""
+        initial = state.get('_spg_initial')
+        episode = state.get('_spg_fire_position_failure')
+        if (initial is None or command.get('combat_mode') != 'artillery_hold' or
+                state.get('airborne') or state.get('_overturned') or
+                _distance(_position(state), tuple(initial['point'][axis]
+                    for axis in ('x', 'y', 'z'))) > initial['radius'] + 2.0):
+            state.pop('_spg_fire_position_failure', None)
+            return
+        identity = spg_positions.plan_identity(initial)
+        sequence = int(state.get('fire_seq', 0))
+        if episode is not None and (episode['identity'] != identity or
+                episode['fire_seq'] != sequence or
+                _distance(episode['origin'], _position(state)) > 2.0 or
+                now - episode['last_failure'] > 30.0):
+            state.pop('_spg_fire_position_failure', None)
+            episode = None
+        # A nominal family can look clear while the frozen dispersed launch
+        # still hits terrain. Only an exact clear receipt or actual shot ends
+        # a confirmed position failure; pending work alone never starts one.
+        if (launch or {}).get('state') == 'clear':
+            state.pop('_spg_fire_position_failure', None)
+            return
+        ready = (target is not None and command.get('fire_allowed') and
+                 gun_state.ready(reload_factor) and ammo_state.can_fire())
+        failed = (ready and planning.get('state') == 'failed' and
+                  planning.get('reason') in ('world_blocked', 'no_candidate'))
+        proof = planning
+        exact = state.get('_spg_launch_failure') or {}
+        if (not failed and ready and exact.get('launch_failed') and
+                exact.get('reason') == 'world_blocked' and
+                state.get('_spg_launch_failure_target') == self._observer_target_key(target) and
+                0.0 <= now - float(exact.get('completed', -1e9)) <= 2.0):
+            failed, proof = True, exact
+        if episode is not None:
+            if ready and episode['counting']:
+                episode['elapsed'] += max(0.0, min(2.0, now - episode['last']))
+            episode.update(last=now, counting=bool(ready))
+        if not failed:
+            return
+        if episode is None:
+            episode = dict(identity=identity, origin=_position(state),
+                fire_seq=sequence, elapsed=0.0, last=now, last_failure=now,
+                counting=True, proofs=[])
+            state['_spg_fire_position_failure'] = episode
+        # Cached polls of the same failure cannot turn one random obstruction
+        # into several independent attempts. Real terminal receipts are timed.
+        target_key = self._observer_target_key(target)
+        proof_key = (target_key, proof.get('completed'), proof.get('reason'))
+        if proof_key not in episode['proofs']:
+            episode['proofs'].append(proof_key)
+            episode['proofs'] = episode['proofs'][-8:]
+        episode['last_failure'] = now
+
+    def _retry_spg_fire_position(self, state, initial, now):
+        """Select another checked parking point without new ballistic queries."""
+        episode = state.get('_spg_fire_position_failure')
+        if (episode is None or episode['elapsed'] < 30.0 or
+                len(episode['proofs']) < 2 or
+                now - episode['last_failure'] > 2.0 or
+                now < state.get('_spg_fire_position_retry_at', -1e9)):
+            return initial
+        # One graph selection per failed episode, at most once per 45 seconds.
+        state['_spg_fire_position_retry_at'] = now + 45.0
+        failed = [(point, until) for point, until in
+                  state.get('_spg_fire_failed_parking', ()) if until > now]
+        failed.append((_position(state), now + 120.0))
+        state['_spg_fire_failed_parking'] = failed[-8:]
+        excluded = [point for point, unused in failed]
+        excluded.extend(state.get('_spg_failed_parking', ()))
+        kwargs = dict(actor_ids=(state['id'],), excluded=excluded,
+            occupied=self._physical_parking_occupancy(state),
+            preferred_zone=initial['zone'])
+        try:
+            if initial['source'] == 'launcher_manual_v1':
+                plans, unused = bot_tactics_runtime.assign_manual_positions(
+                    self._bot_tactics, initial['map'], self.baked_graph,
+                    list(self._ordered_states()), **kwargs)
+            else:
+                plans, unused = spg_positions.assign_initial_positions(
+                    initial['map'], self.baked_graph,
+                    list(self._ordered_states()), **kwargs)
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+            plans = {}
+        replacement = plans.get(state['id'])
+        if replacement is None:
+            state['_spg_position_event'] = 'fire_position_no_safe_alternate'
+            return initial
+        state['_spg_initial'] = replacement
+        state['_spg_fire_relocating'] = True
+        state.pop('_spg_arrived_identity', None)
+        state.pop('_spg_displaced_safe', None)
+        state.pop('_spg_deployment_progress', None)
+        state.pop('_spg_fire_position_failure', None)
+        state['_spg_position_event'] = ('fire_position_same_zone' if
+            replacement['zone'] == initial['zone'] else 'fire_position_other_zone')
+        self._decision_cache.pop(state['id'], None)
+        self._cancel_artillery_intent(state['id'])
+        return replacement
+
     def _artillery_position_order(self, state, order, targets, now):
         """Leave a confirmed muzzle-side obstruction via the existing driver.
 
@@ -11756,6 +11862,9 @@ class BotRuntime(object):
             state.pop('_spg_deployment_progress', None)
         initial = state.get('_spg_initial')
         if initial is not None and mode in ('artillery_hold', 'artillery_deploy'):
+            if (mode == 'artillery_hold' and order.get('fire_allowed') and
+                    targets.get(order.get('target_id')) is not None):
+                initial = self._retry_spg_fire_position(state, initial, now)
             # The new initial goal is not an ordinary route waypoint. In
             # particular, do not replace it with the legacy 16..80 m route
             # heuristic or stop fifteen metres short of its usable area.
@@ -11816,6 +11925,14 @@ class BotRuntime(object):
                           combat_mode='artillery_hold' if arrived else 'artillery_deploy')
             if state.get('_spg_obstruction') is not None and arrived:
                 state['_spg_position_event'] = 'library_position_fire_obstructed'
+            if state.get('_spg_fire_relocating'):
+                if arrived:
+                    state.pop('_spg_fire_relocating', None)
+                else:
+                    # Finish relocation before starting another frozen launch
+                    # against the same failed lane at the old firing position.
+                    result.update(target_id=None, target_kind=None, fire_allowed=False,
+                        aim_position=destination, face_position=destination)
             # Neither reaching a position nor its source recommendation grants
             # fire permission. Keep the selected target and all real fire gates.
             return result
@@ -11890,6 +12007,8 @@ class BotRuntime(object):
         except Exception:
             status = {'planning': {'state': 'status_unavailable'}}
         planning = status.get('planning') or {}
+        self._observe_spg_fire_position(state, command, target, planning,
+            gun_state, ammo_state, reload_factor, now, status.get('launch'))
         target_key = ((target.get('kind'), target.get('network_id', target.get('id')))
                       if target is not None else None)
         stamp = (_position(state), state.get('yaw', 0.0), target_key)
@@ -11947,6 +12066,9 @@ class BotRuntime(object):
             'intent': state['id'] in self._artillery_intents,
             'reproof': state['id'] in self._artillery_reproofs,
             'position_event': state.get('_spg_position_event'),
+            'position_failure_seconds': round((state.get('_spg_fire_position_failure') or {}).get('elapsed', 0.0), 3),
+            'position_failure_proofs': len((state.get('_spg_fire_position_failure') or {}).get('proofs', ())),
+            'position_retry_seconds': max(0.0, round(state.get('_spg_fire_position_retry_at', now) - now, 3)),
         }, separators=(',', ':')))
 
     def _friendly_reposition_order(self, state, targets, now):

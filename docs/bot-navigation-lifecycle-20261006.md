@@ -137,3 +137,38 @@ and callback wiring suites. All 1,323 selected checks pass locally. The
 historical full repository suite is not claimed green: obsolete vehicle-scoped
 planning fixtures are distinct from the current shared-policy contract.
 Packaging separately checks exact source and compiled Python 2.7 payloads.
+
+
+## SPG firing-position relocation
+
+Report 133914 (test110) showed team1 T92 remaining at its authored position
+without firing. Native exact-launch receipts hit remote terrain; targets and
+proofs continued changing, so this was not the old frozen-intent defect.
+Completed unusable lanes previously did not trigger authored-position retry.
+
+An arrived SPG now records ready time after completed world-blocked/no-candidate
+proofs. At least two independent terminal proofs and 30 seconds of ready time
+are required; polling the same cached refusal cannot count as multiple attempts.
+Pending work alone, reload, missing radio permission and absent targets cannot
+start a relocation. After confirmed failures, intervening queued proofs retain
+the position episode rather than resetting its clock. A current conclusive
+failure is still required at selection. An exact clear launch receipt, an actual
+shot, displacement, a different position or expired evidence retires it.
+
+Retry prefers a safe, reachable and unoccupied point inside the current zone,
+then another configured zone using existing priority and footprint rules. The
+current failed area is excluded for 120 seconds, with at most eight remembered
+positions and one selection per 45 seconds. Deployment retries respect those
+exclusions. No alternate leaves the SPG holding and able to try ordinary firing;
+no arbitrary position or route is invented. A relocation finishes before new
+launch intent is admitted, then resumes normal target/fire gates at arrival.
+Base-defense orders still preempt it. The ballistic ray budget and collision
+checks are unchanged; selection uses existing graph data only at bounded retry
+cadence. Cached gate diagnostics include failure time, independent proof count,
+retry cooldown and same-zone/other-zone/no-alternate outcomes.
+
+Controlled tests cover same-zone and cross-zone retry, occupied/no available
+parking, cooldown, arrival/resumption, repeated failure through pending work,
+single random failure, stale-target evidence, reload/radio/target gates and base
+defense. Replaying the captured T92 proof/gate sequence now reaches the retry
+condition; this does not prove the alternate site's native firing clearance.

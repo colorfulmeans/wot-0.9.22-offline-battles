@@ -404,7 +404,7 @@ def parking_point_available(point, clearance, team, excluded, occupied):
 
 
 def assign_initial_positions(map_name, graph, states, mode='regular', catalog=None,
-                             actor_ids=None, excluded=(), occupied=()):
+                             actor_ids=None, excluded=(), occupied=(), preferred_zone=None):
     """Return bot-id -> plan and typed per-SPG outcomes without mutating input.
 
     This runs once before the round manifest is published. It selects a whole
@@ -476,7 +476,8 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
             # Prefer separate support regions, then the author's relative
             # caveat/priority, then the shortest dry graph path. All are local
             # deployment policy; no hidden enemy positions are consulted.
-            score = (used_zones[team].get(zone['id'], 0), zone.get('priority', 0),
+            score = (0 if preferred_zone is None or zone['id'] == preferred_zone else 1,
+                     used_zones[team].get(zone['id'], 0), zone.get('priority', 0),
                      reachable[index], zone['id'], cell, index)
             choices.append((score, zone, cell, point))
         if not choices:

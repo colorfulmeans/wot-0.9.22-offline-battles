@@ -252,3 +252,169 @@ class ShortRetreatRuntimeTests(unittest.TestCase):
         self.assertLess(runtime.states[11]['z'], -5)
         self.assertGreater(runtime.states[11]['fire_seq'], 0)
         self.assertLess(abs(runtime.states[11]['yaw']), .5)
+
+
+class SPGFirePositionTests(unittest.TestCase):
+    setUp = spgs.InitialPositionIntegrationTests.setUp
+    tearDown = spgs.InitialPositionIntegrationTests.tearDown
+    _runtime = spgs.InitialPositionIntegrationTests._runtime
+
+    def fixture(self, radius=36, alternate=True):
+        import types
+        runtime = self._runtime()
+        runtime.baked_graph = spgs._graph()
+        cfg, planning = self.module.bot_tactics, self.module.bot_tactics_runtime
+        raw = cfg.empty('Blocked fire parking')
+        zones = [dict(id='home', label='Home', team=1, point=[-106,346],
+                      radius=radius, heading=180, priority=1)]
+        if alternate:
+            zones.append(dict(id='other', label='Other', team=1, point=[-170,346],
+                              radius=24, heading=180, priority=9))
+        raw['maps']['08_ruinberg'] = dict(mode='regular',
+            resource_sha256=cfg.MAPS['08_ruinberg']['resource_sha256'], routes=[], positions=zones)
+        runtime._bot_tactics = cfg.canonical(raw)
+        state = spgs._states(runtime.baked_graph, 1)[0]
+        plans, unused = planning.assign_manual_positions(runtime._bot_tactics,
+            '08_ruinberg', runtime.baked_graph, [state], preferred_zone='home')
+        state['_spg_initial'] = plans[state['id']]
+        state.update(state['_spg_initial']['point'])
+        state.update(fire_seq=0, airborne=False, _overturned=False)
+        runtime.states = {state['id']:state}
+        target = dict(id=99, network_id=99, kind='human', alive=True)
+        order = dict(combat_mode='artillery_hold', fire_allowed=True, target_id=99,
+                     move_position=tuple(state[k] for k in ('x','y','z')))
+        gun = types.SimpleNamespace(ready=lambda factor: True)
+        ammo = types.SimpleNamespace(can_fire=lambda: True)
+        return runtime,state,target,order,gun,ammo
+
+    def observe(self, fixture, now, planning=None, **changes):
+        runtime,state,target,order,gun,ammo = fixture
+        runtime._observe_spg_fire_position(state, dict(order,**changes), target,
+            planning or dict(state='failed',reason='world_blocked',local_blockage=False,completed=now),
+            gun,ammo,1.0,now)
+
+    def fail_for_30_seconds(self, fixture):
+        for now in range(31):self.observe(fixture,float(now))
+
+    def test_far_blockage_relocates_inside_same_authored_zone_first(self):
+        fixture = self.fixture(); runtime,state,target,order,gun,ammo=fixture
+        original=copy.deepcopy(state['_spg_initial']); pose=tuple(state[k] for k in ('x','y','z'))
+        self.fail_for_30_seconds(fixture)
+        result=runtime._artillery_position_order(state,order,{99:target},30.0)
+        self.assertEqual('home',state['_spg_initial']['zone'])
+        self.assertNotEqual(original['point'],state['_spg_initial']['point'])
+        self.assertEqual('artillery_deploy',result['combat_mode'])
+        self.assertEqual('fire_position_same_zone',state['_spg_position_event'])
+        self.assertEqual(pose,tuple(state[k] for k in ('x','y','z')))
+        self.assertFalse(result['fire_allowed'])
+        self.assertIsNone(result['target_id'])
+        state.update(state['_spg_initial']['point'])
+        arrived=runtime._artillery_position_order(state,order,{99:target},31.0)
+        self.assertEqual('artillery_hold',arrived['combat_mode'])
+        self.assertTrue(arrived['fire_allowed'])
+        self.assertEqual(99,arrived['target_id'])
+        self.assertFalse(runtime._artillery_intents)
+
+    def test_exhausted_small_zone_selects_another_authored_position(self):
+        fixture=self.fixture(radius=12);runtime,state,target,order,gun,ammo=fixture
+        self.fail_for_30_seconds(fixture)
+        runtime._artillery_position_order(state,order,{99:target},30.0)
+        self.assertEqual('other',state['_spg_initial']['zone'])
+        self.assertEqual('fire_position_other_zone',state['_spg_position_event'])
+
+    def test_no_safe_alternate_keeps_attack_permission_and_bounded_retry(self):
+        fixture=self.fixture(radius=12,alternate=False);runtime,state,target,order,gun,ammo=fixture
+        original=state['_spg_initial'];self.fail_for_30_seconds(fixture)
+        result=runtime._artillery_position_order(state,order,{99:target},30.0)
+        self.assertIs(original,state['_spg_initial'])
+        self.assertEqual('artillery_hold',result['combat_mode'])
+        self.assertTrue(result['fire_allowed'])
+        self.assertEqual('fire_position_no_safe_alternate',state['_spg_position_event'])
+        with mock.patch.object(self.module.bot_tactics_runtime,'assign_manual_positions') as select:
+            runtime._artillery_position_order(state,order,{99:target},31.0)
+        select.assert_not_called()
+
+    def test_reload_no_target_no_permission_and_pending_do_not_count(self):
+        fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
+        self.observe(fixture,0.0)
+        for now in range(1,61):
+            self.observe(fixture,float(now),dict(state='pending'))
+        self.assertNotIn('_spg_fire_position_failure',state)
+        self.observe(fixture,61.0,fire_allowed=False)
+        self.assertNotIn('_spg_fire_position_failure',state)
+        gun.ready=lambda factor:False
+        self.observe(fixture,62.0)
+        self.assertNotIn('_spg_fire_position_failure',state)
+        gun.ready=lambda factor:True;fixture=(runtime,state,None,order,gun,ammo)
+        self.observe(fixture,63.0)
+        self.assertNotIn('_spg_fire_position_failure',state)
+
+    def test_nominal_clear_success_and_new_position_retire_failed_episode(self):
+        fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
+        for now in range(10):self.observe(fixture,float(now))
+        runtime._observe_spg_fire_position(state,order,target,dict(state='clear'),
+            gun,ammo,1.0,10.0,dict(state='clear'))
+        self.assertNotIn('_spg_fire_position_failure',state)
+        self.observe(fixture,11.0);state['fire_seq']=1
+        self.observe(fixture,12.0)
+        self.assertEqual(0.0,state['_spg_fire_position_failure']['elapsed'])
+        state['x']+=3
+        self.observe(fixture,13.0)
+        self.assertEqual(0.0,state['_spg_fire_position_failure']['elapsed'])
+
+    def test_single_random_launch_failure_cannot_relocate(self):
+        fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
+        state['_spg_launch_failure']=dict(reason='world_blocked',launch_failed=True,completed=0.0)
+        state['_spg_launch_failure_target']=runtime._observer_target_key(target)
+        for now in range(3):self.observe(fixture,float(now),dict(state='clear'))
+        episode=state['_spg_fire_position_failure']
+        self.assertEqual(1,len(episode['proofs']))
+        for now in range(3,60):self.observe(fixture,float(now),dict(state='clear'))
+        self.assertNotIn('_spg_fire_position_failure',state)
+        original=state['_spg_initial']
+        self.assertIs(original,runtime._retry_spg_fire_position(state,original,59.0))
+        self.assertNotIn('_spg_fire_failed_parking',state)
+
+    def test_repeated_failures_across_pending_proofs_reach_bounded_switch(self):
+        fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
+        for now in range(41):
+            proof=(dict(state='failed',reason='world_blocked',completed=float(now))
+                   if now in (0,20,40) else dict(state='pending'))
+            self.observe(fixture,float(now),proof)
+        self.assertEqual(40.0,state['_spg_fire_position_failure']['elapsed'])
+        self.assertEqual(3,len(state['_spg_fire_position_failure']['proofs']))
+        result=runtime._artillery_position_order(state,order,{99:target},40.0)
+        self.assertEqual('artillery_deploy',result['combat_mode'])
+
+    def test_stale_target_failure_cannot_start_a_position_episode(self):
+        fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
+        state['_spg_launch_failure']=dict(reason='world_blocked',launch_failed=True,completed=10.0)
+        state['_spg_launch_failure_target']=('human',88)
+        self.observe(fixture,10.0,dict(state='clear'))
+        self.assertNotIn('_spg_fire_position_failure',state)
+
+    def test_missing_current_fire_permission_cannot_trigger_position_selection(self):
+        fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
+        self.fail_for_30_seconds(fixture)
+        original=state['_spg_initial']
+        result=runtime._artillery_position_order(state,dict(order,fire_allowed=False),{99:target},30.0)
+        self.assertIs(original,state['_spg_initial'])
+        self.assertFalse(result['fire_allowed'])
+
+
+    def test_wreck_occupied_alternate_is_not_selected(self):
+        fixture=self.fixture(radius=12);runtime,state,target,order,gun,ammo=fixture
+        runtime.states[91]=dict(id=91,team=1,x=-170.0,y=3.406,z=346.0,
+                               alive=False,collision_shape=(20,20,0,2))
+        original=state['_spg_initial'];self.fail_for_30_seconds(fixture)
+        runtime._artillery_position_order(state,order,{99:target},30.0)
+        self.assertIs(original,state['_spg_initial'])
+        self.assertEqual('fire_position_no_safe_alternate',state['_spg_position_event'])
+
+
+    def test_relocation_does_not_override_base_defense(self):
+        fixture=self.fixture();runtime,state,target,order,gun,ammo=fixture
+        original=state['_spg_initial'];self.fail_for_30_seconds(fixture)
+        defense=dict(order,combat_mode='base_defense')
+        self.assertEqual(defense,runtime._artillery_position_order(state,defense,{99:target},30.0))
+        self.assertIs(original,state['_spg_initial'])
