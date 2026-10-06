@@ -85,7 +85,7 @@ def default_spg_positions(name, graph, profile=None):
 
 def _atomic(path, document):
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
-    data = (json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n').encode('utf8')
+    data = (contract.dumps(document) + '\n').encode('ascii')
     if len(data) > contract.MAX_BYTES:
         raise contract.TacticsError('Document is too large')
     fd, temp = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=str(path.parent))

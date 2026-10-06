@@ -18,9 +18,11 @@ from gui.mods.offline_lan_0922.bot_editor_maps import MAPS
 
 SCHEMA = 1
 CLIENT = '0.9.22.0.1-cn-1513'
-MAX_BYTES = 512 * 1024
+MAX_BYTES = 8 * 1024 * 1024
 CLASSES = ('lightTank', 'mediumTank', 'heavyTank', 'AT-SPG', 'SPG')
 DEFAULT_ROUTE_PRIORITY = 5
+MAX_ENTRIES = sum(80 + sum(len(routes) for routes in meta['route_ids'].values()) *
+                  (len(CLASSES) + 1) for meta in MAPS.values())
 SKILLS = ('rookie', 'regular', 'veteran', 'elite')
 PARAMETERS = {
     'reaction_seconds': (0.0, 5.0), 'patience_seconds': (0.0, 10.0),
@@ -269,7 +271,7 @@ def canonical(raw):
             entry['default_routes'].sort(key=lambda r: (r['team'], r['id'], r.get('class_tag', 'all')))
         if entry['routes'] or entry['positions'] or defaults:
             out['maps'][name] = entry
-    if total > 600 or len(dumps(out).encode('utf8')) > MAX_BYTES:
+    if total > MAX_ENTRIES or len(dumps(out).encode('utf8')) > MAX_BYTES:
         raise TacticsError('Tactics profile exceeds its bounded size')
     for name in out['maps']:
         for_round(out, name)

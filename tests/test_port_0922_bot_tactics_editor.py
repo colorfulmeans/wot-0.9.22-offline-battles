@@ -100,6 +100,50 @@ class TacticsContractTests(unittest.TestCase):
             store=Store(tmp);store.ensure_active();store.active_path.write_text('{bad')
             with self.assertRaises(ValueError):store.active()
 
+    def test_full_map_collection_saves_with_waits_and_projects_only_one_map(self):
+        raw=cfg.empty('Full map authoring')
+        for name,meta in cfg.MAPS.items():
+            x=(meta['bounds'][0]+meta['bounds'][2])/2
+            z=(meta['bounds'][1]+meta['bounds'][3])/2
+            points=[[x+i*2,z,0] for i in range(16)]
+            points[0]=[x,z,1,0,[[x,z+j*3,60+j] for j in range(3)]]
+            entry=dict(mode='regular',resource_sha256=meta['resource_sha256'],
+                routes=[],positions=[],default_routes=[])
+            for team,ids in meta['route_ids'].items():
+                for identity in ids:
+                    for tag in ('all',)+cfg.CLASSES:
+                        entry['default_routes'].append(dict(id=identity,team=int(team),class_tag=tag,
+                            label='测试路线',points=copy.deepcopy(points)))
+            for i in range(32):
+                entry['routes'].append(dict(id='r_%d'%i,label='测试路线',team=1,
+                    classes=list(cfg.CLASSES[:-1]),points=copy.deepcopy(points)))
+            for i in range(48):
+                entry['positions'].append(dict(id='p_%d'%i,label='测试炮位',team=1,
+                    point=[x,z],radius=16,heading=0,priority=5))
+            raw['maps'][name]=entry
+        expected=cfg.canonical(raw)
+        self.assertGreater(len(cfg.dumps(expected).encode('ascii')),512*1024)
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(tmp);store.save(expected,apply=True)
+            self.assertEqual(expected,store.active())
+            self.assertEqual(expected,store.read(expected['name']))
+            exported=Path(tmp)/'all-maps.json';store.export(expected,exported)
+            self.assertEqual(expected,store.import_file(exported))
+            projected=cfg.for_round(store.active(),'08_ruinberg')
+            self.assertEqual(['08_ruinberg'],list(projected['maps']))
+            self.assertEqual(expected['maps']['08_ruinberg'],projected['maps']['08_ruinberg'])
+
+    def test_oversized_file_rejection_preserves_existing_profile(self):
+        from bot_tactics_store import _atomic
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(tmp);store.save(profile(),apply=True)
+            before=store.active_path.read_bytes()
+            with self.assertRaises(cfg.TacticsError):
+                _atomic(store.active_path,{'payload':'x'*cfg.MAX_BYTES})
+            self.assertEqual(before,store.active_path.read_bytes())
+            large=Path(tmp)/'large.json';large.write_bytes(b' '* (cfg.MAX_BYTES+1))
+            with self.assertRaises(cfg.TacticsError):store.import_file(large)
+
     def test_profile_label_cannot_escape_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             store=Store(tmp);raw=cfg.empty('../../name');store.save(raw)
