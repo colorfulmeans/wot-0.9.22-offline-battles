@@ -3739,32 +3739,27 @@ class BotRuntime(object):
             plans = {}
             for raw in message.get('bot_manifest') or ():
                 route = raw.get('route') or {}
-                authored = bot_tactics.route_config(self._bot_tactics, name, route.get('id'), raw.get('team'), route.get('waypoints'))
-                if ((self.states.get(raw['id'], {}).get('profile') or {}).get('class_tag') != 'SPG' and
-                        authored is not None and not authored.get('default')):
-                    plans[raw['id']] = bot_tactics_runtime.route_value(authored)
+                if raw['id'] not in self.states:
+                    continue
+                # The published lottery result is authoritative, including an
+                # empty route. A takeover must not draw or rebind geometry.
+                restored = copy.deepcopy(route) if route.get('waypoints') else None
+                if restored is not None:
+                    restored['waypoints'] = tuple((p['x'], p['z'], bool(p.get('hold')))
+                                                  for p in route['waypoints'])
+                plans[raw['id']] = restored
             outcomes = dict((actor, 'restored') for actor in plans)
         elif message.get('battle_mode', 'regular') == 'regular':
-            plans, outcomes = bot_tactics_runtime.assign_routes(
-                self._bot_tactics, name, self.baked_graph, states, self.round_id)
+            self._initial_allocation_seed = random.SystemRandom().getrandbits(64)
+            catalog = (getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {})
+            plans, outcomes, usage = bot_tactics_runtime.assign_initial_routes(
+                self._bot_tactics, name, self.baked_graph, states, catalog,
+                self._initial_allocation_seed)
+            # Discard the director's provisional role/load-balanced occupancy.
+            self.adapter.director.route_usage = dict((key, value) for key, value in usage.items()
+                                                     if not key[1].startswith('spg:'))
         else:
             plans, outcomes = {}, {}
-        if message.get('battle_mode', 'regular') == 'regular':
-            restored = dict((r['id'], r.get('route') or {})
-                            for r in message.get('bot_manifest') or ()) if restoring else {}
-            catalog = (getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {})
-            for state in states:
-                if (state.get('profile') or {}).get('class_tag') == 'SPG':continue
-                if state['id'] in plans:continue
-                previous = restored.get(state['id'], state.get('route') or {})
-                config = bot_tactics.route_config(self._bot_tactics, name, previous.get('id'), state['team'])
-                source_id = config['source_id'] if config is not None and config.get('default') else previous.get('id')
-                variant = next((r for r in catalog.get(state['team'], ())
-                                if r.get('_editor_source') == source_id and
-                                r.get('_editor_class') == state['profile'].get('class_tag')), None)
-                if variant is not None:
-                    plans[state['id']] = variant
-                    outcomes[state['id']] = 'class_default'
         for actor, status in sorted(outcomes.items()):
             if actor in plans:
                 self.states[actor]['route'] = plans[actor]
@@ -3772,7 +3767,7 @@ class BotRuntime(object):
                 if agent is not None:
                     agent['route'] = plans[actor]
             sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS route bot=%d map=%s status=%s id=%s\n' % (
-                actor, name, status, (plans.get(actor) or {}).get('id', 'legacy_fallback')))
+                actor, name, status, (plans.get(actor) or {}).get('id', 'auto_navigation')))
 
     def _prepare_initial_spg_positions(self, message, restoring_authority):
         """Own initial placement once; publish the same plan with the roster.
@@ -3804,9 +3799,13 @@ class BotRuntime(object):
             return
         try:
             plans, outcomes = spg_positions.assign_initial_positions(
-                map_name, self.baked_graph, states, mode)
+                map_name, self.baked_graph, states, mode,
+                allocation_seed=getattr(self, '_initial_allocation_seed', None),
+                deleted_positions=bot_tactics.map_settings(self._bot_tactics, map_name).get('deleted_positions', ()))
             manual, manual_outcomes = bot_tactics_runtime.assign_manual_positions(
-                self._bot_tactics, map_name, self.baked_graph, states, mode)
+                self._bot_tactics, map_name, self.baked_graph, states, mode,
+                allocation_seed=getattr(self, '_initial_allocation_seed', None),
+                paired_routes=(getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {}))
             for actor in manual_outcomes:
                 plans.pop(actor, None)
             plans.update(manual)
@@ -4660,7 +4659,7 @@ class BotRuntime(object):
             values = route.get(key)
             if isinstance(values, dict):
                 result['route'][key] = dict(values)
-        if not route.get('_editor_source'):
+        if route.get('id') and not route.get('_editor_source'):
             catalog = getattr(getattr(self.adapter, 'director', None), 'map_data', {}).get('routes', {})
             scoped = [r['_editor_class'] for r in catalog.get(state['team'], ())
                       if r.get('_editor_source') == route.get('id')]
@@ -11743,7 +11742,8 @@ class BotRuntime(object):
                     preferred_zone=initial['zone'], **kwargs)
             else:
                 plans, unused = spg_positions.assign_initial_positions(
-                    initial['map'], self.baked_graph, states, **kwargs)
+                    initial['map'], self.baked_graph, states,
+                    deleted_positions=bot_tactics.map_settings(self._bot_tactics, initial['map']).get('deleted_positions', ()), **kwargs)
         except (KeyError, IndexError, TypeError, ValueError, OverflowError):
             plans = {}
         replacement = plans.get(state['id'])
@@ -11846,7 +11846,8 @@ class BotRuntime(object):
             else:
                 plans, unused = spg_positions.assign_initial_positions(
                     initial['map'], self.baked_graph,
-                    list(self._ordered_states()), **kwargs)
+                    list(self._ordered_states()),
+                    deleted_positions=bot_tactics.map_settings(self._bot_tactics, initial['map']).get('deleted_positions', ()), **kwargs)
         except (KeyError, IndexError, TypeError, ValueError, OverflowError):
             plans = {}
         replacement = plans.get(state['id'])

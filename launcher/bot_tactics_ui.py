@@ -684,7 +684,7 @@ class BotTacticsEditor:
     def _refresh_items(self):
         self.items.delete(*self.items.get_children())
         if not hasattr(self,'spg_default_cache'):self.spg_default_cache={}
-        key=(self.map_name,repr(self.entry().get('default_routes',())))
+        key=(self.map_name,repr(self.entry().get('default_routes',())),repr(self.entry().get('deleted_positions',())))
         if key not in self.spg_default_cache:
             self.spg_default_cache[key]=storage.default_spg_positions(self.map_name,self.graph_cache.get(self.map_name),self.document)
         self.spg_defaults=self.spg_default_cache[key]
@@ -822,7 +822,13 @@ class BotTacticsEditor:
                     for edit in edits:
                         if edit['id']==identity and edit['team']==team:edit['disabled']=True
             self.selection=None;self.selected_point=None;self._refresh_items();self.mark();return
-        if self.selection[0]=='builtin_positions':return
+        if self.selection[0]=='builtin_positions':
+            if not messagebox.askyesno(self.tr('删除默认驻炮点','Delete default SPG parking'),item['label']+'?',parent=self.root):return
+            self.checkpoint();entry=self._ensure_entry()
+            deleted=entry.setdefault('deleted_positions',[])
+            if item['id'] not in deleted:deleted.append(item['id'])
+            entry['positions'][:]=[p for p in entry['positions'] if p['id']!=item['id']]
+            self.selection=None;self.selected_point=None;self._refresh_items();self.mark();return
         if not messagebox.askyesno(self.tr('删除','Delete'),item['label']+'?',parent=self.root):return
         self.checkpoint()
         if self.selection[0]=='routes':item=self._editable_item()
@@ -852,7 +858,7 @@ class BotTacticsEditor:
         self.checkpoint()
         if remaining:self.entry()['default_routes']=remaining
         else:self.entry().pop('default_routes',None)
-        if not self.entry()['routes'] and not self.entry()['positions'] and not remaining:
+        if not self.entry()['routes'] and not self.entry()['positions'] and not remaining and not self.entry().get('deleted_positions'):
             self.document['maps'].pop(self.map_name,None)
         self.selected_point=None;self.selected_wait=None;self.wait_edit=False;self._refresh_properties();self.redraw();self.mark()
 

@@ -46,6 +46,7 @@ def default_spg_positions(name, graph, profile=None):
     from gui.mods.offline_lan_0922 import spg_positions
     entry = spg_positions.CATALOG['maps'].get(name)
     if not graph:return []
+    deleted = set(contract.map_settings(profile, name).get('deleted_positions', ()))
     if entry is None:
         for path in (_source.parents[3]/'server',_bundled.parents[3]/'server'):
             if path.is_dir() and str(path) not in sys.path:sys.path.insert(0,str(path))
@@ -66,7 +67,7 @@ def default_spg_positions(name, graph, profile=None):
                 result.append(dict(id='spg_%d_%s'%(team,route['id']),team=team,
                     label=labels.route_label(route['id'],'en'),point=[point['x'],point['z']],
                     radius=16.,heading=heading,priority=5))
-        return result
+        return [p for p in result if p['id'] not in deleted]
     grid = spg_positions._Graph(graph, entry['bounds'])
     result = []
     for team in (1, 2):
@@ -80,7 +81,7 @@ def default_spg_positions(name, graph, profile=None):
             result.append(dict(id='spg_%d_%s'%(team,identity), team=team,
                                label='%s / %s'%(identity,cell), point=[point[0],point[2]],
                                radius=16.0, heading=heading, priority=5))
-    return result
+    return [p for p in result if p['id'] not in deleted]
 
 
 def _atomic(path, document):

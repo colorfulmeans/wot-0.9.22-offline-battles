@@ -4,8 +4,8 @@ from __future__ import division
 """Versioned, data-only launcher/host/worker Bot tactics contract (#1513).
 
 No native game imports, environment reads or global mutable settings.  Hosts
-load a bounded document only at an accepted round boundary.  An empty document
-is deliberately the old behaviour, not an implicit retune.
+load a bounded document only at an accepted round boundary. An empty document
+supplies no authored geometry or behavior-parameter overrides.
 """
 import copy
 import hashlib
@@ -21,7 +21,7 @@ CLIENT = '0.9.22.0.1-cn-1513'
 MAX_BYTES = 8 * 1024 * 1024
 CLASSES = ('lightTank', 'mediumTank', 'heavyTank', 'AT-SPG', 'SPG')
 DEFAULT_ROUTE_PRIORITY = 5
-MAX_ENTRIES = sum(80 + sum(len(routes) for routes in meta['route_ids'].values()) *
+MAX_ENTRIES = sum(128 + sum(len(routes) for routes in meta['route_ids'].values()) *
                   (len(CLASSES) + 1) for meta in MAPS.values())
 SKILLS = ('rookie', 'regular', 'veteran', 'elite')
 PARAMETERS = {
@@ -167,13 +167,23 @@ def canonical(raw):
         if name not in MAPS:
             raise TacticsError('Unknown #1513 map: %s' % name)
         meta = MAPS[name]
-        _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions', 'default_routes'),
+        _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions', 'default_routes', 'deleted_positions'),
               ('mode', 'resource_sha256', 'routes', 'positions'))
         fingerprints = (meta['resource_sha256'], meta.get('capture_coordinate_previous_sha256'),
                         meta.get('terrain_edge_previous_sha256'))
         if settings['mode'] != 'regular' or settings['resource_sha256'] not in fingerprints or not settings['resource_sha256']:
             raise TacticsError('Map mode or resource fingerprint mismatch: %s' % name)
         entry = dict(mode='regular', resource_sha256=meta['resource_sha256'], routes=[], positions=[])
+        deleted = settings.get('deleted_positions', [])
+        if not isinstance(deleted, list) or len(deleted) > 48:
+            raise TacticsError('Invalid deleted default parking collection')
+        deleted = [_id(value) for value in deleted]
+        if len(set(deleted)) != len(deleted) or any(
+                not value.startswith(('spg_1_', 'spg_2_')) for value in deleted):
+            raise TacticsError('Invalid deleted default parking identity')
+        if deleted:
+            entry['deleted_positions'] = sorted(deleted)
+            total += len(deleted)
         for kind, limit in (('routes', 32), ('positions', 48)):
             if not isinstance(settings[kind], list) or len(settings[kind]) > limit:
                 raise TacticsError('Too many %s on %s' % (kind, name))
@@ -269,7 +279,7 @@ def canonical(raw):
             total += 1
         if defaults:
             entry['default_routes'].sort(key=lambda r: (r['team'], r['id'], r.get('class_tag', 'all')))
-        if entry['routes'] or entry['positions'] or defaults:
+        if entry['routes'] or entry['positions'] or defaults or deleted:
             out['maps'][name] = entry
     if total > MAX_ENTRIES or len(dumps(out).encode('utf8')) > MAX_BYTES:
         raise TacticsError('Tactics profile exceeds its bounded size')

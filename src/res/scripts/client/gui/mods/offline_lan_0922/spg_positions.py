@@ -10,6 +10,7 @@ No enemy coordinates, ammunition changes, new native methods or wall bypasses.
 
 import heapq
 import math
+from gui.mods.offline_lan_0922 import initial_allocation
 
 from gui.mods.offline_lan_0922.spg_position_data import CATALOG
 
@@ -404,7 +405,8 @@ def parking_point_available(point, clearance, team, excluded, occupied):
 
 
 def assign_initial_positions(map_name, graph, states, mode='regular', catalog=None,
-                             actor_ids=None, excluded=(), occupied=(), preferred_zone=None):
+                             actor_ids=None, excluded=(), occupied=(), preferred_zone=None,
+                             allocation_seed=None, deleted_positions=()):
     """Return bot-id -> plan and typed per-SPG outcomes without mutating input.
 
     This runs once before the round manifest is published. It selects a whole
@@ -433,6 +435,10 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
     reservations = {1: [], 2: []}
     used_zones = {1: {}, 2: {}}
     candidate_cache = {}
+    ordinals = {}
+    for unused_tag, ordinal, pair in initial_allocation.ordered_pairs(artillery):
+        for actor in pair:
+            if actor is not None:ordinals[actor['id']] = ordinal
     for state in artillery:
         actor, team = state['id'], state.get('team')
         if actor_ids is not None and actor not in actor_ids:
@@ -464,6 +470,8 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
         reachable = grid.distances(origin)
         choices = []
         for zone, cell, index, point in candidates:
+            if 'spg_%d_%s' % (team, zone['id']) in deleted_positions:
+                continue
             if not parking_point_available(point, radius, team, excluded, occupied):
                 continue
             if not _has_initial_support(zone, team, states, entry['bounds']):
@@ -483,7 +491,19 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
         if not choices:
             outcomes[actor] = 'no_reachable_unreserved_sourced_cell'
             continue
-        unused_score, zone, cell, point = min(choices, key=lambda row: row[0])
+        if allocation_seed is not None:
+            tier = min(c[0][0] for c in choices)
+            by_zone = {}
+            for candidate in sorted(choices, key=lambda row: (row[0][0], row[0][2:])):
+                if candidate[0][0] == tier:
+                    by_zone.setdefault(candidate[1]['id'], candidate)
+            # Catalog priority is a cost (smaller first), unlike editor priority.
+            selected = initial_allocation.choose(allocation_seed, map_name + ':source_spg', 'SPG',
+                ordinals[actor], [(-c[1].get('priority', 0), c[1]['id'], False, c)
+                                  for c in by_zone.values()], team)[3]
+        else:
+            selected = min(choices, key=lambda row: row[0])
+        unused_score, zone, cell, point = selected
         enemy = graph['bases'][2 - team]
         face = (float(enemy[0]), point[1], float(enemy[1]))
         if zone.get('face_cell'):

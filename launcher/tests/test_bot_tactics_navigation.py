@@ -83,6 +83,30 @@ class NavigationUITests(unittest.TestCase):
         self.editor.book.select(1)
         self.root.update()
 
+    def test_default_parking_delete_persists_without_deleting_the_route_or_other_side(self):
+        e=self.editor;e.route_class_var.set('SPG');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin_positions:'))
+        e.items.selection_set(key);e.select_item();identity=e._selected()['id']
+        routes=copy.deepcopy(e.graph_cache[e.map_name]['routes'])
+        with mock.patch.object(ui.messagebox,'askyesno',return_value=True):e.delete_item()
+        self.assertFalse(e.items.exists(key));self.assertIn(identity,e.entry()['deleted_positions'])
+        self.assertEqual(routes,e.graph_cache[e.map_name]['routes'])
+        e.save(True);saved=e.store.active();self.assertIn(identity,saved['maps'][e.map_name]['deleted_positions'])
+        e._load_map();e.route_class_var.set('total');e.change_route_class()
+        self.assertFalse(e.items.exists(key))
+        self.assertFalse(any(p['id']==identity for p in storage.default_spg_positions(e.map_name,e.graph_cache[e.map_name],saved)))
+        self.assertTrue(any(p['team']==3-e.team for p in storage.default_spg_positions(e.map_name,e.graph_cache[e.map_name],saved)))
+
+    def test_default_parking_delete_removes_edited_override_and_undo_restores(self):
+        e=self.editor;e.route_class_var.set('SPG');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin_positions:'))
+        e.items.selection_set(key);e.select_item();identity=e._selected()['id']
+        e.item_vars['label'].set('Edited battery');e.update_properties()
+        before=copy.deepcopy(e.document)
+        with mock.patch.object(ui.messagebox,'askyesno',return_value=True):e.delete_item()
+        self.assertFalse(any(p['id']==identity for p in e.entry()['positions']))
+        e.undo();self.assertEqual(before,e.document);self.assertTrue(e.items.exists(key))
+
     def test_checkbox_is_right_of_symmetry_off_by_default_and_does_not_edit_profile(self):
         editor=self.editor;before=copy.deepcopy(editor.document)
         self.assertFalse(editor.navigation_grid_var.get())

@@ -12,6 +12,7 @@ import random
 
 from gui.mods.offline_lan_0922 import bot_tactics as config
 from gui.mods.offline_lan_0922 import spg_positions
+from gui.mods.offline_lan_0922 import initial_allocation
 
 
 def graph_view(name, graph):
@@ -103,11 +104,18 @@ def default_routes(profile, name, graph):
     Unusable edits fall back independently, just like authored custom routes.
     """
     edits = config.map_settings(profile, name).get('default_routes', ())
-    routes = graph.get('routes')
+    result = copy.deepcopy(graph.get('routes'))
+    spawns, bases, radii = (graph.get(key) or () for key in
+                            ('spawn_anchors', 'objective_bases', 'objective_base_radii'))
+    symmetric = (len(spawns) == len(bases) == len(radii) == 2 and all(
+        math.hypot(a[0]-b[0], a[1]-b[1]) <= radius
+        for a, b, radius in zip(spawns, bases, radii)))
+    for team in (1, 2):
+        for route in result.get(str(team), ()):
+            route['_allocation_symmetric'] = symmetric
     if not edits:
-        return routes, {}
+        return result, {}
     grid = graph_view(name, graph)
-    result = copy.deepcopy(routes)
     outcomes = {}
     for edit in edits:
         if edit.get('class_tag') == 'SPG':continue
@@ -122,6 +130,7 @@ def default_routes(profile, name, graph):
         if error is None:
             if edit.get('class_tag', 'all') == 'all':
                 source['waypoints'] = [list(p[:3]) for p in edit['points']]
+                source['_allocation_symmetric'] = bool(edit.get('symmetric', False))
             else:
                 if 'priority' in edit:
                     source.setdefault('class_priorities', {})[edit['class_tag']]=edit['priority']
@@ -129,6 +138,7 @@ def default_routes(profile, name, graph):
                 variant.update(id=config.default_route_id(edit),
                                _editor_source=source['id'],
                                _editor_class=edit['class_tag'],
+                               _allocation_symmetric=bool(edit.get('symmetric', False)),
                                waypoints=[list(p[:3]) for p in edit['points']],
                                class_weights=dict((tag, 1.0 if tag == edit['class_tag'] else 0.0)
                                                   for tag in config.CLASSES))
@@ -150,6 +160,79 @@ def default_routes(profile, name, graph):
                     route.setdefault('_editor_disabled_classes',[]).append(scope)
                     route.setdefault('class_weights',{})[scope]=0.0
     return result, outcomes
+
+
+def assign_initial_routes(profile, name, graph, states, catalog, seed):
+    """Allocate all authored/default lanes together, with hard shared capacity.
+
+    Class variants share their base lane's occupancy; priorities are local to
+    the vehicle class. Empty/full catalogs explicitly produce automatic routing.
+    Restored manifests bypass this fresh-round allocator entirely.
+    """
+    settings = config.map_settings(profile, name)
+    authored = settings.get('routes', ())
+    deleted_positions = set(settings.get('deleted_positions', ()))
+    grid = graph_view(name, graph) if authored else None
+    errors = dict((r['id'], validate_route(grid, r)) for r in authored)
+    usage, plans, outcomes = {}, {}, {}
+    by_id = dict((r['id'], r) for r in authored)
+
+    def candidates(state):
+        tag = (state.get('profile') or {}).get('class_tag')
+        rows = catalog.get(state['team'], catalog.get(str(state['team']), ())) or ()
+        variants = dict((r['_editor_source'], r) for r in rows
+                        if r.get('_editor_source') and r.get('_editor_class') == tag)
+        choices = []
+        custom = [r for r in authored if tag != 'SPG' and config.matches(r, state)]
+        fixed = any(r['policy'] == 'fixed' for r in custom)
+        for base in rows:
+            if base.get('_editor_source') or fixed:
+                continue
+            if tag == 'SPG' and 'spg_%d_%s' % (state['team'], base['id']) in deleted_positions:
+                continue
+            route = variants.get(base['id'], base)
+            weights = route.get('class_weights') or {}
+            if tag in base.get('_editor_disabled_classes', ()):
+                continue
+            if weights and weights.get(tag, 0) <= 0:
+                continue
+            key = (state['team'], ('spg:' if tag == 'SPG' else '') + base['id'])
+            if usage.get(key, 0) >= max(1, int(base.get('capacity', 1))):
+                continue
+            priority = (route.get('class_priorities') or {}).get(tag, config.DEFAULT_ROUTE_PRIORITY)
+            choices.append((priority, 'default:' + base['id'],
+                            bool(route.get('_allocation_symmetric')), (route, key, 'random_default')))
+        for route in custom:
+            key = (state['team'], 'user_' + route['id'])
+            if errors[route['id']] or usage.get(key, 0) >= route['capacity']:
+                continue
+            if fixed and route['policy'] != 'fixed':
+                continue
+            p = route['points'][0]
+            if not _route_reachable(grid, (state['x'], state['y'], state['z']),
+                                    grid.closest((p[0], 0, p[1]))):
+                continue
+            peer = by_id.get(route.get('mirror_id'))
+            paired = bool(route.get('symmetric') and peer and peer.get('symmetric') and
+                          peer.get('mirror_id') == route['id'] and peer['team'] != route['team'])
+            family = min(route['id'], peer['id']) if paired else route['id']
+            priority = route.get('class_priorities', {}).get(tag, config.DEFAULT_ROUTE_PRIORITY)
+            choices.append((priority, 'custom:' + family, paired,
+                            (route_value(route), key, 'random_' + route['policy'])))
+        return choices
+
+    def reserve(state, selected):
+        if selected is None:
+            plans[state['id']] = None
+            outcomes[state['id']] = 'full_or_unusable_routes_auto'
+            return
+        route, key, status = selected[3]
+        plans[state['id']] = route
+        usage[key] = usage.get(key, 0) + 1
+        outcomes[state['id']] = status
+
+    initial_allocation.allocate(states, candidates, reserve, seed, name + ':routes')
+    return plans, outcomes, usage
 
 
 def assign_routes(profile, name, graph, states, round_id):
@@ -214,13 +297,33 @@ def _manual_candidates(grid, zone, clearance):
 
 
 def assign_manual_positions(profile, name, graph, states, mode='regular',
-                            actor_ids=None, excluded=(), occupied=(), preferred_zone=None):
-    zones = config.map_settings(profile, name).get('positions', ()) if mode == 'regular' else ()
+                            actor_ids=None, excluded=(), occupied=(), preferred_zone=None,
+                            allocation_seed=None, paired_routes=None):
+    settings = config.map_settings(profile, name)
+    deleted = set(settings.get('deleted_positions', ()))
+    zones = [z for z in settings.get('positions', ()) if z['id'] not in deleted] if mode == 'regular' else ()
     if not zones:
         return {}, {}
     grid = graph_view(name, graph)
     plans, outcomes, reservations, cache = {}, {}, {1: [], 2: []}, {}
     identity = config.digest(profile)
+    paired_families = set()
+    if paired_routes is not None:
+        for team in (1, 2):
+            rows = paired_routes.get(team, paired_routes.get(str(team), ())) or ()
+            for route in rows:
+                family = route['id']
+                if route.get('_editor_source') or not route.get('_allocation_symmetric'):
+                    continue
+                peer_rows = paired_routes.get(3-team, paired_routes.get(str(3-team), ())) or ()
+                if (any(r['id'] == family and r.get('_allocation_symmetric') for r in peer_rows) and
+                        all(any(z['id'] == 'spg_%d_%s' % (side, family) and z['team'] == side
+                                for z in zones) for side in (1, 2))):
+                    paired_families.add(family)
+    ordinals = {}
+    for unused_tag, ordinal, pair in initial_allocation.ordered_pairs(states):
+        for actor in pair:
+            if actor is not None:ordinals[actor['id']] = ordinal
     for state in sorted(states, key=lambda s: (s['team'], s.get('slot', 0), s['id'])):
         if actor_ids is not None and state['id'] not in actor_ids:
             continue
@@ -250,7 +353,25 @@ def assign_manual_positions(profile, name, graph, states, mode='regular',
         if not candidates:
             outcomes[state['id']] = 'manual_no_reachable_parking_space'
             continue
-        unused_preferred, unused_a, unused_b, unused_c, unused_id, p, zone = min(candidates)
+        if allocation_seed is not None:
+            # Zone tickets are uniform, not proportional to the number of
+            # graph cells. Retain safe closest placement inside the drawn zone.
+            tier = min(c[0] for c in candidates)
+            by_zone = {}
+            for candidate in sorted(candidates):
+                if candidate[0] == tier:
+                    by_zone.setdefault(candidate[4], candidate)
+            tickets = []
+            for candidate in by_zone.values():
+                family = candidate[4][len('spg_%d_' % state['team']):]
+                paired = family in paired_families and candidate[4].startswith('spg_%d_' % state['team'])
+                tickets.append((-candidate[1], family if paired else candidate[4], paired, candidate))
+            chosen = initial_allocation.choose(allocation_seed, name + ':manual_spg', 'SPG',
+                ordinals[state['id']], tickets, 0 if all(t[2] for t in tickets) else state['team'])
+            selected = chosen[3]
+        else:
+            selected = min(candidates)
+        unused_preferred, unused_a, unused_b, unused_c, unused_id, p, zone = selected
         angle = math.radians(zone['heading']); bounds = config.MAPS[name]['bounds']
         face = (max(bounds[0], min(bounds[2], p[0]+math.sin(angle)*100)), p[1],
                 max(bounds[1], min(bounds[3], p[2]+math.cos(angle)*100)))
