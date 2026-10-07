@@ -33,6 +33,13 @@ def profile():
 
 
 class TacticsContractTests(unittest.TestCase):
+    def test_parent_without_small_places_cannot_keep_a_retired_wait_clock(self):
+        bounds=cfg.MAPS['08_ruinberg']['bounds']
+        for point in ([0,0,1,60],[0,0,1,-1],[0,0,1,0,[]],[0,0,0,0]):
+            self.assertEqual([0.0,0.0,0],cfg.waypoint(point,bounds))
+        places=[[10,0,60],[20,0,-1]]
+        self.assertEqual([0.0,0.0,1,0.0,places],cfg.waypoint([0,0,1,0,places],bounds))
+
     def test_default_contains_no_hidden_parameter_retunes(self):
         raw=cfg.canonical(cfg.empty())
         self.assertEqual({},cfg.effective(raw,1,'SPG',3))

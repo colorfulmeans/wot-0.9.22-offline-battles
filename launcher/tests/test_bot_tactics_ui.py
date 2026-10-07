@@ -14,6 +14,33 @@ import bot_tactics_store as storage
 
 @unittest.skipUnless(os.name=='nt' or os.environ.get('DISPLAY'),'requires actual Tk display')
 class EditorUITests(unittest.TestCase):
+    def test_deleted_wait_places_do_not_reappear_when_parent_is_reselected(self):
+        from types import SimpleNamespace
+        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.selected_point=0;self.ui.edit_point_condition()
+        for point in ((-66,306),(-46,306),(-26,306)):self.click(point)
+        parent=list(self.ui._wait_point()[:2])+[0]
+        for unused in range(3):
+            self.ui.selected_wait=0;self.ui.delete_wait_point()
+        self.assertEqual(parent,self.ui._wait_point())
+        x,y=self.ui.view.screen(self.ui._wait_point());event=SimpleNamespace(x=x,y=y)
+        self.ui._press_wait(event);self.ui.edit_point_condition(event)
+        self.assertEqual([],storage.contract.waiting_positions(self.ui._wait_point()))
+        self.assertEqual(3,len(self.ui._wait_point()))
+        self.ui.save(True);self.ui.adopt(self.ui.store.active())
+        route=next(r for r in self.ui.entry()['routes'] if r['team']==1)
+        self.assertEqual([round(v,4) for v in parent[:2]]+[0],route['points'][0])
+
+    def test_explicit_add_button_can_add_a_new_place_at_cleared_parent(self):
+        from types import SimpleNamespace
+        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.selected_point=0;self.ui.edit_point_condition();self.click((-66,306))
+        self.ui.selected_wait=0;self.ui.delete_wait_point()
+        self.ui.edit_point_condition()
+        x,y=self.ui.view.screen(self.ui._wait_point());self.ui._press_wait(SimpleNamespace(x=x,y=y))
+        self.assertEqual(1,len(self.ui._wait_point()[4]))
+        self.assertEqual(60,self.ui._wait_point()[4][0][2])
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=tk.Tk();self.root.withdraw()

@@ -131,6 +131,10 @@ def waypoint(raw, bounds):
                 raise TacticsError('Parking places need at least one metre separation')
             places.append(parked)
         value.append(places)
+    if len(value) > 3 and not waiting_positions(value):
+        # A parent gate never owns a clock. Retired single-point durations and
+        # an empty place collection must serialize as ordinary travel geometry.
+        value = value[:2] + [0]
     return value
 
 

@@ -75,6 +75,8 @@ class BotTacticsEditor:
         self.undo_stack = []; self.redo_stack = []
         self.selection = None; self.selected_point = None; self.drag = None
         self.wait_edit = False; self.selected_wait = None
+        self._wait_add_at_parent = False
+        self._wait_parent_cleared = False
         self.graph_cache = {}; self.image_cache = {}; self.background = None; self.photo = None
         self.navigation_image_cache = {}; self.navigation_photo = None
         self.root = tk.Toplevel(parent)
@@ -959,7 +961,7 @@ class BotTacticsEditor:
 
     def _refresh_wait_panel(self):
         point=self._wait_point()
-        if point is None:self.wait_edit=False;self.selected_wait=None
+        if point is None:self.wait_edit=False;self.selected_wait=None;self._wait_add_at_parent=False;self._wait_parent_cleared=False
         places=contract.waiting_positions(point) if point is not None else []
         self.wait_edit_var.set(self.wait_edit)
         self.wait_edit_check.config(state='normal' if point is not None else 'disabled')
@@ -972,6 +974,7 @@ class BotTacticsEditor:
         self.wait_list.config(state='readonly' if self.wait_edit else 'disabled')
 
     def change_wait_edit(self):
+        self._wait_add_at_parent=False
         self.wait_edit=bool(self.wait_edit_var.get()) and self._wait_point() is not None
         if self.wait_edit:self._detach_wait_symmetry()
         self.drag=None;self._refresh_properties();self.redraw()
@@ -999,11 +1002,17 @@ class BotTacticsEditor:
                 if math.hypot(*(a-b for a,b in zip(self.view.screen(p),(event.x,event.y))))<12),None)
             if index is None:return
             if self.wait_edit and index==self.selected_point:
-                self._press_wait(event)
-                return 'break'
+                if self._wait_add_at_parent:
+                    self._press_wait(event)
+                    return 'break'
+                # A double-click on the parent only selects/focuses its editor;
+                # it is not an instruction to recreate a deleted small place.
+                self._wait_add_at_parent=False
             self.selected_point=index;self.selected_wait=None
         if self._wait_point() is None:return
         self._detach_wait_symmetry()
+        self._wait_add_at_parent = event is None
+        if event is None:self._wait_parent_cleared=False
         self.wait_edit=True;self.drag=None;self._refresh_properties();self.redraw()
         self.root.update_idletasks()
         region=self.properties_canvas.bbox('all')
@@ -1016,6 +1025,7 @@ class BotTacticsEditor:
         self._detach_wait_symmetry(checkpoint=False)
         point=self._editable_points()[self.selected_point]
         point[3:]=[0.0,copy.deepcopy(places)] if places else []
+        self._wait_parent_cleared=not bool(places)
         point[2]=int(bool(places));self._sync_symmetry(geometry=True)
 
     def choose_wait(self,event=None):
@@ -1041,6 +1051,7 @@ class BotTacticsEditor:
         places=copy.deepcopy(contract.waiting_positions(point))
         if not 0<=self.selected_wait<len(places):return
         self.checkpoint();del places[self.selected_wait];self._store_wait_places(places)
+        self._wait_add_at_parent=False
         self.selected_wait=None;self.drag=None;self._refresh_properties();self.mark()
         return 'break'
 
@@ -1056,12 +1067,17 @@ class BotTacticsEditor:
         selected=next((i for i,p in enumerate(places) if math.hypot(*(a-b for a,b in
             zip(self.view.screen(p),(event.x,event.y))))<10),None)
         if selected is None:
+            if (math.hypot(*(a-b for a,b in zip(self.view.screen(point),(event.x,event.y))))<12
+                    and not self._wait_add_at_parent and (places or self._wait_parent_cleared)):
+                self.selected_wait=None;self.drag=None;self._refresh_properties();self.redraw()
+                return 'break'
             if len(places)>=3:
                 self.error(self.tr('每个路线节点最多3个等待点。','A route node allows at most 3 wait places.'));return
             p=list(self.view.world(event.x,event.y))
             if any(math.hypot(p[0]-q[0],p[1]-q[1])<1 for q in places):return
             self.checkpoint();places.append(p+[60.0]);selected=len(places)-1;self._store_wait_places(places)
         else:self.checkpoint()
+        self._wait_add_at_parent=False
         self.selected_wait=selected;self.drag=('wait',selected);self._refresh_properties();self.mark()
 
     def press(self,event):

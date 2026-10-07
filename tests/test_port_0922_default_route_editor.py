@@ -131,7 +131,8 @@ class DefaultRouteTests(unittest.TestCase):
         runtime.baked_graph=self.graph
         profile=edited_profile(self.graph)
         edit=profile['maps']['31_airfield']['default_routes'][0]
-        edit['class_tag']='heavyTank';edit['priority']=9;edit['points'][0].append(12.5)
+        edit['class_tag']='heavyTank';edit['priority']=9
+        edit['points'][0][2:]=[1,0,[[edit['points'][0][0],edit['points'][0][1],12.5]]]
         runtime._bot_tactics=config.canonical(profile)
         runtime.adapter=runtime._new_adapter('31_airfield',5)
         for actor,tag in ((11,'heavyTank'),(12,'mediumTank')):
@@ -146,7 +147,7 @@ class DefaultRouteTests(unittest.TestCase):
         self.assertEqual([tuple(p[:3]) for p in source['waypoints']],list(medium['waypoints']))
         self.assertTrue(all(len(p)==3 for p in runtime.states[11]['route']['waypoints']))
         cfg=config.route_config(runtime._bot_tactics,'31_airfield',runtime.states[11]['route']['id'],1)
-        self.assertEqual(12.5,cfg['points'][0][3])
+        self.assertEqual(12.5,cfg['points'][0][4][0][2])
         self.assertIsNone(config.route_config(runtime._bot_tactics,'31_airfield',cfg['id'],2))
         restored=[dict(id=actor,team=1,route=dict(id=runtime.states[actor]['route']['id'],
                   waypoints=[dict(x=p[0],z=p[1],hold=bool(p[2]))
@@ -157,7 +158,8 @@ class DefaultRouteTests(unittest.TestCase):
     def test_symmetry_metadata_and_waits_roundtrip_with_independent_team_lookup(self):
         profile=edited_profile(self.graph)
         own=profile['maps']['31_airfield']['default_routes'][0]
-        own.update(symmetric=True,class_tag='SPG');own['points'][1].append(-1)
+        own.update(symmetric=True,class_tag='SPG')
+        own['points'][1][2:]=[1,0,[[own['points'][1][0],own['points'][1][1],-1]]]
         peer=copy.deepcopy(own);peer.update(team=2,points=list(reversed(own['points'])))
         profile['maps']['31_airfield']['default_routes'].append(peer)
         canonical=config.canonical(profile)
