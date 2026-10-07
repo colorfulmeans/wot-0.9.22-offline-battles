@@ -840,8 +840,7 @@ class BattleDirector(object):
 		return self.map_data.get('routes', {}).get(int(team), ()) or ()
 
 	def _assign_route(self, agent):
-		# Class edits replace the geometry after ordinary lane allocation, so
-		# the original capacity/role distribution is not multiplied by variants.
+		# Shared route geometry supplies a template; each class has three slots.
 		routes = tuple(r for r in self._routes_for(agent['team'])
 		               if not r.get('_editor_source') and
 		               agent['profile'].get('class_tag') not in r.get('_editor_disabled_classes', ()))
@@ -857,12 +856,12 @@ class BattleDirector(object):
 		if not is_artillery:
 			open_routes = []
 			for route in routes:
-				key = (agent['team'], route.get('id'))
-				capacity = max(1, int(route.get('capacity', 1)))
+				key = (agent['team'], route.get('id'), profile.get('class_tag'))
+				capacity = 3
 				if int(self.route_usage.get(key, 0)) < capacity:
 					open_routes.append(route)
-			if open_routes:
-				routes = tuple(open_routes)
+			if not open_routes:return None
+			routes = tuple(open_routes)
 		personality = agent['personality']
 		best = None
 		best_score = -1e18
@@ -891,9 +890,9 @@ class BattleDirector(object):
 				score -= risk * personality['caution'] * 13.0
 				score += personality['initiative'] * risk * 5.0
 				score += personality['route_jitter']
-				key = (agent['team'], route.get('id'))
+				key = (agent['team'], route.get('id'), profile.get('class_tag'))
 				used = int(self.route_usage.get(key, 0))
-				capacity = max(1, int(route.get('capacity', 1)))
+				capacity = 3
 				score -= (float(used) / float(capacity)) * 28.0
 				if used >= capacity:
 					score -= 34.0
@@ -908,7 +907,7 @@ class BattleDirector(object):
 				self.artillery_route_usage[key] = int(
 					self.artillery_route_usage.get(key, 0)) + 1
 			else:
-				key = (agent['team'], best.get('id'))
+				key = (agent['team'], best.get('id'), profile.get('class_tag'))
 				self.route_usage[key] = int(
 					self.route_usage.get(key, 0)) + 1
 			if self._routes_are_baked:

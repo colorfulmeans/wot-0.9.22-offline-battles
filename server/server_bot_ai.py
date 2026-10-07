@@ -2398,11 +2398,9 @@ class BotPlanner(object):
         # Counting them here made a road look defended while also preventing
         # the artillery itself from ever being selected as a donor.
         counts = dict((route_id, 0) for route_id in catalog)
+        class_counts = {}
         for bot in bots:
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
-                continue
-            if not self._route_line_contributor(
-                    bot, self._contacts_for_bot(bot, contacts, now)):
                 continue
             assignment = self._route_assignments.get(bot["id"], {})
             route = assignment.get("route") if isinstance(assignment, dict) else None
@@ -2410,7 +2408,10 @@ class BotPlanner(object):
                 route = bot.get("route") or {}
             route_id = str(route.get("id") or "")
             if route_id in counts:
-                counts[route_id] += 1
+                key = (route_id, bot.get("profile", {}).get("class_tag"))
+                class_counts[key] = class_counts.get(key, 0) + 1
+                if self._route_line_contributor(bot, self._contacts_for_bot(bot, contacts, now)):
+                    counts[route_id] += 1
         target_route = max(sorted(catalog), key=lambda route_id:
                            pressure[route_id] - counts[route_id] * 0.45)
         if pressure[target_route] - counts[target_route] * 0.45 <= 0.0:
@@ -2429,12 +2430,10 @@ class BotPlanner(object):
                     str(route.get("id") or "") == target_route and
                     _number(assignment.get("until")) > 0.0):
                 assignment["until"] = _number(now) + ROUTE_LEASE_SECONDS
-        if ("capacity" in target_record and
-                counts[target_route] >= max(
-                    1, _integer(target_record.get("capacity"), 1))):
-            return
         candidates = []
         for bot in bots:
+            if class_counts.get((target_route, bot.get("profile", {}).get("class_tag")), 0) >= 3:
+                continue
             received = self._contacts_for_bot(bot, contacts, now)
             if not any(self._nearest_route(contact, catalog) == target_route
                        for contact in received):

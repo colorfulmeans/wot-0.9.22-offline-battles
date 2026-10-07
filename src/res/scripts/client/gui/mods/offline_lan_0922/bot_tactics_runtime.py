@@ -90,7 +90,7 @@ def validate_route(grid, route):
 
 
 def route_value(route):
-    return {'id': 'user_' + route['id'], 'capacity': route['capacity'], 'risk': 0.5,
+    return {'id': 'user_' + route['id'], 'capacity': min(3, route['capacity']), 'risk': 0.5,
             'role_weights': {}, 'class_weights': dict((c, 1.0 if c in route['classes'] else 0.0) for c in config.CLASSES),
             # Wait conditions stay in the canonical tactics document on the
             # server. The manifest keeps its existing three-field geometry.
@@ -163,10 +163,10 @@ def default_routes(profile, name, graph):
 
 
 def assign_initial_routes(profile, name, graph, states, catalog, seed):
-    """Allocate all authored/default lanes together, with hard shared capacity.
+    """Allocate lanes with independent per-team, per-class capacity.
 
-    Class variants share their base lane's occupancy; priorities are local to
-    the vehicle class. Empty/full catalogs explicitly produce automatic routing.
+    Shared geometry is an editing template; each class owns its occupancy.
+    Priorities are local to the vehicle class. Empty/full catalogs explicitly produce automatic routing.
     Restored manifests bypass this fresh-round allocator entirely.
     """
     settings = config.map_settings(profile, name)
@@ -200,15 +200,15 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
             # unchanged eligibility, not a prohibition on every other class.
             if tag in weights and weights[tag] <= 0:
                 continue
-            key = (state['team'], ('spg:' if tag == 'SPG' else '') + base['id'])
-            if usage.get(key, 0) >= max(1, int(base.get('capacity', 1))):
+            key = (state['team'], ('spg:' if tag == 'SPG' else '') + base['id'], tag)
+            if usage.get(key, 0) >= 3:
                 continue
             priority = (route.get('class_priorities') or {}).get(tag, config.DEFAULT_ROUTE_PRIORITY)
             choices.append((priority, 'default:' + base['id'],
                             bool(route.get('_allocation_symmetric')), (route, key, 'random_default')))
         for route in custom:
-            key = (state['team'], 'user_' + route['id'])
-            if errors[route['id']] or usage.get(key, 0) >= route['capacity']:
+            key = (state['team'], 'user_' + route['id'], tag)
+            if errors[route['id']] or usage.get(key, 0) >= min(3, route['capacity']):
                 continue
             if fixed and route['policy'] != 'fixed':
                 continue
@@ -259,7 +259,7 @@ def assign_routes(profile, name, graph, states, round_id):
         for route in applicable:
             priority=route.get('class_priorities', {}).get(tag, config.DEFAULT_ROUTE_PRIORITY)
             if priority < default_priority and route['policy'] != 'fixed':continue
-            if errors[route['id']] or usage.get(route['id'], 0) >= route['capacity']:
+            if errors[route['id']] or usage.get((state['team'], route['id'], tag), 0) >= min(3, route['capacity']):
                 continue
             p = route['points'][0]
             target = grid.closest((p[0], 0, p[1]))
@@ -275,7 +275,8 @@ def assign_routes(profile, name, graph, states, round_id):
             continue
         route = min(available, key=lambda value: value[:3])[3]
         result[state['id']] = route_value(route)
-        usage[route['id']] = usage.get(route['id'], 0) + 1
+        key = (state['team'], route['id'], tag)
+        usage[key] = usage.get(key, 0) + 1
         outcomes[state['id']] = route['policy']
     return result, outcomes
 

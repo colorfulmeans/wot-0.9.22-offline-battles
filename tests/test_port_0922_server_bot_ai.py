@@ -2858,6 +2858,21 @@ class ServerBotArtilleryTests(unittest.TestCase):
             planner._route_assignments[bot_id]['route']['id'] == 'middle'
             for bot_id in range(20, 24)))
 
+    def test_rebalance_capacity_is_independent_for_each_class(self):
+        for target_tag, expected_move in (('heavyTank', True), ('mediumTank', False)):
+            planner=BotPlanner()
+            source=_route('source',[(-100,0,False),(-100,100,False),(-100,500,False)],capacity=3)
+            target=_route('target',[(100,0,False),(100,100,False),(100,500,False)],capacity=3)
+            manifest=[_bot(41,1,0,source,'mediumTank',{'support':1.0}),
+                      _bot(42,1,1,source,'mediumTank',{'support':0.9})]
+            manifest.extend(_bot(i,1,i-41,target,target_tag,{'support':1.0}) for i in (43,44,45))
+            states=[_state(i,1,-100 if i<43 else 100,0) for i in range(41,46)]
+            bots=planner._alive_bots(manifest,states)
+            contacts=[{'position':{'x':100.0,'y':0.0,'z':250.0},'health':1000.0,'max_health':1000.0} for _ in range(4)]
+            planner._rebalance_routes(1,bots,contacts,1.0)
+            moved=any(planner._route_assignments.get(i,{}).get('route',{}).get('id')=='target' for i in (41,42))
+            self.assertEqual(expected_move,moved)
+
     def test_spg_does_not_fill_frontline_capacity_during_rebalance(self):
         planner = BotPlanner()
         source = _route('source', [

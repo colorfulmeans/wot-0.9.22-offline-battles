@@ -47,12 +47,12 @@ class InitialRouteLotteryTests(unittest.TestCase):
         self.assertGreater(len(set(p[100]['id'] for p in results)),1)
 
     def test_higher_priority_fills_before_lower_and_full_means_auto(self):
-        plans,outcomes,usage=self.assign(lanes(1,(9,5,5)),actors(4))
+        plans,outcomes,usage=self.assign(lanes(1,(9,5,5)),actors(10))
         self.assertEqual('lane_0',plans[100]['id'])
-        self.assertEqual({None},set(plans[i] for i in (103,203)))
-        self.assertEqual('full_or_unusable_routes_auto',outcomes[103])
-        self.assertTrue(all(n==1 for n in usage.values()))
-        self.assertEqual({'lane_1','lane_2'},set(plans[i]['id'] for i in (101,102)))
+        self.assertEqual({None},set(plans[i] for i in (109,209)))
+        self.assertEqual('full_or_unusable_routes_auto',outcomes[109])
+        self.assertTrue(all(n==3 for n in usage.values()))
+        self.assertEqual({'lane_1','lane_2'},set(plans[i]['id'] for i in (103,104,105,106,107,108)))
 
     def test_standalone_routes_can_differ_between_sides(self):
         catalog=lanes(symmetric=False)
@@ -73,7 +73,7 @@ class InitialRouteLotteryTests(unittest.TestCase):
         plans,unused,unused_usage=self.assign(catalog)
         self.assertTrue(all(plans[i] is not None for i in (100,101,102,200,201,202)))
 
-    def test_class_variants_share_capacity_with_the_base_lane(self):
+    def test_class_variants_have_independent_capacity(self):
         catalog=lanes(1)
         for team in (1,2):
             catalog[team]=catalog[team][:1]
@@ -84,8 +84,33 @@ class InitialRouteLotteryTests(unittest.TestCase):
         states=actors(1)+actors(1,'heavyTank')
         for state in states[2:]:state['id']+=10
         plans,unused,usage=self.assign(catalog,states)
-        self.assertEqual(2,sum(p is not None for p in plans.values()))
-        self.assertEqual({(1,'lane_0'):1,(2,'lane_0'):1},usage)
+        self.assertEqual(4,sum(p is not None for p in plans.values()))
+        self.assertEqual({(t,'lane_0',c):1 for t in (1,2) for c in ('lightTank','heavyTank')},usage)
+
+    def test_mother_only_and_class_variants_each_allow_three_per_class(self):
+        for variants in (False, True):
+            catalog=lanes()
+            tags=('lightTank','mediumTank','heavyTank','AT-SPG')
+            for team in (1,2):
+                base=catalog[team][0];base['class_weights']={tag:1 for tag in tags}
+                catalog[team]=[base]
+                if variants:
+                    for tag in tags:
+                        row=copy.deepcopy(base)
+                        row.update(id='class_'+tag,_editor_source=base['id'],_editor_class=tag)
+                        catalog[team].append(row)
+            states=[]
+            for index,tag in enumerate(tags):
+                group=actors(4,tag)
+                for state in group:state['id']+=index*10
+                states.extend(group)
+            plans,outcomes,usage=self.assign(catalog,states)
+            self.assertEqual(24,sum(p is not None for p in plans.values()))
+            self.assertEqual({(t,'lane_0',c):3 for t in (1,2) for c in tags},usage)
+            for team in (1,2):
+                for index,tag in enumerate(tags):
+                    self.assertIsNone(plans[team*100+index*10+3])
+                    self.assertTrue(all(plans[team*100+index*10+j] is not None for j in range(3)))
 
     def test_disabled_classes_and_spg_do_not_consume_front_lane_capacity(self):
         catalog=lanes(1)
@@ -118,7 +143,7 @@ class InitialRouteLotteryTests(unittest.TestCase):
             catalog[team][0]['_editor_disabled_classes']=['heavyTank']
         plans,unused,usage=self.assign(catalog,actors(2,'mediumTank'))
         self.assertTrue(all(route is not None for route in plans.values()))
-        self.assertEqual({(1,'lane_0'):2,(2,'lane_0'):2},usage)
+        self.assertEqual({(t,'lane_0','mediumTank'):2 for t in (1,2)},usage)
         self.assertTrue(all(route is None for route in self.assign(catalog,actors(1,'heavyTank'))[0].values()))
 
     def test_custom_symmetric_mirror_identity_and_capacity(self):
@@ -149,9 +174,9 @@ class InitialRouteLotteryTests(unittest.TestCase):
                 states=_states(graph,6)
                 for state in states:state['profile']['class_tag']='mediumTank'
                 plans,outcomes,usage=planning.assign_initial_routes(cfg.empty(),name,graph,states,routes,83)
-                for (team,identity),count in usage.items():
+                for (team,identity,tag),count in usage.items():
                     route=next(r for r in routes[str(team)] if r['id']==identity)
-                    self.assertLessEqual(count,route['capacity'])
+                    self.assertLessEqual(count,3)
                 for slot in range(6):
                     a,b=plans[10+slot],plans[20+slot]
                     if a and b and a.get('_allocation_symmetric') and b.get('_allocation_symmetric'):

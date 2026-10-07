@@ -292,7 +292,7 @@ class BotTacticsEditor:
         self.map_status=ttk.Label(centre,text='',wraplength=520);self.map_status.pack(anchor='w')
         self.item_vars={};self.item_fields={}
         for row,(key,zh,en) in enumerate([
-            ('label','名称','Label'),('policy','路线模式','Route policy'),('capacity','路线容量','Route capacity'),
+            ('label','名称','Label'),('policy','路线模式','Route policy'),('capacity','本车型容量（最多3辆）','Class capacity (up to 3)'),
             ('weight','路线分配权重','Route weight'),('slots','指定槽位，逗号分隔','Slots, comma-separated'),
             ('radius','炮位区域半径（米）','SPG zone radius (m)'),
             ('heading','炮位朝向（度，0=北）','SPG heading (deg, 0=N)'),('priority','炮位优先级（0–9）','SPG priority (0–9)'),
@@ -768,7 +768,7 @@ class BotTacticsEditor:
         self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
         scope=self.route_class_var.get()
         self._ensure_entry()['routes'].append(dict(id=identity,label=self.tr('新路线','New route'),team=self.team,
-            classes=list(contract.CLASSES[:-1]) if scope=='all' else [scope],class_priorities={tag:contract.DEFAULT_ROUTE_PRIORITY for tag in (contract.CLASSES[:-1] if scope=='all' else (scope,))},slots=[],policy='preferred',capacity=6,weight=1.0,points=[],symmetric=self.symmetry_var.get()))
+            classes=list(contract.CLASSES[:-1]) if scope=='all' else [scope],class_priorities={tag:contract.DEFAULT_ROUTE_PRIORITY for tag in (contract.CLASSES[:-1] if scope=='all' else (scope,))},slots=[],policy='preferred',capacity=3,weight=1.0,points=[],symmetric=self.symmetry_var.get()))
         self.selection=('routes',identity);self._refresh_items();self.mark()
         self.status.set(self.tr('在地图上点击添加路径点；最多16个。','Click the map to add up to 16 route points.'))
 
@@ -789,7 +789,7 @@ class BotTacticsEditor:
             if source:
                 self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
                 new=dict(id=identity,label=self._default_name(source['id'],self._route_scope())+self.tr(' 副本',' copy'),team=self.team,
-                    classes=list(contract.CLASSES[:-1]) if self._route_scope()=='all' else [self._route_scope()],slots=[],policy='preferred',capacity=source.get('capacity',6),weight=1.0,
+                    classes=list(contract.CLASSES[:-1]) if self._route_scope()=='all' else [self._route_scope()],slots=[],policy='preferred',capacity=3,weight=1.0,
                     points=[[float(p[0]),float(p[1]),int(bool(p[2]))]+list(p[3:]) for p in item['points']])
                 self._ensure_entry()['routes'].append(new)
                 identity += '@'+new['classes'][0] if self.route_class_var.get()=='total' else ''
@@ -887,6 +887,7 @@ class BotTacticsEditor:
             new=copy.deepcopy(item);new['label']=self.item_vars['label'].get()
             kind='positions' if self.selection[0]=='builtin_positions' else self.selection[0]
             if self.selection[0]=='routes':
+                if not 1<=int(self.item_vars['capacity'].get())<=3:raise ValueError(self.tr('本车型路线容量应为1–3辆。','Class route capacity must be 1–3.'))
                 new.update(policy=self.item_vars['policy'].get(),capacity=int(self.item_vars['capacity'].get()),
                     weight=float(self.item_vars['weight'].get()),classes=[k for k,v in self.class_vars.items() if v.get()],
                     slots=[int(v.strip())-1 for v in self.item_vars['slots'].get().split(',') if v.strip()])
