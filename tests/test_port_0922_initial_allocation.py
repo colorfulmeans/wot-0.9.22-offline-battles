@@ -110,6 +110,17 @@ class InitialRouteLotteryTests(unittest.TestCase):
         plans,unused,unused_usage=self.assign(states=states)
         self.assertTrue(all(p is None for p in plans.values()))
 
+    def test_sparse_deletion_mask_does_not_disable_other_vehicle_classes(self):
+        catalog=lanes(5)
+        for team in (1,2):
+            catalog[team]=catalog[team][:1]
+            catalog[team][0]['class_weights']={'heavyTank':0.0}
+            catalog[team][0]['_editor_disabled_classes']=['heavyTank']
+        plans,unused,usage=self.assign(catalog,actors(2,'mediumTank'))
+        self.assertTrue(all(route is not None for route in plans.values()))
+        self.assertEqual({(1,'lane_0'):2,(2,'lane_0'):2},usage)
+        self.assertTrue(all(route is None for route in self.assign(catalog,actors(1,'heavyTank'))[0].values()))
+
     def test_custom_symmetric_mirror_identity_and_capacity(self):
         raw=profile();graph=_graph();states=_states(graph,3)
         route=raw['maps']['08_ruinberg']['routes'][0]

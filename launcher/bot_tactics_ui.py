@@ -512,7 +512,8 @@ class BotTacticsEditor:
         return edit
 
     def _sync_shared_default_geometry(self, item):
-        # Shared edits replace class geometry, while retaining class priorities.
+        # The latest shared edit replaces class travel and clears class waits.
+        item['points']=[list(p[:2])+[0] for p in item['points']]
         for edit in self.entry().get('default_routes',()):
             if (edit['id']==item['id'] and edit['team']==item['team'] and
                     edit.get('class_tag','all') in contract.CLASSES[:-1]):
@@ -735,7 +736,8 @@ class BotTacticsEditor:
         self.classes_frame.grid() if route and self.route_class_var.get()!='total' else self.classes_frame.grid_remove()
         for widget in (self.points,self.point_actions):
             widget.grid() if route or builtin else widget.grid_remove()
-        self.wait_button.config(state='normal' if route or builtin else 'disabled')
+        self.wait_button.config(state='normal' if (route or builtin) and not
+            (builtin and self._route_scope()=='all') else 'disabled')
         self.hold_button.config(text=self.tr('切换驻留点','Toggle hold'))
         if parking or self.route_class_var.get()=='SPG':self.symmetry_var.set(False)
         elif route or builtin:self.symmetry_var.set(bool(item.get('symmetric',False)))
@@ -855,7 +857,7 @@ class BotTacticsEditor:
                 if (edit['id']!=item['id'] or edit.get('class_tag','all') not in contract.CLASSES[:-1] or
                         (edit['team']!=self.team and not item.get('symmetric'))):continue
                 source=next((r for r in graph.get('routes',{}).get(str(edit['team']),()) if r['id']==item['id']),None)
-                if source:edit['points']=[list(p[:2])+[int(bool(p[2]))]+list(p[3:]) for p in source['waypoints']]
+                if source:edit['points']=[list(p[:2])+[0] for p in source['waypoints']]
         if remaining==edits:return
         self.checkpoint()
         if remaining:self.entry()['default_routes']=remaining
@@ -947,6 +949,7 @@ class BotTacticsEditor:
         self._refresh_properties();self.redraw();self.mark()
 
     def toggle_hold(self):
+        if self.selection and self.selection[0]=='builtin' and self._route_scope()=='all':return
         item=self._selected()
         if item is not None and self.selected_point is not None and self.selected_point<len(item.get('points',())):
             self.checkpoint();p=self._editable_points()[self.selected_point];p[2]=int(not p[2])
@@ -957,6 +960,7 @@ class BotTacticsEditor:
         item=self._selected();index=self.selected_point
         if (item is None or not self.selection or self.selection[0] not in ('routes','builtin') or
                 index is None or not 0<=index<len(item.get('points',()))):return None
+        if self.selection[0]=='builtin' and self._route_scope()=='all':return None
         return item['points'][index]
 
     def _refresh_wait_panel(self):
@@ -1022,6 +1026,7 @@ class BotTacticsEditor:
         return 'break'
 
     def _store_wait_places(self, places):
+        if self._wait_point() is None:return False
         self._detach_wait_symmetry(checkpoint=False)
         point=self._editable_points()[self.selected_point]
         point[3:]=[0.0,copy.deepcopy(places)] if places else []

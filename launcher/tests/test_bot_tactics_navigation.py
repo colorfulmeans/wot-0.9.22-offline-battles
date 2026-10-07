@@ -76,6 +76,31 @@ class NavigationDataTests(unittest.TestCase):
 @unittest.skipUnless(HAS_PIL and (os.name == 'nt' or os.environ.get('DISPLAY')),
                      'requires Pillow and Tk display')
 class NavigationUITests(unittest.TestCase):
+    def test_shared_geometry_clears_class_waits_and_class_edit_wins_later(self):
+        e=self.editor;e.map_name='31_airfield';e._load_map()
+        e.route_class_var.set('AT-SPG');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
+        e.items.selection_set(key);e.select_item();e.selected_point=1
+        e.edit_point_condition();point=e._wait_point();e._store_wait_places([[point[0]+12,point[1],25]])
+        scoped=e._editable_item();identity=scoped['id']
+        e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
+        self.assertEqual('disabled',str(e.wait_button.cget('state')))
+        e.selected_point=1;e.edit_point_condition();self.assertFalse(e.wait_edit)
+        e.checkpoint();shared=e._editable_item();shared['points'][0][0]+=8
+        e._sync_symmetry(geometry=True,item=shared)
+        self.assertEqual(shared['points'],scoped['points'])
+        self.assertTrue(all(len(p)==3 and p[2]==0 for p in scoped['points']))
+        e.route_class_var.set('AT-SPG');e.change_route_class();e.items.selection_set(key);e.select_item()
+        e.selected_point=1;e.edit_point_condition();point=e._wait_point()
+        e._store_wait_places([[point[0]+12,point[1],45]])
+        e.save(True)
+        saved=e.store.active()['maps'][e.map_name]['default_routes']
+        self.assertEqual(45,next(r for r in saved if r.get('class_tag')=='AT-SPG' and r['team']==1)['points'][1][4][0][2])
+        self.assertTrue(all(len(p)==3 and p[2]==0 for r in saved if r.get('class_tag','all')=='all' for p in r['points']))
+        e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
+        e.reset_builtin()
+        scoped=next(r for r in e.entry()['default_routes'] if r.get('class_tag')=='AT-SPG' and r['team']==1)
+        self.assertTrue(all(len(p)==3 and p[2]==0 for p in scoped['points']))
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=tk.Tk();self.root.withdraw();self.addCleanup(self.root.destroy)
@@ -282,7 +307,7 @@ class NavigationUITests(unittest.TestCase):
         e.route_class_var.set('all');e.change_route_class();e.items.selection_set(key);e.select_item()
         e.symmetry_var.set(False);e.change_symmetry();e.selected_point=1;e.toggle_hold()
         own=next(r for r in e.entry()['default_routes'] if r['team']==1 and r.get('class_tag')=='heavyTank')
-        self.assertEqual(-1.,own['points'][1][3]);self.assertEqual(7,own['priority'])
+        self.assertFalse(ui.contract.waiting_positions(own['points'][1]));self.assertEqual(7,own['priority'])
         self.assertEqual(other_before,next(r for r in e.entry()['default_routes'] if r['team']==2))
         e.undo()
         own=next(r for r in e.entry()['default_routes'] if r['team']==1 and r.get('class_tag')=='heavyTank')
@@ -290,7 +315,7 @@ class NavigationUITests(unittest.TestCase):
         e.redo();e.reset_builtin()
         own=next(r for r in e.entry()['default_routes'] if r['team']==1 and r.get('class_tag')=='heavyTank')
         original=next(r for r in e.graph_cache[e.map_name]['routes']['1'] if r['id']==identity)['waypoints']
-        self.assertEqual(original,own['points']);self.assertEqual(7,own['priority'])
+        self.assertEqual([list(p[:2])+[0] for p in original],own['points']);self.assertEqual(7,own['priority'])
         self.assertEqual(other_before,next(r for r in e.entry()['default_routes'] if r['team']==2))
 
     def test_wait_nodes_grow_while_editing_and_remain_visible_unselected(self):

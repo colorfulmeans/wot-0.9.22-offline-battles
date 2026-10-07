@@ -179,6 +179,8 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
 
     def candidates(state):
         tag = (state.get('profile') or {}).get('class_tag')
+        if tag not in config.CLASSES:
+            return []
         rows = catalog.get(state['team'], catalog.get(str(state['team']), ())) or ()
         variants = dict((r['_editor_source'], r) for r in rows
                         if r.get('_editor_source') and r.get('_editor_class') == tag)
@@ -194,7 +196,9 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
             weights = route.get('class_weights') or {}
             if tag in base.get('_editor_disabled_classes', ()):
                 continue
-            if weights and weights.get(tag, 0) <= 0:
+            # A class deletion writes a sparse zero mask. Missing entries mean
+            # unchanged eligibility, not a prohibition on every other class.
+            if tag in weights and weights[tag] <= 0:
                 continue
             key = (state['team'], ('spg:' if tag == 'SPG' else '') + base['id'])
             if usage.get(key, 0) >= max(1, int(base.get('capacity', 1))):

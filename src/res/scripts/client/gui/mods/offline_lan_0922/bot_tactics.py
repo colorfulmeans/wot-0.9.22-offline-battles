@@ -267,6 +267,10 @@ def canonical(raw):
                 if points and sum((value[i]-points[-1][i])**2 for i in (0, 1)) < 1:
                     raise TacticsError('Consecutive waypoints need at least one metre separation')
                 points.append(value)
+            if tag == 'all':
+                # Shared defaults carry travel geometry only. Independent
+                # vehicle-class records are the sole owners of small places.
+                points = [p[:2] + [0] for p in points]
             result = dict(id=identity, team=team, points=points)
             if 'label' in route:result['label']=_text(route['label'])
             if tag != 'all':result['class_tag'] = tag

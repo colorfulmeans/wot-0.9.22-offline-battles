@@ -33,6 +33,17 @@ def profile():
 
 
 class TacticsContractTests(unittest.TestCase):
+    def test_shared_default_waits_are_removed_without_touching_class_places(self):
+        raw=cfg.empty();name='08_ruinberg';meta=cfg.MAPS[name]
+        point=[0,0,1,0,[[10,0,25],[20,0,60]]]
+        raw['maps'][name]=dict(mode='regular',resource_sha256=meta['resource_sha256'],routes=[],positions=[],
+            default_routes=[dict(id=meta['route_ids']['1'][0],team=1,points=[copy.deepcopy(point)]),
+                dict(id=meta['route_ids']['1'][0],team=1,class_tag='AT-SPG',points=[copy.deepcopy(point)])])
+        clean=cfg.canonical(raw)['maps'][name]['default_routes']
+        shared=next(r for r in clean if r.get('class_tag','all')=='all')
+        scoped=next(r for r in clean if r.get('class_tag')=='AT-SPG')
+        self.assertEqual([[0.0,0.0,0]],shared['points'])
+        self.assertEqual([point],scoped['points'])
     def test_parent_without_small_places_cannot_keep_a_retired_wait_clock(self):
         bounds=cfg.MAPS['08_ruinberg']['bounds']
         for point in ([0,0,1,60],[0,0,1,-1],[0,0,1,0,[]],[0,0,0,0]):
