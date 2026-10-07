@@ -13,6 +13,7 @@ STYLE_TYPE = 4  # #1513 items.components.c11n_constants.CustomizationType.STYLE
 STOCK_VERSION = 1
 INITIAL_KEY = 'initial_customizations'
 NATIONS = ('ussr', 'germany', 'usa', 'china', 'france', 'uk', 'japan', 'czech', 'sweden', 'poland')
+NATION_LABELS = dict(zip(NATIONS,('USSR','Germany','USA','China','France','UK','Japan','Czech','Sweden','Poland')))
 
 
 def _fields(element):
@@ -102,6 +103,48 @@ def compatible(style, vehicle):
     return (not included or any(matches(rule) for rule in included)) and not any(matches(rule) for rule in excluded)
 
 
+def display_name(style, styles, translate=lambda value:value):
+    if sum(other['label']==style['label'] for other in styles) <= 1:return style['label']
+    nations={nation for action,rule in style['rules'] if action=='include' for nation in rule.get('nations',())}
+    suffix=translate(NATION_LABELS[next(iter(nations))]) if len(nations)==1 else str(style['id'])
+    return translate('%s (%s)') % (style['label'],suffix)
+
+
+def applicability(style, vehicles, translate=lambda value:value):
+    """Describe each exact include/exclude rule independently of other styles."""
+    names={vehicle['name']:vehicle['label'] for vehicle in vehicles}
+    includes=[rule for action,rule in style['rules'] if action=='include']
+    shared=includes[0].get('nations',()) if includes else ()
+    if not all(set(rule.get('nations',()))==set(shared) for rule in includes):shared=()
+    join=translate(', ')
+    def nation_names(nations):return join.join(translate(NATION_LABELS[n]) for n in nations)
+    def description(rule, suppress_nation=False):
+        if rule.get('vehicles'):
+            text=translate('only %s') % join.join(names.get(n,n) for n in rule['vehicles'])
+        elif rule.get('levels')==['8'] and rule.get('tags')==['premium']:
+            text=translate('Tier VIII premium/reward vehicles')
+        elif rule.get('levels')==['10'] and not rule.get('tags'):
+            text=translate('all Tier X vehicles')
+        else:
+            text=translate('all vehicles')
+            if rule.get('levels'):text=translate('Tier %s vehicles') % join.join(rule['levels'])
+            if rule.get('tags'):text+=translate(' with tags %s') % join.join(rule['tags'])
+        if rule.get('nations') and not suppress_nation:
+            text=translate('Vehicles from %s: %s') % (nation_names(rule['nations']),text)
+        return text
+    result=join.join(description(rule,bool(shared)) for rule in includes) if includes else translate('all vehicles')
+    if shared:result=translate('Vehicles from %s: %s') % (nation_names(shared),result)
+    elif includes and not any(rule.get('vehicles') for rule in includes):
+        result=translate('All nations: %s') % result
+    exclusions=[]
+    for action,rule in style['rules']:
+        if action!='exclude':continue
+        exclusions.append(join.join(names.get(n,n) for n in rule['vehicles'])
+                          if set(rule)=={'vehicles'} else description(rule))
+    if exclusions:result+=translate('; excludes %s') % join.join(exclusions)
+    return result
+
+
 def _target(slot_id, game_root, environment=None, root=None):
     path = save_ledger.ledger_path(slot_id, game_root, environment, root)
     state = save_ledger._read_state(path)
@@ -149,19 +192,24 @@ def read_inventory(slot_id, game_root, styles, vehicles, environment=None, root=
     return result
 
 
-def add_style(inventory, style, vehicles, copies):
+def add_style(inventory, style, vehicles, copies, bound_vehicle=False):
     if type(copies) is not int or not 1 <= copies <= 100000:
         raise save_ledger.SaveLedgerError('Enter a quantity between 1 and 100000.')
     applicable = [vehicle for vehicle in vehicles if compatible(style, vehicle)]
     if not applicable:
         raise save_ledger.SaveLedgerError('This style cannot be installed on the selected vehicle.')
+    if bound_vehicle and len(vehicles)!=1:
+        raise save_ledger.SaveLedgerError('Select one vehicle before adding vehicle-bound stock.')
+    if style['rent_count'] and not bound_vehicle:
+        raise save_ledger.SaveLedgerError('Select a vehicle before adding a rental style.')
     stock = inventory.setdefault(str(STYLE_TYPE), {}).setdefault(str(style['id']), {})
     count = copies * (style['rent_count'] or 1)
-    updates = {str(v['compact_descr']): stock.get(str(v['compact_descr']), 0) + count for v in applicable}
+    binding=str(applicable[0]['compact_descr']) if bound_vehicle else '0'
+    updates = {binding: stock.get(binding, 0) + count}
     if any(value > 2 ** 31 - 1 for value in updates.values()):
         raise save_ledger.SaveLedgerError('The style inventory quantity is too large.')
     stock.update(updates)
-    return len(applicable)
+    return copies
 
 
 def write_inventory(slot_id, game_root, inventory, environment=None, root=None, is_running=None):

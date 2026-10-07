@@ -1581,6 +1581,9 @@ def init():
         # Install this before every worker refusal path. A fresh preferences
         # leaf otherwise selects #1513's compulsory, unskippable intro movie.
         _install_intro_skip()
+        if requested_mode != port_config.SIMULATION_WORKER_MODE:
+            from gui.mods.offline_lan_0922 import depot_styles
+            depot_styles.install()
         if requested_mode == port_config.SIMULATION_WORKER_MODE:
             if not _client_guard_released:
                 _started = False

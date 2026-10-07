@@ -15,6 +15,7 @@ class CustomizationsDialog(object):
         tk, ttk, tr = owner._tk, owner._ttk, owner._t
         self.window = tk.Toplevel(owner.save_dialog)
         self.window.title(tr('Coatings'))
+        self.window.geometry('1180x650')
         self.window.transient(owner.save_dialog)
         self.window.protocol('WM_DELETE_WINDOW', self.close)
         frame = tk.Frame(self.window, padx=12, pady=12)
@@ -27,9 +28,10 @@ class CustomizationsDialog(object):
             values=tuple(self.vehicle_by_label), state='readonly', width=62)
         self.vehicle_box.grid(row=0, column=1, sticky='we', pady=4)
         self.vehicle_box.bind('<<ComboboxSelected>>', self.refresh)
-        self.table = ttk.Treeview(frame, columns=('style', 'availability', 'stock', 'vehicles'),
+        self.table = ttk.Treeview(frame, columns=('style', 'scope', 'availability', 'stock', 'vehicles'),
                                   show='headings', height=13, selectmode='extended')
         for name, label, width in (('style', 'Preset style', 200),
+                ('scope', 'Applicable range', 600),
                 ('availability', 'Style type', 100), ('stock', 'Inventory', 90),
                 ('vehicles', 'Compatible vehicles', 130)):
             self.table.heading(name, text=tr(label))
@@ -38,20 +40,26 @@ class CustomizationsDialog(object):
         scrollbar = ttk.Scrollbar(frame, orient='vertical', command=self.table.yview)
         scrollbar.grid(row=1, column=2, sticky='ns')
         self.table.configure(yscrollcommand=scrollbar.set)
+        horizontal=ttk.Scrollbar(frame,orient='horizontal',command=self.table.xview)
+        horizontal.grid(row=2,column=0,columnspan=2,sticky='we')
+        self.table.configure(xscrollcommand=horizontal.set)
+        self.table.bind('<<TreeviewSelect>>',self.show_scope)
         controls = tk.Frame(frame)
-        controls.grid(row=2, column=0, columnspan=2, sticky='we')
-        tk.Label(controls, text=tr('Copies per compatible vehicle')).pack(side='left')
+        controls.grid(row=3, column=0, columnspan=2, sticky='we')
+        tk.Label(controls, text=tr('Copies to add per selected style')).pack(side='left')
         self.quantity = tk.StringVar(value='1')
         ttk.Spinbox(controls, from_=1, to=100000, textvariable=self.quantity, width=8).pack(side='left', padx=8)
         tk.Button(controls, text=tr('Add selected styles'), command=self.add).pack(side='left', padx=4)
         tk.Button(controls, text=tr('Fill all styles'), command=self.fill).pack(side='left', padx=4)
-        tk.Label(frame, text=tr('Includes hidden preset styles. Only compatible vehicles receive stock. '
-            'Each rental copy grants its original battle count. Save with the game closed; changes apply on next launch.'),
-            wraplength=610, justify='left').grid(row=3, column=0, columnspan=2, sticky='we', pady=8)
+        tk.Label(frame, text=tr('Permanent style copies are shared by compatible vehicles. Select a vehicle for rental styles. '
+            'Each rental copy grants its original battle count. Fill all styles is a separate bulk action. Save with the game closed.'),
+            wraplength=1100, justify='left').grid(row=4, column=0, columnspan=2, sticky='we', pady=8)
         self.feedback = tk.Label(frame, text='', wraplength=610, justify='left')
-        self.feedback.grid(row=4, column=0, columnspan=2, sticky='we')
+        self.feedback.grid(row=5, column=0, columnspan=2, sticky='we')
+        self.scope_detail=tk.Label(frame,text='',wraplength=1100,justify='left',anchor='w')
+        self.scope_detail.grid(row=6,column=0,columnspan=2,sticky='we',pady=8)
         actions = tk.Frame(frame)
-        actions.grid(row=5, column=0, columnspan=2, sticky='we', pady=(8, 0))
+        actions.grid(row=7, column=0, columnspan=2, sticky='we', pady=(8, 0))
         tk.Button(actions, text=tr('Save changes'), command=self.save).pack(side='left', expand=True, fill='x')
         tk.Button(actions, text=tr('Close'), command=self.close).pack(side='left', expand=True, fill='x')
         frame.grid_columnconfigure(1, weight=1)
@@ -75,8 +83,16 @@ class CustomizationsDialog(object):
             category = 'Hidden' if style['hidden'] else 'Rental' if style['rent_count'] else 'Permanent'
             unit = tr('battles') if style['rent_count'] else tr('copies')
             self.table.insert('', 'end', iid=str(style['id']), values=(
-                style['label'], tr(category), '%d %s' % (count, unit), len(applicable)))
+                store.display_name(style,self.styles,tr),store.applicability(style,self.vehicles,tr),
+                tr(category), '%d %s' % (count, unit), len(applicable)))
         self.table.selection_set(*(key for key in selected if self.table.exists(key)))
+        self.show_scope()
+
+    def show_scope(self,unused=None):
+        selected=self.table.selection()
+        text=(self.owner._t('Applicable range: %s') % self.table.item(selected[0],'values')[1]
+              if selected else self.owner._t('Select a style to see its full applicable range.'))
+        self.scope_detail.config(text=text)
 
     def add(self):
         try:
@@ -89,7 +105,8 @@ class CustomizationsDialog(object):
             staged = copy.deepcopy(self.inventory)
             for style in self.styles:
                 if str(style['id']) in selected:
-                    store.add_style(staged, style, self.targets(), copies)
+                    store.add_style(staged, style, self.targets(), copies,
+                        bound_vehicle=self.vehicle_by_label.get(self.vehicle.get()) is not None)
             self.inventory = staged
             self.refresh()
             self.feedback.config(text=self.owner._t('Inventory changed. Click Save to apply.'))

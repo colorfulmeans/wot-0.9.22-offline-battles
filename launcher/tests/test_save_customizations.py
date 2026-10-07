@@ -48,7 +48,7 @@ class StyleInventoryTests(unittest.TestCase):
         self.assertEqual(state['vehicles'], saved['vehicles'])
         self.assertEqual(state['ledger']['wallet'], saved['ledger']['wallet'])
         self.assertEqual({'5':{'0':3}}, saved['ledger']['customizations']['2'])
-        self.assertEqual({'101':2}, saved['ledger']['customizations']['4']['128'])
+        self.assertEqual({'0':2}, saved['ledger']['customizations']['4']['128'])
 
     def test_default_topup_counts_only_this_garages_owned_compatible_hulls(self):
         store.save_ledger._write_state(self.path, {'vehicles':{'101':{}},'ledger':{}})
@@ -85,8 +85,32 @@ class StyleInventoryTests(unittest.TestCase):
 
     def test_rental_add_uses_native_battle_count_and_ignores_incompatible_vehicle(self):
         stock={}
-        self.assertEqual(2,store.add_style(stock,STYLES[0],VEHICLES,3))
-        self.assertEqual({'101':300,'102':300},stock['4']['1'])
+        with self.assertRaises(store.save_ledger.SaveLedgerError):store.add_style(stock,STYLES[0],VEHICLES,3)
+        self.assertEqual({},stock)
+        self.assertEqual(3,store.add_style(stock,STYLES[0],VEHICLES[:1],3,bound_vehicle=True))
+        self.assertEqual({'101':300},stock['4']['1'])
+
+    def test_permanent_add_one_is_one_copy_regardless_of_compatible_hull_count(self):
+        stock={};style=dict(STYLES[0],rent_count=0)
+        self.assertEqual(1,store.add_style(stock,style,VEHICLES,1))
+        self.assertEqual({'0':1},stock['4']['1'])
+        store.add_style(stock,style,VEHICLES[:1],1,bound_vehicle=True)
+        self.assertEqual({'0':1,'101':1},stock['4']['1'])
+
+    def test_scope_text_and_names_are_self_contained(self):
+        import wot_launcher
+        tr=lambda text:wot_launcher._CHINESE.get(text,text)
+        # Use the actual filters and localized vehicle names from the catalogue.
+        game=__import__('os').environ.get('WOT_0922_CLIENT')
+        if not game:self.skipTest('requires exact client catalogue')
+        styles,vehicles=store.catalogue(game)
+        by_id={s['id']:s for s in styles}
+        self.assertEqual('黑寡妇（C系）',store.display_name(by_id[34],styles,tr))
+        for identifier in (34,128):
+            self.assertEqual('C系VIII级金币／奖励车辆、全部X级车辆；排除黄金59式',store.applicability(by_id[identifier],vehicles,tr))
+        text=store.applicability(by_id[132],vehicles,tr)
+        for name in ('黄金59式','施瓦茨 58','天蝎 G','T34 B','IS-6 B'):self.assertIn(name,text)
+        self.assertNotIn('上述',text);self.assertNotIn('相同',text)
 
     def test_incompatible_or_invalid_quantity_is_atomic(self):
         stock={}

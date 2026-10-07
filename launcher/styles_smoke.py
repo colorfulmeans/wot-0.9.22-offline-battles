@@ -31,13 +31,20 @@ def run(destination, game_root, translate=lambda value: value):
             dialog.window.geometry('+10000+10000')
             root.update()
             assert len(dialog.table.get_children()) == 27
+            assert dialog.table.heading('scope','text')==translate('Applicable range')
+            assert len({dialog.table.item(str(i),'values')[0] for i in range(32,41)})==9
+            for identifier in (128,129,130,131,132,133,134,135,136):
+                text=dialog.table.item(str(identifier),'values')[1]
+                assert text and '相同' not in text and '上述' not in text
             hidden = [s for s in dialog.styles if s['hidden']]
             assert len(hidden) == 9
             chosen = next(s for s in hidden if s['id'] == 128)
             applicable = [v for v in dialog.vehicles if store.compatible(chosen, v)]
             before = sum(dialog.inventory['4']['128'].values())
             dialog.table.selection_set('128'); dialog.quantity.set('2'); dialog.add()
-            assert sum(dialog.inventory['4']['128'].values()) == before + len(applicable)*2
+            assert sum(dialog.inventory['4']['128'].values()) == before + 2
+            assert dialog.inventory['4']['128']['0']==2
+            dialog.show_scope();assert dialog.table.item('128','values')[1] in dialog.scope_detail.cget('text')
             dialog.save()
             restored = original_read('default', game_root, dialog.styles, dialog.vehicles, root=temp)
             assert restored == dialog.inventory
@@ -60,6 +67,7 @@ def run(destination, game_root, translate=lambda value: value):
             report.update(ok=True, styles=27, hidden=9, compatible_add=True, atomic_save=True,
                           target_filter=True, temporary_save_only=True, save_caption=translate('Save changes'),
                           customization_wallet_earnings_receipts=True)
+            report.update(full_scope_column=True,distinct_nation_names=True,single_copy_add=True)
     except Exception:
         report['error'] = traceback.format_exc()
     finally:
