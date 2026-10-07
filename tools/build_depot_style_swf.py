@@ -30,7 +30,7 @@ def transform(name, source):
         marker = '      protected function getLinkageFromFittingType(param1:String) : String\n'
         source = replace_once(source, marker, '''      protected function getStoreSlots() : Array
       {
-         if(getNameS() == "inventory")
+         if(getNameS() == "inventory" || getNameS() == "shop")
          {
             return FITTING_TYPES.STORE_SLOTS.concat(["offlineStyles"]);
          }
@@ -40,7 +40,7 @@ def transform(name, source):
 ''' + marker)
         source = replace_once(source, '         return param1 + FITTING_TYPE_VIEW_POSTFIX;', '''         if(param1 == "offlineStyles")
          {
-            return "shopVehicleViewUI";
+            return getNameS() == "inventory" ? "shopVehicleViewUI" : "inventoryVehicleViewUI";
          }
          return param1 + FITTING_TYPE_VIEW_POSTFIX;''')
         source = replace_once(source, '"label":param1(_loc5_ + NAME_LABEL_SUFFIX),',
@@ -53,7 +53,55 @@ def transform(name, source):
             'this.storeTable.updateHeaderCountTitle(param1.fittingType == "offlineStyles" ? "库存" : MENU.shop_table_header_count(param1.fittingType));')
     elif name == BASE + 'views.ShopVehicleView':
         source = replace_once(source, '         return this.getSelectedObtainingType();',
-            '         return getUIName() == "inventory" ? "offlineStyles" : this.getSelectedObtainingType();')
+            '         return super.fittingType == "offlineStyles" ? "offlineStyles" : this.getSelectedObtainingType();')
+    elif name == BASE + 'StoreListItemRenderer':
+        marker='      public function StoreListItemRenderer()\n'
+        source=replace_once(source,marker,'''      private var _offlineNameFont:String = null;
+      private var _offlineDescFont:String = null;
+      private var _offlineNameEmbedded:Boolean;
+      private var _offlineDescEmbedded:Boolean;
+
+      private function setStyleTextFont(isStyle:Boolean) : void
+      {
+         var nameFormat:TextFormat = textField.getTextFormat();
+         var descFormat:TextFormat = descField.getTextFormat();
+         if(_offlineNameFont == null)
+         {
+            _offlineNameFont = nameFormat.font;
+            _offlineDescFont = descFormat.font;
+            _offlineNameEmbedded = textField.embedFonts;
+            _offlineDescEmbedded = descField.embedFonts;
+         }
+         nameFormat.font = isStyle ? "Microsoft YaHei" : _offlineNameFont;
+         descFormat.font = isStyle ? "Microsoft YaHei" : _offlineDescFont;
+         textField.embedFonts = isStyle ? false : _offlineNameEmbedded;
+         descField.embedFonts = isStyle ? false : _offlineDescEmbedded;
+         textField.setTextFormat(nameFormat);
+         descField.setTextFormat(descFormat);
+      }
+
+''' + marker)
+        source=replace_once(source,'            descField.text = _loc1_.desc;',
+            '            descField.text = _loc1_.desc;\n            this.setStyleTextFont(_loc1_.itemTypeName == "offlineStyle");')
+        marker='           _loc1_ = StoreTableData(data);'
+        # Only the tooltip method uses this indentation.
+        source=replace_once(source,marker,marker+'''\n           if(_loc1_ && _loc1_.itemTypeName == "offlineStyle")
+           {
+              return;
+           }''')
+        source=replace_once(source,
+            'if(Boolean(_loc1_) && _loc1_.itemTypeName != FITTING_TYPES.BOOSTER)',
+            'if(Boolean(_loc1_) && _loc1_.itemTypeName != "offlineStyle" && _loc1_.itemTypeName != FITTING_TYPES.BOOSTER)')
+    elif name == BASE + 'shop.ShopModuleListItemRenderer':
+        old='         this.moduleIcon.setValuesWithType(param1.requestType,param1.moduleLabel,param1.level);'
+        source=replace_once(source,old,'''         if(param1.itemTypeName == "offlineStyle")
+         {
+            getHelper().initModuleIconAsDefault(this.moduleIcon);
+         }
+         else
+         {
+            this.moduleIcon.setValuesWithType(param1.requestType,param1.moduleLabel,param1.level);
+         }''')
     elif name == BASE + 'inventory.InventoryModuleListItemRenderer':
         marker = '      private function updateModuleIcon(param1:StoreTableData) : void\n'
         source = replace_once(source, marker, '''      override protected function showTooltip() : void
@@ -76,6 +124,10 @@ def transform(name, source):
             {
                this.moduleIcon.setValuesWithType(param1.requestType,param1.moduleLabel,param1.level);
             }''')
+    elif name == BASE + 'views.base.BaseStoreMenuView':
+        source=replace_once(source,
+            '         initializeControlsByHashLocalized(param1,param2,param3,this._localizator);',
+            '         initializeControlsByHashLocalized(param1 == "offlineStyles" ? "vehicle" : param1,param2,param3,this._localizator);')
     else:
         raise ValueError('Unreviewed class: ' + name)
     return source
@@ -87,7 +139,9 @@ def build(client, java, ffdec, output):
     if hashlib.sha256(raw).hexdigest() != INPUT_SHA256:
         raise ValueError('Requires Chinese HD 0.9.22.0.1 #1513 lobby.swf')
     classes = (BASE + 'StoreComponent', BASE + 'views.ShopVehicleView',
-               BASE + 'inventory.InventoryModuleListItemRenderer')
+               BASE + 'inventory.InventoryModuleListItemRenderer',
+               BASE + 'StoreListItemRenderer', BASE + 'shop.ShopModuleListItemRenderer',
+               BASE + 'views.base.BaseStoreMenuView')
     command = [str(java), '-Djava.awt.headless=true', '-jar', str(ffdec)]
     with tempfile.TemporaryDirectory(prefix='wot-depot-ui-') as directory:
         temp = Path(directory)

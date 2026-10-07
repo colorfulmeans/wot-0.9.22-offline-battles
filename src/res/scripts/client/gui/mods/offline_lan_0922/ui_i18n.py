@@ -31,6 +31,15 @@ def tr(source):
 
 
 _ZH = {
+    'Purchase style': u'购买风格',
+    'Buy %s for %d %s?': u'是否购买 %s？价格为 %d %s。',
+    'Style purchased.': u'风格购买成功。',
+    'Style purchase failed.': u'风格购买失败，请检查余额及车辆适用条件。',
+    'Rental style: %d battles per purchase.': u'租用风格：每份可使用 %d 场。',
+    'Permanent style: one copy per purchase.': u'永久风格：每次购买 1 份。',
+    'Select a compatible vehicle in the garage.': u'请先在车库选择适用的车辆。',
+    'credits': u'银币',
+    'gold': u'金币',
     'Replay playback stopped (%s).': u'录像回放已停止（%s）。',
     'Personal mission %d': u'个人任务 %d',
     'Personal mission completed: %s.': u'个人任务完成：%s。',

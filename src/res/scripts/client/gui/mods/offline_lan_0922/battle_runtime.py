@@ -2081,6 +2081,8 @@ class BattleRuntime(object):
         self._spawn_planner = None
         self._navigation_graph = None
         self._grounded_bot_ids = set()
+        self._spawn_overlap_done = set()
+        self._spawn_overlap_retry = {}
         self._bot_vehicle_assignments = {}
         self._spawn_cache = {}
         self._rules_state = {'bases': {}}
@@ -2436,6 +2438,8 @@ class BattleRuntime(object):
         self._bot_create_finished = None
         self._navigation_graph = None
         self._grounded_bot_ids = set()
+        self._spawn_overlap_done = set()
+        self._spawn_overlap_retry = {}
         self._bot_vehicle_assignments = {}
         self._spawn_cache = {}
         self._rules_state = {'bases': {}}
@@ -16848,8 +16852,54 @@ class BattleRuntime(object):
                 state['yaw'], descriptor, now)
             if isinstance(detail, dict) and detail.get('status') == 'ready':
                 ready += 1
+                self._clear_spawn_destructible_overlap(state, descriptor, position, state['yaw'], now)
         self._bot_registry_cursor = (start + 2) % len(states)
         return ready
+
+    def _clear_spawn_destructible_overlap(self, state, descriptor, position, yaw, now):
+        """Clear proved fragile placement overlaps once, on the worker only."""
+        if not self._worker_mode or self._destructibles is None:
+            return False
+        resolver = getattr(self._destructibles, '_catalog_motion_blocked', None)
+        if not callable(resolver):
+            return False
+        actor = int(state['id'])
+        done = getattr(self, '_spawn_overlap_done', None)
+        if done is None:
+            self._spawn_overlap_done = done = set()
+        key = (self._generation, actor)
+        if key in done:
+            return False
+        anchor, unused_yaw = self._formation_pose(int(state.get('team', 1)), int(state.get('slot', 0)))
+        if ((position[0]-anchor[0])**2+(position[2]-anchor[2])**2 > 1.0):
+            done.add(key)
+            return False
+        retry = getattr(self, '_spawn_overlap_retry', None)
+        if retry is None:
+            self._spawn_overlap_retry = retry = {}
+        if now < retry.get(key, 0.0):
+            return False
+        retry[key] = now + 1.0
+        params = vehicle_physics.derive_params(descriptor)
+        cap = self._destructible_drive_speed_cap(descriptor, params, 0.0)
+        # A spawn placement overlap uses the existing cap only for crush
+        # eligibility. The canonical event keeps zero actual impact speed;
+        # there is no fictitious velocity or airborne engine traction.
+        receipt = resolver(self._avatar.spaceID, self._vector(position), yaw, 0.0,
+                           descriptor, now, kinetic_speed=cap, kinetic_commit=True,
+                           return_detail=True, spawn_overlap=True, travel_reach=0.0)
+        if not isinstance(receipt, dict) or receipt.get('status') not in ('clear', 'crushed'):
+            return False
+        if receipt.get('status') == 'clear':
+            # Geometry and the first grounded pose may arrive after an empty
+            # query. Do not seal an airborne/provisional placement as clear.
+            return False
+        done.add(key)
+        retry.pop(key, None)
+        if receipt.get('accepted_now'):
+            sys.stdout.write('[Offline LAN 0.9.22] SPAWN fragile overlap cleared actor=%s token=%s\n' %
+                             (actor, receipt.get('token')))
+        return bool(receipt.get('accepted_now'))
 
     def _prewarm_player_tree_registries(self, now):
         """Register countdown tree identities near authoritative humans."""
@@ -16866,23 +16916,35 @@ class BattleRuntime(object):
             for state in players:
                 if not isinstance(state, dict):
                     continue
+                if self._battle_live:
+                    key = (self._generation, int(state['id']))
+                    if key in self._spawn_overlap_done or now < self._spawn_overlap_retry.get(key, 0.0):
+                        continue
+                    if state.get('alive') is False:
+                        self._spawn_overlap_done.add(key)
+                        continue
                 try:
                     position = (
                         float(state.get('x')), float(state.get('y')),
                         float(state.get('z')))
                     yaw = float(state.get('yaw'))
                     descriptor = self._resolve_player_descriptor(state)
+                    if self._battle_live:
+                        anchor, unused_yaw = self._formation_pose(int(state.get('team', 1)), int(state.get('slot', 0)))
+                        if (position[0]-anchor[0])**2+(position[2]-anchor[2])**2 > 1.0:
+                            self._spawn_overlap_done.add(key)
+                            continue
                 except Exception:
                     continue
-                poses.append((position, yaw, descriptor))
+                poses.append((position, yaw, descriptor, state))
         else:
             descriptor = getattr(self, '_local_descriptor', None)
             if descriptor is not None:
                 poses.append((tuple(self._local_position),
-                              float(self._local_yaw), descriptor))
+                              float(self._local_yaw), descriptor, None))
 
         ready = 0
-        for position, yaw, descriptor in poses:
+        for position, yaw, descriptor, state in poses:
             try:
                 detail = prewarm(
                     self._avatar.spaceID, self._vector(position), yaw,
@@ -16894,6 +16956,8 @@ class BattleRuntime(object):
             if (isinstance(detail, dict) and
                     detail.get('status') == 'ready'):
                 ready += 1
+                if state is not None:
+                    self._clear_spawn_destructible_overlap(state, descriptor, position, yaw, now)
         return ready
 
     def _resolve_player_destructible_contacts(self, players, now):
@@ -17620,14 +17684,15 @@ class BattleRuntime(object):
                         # callback must restore the unchanged live fail-closed
                         # path, not prevent the battle from starting.
                         pass
-            if (not self._battle_live and
-                    self._prebattle_deadline is not None and
-                    self._destructibles is not None):
+            if (self._destructibles is not None and
+                    ((not self._battle_live and self._prebattle_deadline is not None) or
+                     (self._worker_mode and self._battle_live))):
                 try:
                     self._prewarm_player_tree_registries(now)
                 except Exception:
-                    # Tree registration is likewise a countdown optimisation.
-                    # A broken native registry must not prevent battle start.
+                    # A player's first authoritative world pose can arrive
+                    # after countdown. Bounded spawn clearance must survive it.
+                    # A broken registry remains local to the contact attempt.
                     pass
             try:
                 self._prewarm_bot_destructible_registries(now)

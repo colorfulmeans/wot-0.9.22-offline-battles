@@ -4959,8 +4959,10 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		return_status=False, dt=0.04, kinetic_speed=None,
 		return_detail=False, kinetic_commit=False, commit_enabled=True,
 		proposal_only=False, motion_yaw=None, pitch=0.0, roll=0.0,
-		travel_reach=None):
+		travel_reach=None, spawn_overlap=False):
 	"""Resolve exact streamed OBB contact before committing local movement."""
+	if spawn_overlap and (float(vel) != 0.0 or proposal_only):
+		raise ValueError('spawn overlap resolution is stationary and authority-only')
 	if proposal_only and (not return_detail or not kinetic_commit):
 		raise ValueError(
 			'catalog motion proposals require detail and kinetic classification')
@@ -5014,6 +5016,8 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 
 	grouped = {}
 	for candidate in candidates:
+		if spawn_overlap and candidate[4] != 'fragile':
+			continue
 		grouped.setdefault((candidate[0], candidate[1]), []).append(candidate)
 	instances = globals().get('g_offh_destr_instances', {})
 	contact_box = (_vehicle_contact_box(
