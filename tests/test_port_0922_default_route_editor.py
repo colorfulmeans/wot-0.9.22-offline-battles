@@ -60,8 +60,10 @@ class DefaultRouteTests(unittest.TestCase):
         first=source['routes']['1'][0];edit=profile['maps']['31_airfield']['default_routes'][0]
         self.assertEqual(edit['points'],routes['1'][0]['waypoints'])
         self.assertEqual({k:v for k,v in first.items() if k!='waypoints'},
-                         {k:v for k,v in routes['1'][0].items() if k!='waypoints'})
-        self.assertEqual(source['routes']['2'],routes['2'])
+                         {k:v for k,v in routes['1'][0].items() if k not in ('waypoints','_allocation_symmetric')})
+        self.assertFalse(routes['1'][0]['_allocation_symmetric'])
+        unedited,unused=planning.default_routes(config.empty(),'31_airfield',self.graph)
+        self.assertEqual(unedited['2'],routes['2'])
         self.assertEqual(source,self.graph)
         self.assertEqual({'1:'+first['id']:'baked_route_connected'},status)
 
@@ -69,7 +71,7 @@ class DefaultRouteTests(unittest.TestCase):
         graph=copy.deepcopy(self.graph);graph['links']=[0]*len(graph['links'])
         profile=edited_profile(self.graph)
         routes,status=planning.default_routes(profile,'31_airfield',graph)
-        self.assertEqual(graph['routes'],routes)
+        self.assertEqual(planning.default_routes(config.empty(),'31_airfield',graph)[0],routes)
         self.assertEqual(['waypoints_disconnected'],list(status.values()))
 
     def test_worker_installs_edits_before_assignment_and_host_catalog_receives_geometry(self):
@@ -107,7 +109,8 @@ class DefaultRouteTests(unittest.TestCase):
         # The next round with no override must use the unmodified graph again.
         runtime.adapter_factory=factory
         runtime._bot_tactics=config.empty();runtime._new_adapter('31_airfield',6)
-        self.assertEqual(self.graph['routes'],factory.call_args.kwargs['baked_routes'])
+        self.assertEqual(planning.default_routes(config.empty(),'31_airfield',self.graph)[0],
+                         factory.call_args.kwargs['baked_routes'])
 
     def test_editor_registry_matches_every_shipped_default_id(self):
         root=Path(__file__).resolve().parents[1]
@@ -123,12 +126,12 @@ class DefaultRouteTests(unittest.TestCase):
             with self.subTest(map=name):
                 self.assertEqual(len(edits),len(config.canonical(profile)['maps'][name]['default_routes']))
 
-    def test_scoped_defaults_keep_initial_lane_allocation_and_reach_matching_bots(self):
+    def test_scoped_defaults_reach_matching_priority_selected_bots_and_restore_wire_geometry(self):
         module=native._load();runtime=module.BotRuntime(1)
         runtime.baked_graph=self.graph
         profile=edited_profile(self.graph)
         edit=profile['maps']['31_airfield']['default_routes'][0]
-        edit['class_tag']='heavyTank';edit['points'][0].append(12.5)
+        edit['class_tag']='heavyTank';edit['priority']=9;edit['points'][0].append(12.5)
         runtime._bot_tactics=config.canonical(profile)
         runtime.adapter=runtime._new_adapter('31_airfield',5)
         for actor,tag in ((11,'heavyTank'),(12,'mediumTank')):
@@ -138,12 +141,16 @@ class DefaultRouteTests(unittest.TestCase):
             runtime.states[actor]=dict(id=actor,team=1,slot=actor-11,profile={'class_tag':tag},route=source)
         runtime._prepare_user_routes(dict(map='31_airfield'),False)
         self.assertEqual(config.default_route_id(edit),runtime.states[11]['route']['id'])
-        self.assertEqual(edit['id'],runtime.states[12]['route']['id'])
+        medium=runtime.states[12]['route']
+        source=next(r for r in self.graph['routes']['1'] if r['id']==medium['id'])
+        self.assertEqual([tuple(p[:3]) for p in source['waypoints']],list(medium['waypoints']))
         self.assertTrue(all(len(p)==3 for p in runtime.states[11]['route']['waypoints']))
         cfg=config.route_config(runtime._bot_tactics,'31_airfield',runtime.states[11]['route']['id'],1)
         self.assertEqual(12.5,cfg['points'][0][3])
         self.assertIsNone(config.route_config(runtime._bot_tactics,'31_airfield',cfg['id'],2))
-        restored=[dict(id=actor,team=1,route=runtime.states[actor]['route']) for actor in (11,12)]
+        restored=[dict(id=actor,team=1,route=dict(id=runtime.states[actor]['route']['id'],
+                  waypoints=[dict(x=p[0],z=p[1],hold=bool(p[2]))
+                             for p in runtime.states[actor]['route']['waypoints']])) for actor in (11,12)]
         runtime._prepare_user_routes(dict(map='31_airfield',bot_manifest=restored),True)
         self.assertEqual(cfg['id'],runtime.states[11]['route']['id'])
 

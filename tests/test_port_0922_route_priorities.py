@@ -70,7 +70,7 @@ class RoutePriorityTests(unittest.TestCase):
         graph,doc=profile();doc['maps']['31_airfield']['default_routes']=[edit(graph['routes']['1'][0],'lightTank',9)]
         graph=copy.deepcopy(graph);graph['links']=[0]*len(graph['links'])
         routes,status=planning.default_routes(config.canonical(doc),'31_airfield',graph)
-        self.assertEqual(graph['routes'],routes)
+        self.assertEqual(planning.default_routes(config.empty(),'31_airfield',graph)[0],routes)
         self.assertTrue(all(v=='waypoints_disconnected' for v in status.values()))
 
     def test_custom_priorities_rank_before_weight_and_preserve_class_and_capacity(self):

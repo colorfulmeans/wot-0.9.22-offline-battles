@@ -49,7 +49,7 @@ jobs:
           python -m unittest test_port_0922_artillery_controller test_port_0922_spg_tracking test_port_0922_spg_failed_launch
           python -m unittest test_port_0922_battle_runtime.BattleRuntimeContractTests.test_spg_friendly_lane_uses_exact_arc_and_real_he_radius test_port_0922_bot_runtime.BotRuntimeTests.test_spg_exact_friendly_lane_is_checked_before_atomic_fire test_port_0922_projectile_runtime test_port_0922_server_projectiles
           python -m unittest test_port_0922_gameplay_followup.AimProgressTests
-          python -m unittest test_port_0922_airfield_routes_loading test_port_0922_bot_tactics_editor test_port_0922_default_route_editor test_port_0922_route_priorities
+          python -m unittest test_port_0922_airfield_routes_loading test_port_0922_bot_tactics_editor test_port_0922_default_route_editor test_port_0922_route_priorities test_port_0922_initial_allocation
       - name: Check customization economy and durable rental settlement
         env:
           PYTHONDONTWRITEBYTECODE: "1"
