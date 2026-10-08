@@ -3,12 +3,6 @@ name: Build and replace v0.10.0
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main, release/v0.10.0]
-    paths:
-      - '.github/workflows/publish-v0.10.0.yml'
-      - 'docs/releases/v0.10.0.md'
-      - 'docs/bot-editor-guide-en.md'
 
 concurrency:
   group: release-0100-${{ github.ref }}
