@@ -1,5 +1,5 @@
 name: Build and publish v0.10.0
-# Validate the exact isolated replay resources as well as the Python 2.7 mod.
+# Validate current bytecode without inheriting verifier future flags.
 
 on:
   workflow_dispatch:
