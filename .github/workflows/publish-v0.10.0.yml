@@ -1,4 +1,4 @@
-name: Build and publish v0.10.0
+name: Build and replace v0.10.0
 # Validate current bytecode without inheriting verifier future flags.
 
 on:
@@ -95,6 +95,9 @@ jobs:
           --pattern 'test_port_0922_depot_styles.py'
           --pattern 'test_port_0922_ram_incoming_motion.py'
           --pattern 'test_port_0922_spawn_prop_clearance.py'
+          --pattern 'test_port_0922_wreck_route_switch.py'
+          --pattern 'test_port_0922_server_capture.py'
+          --pattern 'test_port_0922_team_commands.py'
       - name: Reproduce the verified recorder resource
         run: python tools/build_replay_runtime.py
       - name: Stage the verified warehouse and shop style UI
@@ -386,26 +389,43 @@ jobs:
         run: |
           set -euo pipefail
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.10.0" >/dev/null 2>&1; then
-            echo 'v0.10.0 already exists; refusing to replace a published tag.' >&2
+          old_target=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.10.0" --jq .object.sha)
+          if [ "$old_target" != 'c8821931a03ac8ae4b46fd59b79a73ca91188280' ] && [ "$old_target" != "$GITHUB_SHA" ]; then
+            echo 'Unexpected v0.10.0 target; refusing an unapproved replacement.' >&2
             exit 1
           fi
           archive=release-assets/wot-0.9.22-offline-battles-0.10.0-Windows-x64.zip
           sources=release-assets/wot-0.9.22-offline-battles-0.10.0-Source-and-validation.zip
           guide=release-assets/wot-0.9.22-offline-battles-0.10.0-Bot-Editor-Guide-English.md
           cp docs/bot-editor-guide-en.md "$guide"
-          gh release create v0.10.0 "$archive" "$sources" "$guide" --draft --target "$GITHUB_SHA" \
-            --title 'v0.10.0 — Bot tactics, navigation and customization' \
-            --notes-file docs/releases/v0.10.0.md
-          gh release view v0.10.0 --json assets --jq '.assets[] | [.name,.size] | @tsv' > release-assets/manifest.tsv
+          gh release view v0.10.0 --json assets --jq '.assets[] | [.name,.size,.id] | @tsv' > release-assets/previous.tsv
+          gh release edit v0.10.0 --draft=true
+          gh release upload v0.10.0 "$archive" "$sources" --clobber
+          gh release view v0.10.0 --json assets --jq '.assets[] | [.name,.size,.id] | @tsv' > release-assets/manifest.tsv
           python - <<'PY'
           from pathlib import Path
           expected = [Path('release-assets/wot-0.9.22-offline-battles-0.10.0-Windows-x64.zip'),
                       Path('release-assets/wot-0.9.22-offline-battles-0.10.0-Source-and-validation.zip'),
                       Path('release-assets/wot-0.9.22-offline-battles-0.10.0-Bot-Editor-Guide-English.md')]
-          rows = dict(line.split('\t') for line in Path('release-assets/manifest.tsv').read_text().splitlines())
+          rows = {name: (size, identity) for name, size, identity in
+                  (line.split('\t') for line in Path('release-assets/manifest.tsv').read_text().splitlines())}
+          previous = {name: identity for name, size, identity in
+                      (line.split('\t') for line in Path('release-assets/previous.tsv').read_text().splitlines())}
           assert set(rows) == {path.name for path in expected}, rows
           for path in expected:
-              assert int(rows[path.name]) == path.stat().st_size, path
+              assert int(rows[path.name][0]) == path.stat().st_size, path
+              if path.suffix == '.zip':
+                  assert rows[path.name][1] != previous[path.name], path
+              else:
+                  assert rows[path.name][1] == previous[path.name], path
           PY
-          gh release edit v0.10.0 --draft=false --prerelease=false --latest
+          # The user explicitly requested replacing this release and deleting
+          # its previous version. Recreate the tag without a force-push.
+          if [ "$old_target" != "$GITHUB_SHA" ]; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/v0.10.0"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref=refs/tags/v0.10.0 -f sha="$GITHUB_SHA"
+          fi
+          gh release edit v0.10.0 --target "$GITHUB_SHA" \
+            --notes-file docs/releases/v0.10.0.md --draft=false --prerelease=false --latest
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.10.0" --jq .object.sha)" = "$GITHUB_SHA"
