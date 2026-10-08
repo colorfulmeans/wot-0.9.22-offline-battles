@@ -318,7 +318,7 @@ class TrafficCoordinator(object):
                      body['position'], heading + math.pi,
                      neighbours, length, width, remaining) is None)
         result = dict(command)
-        result.update(throttle=0.65 * lease['sign'] if clear else 0.0,
+        result.update(throttle=0.70 * lease['sign'] if clear else 0.0,
                       brake=not clear,
                       turn=0.0, target_yaw=body['yaw'], movement_intent=True,
                       recovery_mode='friendly_yield', traffic_mode='friendly_yield',
@@ -554,7 +554,7 @@ class TrafficCoordinator(object):
                         clear = clear and self._escape_probe._reverse_blocked_by_vehicle(
                             body['position'], body['yaw'], neighbours, length, width) is None
                     if clear:
-                        result.update(throttle=-0.65 if bot_id == retreating else 0.65,
+                        result.update(throttle=-0.70 if bot_id == retreating else 0.70,
                                       brake=False,
                                       turn=0.0, target_yaw=body['yaw'], traffic_mode='head_on_retreat')
                 continue

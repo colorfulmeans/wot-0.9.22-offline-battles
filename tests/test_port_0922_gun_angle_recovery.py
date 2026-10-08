@@ -39,6 +39,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
         calls = []
         move = self.order_at(2., lambda *args: calls.append(args) or True)
         self.assertEqual((0., 0., 8.), move['move_position'])
+        self.assertEqual(.70, move['throttle_override'])
         self.state['z'] = 3.
         self.assertEqual(move['move_position'], self.order_at(4.)['move_position'])
         self.assertEqual(1, len(calls))
@@ -48,6 +49,16 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.assertIsNone(resumed['target_id'])
         self.assertTrue(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 7.))
         self.assertFalse(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 14.))
+
+    def test_friendly_lane_yield_uses_seventy_percent_and_expires(self):
+        self.runtime._friendly_repositions[11] = dict(
+            target_id=28, destination=(0., 0., 10.), deadline=5.,
+            fire_range=400., shell_index=0)
+        order, expired = self.runtime._friendly_reposition_order(self.state, self.targets, 2.)
+        self.assertFalse(expired)
+        self.assertEqual(.70, order['throttle_override'])
+        self.assertFalse(order['fire_allowed'])
+        self.assertEqual((None, True), self.runtime._friendly_reposition_order(self.state, self.targets, 5.))
 
     def test_real_reachable_pose_ends_adjustment_without_relaxing_limits(self):
         self.refuse()
@@ -108,6 +119,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.order_at(10.)
         move = self.order_at(12., lambda yaw, distance: yaw > 1.)
         self.assertEqual('withdraw', move['combat_mode'])
+        self.assertEqual(.70, move['throttle_override'])
         self.assertAlmostEqual(-8., move['move_position'][2])
         self.assertEqual(self.target['position'], move['face_position'])
 

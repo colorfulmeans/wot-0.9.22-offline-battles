@@ -360,7 +360,7 @@ class BotAdapter(object):
         braking_distance = max(0.0, float(state.get('stopping_distance') or 0.0))
         stopping = (float(state.get('speed', 0.0)) < -0.05 and
                     distance <= max(WAYPOINT_ARRIVAL_RADIUS, braking_distance))
-        return {'throttle': 0.0 if stopping else -0.72,
+        return {'throttle': 0.0 if stopping else -1.0,
                 'turn': 0.0 if stopping else -max(-0.5, min(0.5, error / 0.58)),
                 'withdrawal_aim': goal_distance <= 30.0 and exposed,
                 'target_yaw': face_yaw, 'recovery_mode': 'reverse_withdraw'}

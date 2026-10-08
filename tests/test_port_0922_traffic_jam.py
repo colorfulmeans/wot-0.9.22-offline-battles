@@ -50,7 +50,7 @@ class ParkedTrafficTests(unittest.TestCase):
         first = self.prime()
         self.assertGreater(first['throttle'], 0.)
         self.assertEqual('friendly_yield', first['recovery_mode'])
-        self.assertEqual(.65,abs(first['throttle']))
+        self.assertEqual(.70,abs(first['throttle']))
         self.assertFalse(first['fire_allowed'])
         self.assertEqual(99, first['target_id'])
         position = self.parked['position'][2]

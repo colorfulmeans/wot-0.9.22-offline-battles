@@ -3292,7 +3292,7 @@ class BotPlanner(object):
         if phase == "approach":
             order["combat_mode"] = "take_cover"
             order["move_position"] = dict(cover)
-            order["throttle_override"] = 0.72
+            order["throttle_override"] = 1.0
         elif phase == "hold":
             order["combat_mode"] = "cover_hold"
             order["move_position"] = dict(cover)
@@ -3303,7 +3303,7 @@ class BotPlanner(object):
         elif phase == "peek":
             order["combat_mode"] = "cover_peek"
             order["move_position"] = dict(peek)
-            order["throttle_override"] = 0.75 if peek_distance > 4.5 else 0.0
+            order["throttle_override"] = 1.0 if peek_distance > 4.5 else 0.0
             order["fire_allowed"] = can_fire
         else:
             order["combat_mode"] = "cover_return"
@@ -3667,7 +3667,7 @@ class BotPlanner(object):
             order["combat_mode"] = "flank"
             order["move_position"] = self._flank_point(
                 bot, focus, desired_range, team_bots or ())
-            order["throttle_override"] = 0.78
+            order["throttle_override"] = 1.0
             self._firing_holds.pop(bot["id"], None)
             return order
         advance_score = (
@@ -3695,7 +3695,7 @@ class BotPlanner(object):
                 # back to the route repeatedly resets local navigation progress.
                 order["combat_mode"] = "advance" if route_id else "advance_contact"
                 order["move_position"] = dict(move if route_id else focus["position"])
-                order["throttle_override"] = 0.72
+                order["throttle_override"] = 1.0
             elif range_mode == "support_hold":
                 order["combat_mode"] = "support_hold"
                 order["move_position"] = _point(state)

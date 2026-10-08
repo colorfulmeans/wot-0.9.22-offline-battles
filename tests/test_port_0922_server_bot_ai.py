@@ -304,7 +304,7 @@ class ServerBotTacticsTests(unittest.TestCase):
         peeking = planner.build_orders(
             self.manifest, self.states, players, 7.2)['orders'][0]
         self.assertEqual('cover_peek', peeking['combat_mode'])
-        self.assertEqual(0.75,peeking['throttle_override'])
+        self.assertEqual(1.0,peeking['throttle_override'])
 
     def test_low_health_vehicle_retreats_without_waiting_for_a_hit(self):
         planner = BotPlanner()

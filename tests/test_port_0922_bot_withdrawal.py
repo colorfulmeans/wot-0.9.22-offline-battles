@@ -29,17 +29,24 @@ class WithdrawalTests(unittest.TestCase):
                      'crossfire_withdraw'):
             self.order['combat_mode'] = mode
             result = self.decide()
-            self.assertLess(result['throttle'], 0.)
+            self.assertEqual(-1.0, result['throttle'])
             self.assertAlmostEqual(0., result['turn'])
             self.assertAlmostEqual(0., math.sin(result['target_yaw']))
             self.assertGreater(math.cos(result['target_yaw']), .99)
             self.assertEqual(self.order['aim_position'], result['aim_position'])
             self.assertTrue(result['fire_allowed'])
 
+    def test_aligned_gun_angle_adjustment_keeps_seventy_percent(self):
+        self.order.update(combat_mode='gun_angle_adjust', move_position=(0., 0., 20.),
+                          throttle_override=.70)
+        self.assertEqual(.70, self.decide()['throttle'])
+        self.order['throttle_override'] = 0.
+        self.assertEqual(0., self.decide()['throttle'])
+
     def test_shallow_diagonal_backs_with_correct_reverse_steering_sign(self):
         self.order['move_position'] = (-5., 0., -20.)
         result = self.decide()
-        self.assertLess(result['throttle'], 0.)
+        self.assertEqual(-1.0, result['throttle'])
         self.assertLess(result['turn'], 0.)
         self.assertLess(abs(result['turn']), .5)
         self.assertGreater(math.cos(result['target_yaw']), .9)
