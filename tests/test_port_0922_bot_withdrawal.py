@@ -36,10 +36,10 @@ class WithdrawalTests(unittest.TestCase):
             self.assertEqual(self.order['aim_position'], result['aim_position'])
             self.assertTrue(result['fire_allowed'])
 
-    def test_aligned_gun_angle_adjustment_keeps_seventy_percent(self):
+    def test_aligned_gun_angle_adjustment_uses_full_throttle(self):
         self.order.update(combat_mode='gun_angle_adjust', move_position=(0., 0., 20.),
-                          throttle_override=.70)
-        self.assertEqual(.70, self.decide()['throttle'])
+                          throttle_override=1.0)
+        self.assertEqual(1.0, self.decide()['throttle'])
         self.order['throttle_override'] = 0.
         self.assertEqual(0., self.decide()['throttle'])
 

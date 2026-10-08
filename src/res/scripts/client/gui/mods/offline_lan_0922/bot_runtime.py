@@ -12181,7 +12181,7 @@ class BotRuntime(object):
         if elapsed < 6.0 and destination is not None:
             result.update(move_position=destination,
                           combat_mode='withdraw' if marker['reverse'] else 'gun_angle_adjust',
-                          throttle_override=0.70)
+                          throttle_override=1.0)
             return result
         if elapsed < 6.0 and not marker['selected']:
             return result
@@ -12225,7 +12225,7 @@ class BotRuntime(object):
             'move_position': destination,
             'fire_allowed': False,
             'combat_mode': 'friendly_lane_reposition',
-            'throttle_override': 0.70,
+            'throttle_override': 1.0,
             'fire_range': marker['fire_range'],
             'shell_index': marker['shell_index'],
         }, False
