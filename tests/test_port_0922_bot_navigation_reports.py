@@ -181,7 +181,9 @@ class LocalFallbackReceiptTests(unittest.TestCase):
         selected = nav._pending_target(22, current, goal, 1.0, state)
         receipt = state['local_fallback']
         self.assertEqual(current, selected)
-        self.assertEqual(18, receipt['attempted'])
+        # Include the existing nearest-supported-cell probe as well as the
+        # eighteen fan candidates; native query limits below are unchanged.
+        self.assertEqual(19, receipt['attempted'])
         self.assertEqual(18, receipt['missing_ground'])
         self.assertIsNone(receipt['selected'])
         json.dumps(receipt)

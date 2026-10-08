@@ -1266,7 +1266,7 @@ class TerrainGrid(object):
 
 	def safe_local_target(self, current, goal, now, avoid_points=None,
 			side_preference=1.0, edge_penalties=None,
-			minimum_offset=0.0, diagnostic=None):
+			minimum_offset=0.0, diagnostic=None, excluded_target_cells=None):
 		"""Choose one short, fully probed detour when the global search fails.
 
 		This is deliberately not a direct-to-goal fallback. Every candidate must
@@ -1279,6 +1279,8 @@ class TerrainGrid(object):
 			diagnostic.update(at=float(now), current=tuple(current), goal=tuple(goal),
 				attempted=0, missing_ground=0, failed_edge=0, shallow_or_unknown=0,
 				corridor_rejected=0, private_edge=0, accepted=0, selected=None)
+			if excluded_target_cells:
+				diagnostic['visited_rejected'] = 0
 		dx = float(goal[0]) - float(current[0])
 		dz = float(goal[2]) - float(current[2])
 		if abs(dx) + abs(dz) < 0.1:
@@ -1290,6 +1292,10 @@ class TerrainGrid(object):
 			for oz in range(-2, 3):
 				for ox in range(-2, 3):
 					key = (cell[0] + ox, cell[1] + oz)
+					if key in (excluded_target_cells or ()):
+						if diagnostic is not None:
+							diagnostic['visited_rejected'] += 1
+						continue
 					y = self._baked_cell_height(key)
 					if y is not None:
 						point = self.point_for(key, y)
@@ -1297,12 +1303,16 @@ class TerrainGrid(object):
 							candidates.append((_distance_2d(current, point), point))
 			# At most one nearby candidate receives a full native query per decision.
 			for unused_distance, point in sorted(candidates)[:1]:
+				if diagnostic is not None:
+					diagnostic['attempted'] += 1
 				candidate_yaw = math.atan2(point[0] - current[0], point[2] - current[2])
 				delta = (candidate_yaw - desired_yaw + math.pi) % (2.0 * math.pi) - math.pi
 				if abs(delta) < max(0.0, float(minimum_offset)):
 					continue
 				if (not self.path_has_edge_penalty((current, point), edge_penalties) and
 						self.dry_segment_clear(current, point, now)):
+					if diagnostic is not None:
+						diagnostic.update(accepted=1, selected=point)
 					return point
 		side = 1.0 if float(side_preference) >= 0.0 else -1.0
 		offsets = (0.0, side * 0.45, -side * 0.45,
@@ -1319,6 +1329,10 @@ class TerrainGrid(object):
 				yaw = desired_yaw + offset
 				x = float(current[0]) + math.sin(yaw) * distance
 				z = float(current[2]) + math.cos(yaw) * distance
+				if self.cell_for((x, current[1], z)) in (excluded_target_cells or ()):
+					if diagnostic is not None:
+						diagnostic['visited_rejected'] += 1
+					continue
 				if diagnostic is not None:
 					diagnostic['attempted'] += 1
 				y = self._ground(x, z, float(current[1]))
@@ -1335,6 +1349,8 @@ class TerrainGrid(object):
 							if len(self._live_join_targets) >= 64:
 								self._live_join_targets.pop()
 							self._live_join_targets.add(candidate)
+							if diagnostic is not None:
+								diagnostic.update(accepted=1, selected=candidate)
 							return candidate
 					if diagnostic is not None:
 						diagnostic['missing_ground'] += 1
@@ -1911,6 +1927,15 @@ class TerrainNavigator(object):
 			state['last_target'] = tuple(target)
 
 	def _local_fallback_origin(self, current, goal, state):
+		# A consumed native-proved exit may lie in an eroded baked cell.
+		# Once the hull reaches supported graph terrain, replaying that old
+		# anchor can keep selecting its already consumed nearest graph point.
+		if self.grid.prebaked and self.grid._baked_cell_height(self.grid.cell_for(current)) is not None:
+			completed = state.get('local_completed_target')
+			if (completed is not None and
+					completed[1] == self._local_fallback_intent(goal, state) and
+					self.grid._baked_cell_height(self.grid.cell_for(completed[0])) is None):
+				state.pop('local_completed_target', None)
 		completed = state.get('local_completed_target')
 		if (completed is not None and completed[1] == self._local_fallback_intent(goal, state) and
 				_distance_2d(current, completed[0]) <= self.grid.cell_size):
@@ -1927,12 +1952,15 @@ class TerrainNavigator(object):
 		return tuple(current)
 
 	def _new_local_fallback(self, bot_id, current, origin, goal, now,
-			avoid_points, state):
+			avoid_points, state, eroded_reentry=False):
+		exclusions = (state.get('temporary_visited_cells', ())
+		              if eroded_reentry and state.get('temporary_stalled') else ())
 		fallback = self.grid.safe_local_target(
 			origin, goal, now, avoid_points,
 			1.0 if (int(bot_id) % 2) else -1.0,
 			self._active_planning_edge_penalties(bot_id, now),
-			0.0, diagnostic=state.setdefault('local_fallback', {}))
+			0.0, diagnostic=state.setdefault('local_fallback', {}),
+			excluded_target_cells=exclusions)
 		if fallback is not None and self._temporary_path_repeats(state, (fallback,)):
 			return tuple(current)
 		connector_clear = True
@@ -2163,11 +2191,17 @@ class TerrainNavigator(object):
 
 	@observed('nav.fallback')
 	def _safe_fallback_target(self, bot_id, current, goal, now, avoid_points, state):
+		completed = state.get('local_completed_target')
+		eroded_reentry = bool(self.grid.prebaked and completed is not None and
+			completed[1] == self._local_fallback_intent(goal, state) and
+			self.grid._baked_cell_height(self.grid.cell_for(completed[0])) is None and
+			self.grid._baked_cell_height(self.grid.cell_for(current)) is not None)
 		origin = self._local_fallback_origin(current, goal, state)
 		retained = self._retained_local_fallback(bot_id, current, goal, now, state)
 		if retained is not None:
 			return retained
-		return self._new_local_fallback(bot_id, current, origin, goal, now, avoid_points, state)
+		return self._new_local_fallback(bot_id, current, origin, goal, now,
+			avoid_points, state, eroded_reentry=eroded_reentry)
 
 	def _fallback_target(self, bot_id, current, goal, now, avoid_points, state,
 			allow_safe_local=True):
