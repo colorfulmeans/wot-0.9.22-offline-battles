@@ -39,6 +39,9 @@ PORT = (Path(__file__).resolve().parents[1] / 'src' / 'res' / 'scripts' /
 
 # Modules whose json output is a file on disk for a human to read.
 FILE_WRITERS = frozenset((
+    # Canonical tactics serialization runs when loading/pinning a profile;
+    # stable key order is part of its persisted SHA256 contract.
+    'bot_tactics.py',
     'config.py',
     'internal_hit_layouts.py',
     'internal_layout_store.py',
@@ -119,7 +122,7 @@ class JsonEncoderCycleTest(unittest.TestCase):
 
     def test_the_file_writers_are_a_deliberate_short_list(self):
         # If this grows, someone exempted a hot path instead of fixing it.
-        self.assertEqual(3, len(FILE_WRITERS))
+        self.assertEqual(4, len(FILE_WRITERS))
         for name in FILE_WRITERS:
             self.assertTrue((PORT / name).exists(), name)
 

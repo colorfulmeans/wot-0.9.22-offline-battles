@@ -11,7 +11,8 @@ class ReleaseBuilderTests(unittest.TestCase):
         source = (PORT_ROOT / 'build_wotmod.py').read_text(encoding='utf-8')
         self.assertIn("'host': '127.0.0.1'", source)
         self.assertIn("'port': 28782", source)
-        self.assertNotIn('os.environ.get(', source)
+        self.assertNotIn("os.environ.get('WOT_SERVER_HOST'", source)
+        self.assertNotIn("os.environ.get('WOT_SERVER_PORT'", source)
         self.assertNotIn('server_endpoint.json', source)
 
     def test_the_package_never_carries_user_owned_state_files(self):

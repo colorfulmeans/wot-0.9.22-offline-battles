@@ -7037,6 +7037,10 @@ class BootstrapContractTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.account_rpc.data': account_rpc_package.data,
             'gui.mods.offline_lan_0922.compat': compatibility_module,
             'gui.mods.offline_lan_0922.config': config,
+            'gui.mods.offline_lan_0922.engine_audio': types.SimpleNamespace(install=lambda: None, uninstall=lambda: None),
+            'gui.mods.offline_lan_0922.runtime_diagnostics': types.SimpleNamespace(install_exit_trace=lambda: None),
+            'gui.mods.offline_lan_0922.depot_styles': types.SimpleNamespace(install=lambda: None),
+            'gui.mods.offline_lan_0922.offline_replay': types.SimpleNamespace(replay_request=lambda: None),
             'gui.mods.offline_lan_0922.instance_guard': instance_guard,
             'gui.mods.offline_lan_0922.vehicle_blacklist': vehicle_blacklist,
             'gui.mods.offline_lan_0922.vehicle_configuration':
@@ -7070,7 +7074,7 @@ class BootstrapContractTests(unittest.TestCase):
             module._signal_player_ready = mock.Mock(return_value=True)
             module.init()
             module.init()
-            instance_guard.release_if_requested.assert_called_once_with()
+            self.assertEqual([mock.call()], instance_guard.release_if_requested.mock_calls)
             self.assertEqual(
                 [module._on_lobby_view_loaded],
                 event_bus.listeners[lobby_loaded])

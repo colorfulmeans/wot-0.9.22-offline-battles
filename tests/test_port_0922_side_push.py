@@ -72,7 +72,7 @@ class SidePushWorldBoundaryTests(unittest.TestCase):
                 (peer, 3., 25000., 300., 0)):
             state.update(x=x, y=0., z=0., yaw=0., speed=0., pitch=0., roll=0.,
                          mass=mass, half_width=shape[0], half_length=shape[1],
-                         collision_shape=shape, alive=True, team=1,
+                         collision_shape=shape, alive=True, team=1, grounded_once=True,
                          push_x=0., push_z=0., rotation_dir=turn, movement_dir=0)
             runtime._physics_params_for(state['id']).update(
                 mass=mass, powerW=power*735.49875, rotSpd=.4)
@@ -92,8 +92,9 @@ class SidePushWorldBoundaryTests(unittest.TestCase):
         self.assertEqual(3., peer['x'])
         self.assertEqual(0., peer['push_x'])
 
-    def test_wreck_push_cannot_settle_through_a_bridge_into_missing_support(self):
+    def test_wreck_push_off_a_deck_starts_a_fall_without_snapping_to_lower_ground(self):
         peer = self._side_contact(ground=-40., wreck=True)
-        self.assertEqual(3., peer['x'])
-        self.assertEqual(0., peer['y'])
-        self.assertEqual(0., peer['push_x'])
+        self.assertLess(peer['x'],3.1)
+        self.assertGreater(peer['y'],-1.)
+        self.assertLess(peer['y'],0.)
+        self.assertTrue(peer['airborne'])

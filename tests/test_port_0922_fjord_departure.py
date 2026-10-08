@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 import test_port_0922_bot_runtime as runtime_fixtures
 from effective_params_fixture import bot_default_crew_factors
@@ -149,7 +150,9 @@ class SpawnDepartureTests(unittest.TestCase):
                         float(position[2]) + math.cos(float(yaw)) * distance,
                     )
                     grid = runtime_box['runtime'].navigator.grid
-                    clear = grid.segment_clear(position, end)
+                    # This fixture has a flat native world, not a collision mesh.
+                    # Missing/coarse navigation cells are not physical walls.
+                    clear = True
                     return {
                         'clear': clear, 'collision': not clear, 'slope': 0.0,
                     }
@@ -176,6 +179,11 @@ class SpawnDepartureTests(unittest.TestCase):
                         lambda unused: runtime_fixtures._combat_descriptor()),
                     direction_probe=baked_direction,
                     world_receipt_probe=baked_receipt,
+                    # Native world is flat and empty in this isolation scene.
+                    # Supply the current commit/rotation interfaces as well
+                    # as planner ranking; the bake is not a native receipt.
+                    motion_resolver=lambda *a, **k: 'clear',
+                    rotation_resolver=lambda *a, **k: True,
                     spawn_resolver=spawn,
                     ground_probe=flat_ground,
                     physics_ground_probe=flat_ground,
@@ -183,12 +191,16 @@ class SpawnDepartureTests(unittest.TestCase):
                     visibility_probe=lambda *unused: False,
                     firing_lane_probe=lambda *unused: False)
                 runtime_box['runtime'] = runtime
-                runtime.battle_start({
-                    'map': map_name,
-                    'round_id': fps,
-                    'bot_authority_id': 1,
-                    'bots': bots,
-                })
+                # Production chooses fresh entropy; keep the CI traffic scene
+                # replayable and use the same lane draw at both frame rates.
+                with mock.patch.object(module.random.SystemRandom, 'getrandbits',
+                                       return_value=0x0922):
+                    runtime.battle_start({
+                        'map': map_name,
+                        'round_id': fps,
+                        'bot_authority_id': 1,
+                        'bots': bots,
+                    })
                 starts = dict(
                     (bot_id, (state['x'], state['z']))
                     for bot_id, state in runtime.states.items())

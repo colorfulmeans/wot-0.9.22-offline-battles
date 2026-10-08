@@ -75,7 +75,8 @@ class RotationRecoveryTests(unittest.TestCase):
         straight_reverse = [(at, cmd) for at, cmd in decisions
                             if cmd['throttle'] < 0.0 and cmd['turn'] == 0.0]
         self.assertTrue(straight_reverse, decisions)
-        self.assertGreaterEqual(straight_reverse[0][0], 1.8)
+        # A native-refused pivot now permits an earlier checked translation.
+        self.assertGreater(straight_reverse[0][0], 0.0)
         self.assertLess(straight_reverse[0][0], 3.0)
         self.assertTrue(any(speed < 0.0 for unused, yaw, speed in translations))
         self.assertGreater(max(math.hypot(x, z) for x, z, yaw, speed in poses), .55)

@@ -48,6 +48,8 @@ class AirfieldSpawnTests(unittest.TestCase):
         manager, area, bigworld, math_module, tree_descriptor, authority, destroyed, calls = scene
         battle = runtime_fixture.BattleRuntime(runtime_fixture._runtime())
         battle._worker_mode = True
+        battle._config = {'map': '31_airfield'}
+        battle._formation_pose = lambda team, slot: ((0., 0., -2.), 0.)
         battle._avatar = types.SimpleNamespace(spaceID=1)
         battle._destructibles = sensor
         battle._runtime.bigworld = bigworld

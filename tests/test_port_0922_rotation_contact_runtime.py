@@ -26,6 +26,8 @@ class PlayerRotationContactTests(unittest.TestCase):
         battle._local_physics = local.vehicle_physics.derive_params(own_descriptor)
         battle._sender = types.SimpleNamespace(forward=0.)
         battle._local_drive_turn = 1.
+        battle._bots=types.SimpleNamespace(replica_contact_params=
+            lambda state,descriptor:local.vehicle_physics.derive_params(descriptor))
         battle._motion_is_clear = lambda *args, **kw: True
         battle._baked_pose_safe = lambda *args: True
         candidates = battle._contact_tanks((0., 0., 0.), shape, .04)
@@ -104,7 +106,7 @@ class BotRotationContactTests(unittest.TestCase):
                 state = runtime.states[11]
                 state.update(x=0., y=0., z=0., yaw=0., speed=0., grounded_once=True)
                 shape = state['collision_shape']
-                peer = dict(id=1, x=2*shape[0], y=0., z=0., yaw=0.,
+                peer = dict(id=1, position=(2*shape[0],0.,0.), x=2*shape[0], y=0., z=0., yaw=0.,
                             half_width=shape[0], half_length=shape[1],
                             shape=shape, mass=state['mass'], speed=0., alive=True)
                 with mock.patch.object(self.module.vehicle_physics, 'longitudinal_step', return_value=0.), \
@@ -118,6 +120,6 @@ class BotRotationContactTests(unittest.TestCase):
                     # motion above, while AI withdraws steering torque into
                     # the player rather than continuing to push their side.
                     self.assertEqual(0, state['rotation_dir'])
-                    peer['x'] = 100.
+                    peer['x'] = 100.;peer['position']=(100.,0.,0.)
                     runtime.update(.04, 1.04, neighbours=[peer])
                 self.assertAlmostEqual(.08*direction, state['yaw']-stopped)

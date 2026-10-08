@@ -265,7 +265,7 @@ class _TrackScroll(object):
 
 class _Model(object):
     _SUPPORTED_ATTRIBUTES = frozenset((
-        'matrix', 'visible', 'node_bindings', 'fashions'))
+        'matrix', 'root', 'visible', 'node_bindings', 'fashions'))
     # ``ProjectileMover.add`` proves #1513 keeps the mesh and the attachment
     # draw flags apart on its projectile model. Static package inspection
     # cannot prove whether the native vehicle compound exposes the second one,
@@ -278,6 +278,7 @@ class _Model(object):
             supported.add(self._ATTACHMENT_GATE_ATTRIBUTE)
         object.__setattr__(self, '_supported', frozenset(supported))
         self.matrix = None
+        self.root = types.SimpleNamespace()
         self.visible = True
         if attachment_gate:
             self.visibleAttachments = True
@@ -3289,7 +3290,7 @@ class NativeRemoteVehicleFactoryTests(unittest.TestCase):
         detailed_engine = types.SimpleNamespace(
             vehicleSpeedLink=None, rotationSpeedLink=None)
         pending.appearance.detailedEngineState = detailed_engine
-        pending.appearance.engineAudition = object()
+        pending.appearance.engineAudition = mock.Mock()
         wheels_animator = types.SimpleNamespace(
             setMovementInfo=mock.Mock())
         pending.appearance.wheelsAnimator = wheels_animator
@@ -35039,7 +35040,7 @@ class LocalEngineAudioMotionTests(unittest.TestCase):
         with mock.patch('sys.stdout', io.StringIO()):
             battle._attach_local_presentation()
         self.assertEqual(
-            ['vehicleSpeedLink', 'rotationSpeedLink'], writes)
+            ['vehicleSpeedLink', 'rotationSpeedLink', 'vehicleMatrixLink'], writes)
         del writes[:]
 
         with mock.patch('sys.stdout', io.StringIO()):

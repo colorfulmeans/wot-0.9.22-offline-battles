@@ -1,7 +1,9 @@
 name: Tests
 
 on:
+  # PR branches run once through pull_request; main still verifies pushes.
   push:
+    branches: [main]
   pull_request:
   # Forks do not run push-triggered workflows; dispatch keeps CI available.
   workflow_dispatch:
@@ -17,48 +19,47 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+      - name: Install pinned test dependencies
+        run: python -m pip install Pillow==12.3.0
       - name: Check traffic, withdrawal and slope aiming independently
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client
-        run: |
-          python -m unittest test_port_0922_navigation_retry_intent test_port_0922_navigation_replan test_port_0922_navigation_retry_motion test_port_0922_navigation_capability_wiring
-          python -m unittest test_port_0922_navigation_wait_recovery test_port_0922_navigation_wait_runtime test_port_0922_navigation_wait_lifecycle test_port_0922_wreck_route test_port_0922_navigation_pending_prefix test_port_0922_airfield_live_egress test_port_0922_driver_arrival test_port_0922_driver_recovery_feedback
-          python -m unittest test_port_0922_ai test_port_0922_navigation test_port_0922_bot_navigation_reports
-          python -m unittest test_port_0922_authored_route_progress test_port_0922_navigation_clearance test_port_0922_navigation.StaticHullNavigationTests test_port_0922_slope_shortcuts
-          python -m unittest test_port_0922_navigation.ClimbApproachNavigationTests.test_reported_active_bend_keeps_progress_until_its_setup_is_reached test_port_0922_navigation.ClimbApproachNavigationTests.test_active_bend_does_not_keep_a_newly_blocked_or_unplanned_ford_target test_port_0922_navigation_pending_prefix.PendingPrefixTests.test_pending_then_complete_path_retreats_out_of_u_wall_and_reaches_goal
-          python -m unittest test_port_0922_downhill_navigation test_port_0922_navigation.ClimbApproachNavigationTests.test_owned_overshot_point_advances_only_through_a_proved_forward_link
-          python -m unittest test_port_0922_sheridan_ingress test_port_0922_capture_coordinate_audit
-          python -m unittest test_port_0922_vehicle_physics test_port_0922_physics_regressions release097.test_096_contact_steering5
-          python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_bot_motion_preserves_partial_steering_input
-          python -m unittest test_port_0922_bot_support_launch
-          python -m unittest test_port_0922_embedded_slope
-          python -m unittest test_port_0922_bot_navigation_reports.LocalFallbackReceiptTests test_port_0922_bot_runtime.BotRuntimeTests.test_stall_diagnostic_records_cause_without_per_frame_logging test_port_0922_bot_runtime.BotRuntimeTests.test_navigation_receipt_is_bounded_and_does_not_query_world test_port_0922_driver_arrival.DriverArrivalTests.test_slow_fixed_alignment_outlasts_macro_distance_timeout test_port_0922_driver_arrival.DriverArrivalTests.test_stalled_or_oscillating_alignment_still_recovers test_port_0922_driver_arrival.DriverArrivalTests.test_changing_local_targets_cannot_reset_alignment_credit
-          python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_local_roaming_diagnostic_survives_half_metre_timer_resets test_port_0922_bot_runtime.BotRuntimeTests.test_local_roaming_resets_when_leaving_pocket_or_route_intent test_port_0922_bot_runtime.BotRuntimeTests.test_stationary_diagnostics_keep_three_seconds_without_roaming_duplicates
-          python -m unittest test_port_0922_bot_shallow_trench test_port_0922_spg_initial_positions.InitialPositionIntegrationTests
-          python -m unittest test_port_0922_driver_recovery_feedback.DriverRecoveryFeedbackTests.test_long_su14_hull_uses_checked_short_translation_when_neither_pivot_fits test_port_0922_driver_recovery_feedback.DriverRecoveryFeedbackTests.test_short_escape_still_checks_the_complete_neighbour_sweep test_port_0922_driver_recovery_feedback.DriverRecoveryFeedbackTests.test_short_escape_reaches_native_motion_and_retires_a_failed_end
-          python -m unittest test_port_0922_driver_recovery_feedback.DriverRecoveryFeedbackTests.test_real_forward_failure_checks_short_rear_before_an_unproved_pivot test_port_0922_driver_recovery_feedback.DriverRecoveryFeedbackTests.test_short_escape_uses_only_the_free_gap_before_a_neighbour test_port_0922_driver_recovery_feedback.DriverRecoveryFeedbackTests.test_live_runtime_applies_alignment_brake_to_copied_physics
-          python -m unittest test_port_0922_driver_arrival.DriverArrivalTests.test_report_clear_object_730_reaches_fixed_waypoint_instead_of_orbit test_port_0922_driver_arrival.DriverArrivalTests.test_clear_short_routes_converge_at_slow_and_fast_traverse_rates test_port_0922_driver_arrival.DriverArrivalTests.test_track_pivot_chassis_can_reach_short_route_target test_port_0922_driver_arrival.DriverArrivalTests.test_aligned_route_does_not_stop_at_every_waypoint test_port_0922_driver_arrival.DriverArrivalTests.test_alignment_brake_survives_zero_speed_then_releases_when_facing_goal test_port_0922_driver_arrival.DriverArrivalTests.test_hold_reverse_new_goal_and_missing_physics_clear_alignment
-          python -m unittest test_port_0922_bot_withdrawal test_port_0922_traffic test_port_0922_traffic_jam
-          python -m unittest test_port_0922_parking_displacement test_port_0922_gun_angle_recovery
-          python -m unittest test_port_0922_withdrawal_runtime test_port_0922_wreck_contact_recovery test_port_0922_oct03_bot_egress test_port_0922_bot_rotation_drive test_port_0922_airfield_spawn test_port_0922_oct03_airfield_followup test_port_0922_bot_destructible_approach test_port_0922_destructibles test_port_0922_tree_followup test_port_0922_foliage_baker test_port_0922_foliage
-          python -m unittest test_port_0922_contact_dynamics.GroundContactTests.test_hostile_side_contact_overrides_firing_hold_and_preserves_combat_target test_port_0922_contact_dynamics.GroundContactTests.test_korea_offset_side_contact_selects_checked_separating_end
-          python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_contact_escape_final_probe_uses_the_admitted_short_sweep
-          python -m unittest test_port_0922_bot_runtime.BotRuntimeTests.test_authored_wait_cancels_friendly_reposition_without_translation
-          python -m unittest test_port_0922_wreck_route_switch test_port_0922_bot_state_codec test_port_0922_server_bot_ai test_port_0922_authored_route_waits test_port_0922_wait_parking test_port_0922_radio_routes
-          python -m unittest test_port_0922_artillery_controller test_port_0922_spg_tracking test_port_0922_spg_failed_launch
-          python -m unittest test_port_0922_battle_runtime.BattleRuntimeContractTests.test_spg_friendly_lane_uses_exact_arc_and_real_he_radius test_port_0922_bot_runtime.BotRuntimeTests.test_spg_exact_friendly_lane_is_checked_before_atomic_fire test_port_0922_projectile_runtime test_port_0922_server_projectiles
-          python -m unittest test_port_0922_gameplay_followup.AimProgressTests
-          python -m unittest test_port_0922_airfield_routes_loading test_port_0922_bot_tactics_editor test_port_0922_default_route_editor test_port_0922_route_priorities test_port_0922_initial_allocation
+        run: >-
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results
+          --pattern 'test_port_0922_ai.py'
+          --pattern 'test_port_0922_navigation*.py'
+          --pattern 'test_port_0922_driver*.py'
+          --pattern 'test_port_0922_traffic*.py'
+          --pattern 'test_port_0922_bot*.py'
+          --pattern 'test_port_0922_contact*.py'
+          --pattern 'test_port_0922_wreck*.py'
+          --pattern 'test_port_0922_artillery*.py'
+          --pattern 'test_port_0922_spg*.py'
+          --pattern 'test_port_0922_downhill*.py'
+          --pattern 'test_port_0922_parking*.py'
+          --pattern 'test_port_0922_withdrawal*.py'
+          --pattern 'test_port_0922_gun_angle*.py'
+          --pattern 'test_port_0922_wait_parking.py'
+          --pattern 'test_port_0922_server_bot_ai.py'
+
       - name: Check customization economy and durable rental settlement
+        if: ${{ !cancelled() }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client:launcher:launcher/tests
         run: |
-          python -m unittest test_port_0922_garage test_port_0922_account_rpc test_port_0922_economy test_port_0922_economy_payloads test_port_0922_postbattle test_save_customizations test_port_0922_default_styles test_port_0922_bootstrap_lifecycle.BootstrapLifecycleTests.test_the_shop_publishes_the_baked_price_of_every_item
-      - name: Compile changed client code under Python 2.7
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_save_customizations.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py
+      - name: Compile all client code under Python 2.7
+        if: ${{ !cancelled() }}
         run: |
-          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; root='src/res/scripts/client/gui/mods/offline_lan_0922'; paths=['config.py','bootstrap.py','price_catalogue.py','account_rpc/garage.py','account_rpc/garage_store.py','artillery_controller.py','artillery_arc_queue.py','ai/adapter.py','ai/driver.py','ai/navigation.py','ai/planner.py','ai/traffic.py','bot_runtime.py','bot_state_codec.py','battle_runtime.py','vehicle_physics.py','destructibles_sensor.py','bot_tactics.py','bot_tactics_runtime.py','bot_editor_maps.py','spg_positions.py','tank_collision.py']; [compile(open(os.path.join(root,p),'rb').read(),p,'exec') for p in paths]; print('Changed client code compiles under Python 2.7')"
+          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; paths=[os.path.join(base,name) for base,dirs,files in os.walk('src/res/scripts/client') for name in files if name.endswith('.py')]; [compile(open(p,'rb').read(),p,'exec') for p in paths]; print('%d client modules compile under Python 2.7' % len(paths))"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: bot-test-results
+          path: build/bot-test-results/
+          if-no-files-found: error
   test:
     needs: windows-server
     runs-on: ubuntu-latest
@@ -76,16 +77,23 @@ jobs:
           python -m unittest discover -s tests
           -p "test_port_0922_gameplay_followup.py" -v
       - name: Run client test suite
+        if: ${{ !cancelled() }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: >-
-          python -m unittest discover -s tests
-          -p "test_*.py" -v
+        run: python tools/run_test_suite.py --jobs 4 --logs build/client-test-results
       - name: Run launcher test suite
-        working-directory: launcher
+        if: ${{ !cancelled() }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+        run: python tools/run_test_suite.py --directory launcher/tests --jobs 2 --logs build/launcher-test-results
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: unit-test-results
+          path: |
+            build/client-test-results/
+            build/launcher-test-results/
+          if-no-files-found: error
       - uses: actions/download-artifact@v4
         with:
           name: wot-0.9.22-lan-server-windows
@@ -115,6 +123,24 @@ jobs:
         with:
           name: wot-0.9.22-lan-client
           path: dist/*
+          if-no-files-found: error
+
+  windows-editor-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install pinned test dependencies
+        run: python -m pip install Pillow==12.3.0
+      - name: Run actual Tk editor tests on Windows
+        run: python tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs build/windows-editor-results
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: windows-editor-results
+          path: build/windows-editor-results/
           if-no-files-found: error
 
   windows-server:
@@ -368,7 +394,7 @@ jobs:
           Write-Host "Downloaded launcher is runnable after one ZIP extraction"
           foreach ($port in @("0.9.22")) {
               $process = Start-Process -FilePath $launcher `
-                  -ArgumentList "--serve", $port -PassThru
+                  -ArgumentList "--serve", $port -PassThru -WindowStyle Hidden
               try {
                   $deadline = (Get-Date).AddSeconds(60)
                   $listening = $false

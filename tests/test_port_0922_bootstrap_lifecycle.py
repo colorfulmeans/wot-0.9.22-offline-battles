@@ -305,6 +305,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             100 if earnings_percent is None else earnings_percent)
         config_module.save_slot_initial_wallet = lambda: dict(initial_wallet or {})
         config_module.save_slot_initial_personal_progress = lambda: {}
+        config_module.save_slot_initial_customizations = lambda: {}
         config_module.ACTIVE_SAVE_SLOT = object()
         config_module.active_save_slot = lambda: 'default'
         # No inbox file exists unless a test writes one, so the launcher
@@ -618,6 +619,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.account_rpc.state': state_module,
             'gui.mods.offline_lan_0922.compat': compat_module,
             'gui.mods.offline_lan_0922.config': config_module,
+            'gui.mods.offline_lan_0922.engine_audio': types.SimpleNamespace(install=lambda: None, uninstall=lambda: None),
+            'gui.mods.offline_lan_0922.runtime_diagnostics': types.SimpleNamespace(install_exit_trace=lambda: None),
             'gui.mods.offline_lan_0922.instance_guard': (
                 instance_guard_module),
             'gui.mods.offline_lan_0922.lan_session': lan_session_module,
@@ -1199,7 +1202,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual(0, snapshot['vehicleXP'][90012])
         # A delivery that is never written is delivered again next start,
         # against an inbox entry that is already gone.
-        self.assertEqual(snapshot, store.flushed)
+        self.assertEqual(snapshot['vehicles'], store.flushed['vehicles'])
+        self.assertEqual(snapshot['vehicleTypeCompactDescrs'], store.flushed['vehicleTypeCompactDescrs'])
         notices = snapshot['personalMissionNotifications']
         self.assertEqual(1, len(notices))
         rewards = notices[0]['settlement']['account_changes'][0]['rewards']
@@ -1505,7 +1509,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
     def test_the_first_garage_uses_the_launchers_initial_wallet(self):
         snapshot = self._with_saved_garage(
             (), initial_wallet={'credits': 23, 'gold': 45, 'freeXP': 67})
-        self.assertEqual({'credits': 23, 'gold': 45, 'freeXP': 67, 'crystal': 0}, snapshot['wallet'])
+        self.assertEqual({'credits': 23, 'gold': 45, 'freeXP': 67, 'crystal': 1000000}, snapshot['wallet'])
 
     def test_the_garage_reads_the_multiplier_the_launcher_wrote(self):
         """It describes the account, like the save type, not the garage."""

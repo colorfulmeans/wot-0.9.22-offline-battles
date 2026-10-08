@@ -3184,6 +3184,14 @@ class BotRuntime(object):
         if 'engineHealth' in destroyed:
             state['_siege_intent_elapsed'] = 0.0
             return False
+        # Brake using the installed travel/siege descriptor first. Replacing
+        # it while moving would erase momentum instead of stopping the hull.
+        if abs(state.get('speed', 0.0)) > 0.05:
+            command['throttle'] = 0.0
+            command['turn'] = 0.0
+            command['brake'] = True
+            command['fire_allowed'] = False
+            return False
         next_state, remaining, transition_total, changed = \
             siege_mechanics.request_transition(
                 current, state.get('_siege_time_left', 0.0),
@@ -5528,16 +5536,25 @@ class BotRuntime(object):
         if not _player_spotting_perk(
                 snapshot, source, 'gunner_rancorous'):
             return spotting.SPOT_MEMORY_SECONDS
+        overrides = (snapshot.get('battle_booster') or {}).get(
+            'skill_overrides') or {}
+        duration = spotting.SPOT_MEMORY_SECONDS + max(0.0, min(4.0,
+            _number(overrides.get('designated_target_duration'),
+                    spotting.DESIGNATED_SPOT_MEMORY_SECONDS -
+                    spotting.SPOT_MEMORY_SECONDS)))
+        sector = max(0.0, min(math.radians(5.0),
+            _number(overrides.get('designated_target_sector'),
+                    math.radians(5.0))))
         source_position = _position(source)
         target_position = target.get('position') or _position(target)
         dx = target_position[0] - source_position[0]
         dz = target_position[2] - source_position[2]
         if dx * dx + dz * dz <= 0.000001:
-            return spotting.DESIGNATED_SPOT_MEMORY_SECONDS
+            return duration
         bearing = math.atan2(dx, dz)
         gun_yaw = source.get('aim_yaw', source.get('yaw', 0.0))
-        if abs(_angle_delta(bearing, gun_yaw)) <= math.radians(5.0) + 1e-9:
-            return spotting.DESIGNATED_SPOT_MEMORY_SECONDS
+        if abs(_angle_delta(bearing, gun_yaw)) <= sector + 1e-9:
+            return duration
         return spotting.SPOT_MEMORY_SECONDS
 
     @staticmethod
@@ -6510,7 +6527,8 @@ class BotRuntime(object):
         return True
 
     def _log_motion_stall(self, state, command, throttle, turn,
-                          path_clear, motion_probe, now, pose_frozen=False):
+                          path_clear, motion_probe, now, pose_frozen=False,
+                          traffic_input=None, traffic_output=None):
         """Record stationary authority decisions without requiring debug mode.
 
         Include intentional holds: a mistaken arrival or navigation wait is
@@ -6593,6 +6611,9 @@ class BotRuntime(object):
             driver_state.get('navigation_wait') or {})
         # Finish this rare diagnostic after every authority gate has run.
         # The control verdict alone cannot explain a later pose rollback.
+        before_traffic = traffic_input if traffic_input is not None else command
+        after_traffic = traffic_output if traffic_output is not None else command
+        traffic_mode = after_traffic.get('traffic_mode', command.get('traffic_mode'))
         state['_motion_stall_pending'] = {
             'id': int(state['id']), 'vehicle': state.get('vehicle'),
             'native_motion': bool(self.native_motion),
@@ -6625,7 +6646,17 @@ class BotRuntime(object):
                 net_distance=_distance(position, roaming[0]),
                 reason='movement_reset_stationary_timer'),
             'start': position, 'speed_before': state.get('speed', 0.0),
-            'requested_throttle': throttle, 'turn': turn,
+            'requested_throttle': command.get('throttle', throttle),
+            'requested_turn': command.get('turn', turn), 'turn': turn,
+            'traffic_mode': traffic_mode,
+            'controls': {
+                'planner': (command.get('throttle', throttle), command.get('turn', turn)),
+                'before_traffic': (before_traffic.get('throttle', throttle), before_traffic.get('turn', turn)),
+                'after_traffic': (after_traffic.get('throttle', throttle), after_traffic.get('turn', turn)),
+                'motion': (throttle, turn),
+                'forward_blocked_by': after_traffic.get('forward_blocked_by'),
+                'reverse_blocked_by': after_traffic.get('reverse_blocked_by'),
+            },
             'yaw': state.get('yaw'), 'pitch': state.get('pitch'),
             'roll': state.get('roll'), 'shape': state.get('collision_shape'),
             'close_contacts': [dict(kind=t.get('kind'), id=t.get('network_id'),
@@ -6645,7 +6676,7 @@ class BotRuntime(object):
               'target=%s/%s fire=%s gun_aligned=%s fire_seq=%s reload=%s lane=%s' % (
                   state['id'], position[0], position[2],
                   command.get('combat_mode'), command.get('recovery_mode'),
-                  command.get('traffic_mode', 'none'),
+                  traffic_mode or 'none',
                   command.get('movement_intent'), command.get('move_position'),
                   strategic.get('move_position'), state.get('yaw', 0.0),
                   command.get('target_yaw'), state.get('speed', 0.0),
@@ -12800,6 +12831,7 @@ class BotRuntime(object):
         tick_safe = {}
         passive_forwards = {}
         attempted_yaws = {}
+        drive_targets = {}
         siege_locked_poses = {}
         integrated = set()
         for state in self.states.values():
@@ -12992,7 +13024,7 @@ class BotRuntime(object):
                     'throttle': 0.0, 'turn': 0.0,
                     'target_yaw': state['yaw'],
                     'recovery_mode': 'physical_hold',
-                    'movement_intent': False,
+                    'movement_intent': False, 'brake': True,
                 }
                 contacts = ()
                 targets = {}
@@ -13254,6 +13286,7 @@ class BotRuntime(object):
                     command['aim_position'] = frozen['aim_position']
                     command['face_position'] = frozen['aim_position']
                 if pending_reproof is not None:
+                    command['brake'] = True
                     command['throttle'] = 0.0
                     command['turn'] = 0.0
                     command['movement_intent'] = False
@@ -13311,6 +13344,8 @@ class BotRuntime(object):
                 movement_intent=command.get('movement_intent', True),
                 withdrawal_aim=command.get('withdrawal_aim', False))
             state['hull_aiming'] = bool(hull_aiming)
+            if hull_aiming and abs(throttle) <= 0.01:
+                command['brake'] = True
             # Cached strategic orders cannot justify driving into a hull that
             # moved into the corridor since the last decision. Keep physics as
             # the owner of momentum and contact, and brake the drive input.
@@ -13327,8 +13362,9 @@ class BotRuntime(object):
                     state, dict(command, turn=turn),
                     self._physics_params_for(state['id']) or
                     vehicle_physics._DEFAULTS)
+            traffic_input = dict(command, throttle=throttle, turn=turn)
             safety = self._traffic_coordinator.safe_controls(
-                safety_body, dict(command, throttle=throttle, turn=turn),
+                safety_body, traffic_input,
                 self._neighbours_for(state, neighbours), now,
                 current_stopping_distance, step)
             throttle, turn = safety['throttle'], safety['turn']
@@ -13370,6 +13406,8 @@ class BotRuntime(object):
             travel_yaw = (state['yaw'] if travel_sign > 0.0
                           else state['yaw'] + math.pi)
             attempted_yaws[state['id']] = travel_yaw
+            if command.get('movement_intent'):
+                drive_targets[state['id']] = command.get('move_position')
             maximum_probe_distance = None
             move_position = command.get('move_position')
             navigation_grid = getattr(self.navigator, 'grid', None)
@@ -13607,7 +13645,8 @@ class BotRuntime(object):
                         # it makes the remaining catch-up slices hold without
                         # repeating the same deferred native probe.
                         self._motion_probe_cache.pop(state['id'], None)
-                        if cached_motion_probe is not None:
+                        if (cached_motion_probe is not None or
+                                not callable(self.motion_resolver)):
                             # Preserve the established no-cache behaviour: an
                             # exact resolver may still admit this first slice.
                             # Only the stale proof introduced by this change
@@ -13694,7 +13733,7 @@ class BotRuntime(object):
             self._log_direction_flip(state, path_clear, motion_probe, now)
             self._log_motion_stall(
                 state, command, throttle, turn, path_clear, motion_probe, now,
-                pose_frozen)
+                pose_frozen, traffic_input=traffic_input, traffic_output=safety)
             if diagnostic is not None:
                 diagnostic.phase('bot.integrate')
             if not self.native_motion:
@@ -13986,10 +14025,6 @@ class BotRuntime(object):
                                 now)
                         else:
                             report_contact(state['id'], position, contact_target, now)
-                elif path_clear and abs(speed) > 0.05:
-                    clear_contact = getattr(self.navigator, 'clear_blocked_contact', None)
-                    if callable(clear_contact):
-                        clear_contact(state['id'])
                 elif motion_status in ('soft', 'cap_crushed'):
                     self._hard_contact_grinds[state['id']] = 1
                 if resolved_motion and callable(self.motion_report):
@@ -14379,6 +14414,22 @@ class BotRuntime(object):
                 pose_rollback = self._guard_realised_pose(
                     state, settled, False, attempted_yaw,
                     navigation_hazards=False) or pose_rollback
+            # Horizontal clearance precedes support settlement. Only the
+            # accepted driven pose may clear a contact episode; otherwise a
+            # rejected prop deck clears its own evidence every single tick.
+            goal = drive_targets.get(bot_id)
+            if support_blocked_by_id.get(bot_id, False) and goal is not None:
+                report = getattr(self.navigator, 'report_hard_contact', None)
+                if callable(report):
+                    report(bot_id, tick_poses[bot_id], goal,
+                           attempted_yaw, now)
+                self._invalidate_realised_motion(bot_id, attempted_yaw)
+            elif (not pose_rollback and not ballistic_ticks.get(bot_id, False)
+                  and ((tick_poses[bot_id][0] - settled[0]) ** 2 +
+                       (tick_poses[bot_id][2] - settled[2]) ** 2) > 1.0e-12):
+                clear_contact = getattr(self.navigator, 'clear_blocked_contact', None)
+                if callable(clear_contact):
+                    clear_contact(bot_id)
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),
                 pose_rollback, settled, now)

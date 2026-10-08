@@ -35,7 +35,8 @@ class RoutePriorityTests(unittest.TestCase):
         self.assertTrue(all(v=='baked_route_connected' for v in status.values()))
         director=BattleDirector('31_airfield',123,baked_routes=routes)
         preferred=next(r for r in director._routes_for(1) if r['id']==north['id'])
-        for i in range(preferred['capacity']):
+        # Capacity is per vehicle class, not the parent route's total.
+        for i in range(3):
             agent=director.register_profile(i+1,1,dict(class_tag='lightTank',roles={'brawler':1.0},vehicle_name='test'))
             self.assertEqual(north['id'],agent['route']['id'])
         agent=director.register_profile(100,1,dict(class_tag='lightTank',roles={'brawler':1.0},vehicle_name='test'))
@@ -99,7 +100,7 @@ class RoutePriorityTests(unittest.TestCase):
         routes,status=planning.default_routes(config.canonical(doc),'31_airfield',graph)
         self.assertIn('route_deleted',status.values())
         director=BattleDirector('31_airfield',123,baked_routes=routes)
-        self.assertNotIn(north['id'],[director.register_profile(i,1,dict(class_tag='lightTank',roles={} ))['route']['id'] for i in range(1,15)])
+        self.assertNotIn(north['id'],[(director.register_profile(i,1,dict(class_tag='lightTank',roles={} ))['route'] or {}).get('id') for i in range(1,15)])
         source=next(r for r in director._routes_for(1) if r['id']==north['id'])
         self.assertEqual(0.,source['class_weights']['lightTank'])
         self.assertNotIn('heavyTank',source['_editor_disabled_classes'])

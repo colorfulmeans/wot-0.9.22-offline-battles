@@ -404,6 +404,7 @@ class EditorUITests(unittest.TestCase):
         x,y=self.ui.view.screen(point)
         event=type('Event',(),dict(x=x,y=y))()
         self.ui.edit_point_condition(event)
+        self.ui.edit_point_condition()  # Explicit Add; selecting a parent never creates parking.
         self.click(point[:2]);self.ui.wait_seconds.set('25');self.ui.update_wait_time()
         self.ui.profile_name.set('Timed route');self.ui.save(False)
         saved=self.ui.store.read('Timed route')

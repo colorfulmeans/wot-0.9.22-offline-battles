@@ -11,3 +11,8 @@ src/res/scripts/client/gui/mods/offline_lan_0922/world_collision.py -whitespace
 navgraphs/*.json -text
 
 tools/replay/*.py -text
+
+# Catalog manifests hash bytes, including newlines, on every platform.
+destructibles/*.json -text
+foliage/*.json -text
+tools/vendor/navigation_baseline_f5b0173/** -text

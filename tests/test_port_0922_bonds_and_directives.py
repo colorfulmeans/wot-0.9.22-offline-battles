@@ -363,6 +363,15 @@ class BondsAndDirectivesTests(unittest.TestCase):
         self.assertEqual(10.0, BotRuntime._designated_spot_duration(
             source, {'position': (100.0, 0.0, 0.0)}, snapshot))
 
+    def test_designated_target_override_requires_a_trained_eligible_gunner(self):
+        snapshot = _effective_params_snapshot(designated_target=False)
+        snapshot['battle_booster'] = {'compact_descr': 11003,
+            'skill_overrides': {'designated_target_duration': 4.0,
+                               'designated_target_sector': 0.0872664626}}
+        source = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'aim_yaw': 0.0}
+        self.assertEqual(10.0, BotRuntime._designated_spot_duration(
+            source, {'position': (0.0, 0.0, 100.0)}, snapshot))
+
     def test_direct_he_feedback_uses_damage_instead_of_penetration(self):
         for splash, damage, result in ((False, 150, 1), (False, 0, 0),
                                        (False, 0, 2), (True, 100, 1)):
@@ -385,7 +394,7 @@ class BondsAndDirectivesTests(unittest.TestCase):
             flags = battle._avatar.shot_results[0][0] >> 32
             constants = runtime.constants.VEHICLE_HIT_FLAGS
             expected = (constants.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_EXPLOSION
-                        if splash else (constants.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE
+                        if splash or damage and result != 2 else (constants.MATERIAL_WITH_POSITIVE_DF_PIERCED_BY_PROJECTILE
                         if damage else constants.MATERIAL_WITH_POSITIVE_DF_NOT_PIERCED_BY_PROJECTILE))
             self.assertTrue(flags & expected)
             self.assertEqual(result, event['shot_result'])

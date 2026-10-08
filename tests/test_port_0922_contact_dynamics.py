@@ -356,9 +356,12 @@ class GroundContactTests(unittest.TestCase):
         for dt in (1./15, 1./30, 1./60):
             driver = LocalDriver()
             modes=[]
-            for i in range(int(5/dt)):
+            # Alternating 10 cm samples exceed local translation progress;
+            # the independent eight-second objective clock must still expire.
+            for i in range(int(12/dt)):
                 order = driver.drive(1, 0, (.05 if i%2 else -.05, 0., 0.),
-                                     0., 0., dt, (0.,0.,100.), [], lambda *a: True)
+                                     0., 0., dt, (0.,0.,100.), [], lambda *a: True,
+                                     progress_target=(0.,0.,100.))
                 modes.append(order['recovery_mode'])
                 driver.wait_for_traffic(1, dt)
             self.assertIn('reverse_turn', modes)

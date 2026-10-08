@@ -246,7 +246,7 @@ _FINAL_POLL_SCHEDULED = False
 
 def _process_log(row):
     sys.stdout.write('[Offline LAN 0.9.22] REPLAY_PROCESS %s\n' %
-                     json.dumps(row, ensure_ascii=True, sort_keys=True,
+                     json.dumps(row, ensure_ascii=True,
                                 separators=(',', ':')))
 
 

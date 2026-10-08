@@ -244,7 +244,7 @@ class DriverRecoveryFeedbackTests(unittest.TestCase):
                     pose_clear=lambda yaw: False)
                 self.assertEqual(0., command['turn'])
                 if available:
-                    self.assertEqual(available * .45, command['throttle'])
+                    self.assertEqual(float(available), command['throttle'])
                     self.assertEqual(2., command['recovery_probe_distance'])
                 else:
                     self.assertEqual('blocked', command['recovery_mode'])

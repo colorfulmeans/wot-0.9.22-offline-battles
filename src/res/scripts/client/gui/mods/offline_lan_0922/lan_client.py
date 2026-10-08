@@ -3568,7 +3568,7 @@ class LANClient(object):
     @staticmethod
     def _state_transfer_diagnostic(stage, fields):
         print('[Offline LAN 0.9.22] STATE_TRANSFER %s %s' % (
-            stage, json.dumps(fields, sort_keys=True, separators=(',', ':'))))
+            stage, json.dumps(fields, separators=(',', ':'))))
 
     def _worker(self, generation=None):
         if generation is None:

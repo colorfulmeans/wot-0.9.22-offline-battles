@@ -86,7 +86,7 @@ class DefaultRouteTests(unittest.TestCase):
         adapter=runtime._new_adapter('31_airfield',5)
         assigned=[adapter.director.register_profile(i,1,dict(class_tag='mediumTank',
                   roles={'flanker':1.0},vehicle_name='test'))['route'] for i in range(11,25)]
-        edited=[r for r in assigned if r['id']==route['id']]
+        edited=[r for r in assigned if r is not None and r['id']==route['id']]
         self.assertTrue(edited)
         for selected in edited:
             self.assertEqual([tuple(p) for p in expected],list(selected['waypoints']))

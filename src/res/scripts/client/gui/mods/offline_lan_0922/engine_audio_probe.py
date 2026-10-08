@@ -319,7 +319,7 @@ class _Writer(object):
         self.normalized_fields += changes[0]
         if changes[0] and isinstance(safe, dict):
             safe['_diagnostic_normalized_fields'] = changes[0]
-        return (json.dumps(safe, sort_keys=True, ensure_ascii=True, allow_nan=False) + '\n').encode('ascii')
+        return (json.dumps(safe, ensure_ascii=True, allow_nan=False) + '\n').encode('ascii')
 
     def _write(self, row):
         # Bad data affects only this record, never every later snapshot.
