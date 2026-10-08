@@ -914,7 +914,7 @@ def grounded_inverse_masses(contact, first, second, inverse_a, inverse_b, dt):
     return inverse_a, inverse_b
 
 
-def translation_fraction(body, movement, others):
+def translation_fraction(body, movement, others, contacts=None, contact_ids=None):
     """Sweep one translated OBB, retaining only the existing contact slop.
 
     An endpoint test can miss an entire intervening hull. Intersect the four
@@ -950,6 +950,8 @@ def translation_fraction(body, movement, others):
         if contact[2] >= POSITION_SLOP - 1.0e-9:
             if mx*contact[0] + mz*contact[1] < -1.0e-9:
                 fraction = 0.0
+                if contacts is not None and (contact_ids is None or other['id'] in contact_ids):
+                    contacts.append((other['id'], 0.0))
             continue
         peer_axes = _axes(other['yaw'])
         entry, leave = 0.0, 1.0
@@ -969,7 +971,11 @@ def translation_fraction(body, movement, others):
             if entry > leave:
                 break
         if entry <= leave and leave >= 0.0:
-            fraction = min(fraction, max(0.0, entry))
+            candidate = max(0.0, entry)
+            fraction = min(fraction, candidate)
+            if (contacts is not None and candidate < 1.0 and
+                    (contact_ids is None or other['id'] in contact_ids)):
+                contacts.append((other['id'], candidate))
     return fraction
 
 

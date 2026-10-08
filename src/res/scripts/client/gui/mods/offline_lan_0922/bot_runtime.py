@@ -25,6 +25,7 @@ from gui.mods.offline_lan_0922 import bot_gunnery
 from gui.mods.offline_lan_0922 import bot_state_codec
 from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import device_damage
+from gui.mods.offline_lan_0922 import ram_motion
 from gui.mods.offline_lan_0922 import effective_params
 from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import gun_pitch_limits
@@ -147,7 +148,7 @@ _PUBLICATION_EDGE_SCALAR_FIELDS = (
     'burst_interval', 'burst_shell_index',
     'siege_state', 'siege_transition_total_ms',
     'health', 'alive', 'combat_base_revision', 'combat_seq',
-    'death_reason', 'display_health', 'world_pose', 'route_wreck_blocked',
+    'death_reason', 'display_health', 'world_pose', 'route_wreck_blocked', 'ram_motion',
     'stun_end_server_time_ms',
 )
 _PUBLICATION_EDGE_MISSING = object()
@@ -3614,6 +3615,8 @@ class BotRuntime(object):
                 'mass': self._physics_params[bot_id]['mass'],
                 'ram_profile': tank_collision.descriptor_ram_profile(
                     descriptor),
+                'ram_motion': ram_motion.normalize(raw.get('ram_motion', [])),
+                '_ram_motion_seq': max([r[1] for r in raw.get('ram_motion', [])] or [0]),
                 'push_x': 0.0, 'push_z': 0.0,
                 'air_lateral_x': 0.0, 'air_lateral_z': 0.0,
                 'slide_speed': 0.0,
@@ -3950,6 +3953,8 @@ class BotRuntime(object):
         state['push_x'] = _number(raw.get('push_x'))
         state['push_z'] = _number(raw.get('push_z'))
         state['contact_push_acks'] = copy.deepcopy(raw.get('contact_push_acks', []))
+        state['ram_motion'] = ram_motion.normalize(raw.get('ram_motion', []))
+        state['_ram_motion_seq'] = max([row[1] for row in state['ram_motion']] or [0])
         state['push_yaw'] = _number(raw.get('push_yaw'))
         state['vertical_speed'] = 0.0
         state['airborne'] = bool(raw.get('airborne', False))
@@ -6648,6 +6653,7 @@ class BotRuntime(object):
             'start': position, 'speed_before': state.get('speed', 0.0),
             'requested_throttle': command.get('throttle', throttle),
             'requested_turn': command.get('turn', turn), 'turn': turn,
+            'ram_motion': [list(row) for row in state.get('ram_motion', ())],
             'traffic_mode': traffic_mode,
             'controls': {
                 'planner': (command.get('throttle', throttle), command.get('turn', turn)),
@@ -8883,7 +8889,7 @@ class BotRuntime(object):
                 raw, HUMAN_TARGET_ID_BASE+int(raw['id']), profile['shape']))
         return bodies
 
-    def _guard_tank_translations(self, players, tick_poses):
+    def _guard_tank_translations(self, players, tick_poses, sample_time_us=None):
         # Sweep against the same pre-drive roster so an earlier actor cannot
         # tunnel past another before that actor gets its turn. Final contact
         # constraints then use the accepted endpoints and incoming velocities.
@@ -8893,12 +8899,68 @@ class BotRuntime(object):
             if start is not None:
                 body['x'], body['z'] = start[0], start[2]
         by_id = dict((body['id'], body) for body in bodies)
+        players_by_id = dict((HUMAN_TARGET_ID_BASE + int(p['id']), p)
+                             for p in players or () if isinstance(p, dict)
+                             and p.get('id') is not None)
         for state in self._ordered_states():
+            if not state.get('alive', True):
+                state['ram_motion'] = []
+                continue
             start = tick_poses.get(state['id'])
             if start is None:
                 continue
             move = (state['x']-start[0], state['z']-start[2])
-            fraction = tank_collision.translation_fraction(by_id[state['id']], move, bodies)
+            contacts = []
+            fraction = tank_collision.translation_fraction(
+                by_id[state['id']], move, bodies, contacts=contacts, contact_ids=players_by_id)
+            # Keep only an actual enemy player contact. No world query or
+            # predicted motor velocity belongs to this incoming HP evidence.
+            previous = dict((row[0], row) for row in state.get('ram_motion', ()))
+            retained = {}
+            for peer, row in previous.items():
+                raw = players_by_id.get(HUMAN_TARGET_ID_BASE + peer)
+                other = by_id.get(HUMAN_TARGET_ID_BASE + peer)
+                if (raw is not None and raw.get('alive', True) and other is not None
+                        and raw.get('team') != state.get('team')
+                        and tank_collision.vertical_overlap(
+                            state['y'], by_id[state['id']]['shape'],
+                            other['y'], other['shape'],
+                            pitch_a=state.get('pitch', 0.0), roll_a=state.get('roll', 0.0),
+                            pitch_b=other.get('pitch', 0.0), roll_b=other.get('roll', 0.0))
+                        and tank_collision.obb_contact(
+                            state['x'], state['z'], state['yaw'], by_id[state['id']]['shape'],
+                            other['x'], other['z'], other['yaw'], other['shape']) is not None):
+                    retained[peer] = row
+            for peer_id, hit_fraction in contacts:
+                raw = players_by_id.get(peer_id)
+                if (hit_fraction > fraction + 1e-9 or raw is None
+                        or not raw.get('alive', True) or not state.get('alive', True)
+                        or raw.get('team') == state.get('team')):
+                    continue
+                speed = state.get('speed', 0.0)
+                velocity = (math.sin(state['yaw']) * speed + state.get('push_x', 0.0),
+                            state.get('vertical_speed', 0.0),
+                            math.cos(state['yaw']) * speed + state.get('push_z', 0.0))
+                peer = int(raw['id'])
+                old = retained.get(peer)
+                # A harmless slow touch must not hide later real acceleration.
+                # Once the client admits HP, its contact episode deduplicates it.
+                if sum(v*v for v in velocity) > sum(v*v for v in (old[3:6] if old else ())):
+                    seq = state.get('_ram_motion_seq', 0) + 1
+                    state['_ram_motion_seq'] = seq
+                    retained[peer] = [peer, seq, int(sample_time_us if sample_time_us is not None
+                                                    else self._sample_time_us)] + list(velocity) + [
+                        start[0] + move[0] * hit_fraction,
+                        start[1] + (state['y'] - start[1]) * hit_fraction,
+                        start[2] + move[1] * hit_fraction,
+                        state['yaw'], state.get('pitch', 0.0), state.get('roll', 0.0),
+                        raw.get('x', 0.0), raw.get('y', 0.0), raw.get('z', 0.0),
+                        raw.get('yaw', 0.0), raw.get('pitch', 0.0), raw.get('roll', 0.0),
+                        math.sin(raw.get('yaw', 0.0)) * raw.get('speed', 0.0),
+                        raw.get('vertical_speed', 0.0),
+                        math.cos(raw.get('yaw', 0.0)) * raw.get('speed', 0.0)]
+            state['ram_motion'] = [retained[peer] for peer in sorted(retained)]
+
             if fraction < 1.0 or state.get('push_x') or state.get('push_z'):
                 state['_contact_drive_sweep'] = (start, move)
             else:
@@ -14344,7 +14406,7 @@ class BotRuntime(object):
         # complete roster only after every live body reaches that boundary.
         pending_ram_count = len(self._pending_ram_reports)
         if not self.native_motion:
-            self._guard_tank_translations(players, tick_poses)
+            self._guard_tank_translations(players, tick_poses, step_end_time_us)
             self._contact_players = players
             self._contact_now = now
             for bot_id, forced_speed in passive_forwards.items():

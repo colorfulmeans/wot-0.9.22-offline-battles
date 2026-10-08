@@ -4,7 +4,7 @@ from __future__ import print_function
 
 import base64
 import bisect
-from gui.mods.offline_lan_0922 import ram_history
+from gui.mods.offline_lan_0922 import ram_history, ram_motion
 import collections
 import copy
 import json
@@ -9272,6 +9272,7 @@ class BattleRuntime(object):
             return None
         if left_time == right_time:
             result = {} if velocity_only else dict(left_state)
+            result['ram_motion'] = ram_motion.at_time([], left_state.get('ram_motion'), sample_time_us)
             result['ram_vx'] = 0.0
             result['ram_vy'] = 0.0
             result['ram_vz'] = 0.0
@@ -9321,6 +9322,8 @@ class BattleRuntime(object):
                                      _number(right_state.get('yaw'))) * progress)
             if progress >= 1.0:
                 result['alive'] = bool(right_state.get('alive', True))
+        result['ram_motion'] = ram_motion.at_time(
+            left_state.get('ram_motion'), right_state.get('ram_motion'), sample_time_us)
         result['ram_vx'] = (
             _number(right_state.get('x')) -
             _number(left_state.get('x'))) * 1000000.0 / span_us
@@ -21295,7 +21298,8 @@ class BattleRuntime(object):
                                  hit_point, player_velocity, bot_velocity,
                                  contact_time_us, own_pose=None,
                                  bot_pose=None, player_ram_profile=None,
-                                 contact_normal=None, contact_y_span=None):
+                                 contact_normal=None, contact_y_span=None,
+                                 bot_ram_motion_seq=None):
         """Queue one immutable contact episode without applying HP locally."""
         if len(self._native_ram_contact_proofs) >= 16:
             return False
@@ -21354,6 +21358,7 @@ class BattleRuntime(object):
         player_bonus = float(player_ram_profile['ramming_bonus'])
         proof = {
             'bot_id': bot_id,
+            'bot_ram_motion_seq': bot_ram_motion_seq,
             'record': record,
             'presentation_time_us': record.get('presentation_time_us'),
             'bot_history_bracket': (list(record['presentation_bracket'])
@@ -21463,6 +21468,9 @@ class BattleRuntime(object):
             if proof['attempts'] < 2:
                 return False
             self._native_ram_contact_proofs.pop(event_seq, None)
+            if (proof.get('bot_ram_motion_seq') is not None and
+                    revision is not None and presentation_time_us is not None):
+                record['ram_motion_failed_seq'] = proof['bot_ram_motion_seq']
             # No HP receipt was admitted. An unsuccessful geometry probe is
             # not a paid collision episode: a later real contact must be able
             # to prove its own current pose and pre-separation velocity.
@@ -21516,6 +21524,8 @@ class BattleRuntime(object):
         }
         if bracket is not None:
             receipt['bot_history_bracket'] = list(bracket)
+        if proof.get('bot_ram_motion_seq') is not None:
+            receipt['bot_ram_motion_seq'] = int(proof['bot_ram_motion_seq'])
         self._local_ram_receipt = receipt
         self._local_ram_receipts[self._local_ram_seq] = dict(receipt)
         self._native_ram_contact_proofs.pop(event_seq, None)
@@ -21571,7 +21581,9 @@ class BattleRuntime(object):
         overlapping = set()
         closing_gaps = set()
         newly_armed = set()
+        live_own = own
         for other in others:
+            own = live_own
             if (not other.get('alive', True) or
                     other.get('kind') != 'bot'):
                 continue
@@ -21580,6 +21592,19 @@ class BattleRuntime(object):
             if own_team in (1, 2) and own_team == other_team:
                 continue
             bot_id = int(other['network_id'])
+            motion = other.get('_ram_motion')
+            if motion is not None:
+                if (other.get('_record') or {}).get('ram_motion_failed_seq') == motion[1]:
+                    continue
+                # Prove the original physical pair, not a later pushed pose.
+                own = dict(live_own)
+                other = dict(other)
+                for index, field in enumerate(('x','y','z','yaw','pitch','roll')):
+                    other[field] = motion[6+index]
+                    own[field] = motion[12+index]
+                other['vx'], other['vy'], other['vz'] = motion[3:6]
+                own['vx'], own['vy'], own['vz'] = motion[18:21]
+
             own_center_y = float(own['y']) + (
                 float(own['shape'][2]) +
                 float(own['shape'][3])) * 0.5
@@ -21679,9 +21704,12 @@ class BattleRuntime(object):
                             body['x'], body['z'], body['yaw'], body['shape']) is not None):
                     witnesses.append((body.get('network_id'), body.get('alive', True), body.get('team')))
             sys.stdout.write('[Offline LAN 0.9.22] RAM_EVIDENCE observed '
-                'bot=%d next_event=%d stamp=%s bracket=%s contacts=%s\n' % (
+                'bot=%d next_event=%d stamp=%s bracket=%s contacts=%s '
+                'motion_seq=%s bot_velocity=%s\n' % (
                     bot_id, self._native_ram_event_seq+1,
-                    record.get('presentation_time_us'), record.get('presentation_bracket'), witnesses))
+                    record.get('presentation_time_us'), record.get('presentation_bracket'), witnesses,
+                    other.get('bot_ram_motion_seq'),
+                    (other['vx'], other.get('vy', 0.0), other['vz'])))
             queued = self._queue_ram_contact_proof(
                 record, entity, bot_vehicle, hit_point,
                 (own['vx'], own.get('vy', 0.0), own['vz']),
@@ -21694,7 +21722,8 @@ class BattleRuntime(object):
                           _number(other.get('roll'))),
                 player_ram_profile=own['ram_profile'],
                 contact_normal=impact_contact[:2],
-                contact_y_span=(contact_low, contact_high))
+                contact_y_span=(contact_low, contact_high),
+                bot_ram_motion_seq=other.get('bot_ram_motion_seq'))
             # Queue admission, including one next-frame plate retry, owns the
             # episode. A sustained overlap must never generate another HP
             # proposal merely because rendering/polling continues.
@@ -21810,6 +21839,7 @@ class BattleRuntime(object):
             if isinstance(presented_pose, dict):
                 state = dict(state)
                 state.update(presented_pose)
+            witness = None
             if record.get('kind') == 'bot':
                 presentation_time_us = record.get('presentation_time_us')
                 revision = self._ram_bot_revision_at(
@@ -21823,6 +21853,11 @@ class BattleRuntime(object):
                     for name in ('ram_vx', 'ram_vy', 'ram_vz'):
                         if name in historical:
                             state[name] = historical[name]
+                    witness = ram_motion.for_player(historical.get('ram_motion'),
+                                                    int(getattr(self.client, 'player_id', 0)))
+                    if witness is not None:
+                        state['ram_vx'], state['ram_vy'], state['ram_vz'] = witness[3:6]
+                        state['bot_ram_motion_seq'] = witness[1]
             alive = bool(state.get('alive', True))
             yaw = _number(state.get('yaw'))
             speed = _number(state.get('speed')) if alive else 0.0
@@ -21915,6 +21950,8 @@ class BattleRuntime(object):
                 # Historical armour receipts settle HP independently.
                 'impulse': True,
                 'physical_velocity': physical_velocity,
+                'bot_ram_motion_seq': state.get('bot_ram_motion_seq'),
+                '_ram_motion': witness,
                 'push_yaw': push_yaw,
                 # Bot wreck momentum retains its real inverse mass. Their
                 # owner alone advances the pose. A dead human hull has no

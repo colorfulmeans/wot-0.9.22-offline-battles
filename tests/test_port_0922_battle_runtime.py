@@ -8796,7 +8796,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'bot_state_revision': revision, 'bot_state_time_us': stamp,
                 'bots': [{'id': 11, 'x': x, 'y': y, 'z': z, 'yaw': 0.5,
                           'pitch': 0.1, 'roll': -0.1, 'alive': True}]})
-        fields = ('ram_vx', 'ram_vy', 'ram_vz')
+        fields = ('ram_vx', 'ram_vy', 'ram_vz', 'ram_motion')
         for stamp in (50000, 100000, 150000, 230000, 250000, 300000, 350000):
             revision = battle._ram_bot_revision_at(11, stamp)
             with self.subTest(stamp=stamp, revision=revision):
