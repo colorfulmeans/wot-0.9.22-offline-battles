@@ -341,13 +341,13 @@ class BotTacticsEditor:
         actions_wait=ttk.Frame(self.wait_panel);actions_wait.pack(fill='x')
         self.wait_apply=ttk.Button(actions_wait,text=self.tr('设置时间和朝向','Set time and heading'),command=self.update_wait_time);self.wait_apply.pack(side='left')
         self.wait_delete=ttk.Button(actions_wait,text=self.tr('删除等待点','Delete wait point'),command=self.delete_wait_point);self.wait_delete.pack(side='left')
-        ttk.Label(self.wait_panel,text=self.tr('圆环为停车避让参考，大车需更多空间；箭头为偏好朝向，交战可自由转向。勾选后点击添加或拖动；Delete删除。',
-            'Ring: parking clearance guide; large hulls need more room. Arrow: preferred idle heading; combat can turn freely. Click to add/drag; Delete removes.'),wraplength=250).pack(anchor='w')
+        ttk.Label(self.wait_panel,text=self.tr('圆环为半径6米的大车停车参考；箭头为偏好朝向，交战可自由转向。勾选后点击添加或拖动；Delete删除。',
+            'Ring: 6 m radius large-hull parking guide. Arrow: preferred idle heading; combat can turn freely. Click to add/drag; Delete removes.'),wraplength=250).pack(anchor='w')
         self.node_legend=ttk.LabelFrame(right,text=self.tr('节点图例','Node legend'))
         self.node_legend.grid(row=23,column=0,sticky='ew',pady=(5,0))
         for row,(radius,zh,en) in enumerate(((4,'普通节点','Normal waypoint'),
                 (7,'大圆点：等待点组（点击展开）','Large circle: wait group (click to expand)'),
-                (4,'方点：等待位；圆环：避让范围约4.9米','Square: wait place; ring: ~4.9 m clearance'))):
+                (4,'方点：等待位；圆环：大车参考半径6米','Square: wait place; ring: 6 m radius large-hull guide'))):
             marker=tk.Canvas(self.node_legend,width=22,height=20,background='#202529',highlightthickness=0)
             marker.grid(row=row,column=0,padx=4,pady=1)
             draw=marker.create_rectangle if row==2 else marker.create_oval

@@ -101,7 +101,7 @@ def point(raw, bounds):
             round(number(raw[1], bounds[1], bounds[3]), 4)]
 
 
-WAIT_AVOIDANCE_RADIUS = math.hypot(3.5, 1.7) + 1.0
+WAIT_AVOIDANCE_RADIUS = 6.0
 
 
 def waiting_heading(place, following=None):
