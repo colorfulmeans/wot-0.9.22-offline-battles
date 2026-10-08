@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   bot-behavior-regressions:
@@ -377,15 +378,18 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
       - uses: actions/upload-artifact@v4
+        id: launcher_download
         with:
           name: wot-0.9.22-offline-battles-launcher
           # Upload the runnable folder; Actions supplies the only outer ZIP.
           path: launcher/dist/wot-0.9.22-offline-battles/
           if-no-files-found: error
+          overwrite: true
       - name: Extract the actual download once
         uses: actions/download-artifact@v4
         with:
-          name: wot-0.9.22-offline-battles-launcher
+          artifact-ids: ${{ steps.launcher_download.outputs.artifact-id }}
+          github-token: ${{ github.token }}
           path: ${{ runner.temp }}/launcher-download
       - name: Verify that the bundled servers run from the launcher
         shell: pwsh
