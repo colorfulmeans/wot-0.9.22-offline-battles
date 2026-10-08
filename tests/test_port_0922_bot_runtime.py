@@ -16891,6 +16891,20 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertIn('frozen=True', output.getvalue())
             self.assertIn('strategic_goal=(0.0, 0.0, 200.0)', output.getvalue())
 
+    def test_motion_diagnostic_nonempty_gun_angle_rejections_use_simulation_time(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state=self.runtime.states[11]
+        state['_motion_stall_pending']={}
+        state['_gun_angle_rejected']={('bot',2):108.0,('human',1):99.0}
+        position=(state['x'],state['y'],state['z'])
+        output=io.StringIO()
+        with redirect_stdout(output):
+            self.runtime._finish_motion_stall(state,False,False,position,100.0)
+        row=json.loads(output.getvalue().split('[BOT MOTION] ',1)[1])
+        self.assertEqual([8.0,0.0],[r['seconds_left'] for r in row['gun_angle_rejected']])
+        self.assertNotIn('_motion_stall_pending',state)
+
     def test_navigation_receipt_is_bounded_and_does_not_query_world(self):
         from contextlib import redirect_stdout
         from unittest.mock import Mock
@@ -16913,7 +16927,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.runtime._log_motion_stall(state, order, 0.0, 0.0, True, {}, 0.0)
             self.runtime._log_motion_stall(state, order, 0.0, 0.0, True, {}, 3.0)
             self.runtime._finish_motion_stall(state, False, False,
-                (state['x'], state['y'], state['z']))
+                (state['x'], state['y'], state['z']),3.0)
         row = json.loads(output.getvalue().split('[BOT MOTION] ', 1)[1])
         receipt = row['navigation']
         self.assertEqual(7, len(receipt['path_near_target']))
@@ -16959,7 +16973,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.runtime._log_motion_stall(
                 state, order, 0.0, 0.0, True, {}, 3.0,
                 traffic_input=order, traffic_output=safety)
-            self.runtime._finish_motion_stall(state, False, False, position)
+            self.runtime._finish_motion_stall(state, False, False, position,3.0)
         self.assertIn('traffic=vehicle_brake', output.getvalue())
         row = json.loads(output.getvalue().split('[BOT MOTION] ', 1)[1])
         self.assertEqual('vehicle_brake', row['traffic_mode'])
@@ -16969,6 +16983,39 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([0.0, 0.0], row['controls']['motion'])
         self.assertEqual([], row['contact_pairs'])
         self.assertNotIn('traffic_mode', order)
+
+    def test_update_with_gun_angle_rejections_keeps_running_after_stall_log(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        state['_motion_stall_log'] = (
+            (state['x'], state['y'], state['z']), 0.0)
+        state['_gun_angle_rejected']={('bot',2):8.0}
+        original_decide = self.runtime.adapter.decide
+
+        def decide(*args):
+            command = original_decide(*args)
+            command.update(turn=-0.4, fire_allowed=False)
+            return command
+
+        self.runtime.adapter.decide = decide
+
+        def brake(body, command, neighbours, now, distance, step):
+            return dict(command, throttle=0.0, turn=0.0, brake=True,
+                        traffic_mode='vehicle_brake', forward_blocked_by=27)
+
+        output = io.StringIO()
+        with redirect_stdout(output), mock.patch.object(
+                self.runtime._traffic_coordinator, 'safe_controls',
+                side_effect=brake):
+            self.runtime.update(0.04, 3.0)
+            self.runtime.update(0.04, 3.04)
+        self.assertEqual(1, output.getvalue().count('[BOT STALL]'))
+        line = next(line for line in output.getvalue().splitlines()
+                    if line.startswith('[BOT MOTION] '))
+        row = json.loads(line.split('[BOT MOTION] ', 1)[1])
+        self.assertEqual(5.0,row['gun_angle_rejected'][0]['seconds_left'])
+        self.assertNotIn('_motion_stall_pending',state)
 
     def test_update_passes_control_stages_to_bounded_motion_diagnostic(self):
         from contextlib import redirect_stdout
@@ -17025,7 +17072,7 @@ class BotRuntimeTests(unittest.TestCase):
                     state, order, 1.0, 1.0, True, {}, float(second))
                 if '_motion_stall_pending' in state:
                     self.runtime._finish_motion_stall(
-                        state, False, False, (state['x'], state['y'], state['z']))
+                        state, False, False, (state['x'], state['y'], state['z']),float(second))
         rows = [json.loads(line.split('[BOT MOTION] ', 1)[1])
                 for line in output.getvalue().splitlines()
                 if line.startswith('[BOT MOTION] ')]

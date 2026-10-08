@@ -6661,7 +6661,7 @@ class BotRuntime(object):
                       strategic.get('target_kind'), strategic.get('target_id')))))
 
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
-                             settled_position):
+                             settled_position, now):
         """Log the actual authority outcome without extra world queries."""
         trace = state.pop('_motion_stall_pending', None)
         if trace is None:
@@ -14381,7 +14381,7 @@ class BotRuntime(object):
                     navigation_hazards=False) or pose_rollback
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),
-                pose_rollback, settled)
+                pose_rollback, settled, now)
         if diagnostic is not None:
             diagnostic.actor(None)
         self._alive_bot_ticks += len(slope_candidates)
