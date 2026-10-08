@@ -2502,25 +2502,39 @@ class BotPlanner(object):
         bot_id = bot['id']
         state = bot['state']
         route_id = str(order.get('route_id') or '')
-        if (order.get('combat_mode') not in ('route', 'advance', 'parking_approach') or
+        if (order.get('combat_mode') not in ('route', 'advance', 'parking_approach', 'base_capture') or
                 order.get('team_command') or
                 order.get('throttle_override') is not None or
-                not state.get('route_wreck_blocked') or
                 not self._route_donor_eligible(bot)):
             self._wreck_route_progress.pop(bot_id, None)
             return
         point = _point(state)
         goal = _point(order.get('move_position') or {})
+        physical_block = bool(state.get('route_wreck_blocked'))
+        distance = math.hypot(goal['x'] - point['x'], goal['z'] - point['z'])
+        # Completed arrivals, intentional holds and unowned poses are not
+        # failed travel. Native geometry refusal need not be a wreck receipt.
+        if not physical_block and (not state.get('world_pose') or
+                distance <= max(13.0, _number(order.get('arrival_radius')))):
+            self._wreck_route_progress.pop(bot_id, None)
+            return
         key = (route_id, order.get('route_index'))
         progress = self._wreck_route_progress.get(bot_id)
         if (progress is None or progress['key'] != key or
-                math.hypot(goal['x'] - progress['goal']['x'],
-                           goal['z'] - progress['goal']['z']) > 2.0):
+                progress.get('physical_block') != physical_block):
             progress = None
         if progress is None:
             self._wreck_route_progress[bot_id] = {
-                'key': key, 'goal': goal, 'since': _number(now)}
+                'key': key, 'goal': goal, 'since': _number(now),
+                'origin': dict(point), 'physical_block': physical_block}
             return
+        if not physical_block:
+            origin = progress.get('origin', point)
+            net = math.hypot(point['x'] - origin['x'], point['z'] - origin['z'])
+            toward = math.hypot(goal['x'] - origin['x'], goal['z'] - origin['z']) - distance
+            if net >= 6.0 and toward >= 4.0:
+                progress.update(since=_number(now), origin=dict(point), goal=goal)
+                return
         # A moving recovery orbit still has a finite attempt budget. Only
         # consuming the gate or clearing the physical blocker ends this attempt.
         if _number(now) - progress['since'] < WRECK_ROUTE_WAIT_SECONDS:
@@ -2550,7 +2564,8 @@ class BotPlanner(object):
             self._apply_authored_route_order(order, bot, move, now)
             self._wreck_route_progress[bot_id] = {
                 'key': (new_id, new_index), 'goal': _point(move),
-                'since': _number(now)}
+                'since': _number(now), 'origin': dict(point),
+                'physical_block': physical_block}
             return
         if route_state.get('blocked_skip_to') != index and index + 1 < len(waypoints):
             next_index = index + 1
@@ -2575,7 +2590,8 @@ class BotPlanner(object):
             self._apply_authored_route_order(order, bot, move, now)
             self._wreck_route_progress[bot_id] = {
                 'key': (new_id, new_index), 'goal': _point(move),
-                'since': _number(now)}
+                'since': _number(now), 'origin': dict(point),
+                'physical_block': physical_block}
             return
         avoided = self._wreck_route_avoid.setdefault(bot_id, {})
         avoided[route_id] = _number(now) + WRECK_ROUTE_AVOID_SECONDS
@@ -2596,20 +2612,41 @@ class BotPlanner(object):
                 class_tag), 0.5)
             if affinity < MIN_ROUTE_CLASS_AFFINITY:
                 continue
+            points = route['waypoints']
+            entry = min(range(len(points)), key=lambda i: math.hypot(
+                _number(points[i].get('x')) - point['x'],
+                _number(points[i].get('z')) - point['z']))
+            while entry < len(points) - 1 and math.hypot(
+                    _number(points[entry].get('x')) - point['x'],
+                    _number(points[entry].get('z')) - point['z']) < 30.0:
+                entry += 1
+            # Different route names may share the same failed next gate.
+            # Do not call that an alternative exit.
+            if math.hypot(_number(points[entry].get('x')) - goal['x'],
+                          _number(points[entry].get('z')) - goal['z']) < 16.0:
+                continue
             nearest = min(math.hypot(
                 _number(p.get('x')) - point['x'],
                 _number(p.get('z')) - point['z'])
                 for p in route['waypoints'])
-            candidates.append((-affinity, nearest, candidate_id, route))
+            candidates.append((-affinity, nearest, candidate_id, route, entry))
         if not candidates:
             # No suitable alternative: keep the physical hold, never force
             # through a wreck or repeat a route-switch storm each tick.
             progress['since'] = _number(now)
             return
-        route = min(candidates, key=lambda value: value[:3])[3]
+        chosen = min(candidates, key=lambda value: value[:3])
+        route, entry = chosen[3:]
         self._route_assignments[bot_id] = {
             'route': route, 'until': 0.0, 'wreck_detour': True}
-        self._route_states.pop(bot_id, None)
+        # Join the evaluated entry from the current hull position, rather than
+        # restoring a stale failed cursor from an earlier visit to this lane.
+        saved = self._route_history.get(bot_id, {}).get(str(route.get('id'))) or {}
+        self._route_states[bot_id] = dict(
+            route_id=str(route.get('id')), index=entry, join_index=entry,
+            join_anchor=dict(point),
+            parking_completed=set(saved.get('parking_completed', ())),
+            parking_skipped=set(saved.get('parking_skipped', ())))
         self._wreck_route_progress.pop(bot_id, None)
         new_id, index, move, anchor, join = self._route(bot, now)
         order.update(route_id=new_id, route_index=index,
@@ -2617,7 +2654,7 @@ class BotPlanner(object):
                      parking_slot=None, arrival_radius=None,
                      move_position=move, face_position=dict(move),
                      route_anchor=anchor, route_join=join,
-                     route_switch_reason='wreck_stall',
+                     route_switch_reason='wreck_stall' if physical_block else 'no_route_progress',
                      previous_route_id=route_id)
         self._apply_authored_route_order(order, bot, move, now)
 
@@ -3476,8 +3513,14 @@ class BotPlanner(object):
             self._apply_base_defense_order(order, bot, travel_override)
             self._firing_holds.pop(bot["id"], None)
             return order
+        artillery_only = (str(profile.get('class_tag') or '') == 'SPG' and
+            team_bots and all(str(b.get('profile', {}).get('class_tag') or '') == 'SPG'
+                              for b in team_bots))
+        # Artillery already qualifies for the existing capture squad when no
+        # regulars remain. Its stationary parking anchor cannot consume a
+        # front-line staging gate, so do not wait for that impossible cursor.
         if (no_known_enemies and capture_target is not None and
-                self._capture_staged(bot, route_index)):
+                (self._capture_staged(bot, route_index) or artillery_only)):
             self._apply_base_capture_order(order, bot, capture_target)
             self._firing_holds.pop(bot["id"], None)
             return order

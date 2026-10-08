@@ -39,6 +39,18 @@ assert 'core.py' in verified
 assert 'bot_tactics_ui.py' in verified
 assert 'bot_tactics_labels.py' in verified
 
+sys.path.insert(0, str(ROOT / 'launcher'))
+import stage_payload
+server_sources = []
+for relative in stage_payload.PAYLOAD_FILES['0.9.22']:
+    server_sources.append(relative)
+for directory in stage_payload.PAYLOAD_TREES['0.9.22']:
+    server_sources.extend(path.relative_to(ROOT).as_posix()
+                          for path in (ROOT / directory).rglob('*.py'))
+for relative in server_sources:
+    bundled = app / '_internal/servers/0.9.22' / relative
+    assert bundled.read_bytes().replace(b'\r\n', b'\n') == (ROOT / relative).read_bytes().replace(b'\r\n', b'\n'), relative
+
 with zipfile.ZipFile(app / '_internal/client/0.9.22.zip') as client:
     assert client.read('offline_worker_starter.exe') == (ROOT / 'native/offline_worker_starter.exe').read_bytes()
     mod_name = next(n for n in client.namelist() if n.endswith('.wotmod'))
@@ -59,5 +71,6 @@ with zipfile.ZipFile(app / '_internal/client/0.9.22.zip') as client:
             assert all(i.compress_type == zipfile.ZIP_STORED for i in mod.infolist())
             assert mod.read('res/offline_replay/replay_reader_process.py') == (ROOT / 'tools/replay/replay_reader_process.py').read_bytes()
 print(json.dumps({'frozen_source_modules_verified': len(verified),
+                  'bundled_server_sources_verified': len(server_sources),
                   'replay_entry_bundled': True, 'recorder_runtime_executed': True,
                   'native_starter_matches_source_tree': True}))
