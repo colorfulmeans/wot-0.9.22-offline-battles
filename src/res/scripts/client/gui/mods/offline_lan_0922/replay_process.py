@@ -30,7 +30,7 @@ except ImportError:
 
 RUNTIME_RESOURCE = 'res/offline_replay/recorder-runtime.zip'
 RUNTIME_DIGEST = '8aee9faae63078408922d2ec000dc4211195a62a6921422a096042be3fe5f37b'
-PACKAGE_NAME = 'org.colorfulmeans.offline_lan_0922_0.9.7.wotmod'
+PACKAGE_NAME = 'org.colorfulmeans.offline_lan_0922_0.10.0.wotmod'
 MAX_FRAME = 4 * 1024 * 1024
 MAX_QUEUE_BYTES = 16 * 1024 * 1024
 MAX_QUEUE_PACKETS = 512

@@ -187,7 +187,10 @@ class ParkingLotteryTests(unittest.TestCase):
     def test_deleted_default_positions_roundtrip_and_do_not_reappear(self):
         import bot_tactics_store as store
         graph=_graph();raw=profile();entry=raw['maps']['08_ruinberg']
-        defaults=store.default_spg_positions('08_ruinberg',graph,raw)
+        # This case exercises deletion of the legacy baked source catalog.
+        # Adopted authored position IDs belong to a separate catalog.
+        with mock.patch.object(cfg,'default_map',return_value={}):
+            defaults=store.default_spg_positions('08_ruinberg',graph,raw)
         deleted=[p['id'] for p in defaults if p['team']==1]
         entry['deleted_positions']=deleted
         canonical=cfg.canonical(raw)

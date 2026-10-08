@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.9.7** — [Release notes](docs/releases/v0.9.7.md).
+Current release: **v0.10.0** — [Release notes](docs/releases/v0.10.0.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.9.7-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.10.0-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -79,10 +79,9 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
-The [v0.9.7 release notes](docs/releases/v0.9.7.md) cover the follow-up
-since v0.9.6: crew hit feedback, steering and ram contacts, lighter Bot ground
-support, bridge departures, visibility and audio fixes, crew service records,
-offline replays, large LAN state transfers and linked game/session shutdown.
+The [v0.10.0 release notes](docs/releases/v0.10.0.md) cover the comprehensive map tactics baseline, route editor,
+waiting places, Bot navigation and combat improvements, customization shop
+and warehouse, and gameplay fixes.
 Recordings are stored in `replays/offline` in the game folder; open them from
 the launcher's Replay tab. Playback currently supports forward 1x and a manual
 camera. Keep the original vehicle profile and use recordings from this version.
@@ -586,3 +585,5 @@ Route priorities are set per vehicle class (0..9, higher first). All vehicle cla
 Default SPG parking is deletable from the total, shared and SPG editor views. A bounded per-map deletion list persists after saving, reopening and applying the profile. Deleting parking also removes its edited override, leaves combat routes and opposite-side parking unchanged, and excludes it from initial placement and later artillery relocation. Deleting the last default parking uses automatic deployment rather than reinstating the deleted list. Undo restores the previous draft.
 
 Deleting the last small waiting place restores a three-field ordinary parent gate, with no hold flag or clock. Contract loading/saving discards retired parent-only durations and empty waiting-place collections. Reselecting or double-clicking that parent only focuses its waiting editor; it cannot recreate a sixty-second small place. The explicit Add wait point action still permits intentional placement at the parent's coordinates. Existing nonempty places retain their individual times and geometry.
+
+Bot tactics editor: [English user guide](docs/bot-editor-guide-en.md).

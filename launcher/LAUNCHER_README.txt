@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v0.9.7
+wot-0.9.22-offline-battles v0.10.0
 
 Supported client: Chinese HD World of Tanks 0.9.22.0.1 #1513 (32-bit).
 The launcher and bundled server require 64-bit Windows.
@@ -33,7 +33,7 @@ Fully unlocked saves receive one copy per compatible vehicle on their first styl
 stock initialization, including existing saves; later use/sales are not replenished.
 
 English release notes:
-https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v0.9.7
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v0.10.0
 
 This mod is free; resale is prohibited. World of Tanks game assets are not
 included. This unofficial project is not endorsed by Wargaming.

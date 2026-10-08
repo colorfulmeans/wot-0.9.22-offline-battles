@@ -87,10 +87,10 @@ class EditorUITests(unittest.TestCase):
         self.assertTrue(self.ui.wait_edit)
         self.assertLess(int(self.ui.point_actions.grid_info()['row']),int(self.ui.wait_panel.grid_info()['row']))
         self.assertLess(int(self.ui.wait_panel.grid_info()['row']),int(self.ui.node_legend.grid_info()['row']))
-        for point,seconds in [((-66,306),10),((-46,306),20),((-26,306),30)]:
+        for point,seconds in [((-66,306),10),((-6,306),20),((54,306),30)]:
             self.click(point);self.ui.wait_seconds.set(str(seconds));self.ui.update_wait_time()
         self.assertEqual([10,20,30],[p[2] for p in self.ui._wait_point()[4]])
-        before=copy.deepcopy(self.ui.document);self.click((-6,306))
+        before=copy.deepcopy(self.ui.document);self.click((114,306))
         self.assertTrue(self.error_mock.called);self.assertEqual(before,self.ui.document)
         self.assertEqual(3,len(self.ui.canvas.find_withtag('wait_place')))
         self.ui.wait_edit_var.set(False);self.ui.change_wait_edit()

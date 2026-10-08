@@ -1,11 +1,17 @@
-name: Build and publish v0.9.7
+name: Build and publish v0.10.0
 # Validate the exact isolated replay resources as well as the Python 2.7 mod.
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main, release/v0.10.0]
+    paths:
+      - '.github/workflows/publish-v0.10.0.yml'
+      - 'docs/releases/v0.10.0.md'
+      - 'docs/bot-editor-guide-en.md'
 
 concurrency:
-  group: release-097-${{ github.ref }}
+  group: release-0100-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -30,12 +36,12 @@ jobs:
         run: >-
           pwsh -NoProfile -File
           server/build_windows_server.ps1
-      - name: Verify v0.9.7 server executable version
+      - name: Verify v0.10.0 server executable version
         shell: pwsh
         run: |
           $version = (Get-Item -LiteralPath 'dist/server/WoT-0.9.22-LAN-Server.exe').VersionInfo
-          if ($version.FileVersion -ne '0.9.7' -or
-              $version.ProductVersion -ne '0.9.7') {
+          if ($version.FileVersion -ne '0.10.0' -or
+              $version.ProductVersion -ne '0.10.0') {
             throw 'Incorrect Windows server executable version'
           }
           $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path 'dist/server/WoT-0.9.22-LAN-Server.exe'))
@@ -65,7 +71,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           APPDATA: ${{ runner.temp }}/wot-tests/roaming
           LOCALAPPDATA: ${{ runner.temp }}/wot-tests/local
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+        run: python ../tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs ../build/launcher-results
       - uses: actions/download-artifact@v4
         with:
           name: launcher-manual-server-input
@@ -74,18 +80,34 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUTF8: "1"
-        run: python tools/test_release097.py
+        run: >-
+          python tools/run_test_suite.py --jobs 4 --logs build/release0100-results
+          --pattern 'test_port_0922_initial_allocation.py'
+          --pattern 'test_port_0922_eroded_fallback_cycle.py'
+          --pattern 'test_port_0922_authored_route*.py'
+          --pattern 'test_port_0922_navigation_wait*.py'
+          --pattern 'test_port_0922_wait_parking.py'
+          --pattern 'test_port_0922_gun_angle_recovery.py'
+          --pattern 'test_port_0922_artillery*.py'
+          --pattern 'test_port_0922_spg*.py'
+          --pattern 'test_port_0922_default_styles.py'
+          --pattern 'test_port_0922_depot_styles.py'
+          --pattern 'test_port_0922_ram_incoming_motion.py'
+          --pattern 'test_port_0922_spawn_prop_clearance.py'
       - name: Reproduce the verified recorder resource
         run: python tools/build_replay_runtime.py
+      - name: Stage the verified warehouse and shop style UI
+        run: python tools/stage_release_style_ui.py
       - name: Build Python 2.7 0.9.22 client package
         run: >-
           docker run --rm --platform linux/amd64 -v "$PWD:/work"
+          -e WOT_OFFLINE_DEPOT_STYLE_SWF=/work/build/depot/lobby.swf
           -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
           -w /work python:2.7.18
           python build_wotmod.py
       - name: Verify accepted client code and shutdown signal
         run: |
-          docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release097_code.py dist/org.colorfulmeans.offline_lan_0922_0.9.7.wotmod
+          docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.0.wotmod
           docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work python:2.7.18 python tests/release097/test_097_exit_signal.py
       - name: Validate 0.9.22 client package
         run: >-
@@ -131,19 +153,28 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           APPDATA: ${{ runner.temp }}/wot-tests/roaming
           LOCALAPPDATA: ${{ runner.temp }}/wot-tests/local
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+        run: python ../tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs ../build/launcher-results
       - name: Build launcher distribution
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
-      - name: Verify v0.9.7 launcher and client versions
+      - name: Run the built Bot editor smoke
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD "launcher/dist/wot-0.9.22-offline-battles/wot-0.9.22-offline-battles.exe"
+          $result = Join-Path $env:RUNNER_TEMP "bot-editor-smoke.json"
+          $process = Start-Process -FilePath $exe -ArgumentList "--verify-bot-editor", $result -WindowStyle Hidden -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Frozen editor smoke failed" }
+          $report = Get-Content -Raw -LiteralPath $result | ConvertFrom-Json
+          if (-not $report.ok) { throw "Frozen editor report failed" }
+      - name: Verify v0.10.0 launcher and client versions
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $app = "launcher/dist/wot-0.9.22-offline-battles"
           $archive = "$app/_internal/client/0.9.22.zip"
           $version = (Get-Item -LiteralPath "$app/wot-0.9.22-offline-battles.exe").VersionInfo
-          if ($version.FileVersion -ne '0.9.7' -or
-              $version.ProductVersion -ne '0.9.7') {
+          if ($version.FileVersion -ne '0.10.0' -or
+              $version.ProductVersion -ne '0.10.0') {
             throw 'Incorrect Windows launcher executable version'
           }
           @'
@@ -152,13 +183,13 @@ jobs:
           with zipfile.ZipFile(sys.argv[1]) as client:
               identity = json.loads(client.read(
                   'mods/configs/offline_lan_0922/build_identity.json'))
-              assert identity['semanticVersion'] == '0.9.7', identity
+              assert identity['semanticVersion'] == '0.10.0', identity
               mods = [name for name in client.namelist() if name.endswith('.wotmod')]
-              assert len(mods) == 1 and mods[0].endswith('_0.9.7.wotmod'), mods
+              assert len(mods) == 1 and mods[0].endswith('_0.10.0.wotmod'), mods
               with zipfile.ZipFile(io.BytesIO(client.read(mods[0]))) as mod:
                   assert mod.testzip() is None
-                  assert ElementTree.fromstring(mod.read('meta.xml')).findtext('version') == '0.9.7'
-          print('Verified v0.9.7 client build identity and mod.')
+                  assert ElementTree.fromstring(mod.read('meta.xml')).findtext('version') == '0.10.0'
+          print('Verified v0.10.0 client build identity and mod.')
           '@ | python - $archive
           if ($LASTEXITCODE -ne 0) { throw "Client release version check failed" }
       - uses: actions/upload-artifact@v4
@@ -284,9 +315,9 @@ jobs:
       - name: Verify frozen application sources and replay runtime
         shell: pwsh
         env:
-          LOCALAPPDATA: ${{ runner.temp }}/release097-runtime-cache
+          LOCALAPPDATA: ${{ runner.temp }}/release0100-runtime-cache
         run: |
-          python tools/verify_release097_package.py "$env:RUNNER_TEMP/launcher-download"
+          python tools/verify_release0100_package.py "$env:RUNNER_TEMP/launcher-download"
           if ($LASTEXITCODE -ne 0) { throw 'Frozen application verification failed' }
       - name: Create the verified release ZIP
         shell: pwsh
@@ -311,7 +342,7 @@ jobs:
           assert {p.name for p in root.iterdir()} == {'wot-0.9.22-offline-battles.exe', '_internal', 'licenses', 'README.txt', 'LICENSE', 'THIRD_PARTY_NOTICES.md'}, sorted(p.name for p in root.iterdir())
           output = Path('release-assets')
           output.mkdir()
-          target = output / 'wot-0.9.22-offline-battles-0.9.7-Windows-x64.zip'
+          target = output / 'wot-0.9.22-offline-battles-0.10.0-Windows-x64.zip'
           with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
               for path in sorted(root.rglob('*')):
                   if path.is_file():
@@ -325,7 +356,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release ZIP verification failed' }
       - uses: actions/upload-artifact@v4
         with:
-          name: release-097-verified
+          name: release-0100-verified
           path: release-assets/*.zip
           if-no-files-found: error
           compression-level: 0
@@ -340,33 +371,36 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
-          name: release-097-verified
+          name: release-0100-verified
           path: release-assets
       - name: Archive the matching source and validation gates
-        run: git archive --format=zip --output=release-assets/wot-0.9.22-offline-battles-0.9.7-Source-and-validation.zip HEAD
-      - name: Publish the verified v0.9.7 assets from main
+        run: git archive --format=zip --output=release-assets/wot-0.9.22-offline-battles-0.10.0-Source-and-validation.zip HEAD
+      - name: Publish the verified v0.10.0 assets from main
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.9.7" >/dev/null 2>&1; then
-            echo 'v0.9.7 already exists; refusing to replace a published tag.' >&2
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.10.0" >/dev/null 2>&1; then
+            echo 'v0.10.0 already exists; refusing to replace a published tag.' >&2
             exit 1
           fi
-          archive=release-assets/wot-0.9.22-offline-battles-0.9.7-Windows-x64.zip
-          sources=release-assets/wot-0.9.22-offline-battles-0.9.7-Source-and-validation.zip
-          gh release create v0.9.7 "$archive" "$sources" --draft --target "$GITHUB_SHA" \
-            --title 'v0.9.7 — Offline replays, crew feedback and gameplay fixes' \
-            --notes-file docs/releases/v0.9.7.md
-          gh release view v0.9.7 --json assets --jq '.assets[] | [.name,.size] | @tsv' > release-assets/manifest.tsv
+          archive=release-assets/wot-0.9.22-offline-battles-0.10.0-Windows-x64.zip
+          sources=release-assets/wot-0.9.22-offline-battles-0.10.0-Source-and-validation.zip
+          guide=release-assets/wot-0.9.22-offline-battles-0.10.0-Bot-Editor-Guide-English.md
+          cp docs/bot-editor-guide-en.md "$guide"
+          gh release create v0.10.0 "$archive" "$sources" "$guide" --draft --target "$GITHUB_SHA" \
+            --title 'v0.10.0 — Bot tactics, navigation and customization' \
+            --notes-file docs/releases/v0.10.0.md
+          gh release view v0.10.0 --json assets --jq '.assets[] | [.name,.size] | @tsv' > release-assets/manifest.tsv
           python - <<'PY'
           from pathlib import Path
-          expected = [Path('release-assets/wot-0.9.22-offline-battles-0.9.7-Windows-x64.zip'),
-                      Path('release-assets/wot-0.9.22-offline-battles-0.9.7-Source-and-validation.zip')]
+          expected = [Path('release-assets/wot-0.9.22-offline-battles-0.10.0-Windows-x64.zip'),
+                      Path('release-assets/wot-0.9.22-offline-battles-0.10.0-Source-and-validation.zip'),
+                      Path('release-assets/wot-0.9.22-offline-battles-0.10.0-Bot-Editor-Guide-English.md')]
           rows = dict(line.split('\t') for line in Path('release-assets/manifest.tsv').read_text().splitlines())
           assert set(rows) == {path.name for path in expected}, rows
           for path in expected:
               assert int(rows[path.name]) == path.stat().st_size, path
           PY
-          gh release edit v0.9.7 --draft=false --prerelease=false --latest
+          gh release edit v0.10.0 --draft=false --prerelease=false --latest

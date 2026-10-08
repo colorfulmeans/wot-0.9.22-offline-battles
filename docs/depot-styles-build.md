@@ -52,3 +52,5 @@ boundaries. They do not prove BigWorld Flash rendering or native navigation.
 Acceptance must check opening the new category, counts after adding/using a
 style, country/type/tier filters, original categories, and returning to garage
 Exterior to install a style on Chinese HD #1513.
+
+For v0.10.0 GitHub packaging, `tools/stage_release_style_ui.py` retrieves the reviewed generated input from a pinned Git blob build cache. The source tree does not contain the client Flash asset. The transformer digest and output digest must match `tools/release0100-style-input.json`; changing the transformer requires regenerating and reviewing this input with the exact client.
