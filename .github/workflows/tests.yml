@@ -389,6 +389,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ steps.launcher_download.outputs.artifact-id }}
+          merge-multiple: true
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/launcher-download
       - name: Verify that the bundled servers run from the launcher
