@@ -87,7 +87,12 @@ The remaining checks are not labelled obsolete solely because they fail:
 | `test_port_0922_tactical_route_review.py` | Canada west-hills geometry still intersects the historical railway exclusion region. This is a resource-risk check, not proof of a native collision. |
 | `test_port_0922_wreck_dynamics.py` | KV-5 pushing through the lighter-owner side and one delayed reverse-owner scene move in the expected direction but fail the retained one-metre progress requirement. |
 
-The launcher suite passes locally on Windows. All 163 client modules compile
+Final local client discovery ran 7,205 cases in 266 files. It reported no
+import/runtime errors; five files retain 13 failing subcases, with four existing
+skips. The full run also exposed an unseeded Great Wall traffic scene; pinning
+its startup allocation made that scene reproducible and its focused rerun passes.
+The launcher ran 969 cases in 21 files with zero failures and 15 existing skips
+(the live Tk route-editor cases ran). All 163 client modules compile
 under Python 2.7. Source/data simulations do not prove actual native client
 physics, rendering or performance. No live profiles, default user tactics,
 map geometry or production full-suspension setting were rewritten.
