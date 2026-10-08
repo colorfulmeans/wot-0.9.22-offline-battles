@@ -84,7 +84,7 @@ class ReplayReloadSound(object):
     def _report(self, phase, **fields):
         import json
         fields['phase'] = phase
-        self.log('REPLAY_SOUND ' + json.dumps(fields, sort_keys=True, separators=(',', ':')))
+        self.log('REPLAY_SOUND ' + json.dumps(fields, separators=(',', ':')))
 
     def bind(self, controller):
         current = controller.getGunSettings()

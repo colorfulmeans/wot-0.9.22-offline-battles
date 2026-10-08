@@ -2,13 +2,12 @@
 from __future__ import print_function
 import sys
 
-CRITICAL_EVENT = 'enemy_no_hp_damage_at_no_attempt_by_player'
-# Only the direct-projectile result chosen by stock showShotResults is remapped.
+CRITICAL_EVENT = 'enemy_hp_damaged_by_projectile_by_player'
+# Only module-only direct-projectile results are remapped. Stock HP-damage
+# voices include distinct damage-and-track/gun events; replacing those with
+# a no-HP-damage event loses the successful hit announcement.
 # Kill and ignition sounds, ally messages, HE groups and HUD flags stay native.
-_DIRECT_RESULTS = frozenset((
-    'enemy_hp_damaged_by_projectile_by_player',
-    'enemy_hp_damaged_by_projectile_and_gun_damaged_by_player',
-    'enemy_hp_damaged_by_projectile_and_chassis_damaged_by_player',
+_MODULE_ONLY_RESULTS = frozenset((
     'enemy_no_hp_damage_at_attempt_by_player',
     'enemy_no_hp_damage_at_attempt_and_gun_damaged_by_player',
     'enemy_no_hp_damage_at_attempt_and_chassis_damaged_by_player',
@@ -27,14 +26,14 @@ class _PriorityVoice(object):
         return getattr(self.original, name)
 
     def play(self, name, *args, **kwargs):
-        if name in _DIRECT_RESULTS:
+        if name in _MODULE_ONLY_RESULTS:
             name = CRITICAL_EVENT
             self.remapped = True
         return self.original.play(name, *args, **kwargs)
 
 
 def present(avatar, callback, results):
-    """Do not falsify armour penetration to request the critical-hit voice."""
+    """Announce a confirmed internal penetration without changing HUD flags."""
     original = avatar.soundNotifications
     proxy = _PriorityVoice(original)
     avatar.soundNotifications = proxy

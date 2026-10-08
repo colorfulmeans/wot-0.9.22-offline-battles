@@ -245,7 +245,9 @@ class NavigationCapabilityDirectionABITests(unittest.TestCase):
         self.assertEqual([(True, True, True)], verdicts)
         candidate_calls = [entry for entry in calls
                            if entry[0] == 0.0 and entry[1] == 5.6]
-        self.assertEqual(2, len(candidate_calls))
+        # Identical world heading and shared static policy have one receipt,
+        # regardless of forward/reverse intent; kinetics remain motion-owned.
+        self.assertEqual(1, len(candidate_calls))
         self.assertTrue(all(entry[2] is runtime.navigation_planning_capability()
                             for entry in candidate_calls))
 

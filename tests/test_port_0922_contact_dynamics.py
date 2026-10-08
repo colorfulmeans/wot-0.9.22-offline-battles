@@ -117,7 +117,7 @@ class GroundContactTests(unittest.TestCase):
         peer['position'] = (10., 0., 0.)
         self.assertFalse(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
         peer.update(position=(2.99, 0., 0.), team=1)
-        self.assertFalse(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
+        self.assertTrue(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
 
     def test_korea_offset_side_contact_selects_checked_separating_end(self):
         """The 181355 Object 212 pose must actively leave the WZ-132."""
@@ -168,7 +168,7 @@ class GroundContactTests(unittest.TestCase):
             state, strategic, lambda *unused: True)
 
         self.assertEqual('contact_escape', command['recovery_mode'])
-        self.assertEqual(-0.72, command['throttle'])
+        self.assertEqual(-1.0, command['throttle'])
         self.assertEqual(0.0, command['turn'])
         self.assertEqual(player['id'], command['target_id'])
         self.assertTrue(command['fire_allowed'])
@@ -209,7 +209,7 @@ class GroundContactTests(unittest.TestCase):
                 bot_position[2] - forward[1] * 8.0),
         }
         state['neighbours'] = [player, rear]
-        geometry = adapter._enemy_contact(15, state, bot_position)
+        geometry = adapter._hull_contact(15, state, bot_position)
         self.assertIsNone(adapter._contact_escape_plan(
             state, bot_position, lambda *unused: True, geometry))
 
@@ -340,7 +340,7 @@ class GroundContactTests(unittest.TestCase):
         side = dict(id=2, position=(2.99, 0., -1.), yaw=0., half_length=3.5, half_width=1.5)
         rear = dict(side, id=3, position=(0., 0., -8.))
         front = dict(side, id=4, position=(0., 0., 8.))
-        for peers, mode in (([side, rear], 'forward_escape'), ([side, rear, front], 'blocked')):
+        for peers, mode in (([side, rear], 'forward_escape'), ([side, rear, front], 'short_forward_escape')):
             driver = LocalDriver()
             driver._state(1, 0, (0., 0., 0.)).update(recovery_time=.5, recovery_side=1.)
             order = driver.drive(1, 0, (0., 0., 0.), 0., 0., .04,
@@ -348,16 +348,20 @@ class GroundContactTests(unittest.TestCase):
                                  half_width=1.5, pose_clear=lambda yaw: False)
             self.assertEqual(mode, order['recovery_mode'])
             self.assertEqual(0., order['turn'])
-            self.assertEqual(.72 if mode == 'forward_escape' else 0., order['throttle'])
+            self.assertEqual(1.0, order['throttle'])
+            if mode=='short_forward_escape':self.assertLessEqual(order['recovery_probe_distance'],4.0)
 
     def test_contact_oscillation_cannot_renew_driver_wait_forever(self):
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver
         for dt in (1./15, 1./30, 1./60):
             driver = LocalDriver()
             modes=[]
-            for i in range(int(5/dt)):
+            # Alternating 10 cm samples exceed local translation progress;
+            # the independent eight-second objective clock must still expire.
+            for i in range(int(12/dt)):
                 order = driver.drive(1, 0, (.05 if i%2 else -.05, 0., 0.),
-                                     0., 0., dt, (0.,0.,100.), [], lambda *a: True)
+                                     0., 0., dt, (0.,0.,100.), [], lambda *a: True,
+                                     progress_target=(0.,0.,100.))
                 modes.append(order['recovery_mode'])
                 driver.wait_for_traffic(1, dt)
             self.assertIn('reverse_turn', modes)

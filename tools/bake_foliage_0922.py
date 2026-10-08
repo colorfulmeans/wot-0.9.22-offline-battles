@@ -357,7 +357,7 @@ def bake_speedtrees(resources, map_name, tokens, speedtrees,
                 'WGDE SpeedTree has no descriptor %s at SpTr row %d' %
                 (resource, source_index))
         health = float(record['health'])
-        if health < 10.0 or health > 1000.0:
+        if health <= 0.0 or health > 1000.0:
             continue
         if float(record['density']) <= 0.0:
             nonconcealing_fallable_trees += 1

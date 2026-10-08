@@ -128,7 +128,7 @@ class TrafficTests(unittest.TestCase):
             for own, other in ((first, second), (second, first)):
                 self.assertEqual(command(own['yaw']), self.adjust(own, other, now, clear=False))
                 retreat = self.adjust(own, other, now, clear=True)
-                self.assertEqual(-.72 if own is second else .72, retreat['throttle'])
+                self.assertEqual(-.70 if own is second else .70, retreat['throttle'])
                 self.assertEqual(0., retreat['turn'])
         # Even a completely stationary pair cannot renew the backing attempt.
         for now in (YIELD_SECONDS+HEAD_ON_RETREAT_SECONDS, 20.):
@@ -148,7 +148,7 @@ class TrafficTests(unittest.TestCase):
         # A reversing tank must keep the chosen retreat instead of alternating
         # with a forward driver order every time velocity changes sign.
         second['velocity'] = (0., 0., 1.)
-        self.assertEqual(-.72, self.adjust(second, first, YIELD_SECONDS+.1)['throttle'])
+        self.assertEqual(-.70, self.adjust(second, first, YIELD_SECONDS+.1)['throttle'])
         rear = body(3, 0., 15., math.pi, 0.)
         order = self.traffic.adjust(2, second, command(math.pi), [first, rear],
                                     YIELD_SECONDS+.2, lambda *a: True)

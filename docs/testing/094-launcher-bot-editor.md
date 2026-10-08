@@ -52,13 +52,61 @@ currently supported regular battle mode is authored. Window zoom/pan/resize
 never changes stored world X/Z coordinates. Himmelsdorf's non-centred bounds
 are covered explicitly.
 
-Original routes are visible but read-only. Copy one to customize it, or create
-an empty route and click to add points. Drag points, Shift-click to insert,
-Delete to remove, and use the hold action to mark a hold waypoint. Undo/redo
-stores document edits, not view changes. Route attributes include allowed
+Original routes can be edited directly: select a built-in route, drag points,
+click to append, Shift-click to insert, or Delete to remove a point. The existing
+16-point communication limit still applies. Edits are saved per map, team and
+route and vehicle class in the profile, and applied on the next round without rewriting installed
+navigation resources. Reset route restores the selected original geometry;
+undo/redo covers these edits. Built-in identities and allocation metadata remain
+unchanged, so normal route assignment and emergency lane changes use the edited
+geometry. A disconnected or unusable edit falls back to its original route and
+is logged; Check map reports its baked validation result before a match.
+
+The class selector chooses the geometry being edited, not just its display.
+All classes supplies shared geometry; a class-specific default edit overrides
+only that class on its original allocated lane. The legend and route lines use
+light green, medium yellow, heavy grey, TD blue and SPG red. The list shows the
+current scope and marks saved edits. In All classes view, scoped overrides are
+also drawn in their class colours.
+
+Enable Route symmetry to share exactly the same coordinates with the opposite
+team in reverse order. Dragging, inserting and deleting route nodes synchronize
+from either side. Turning symmetry off retains both versions for independent
+editing. It reverses traversal, not map coordinates. Resetting a symmetric
+default resets both teams for that class; copying creates an independent route.
+
+Select or double-click a default or custom node, then enable the waiting-place
+editor below the route-point actions. Click the map to add up to three independent
+parking places, drag them to adjust positions, and set each duration separately:
+0 continues, up to 3600 seconds waits, and -1 holds permanently. Delete removes
+the selected parking place without deleting its parent route node. Unselected
+groups appear as one large circle; only the selected parent expands its places.
+Entering the waiting-place editor unchecks and disables Route symmetry, keeping
+the opposite team's current geometry and waits. Leaving this editor enables the
+checkbox again; it remains unchecked until explicitly enabled. Normal route-node
+editing still supports symmetry. Artillery parking also displays Route symmetry
+disabled and unchecked. Existing single-point waits retain their position and
+duration. The host leases one place per Bot,
+starts its timer within 1 m, and retains occupancy until the departing hull is
+clear. Extra Bots wait for an available place instead of converging on it.
+Place parking positions far enough apart for the intended vehicle hulls; nearby
+reservations cannot be occupied concurrently. A waiting Bot can still rotate its
+hull, aim and fire, but contact escape and friendly repositioning cannot translate
+it out of its place. Automatic route reinforcement cannot cancel an active wait.
+Temporary route reassignment joins a new lane near the current position instead
+of replaying deployment from point zero. Returning to a scripted route restores
+progress and completed waits; an interrupted unfinished wait reacquires its place
+and starts a new arrival clock. Round reset and vehicle removal clear this history.
+Check map reports each invalid waiting place by route, parent node, place number
+and coordinates. It checks usable positions, entry from the parent and directed
+exit to the following route node. These editor checks do not measure firing lanes
+or change runtime route admission or navigation-grid display settings.
+
+Copy a route or create an empty custom route for separate allocation rules.
+Custom route attributes include allowed
 classes, optional 1-based UI slots, capacity, sampling weight, and preferred or
-fixed policy. SPGs are deliberately excluded from ordinary attack-route class
-assignments and use their position library instead.
+fixed policy. SPGs only use parking regions; custom/default scripted SPG
+routes are not available. Ordinary deployment still uses the position library.
 
 Route points are macro intent, not a request to bypass terrain. Initial route
 selection checks baked connectivity and uses a deterministic weighted draw.
@@ -84,6 +132,32 @@ itself still covers only Ruinberg and Steppes (10 zones, 15 cells); editable map
 coverage must not be confused with 41 validated community recommendation sets.
 
 ## Validation is not native acceptance
+
+The map validation window is scrollable and reports every unusable node with
+its one-based index and X/Z coordinates, and both node numbers for disconnected
+adjacent segments. It includes team, route and class labels. Missing ground,
+water/boundary hazards and out-of-grid coordinates have separate explanations.
+These are baked-grid facts, not proof that a native ground surface is impassable.
+
+Route symmetry is always visible immediately to the right of the own-base
+coordinates, on a separate toolbar row that fits the minimum window width.
+Select a regular route to enable it. Parking regions remain team-specific.
+
+Selecting SPG shows default parking points instead of regular lane polylines.
+Ruinberg/Steppes use the sourced parking regions; other maps preview the exact
+host rear-route anchor selection, including admitted global route edits. An
+untouched preview does not create a manual override. Editing a default parking
+point creates a manual region override; reset/undo restore the untouched preview.
+The circle represents the parking region, not a promise to place every gun at
+its centre. The worker still resolves distinct vehicle-sized initial reservations.
+
+The editor opens with All classes selected and Route symmetry checked.
+Unedited ordinary routes adopt symmetry when first edited; an explicitly
+disabled saved setting remains independent. SPG regions are team-specific.
+The legend uses red squares for SPG parking regions. Click or drag to reposition
+the region, then edit its radius, heading and priority. SPG movement points,
+itineraries, arrival waits and route class selection are removed. The position
+schema contains only a centre and region properties. Tank route waits remain.
 
 The editor's map check proves only baked connectivity and existence of generic
 parking space. Vehicle-sized parking is checked by the actual worker at round

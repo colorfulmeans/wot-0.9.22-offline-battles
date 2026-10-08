@@ -304,6 +304,7 @@ class ServerBotTacticsTests(unittest.TestCase):
         peeking = planner.build_orders(
             self.manifest, self.states, players, 7.2)['orders'][0]
         self.assertEqual('cover_peek', peeking['combat_mode'])
+        self.assertEqual(1.0,peeking['throttle_override'])
 
     def test_low_health_vehicle_retreats_without_waiting_for_a_hit(self):
         planner = BotPlanner()
@@ -1105,6 +1106,77 @@ class ServerBotTacticsTests(unittest.TestCase):
         resumed_ids = set(planner._base_capture[1]['bot_ids'])
         self.assertEqual(initial_ids, resumed_ids)
 
+    def test_stalled_capture_member_yields_to_a_nearby_screen(self):
+        planner = BotPlanner()
+        manifest = [_bot(400 + i, 1, i, self.route, 'mediumTank') for i in range(5)]
+        states = [_state(bot['id'], 1, i * 20, 100) for i, bot in enumerate(manifest)]
+        defense = _capture_defense()
+        planner.build_orders(manifest, states, [], 1., defense)
+        selected = set(planner._base_capture[1]['bot_ids'])
+        candidate = next(s for s in states if s['id'] not in selected)
+        target = planner._capture_target(defense, 1)['point']
+        candidate.update(x=target['x'] - 60., z=target['z'])
+        # Two members are actually capturing. The last is alive but has made
+        # no net progress; the nearby screen must fill only that vacant role.
+        stalled = min(selected)
+        for state in states:
+            if state['id'] in selected and state['id'] != stalled:
+                state.update(x=target['x'], z=target['z'])
+        planner.build_orders(manifest, states, [], 21.1, defense)
+        replacement = set(planner._base_capture[1]['bot_ids'])
+        self.assertNotIn(stalled, replacement)
+        self.assertIn(candidate['id'], replacement)
+        self.assertEqual(3, len(replacement))
+        self.assertEqual(selected - {stalled}, selected.intersection(replacement))
+        planner.build_orders(manifest, states, [], 22., defense)
+        self.assertEqual(replacement, set(planner._base_capture[1]['bot_ids']))
+
+    def test_capture_progress_does_not_expire_slow_travel(self):
+        planner = BotPlanner()
+        manifest = [_bot(400 + i, 1, i, self.route, 'mediumTank') for i in range(5)]
+        states = [_state(bot['id'], 1, i * 20, 0) for i, bot in enumerate(manifest)]
+        defense = _capture_defense()
+        planner.build_orders(manifest, states, [], 0., defense)
+        selected = set(planner._base_capture[1]['bot_ids'])
+        for now in range(1, 100):
+            for state in states:
+                if state['id'] in selected:
+                    state['z'] += .03
+            planner.build_orders(manifest, states, [], float(now), defense)
+        self.assertEqual(selected, set(planner._base_capture[1]['bot_ids']))
+
+    def test_capture_progress_respects_each_bots_contact_lease(self):
+        for known in (False, True):
+            with self.subTest(known=known):
+                planner = BotPlanner()
+                manifest = [_bot(400 + i, 1, i, self.route, 'mediumTank') for i in range(4)]
+                states = [_state(bot['id'], 1, i * 20, 0) for i, bot in enumerate(manifest)]
+                defense = _capture_defense()
+                planner.build_orders(manifest, states, [], 0., defense)
+                selected = set(planner._base_capture[1]['bot_ids'])
+                stalled = min(selected)
+                backup = next(s['id'] for s in states if s['id'] not in selected)
+                target = planner._capture_target(defense, 1)
+                for state in states:
+                    if state['id'] in selected and state['id'] != stalled:
+                        state.update(x=target['point']['x'], z=target['point']['z'])
+                contact = dict(radio_bot_until={(stalled if known else backup): 30.})
+                planner._contacts[1] = {('human', 900): contact}
+                bots = planner._alive_bots(manifest, states)
+                result = planner._update_base_capture(1, bots, target, set(), 21., [contact])
+                self.assertEqual(known, stalled in result)
+                self.assertEqual(not known, backup in result)
+                self.assertEqual(3, len(result))
+
+    def test_no_capture_replacement_does_not_empty_the_squad(self):
+        planner = BotPlanner()
+        manifest = [_bot(400 + i, 1, i, self.route, 'mediumTank') for i in range(4)]
+        states = [_state(bot['id'], 1, i * 20, 0) for i, bot in enumerate(manifest)]
+        defense = _capture_defense()
+        planner.build_orders(manifest, states, [], 0., defense)
+        planner.build_orders(manifest, states, [], 21., defense)
+        self.assertEqual(3, len(planner._base_capture[1]['bot_ids']))
+
     def test_capture_squad_replaces_only_a_dead_member(self):
         planner = BotPlanner()
         manifest = [
@@ -1661,7 +1733,8 @@ class ServerBotTacticsTests(unittest.TestCase):
                       supported.build_orders(
                           [cautious, ally], [cautious_state, ally_state],
                           [player], 1.0)['orders'])
-        self.assertEqual('advance_contact', orders[12]['combat_mode'])
+        self.assertEqual('advance', orders[12]['combat_mode'])
+        self.assertEqual(100.0, orders[12]['move_position']['z'])
         live_bots = supported._alive_bots(
             [cautious, ally], [cautious_state, ally_state])
         self.assertGreater(supported._ally_support_score(
@@ -1687,7 +1760,8 @@ class ServerBotTacticsTests(unittest.TestCase):
         order = planner.build_orders(
             [cautious], [state], [player], 1.0)['orders'][0]
 
-        self.assertEqual('advance_contact', order['combat_mode'])
+        self.assertEqual('advance', order['combat_mode'])
+        self.assertEqual(100.0, order['move_position']['z'])
         self.assertGreater(order['throttle_override'], 0.0)
         self.assertFalse(order['fire_allowed'])
 
@@ -2784,6 +2858,21 @@ class ServerBotArtilleryTests(unittest.TestCase):
         self.assertTrue(all(
             planner._route_assignments[bot_id]['route']['id'] == 'middle'
             for bot_id in range(20, 24)))
+
+    def test_rebalance_capacity_is_independent_for_each_class(self):
+        for target_tag, expected_move in (('heavyTank', True), ('mediumTank', False)):
+            planner=BotPlanner()
+            source=_route('source',[(-100,0,False),(-100,100,False),(-100,500,False)],capacity=3)
+            target=_route('target',[(100,0,False),(100,100,False),(100,500,False)],capacity=3)
+            manifest=[_bot(41,1,0,source,'mediumTank',{'support':1.0}),
+                      _bot(42,1,1,source,'mediumTank',{'support':0.9})]
+            manifest.extend(_bot(i,1,i-41,target,target_tag,{'support':1.0}) for i in (43,44,45))
+            states=[_state(i,1,-100 if i<43 else 100,0) for i in range(41,46)]
+            bots=planner._alive_bots(manifest,states)
+            contacts=[{'position':{'x':100.0,'y':0.0,'z':250.0},'health':1000.0,'max_health':1000.0} for _ in range(4)]
+            planner._rebalance_routes(1,bots,contacts,1.0)
+            moved=any(planner._route_assignments.get(i,{}).get('route',{}).get('id')=='target' for i in (41,42))
+            self.assertEqual(expected_move,moved)
 
     def test_spg_does_not_fill_frontline_capacity_during_rebalance(self):
         planner = BotPlanner()

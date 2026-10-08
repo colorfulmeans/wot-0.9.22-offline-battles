@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 import test_port_0922_bot_runtime as runtime_fixtures
 from effective_params_fixture import bot_default_crew_factors
@@ -109,8 +110,12 @@ class GreatWallGateTests(unittest.TestCase):
             visibility_probe=lambda *unused: False,
             firing_lane_probe=lambda *unused: False)
         runtime_box['runtime'] = runtime
-        runtime.battle_start({'map': MAP_NAME, 'round_id': 7,
-                              'bot_authority_id': 1, 'bots': _bots()})
+        # Replay one fixed scene instead of changing the other 27 Bot lanes
+        # every time this opposed-gate regression runs.
+        with mock.patch.object(module.random.SystemRandom, 'getrandbits',
+                               return_value=0x0922):
+            runtime.battle_start({'map': MAP_NAME, 'round_id': 7,
+                                  'bot_authority_id': 1, 'bots': _bots()})
         opposed = [bot_id for bot_id, state in runtime.states.items()
                    if int(state.get('team', 0)) == 2 and
                    abs(state['x'] - PASSAGE_X) < 1.0 and

@@ -20,7 +20,7 @@ class NavigationSoftObstacleTests(unittest.TestCase):
     @staticmethod
     def capability(scene, speed=10.0, mass=None):
         mass = float(scene.descriptor.physics['weight'] if mass is None else mass)
-        return (('stock1513', mass, speed), mass, speed)
+        return (('ignore_destructibles', 1), None, None)
 
     def blocked(self, scene, capability=None, trace=None):
         return scene.battle._navigation_obstacle(
@@ -89,17 +89,11 @@ class NavigationSoftObstacleTests(unittest.TestCase):
                 (0, 0, 20), (), clear, stop_at_target=False)
             self.assertGreater(aligned['throttle'], 0.0)
 
-            recovery = LocalDriver()
-            state = recovery._state(11, 0, (0, 0, 0))
-            state.update(recovery_time=1.0, recovery_side=1.0)
-            samples[:] = []
-            command = recovery.drive(
-                11, 0, (0, 0, 0), math.pi, 0.0, 0.1,
-                (0, 0, 20), (), clear, stop_at_target=False)
-            self.assertLess(samples[0][1], 0.0)
-            self.assertTrue(samples[0][2]['clear'])
-            self.assertLess(command['throttle'], 0.0)
-            self.assertEqual('reverse_turn', command['recovery_mode'])
+            # Static route clearance is gear-independent; physical crush and
+            # LocalDriver recovery selection are separate owners.
+            policy = self.capability(scene, -10.0)
+            self.assertFalse(scene.battle._navigation_obstacle(
+                (0., 0., 20.), (0., 0., 0.), 2.15, policy, {}))
 
     def test_heavy_and_light_native_edges_have_identical_clearance(self):
         with self.fixture.scene(registered=True, health=150.0) as scene:

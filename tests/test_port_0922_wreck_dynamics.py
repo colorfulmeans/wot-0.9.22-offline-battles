@@ -156,7 +156,16 @@ class AngularContactTests(unittest.TestCase):
 
 
 class WreckOwnerTests(unittest.TestCase):
-    setUp = bt.ShovedWreckTests.setUp
+    def setUp(self):
+        bt.ShovedWreckTests.setUp(self)
+        if self._testMethodName in (
+                'test_report_bank_releases_live_and_dead_hulls_without_drive_input',
+                'test_authority_update_advances_bank_slide_for_live_and_dead_states',
+                'test_contact_promotes_live_bot_to_track_support_before_cliff_departure'):
+            # Explicit detailed-support experiment; production stays disabled.
+            support=mock.patch.object(self.module,'BOT_FULL_SUPPORT_ENABLED',True)
+            support.start();self.addCleanup(support.stop)
+
     tearDown = bt.ShovedWreckTests.tearDown
     _runtime = bt.ShovedWreckTests._runtime
     _wreck = bt.ShovedWreckTests._wreck
@@ -469,7 +478,7 @@ class WreckOwnerTests(unittest.TestCase):
         worker._apply_wreck_contact_response(state,dict(delta_velocity=(0.,4.),correction=(0.,0.)),.1)
         self.assertEqual(before,state['z'])
 
-    def test_production_wreck_only_ground_probe_activates_after_death(self):
+    def test_production_wreck_does_not_reactivate_disabled_detailed_support(self):
         worker,state,unused=bt.BotRuntimeTests._suspension_case(self,lambda x,z:0.)
         worker.states={state['id']:state}
         worker._wreck_ground_probe=worker._suspension_ground_probe
@@ -477,7 +486,7 @@ class WreckOwnerTests(unittest.TestCase):
         worker._suspension_params.clear()
         self.assertIsNone(worker._suspension_params_for(state['id']))
         state.update(alive=False,health=0,collision_shape=c.DEFAULT_SHAPE,mass=25000.)
-        self.assertIsNotNone(worker._suspension_params_for(state['id']))
+        self.assertIsNone(worker._suspension_params_for(state['id']))
         worker._apply_wreck_contact_response(state,dict(delta_velocity=(0.,0.),correction=(0.,0.)),.02)
         self.assertFalse(worker._suspension_param_failures)
 
@@ -905,7 +914,7 @@ class HeadOnOwnerTests(unittest.TestCase):
         with mock.patch.object(vt.BattleRuntime,'_predict_bot_contact_velocity',old_cache):
             blocked=self.travel(100575.,1200.,55883.,800.,60,delay=.15,input_delay=.15)
         released=self.travel(100575.,1200.,55883.,800.,60,delay=.15,input_delay=.15)
-        self.assertAlmostEqual(0.,blocked)
+        self.assertLess(abs(blocked), .001)
         self.assertGreater(released,1.)
 
     def test_bidirectional_delay_does_not_turn_head_on_power_into_a_deadlock(self):

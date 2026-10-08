@@ -12,8 +12,8 @@ _CONTROL_POINT_SIZE = 124
 _MAX_SPACE_BYTES = 64 * 1024 * 1024
 
 
-def radii_from_space(data, bases):
-    """Match team control points to the two baked standard-mode objectives."""
+def _points_from_space(data):
+    """Decode the pinned compiled control-point layout."""
     if len(data) < _ROW.size:
         raise ValueError('compiled map space header is missing')
     magic, version, directory_end, unused_a, unused_b, count = (
@@ -39,12 +39,36 @@ def radii_from_space(data, bases):
     if (size != _CONTROL_POINT_SIZE or count > 4096 or
             length != 8 + count * size):
         raise ValueError('WTCP control point layout is invalid')
-    matched = {1: set(), 2: set()}
+    points = []
     for index in range(count):
         start = offset + 8 + index * size
         x, z = struct.unpack_from('<f', data, start + 48)[0], (
             struct.unpack_from('<f', data, start + 56)[0])
         radius, team = struct.unpack_from('<fI', data, start + 64)
+        visibility = struct.unpack_from('<I', data, start + 120)[0]
+        points.append((x, z, radius, team, visibility))
+    return points
+
+
+def standard_circles_from_space(data):
+    """Return exact standard-battle centres and radii in team order."""
+    result = []
+    points = _points_from_space(data)
+    for team in (1, 2):
+        candidates = [p for p in points if p[3] == team and p[4] & 1]
+        if len(candidates) != 1:
+            raise ValueError('WTCP must contain one standard circle per team')
+        x, z, radius, unused_team, unused_visibility = candidates[0]
+        if any(math.isnan(v) or math.isinf(v) for v in (x, z, radius)) or radius <= 0:
+            raise ValueError('WTCP standard circle is invalid')
+        result.append(([x, z], radius))
+    return result
+
+
+def radii_from_space(data, bases):
+    """Match team control points to the two baked standard-mode objectives."""
+    matched = {1: set(), 2: set()}
+    for x, z, radius, team, unused_visibility in _points_from_space(data):
         if team not in matched:
             continue
         base = bases[team - 1]

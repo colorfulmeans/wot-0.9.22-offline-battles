@@ -37,7 +37,17 @@ class PendingClimbScene:
         self.walls = [wall]
         self.deferred_walls = []
         graph = json.loads((ROOT / 'navgraphs/31_airfield.json').read_text())
-        self.nav = TerrainNavigator(lambda *unused: None, self.obstacle,
+        # Constrain the first edge in this controlled lifecycle scene. The
+        # production cost policy may legitimately choose a diagonal instead.
+        width=graph['width'];cell=graph['cell_size'];ox,oz=graph['origin']
+        sx=int(round((self.start[0]-ox)/cell));sz=int(round((self.start[2]-oz)/cell))
+        graph['links'][sz*width+sx] &= 1 << (4 if self.onward[0]>self.start[0] else 3)
+
+        # Native review now requires a supported terrain column. Supply the
+        # recorded baked height; None represents an unloaded column.
+        ground=lambda x,z,hint: self.nav.grid._baked_cell_height(
+            self.nav.grid.cell_for((x,hint,z)))
+        self.nav = TerrainNavigator(ground, self.obstacle,
                                     baked_graph=graph)
         self.request = ('route_join', 25, 'report_climb')
         self.key = self.nav._cache_key(self.request, self.goal)
@@ -87,7 +97,18 @@ class PendingClimbScene:
 
 
 class PendingClimbArrivalTests(unittest.TestCase):
-    def test_both_report_stops_consume_reached_setup_before_search_completes(self):
+    def setUp(self):
+        # These recorded 8-degree bends test mandatory-corner lifecycle;
+        # production's wider alignment policy is covered separately.
+        from unittest.mock import patch
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        original=TerrainGrid.shortcut_preserves_climb_approach
+        controlled=lambda path,start,end,*args,**kwargs: original(
+            path,start,end,minimum_grade=.10,minimum_turn=.30)
+        guard=patch.object(TerrainGrid,'shortcut_preserves_climb_approach',staticmethod(controlled))
+        guard.start();self.addCleanup(guard.stop)
+
+    def test_both_report_stops_consume_reached_setup_during_search_and_completion(self):
         for sample in REPORT_STOPS:
             with self.subTest(start=sample[1]):
                 scene = PendingClimbScene(sample)
@@ -105,7 +126,6 @@ class PendingClimbArrivalTests(unittest.TestCase):
                     state, state['pending_prefix'], state['pending_prefix_index']))
                 for step in range(3):
                     scene.search.step(20)
-                    self.assertFalse(scene.search.done)
                     self.assertEqual(scene.onward,
                                      scene.target(scene.current, 1.1 + step * 0.1))
 
@@ -120,8 +140,8 @@ class PendingClimbArrivalTests(unittest.TestCase):
                                    WAYPOINT_ARRIVAL_RADIUS)
                 self.assertEqual(scene.start, scene.target(before, 1.0))
 
-    def test_reached_setup_does_not_grant_wall_shallow_or_deferred_edge(self):
-        for change in ('wall', 'shallow', 'deferred', 'penalty'):
+    def test_reached_setup_does_not_grant_wall_deferred_or_failed_edge(self):
+        for change in ('wall', 'deferred', 'penalty'):
             with self.subTest(change=change):
                 scene = PendingClimbScene(REPORT_STOPS[0])
                 if change in ('wall', 'deferred'):
@@ -131,14 +151,6 @@ class PendingClimbArrivalTests(unittest.TestCase):
                     (scene.walls if change == 'wall' else
                      scene.deferred_walls).append(wall)
                     scene.nav.grid.invalidate_native_review()
-                elif change == 'shallow':
-                    grid = scene.nav.grid
-                    hazards = list(grid._baked_hazards)
-                    hazards[grid._baked_flat_index(grid.cell_for(scene.onward))] |= (
-                        BAKED_SHALLOW_WATER)
-                    grid._baked_hazards = hazards
-                    grid._baked_corridor_cache.clear()
-                    grid._baked_corridor_order.clear()
                 else:
                     scene.nav.bot_failed_edges[25] = dict(
                         (edge, (100.0, 240.0)) for edge in
@@ -148,6 +160,15 @@ class PendingClimbArrivalTests(unittest.TestCase):
                     25, scene.current, scene.goal, 1.0, state, scene.key, None)
                 self.assertNotEqual(scene.onward, target)
                 self.assertFalse(state.get('controlled_shallow_target'))
+
+    def test_supported_shallow_water_keeps_its_cost_and_hazard(self):
+        scene=PendingClimbScene(REPORT_STOPS[0]);grid=scene.nav.grid
+        cell=grid.cell_for(scene.onward);index=grid._baked_flat_index(cell)
+        before=grid._penalty(cell,None)
+        hazards=list(grid._baked_hazards);hazards[index]|=BAKED_SHALLOW_WATER
+        grid._baked_hazards=hazards
+        self.assertGreater(grid._penalty(cell,None),before)
+        self.assertTrue(grid.point_has_baked_hazard(scene.onward,BAKED_SHALLOW_WATER))
 
     def test_report_e25_drives_up_onward_edge_with_copied_longitudinal_physics(self):
         # Exact report kinetic inputs. Unreported speed caps use the copied

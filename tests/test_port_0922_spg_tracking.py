@@ -148,7 +148,9 @@ class SPGTrackingTests(unittest.TestCase):
         self.assertGreaterEqual(runtime.states[11]['fire_seq'], 2)
         self.assertTrue(receipts)
         self.assertTrue(all(row[3] == 2 for row in records))
-        self.assertAlmostEqual(math.pi/2, runtime.states[11]['yaw'], places=2)
+        # Once the target is inside the installed traverse interval, a firing
+        # hold keeps its hull still instead of chasing the compass bearing.
+        self.assertLessEqual(abs(runtime.states[11]['yaw'] - math.pi/2), .15)
         self.assertTrue(all('proof_key' in row for row in receipts))
 
     def test_target_permission_does_not_fire_through_confirmed_wall(self):

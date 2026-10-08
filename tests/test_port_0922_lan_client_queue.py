@@ -616,6 +616,7 @@ class LanClientQueueTests(unittest.TestCase):
             'health', 'alive', 'critical', 'combat_base_revision',
             'combat_seq', 'combat_fire_elapsed', 'combat_fire_timer',
             'death_reason', 'display_health', 'shot_yaw', 'shot_pitch',
+            'route_wreck_blocked',
         }
         self.assertEqual(29, len(queued_bots))
         for state in queued_bots:

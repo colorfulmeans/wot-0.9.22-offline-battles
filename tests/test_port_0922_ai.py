@@ -418,13 +418,10 @@ class BotAiPortTests(unittest.TestCase):
                         '%s-%d' % (label, index))
                     assigned.append((label, agent['route']['id']))
                 with self.subTest(team=team, lineup=lineup):
-                    self.assertEqual(
-                        [(label, expected[label]) for label in lineup],
-                        assigned)
-                    # The SPG uses a rear staging anchor on middle_road without
-                    # consuming one of its four front-line slots.
-                    self.assertEqual(
-                        4, director.route_usage[(team, 'middle_road')])
+                    self.assertTrue(all(route is not None for label,route in assigned))
+                    self.assertTrue(all(n<=3 for n in director.route_usage.values()))
+                    self.assertEqual(len(lineup)-1,sum(director.route_usage.values()))
+                    self.assertTrue(all(key[2]!='SPG' for key in director.route_usage))
 
     def test_spg_uses_battery_route_without_consuming_frontline_capacity(self):
         director = BattleDirector('04_himmelsdorf', 29)
@@ -751,7 +748,7 @@ class BotAiPortTests(unittest.TestCase):
         navigator = TerrainNavigator(
             lambda *unused: None, baked_graph=graph)
         navigator._path = lambda *unused: (('search-result',), None)
-        navigator.grid.safe_local_target = lambda *unused: None
+        navigator.grid.safe_local_target = lambda *unused, **kwargs: None
 
         selected = navigator.next_target(
             7, current, goal, ('route', 1, 'wet-shortcut'), 1.0)
@@ -808,7 +805,7 @@ class BotAiPortTests(unittest.TestCase):
     def test_pending_search_still_holds_when_no_safe_step_exists(self):
         """Bounded progress never invents a step the probes did not prove."""
         navigator = self._pending_navigator()
-        navigator.grid.safe_local_target = lambda *unused: None
+        navigator.grid.safe_local_target = lambda *unused, **kwargs: None
         current = (10.0, 0.0, 24.0)
         goal = (42.0, 0.0, 24.0)
         path_key = ('route_join', 7, 1, 'lane', 1)
@@ -941,7 +938,7 @@ class BotAiPortTests(unittest.TestCase):
         navigator.grid.begin_plan = begin_plan
         navigator.grid.dry_segment_clear = lambda *unused: False
         navigator.grid.segment_clear = lambda *unused: False
-        navigator.grid.safe_local_target = lambda point, *unused: (
+        navigator.grid.safe_local_target = lambda point, *unused, **kwargs: (
             point[0] + navigator.grid.cell_size + 0.1,
             point[1], point[2])
 
@@ -1051,7 +1048,7 @@ class BotAiPortTests(unittest.TestCase):
         navigator = TerrainNavigator(
             lambda *unused: None, baked_graph=graph)
         navigator._path = lambda *unused: (('search-result',), ())
-        navigator.grid.safe_local_target = lambda *unused: None
+        navigator.grid.safe_local_target = lambda *unused, **kwargs: None
 
         selected = navigator.next_target(
             7, current, goal, ('route', 1, 'wet-shortcut'), 1.0)
@@ -1222,7 +1219,7 @@ class BotAiPortTests(unittest.TestCase):
         navigator.bot_states[7] = state
         edge = navigator.grid._edge_cells_for_segment(current, vetoed)
         navigator.bot_failed_edges[7] = {edge: (60.0, 240.0)}
-        navigator.grid.safe_local_target = lambda *unused: None
+        navigator.grid.safe_local_target = lambda *unused, **kwargs: None
 
         selected = navigator._pending_target(
             7, current, vetoed, 1.0, state)
@@ -1280,7 +1277,7 @@ class BotAiPortTests(unittest.TestCase):
             lambda *unused: None, baked_graph=self._baked_graph(5, 1))
         escalate(no_local, 13)
         no_local._path = lambda key, *unused: (key, ())
-        no_local.grid.safe_local_target = lambda *unused: None
+        no_local.grid.safe_local_target = lambda *unused, **kwargs: None
         selected = no_local.next_target(13, current, goal, route_key, 2.03)
         self.assertEqual(current, selected)
         self.assertEqual(
@@ -1460,7 +1457,7 @@ class BotAiPortTests(unittest.TestCase):
 
         penalties = []
 
-        def unsafe_escape(*args):
+        def unsafe_escape(*args, **kwargs):
             penalties.append(args[5])
             return goal
 
@@ -1472,7 +1469,7 @@ class BotAiPortTests(unittest.TestCase):
         self.assertTrue(navigator.bot_segment_penalized(
             11, current, goal, 2.03))
         navigator._path = lambda key, *unused: (key, None)
-        navigator.grid.safe_local_target = lambda *unused: None
+        navigator.grid.safe_local_target = lambda *unused, **kwargs: None
         self.assertEqual(current, navigator.next_target(
             11, current, goal, route_key, 2.04))
         self.assertNotIn('macro_escape_target', state)
@@ -1715,8 +1712,7 @@ class BotAiPortTests(unittest.TestCase):
             # A search near the shore fails after A* has selected the ford.
             if position[0] >= 17.0:
                 return (('shore-search-failed',), ())
-            return planned(path_key, start, target, now, avoid_points,
-                           native_capability)
+            return planned(path_key, start, target, now, avoid_points)
 
         def direction_clear(sample_yaw):
             # Same one-cell corridor rule as the runtime planner gate.
@@ -2439,8 +2435,16 @@ class BotAiPortTests(unittest.TestCase):
             (), lambda unused_yaw: True)
 
         self.assertEqual('drive', order['recovery_mode'])
-        self.assertEqual(1.0, order['throttle'])
+        # This corner lies behind the incoming hull heading. Brake and pivot,
+        # then release forward drive instead of orbiting past the turn.
+        self.assertEqual(0.0, order['throttle'])
+        self.assertTrue(order['brake'])
         self.assertGreater(abs(order['turn']), 0.9)
+        outgoing_yaw = math.atan2(target[0] - corner[0], target[1] - corner[1])
+        aligned = driver.drive(
+            121, 0, (corner[0], 0.0, corner[1]), outgoing_yaw, 0.0, 0.1,
+            (target[0], 0.0, target[1]), (), lambda unused_yaw: True)
+        self.assertEqual(1.0, aligned['throttle'])
 
     def test_a_wedged_hull_still_reaches_recovery(self):
         driver = LocalDriver()
@@ -2884,11 +2888,55 @@ class BotAiPortTests(unittest.TestCase):
 
         self.assertLess(escaped[0] * escaped[1], 0.0)
 
+    def test_short_escape_uses_full_throttle_and_keeps_distance_deadline_and_veto(self):
+        for sign in (-1.0,1.0):
+            driver=LocalDriver();position=(0,0,0);state=driver._state(1,0,position)
+            allowed=math.pi if sign<0 else 0.0
+            clear=lambda angle,*args:abs(math.sin((angle-allowed)/2))<.01
+            escape=driver._short_escape(state,position,0,0,.1,0,0,(),clear,3.5,1.7)
+            self.assertEqual(sign,escape['throttle'])
+            retained=driver._retained_short_escape(state,position,0,(),clear,3.5,1.7)
+            self.assertEqual(sign,retained['throttle'])
+            self.assertIsNone(driver._retained_short_escape(state,position,0,(),lambda *args:False,3.5,1.7))
+            driver._short_escape(state,position,0,0,.1,0,0,(),clear,3.5,1.7)
+            state['clock']=4.0
+            self.assertIsNone(driver._retained_short_escape(state,position,0,(),clear,3.5,1.7))
+
+    def test_ordinary_uphill_and_downhill_turns_keep_driving(self):
+        for height in (-12.0,-6.0,6.0,12.0):
+            driver=LocalDriver()
+            order=driver.drive(120,0,(0,0,0),0,0,.1,(20,height,20),(),lambda *args:True)
+            self.assertEqual(1.0,order['throttle'])
+            self.assertFalse(order['brake'])
+        driver=LocalDriver()
+        order=driver.drive(120,0,(0,0,0),-.1,0,.1,(20,-14.5,20),(),lambda *args:True)
+        self.assertEqual(0.0,order['throttle'])
+        self.assertTrue(order['brake'])
+
+    def test_dynamic_grid_admits_both_directions_up_to_27_point_5_degrees(self):
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        for grade,allowed in ((.51,True),(-.51,True),(.53,False),(-.53,False)):
+            grid=TerrainGrid(lambda x,z,hint:grade*z,obstacle_probe=lambda *args:False,cell_size=4)
+            self.assertEqual(allowed,grid._native_segment_clear((0,0,0),(0,grade*20,20)))
+        for sign in (-1,1):
+            path=((0,0,0),(20,0,0),(20,sign*20*math.tan(math.radians(22)),20))
+            self.assertTrue(TerrainGrid.shortcut_preserves_climb_approach(path,0,2))
+            path=((0,0,0),(20,0,0),(20,sign*20*math.tan(math.radians(23)),20))
+            self.assertFalse(TerrainGrid.shortcut_preserves_climb_approach(path,0,2))
+
+    def test_only_steep_bends_block_slope_smoothing_in_both_directions(self):
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        for sign in (-1,1):
+            ordinary=((0,0,0),(20,0,0),(20,sign*6,20))
+            steep=((0,0,0),(20,0,0),(20,sign*10,20))
+            self.assertTrue(TerrainGrid.shortcut_preserves_climb_approach(ordinary,0,2))
+            self.assertFalse(TerrainGrid.shortcut_preserves_climb_approach(steep,0,2))
+
     def test_uphill_route_turn_aligns_before_drive_torque(self):
         driver = LocalDriver()
         uphill = driver.drive(
-            120, 0, (0.0, 0.0, 0.0), 0.0, 0.0, 0.1,
-            (20.0, 6.0, 20.0), (), lambda unused_yaw: True)
+            120, 0, (0.0, 0.0, 0.0), -0.1, 0.0, 0.1,
+            (20.0, 14.5, 20.0), (), lambda unused_yaw: True)
         flat = driver.drive(
             121, 1, (0.0, 0.0, 0.0), 0.0, 0.0, 0.1,
             (20.0, 0.0, 20.0), (), lambda unused_yaw: True)

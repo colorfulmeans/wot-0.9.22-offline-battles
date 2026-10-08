@@ -1,0 +1,15 @@
+{
+  "input_sha256": "3a54f7081b35b77dfbcb0048bfe9e8c77f0071cf0586cfb68dabf5a00ff81e55",
+  "output_sha256": "6f5c4eb0bd7e02751105f9e37bc9e7360643ae9bc8a75c7574996d8cad4cd74f",
+  "classes": [
+    "net.wg.gui.lobby.store.StoreComponent",
+    "net.wg.gui.lobby.store.views.ShopVehicleView",
+    "net.wg.gui.lobby.store.inventory.InventoryModuleListItemRenderer",
+    "net.wg.gui.lobby.store.StoreListItemRenderer",
+    "net.wg.gui.lobby.store.shop.ShopModuleListItemRenderer",
+    "net.wg.gui.lobby.store.views.base.BaseStoreMenuView"
+  ],
+  "client": "Chinese HD 0.9.22.0.1 #1513",
+  "blob_sha": "eeed39d92032195414959ea5245f5fe86794b146",
+  "transformer_sha256": "b76a5d3a8954b89b7aceb13788762afb5212de7fa1425b1965ff4fd643874c27"
+}

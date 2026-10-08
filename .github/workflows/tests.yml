@@ -1,7 +1,9 @@
 name: Tests
 
 on:
+  # PR branches run once through pull_request; main still verifies pushes.
   push:
+    branches: [main]
   pull_request:
   # Forks do not run push-triggered workflows; dispatch keeps CI available.
   workflow_dispatch:
@@ -10,6 +12,56 @@ permissions:
   contents: read
 
 jobs:
+  bot-behavior-regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install pinned test dependencies
+        run: python -m pip install Pillow==12.3.0
+      - name: Check traffic, withdrawal and slope aiming independently
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests:server:src/res/scripts/client
+        run: >-
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results
+          --pattern 'test_port_0922_ai.py'
+          --pattern 'test_port_0922_eroded_fallback_cycle.py'
+          --pattern 'test_port_0922_initial_allocation.py'
+          --pattern 'test_port_0922_navigation*.py'
+          --pattern 'test_port_0922_driver*.py'
+          --pattern 'test_port_0922_traffic*.py'
+          --pattern 'test_port_0922_bot*.py'
+          --pattern 'test_port_0922_contact*.py'
+          --pattern 'test_port_0922_wreck*.py'
+          --pattern 'test_port_0922_artillery*.py'
+          --pattern 'test_port_0922_spg*.py'
+          --pattern 'test_port_0922_downhill*.py'
+          --pattern 'test_port_0922_parking*.py'
+          --pattern 'test_port_0922_withdrawal*.py'
+          --pattern 'test_port_0922_gun_angle*.py'
+          --pattern 'test_port_0922_wait_parking.py'
+          --pattern 'test_port_0922_server_bot_ai.py'
+
+      - name: Check customization economy and durable rental settlement
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests:server:src/res/scripts/client:launcher:launcher/tests
+        run: |
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_save_customizations.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py
+      - name: Compile all client code under Python 2.7
+        if: ${{ !cancelled() }}
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python -c "import os; paths=[os.path.join(base,name) for base,dirs,files in os.walk('src/res/scripts/client') for name in files if name.endswith('.py')]; [compile(open(p,'rb').read(),p,'exec') for p in paths]; print('%d client modules compile under Python 2.7' % len(paths))"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: bot-test-results
+          path: build/bot-test-results/
+          if-no-files-found: error
   test:
     needs: windows-server
     runs-on: ubuntu-latest
@@ -27,16 +79,23 @@ jobs:
           python -m unittest discover -s tests
           -p "test_port_0922_gameplay_followup.py" -v
       - name: Run client test suite
+        if: ${{ !cancelled() }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: >-
-          python -m unittest discover -s tests
-          -p "test_*.py" -v
+        run: python tools/run_test_suite.py --jobs 4 --logs build/client-test-results
       - name: Run launcher test suite
-        working-directory: launcher
+        if: ${{ !cancelled() }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+        run: python tools/run_test_suite.py --directory launcher/tests --jobs 2 --logs build/launcher-test-results
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: unit-test-results
+          path: |
+            build/client-test-results/
+            build/launcher-test-results/
+          if-no-files-found: error
       - uses: actions/download-artifact@v4
         with:
           name: wot-0.9.22-lan-server-windows
@@ -52,12 +111,17 @@ jobs:
           if-no-files-found: error
       - name: Reproduce the verified recorder resource
         run: python tools/build_replay_runtime.py
+      - name: Stage verified style UI
+        run: python tools/stage_release_style_ui.py
       - name: Build Python 2.7 0.9.22 LAN client
         run: >-
           docker run --rm --platform linux/amd64 -v "$PWD:/work"
+          -e WOT_OFFLINE_DEPOT_STYLE_SWF=/work/build/depot/lobby.swf
           -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
           -w /work python:2.7.18
           sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python build_wotmod.py'
+      - name: Verify all current client bytecode
+        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.0.wotmod
       - name: Validate 0.9.22 wotmod package
         run: >-
           python tools/validate_wotmod.py
@@ -66,6 +130,24 @@ jobs:
         with:
           name: wot-0.9.22-lan-client
           path: dist/*
+          if-no-files-found: error
+
+  windows-editor-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install pinned test dependencies
+        run: python -m pip install Pillow==12.3.0
+      - name: Run actual Tk editor tests on Windows
+        run: python tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs build/windows-editor-results
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: windows-editor-results
+          path: build/windows-editor-results/
           if-no-files-found: error
 
   windows-server:
@@ -166,7 +248,7 @@ jobs:
 
           $process = Start-Process `
               -FilePath $serverExe `
-              -PassThru `
+              -PassThru -WindowStyle Hidden `
               -RedirectStandardOutput $stdout `
               -RedirectStandardError $stderr
           try {
@@ -319,7 +401,7 @@ jobs:
           Write-Host "Downloaded launcher is runnable after one ZIP extraction"
           foreach ($port in @("0.9.22")) {
               $process = Start-Process -FilePath $launcher `
-                  -ArgumentList "--serve", $port -PassThru
+                  -ArgumentList "--serve", $port -PassThru -WindowStyle Hidden
               try {
                   $deadline = (Get-Date).AddSeconds(60)
                   $listening = $false

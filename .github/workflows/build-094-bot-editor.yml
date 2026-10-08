@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m unittest test_port_0922_bot_tactics_editor test_port_0922_spg_initial_positions test_port_0922_spg_tracking test_port_0922_ram_contact_followup test_port_0922_bot_gunnery -v 2>&1 | tee build-evidence/editor-runtime-tests.log
+          python -m unittest test_port_0922_bot_tactics_editor test_port_0922_spg_initial_positions test_port_0922_initial_allocation test_port_0922_spg_tracking test_port_0922_ram_contact_followup test_port_0922_bot_gunnery -v 2>&1 | tee build-evidence/editor-runtime-tests.log
           python tools/test_094_repairs.py 2>&1 | tee build-evidence/retained-mechanics.log
           python tools/test_bot080_radio_contract.py 2>&1 | tee build-evidence/radio-contract.log
           python tools/test_bot080_startup_contract.py 2>&1 | tee build-evidence/startup-contract.log

@@ -507,8 +507,7 @@ class BotLineupIntegrationTests(unittest.TestCase):
             frozenset(vehicle_overlays._NON_EDITABLE_VEHICLE_SUFFIXES),
             frozenset(bot_lineup_profiles.NON_BATTLE_ENTITY_BOT_SUFFIXES_0922))
 
-        retired_module = bot_lineup_profiles.retired_vehicles
-        retired_bot_names = retired_module.RETIRED_BOT_VEHICLES_0922
+        retired_bot_names = bot_lineup_profiles.RETIRED_BOT_VEHICLES_0922
         for name, tags, expected in self._EXCLUSION_CASES:
             entry = types.SimpleNamespace(name=name, level=5, tags=tags)
             admitted = bool(
@@ -525,12 +524,12 @@ class BotLineupIntegrationTests(unittest.TestCase):
                     getList=lambda unused_nation_id: {1: entry})))
             self.assertEqual(admitted, bool(
                 descriptor_donation.vehicle_catalog(runtime)), name)
-            self.assertEqual(admitted, not BattleRuntime._vehicle_excluded(
+            self.assertEqual(bot_admitted, not BattleRuntime._vehicle_excluded(
                 entry), name)
             server_names = server_runtime._bot_lineup_allowed_names([{
                 'name': name, 'level': 5, 'tags': list(tags),
             }])
-            self.assertEqual(admitted, name in server_names, name)
+            self.assertEqual(bot_admitted, name in server_names, name)
 
     def test_the_helper_rule_withholds_nothing_without_the_secret_tag(self):
         # ``secret`` is what separates a stock placeholder from a shipped

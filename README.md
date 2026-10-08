@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.9.7** — [Release notes](docs/releases/v0.9.7.md).
+Current release: **v0.10.0** — [Release notes](docs/releases/v0.10.0.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.9.7-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.10.0-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -44,6 +44,19 @@ launches retain English unless `WOT_OFFLINE_UI_LANGUAGE=zh` is set.
 When you host, approve the UAC prompt that opens TCP 28782 for the launcher.
 Run the server only on a network you trust.
 
+Bot error reports automatically include bounded motion and navigation receipts:
+stationary hulls at most once per three seconds, and hulls circling inside an
+eight-metre pocket at most once per fifteen seconds. The receipts include nearby
+baked cells, local fallback rejection counts, the next path points and alignment
+timers, without extra native ground or collision queries. Reproduce the problem
+and export the launcher's error report; no debug switch is required.
+
+The route editor's **Show navigation grid** checkbox sits beside Route symmetry.
+It overlays raw baked height, hazard and link coverage with a colour legend.
+**Check map** retains the original profile/route admission checks and does not
+run raw navigation-cell inspection. The overlay is off by default and cached
+in the editor; it adds no battle-time ground or collision queries.
+
 ## The garage
 
 The 0.9.22 client gets a working offline garage:
@@ -66,15 +79,48 @@ Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.
 
-The [v0.9.7 release notes](docs/releases/v0.9.7.md) cover the follow-up
-since v0.9.6: crew hit feedback, steering and ram contacts, lighter Bot ground
-support, bridge departures, visibility and audio fixes, crew service records,
-offline replays, large LAN state transfers and linked game/session shutdown.
+The [v0.10.0 release notes](docs/releases/v0.10.0.md) cover the comprehensive map tactics baseline, route editor,
+waiting places, Bot navigation and combat improvements, customization shop
+and warehouse, and gameplay fixes.
 Recordings are stored in `replays/offline` in the game folder; open them from
 the launcher's Replay tab. Playback currently supports forward 1x and a manual
 camera. Keep the original vehicle profile and use recordings from this version.
 The unresolved internal-module inventory attached to the v0.9.6 release still
 describes outstanding geometry work; this release does not add guessed layouts.
+
+The current Bot test branch uses an experimental shared drive budget: full
+forward/reverse plus steering reserves 25% for contact steering and keeps 75%
+for longitudinal drive. Partial steering reduces drive and adds rolling drag
+continuously; both player and Bot callers preserve the analogue input. This
+allocation is a playtest choice, not a recovered retail gearbox law. Missing
+tree registrations no longer freeze Bots: native world and catalog collision
+checks remain authoritative, and exact realised tree contacts retry separately
+when presentation/publication is pending. Exact-client gameplay remains the
+acceptance boundary for climbing, pushing and tree-felling behaviour.
+
+The same test branch separates Bot/wreck ground placement from vertical
+momentum. A support-height correction no longer becomes a launch impulse
+when a worker catch-up slice is short. Grounded momentum follows signed
+travel on the supported chassis plane; normal ramp departures, airborne
+gravity and landing damage remain active. Live #1513 playtesting is required.
+
+Blocked artillery deployment first uses collision-checked straight escape
+steps when the hull cannot pivot. After twenty seconds without net progress,
+it can choose another reachable parking position, keeping manual positions
+inside authored regions and respecting other artillery reservations. Retries
+are bounded. Shallow depressions now check opposing chassis support before
+small successive drops can lower a Bot or wreck between the banks; ordinary
+slopes and genuine cliff departures retain their normal support behaviour.
+
+Nearby Bot route corners now use the installed traverse rate to brake and
+align before advancing, preventing a coasting hull from orbiting a short
+navigation point. Failed forward motion can try shorter checked straight
+escapes before repeating a pivot. Artillery stuck in a coarse navigation hole
+can rank alternate parking from its original connected spawn, while all
+movement still uses the live pose and native collision checks. Capture squads
+replace a member after twenty seconds without net progress when another
+eligible vehicle is available; vehicles inside the circle or fighting known
+contacts retain their places, and the three-vehicle limit remains unchanged.
 
 Grand Battles (30 versus 30) remain unavailable. The 0.9.22 mode requires
 Tier X vehicles, a 15-minute battle, up to four SPGs per team, three matched
@@ -519,8 +565,8 @@ and removal of that runtime dependency remain a distinct integration step.
 Tests:
 
 ```bash
-python3 -m unittest discover -s tests
-cd launcher && python3 -m unittest discover -s tests
+python3 tools/run_test_suite.py --jobs 4 --logs build/client-test-results
+python3 tools/run_test_suite.py --directory launcher/tests --jobs 2 --logs build/launcher-test-results
 ```
 
 Project code is distributed under [`GPL-3.0`](LICENSE). World of Tanks and its
@@ -531,3 +577,13 @@ and bundled runtimes.
 ### Static navigation review removal test
 
 This test branch removes broad native static-edge review and its live missing-cell/link repair machinery for every map. The rebuilt Airfield graph is retained; the other 40 graphs are unchanged and are not represented as newly baked. Local displaced-hull connector checks, moving-vehicle avoidance, wreck costs, per-Bot contact recovery and final physical collision remain. Native gameplay and performance require testing on the exact client.
+
+The route editor offers All class routes above All vehicle classes. Default route names are editable in shared, individual-class and total views; parking names are also editable. User-entered names stay unchanged when switching UI language. Authors can name the complete experimental layout in Chinese; English names are reviewed when that layout is adopted as the new bundled default. Renaming changes neither geometry nor class priorities. It shows effective per-class coloured routes and red SPG parking, without a separate shared-default line. Selecting a coloured route scopes edits to that vehicle class; overlapping routes can be selected by class in the list. All vehicle classes edits shared defaults in black. The last geometry edit wins: editing a shared default replaces the corresponding existing class geometry and clears its waiting places and timers, while preserving class priorities. Shared defaults expose travel geometry only. A later class edit affects only that class. The symmetry checkbox controls whether the opposite team is updated; merely switching views does not replace geometry. Only explicit small parking places own waiting durations. A parent with such places grows on the selected route; collapsed groups retain a large parent marker. A parent with no small places is an ordinary travel node and cannot retain a waiting clock. Default routes can be deleted for a specific class or all classes, including from the total view; deletion follows route symmetry and excludes the lane from Bot allocation. Undo or resetting the profile restores deleted defaults. Insert point adds a draggable node after the selected point (midpoint when a next node exists), within the sixteen-node limit. This view changes no battle-side navigation work.
+
+Route priorities are set per vehicle class (0..9, higher first). All vehicle classes has no priority control. All class routes allows editing the selected vehicle class route priority and the selected SPG parking priority; priority-only edits retain shared custom-route geometry and class membership. At fresh round creation, each Bot draws uniformly among available highest-priority lanes, with replacement until capacity is reached; lower priorities become eligible after that tier fills. Default class variants share the original lane capacity. Explicit fixed-slot custom routes retain their assignment authority. Corresponding Bots by class ordinal share symmetric lane-family draws and use their own team's geometry. Standalone/asymmetric routes draw independently; unmatched class counts, unavailable counterparts and exhausted capacity also allow local allocation. Empty/full route catalogs use automatic navigation. SPG parking regions use the same priority-before-random policy, reserving actual vehicle-sized clear space rather than distributing in region order. Edited default parking tied to symmetric lane families shares the draw when both sides have the same available families; standalone parking and unmatched safe spaces stay local. Source-catalog cost priorities retain their lower-first convention; editor priorities are higher-first. A fresh entropy seed is shared by the round's initial allocators without changing projectile random state. Published manifests preserve the choice across authority handoff and reconnect; runtime blockage/relocation remains under existing navigation owners. Save and apply for the next round; allocation adds no native movement queries or configuration rewrites.
+
+Default SPG parking is deletable from the total, shared and SPG editor views. A bounded per-map deletion list persists after saving, reopening and applying the profile. Deleting parking also removes its edited override, leaves combat routes and opposite-side parking unchanged, and excludes it from initial placement and later artillery relocation. Deleting the last default parking uses automatic deployment rather than reinstating the deleted list. Undo restores the previous draft.
+
+Deleting the last small waiting place restores a three-field ordinary parent gate, with no hold flag or clock. Contract loading/saving discards retired parent-only durations and empty waiting-place collections. Reselecting or double-clicking that parent only focuses its waiting editor; it cannot recreate a sixty-second small place. The explicit Add wait point action still permits intentional placement at the parent's coordinates. Existing nonempty places retain their individual times and geometry.
+
+Bot tactics editor: [English user guide](docs/bot-editor-guide-en.md).

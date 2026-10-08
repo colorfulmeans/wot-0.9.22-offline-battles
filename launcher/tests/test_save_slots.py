@@ -77,6 +77,35 @@ class SaveSlotsTests(unittest.TestCase):
                 save_slots.DEFAULT_SLOT_ID, root=self.root)[
                     "earnings_percent"])
 
+    def test_multiplier_notice_is_saved_for_initial_and_existing_garages(self):
+        import save_ledger
+        for garage in (False,True):
+            with tempfile.TemporaryDirectory() as root:
+                slot='default';path=save_ledger.ledger_path(slot,root=root)
+                if garage:
+                    os.makedirs(os.path.dirname(path),exist_ok=True)
+                    save_ledger._write_state(path,{'ledger':{'wallet':{'gold':42}}})
+                save_slots.set_earnings_percent(slot,250,root=root,is_running=lambda:False)
+                target=path if garage else save_slots.metadata_path(slot,root=root)
+                data=save_ledger._read_state(target)
+                rows=data['ledger']['personalMissions']['notifications'] if garage else data['initial_account_notifications']
+                self.assertEqual({'kind':'earnings_percent','before':100,'count':250},rows[0]['settlement']['account_changes'][0]['rewards'][0])
+                save_slots.set_earnings_percent(slot,250,root=root,is_running=lambda:False)
+                after=save_ledger._read_state(target)
+                self.assertEqual(data,after)
+
+    def test_multiplier_notice_write_failure_restores_previous_metadata(self):
+        import save_ledger
+        from unittest import mock
+        slot='default';path=save_ledger.ledger_path(slot,root=self.root)
+        os.makedirs(os.path.dirname(path),exist_ok=True)
+        save_ledger._write_state(path,{'ledger':{}})
+        save_slots.set_earnings_percent(slot,150,root=self.root,is_running=lambda:False)
+        before=save_ledger._read_state(save_slots.metadata_path(slot,root=self.root))
+        with mock.patch.object(save_ledger,'_write_state',side_effect=save_ledger.SaveLedgerError('denied')):
+            with self.assertRaises(save_slots.SaveSlotError):save_slots.set_earnings_percent(slot,250,root=self.root,is_running=lambda:False)
+        self.assertEqual(before,save_ledger._read_state(save_slots.metadata_path(slot,root=self.root)))
+
     def test_an_impossible_multiplier_is_clamped_rather_than_stored(self):
         for wanted, expected in ((0, 1), (-5, 1), (99999, 10000),
                                  ("lots", 100), (None, 100)):

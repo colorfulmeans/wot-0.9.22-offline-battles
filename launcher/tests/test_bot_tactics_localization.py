@@ -28,8 +28,9 @@ class CatalogTests(unittest.TestCase):
                 self.assertNotIn('锡城', caption)
 
     def test_requested_full_himmelsdorf_name_and_winter_variant(self):
-        self.assertEqual('锡莫尔斯多夫', labels.map_label('04_himmelsdorf', 'zh'))
-        self.assertEqual('锡莫尔斯多夫（冬季）', labels.map_label('86_himmelsdorf_winter', 'zh'))
+        self.assertEqual('失落小镇', labels.map_label('95_lost_city', 'zh'))
+        self.assertEqual('锡默尔斯多夫', labels.map_label('04_himmelsdorf', 'zh'))
+        self.assertEqual('锡默尔斯多夫（冬季）', labels.map_label('86_himmelsdorf_winter', 'zh'))
         self.assertEqual('Himmelsdorf', labels.map_label('04_himmelsdorf', 'en'))
         self.assertEqual('Winter Himmelsdorf', labels.map_label('86_himmelsdorf_winter', 'en'))
 
@@ -53,7 +54,7 @@ class CatalogTests(unittest.TestCase):
             self.assertNotIn('_', labels.route_label(key, 'en'))
 
     def test_behavior_and_policy_catalogs_cover_runtime_identifiers(self):
-        self.assertEqual({'all'} | set(storage.contract.CLASSES), set(labels.ENUM_NAMES['class_tag']))
+        self.assertEqual({'total', 'all'} | set(storage.contract.CLASSES), set(labels.ENUM_NAMES['class_tag']))
         self.assertEqual({''} | set(storage.contract.SKILLS), set(labels.ENUM_NAMES['skill']))
         self.assertEqual(set(storage.contract.PARAMETERS) | {'skill', 'crew_level'}, set(labels.PARAM_NAMES))
         self.assertEqual({'preferred', 'fixed'}, set(labels.ENUM_NAMES['policy']))
@@ -63,10 +64,16 @@ class CatalogTests(unittest.TestCase):
 class LanguageUITests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        # Exercise the historical source-graph fixture independently of the adopted baseline.
+        patcher=mock.patch.object(storage.contract,'default_map',return_value={})
+        patcher.start();self.addCleanup(patcher.stop)
+        storage.Store(self.temp.name).save(storage.contract.empty(),apply=True)
         self.root = tk.Tk(); self.root.withdraw(); self.addCleanup(self.root.destroy)
         patch = mock.patch.object(ui_module.messagebox, 'showerror')
         self.errors = patch.start(); self.addCleanup(patch.stop)
         self.ui = ui_module.BotTacticsEditor(self.root, store=storage.Store(self.temp.name), language='zh')
+        self.ui.map_var.set(storage.MAP_LABELS['08_ruinberg']);self.ui.change_map()
+        self.ui.route_class_var.set('heavyTank');self.ui.change_route_class();self.ui.symmetry_var.set(False)
         self.root.update()
 
     def choose(self, box, index):
@@ -116,11 +123,11 @@ class LanguageUITests(unittest.TestCase):
     def test_builtin_routes_are_translated_without_changing_ids(self):
         self.ui.map_var.set('喀秋莎'); self.ui.change_map(); self.root.update()
         for key, caption in [('waterfall','瀑布'),('plateau','高原'),('village','村庄')]:
-            self.assertEqual('[内置] '+caption, self.ui.items.item('builtin:'+key,'text'))
+            self.assertEqual('[默认/重型坦克] '+caption+' [优先级 5]', self.ui.items.item('builtin:'+key,'text'))
         self.ui.items.selection_set('builtin:plateau'); self.root.update()
         before=copy.deepcopy(self.ui.document)
         self.ui.set_language('en'); self.root.update()
-        self.assertEqual('[Built-in] Plateau',self.ui.items.item('builtin:plateau','text'))
+        self.assertEqual('[Default/Heavy tank] Plateau [Priority 5]',self.ui.items.item('builtin:plateau','text'))
         self.assertEqual(('builtin','plateau'),self.ui.selection)
         self.assertEqual(before,self.ui.document)
 
@@ -200,11 +207,11 @@ class MainLanguageTests(unittest.TestCase):
                 editor.profile_name.set('未保存测试')
                 app.language_choice.set('English');app._language_selected();app.root.update()
                 self.assertEqual('en',editor.language)
-                self.assertEqual('Ruinberg',editor.map_var.get())
+                self.assertEqual('Fjords',editor.map_var.get())
                 self.assertEqual('未保存测试',editor.profile_name.get())
                 with mock.patch.object(i18n,'detect_system_language',return_value='zh'):
                     app.language_choice.set('Auto / 自动');app._language_selected();app.root.update()
-                self.assertEqual('zh',editor.language);self.assertEqual('鲁别克',editor.map_var.get())
+                self.assertEqual('zh',editor.language);self.assertEqual('北欧峡湾',editor.map_var.get())
                 editor.root.destroy()
                 app.language_choice.set('English');app._language_selected();app.root.update()
                 app.bot_tactics_button.invoke();app.root.update()

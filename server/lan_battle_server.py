@@ -46,7 +46,7 @@ from vehicle_overlay_store import (
     VehicleOverlayStore,
     VehicleOverlayStoreError,
 )
-from gui.mods.offline_lan_0922 import ram_history
+from gui.mods.offline_lan_0922 import ram_history, ram_motion
 from gui.mods.offline_lan_0922 import state_transfer
 from gui.mods.offline_lan_0922 import battle_bonds, tank_collision
 from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
@@ -4909,7 +4909,8 @@ class BattleState:
         for key, default, maximum in (("desired_range", 180.0, 2000.0),
                                       ("fire_range", 500.0, 2500.0),
                                       ("speed", 0.0, 200.0),
-                                      ("armor", 0.0, 10000.0)):
+                                      ("armor", 0.0, 10000.0),
+                                      ("parking_radius", math.hypot(3.5, 1.7), 20.0)):
             profile[key] = round(_clamp(_finite_float(raw.get(key), default), 0.0, maximum), 3)
         profile["shells"] = []
         shells = raw.get("shells") or []
@@ -6268,8 +6269,10 @@ class BattleState:
             "push_x": _finite_float(raw.get("push_x")),
             "push_z": _finite_float(raw.get("push_z")),
             "push_yaw": _finite_float(raw.get("push_yaw")),
+            "ram_motion": ram_motion.normalize(raw.get("ram_motion", [])),
             "airborne": bool(raw.get("airborne", False)),
             "service_brake": bool(raw.get("service_brake", False)),
+            "route_wreck_blocked": bool(raw.get("route_wreck_blocked", False)),
             "contact_push_acks": list(tank_contact_ledger.normalize(
                 raw.get("contact_push_acks", [])).values()),
             "movement_dir": (1 if movement > 0.01 else
@@ -6668,6 +6671,7 @@ class BattleState:
         admitted, and no projectile edge is derived from a state it refused.
         """
         result = dict(previous) if previous else {}
+        result['route_wreck_blocked'] = bool(raw.get('route_wreck_blocked', False))
         # The ledgers this holds must not alias the retired state; every other
         # path here produces fresh containers.
         for name in ("critical", "equipment_states", "ammo_remaining"):
@@ -6689,6 +6693,7 @@ class BattleState:
         result['push_x'] = raw.get('push_x', 0.0)
         result['push_z'] = raw.get('push_z', 0.0)
         result['push_yaw'] = raw.get('push_yaw', 0.0)
+        result['ram_motion'] = ram_motion.normalize(raw.get('ram_motion', []))
         result['airborne'] = bool(raw.get('airborne', False))
         result['service_brake'] = bool(raw.get('service_brake', False))
         result['contact_push_acks'] = copy.deepcopy(raw.get('contact_push_acks', []))
@@ -10953,7 +10958,7 @@ class BattleState:
     def _normalize_ram_contact_envelope(self, player, raw_ram):
         """Validate one receipt without consulting mutable Bot progress."""
         if (not isinstance(raw_ram, dict) or
-                set(raw_ram) - {'bot_history_bracket'} != HUMAN_RAM_CONTACT_FIELDS):
+                set(raw_ram) - {'bot_history_bracket', 'bot_ram_motion_seq'} != HUMAN_RAM_CONTACT_FIELDS):
             return None, "malformed_contact"
         try:
             seq = _exact_int(raw_ram.get("seq"), 1, 2147483647)
@@ -11067,6 +11072,12 @@ class BattleState:
             if bracket is None or bracket[3] > MAX_MOTION_TIME_US:
                 return None, 'invalid_history_bracket'
             normalized['bot_history_bracket'] = bracket
+        if 'bot_ram_motion_seq' in raw_ram:
+            try:
+                normalized['bot_ram_motion_seq'] = _exact_int(
+                    raw_ram['bot_ram_motion_seq'], 1, 2147483647)
+            except (ValueError, TypeError, OverflowError):
+                return None, 'invalid_ram_motion_identity'
         return normalized, None
 
     def _validate_ram_contact(self, player, raw_ram):
@@ -11091,6 +11102,20 @@ class BattleState:
                 # incomplete new-style receipt to a worker to wait or guess.
                 return None, reason
             contact['ram_bot_state'] = pinned
+        if 'bot_ram_motion_seq' in contact:
+            witness = ram_motion.for_player(
+                contact.get('ram_bot_state', {}).get('ram_motion'), player.player_id)
+            if (witness is None or witness[1] != contact['bot_ram_motion_seq'] or
+                    any(abs(contact[name] - witness[3+i]) > 0.0002
+                        for i, name in enumerate(('bot_vx', 'bot_vy', 'bot_vz')))):
+                return None, 'canonical_ram_motion_mismatch'
+            for i, name in enumerate(('x','y','z','yaw','pitch','roll')):
+                if abs(contact[name] - witness[12+i]) > 0.0002:
+                    return None, 'canonical_ram_motion_pose_mismatch'
+                contact['ram_bot_state'][name] = witness[6+i]
+            if any(abs(contact[name] - witness[18+i]) > 0.0002
+                   for i, name in enumerate(('vx','vy','vz'))):
+                return None, 'canonical_ram_motion_player_velocity_mismatch'
         return contact, None
 
     @staticmethod
@@ -14681,7 +14706,9 @@ class BattleState:
                 team_orders = self._active_team_commands_locked()
                 self.bot_orders = self.bot_planner.build_orders(
                     self.bot_manifest, list(self.bot_states.values()),
-                    [self._public_player(p, include_outfits=False)
+                    [dict(self._public_player(p, include_outfits=False),
+                          collision_shape=self.human_collision_profiles.get(
+                              p.player_id, {}).get('shape'))
                      for p in self.players.values()
                      if p.connected and p.participating],
                     time.monotonic(), self._bot_defense_context(),

@@ -67,6 +67,23 @@ class NavigationRetryMotionTests(unittest.TestCase):
                     return True
             return False
 
+        def native_corridor(start, end, padding):
+            if not scene.blocked(start, start, padding):
+                return scene.blocked(start, end, padding)
+            # Broadphase padding is not a physical hull already intersecting
+            # a wall. Resolve its ambiguous origin with the same complete OBB
+            # used by the final-motion authority, including every swept pose.
+            dx, dz = end[0]-start[0], end[2]-start[2]
+            distance = math.hypot(dx, dz)
+            angle = math.atan2(dx, dz) if distance > 0.001 else yaw
+            steps = max(1, int(math.ceil(distance / 0.25)))
+            return any(occupied((start[0]+dx*i/steps, 0.0,
+                                 start[2]+dz*i/steps), angle)
+                       for i in range(steps+1))
+
+        nav.grid.obstacle_probe = native_corridor
+        nav.grid.invalidate_native_review()
+
         elapsed = 0.0
         exited = False
         failed_positions = []
@@ -83,6 +100,7 @@ class NavigationRetryMotionTests(unittest.TestCase):
                      'yaw': yaw, 'speed': speed, 'dt': dt, 'now': elapsed,
                      'half_length': length, 'half_width': width,
                      'turn_speed_limit': params['rotSpd'], 'decision_horizon': dt}
+            state['pose_clear'] = lambda angle: not occupied(position, angle)
             # Match the runtime's obstruction-evidence gate. A slow but healthy
             # search alone cannot request a physical escape. This analytic
             # fixture has no contact grind impulse; erased baked cells still
@@ -94,18 +112,14 @@ class NavigationRetryMotionTests(unittest.TestCase):
                 nav.grid._baked_cell_height(nav.grid.cell_for(position)) is None)
 
             def direction_clear(angle, maximum_distance=None):
-                distance = (state.get('navigation_probe_distance', 15.0)
+                issued = nav.bot_states.get(bot, {}).get('last_target') or goal
+                bounded = max(math.hypot(issued[0]-position[0], issued[2]-position[2]),
+                              length + max(0.5, abs(speed) * dt))
+                distance = (bounded
                             if maximum_distance is None else maximum_distance)
                 end = (position[0] + math.sin(angle) * distance, 0.0,
                        position[2] + math.cos(angle) * distance)
-                if not scene.blocked(position, position, width):
-                    return not scene.blocked(position, end, width)
-                # Near the open wall endpoint a legal hull can occupy a corner
-                # of the square inflated broadphase: Panther II at approximately
-                # (-6.42, -11.47) was one such pose. A ray starting there reports
-                # every heading blocked, including travel away from the wall.
-                # Resolve that ambiguous start with the complete physical OBB
-                # sweep; never simply ignore a hit that starts at the origin.
+                # The native motion proof uses the complete swept hull.
                 return not any(adapter.driver._obb_overlap(
                     ((position[0] + end[0]) * 0.5, 0.0,
                      (position[2] + end[2]) * 0.5),
@@ -120,11 +134,13 @@ class NavigationRetryMotionTests(unittest.TestCase):
             if command.pop('navigation_replan', False):
                 nav.request_replan(bot, position, elapsed)
                 navigation_replans += 1
-            # The same 15 credits/second keeps genuine pending phases visible
-            # without also starving A* merely because controls run at 5 Hz.
-            search_credit += dt * 15.0
-            work = int(search_credit)
-            search_credit -= work
+            # Match production's shared 960/s, 96/frame ceiling. The initial
+            # five-expansion attempts still fail genuinely; slowing all later
+            # searches to 15/s tests artificial starvation rather than recovery.
+            search_credit += dt * 960.0
+            available = int(search_credit)
+            work = min(96, available)
+            search_credit -= available
             for key, search in list(nav.searches.items()):
                 search.step(work)
                 if search.done:

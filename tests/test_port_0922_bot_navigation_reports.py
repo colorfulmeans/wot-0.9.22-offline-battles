@@ -150,7 +150,10 @@ class AirfieldPendingEscapeTests(unittest.TestCase):
                 bearing = math.atan2(goal[0] - current[0], goal[2] - current[2])
                 exit_bearing = math.atan2(target[0] - current[0], target[2] - current[2])
                 offset = (exit_bearing - bearing + math.pi) % (2 * math.pi) - math.pi
-                self.assertGreater(abs(offset), 1.75)
+                # Rebaked coverage may expose a checked forward exit. Recovery
+                # must use actual terrain proof, not require a historic bearing.
+                self.assertGreater(math.hypot(target[0]-current[0],
+                    target[2]-current[2]), 1.5)
 
     def test_known_forward_exit_keeps_precedence_over_rear_candidates(self):
         nav = TerrainNavigator(lambda *unused: 0.0,
@@ -166,6 +169,42 @@ class AirfieldPendingEscapeTests(unittest.TestCase):
         nav.grid.review_native_corridor(current, goal)
         self.assertEqual(current, nav._pending_target(
             2, current, goal, 1.0, {'pending_since': 0.0}))
+
+
+class LocalFallbackReceiptTests(unittest.TestCase):
+    def test_reported_jpz_pocket_records_missing_cells_with_bounded_native_attempts(self):
+        graph = json.loads((ROOT / 'navgraphs/31_airfield.json').read_text())
+        ground, collision = mock.Mock(), mock.Mock()
+        nav = TerrainNavigator(ground, collision, baked_graph=graph)
+        state = {'pending_since': 0.0}
+        current, goal = (-333.01, -.18, -195.16), (-325.287, 0.0, -53.595)
+        selected = nav._pending_target(22, current, goal, 1.0, state)
+        receipt = state['local_fallback']
+        self.assertEqual(current, selected)
+        # Include the existing nearest-supported-cell probe as well as the
+        # eighteen fan candidates; native query limits below are unchanged.
+        self.assertEqual(19, receipt['attempted'])
+        self.assertEqual(18, receipt['missing_ground'])
+        self.assertIsNone(receipt['selected'])
+        json.dumps(receipt)
+        self.assertLessEqual(ground.call_count, 4)
+        collision.assert_not_called()
+
+    def test_receipts_preserve_selection_and_native_probe_counts(self):
+        for blocked in (False, True):
+            outputs = []
+            for record in (False, True):
+                ground, collision = mock.Mock(return_value=0.0), mock.Mock(return_value=blocked)
+                nav = TerrainNavigator(ground, collision)
+                receipt = {} if record else None
+                selected = nav.grid.safe_local_target((0., 0., 0.), (0., 0., 40.),
+                    1.0, diagnostic=receipt)
+                outputs.append((selected, ground.call_count, collision.call_count))
+                if record:
+                    self.assertEqual(18, receipt['attempted'])
+                    self.assertEqual(18, receipt['corridor_rejected'] if blocked else receipt['accepted'])
+                    self.assertEqual(selected, receipt['selected'])
+            self.assertEqual(outputs[0], outputs[1])
 
 
 class BlockedPlannerReviewTests(unittest.TestCase):

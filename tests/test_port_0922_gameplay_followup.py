@@ -231,6 +231,32 @@ class AimProgressTests(unittest.TestCase):
     def tearDown(self):
         self.fixture.tearDown()
 
+    def test_snapshot_waits_for_physical_yaw_and_pitch_slew_completion(self):
+        runtime = self.fixture.runtime
+        runtime.battle_start(self.fixture.start)
+        descriptor = bot_fixture._combat_descriptor(turret_speed=1.0)
+        runtime._descriptors[11] = descriptor
+        runtime._gun_yaw_limits[11] = (-math.pi, math.pi, False)
+        state = runtime.states[11]
+        target = dict(id=2, kind='human', network_id=2, alive=True,
+                      position=(100., 0., 400.))
+        for yaw_error, pitch_error in ((.05, 0.), (0., .03), (.05, .03)):
+            with self.subTest(yaw=yaw_error, pitch=pitch_error):
+                state.update(x=0., y=0., z=0., yaw=0., pitch=0., roll=0.,
+                             turret_yaw=0., aim_yaw=0., gun_pitch=0.)
+                command = {'_ballistic_solution': dict(
+                    aim_position=target['position'], yaw=yaw_error,
+                    pitch=pitch_error, flight_time=1.)}
+                runtime._update_gun_aim(state, command, target, .001)
+                self.assertFalse(state['gun_aligned'])
+                for unused in range(200):
+                    runtime._update_gun_aim(state, command, target, .01)
+                    if state['gun_aligned']:
+                        break
+                self.assertTrue(state['gun_aligned'])
+                self.assertAlmostEqual(yaw_error, state['turret_yaw'])
+                self.assertAlmostEqual(pitch_error, state['gun_pitch'])
+
     def test_limited_turret_crosses_the_legal_front_arc_instead_of_rear_stop(self):
         runtime = self.fixture.runtime
         runtime.battle_start(self.fixture.start)
@@ -904,7 +930,7 @@ class PresentedCollisionTests(unittest.TestCase):
         self.assertEqual([11], [body['network_id'] for body in bodies])
 
 class ArtilleryTargetLeaseTests(unittest.TestCase):
-    def test_acquired_spg_target_survives_proof_gap_but_cannot_fire_without_lane(self):
+    def test_radio_spg_target_survives_proof_gap_with_local_arc_attempt_authorized(self):
         import test_port_0922_server_bot_ai as fixture
         planner = fixture.BotPlanner()
         route = fixture._route('rear', [(0, 0, True)])
@@ -920,15 +946,19 @@ class ArtilleryTargetLeaseTests(unittest.TestCase):
 
         blocked = fixture._contact(2, 0, 200, [])
         first = orders(1.0, [blocked])
-        self.assertIsNone(first['target_id'])
+        # Server authorization requests a local trajectory attempt. The
+        # ArtilleryController, not the radio selector, owns launch proof.
+        self.assertEqual(2, first['target_id'])
+        self.assertTrue(first['fire_allowed'])
         acquired = orders(2.0, [fixture._contact(2, 0, 200, [11])])
         self.assertEqual(2, acquired['target_id'])
         self.assertTrue(acquired['fire_allowed'])
         pending = orders(12.0, [blocked])
         self.assertEqual(2, pending['target_id'])
-        self.assertFalse(pending['fire_allowed'])
+        self.assertTrue(pending['fire_allowed'])
         alternative = orders(13.0, [blocked, fixture._contact(3, 0, 210, [11])])
-        self.assertEqual(3, alternative['target_id'])
+        # A different radio shootability report is not a failed local arc.
+        self.assertEqual(2, alternative['target_id'])
         self.assertTrue(alternative['fire_allowed'])
         hidden = orders(14.0, [dict(blocked, visible=False),
             dict(fixture._contact(3, 0, 210, []), visible=False)])

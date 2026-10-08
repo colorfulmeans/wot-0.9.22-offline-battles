@@ -1309,8 +1309,16 @@ class GarageState(object):
         ``CustomizationOutfit`` is the stock serializer for that reference.
         """
         style_id = _int(style_id)
-        if style_id <= 0:
-            raise GarageError('a style request needs a positive style id')
+        if style_id < 0:
+            raise GarageError('a style request cannot use a negative style id')
+        if style_id == 0:
+            # #1513 StyleApplier sends zero when its style is None. Uninstall
+            # the ALL-season reference without selling owned/rented inventory.
+            record = self._record(vehicle_inventory_id, touch=False)
+            record.setdefault('outfits', {}).pop(CUSTOMIZATION_ALL_SEASONS, None)
+            self._touched.add(_int(vehicle_inventory_id))
+            self.revision += 1
+            return record
         try:
             styles = self._vehicles_module().g_cache.customization20().styles
             if style_id not in styles:
@@ -1328,6 +1336,14 @@ class GarageState(object):
         # arena-specific outfits supplied by the style definition.
         staged['outfits'] = {
             CUSTOMIZATION_ALL_SEASONS: (canonical, True)}
+        # CMD 116 also rents/applies a style without a separate CMD 118.
+        style = styles[style_id]
+        compact_descr = _int(style.compactDescr)
+        kind, item_id = self._customization_identity(compact_descr)
+        vehicle_type = _int(record.get('vehicleTypeCompactDescr'))
+        owned = self._snapshot.get('customizationItems', {}).get(kind, {}).get(item_id, {})
+        if not (owned.get(vehicle_type, 0) or owned.get(0, 0)):
+            self.buy_customizations(vehicle_inventory_id, [compact_descr, 1])
         record.clear()
         record.update(staged)
         self._touched.add(_int(vehicle_inventory_id))
@@ -1336,37 +1352,56 @@ class GarageState(object):
 
     def buy_customizations(self, vehicle_inventory_id, purchases):
         """Own ``(intCompactDescr, count)`` pairs for one vehicle type."""
-        record = self._record(vehicle_inventory_id)
+        record = (self._record(vehicle_inventory_id, touch=False)
+                  if _int(vehicle_inventory_id) else None)
         pairs = _layout_pairs(purchases)
-        vehicle_type = _int(record.get('vehicleTypeCompactDescr', 0))
-        if vehicle_type <= 0:
+        vehicle_type = _int(record.get('vehicleTypeCompactDescr', 0)) if record else 0
+        if record is not None and vehicle_type <= 0:
             raise GarageError('the vehicle has no type compact descriptor')
         parsed = []
+        total = {}
         for compact_descr, count in pairs:
             if count <= 0:
                 raise GarageError('a customization purchase needs a count')
             custom_type, item_id = self._customization_identity(compact_descr)
-            parsed.append((custom_type, item_id, count))
+            if compact_descr in self._snapshot.get('notInShopItems', ()):
+                raise GarageError('customization is not sold in the shop')
+            price = self._customization_cost(compact_descr, count)
+            for currency, amount in price.items():
+                total[currency] = total.get(currency, 0) + amount
+            style = self._customization_style(compact_descr)
+            units = max(1, _int(getattr(style, 'rentCount', 0)))
+            if units > 1 and vehicle_type == 0:
+                raise GarageError('a rental style needs a vehicle')
+            parsed.append((custom_type, item_id, count * units))
 
-        owned = self._snapshot.setdefault('customizationItems', {})
+        owned = self._snapshot.get('customizationItems', {})
         staged = copy.deepcopy(owned)
         for custom_type, item_id, count in parsed:
             buckets = staged.setdefault(custom_type, {}).setdefault(
                 item_id, {})
             buckets[vehicle_type] = int(buckets.get(vehicle_type, 0)) + count
+        self._charge(total)
         self._snapshot['customizationItems'] = staged
         self.revision += 1
         return record
 
     def sell_customization(self, vehicle_inventory_id, compact_descr, count):
         """Remove a vehicle-bound customization item using CMD 117 fields."""
-        record = self._record(vehicle_inventory_id)
+        record = (self._record(vehicle_inventory_id, touch=False)
+                  if _int(vehicle_inventory_id) else None)
         count = _int(count)
         if count <= 0:
             raise GarageError('a customization sale needs a count')
         custom_type, item_id = self._customization_identity(compact_descr)
-        vehicle_type = _int(record.get('vehicleTypeCompactDescr', 0))
-        owned = self._snapshot.setdefault('customizationItems', {})
+        vehicle_type = _int(record.get('vehicleTypeCompactDescr', 0)) if record else 0
+        self._customization_cost(compact_descr)
+        style = self._customization_style(compact_descr)
+        if _int(getattr(style, 'rentCount', 0)) > 0:
+            raise GarageError('remaining rental battles cannot be sold')
+        # Match the stock dialog's existing sell modifiers and conversion.
+        refund = self._item_refund(compact_descr, count)
+        owned = self._snapshot.get('customizationItems', {})
         staged = copy.deepcopy(owned)
         buckets = staged.get(custom_type, {}).get(item_id, {})
         current = int(buckets.get(vehicle_type, 0))
@@ -1378,8 +1413,57 @@ class GarageState(object):
         else:
             buckets.pop(vehicle_type, None)
         self._snapshot['customizationItems'] = staged
+        self._pay_back(refund)
         self.revision += 1
         return record
+
+    def _customization_cost(self, compact_descr, count=1):
+        prices = self._snapshot.get('shopItemPrices', {})
+        if _int(compact_descr) not in prices:
+            raise GarageError('customization price is unavailable')
+        return self._item_cost(compact_descr, count)
+
+    def _customization_style(self, compact_descr):
+        cache = getattr(self._vehicles_module(), 'g_cache', None)
+        if cache is None or not hasattr(cache, 'customization20'):
+            return None
+        for style in cache.customization20().styles.values():
+            if _int(getattr(style, 'compactDescr', 0)) == _int(compact_descr):
+                return style
+        return None
+
+    def consume_customization_rental(self, vehicle_type):
+        """Consume one played battle, inside the durable battle settlement."""
+        record = next((row for row in self._records()
+                       if _int(row.get('vehicleTypeCompactDescr')) == _int(vehicle_type)), None)
+        if record is None:
+            return False
+        raw = record.get('outfits', {}).get(CUSTOMIZATION_ALL_SEASONS)
+        if not raw or not raw[1]:
+            return False
+        try:
+            outfit = self._customizations_module().parseOutfitDescr(raw[0])
+        except Exception as error:
+            raise GarageError('rental outfit is unavailable: %s' % error)
+        style_id = _int(getattr(outfit, 'styleId', 0))
+        if not style_id:
+            return False
+        style = self._vehicles_module().g_cache.customization20().styles.get(style_id)
+        if _int(getattr(style, 'rentCount', 0)) <= 0:
+            return False
+        kind, item_id = self._customization_identity(style.compactDescr)
+        bindings = self._snapshot.get('customizationItems', {}).get(kind, {}).get(item_id, {})
+        vehicle_type = _int(record.get('vehicleTypeCompactDescr'))
+        binding = vehicle_type if bindings.get(vehicle_type, 0) else 0
+        remaining = max(0, _int(bindings.get(binding, 0)) - 1)
+        if remaining:
+            bindings[binding] = remaining
+        else:
+            bindings.pop(binding, None)
+            record['outfits'].pop(CUSTOMIZATION_ALL_SEASONS, None)
+        self._touched.add(_int(record['id']))
+        self.revision += 1
+        return True
 
     def _customization_identity(self, compact_descr):
         compact_descr = _int(compact_descr)

@@ -260,11 +260,16 @@ class BotStateCodecTest(unittest.TestCase):
         # ``gui`` and ``gui.mods`` are namespace directories supplied by the
         # game package, so load the module file directly under 2.7.
         program = (
-            'import imp, json, sys\n'
+            'import imp, json, sys, types, os\n'
+            'root = %r\n'
+            'for name in ("gui", "gui.mods", "gui.mods.offline_lan_0922"):\n'
+            '    package = types.ModuleType(name)\n'
+            '    package.__path__ = [os.path.join(root, *name.split("."))]\n'
+            '    sys.modules[name] = package\n'
             'codec = imp.load_source("bot_state_codec", %r)\n'
             'state = json.loads(sys.stdin.read())\n'
             'json.dump(codec.encode_row(state), sys.stdout)\n'
-        ) % (str(CODEC_PATH),)
+        ) % (str(CLIENT_ROOT), str(CODEC_PATH))
         states = [_bot_state(), _bot_state(x=1.00005, yaw=0.123455,
                                           speed=-0.00005, roll=-0.000005)]
         for state in states:

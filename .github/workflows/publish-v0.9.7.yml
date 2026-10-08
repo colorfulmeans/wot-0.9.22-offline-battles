@@ -3,11 +3,6 @@ name: Build and publish v0.9.7
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main, release/v0.9.7]
-    paths:
-      - '.github/workflows/publish-v0.9.7.yml'
-      - 'docs/releases/v0.9.7.md'
 
 concurrency:
   group: release-097-${{ github.ref }}

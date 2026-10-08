@@ -10,12 +10,13 @@ snapshot stream. No timeout, invented pose, damage override or motion occurs.
 """
 
 import math
+from gui.mods.offline_lan_0922 import ram_motion
 from collections import OrderedDict
 
 MAX_REVISIONS = 512
 MAX_BRACKET_REVISION_SPAN = 255
 POSE_FIELDS = ('id', 'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
-               'gun_pitch', 'alive', 'team', 'vehicle')
+               'gun_pitch', 'alive', 'team', 'vehicle', 'ram_motion')
 ANGLES = ('yaw', 'aim_yaw', 'pitch', 'roll')
 try:
     INTEGER_TYPES = (int, long)
@@ -56,6 +57,9 @@ def interpolate_pose(left, right, lt, rt, stamp):
             left.get('id') != right.get('id') or not lt <= stamp <= rt):
         return None
     result = dict(left)
+    result['ram_motion'] = (ram_motion.at_time([], right.get('ram_motion'), stamp)
+                            if stamp >= rt else ram_motion.at_time(
+                                left.get('ram_motion'), right.get('ram_motion'), stamp))
     if lt == rt:
         return result
     progress = (stamp-lt)/float(rt-lt)
@@ -93,6 +97,8 @@ class RamPoseArchive(object):
             if isinstance(state, dict):
                 frozen[int(bot_id)] = dict((k, state[k]) for k in POSE_FIELDS
                                           if k in state)
+                if state.get('ram_motion'):
+                    frozen[int(bot_id)]['ram_motion'] = ram_motion.normalize(state['ram_motion'])
         self.samples[int(revision)] = (int(stamp), frozen)
         while len(self.samples) > self.limit:
             self.samples.popitem(last=False)

@@ -79,3 +79,96 @@ identity, Windows launcher tests and server readiness are separate gates.
 Native acceptance remains: SPGs engaging stationary/moving received targets on
 Steppes, Ruinberg nearby walls and alternate-position behavior, no shooting
 through solid cover or friendlies, and removal of targets after radio loss.
+
+## Follow-up: report 20261005-224253, M12 exact-launch failure lifecycle
+
+Build 102's third El Halluf round contains two M12s. Team 1 fired nine times;
+team 2 reached its parking position with ammunition and ready fire orders but
+never fired. Its gate samples include 93 completed exact-path world failures,
+including hits about 504 and 647 metres from the gun. These were reported as
+`exact_launch_pending`: the native adapter returned the same `None` for pending
+and completed failure, leaving the runtime's frozen nominal aim alive. The
+same failed random parabola was repeatedly checked while the target moved.
+
+The adapter now publishes an explicit terminal failure from the existing queue
+receipt. The runtime cancels that intent and its stale aim caches immediately,
+without spending ammunition, changing reload or advancing the fire sequence.
+The next attempt obtains a freshly proved nominal solution. A still-current
+world-blocked family is excluded for the existing planning-success cooldown;
+another legal family can be proved, or lane admission becomes false so the
+existing target planner can select another received contact. Target displacement
+over the existing 1.5 m aim-staleness threshold, source pose changes, a fired
+sequence, cooldown expiry or round reset clear that exclusion. Pending alternate
+planning/launch work and a completed clear alternate keep their family ownership
+through the cooldown, so long native queues cannot cause low/high ping-pong.
+Timeouts and unresolved probes release the hold without claiming world geometry.
+
+The same deterministic random draw and next fire sequence are retained. There
+is no endpoint compensation, random reroll, cover bypass, native-ray budget
+increase, cadence change, parking relocation, route/save mutation or slope-pose
+change. Gate records distinguish terminal failures from genuine pending work.
+The new end-to-end Python regressions exercise both queues, the native adapter
+boundary and runtime intent cleanup, including movement, alternate arcs, timeout,
+cooldown and reset. Native M12 firing and frame pacing on #1513 remain Windows
+acceptance requirements.
+
+
+## Occupied parking and external displacement
+
+The October 5 23:09 report ran test build 102. WZ-111G repeatedly approached
+the same authored waiting place while the player occupied it. T25/2 later
+returned and completed its wait; periodic motion records do not capture the
+instant of the player's shove. Tortoise fired before taking damage, then lost
+its retreat endpoint after the six-second damage memory expired. No native
+gameplay acceptance is claimed by the engine-stub tests below.
+
+## Behavior
+
+- Waiting-place admission accounts for current humans, live Bots and wrecks,
+  with chassis-derived radii and separate identity domains. An approaching
+  hull relinquishes an occupied lease. It uses another free authored slot or
+  holds a stable queue pose, retaining normal target and fire permissions.
+- The one-metre arrival tolerance only starts the clock. Small displacement
+  within two chassis radii, consistent with the admitted terrain grade and
+  not airborne, holds the current pose. The original timer runs continuously;
+  a larger or unsafe shove requires deployment again without resetting it.
+- SPGs check occupancy on the existing one-second tactical cadence. Occupied
+  goals retry selection at most once per five seconds, preferring another
+  graph-checked location in the same manual zone. If all valid destinations
+  are occupied, they hold the current position and recheck after bodies leave.
+- An arrived SPG may remain at a displaced pose only inside its manual zone
+  or sourced cell, with baked footprint clearance and matching ground height.
+  This does not move an authored zone or skip any ballistic/launch checks.
+- A committed retreat retains its endpoint through target or recent-hit
+  expiry until arrival or the existing no-progress timeout. The existing
+  defensive pause then permits route resumption when the local threat ends.
+- A short, checked reverse withdrawal can make a small fixed-gun correction
+  while keeping reverse throttle. Long travel and recovery retain steering
+  ownership; gun traverse, elevation, line-of-fire and reload gates still apply.
+
+## Validation and real-client follow-up
+
+`test_port_0922_parking_displacement` covers occupied/reoccupied waiting
+leases, full occupancy and release, chassis size, separate floors, displaced
+wait clocks, same-zone SPG reselection, bounded queue checks, supported SPG
+displacement, retreat expiry/arrival/pause, and a limited-traverse hull which
+actually reverses, aims and fires through the production worker.
+
+On the exact #1513 client, repeat the Grille 15/WZ-111G blocked-wait setup,
+push T25/2 after its clock starts, occupy/push an SPG inside and outside its
+authored zone, and observe Tortoise under fire. Verify there is no deliberate
+player shoving, no timer reset, no six-second route reversal, and continued
+normal firing whenever the installed gun can physically bear. No additional
+native terrain rays, authored coordinates, saves or suspension settings are
+changed by this fix.
+
+The 23:48 report ran build 103. Object 268 v4 had completed its wait and
+repeatedly approached a corpse-blocked route corridor before switching lanes.
+Only a new best approach or new radial detour territory now renews the stall
+clock; revisiting opposite sides of the same obstruction does not. A physical
+obstruction close to a travel waypoint no longer disables the fallback timer.
+Nearby occupied travel targets receive a bounded, temporary baked-ground bypass
+using current chassis footprints. This leaves the authored point and one-metre
+wait admission untouched, restores the ordinary goal after the blocker leaves,
+and adds no native terrain probes. Regression cases also cover a corpse entering
+an already leased wait, all wait slots occupied by corpses, and a vacated slot.

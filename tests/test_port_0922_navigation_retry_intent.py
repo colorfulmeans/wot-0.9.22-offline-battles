@@ -203,5 +203,51 @@ class DeferredCachedPathTests(unittest.TestCase):
                 self.assertFalse(nav.searches)
 
 
+class PlanningInterfaceTests(unittest.TestCase):
+    def test_static_policy_receives_one_native_refusal_and_current_origin(self):
+        from gui.mods.offline_lan_0922.ai.navigation import STATIC_PLANNING_POLICY
+        calls = []
+        def blocked(a, b, width, policy, evidence):
+            calls.append((a, b, policy))
+            evidence.update(reason='fixture_wall')
+            return True
+        nav = TerrainNavigator(lambda *args: 0.0, blocked, cell_size=4.0)
+        start, goal = (0.0, 0.0, 12.0), (0.0, 0.0, 80.0)
+        nav.begin_frame(0.0)
+        key, unused = nav._path(('join', 22, 'proof'), start, goal, 0.0, None)
+        nav.end_frame()
+        search = nav.searches[key]
+        while not search.done:
+            search.step(96)
+        nav._finish_search(key, search, 1.0)
+        receipt = nav.path_native_refusals[key]
+        self.assertEqual(start, receipt['start'])
+        self.assertEqual(goal, receipt['goal'])
+        self.assertEqual('fixture_wall', receipt['reason'])
+        self.assertTrue(calls)
+        self.assertTrue(all(call[2] is STATIC_PLANNING_POLICY for call in calls))
+        nav.invalidate_native_planning()
+        self.assertFalse(nav.path_native_refusals)
+
+    def test_body_type_error_does_not_retry_native_callback(self):
+        calls = []
+        def broken(a, b, width, policy, evidence):
+            calls.append(a)
+            raise TypeError('callback body failed')
+        nav = TerrainNavigator(lambda *args: 0.0, broken, cell_size=4.0)
+        self.assertFalse(nav.grid.segment_clear((0, 0, 0), (0, 0, 4)))
+        self.assertEqual(1, len(calls))
+
+    def test_unsupported_kinetic_policy_is_explicitly_rejected(self):
+        nav = TerrainNavigator(lambda *args: 0.0)
+        kinetic = (('stock1513', 10000, 20), 10000, 20)
+        for operation in (
+                lambda: nav.grid.begin_plan((0, 0, 0), (0, 0, 4), native_capability=kinetic),
+                lambda: nav.grid.segment_clear((0, 0, 0), (0, 0, 4), kinetic),
+                lambda: nav.next_target(1, (0, 0, 0), (0, 0, 4), ('local', 1), 0, native_capability=kinetic)):
+            with self.assertRaisesRegex(ValueError, 'unsupported navigation collision policy'):
+                operation()
+
+
 if __name__ == '__main__':
     unittest.main()

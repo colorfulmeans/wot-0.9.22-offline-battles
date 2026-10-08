@@ -33,6 +33,24 @@ def profile():
 
 
 class TacticsContractTests(unittest.TestCase):
+    def test_shared_default_waits_are_removed_without_touching_class_places(self):
+        raw=cfg.empty();name='08_ruinberg';meta=cfg.MAPS[name]
+        point=[0,0,1,0,[[10,0,25],[20,0,60]]]
+        raw['maps'][name]=dict(mode='regular',resource_sha256=meta['resource_sha256'],routes=[],positions=[],
+            default_routes=[dict(id=meta['route_ids']['1'][0],team=1,points=[copy.deepcopy(point)]),
+                dict(id=meta['route_ids']['1'][0],team=1,class_tag='AT-SPG',points=[copy.deepcopy(point)])])
+        clean=cfg.canonical(raw)['maps'][name]['default_routes']
+        shared=next(r for r in clean if r.get('class_tag','all')=='all')
+        scoped=next(r for r in clean if r.get('class_tag')=='AT-SPG')
+        self.assertEqual([[0.0,0.0,0]],shared['points'])
+        self.assertEqual([point],scoped['points'])
+    def test_parent_without_small_places_cannot_keep_a_retired_wait_clock(self):
+        bounds=cfg.MAPS['08_ruinberg']['bounds']
+        for point in ([0,0,1,60],[0,0,1,-1],[0,0,1,0,[]],[0,0,0,0]):
+            self.assertEqual([0.0,0.0,0],cfg.waypoint(point,bounds))
+        places=[[10,0,60],[20,0,-1]]
+        self.assertEqual([0.0,0.0,1,0.0,places],cfg.waypoint([0,0,1,0,places],bounds))
+
     def test_default_contains_no_hidden_parameter_retunes(self):
         raw=cfg.canonical(cfg.empty())
         self.assertEqual({},cfg.effective(raw,1,'SPG',3))
@@ -99,6 +117,50 @@ class TacticsContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store=Store(tmp);store.ensure_active();store.active_path.write_text('{bad')
             with self.assertRaises(ValueError):store.active()
+
+    def test_full_map_collection_saves_with_waits_and_projects_only_one_map(self):
+        raw=cfg.empty('Full map authoring')
+        for name,meta in cfg.MAPS.items():
+            x=(meta['bounds'][0]+meta['bounds'][2])/2
+            z=(meta['bounds'][1]+meta['bounds'][3])/2
+            points=[[x+i*2,z,0] for i in range(16)]
+            points[0]=[x,z,1,0,[[x,z+j*3,60+j] for j in range(3)]]
+            entry=dict(mode='regular',resource_sha256=meta['resource_sha256'],
+                routes=[],positions=[],default_routes=[])
+            for team,ids in meta['route_ids'].items():
+                for identity in ids:
+                    for tag in ('all',)+cfg.CLASSES:
+                        entry['default_routes'].append(dict(id=identity,team=int(team),class_tag=tag,
+                            label='测试路线',points=copy.deepcopy(points)))
+            for i in range(32):
+                entry['routes'].append(dict(id='r_%d'%i,label='测试路线',team=1,
+                    classes=list(cfg.CLASSES[:-1]),points=copy.deepcopy(points)))
+            for i in range(48):
+                entry['positions'].append(dict(id='p_%d'%i,label='测试炮位',team=1,
+                    point=[x,z],radius=16,heading=0,priority=5))
+            raw['maps'][name]=entry
+        expected=cfg.canonical(raw)
+        self.assertGreater(len(cfg.dumps(expected).encode('ascii')),512*1024)
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(tmp);store.save(expected,apply=True)
+            self.assertEqual(expected,store.active())
+            self.assertEqual(expected,store.read(expected['name']))
+            exported=Path(tmp)/'all-maps.json';store.export(expected,exported)
+            self.assertEqual(expected,store.import_file(exported))
+            projected=cfg.for_round(store.active(),'08_ruinberg')
+            self.assertEqual(['08_ruinberg'],list(projected['maps']))
+            self.assertEqual(expected['maps']['08_ruinberg'],projected['maps']['08_ruinberg'])
+
+    def test_oversized_file_rejection_preserves_existing_profile(self):
+        from bot_tactics_store import _atomic
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(tmp);store.save(profile(),apply=True)
+            before=store.active_path.read_bytes()
+            with self.assertRaises(cfg.TacticsError):
+                _atomic(store.active_path,{'payload':'x'*cfg.MAX_BYTES})
+            self.assertEqual(before,store.active_path.read_bytes())
+            large=Path(tmp)/'large.json';large.write_bytes(b' '* (cfg.MAX_BYTES+1))
+            with self.assertRaises(cfg.TacticsError):store.import_file(large)
 
     def test_profile_label_cannot_escape_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -168,6 +230,19 @@ class TacticsContractTests(unittest.TestCase):
         route=raw['maps']['08_ruinberg']['routes'][0]
         index=grid.closest((route['points'][1][0],0,route['points'][1][1]));g['heights_mm'][index]=None
         self.assertEqual('waypoint_unusable',planning.validate_route(grid,route))
+
+    def test_detailed_check_lists_all_bad_nodes_and_the_disconnected_pair(self):
+        raw=profile();g=_graph();grid=planning.graph_view('08_ruinberg',g)
+        route=raw['maps']['08_ruinberg']['routes'][0]
+        for index in (0,3):
+            p=route['points'][index];cell=grid.closest((p[0],0,p[1]));g['heights_mm'][cell]=None
+        g['links'][:]=[0]*len(g['links'])
+        rows=planning.authoring_check(raw,'08_ruinberg',g,details=True)
+        issues=next(row[2] for row in rows if row[0]=='west')
+        self.assertEqual([[1],[2,3],[4]],[issue['nodes'] for issue in issues])
+        self.assertEqual('missing_ground',issues[0]['reason'])
+        self.assertEqual(route['points'][3][:2],issues[-1]['points'][0])
+        self.assertEqual(2,len(planning.authoring_check(raw,'08_ruinberg',g)[0]))
 
 
 class RoundFreezeTests(unittest.TestCase):
@@ -240,6 +315,26 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
         self.assertFalse(rt._gunner_ready(rt.states[11],gun,target,1.0))
         self.assertFalse(rt._gunner_ready(rt.states[11],gun,target,2.0))
         self.assertTrue(rt._gunner_ready(rt.states[11],gun,target,4.0))
+
+    def test_parking_accepts_only_a_single_region_without_route_nodes(self):
+        message=self.message();zone=message['bot_tactics']['maps']['08_ruinberg']['positions'][0]
+        zone['points']=[zone['point']+[1,12.],[-106.,306.,0,0.]]
+        with self.assertRaises(cfg.TacticsError):cfg.canonical(message['bot_tactics'])
+
+    def test_blocked_manual_parking_retries_inside_authored_regions(self):
+        rt = self.runtime(); message = self.message()
+        with contextlib.redirect_stdout(io.StringIO()):
+            rt.battle_start(message)
+        state = rt.states[11]
+        original = copy.deepcopy(state['_spg_initial'])
+        order = {'combat_mode': 'artillery_deploy'}
+        rt._artillery_position_order(state, order, {}, 0.)
+        rt._artillery_position_order(state, order, {}, 20.1)
+        alternate = state['_spg_initial']
+        self.assertNotEqual(original['point'], alternate['point'])
+        self.assertEqual('launcher_manual_v1', alternate['source'])
+        self.assertIsNotNone(cfg.canonical_manual_plan(
+            alternate, rt._bot_tactics, '08_ruinberg', state['vehicle'], state['team']))
 
     def test_manifest_server_orders_and_navigation_share_same_manual_goal(self):
         from lan_battle_server import BattleState

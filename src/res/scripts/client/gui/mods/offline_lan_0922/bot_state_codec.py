@@ -27,7 +27,7 @@ compare, so a row carries them rather than depending on a second message.
 """
 
 import math
-from gui.mods.offline_lan_0922 import tank_contact_ledger
+from gui.mods.offline_lan_0922 import tank_contact_ledger, ram_motion
 
 
 # Canonical orders. A row carries slot indices into these tuples, never names.
@@ -53,7 +53,9 @@ FIRE_CLOCK_SCALE = 1000000    # round(v, 6)
 DEVICE_HP_SCALE = 1000        # round(v, 3)
 
 # Flag bits.
+F_HAS_RAM_MOTION = 1 << 21
 F_SERVICE_BRAKE = 1 << 19
+F_ROUTE_WRECK_BLOCKED = 1 << 20
 F_ALIVE = 1 << 0
 F_WORLD_POSE = 1 << 1
 F_AMMO_RELOAD_PENDING = 1 << 2
@@ -78,6 +80,7 @@ F_AIRBORNE = 1 << 18
 # "keep the state the server already admitted". A positional row always has the
 # columns, so a presence bit carries that distinction instead.
 OPTIONAL_GROUPS = (
+    (F_HAS_RAM_MOTION, ('ram_motion',)),
     (F_HAS_AMMO, ('ammo_remaining', 'next_shell_index',
                   'ammo_reload_pending')),
     (F_HAS_BURST, ('burst_active', 'burst_group_seq', 'burst_count',
@@ -222,6 +225,8 @@ def encode_row(state):
         flags |= F_WORLD_POSE
     if state.get('service_brake', False):
         flags |= F_SERVICE_BRAKE
+    if state.get('route_wreck_blocked', False):
+        flags |= F_ROUTE_WRECK_BLOCKED
     if state.get('airborne', False):
         flags |= F_AIRBORNE
     if state.get('ammo_reload_pending', False):
@@ -348,6 +353,15 @@ def encode_row(state):
                         _fixed(entry[3], SPEED_SCALE),
                         _fixed(entry[4], POSITION_SCALE),
                         _fixed(entry[5], POSITION_SCALE), _fixed(entry[6], SPEED_SCALE)))
+    if flags & F_HAS_RAM_MOTION:
+        try:
+            motions = ram_motion.normalize(state['ram_motion'])
+        except (ValueError, TypeError, OverflowError):
+            raise BotStateCodecError('invalid ram motion')
+        row.append(len(motions))
+        for motion in motions:
+            row.extend(motion[:3])
+            row.extend(_fixed(v, scale) for v, scale in zip(motion[3:], ram_motion.SCALES))
     return row
 
 
@@ -393,6 +407,7 @@ def decode_row(row, static):
     result['world_pose'] = bool(flags & F_WORLD_POSE)
     result['airborne'] = bool(flags & F_AIRBORNE)
     result['service_brake'] = bool(flags & F_SERVICE_BRAKE)
+    result['route_wreck_blocked'] = bool(flags & F_ROUTE_WRECK_BLOCKED)
     result['ammo_reload_pending'] = bool(flags & F_AMMO_RELOAD_PENDING)
     result['burst_active'] = bool(flags & F_BURST_ACTIVE)
     result['movement_dir'] = (
@@ -501,5 +516,17 @@ def decode_row(row, static):
             tank_contact_ledger.normalize(result['contact_push_acks'])
         except (ValueError, TypeError, OverflowError):
             raise BotStateCodecError('invalid contact acknowledgement')
+    if flags & F_HAS_RAM_MOTION:
+        count = cursor.take()
+        if not 0 <= count <= ram_motion.MAX_PEERS:
+            raise BotStateCodecError('invalid ram motion count')
+        motions = []
+        for unused in range(count):
+            motions.append([cursor.take(), cursor.take(), cursor.take()] +
+                           [_real(cursor.take(), scale) for scale in ram_motion.SCALES])
+        try:
+            result['ram_motion'] = ram_motion.normalize(motions)
+        except (ValueError, TypeError, OverflowError):
+            raise BotStateCodecError('invalid ram motion')
     cursor.finish()
     return result

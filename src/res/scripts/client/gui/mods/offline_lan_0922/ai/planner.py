@@ -13,6 +13,7 @@ import math
 import random
 
 from gui.mods.offline_lan_0922.ai import maps as bot_ai_maps
+from gui.mods.offline_lan_0922.bot_tactics import DEFAULT_ROUTE_PRIORITY
 
 
 CONTACT_MEMORY_SECONDS = 7.0
@@ -593,7 +594,9 @@ def build_vehicle_profile(descriptor):
 		roles['scout'] = min(1.0, roles['scout'] + 0.08)
 	elif speed and speed < 9.0:
 		roles['flanker'] = max(0.0, roles['flanker'] - 0.16)
-	if armor >= 120.0:
+	# All TDs share the sniper policy. Armour remains physical/profile data,
+	# but does not turn an armoured TD into a short-range tactical subtype.
+	if armor >= 120.0 and class_tag != 'AT-SPG':
 		roles['brawler'] = min(1.0, roles['brawler'] + 0.18)
 		roles['sniper'] = max(0.0, roles['sniper'] - 0.08)
 
@@ -608,9 +611,6 @@ def build_vehicle_profile(descriptor):
 		'SPG': (650.0, 1250.0),
 	}
 	desired_range, fire_range = desired_ranges[class_tag]
-	if armor >= 120.0 and class_tag == 'AT-SPG':
-		desired_range = 115.0
-		fire_range = 320.0
 
 	dominant = 'support'
 	dominant_score = -1.0
@@ -761,10 +761,12 @@ def _map_data_with_baked_routes(map_data, baked_routes):
 			if 'class_weights' in route:
 				route['class_weights'] = dict(
 					route.get('class_weights', {}) or {})
+			for tag in route.get('_editor_disabled_classes', ()):
+				route.setdefault('class_weights', {})[tag] = 0.0
 			route['waypoints'] = tuple(waypoints)
 			converted.append(route)
 		routes[team] = tuple(converted)
-	if not routes.get(1) or not routes.get(2):
+	if (not routes.get(1) or not routes.get(2)) and not baked_routes.get('_editor_allow_empty'):
 		return map_data
 	result['routes'] = routes
 	# Baked routes already carry their team orientation and graph-validated
@@ -838,7 +840,10 @@ class BattleDirector(object):
 		return self.map_data.get('routes', {}).get(int(team), ()) or ()
 
 	def _assign_route(self, agent):
-		routes = self._routes_for(agent['team'])
+		# Shared route geometry supplies a template; each class has three slots.
+		routes = tuple(r for r in self._routes_for(agent['team'])
+		               if not r.get('_editor_source') and
+		               agent['profile'].get('class_tag') not in r.get('_editor_disabled_classes', ()))
 		if not routes:
 			return None
 		profile = agent['profile']
@@ -851,15 +856,16 @@ class BattleDirector(object):
 		if not is_artillery:
 			open_routes = []
 			for route in routes:
-				key = (agent['team'], route.get('id'))
-				capacity = max(1, int(route.get('capacity', 1)))
+				key = (agent['team'], route.get('id'), profile.get('class_tag'))
+				capacity = 3
 				if int(self.route_usage.get(key, 0)) < capacity:
 					open_routes.append(route)
-			if open_routes:
-				routes = tuple(open_routes)
+			if not open_routes:return None
+			routes = tuple(open_routes)
 		personality = agent['personality']
 		best = None
 		best_score = -1e18
+		best_priority = -1
 		for route in routes:
 			role_weights = route.get('role_weights', {})
 			risk = _number(route.get('risk', 0.5), 0.5)
@@ -884,13 +890,15 @@ class BattleDirector(object):
 				score -= risk * personality['caution'] * 13.0
 				score += personality['initiative'] * risk * 5.0
 				score += personality['route_jitter']
-				key = (agent['team'], route.get('id'))
+				key = (agent['team'], route.get('id'), profile.get('class_tag'))
 				used = int(self.route_usage.get(key, 0))
-				capacity = max(1, int(route.get('capacity', 1)))
+				capacity = 3
 				score -= (float(used) / float(capacity)) * 28.0
 				if used >= capacity:
 					score -= 34.0
-			if score > best_score:
+			priority = 0 if is_artillery else int((route.get('class_priorities') or {}).get(profile.get('class_tag'), DEFAULT_ROUTE_PRIORITY))
+			if (priority, score) > (best_priority, best_score):
+				best_priority = priority
 				best_score = score
 				best = route
 		if best is not None:
@@ -899,7 +907,7 @@ class BattleDirector(object):
 				self.artillery_route_usage[key] = int(
 					self.artillery_route_usage.get(key, 0)) + 1
 			else:
-				key = (agent['team'], best.get('id'))
+				key = (agent['team'], best.get('id'), profile.get('class_tag'))
 				self.route_usage[key] = int(
 					self.route_usage.get(key, 0)) + 1
 			if self._routes_are_baked:
@@ -1234,8 +1242,11 @@ class BattleDirector(object):
 					order['move_position'] = self._fallback_position(agent, position)
 					order['combat_mode'] = 'withdraw'
 				elif distance > profile['desired_range'] * far_ratio:
-					order['move_position'] = contact['position']
-					order['combat_mode'] = 'advance_contact'
+					if order.get('route_id'):
+						order['combat_mode'] = 'advance'
+					else:
+						order['move_position'] = contact['position']
+						order['combat_mode'] = 'advance_contact'
 				elif distance < profile['desired_range'] * close_ratio:
 					# Use the route as a known-safe fallback instead of reversing into
 					# arbitrary geometry. Brawlers with high aggression are less eager.

@@ -7890,3 +7890,102 @@ exercises normal install, forced reinstall and startup repair against default
 and named external slots, including legacy state and rotated backups. The
 746 launcher tests pass (14 platform/environment skips). Product reset stays
 behind its separate confirmation and is not invoked by installation or repair.
+
+## Bounded legacy Bot slope reattachment (October 6 report)
+
+Report 20261006-001822 uses launcher build 104 on the exact #1513 client.
+T-54 Bot 22 remains near (-66.50, 39.782, -252.50) with repeated centre support
+40.629, support limit 0.6 and support rollback; nearby/contact lists are empty.
+The log begins after burial, so it does not establish its initial writer.
+The legacy attitude sampler previously applied one half-step then suppressed
+further convergence at an unchanged sampling anchor. Continue convergence using
+the accepted cached pitch/roll target, without additional ground columns.
+Rejected native pose samples also consume the existing five-attempt frame cap.
+
+After one second of exceptional support rejection, a nearly stationary hull
+may prove its current four-end footprint. All ends must exist, remain inside
+the existing 0.55 grade, agree with the centre within 0.1 m at both midpoints,
+and include a lower supported end. The repair depth is bounded by the smaller
+chassis half-span at that same grade. Raised decks, steps, cliffs and missing
+support fail closed. The existing native full-body pose sweep must accept the
+height correction; snapshot rollback includes the cached attitude target.
+Height correction creates no upward velocity and leaves landing/airborne laws
+unchanged. Reuse the proved footprint for the scheduled attitude update.
+
+Only one exceptional footprint may be sampled across the whole Bot roster per
+control update (at most four added columns); each hull retries at most once per
+second. Normal centre support and staggered pose budgets remain unchanged.
+Engine-free regressions cover the reported height gap on a continuous slope,
+cached convergence, native pose denial, steps/decks/cliffs/missing support,
+retry/shared budget bounds and all 29 rejected poses under the frame cap.
+These checks do not prove native slope shape or Windows frame pacing; repeat
+T-54's actual El Halluf descent with the resulting launcher package.
+
+
+### Bounded route gate attempts and optional parking places (2026-10-06)
+
+A route gate remains ordinary travel geometry. Only its explicit small parking
+places replace that gate for the vehicle holding a place lease. Empty groups and
+fully occupied/reserved groups use the parent gate without stopping or queueing;
+a declined group is not reacquired while that vehicle traverses the same gate.
+Completed real parking still advances without requiring a return to the parent.
+Legacy parent duration fields alone no longer create a parking place.
+
+Worker-proved player/wreck blockage has a twenty-second attempt budget. On the
+first timeout the planner abandons the gate and targets its successor, with a
+connector anchored at the current hull pose instead of the rejected gate. If that
+successor also remains blocked for twenty seconds, the planner selects a suitable
+alternative route. Reaching the successor clears the skip sequence. Clearing the
+blocker resets the attempt clock; chassis oscillation does not extend it. Holds,
+combat, explicit team commands and proved immobilization do not consume attempts.
+A blocked terminal gate has no successor and can change lanes after its budget.
+Without a suitable alternative, retry selection remains bounded by that budget.
+All bookkeeping uses the existing server planning pass and worker collision proof;
+this change adds no native terrain queries or higher-frequency planning.
+
+Focused tests cover consecutive blocked gates, actual progress, recovery orbits,
+player/wreck/reservation occupancy, empty groups, parent-gate fallback and retained
+individual arrival clocks. Exact-client gameplay remains the acceptance boundary
+for collision clearance and movement feel.
+
+
+### Test116 customization price and transaction parity (#1513)
+
+The old bootstrap overwrote every paint/camouflage/decal/modification/style
+price with zero credits, and CMD118/117 adjusted inventory without money.
+Native c11n_readers._readPricedItems binds each descriptor's priceGroup name
+to a PriceGroup, then copies that group's price through items.vehicles. Client
+initialization discards the collected price table. All #1513 appearance item
+definitions use these groups (no inline item prices found). The price baker
+now preserves all 40 groups, including non-shop flags; packed type-5 strings
+encode the base64 text of Boolean flags and must not be mistaken for false.
+
+Bootstrap restores group prices using native descriptor names. Standard paint
+is 20 gold, legacy camouflages/emblems/inscriptions 50, effects 300, ordinary
+gold styles 750 and rental styles 75000 credits. Special groups retain their
+exact amounts and non-shop flags. Missing groups fail rather than publishing
+a free item. Owned customization stock is not retroactively billed.
+
+Official context: https://worldoftanks.com/en/news/general-news/update-921-is-here/
+confirms 50 gold per camouflage part and directs players to the client for
+other prices. https://worldoftanks.eu/en/news/specials/weekly-offers-3-march2022/
+confirms 75000 credits per 100-battle rental. #1513's own Style.rentCount,
+isRentable/isRented/getRentInfo and Vehicle._parseStyledOutfits are the exact
+contract: bound inventory counts hold remaining battles; outfit tuple Boolean
+is enablement, not an invented rental clock.
+
+Purchases validate the complete batch before charging; unknown/non-shop items
+and insufficient funds do not create inventory. Stock unbound inventory uses
+vehicle-type key zero. Rented styles require a vehicle and grant the native
+rentCount per paid unit. CMD116 charges only when the style is not owned.
+CMD117 uses the existing Shop.getSellPrice/sellPriceModifiers contract and
+account exchange rate, returning credits with the existing 0.5 sell factor;
+no new gold refund policy is invented. Remaining rental battles cannot be sold.
+
+Enabled rental use settles inside the existing atomic battle/crew/save receipt
+transaction. Training does not consume use, receipt retry does not consume it
+twice, and zero remaining battles removes the active ALL-season outfit.
+Reapplication after expiry purchases a new rental. Tests cover charged copies,
+stock sale, free/missing/hidden price handling, unbound inventory, failed batch
+atomicity, repeat style application, expiry and durable duplicate settlement.
+Native menu presentation and real Windows purchases remain the playtest boundary.

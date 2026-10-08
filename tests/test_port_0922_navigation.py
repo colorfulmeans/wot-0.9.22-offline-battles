@@ -15,6 +15,114 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 
 
 class ClimbApproachNavigationTests(unittest.TestCase):
+    def setUp(self):
+        # Lower the configurable guard only in these lifecycle fixtures: their
+        # real 8-degree report bends exercise mandatory-corner consumption.
+        # Production's 22.5-degree policy is covered by the driver/guard tests.
+        from unittest.mock import patch
+        original=TerrainGrid.shortcut_preserves_climb_approach
+        controlled=lambda path,start,end,*args,**kwargs:original(path,start,end,minimum_grade=.10,minimum_turn=.30)
+        guard=patch.object(TerrainGrid,'shortcut_preserves_climb_approach',staticmethod(controlled))
+        guard.start();self.addCleanup(guard.stop)
+
+    def test_owned_overshot_point_advances_only_through_a_proved_forward_link(self):
+        for blocked in (False, True):
+            with self.subTest(blocked=blocked):
+                graph = StaticHullNavigationTests._flat_graph()
+                if blocked:
+                    # A genuine missing destination cell forbids the forward
+                    # connector; the target behind remains the safe bend.
+                    graph['heights_mm'][2 * graph['width'] + 2] = None
+                def ground(x, z, hint):
+                    if blocked and 6.0 <= x < 10.0 and 6.0 <= z < 10.0:
+                        return None
+                    return 0.0 if 0.0 <= x <= 80.0 and 0.0 <= z <= 80.0 else None
+                nav = TerrainNavigator(ground, lambda *unused: False, baked_graph=graph)
+                path = ((0., 0., 0.), (4., 0., 4.), (8., 0., 8.))
+                current, goal, request = (9., 0., 5.), path[-1], ('route', 2, 'overshoot', 1)
+                nav.next_target(23, path[0], goal, request, 0.)
+                key = nav._cache_key(request, goal)
+                nav.paths[key] = path
+                nav.path_times[key] = 0.
+                nav.bot_states[23].update(path_key=key, index=1, last_target=path[1])
+                target = nav.next_target(23, current, goal, request, .1,
+                                         lookahead_distance=1.)
+                self.assertEqual(path[1] if blocked else path[2], target)
+                self.assertEqual(1 if blocked else 2, nav.bot_states[23]['index'])
+
+    def _el_halluf_active_bend(self):
+        # Build 100, report 20261005-212211: Pz.58 at the south slope lip.
+        # Replay its sampled poses/path against the current baked graph.
+        # Unavailable native ground fails closed; this is not a world replay.
+        graph = json.loads((PORT_ROOT / 'navgraphs/29_el_hallouf.json').read_text())
+        calls = []
+        nav = TerrainNavigator(lambda *args: calls.append(args),
+                               lambda *args: False, baked_graph=graph)
+        path = ((-70.,45.685,-266.), (-74.,46.576,-266.),
+                (-74.,44.112,-258.), (-54.,37.938,-254.),
+                (-50.,33.99,-246.), (-34.,27.178,-238.),
+                (-14.,18.223,-214.))
+        poses = ((-71.37210003185253,45.97560119628906,-265.938209573189),
+                 (-71.73911070797317,46.06977081298828,-265.9727960732439))
+        goal = (29.276,0.,-180.313)
+        request = ('route',2,'class_mt_south_valley',2)
+        base = nav._cache_key(request, goal)
+        nav.paths[base] = path
+        nav.path_times[base] = 0.
+        nav.begin_frame(.1)
+        try:
+            self.assertEqual(path[1], nav.next_target(21,path[0],goal,request,0.))
+        finally:
+            nav.end_frame()
+        key = nav._cache_key(('join',21,nav.grid.cell_for(poses[0])) + request,goal)
+        nav.paths[key] = path
+        nav.path_times[key] = 0.
+        nav.bot_states[21].update(path_key=key,index=1,last_target=path[1])
+        return nav,path,poses,goal,request,calls
+
+    def test_reported_active_bend_keeps_progress_until_its_setup_is_reached(self):
+        nav,path,poses,goal,request,calls = self._el_halluf_active_bend()
+        def target(position, now):
+            nav.begin_frame(.1)
+            try:
+                return nav.next_target(21,position,goal,request,now)
+            finally:
+                nav.end_frame()
+        # Crossing the outgoing edge's perpendicular plane by a few cm is
+        # not arrival: the actual setup remains more than 2 m to the side.
+        self.assertEqual(path[1], target(poses[0],1.))
+        before = len(calls)
+        for tick in range(30):
+            self.assertEqual(path[1], target(poses[tick % 2],1.1+tick*.1))
+            self.assertEqual(1, nav.bot_states[21]['index'])
+        self.assertEqual(before,len(calls))
+        self.assertEqual(path[2],target(path[1],4.2))
+        self.assertEqual(2,nav.bot_states[21]['index'])
+
+    def test_active_bend_does_not_keep_a_newly_blocked_or_unplanned_ford_target(self):
+        for obstruction in ('wall','penalty','unplanned_shallow'):
+            with self.subTest(obstruction=obstruction):
+                nav,path,poses,goal,request,calls = self._el_halluf_active_bend()
+                if obstruction == 'wall':
+                    original = nav.grid.segment_clear
+                    nav.grid.segment_clear = lambda start,end: (
+                        end != path[1] and original(start,end))
+                elif obstruction == 'penalty':
+                    nav.bot_failed_edges[21] = dict((edge,(100.,240.)) for edge in
+                        nav.grid._edge_keys_for_segment(poses[1],path[1]))
+                else:
+                    original = nav.grid.segment_has_baked_hazard
+                    nav.grid.segment_has_baked_hazard = lambda start,end,mask: (
+                        (start == poses[1] and end == path[1]) or
+                        original(start,end,mask))
+                nav.begin_frame(.1)
+                try:
+                    selected = nav.next_target(21,poses[1],goal,request,1.)
+                finally:
+                    nav.end_frame()
+                self.assertNotEqual(path[1],selected)
+                self.assertFalse(nav.bot_states[21].get('controlled_shallow_target'))
+
     def test_unknown_native_edge_is_shared_only_until_next_worker_frame(self):
         calls = []
         loaded = [False]
@@ -62,12 +170,18 @@ class ClimbApproachNavigationTests(unittest.TestCase):
             cell = grid.cell_for((raw[0], 0.0, raw[1]))
             endpoints.append(grid.point_for(cell, grid._baked_cell_height(cell)))
         start, goal = endpoints
-        path = grid.plan(start, goal, prefer_clearance=True)
+        # Exercise the historical authored bend against current terrain data.
+        # A fresh A* route may legitimately select a different ridge corridor.
+        bend = []
+        for x, z in ((366.0, 6.0), (366.0, 14.0), (370.0, 22.0)):
+            cell = grid.cell_for((x, 0.0, z))
+            bend.append(grid.point_for(cell, grid._baked_cell_height(cell)))
+        path = (start,) + tuple(bend) + (goal,)
         pivot = next(index for index, point in enumerate(path)
                      if point[0] == 366.0 and point[2] == 14.0)
         key = ('route', 1, 'north_ridge', 1)
         cache_key = navigator._cache_key(
-            navigator._native_path_key(key, native_capability), goal)
+            key, goal)
         navigator.paths[cache_key] = path
         navigator.path_times[cache_key] = 0.0
         return graph, navigator, path, pivot, key
@@ -235,7 +349,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         # its setup, the old navigator issued a 3.12 m safe-local step,
         # then targeted the setup behind the hull on the next decision.
         for now, z in ((1.0, 12.6), (1.1, 15.72)):
-            current = (366.0, path[pivot][1], z)
+            current = (path[pivot][0], path[pivot][1], z)
             self.assertGreater(math.hypot(
                 path[-1][0] - current[0], path[-1][2] - current[2]), 15.0)
             selected = runtime._navigation_target(
@@ -252,14 +366,18 @@ class ClimbApproachNavigationTests(unittest.TestCase):
             aligned = driver.drive(
                 7, 0, current, aligning['target_yaw'], 0.0, 0.1,
                 selected, [], lambda yaw: True)
-            self.assertEqual(0.0, aligning['throttle'])
+            # Ordinary slopes no longer impose a special facing brake; the
+            # independent short-corner gate can still stop a nearby turn.
+            if math.hypot(selected[0]-current[0],selected[2]-current[2])>8.0:
+                self.assertGreater(aligning['throttle'],0.0)
+            else:self.assertEqual(0.0,aligning['throttle'])
             self.assertGreater(aligned['throttle'], 0.0)
 
     def test_fjord_unreached_climb_setup_is_not_skipped_within_grid_radius(self):
         unused_graph, navigator, path, pivot, key = self._fjord_route()
         # Inside the grid's 2.2 m advancement radius but outside the driver's
         # 1.5 m arrival radius: the uphill setup has not been reached yet.
-        current = (366.0, path[pivot][1], 12.4)
+        current = (path[pivot][0], path[pivot][1], 12.4)
 
         selected = navigator.next_target(7, current, path[-1], key, 1.0)
 
@@ -270,7 +388,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         for blocker in ('collision', 'penalty'):
             with self.subTest(blocker=blocker):
                 unused_graph, navigator, path, pivot, key = self._fjord_route()
-                current = (366.0, path[pivot][1], 12.6)
+                current = (path[pivot][0], path[pivot][1], 12.6)
                 next_point = path[pivot + 1]
                 if blocker == 'collision':
                     original = navigator.grid.segment_clear
@@ -299,7 +417,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         self.assertEqual(next_point, selected)
         self.assertEqual(next_point,
                          navigator.bot_states[7]['controlled_shallow_target'])
-        current = (366.0, path[pivot][1], 16.5)
+        current = (path[pivot][0], path[pivot][1], 16.5)
 
         selected = navigator.next_target(7, current, path[-1], key, 1.1)
 
@@ -342,7 +460,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         cache_key = navigator._cache_key(replacement_key, path[-1])
         navigator.paths[cache_key] = replacement
         navigator.path_times[cache_key] = 1.0
-        current = (366.0, path[pivot][1], 16.5)
+        current = (path[pivot][0], path[pivot][1], 16.5)
         self.assertFalse(navigator.grid.live_shortcut_preserves_climb_approach(
             current, replacement, 0, 1))
 
@@ -496,6 +614,23 @@ class ArenaRectangleClipTests(unittest.TestCase):
 
 
 class StaticHullNavigationTests(unittest.TestCase):
+    def test_el_halluf_e3_centreline_needs_its_installed_width_around_wz_wreck(self):
+        graph=prebaked_navigation.load_graph('29_el_hallouf',str(PORT_ROOT))
+        grid=TerrainGrid(lambda *unused:0., obstacle_probe=lambda *unused:False,baked_graph=graph)
+        wreck=((24,-107.3865118374,-212.6340347494,.7122862294,3.6386919022,1.6741000414),)
+        path=((-98.,35.016,-214.),(-102.,36.245,-214.),(-102.,37.301,-218.),
+              (-106.,38.552,-218.),(-106.,39.767,-222.))
+        grid.set_static_hulls(wreck)
+        self.assertFalse(grid.path_crosses_static_hull(path))
+        grid.set_static_hulls(wreck,clearance=1.8657310009)
+        self.assertTrue(grid.path_crosses_static_hull(path))
+        revision=grid.static_hull_revision
+        self.assertFalse(grid.set_static_hulls(wreck,clearance=1.8657310009))
+        self.assertEqual(revision,grid.static_hull_revision)
+        detour=grid.plan(path[0],(-167.115,0.,-263.719),now=719.,max_expansions=5000)
+        self.assertTrue(detour)
+        self.assertFalse(grid.path_crosses_static_hull(detour))
+
     """A destroyed hull is exact static geometry the graph has to carry."""
 
     @staticmethod

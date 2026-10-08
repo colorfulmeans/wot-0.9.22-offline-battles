@@ -4,8 +4,8 @@ from __future__ import division
 """Versioned, data-only launcher/host/worker Bot tactics contract (#1513).
 
 No native game imports, environment reads or global mutable settings.  Hosts
-load a bounded document only at an accepted round boundary.  An empty document
-is deliberately the old behaviour, not an implicit retune.
+load a bounded document only at an accepted round boundary. An empty document
+supplies no authored geometry or behavior-parameter overrides.
 """
 import copy
 import hashlib
@@ -18,8 +18,11 @@ from gui.mods.offline_lan_0922.bot_editor_maps import MAPS
 
 SCHEMA = 1
 CLIENT = '0.9.22.0.1-cn-1513'
-MAX_BYTES = 512 * 1024
+MAX_BYTES = 8 * 1024 * 1024
 CLASSES = ('lightTank', 'mediumTank', 'heavyTank', 'AT-SPG', 'SPG')
+DEFAULT_ROUTE_PRIORITY = 5
+MAX_ENTRIES = sum(128 + sum(len(routes) for routes in meta['route_ids'].values()) *
+                  (len(CLASSES) + 1) for meta in MAPS.values())
 SKILLS = ('rookie', 'regular', 'veteran', 'elite')
 PARAMETERS = {
     'reaction_seconds': (0.0, 5.0), 'patience_seconds': (0.0, 10.0),
@@ -74,6 +77,17 @@ def empty(name='Default'):
             'behavior': [], 'maps': {}}
 
 
+def default_profile(name='Default'):
+    from gui.mods.offline_lan_0922.bot_tactics_default_data import PROFILE_JSON
+    document = json.loads(PROFILE_JSON)
+    document['name'] = name
+    return document
+
+
+def default_map(name):
+    return default_profile()['maps'].get(name, {})
+
+
 def normalize_values(raw):
     _keys(raw, tuple(PARAMETERS) + ('skill', 'crew_level'))
     out = {}
@@ -96,6 +110,55 @@ def point(raw, bounds):
         raise TacticsError('Point must be [x, z]')
     return [round(number(raw[0], bounds[0], bounds[2]), 4),
             round(number(raw[1], bounds[1], bounds[3]), 4)]
+
+
+WAIT_AVOIDANCE_RADIUS = 6.0
+
+
+def waiting_heading(place, following=None):
+    """Preferred arrival heading; absent explicit heading faces the next gate."""
+    if len(place)>3:return place[3]
+    if following is None:return None
+    dx,dz=following[0]-place[0],following[1]-place[1]
+    return math.degrees(math.atan2(dx,dz)) if dx*dx+dz*dz>0.0001 else None
+
+
+def waiting_positions(waypoint):
+    """Independent single-vehicle parking places attached to one route gate."""
+    if len(waypoint) > 4:
+        return waypoint[4]
+    return []
+
+
+def waypoint(raw, bounds):
+    if not isinstance(raw, (list, tuple)) or len(raw) not in (3, 4, 5):
+        raise TacticsError('Waypoint must contain geometry and optional waits')
+    value = point(raw[:2], bounds) + [integer(raw[2], 0, 1)]
+    if len(raw) > 3:
+        seconds = number(raw[3], -1, 3600)
+        if -1 < seconds < 0:raise TacticsError('Use -1 for a permanent hold')
+        value.append(seconds)
+    if len(raw) > 4:
+        if raw[3] != 0:raise TacticsError('Independent parking replaces the gate wait')
+        if not isinstance(raw[4], list) or not 0 <= len(raw[4]) <= 3:
+            raise TacticsError('A waypoint allows zero to three parking places')
+        places = []
+        for place in raw[4]:
+            if not isinstance(place, (list, tuple)) or len(place) not in (3, 4):
+                raise TacticsError('Parking place must contain x, z, wait seconds and optional heading')
+            seconds = number(place[2], -1, 3600)
+            if -1 < seconds < 0:raise TacticsError('Use -1 for a permanent hold')
+            parked = point(place[:2], bounds) + [seconds]
+            if len(place)>3:parked.append(number(place[3],-180.0,180.0))
+            if any(sum((parked[i]-other[i])**2 for i in (0,1)) < 1 for other in places):
+                raise TacticsError('Parking places need at least one metre separation')
+            places.append(parked)
+        value.append(places)
+    if len(value) > 3 and not waiting_positions(value):
+        # A parent gate never owns a clock. Retired single-point durations and
+        # an empty place collection must serialize as ordinary travel geometry.
+        value = value[:2] + [0]
+    return value
 
 
 def canonical(raw):
@@ -131,18 +194,32 @@ def canonical(raw):
         if name not in MAPS:
             raise TacticsError('Unknown #1513 map: %s' % name)
         meta = MAPS[name]
-        _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions'),
+        _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions', 'default_routes', 'deleted_positions'),
               ('mode', 'resource_sha256', 'routes', 'positions'))
-        if settings['mode'] != 'regular' or settings['resource_sha256'] != meta['resource_sha256']:
+        fingerprints = (meta['resource_sha256'], meta.get('capture_coordinate_previous_sha256'),
+                        meta.get('terrain_edge_previous_sha256'))
+        if settings['mode'] != 'regular' or settings['resource_sha256'] not in fingerprints or not settings['resource_sha256']:
             raise TacticsError('Map mode or resource fingerprint mismatch: %s' % name)
         entry = dict(mode='regular', resource_sha256=meta['resource_sha256'], routes=[], positions=[])
+        deleted = settings.get('deleted_positions', [])
+        if not isinstance(deleted, list) or len(deleted) > 48:
+            raise TacticsError('Invalid deleted default parking collection')
+        deleted = [_id(value) for value in deleted]
+        if len(set(deleted)) != len(deleted) or any(
+                not value.startswith(('spg_1_', 'spg_2_')) and
+                value not in set(z['id'] for z in default_map(name).get('positions', ()))
+                for value in deleted):
+            raise TacticsError('Invalid deleted default parking identity')
+        if deleted:
+            entry['deleted_positions'] = sorted(deleted)
+            total += len(deleted)
         for kind, limit in (('routes', 32), ('positions', 48)):
             if not isinstance(settings[kind], list) or len(settings[kind]) > limit:
                 raise TacticsError('Too many %s on %s' % (kind, name))
             seen = set()
             for item in settings[kind]:
                 common = ('id', 'label', 'team')
-                allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points')
+                allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points', 'mirror_id', 'symmetric', 'class_priorities')
                                     if kind == 'routes' else ('point', 'radius', 'heading', 'priority'))
                 _keys(item, allowed, common)
                 identity = _id(item['id'])
@@ -151,6 +228,10 @@ def canonical(raw):
                 seen.add(identity)
                 result = dict(id=identity, label=_text(item['label']), team=integer(item['team'], 1, 2))
                 if kind == 'routes':
+                    if 'mirror_id' in item:result['mirror_id'] = _id(item['mirror_id'])
+                    if 'symmetric' in item:
+                        if type(item['symmetric']) is not bool:raise TacticsError('Symmetry must be boolean')
+                        if item['symmetric']:result['symmetric'] = True
                     tags, slots = item.get('classes', []), item.get('slots', [])
                     if (not isinstance(tags, list) or not tags or len(tags) > len(CLASSES) or
                             any(t not in CLASSES for t in tags) or len(set(tags)) != len(tags)):
@@ -168,20 +249,17 @@ def canonical(raw):
                         raise TacticsError('A route must contain 1..16 waypoints')
                     points = []
                     for pt in pts:
-                        if not isinstance(pt, (list, tuple)) or len(pt) not in (3, 4):
-                            raise TacticsError('Waypoint must be [x, z, hold, optional wait seconds]')
-                        value = point(pt[:2], meta['bounds']) + [integer(pt[2], 0, 1)]
-                        if len(pt) == 4:
-                            wait = number(pt[3], -1, 3600)
-                            if -1 < wait < 0:
-                                raise TacticsError('Use -1 for a permanent hold')
-                            value.append(wait)
+                        value = waypoint(pt, meta['bounds'])
                         if points and sum((value[i] - points[-1][i]) ** 2 for i in (0, 1)) < 1:
                             raise TacticsError('Consecutive waypoints need at least one metre separation')
                         points.append(value)
                     result.update(classes=sorted(tags), slots=sorted(slots), policy=policy,
                                   capacity=integer(item.get('capacity', 6), 1, 15),
                                   weight=number(item.get('weight', 1.0), 0.01, 10.0), points=points)
+                    priorities=item.get('class_priorities', {})
+                    if not isinstance(priorities, dict) or any(t not in CLASSES[:-1] for t in priorities):
+                        raise TacticsError('Invalid route priority classes')
+                    if priorities:result['class_priorities']=dict((t, integer(v, 0, 9)) for t,v in priorities.items())
                 else:
                     result.update(point=point(item.get('point'), meta['bounds']),
                                   radius=number(item.get('radius', 12.0), 3.0, 80.0),
@@ -190,9 +268,53 @@ def canonical(raw):
                 entry[kind].append(result)
                 total += 1
             entry[kind].sort(key=lambda a: a['id'])
-        if entry['routes'] or entry['positions']:
+        defaults = settings.get('default_routes', [])
+        if not isinstance(defaults, list) or len(defaults) > sum(
+                len(v) for v in meta['route_ids'].values()) * (len(CLASSES) + 1):
+            raise TacticsError('Invalid default route collection')
+        seen = set()
+        for route in defaults:
+            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric', 'priority', 'disabled', 'label'), ('id', 'team', 'points'))
+            team = integer(route['team'], 1, 2)
+            identity = _id(route['id'])
+            tag = route.get('class_tag', 'all')
+            if tag not in ('all',) + CLASSES:raise TacticsError('Invalid default route class')
+            key = (team, identity, tag)
+            if identity not in meta['route_ids'][str(team)] or key in seen:
+                raise TacticsError('Unknown or duplicate default route')
+            seen.add(key)
+            pts = route['points']
+            if not isinstance(pts, list) or not 1 <= len(pts) <= 16:
+                raise TacticsError('A route must contain 1..16 waypoints')
+            points = []
+            for pt in pts:
+                value = waypoint(pt, meta['bounds'])
+                if points and sum((value[i]-points[-1][i])**2 for i in (0, 1)) < 1:
+                    raise TacticsError('Consecutive waypoints need at least one metre separation')
+                points.append(value)
+            if tag == 'all':
+                # Shared defaults carry travel geometry only. Independent
+                # vehicle-class records are the sole owners of small places.
+                points = [p[:2] + [0] for p in points]
+            result = dict(id=identity, team=team, points=points)
+            if 'label' in route:result['label']=_text(route['label'])
+            if tag != 'all':result['class_tag'] = tag
+            if 'disabled' in route:
+                if type(route['disabled']) is not bool:raise TacticsError('Disabled must be boolean')
+                if route['disabled']:result['disabled']=True
+            if 'priority' in route:
+                if tag not in CLASSES[:-1]:raise TacticsError('Route priority requires a non-artillery vehicle class')
+                result['priority']=integer(route['priority'], 0, 9)
+            if 'symmetric' in route:
+                if type(route['symmetric']) is not bool:raise TacticsError('Symmetry must be boolean')
+                if route['symmetric']:result['symmetric'] = True
+            entry.setdefault('default_routes', []).append(result)
+            total += 1
+        if defaults:
+            entry['default_routes'].sort(key=lambda r: (r['team'], r['id'], r.get('class_tag', 'all')))
+        if entry['routes'] or entry['positions'] or defaults or deleted:
             out['maps'][name] = entry
-    if total > 600 or len(dumps(out).encode('utf8')) > MAX_BYTES:
+    if total > MAX_ENTRIES or len(dumps(out).encode('utf8')) > MAX_BYTES:
         raise TacticsError('Tactics profile exceeds its bounded size')
     for name in out['maps']:
         for_round(out, name)
@@ -233,13 +355,36 @@ def map_settings(raw, name):
     return (raw or {}).get('maps', {}).get(name, {})
 
 
-def route_config(raw, name, route_id):
-    return next((r for r in map_settings(raw, name).get('routes', ())
-                 if 'user_' + r['id'] == route_id), None)
+def route_config(raw, name, route_id, team=None, waypoints=None):
+    entry = map_settings(raw, name)
+    custom = next((r for r in entry.get('routes', ()) if 'user_' + r['id'] == route_id), None)
+    if custom is not None:return custom
+    edit = next((r for r in entry.get('default_routes', ())
+                 if default_route_id(r) == route_id and (team is None or r['team'] == team)), None)
+    if edit is None:return None
+    if waypoints is not None:
+        # A rejected global edit retains the original route ID in the manifest.
+        # Its optional waits must not be attached to unrelated fallback nodes.
+        if len(waypoints) != len(edit['points']):return None
+        for actual, expected in zip(waypoints, edit['points']):
+            actual = (actual['x'], actual['z']) if isinstance(actual, dict) else actual[:2]
+            # Uploaded manifest coordinates are rounded to three decimals.
+            # Accept that serialization error, not a different fallback lane.
+            if any(abs(actual[i] - expected[i]) > 0.000501 for i in (0, 1)):return None
+    tag = edit.get('class_tag', 'all')
+    return dict(edit, id=route_id, default=True, source_id=edit['id'],
+                classes=list(CLASSES) if tag == 'all' else [tag],
+                slots=[], policy='preferred')
+
+
+def default_route_id(route):
+    tag = route.get('class_tag', 'all')
+    codes = dict(zip(CLASSES, ('lt', 'mt', 'ht', 'td', 'spg')))
+    return route['id'] if tag == 'all' else 'class_' + codes[tag] + '_' + route['id']
 
 
 def matches(route, state):
-    return (route['team'] == state.get('team') and
+    return (not route.get('disabled') and route['team'] == state.get('team') and
             (state.get('profile') or {}).get('class_tag') in route['classes'] and
             (not route['slots'] or state.get('slot') in route['slots']))
 

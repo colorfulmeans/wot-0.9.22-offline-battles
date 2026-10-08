@@ -30,7 +30,7 @@ import navigation_graph_schema as _navigation_schema
 
 
 MOD_ID = 'org.colorfulmeans.offline_lan_0922'
-MOD_VERSION = '0.9.7'
+MOD_VERSION = '0.10.0'
 BUILD_IDENTITY_ENV = 'WOT_OFFLINE_BUILD_IDENTITY'
 BUILD_IDENTITY_FILENAME = 'build_identity.json'
 BUILD_IDENTITY_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$')
@@ -691,6 +691,27 @@ def _validate_entry(staging_root):
         raise SystemExit('unexpected Python bytecode magic: %r' % magic)
 
 
+def _stage_depot_style_ui(staging_root):
+    source = os.environ.get('WOT_OFFLINE_DEPOT_STYLE_SWF')
+    if not source:
+        return
+    with open(source, 'rb') as stream:
+        raw = stream.read()
+    with open(source + '.json', 'rb') as stream:
+        proof = json.load(stream)
+    if (proof.get('input_sha256') !=
+            '3a54f7081b35b77dfbcb0048bfe9e8c77f0071cf0586cfb68dabf5a00ff81e55' or
+            proof.get('output_sha256') != hashlib.sha256(raw).hexdigest() or
+            raw[:3] not in (b'CWS', b'FWS')):
+        raise SystemExit('invalid #1513 warehouse style UI build')
+    target = os.path.join(staging_root, 'res', 'gui', 'flash', 'lobby.swf')
+    parent = os.path.dirname(target)
+    if not os.path.isdir(parent):
+        os.makedirs(parent)
+    with open(target, 'wb') as stream:
+        stream.write(raw)
+
+
 def build():
     _validate_python()
     repo_root = os.path.abspath(os.path.dirname(__file__))
@@ -704,6 +725,7 @@ def build():
     try:
         staging_root = os.path.join(staging_parent, 'package')
         shutil.copytree(source_root, staging_root)
+        _stage_depot_style_ui(staging_root)
         shutil.copy2(os.path.join(repo_root, 'meta.xml'), staging_root)
         _copy_legal_files(staging_root)
         _remove_stale_bytecode(staging_root)

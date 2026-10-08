@@ -158,7 +158,7 @@ class TrackPivotGeometryTests(unittest.TestCase):
                 start, yaw, angle, descriptor, pivot_offset=offset))
         self.assertEqual(1, world.call_count)
         self.assertNotEqual(start, tuple(world.call_args.args[3]))
-        self.assertIsNone(world.call_args.kwargs['departing_contact'])
+        self.assertTrue(callable(world.call_args.kwargs['departing_contact']))
 
     def test_support_rise_rejects_local_arc_centre_and_heading_together(self):
         from test_port_0922_siege_braking import local_battle
@@ -289,43 +289,30 @@ class TrackPivotBotTests(unittest.TestCase):
     def tearDown(self):
         self.fixture.tearDown()
 
-    def test_bot_track_arc_commits_only_after_the_full_pose_is_clear(self):
-        fixture = self.fixture
-        for around, clear, support_block in (
-                (False, False, False), (False, True, False),
-                (True, True, False), (False, True, True)):
-            with self.subTest(around=around, clear=clear, support=support_block):
-                command = fixture._stationary_command()
-                command.update(turn=1., target_yaw=1.)
-                descriptor = bot_fixture._combat_descriptor()
-                descriptor.chassis.rotationIsAroundCenter = around
-                descriptor.physics['trackCenterOffset'] = 1.35
-                rotation = mock.Mock(return_value=clear)
-                runtime = fixture.module.BotRuntime(
-                    1, descriptor_resolver=lambda unused: descriptor,
-                    adapter_factory=lambda *unused: bot_fixture._FixedAdapter(command),
-                    direction_probe=lambda *unused: {'clear': True, 'slope': 0.},
-                    ground_probe=lambda *unused: 0.,
-                    physics_ground_probe=lambda *unused: 0.,
-                    spawn_resolver=bot_fixture._spawn_resolver,
-                    baked_graph=bot_fixture._graph(),
-                    motion_resolver=lambda *unused: 'clear',
-                    rotation_resolver=rotation)
+    def test_basic_bot_pivot_uses_checked_centre_rotation_for_both_chassis_flags(self):
+        # Track-arc helpers and player ownership are tested above. The current
+        # basic-ground Bot path rotates about its accepted centre and relies
+        # on the native full-hull rotation verdict, without spring integration.
+        fixture=self.fixture
+        for around,clear in ((False,False),(False,True),(True,True)):
+            with self.subTest(around=around,clear=clear):
+                command=fixture._stationary_command();command.update(turn=1.,target_yaw=1.)
+                descriptor=bot_fixture._combat_descriptor()
+                descriptor.chassis.rotationIsAroundCenter=around
+                descriptor.physics['trackCenterOffset']=1.35
+                rotation=mock.Mock(return_value=clear)
+                runtime=fixture.module.BotRuntime(
+                    1,descriptor_resolver=lambda unused:descriptor,
+                    adapter_factory=lambda *unused:bot_fixture._FixedAdapter(command),
+                    direction_probe=lambda *unused:dict(clear=True,slope=0.),
+                    ground_probe=lambda *unused:0.,physics_ground_probe=lambda *unused:0.,
+                    spawn_resolver=lambda *unused:((0.,0.,0.),0.),
+                    baked_graph=bot_fixture._flat_open_graph(),
+                    motion_resolver=lambda *unused:'clear',rotation_resolver=rotation)
                 runtime.battle_start(fixture.start)
-                state = runtime.states[11]
-                state.update(x=0., y=0., z=0., yaw=0., speed=0., grounded_once=True)
-                if support_block:
-                    runtime._physics_ground_probe = lambda x, z, hint: (
-                        10. if z > 1.e-5 else 0.)
-                runtime.update(.04, 1.)
-                if not clear or support_block:
-                    self.assertEqual((0., 0., 0.), (state['x'], state['z'], state['yaw']))
-                elif around:
-                    self.assertGreater(state['yaw'], 0.)
-                    self.assertEqual((0., 0.), (state['x'], state['z']))
-                else:
-                    self.assertGreater(state['yaw'], 0.)
-                    expected = physics.track_pivot_position((0., 0., 0.), 0., state['yaw'], 1.35)
-                    self.assertAlmostEqual(expected[0], state['x'])
-                    self.assertAlmostEqual(expected[2], state['z'])
-                    self.assertEqual(1.35, rotation.call_args.args[-1])
+                state=runtime.states[11];state.update(x=0.,y=0.,z=0.,yaw=0.,speed=0.,grounded_once=True)
+                runtime.update(.04,1.)
+                self.assertEqual((0.,0.),(state['x'],state['z']))
+                if clear:self.assertGreater(state['yaw'],0.)
+                else:self.assertEqual(0.,state['yaw'])
+                rotation.assert_called()

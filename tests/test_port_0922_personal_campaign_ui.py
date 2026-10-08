@@ -245,6 +245,48 @@ class PersonalCampaignMessageTests(unittest.TestCase):
             self.assertIn(expected, result[0])
         self.assertIn('Account assets removed: Free XP: 200', result[1])
 
+    def test_launcher_style_and_earnings_receipts_have_readable_messages(self):
+        with mock.patch.object(self.ui,'_style_name',return_value='Hidden style'):
+            result=self.ui.messages({'account_changes':[
+                {'phase':'granted','rewards':[{'kind':'style','id':128,'count':2}]},
+                {'phase':'updated','rewards':[{'kind':'earnings_percent','before':100,'count':250}]}]})
+        self.assertEqual(['Account assets received: Style inventory: Hidden style x2.',
+            'Account settings updated: Battle earnings multiplier: 100% -> 250%.'],result)
+
+    def test_launcher_vehicle_delivery_commits_notice_once_and_keeps_failed_delivery_pending(self):
+        import ast
+        from pathlib import Path
+        source=Path(__file__).resolve().parents[1]/'src/res/scripts/client/gui/mods/offline_lan_0922/bootstrap.py'
+        function=next(n for n in ast.parse(source.read_bytes()).body
+                      if isinstance(n,ast.FunctionDef) and n.name=='_deliver_launcher_purchases')
+        pending=['ussr:R31_Valentine_LL']
+        inbox=types.ModuleType('gui.mods.offline_lan_0922.launcher_inbox')
+        inbox.inbox_path=lambda:'isolated-inbox'
+        inbox.pending_vehicles=lambda path:list(pending)
+        inbox.keep_pending=lambda names,path:pending.__setitem__(slice(None),names)
+        items=types.ModuleType('items');items.ITEM_TYPE_INDICES=object()
+        store=types.SimpleNamespace(mark_dirty=lambda:None,flush=mock.Mock(return_value=False))
+        def build(snapshot,vehicles,tankmen,indices,settings,name):
+            snapshot['vehicles'].append({'vehicleTypeName':name,'vehicleTypeCompactDescr':701,'tankmen':[]})
+            return 701
+        namespace={'copy':copy,'sys':sys,'_garage_store':lambda:store,
+                   '_build_purchased_vehicle':build,'_validate_restored_garage':lambda *unused:None,
+                   'data':types.SimpleNamespace(_validate_selected_vehicle=lambda *unused:None)}
+        exec(compile(ast.Module(body=[function],type_ignores=[]),str(source),'exec'),namespace)
+        snapshot={'vehicles':[]}
+        with mock.patch.dict(sys.modules,{'gui.mods.offline_lan_0922.launcher_inbox':inbox,
+                'gui.mods.offline_lan_0922.personal_campaign_ui':self.ui,'items':items}):
+            deliver=namespace['_deliver_launcher_purchases']
+            self.assertEqual(0,deliver(snapshot,None,None,None))
+            self.assertEqual({'vehicles':[]},snapshot);self.assertEqual(1,len(pending))
+            store.flush.return_value=True
+            self.assertEqual(1,deliver(snapshot,None,None,None))
+            self.assertEqual([],pending)
+            self.assertEqual(1,len(snapshot['personalMissionNotifications']))
+            self.assertEqual('vehicle',snapshot['personalMissionNotifications'][0]['settlement']['account_changes'][0]['rewards'][0]['kind'])
+            self.assertEqual(0,deliver(snapshot,None,None,None))
+            self.assertEqual(1,len(snapshot['personalMissionNotifications']))
+
     def test_permanently_dismissed_woman_is_not_reported_as_withdrawn(self):
         result = self.message(mission(before=1, after=0, paid_stages=[],
             phase='revoked', tankwomen_revoked=0, tankwomen_already_dismissed=1))

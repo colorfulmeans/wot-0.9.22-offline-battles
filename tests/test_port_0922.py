@@ -350,7 +350,7 @@ class PortSourceTests(unittest.TestCase):
         build_script = (PORT_ROOT / 'build_for_client.sh').read_text(
             encoding='utf-8')
 
-        self.assertEqual('0.9.7', packager.MOD_VERSION)
+        self.assertEqual('0.10.0', packager.MOD_VERSION)
         self.assertEqual(packager.MOD_VERSION, package.PORT_VERSION)
         self.assertEqual(packager.MOD_VERSION, meta_version)
         self.assertIn(
@@ -367,10 +367,10 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual([packager.MOD_VERSION], values, filename)
         for directory in ('launcher', 'server'):
             source = (PORT_ROOT / directory / 'version_info.txt').read_text()
-            self.assertIn("StringStruct('FileVersion', '0.9.7')", source)
-            self.assertIn("StringStruct('ProductVersion', '0.9.7')", source)
-            self.assertIn('filevers=(0, 9, 7, 0)', source)
-            self.assertIn('prodvers=(0, 9, 7, 0)', source)
+            self.assertIn("StringStruct('FileVersion', '0.10.0')", source)
+            self.assertIn("StringStruct('ProductVersion', '0.10.0')", source)
+            self.assertIn('filevers=(0, 10, 0, 0)', source)
+            self.assertIn('prodvers=(0, 10, 0, 0)', source)
 
     def test_port_sources_are_python_2_compatible_syntax(self):
         source_root = PORT_ROOT / 'src'
@@ -490,7 +490,7 @@ class PortSourceTests(unittest.TestCase):
                 config_path.parent / packager.BUILD_IDENTITY_FILENAME
             ).read_text(encoding='utf-8'))
             self.assertEqual(1, identity['schema'])
-            self.assertEqual('0.9.7', identity['semanticVersion'])
+            self.assertEqual('0.10.0', identity['semanticVersion'])
             self.assertRegex(
                 identity['buildIdentity'],
                 r'^local-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
@@ -7037,6 +7037,10 @@ class BootstrapContractTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.account_rpc.data': account_rpc_package.data,
             'gui.mods.offline_lan_0922.compat': compatibility_module,
             'gui.mods.offline_lan_0922.config': config,
+            'gui.mods.offline_lan_0922.engine_audio': types.SimpleNamespace(install=lambda: None, uninstall=lambda: None),
+            'gui.mods.offline_lan_0922.runtime_diagnostics': types.SimpleNamespace(install_exit_trace=lambda: None),
+            'gui.mods.offline_lan_0922.depot_styles': types.SimpleNamespace(install=lambda: None),
+            'gui.mods.offline_lan_0922.offline_replay': types.SimpleNamespace(replay_request=lambda: None),
             'gui.mods.offline_lan_0922.instance_guard': instance_guard,
             'gui.mods.offline_lan_0922.vehicle_blacklist': vehicle_blacklist,
             'gui.mods.offline_lan_0922.vehicle_configuration':
@@ -7070,7 +7074,7 @@ class BootstrapContractTests(unittest.TestCase):
             module._signal_player_ready = mock.Mock(return_value=True)
             module.init()
             module.init()
-            instance_guard.release_if_requested.assert_called_once_with()
+            self.assertEqual([mock.call()], instance_guard.release_if_requested.mock_calls)
             self.assertEqual(
                 [module._on_lobby_view_loaded],
                 event_bus.listeners[lobby_loaded])

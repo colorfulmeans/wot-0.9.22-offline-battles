@@ -10,6 +10,7 @@ on:
       - fix/0922-native-offers-training-reserves-20260917
       - fix/094-pr40-gameplay-20260925
       - release/v0.9.5
+      - fix/097-bot-withdrawal-and-slope-aim
 
 permissions:
   contents: read
@@ -62,19 +63,24 @@ jobs:
         working-directory: launcher
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+        run: python ../tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs ../build/launcher-results
       - uses: actions/download-artifact@v4
         with:
           name: launcher-manual-server-input
           path: dist/server
       - name: Reproduce the verified recorder resource
         run: python tools/build_replay_runtime.py
+      - name: Stage verified style UI
+        run: python tools/stage_release_style_ui.py
       - name: Build Python 2.7 0.9.22 client package
         run: >-
           docker run --rm --platform linux/amd64 -v "$PWD:/work"
+          -e WOT_OFFLINE_DEPOT_STYLE_SWF=/work/build/depot/lobby.swf
           -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
           -w /work python:2.7.18
           python build_wotmod.py
+      - name: Verify all current client bytecode
+        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.0.wotmod
       - name: Validate 0.9.22 client package
         run: >-
           python tools/validate_wotmod.py
@@ -108,7 +114,7 @@ jobs:
         working-directory: launcher
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python -m unittest discover -s tests -p "test_*.py" -v
+        run: python ../tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs ../build/launcher-results
       - name: Build launcher distribution
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
@@ -231,7 +237,7 @@ jobs:
           '@
           foreach ($port in @("0.9.22")) {
               $process = Start-Process -FilePath $launcher `
-                  -ArgumentList "--serve", $port -PassThru
+                  -ArgumentList "--serve", $port -PassThru -WindowStyle Hidden
               try {
                   $deadline = (Get-Date).AddSeconds(60)
                   $compatible = $false

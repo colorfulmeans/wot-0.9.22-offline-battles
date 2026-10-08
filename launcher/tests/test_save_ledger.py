@@ -28,6 +28,16 @@ def _state(credits_amount=100000, gold=0, free_xp=0, **extra):
 
 
 class SaveLedgerTest(unittest.TestCase):
+    def test_four_currency_edits_queue_actual_deltas_once(self):
+        self._write(_state())
+        wanted={'credits':123,'gold':456,'freeXP':789,'crystal':42}
+        save_ledger.write_balances(self.slot,wanted,root=self.root,is_running=lambda:False)
+        saved=self._read();rows=saved['ledger']['personalMissions']['notifications']
+        kinds={reward['kind'] for row in rows for change in row['settlement']['account_changes'] for reward in change['rewards']}
+        self.assertEqual(set(wanted),kinds)
+        save_ledger.write_balances(self.slot,wanted,root=self.root,is_running=lambda:False)
+        self.assertEqual(saved,self._read())
+
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.slot = "career"

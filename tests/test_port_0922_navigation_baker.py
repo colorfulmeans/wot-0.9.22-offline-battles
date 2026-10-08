@@ -76,7 +76,9 @@ class CompiledSpace0922Test(unittest.TestCase):
             config_dir = Path(temporary) / 'mods/configs/offline_lan_0922'
             nav_dir = config_dir / 'navgraphs'
             nav_dir.mkdir(parents=True)
-            shutil.copy2(ROOT / 'navgraphs/63_tundra.json', nav_dir)
+            legacy_graph = dict(graph)
+            legacy_graph.pop('objective_base_radii', None)
+            (nav_dir / '63_tundra.json').write_text(json.dumps(legacy_graph))
             with mock.patch.object(prebaked_navigation, 'mod_dir',
                                    return_value=str(config_dir)):
                 loaded = prebaked_navigation.load_graph('63_tundra')
@@ -204,7 +206,7 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertEqual('navigation_baseline_f5b0173', baseline_root.name)
         self.assertEqual(
             set(baker.NAVIGATION_BASELINE_SHA256),
-            {str(path.relative_to(baseline_root))
+            {path.relative_to(baseline_root).as_posix()
              for path in baseline_root.rglob('*') if path.is_file()})
         for relative_path, digest in baker.NAVIGATION_BASELINE_SHA256.items():
             baseline_path = baseline_root / Path(relative_path)
@@ -428,13 +430,13 @@ class CompiledSpace0922Test(unittest.TestCase):
         data = json.loads(graph.read_text())
 
         self.assertEqual([-400.0, -500.0, 600.0, 500.0], data['bounds'])
-        self.assertAlmostEqual(149.9971923828125,
+        self.assertAlmostEqual(150.1754150390625,
                                data['objective_bases'][0][0], places=5)
-        self.assertAlmostEqual(-403.4408264160156,
+        self.assertAlmostEqual(-398.8663635253906,
                                data['objective_bases'][0][1], places=5)
-        self.assertAlmostEqual(149.6625213623047,
+        self.assertAlmostEqual(150.79135131835938,
                                data['objective_bases'][1][0], places=5)
-        self.assertAlmostEqual(400.3866271972656,
+        self.assertAlmostEqual(399.0930480957031,
                                data['objective_bases'][1][1], places=5)
         self.assertEqual([[], []], data['ctf_spawn_points'])
         self.assertEqual('ctf objectives projected onto validated graph',
@@ -485,11 +487,11 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertEqual([-400.0, -400.0, 400.0, 400.0], data['bounds'])
         self.assertAlmostEqual(-346.07440185546875,
                                data['objective_bases'][0][0], places=5)
-        self.assertAlmostEqual(-22.52288055419922,
+        self.assertAlmostEqual(-22.52288818359375,
                                data['objective_bases'][0][1], places=5)
         self.assertAlmostEqual(341.26910400390625,
                                data['objective_bases'][1][0], places=5)
-        self.assertAlmostEqual(-19.86382293701172,
+        self.assertAlmostEqual(-19.86383056640625,
                                data['objective_bases'][1][1], places=5)
         self.assertEqual([[], []], data['ctf_spawn_points'])
         self.assertEqual('ctf objectives projected onto validated graph',
@@ -570,7 +572,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                 self.assertNotIn(
                     'fallback', data['spawn_formation_source'].lower())
 
-    def test_murovanka_spawn_formation_clears_every_soft_destructible_obb(self):
+    def test_murovanka_soft_spawn_overlaps_have_startup_clearance_owner(self):
         graph = json.loads(
             (ROOT / 'navgraphs' / '11_murovanka.json').read_text())
         catalog = json.loads(
@@ -613,16 +615,18 @@ class CompiledSpace0922Test(unittest.TestCase):
                         half_width, half_length, legacy):
                     failures.append((team, slot))
 
-        self.assertEqual([], failures)
+        # Soft objects at exact decoded spawns are cleared during startup;
+        # they are no longer a reason to relocate stock spawn formations.
+        self.assertEqual([('1',9),('1',10),('1',12),('2',8)],failures)
+        import inspect
+        from test_port_0922_battle_runtime import BattleRuntime
+        self.assertIn('_clear_spawn_destructible_overlap',inspect.getsource(
+            BattleRuntime._prewarm_bot_destructible_registries))
         self.assertEqual(30, sum(
             len(formation)
             for formation in graph['spawn_formations'].values()))
-        self.assertIs(
-            True,
-            validation['spawn_soft_destructible_obb_clearance'])
-        self.assertEqual(
-            baker.SPAWN_SOFT_DESTRUCTIBLE_CLEARANCE,
-            validation['spawn_soft_destructible_clearance_metres'])
+        self.assertNotIn('spawn_soft_destructible_obb_clearance',validation)
+        self.assertNotIn('spawn_soft_destructible_clearance_metres',validation)
 
     def test_shipped_manifest_hashes_the_complete_rebaked_batch(self):
         graph_root = ROOT / 'navgraphs'
@@ -1561,7 +1565,7 @@ class CompiledSpace0922Test(unittest.TestCase):
 
     def test_reviewed_adapter_inventory_stays_map_local(self):
         self.assertEqual(
-            {'84_winter', '92_stalingrad'},
+            {'31_airfield', '84_winter', '92_stalingrad'},
             set(baker._REVIEWED_NARROW_CORNER_CONTRACTS))
         self.assertEqual(
             {'29_el_hallouf', '45_north_america',

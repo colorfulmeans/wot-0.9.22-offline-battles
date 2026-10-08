@@ -129,7 +129,7 @@ class Gameplay083Tests(unittest.TestCase):
         self.assertEqual(health - 100, victim.health)
         self.assertEqual(0, victim.stun_end_server_time_ms)
 
-    def test_stun_factors_survive_bot_combat_restore_and_affect_player_stats(self):
+    def test_stun_clock_survives_combat_restore_and_factors_belong_to_stat_owner(self):
         factors = stun_mechanics.impact(
             dict(kind='HIGH_EXPLOSIVE', damage=[1000, 150], stun=stun_shell()),
             0, 0, stun_config())[1]
@@ -138,14 +138,17 @@ class Gameplay083Tests(unittest.TestCase):
         record = bot_runtime._combat_record(state)
         restored = dict(max_health=100)
         bot_runtime._apply_combat_record(restored, record)
-        self.assertEqual(factors['reload'], stun_mechanics.factor(restored, 'reload'))
+        self.assertEqual(5000,restored['stun_end_server_time_ms'])
+        self.assertNotIn('stun_factors',record)
+        self.assertNotIn('stun_factors',restored)
         vehicle = types.SimpleNamespace(_offlineStunFactors=factors)
         with mock.patch.object(critical_damage, '_crew_factor', return_value=1.0), \
                 mock.patch.object(critical_damage, '_module_factor', return_value=1.0):
             self.assertEqual(factors['reload'], critical_damage.stat_factor(vehicle, 'reload'))
         record['stun_end_server_time_ms'] = 0
         bot_runtime._apply_combat_record(restored, record)
-        self.assertEqual({}, restored['stun_factors'])
+        self.assertEqual(0,restored['stun_end_server_time_ms'])
+        self.assertNotIn('stun_factors',restored)
         self.assertEqual(1.0, stun_mechanics.factor(restored, 'reload'))
 
 
@@ -182,8 +185,8 @@ class _EngineAppearance(types.SimpleNamespace):
         if self._audition is not None:
             # Removal destroys the native component, regardless of Python
             # references to its wrapper. Clear its callback owners first.
-            assert self.detailedEngineState.onEngineStart is None
-            assert self.detailedEngineState.onStateChanged is None
+            assert getattr(self.detailedEngineState.onEngineStart, '__self__', None) is not self._audition
+            assert getattr(self.detailedEngineState.onStateChanged, '__self__', None) is not self._audition
             self._audition.ownership = 'retired'
         if value is not None:
             assert value.ownership == 'new', 'This wrapper own nothing'
@@ -219,6 +222,9 @@ class EngineAudioOwnershipTests(unittest.TestCase):
             'vehicle_systems.model_assembler': assembler, 'DataLinks': self.links})
         patch.start()
         self.addCleanup(patch.stop)
+        from gui.mods.offline_lan_0922.entities import native_remote_vehicle
+        activation = mock.patch.object(native_remote_vehicle, '_activate_revealed_engine', return_value=True)
+        activation.start(); self.addCleanup(activation.stop)
 
     def _assemble(self, is_player, appearance):
         self.assertFalse(is_player)
@@ -238,8 +244,8 @@ class EngineAudioOwnershipTests(unittest.TestCase):
             self.assertTrue(set_engine_audible(self.vehicle, False))
             self.assertEqual('retired', old.ownership)
             self.assertIsNone(self.appearance.engineAudition)
-            self.assertIsNone(self.detailed.onEngineStart)
-            self.assertIsNone(self.detailed.onStateChanged)
+            self.assertIsNot(self.original, getattr(self.detailed.onEngineStart, '__self__', None))
+            self.assertIsNot(self.original, getattr(self.detailed.onStateChanged, '__self__', None))
             self.assertTrue(set_engine_audible(self.vehicle, False))
             self.assertTrue(set_engine_audible(self.vehicle, True))
             new = self.appearance.engineAudition
@@ -247,8 +253,8 @@ class EngineAudioOwnershipTests(unittest.TestCase):
             self.assertEqual(index + 1, len(self.created))
             self.assertFalse(set_engine_audible(self.vehicle, True))
             self.assertIs(speed_link, self.detailed.vehicleSpeedLink)
-            self.assertIs(new, self.detailed.onEngineStart.__self__)
-            self.assertIs(new, self.detailed.onStateChanged.__self__)
+            self.assertIs(self.appearance._offlineEngineRelay, self.detailed.onEngineStart.__self__)
+            self.assertIs(self.appearance._offlineEngineRelay, self.detailed.onStateChanged.__self__)
             self.detailed.onEngineStart()
             new.attachToModel.assert_called_once_with(self.appearance.compoundModel)
             new.setIsUnderwaterInfo.assert_called_once_with(
@@ -315,7 +321,7 @@ class EngineAudioOwnershipTests(unittest.TestCase):
         self.assertFalse(set_engine_audible(self.vehicle, True))
         self.assertEqual('retired', self.created[-1].ownership)
         self.assertIsNone(self.appearance.engineAudition)
-        self.assertIsNone(self.detailed.onEngineStart)
+        self.assertIsNot(self.original, getattr(self.detailed.onEngineStart, '__self__', None))
         self.assembler.assembleVehicleAudition.side_effect = self._assemble
         self.assertTrue(set_engine_audible(self.vehicle, True))
         self.assertEqual(2, len(self.created))

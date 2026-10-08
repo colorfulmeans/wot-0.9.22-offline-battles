@@ -22,6 +22,7 @@ because the client does keep that: ``VehicleType.unlocksDescrs`` holds
 """
 
 import re
+import base64
 import sys
 import zipfile
 from pathlib import Path
@@ -290,7 +291,37 @@ def _render_table(name, table, comment):
     return text + '}\n'
 
 
-def render(version, build, vehicles, components, shells, artefacts):
+def scan_customization_groups(client_root):
+    """Read the exact price-group names bound by c11n_readers._readPricedItems."""
+    groups = {}
+    with zipfile.ZipFile(client_root / SCRIPTS_PACKAGE) as archive:
+        for member in sorted(archive.namelist()):
+            if not (member.startswith('scripts/item_defs/customization/priceGroups/')
+                    and member.endswith('.xml')):
+                continue
+            root = _sections(archive, member)
+            for tag, raw in _children(root):
+                if tag != 'priceGroup':
+                    continue
+                section = _element(raw)
+                fields = dict(_children(section))
+                name = vehicle_prices.text(fields['name'].value)
+                price = _read_price(section)
+                if price is None:
+                    raise ValueError('customization group has no price: %s' % name)
+                flag = fields.get('notInShop')
+                value = flag.value if flag is not None else False
+                # Packed base64 strings retain their decoded bytes in type 5.
+                if flag is not None and flag.value_type == 5:
+                    value = base64.b64encode(value).decode('ascii')
+                hidden = value is True or str(value).lower() in ('true', '1')
+                if isinstance(value, bytes):
+                    hidden = value.lower() in (b'true', b'1')
+                groups[name] = (price[0], price[1], hidden)
+    return groups
+
+
+def render(version, build, vehicles, components, shells, artefacts, customization_groups=None):
     text = HEADER % {'version': version, 'build': build}
     text += _render_table(
         'VEHICLE_PRICES', vehicles, "Keyed '<nation>:<vehicle name>'.")
@@ -302,6 +333,8 @@ def render(version, build, vehicles, components, shells, artefacts):
     text += _render_table(
         'ARTEFACT_PRICES', artefacts,
         'Equipment and optional devices are nation independent.')
+    text += _render_table('CUSTOMIZATION_GROUP_PRICES', customization_groups or {},
+                          'Exact #1513 customization price-group names.')
     return text + FOOTER
 
 
@@ -326,7 +359,8 @@ def main():
         len(gold_vehicles),
         len([key for key in gold_vehicles if vehicles[key][2]])))
     OUTPUT_PATH.write_text(
-        render(version, build, vehicles, components, shells, artefacts),
+        render(version, build, vehicles, components, shells, artefacts,
+               scan_customization_groups(client_root)),
         encoding='utf-8')
     print('written: %s' % OUTPUT_PATH)
 

@@ -285,7 +285,7 @@ def chassis_span_offsets(yaw, half_width, half_length):
 
 
 def straddled_support(body_y, follow_gap, axis_samples,
-                      maximum_rise=SUPPORT_STRADDLE_RISE):
+                      maximum_rise=SUPPORT_STRADDLE_RISE, interpolate=False):
     """Return the support of a hull spanning a gap under its centre column.
 
     A tracked hull rests on its chassis ends, not on one ray at its centre.
@@ -324,7 +324,10 @@ def straddled_support(body_y, follow_gap, axis_samples,
             heights.append(height)
         if len(heights) != 2:
             continue
-        candidate = max(heights)
+        # Opposing witnesses are equidistant from the body centre. Their
+        # midpoint follows a planar slope exactly; using the higher end for
+        # small descents would hold every downhill tank above the ground.
+        candidate = sum(heights) * 0.5 if interpolate else max(heights)
         if support is None or candidate > support:
             support = candidate
     return support
@@ -911,7 +914,7 @@ def grounded_inverse_masses(contact, first, second, inverse_a, inverse_b, dt):
     return inverse_a, inverse_b
 
 
-def translation_fraction(body, movement, others):
+def translation_fraction(body, movement, others, contacts=None, contact_ids=None):
     """Sweep one translated OBB, retaining only the existing contact slop.
 
     An endpoint test can miss an entire intervening hull. Intersect the four
@@ -947,6 +950,8 @@ def translation_fraction(body, movement, others):
         if contact[2] >= POSITION_SLOP - 1.0e-9:
             if mx*contact[0] + mz*contact[1] < -1.0e-9:
                 fraction = 0.0
+                if contacts is not None and (contact_ids is None or other['id'] in contact_ids):
+                    contacts.append((other['id'], 0.0))
             continue
         peer_axes = _axes(other['yaw'])
         entry, leave = 0.0, 1.0
@@ -966,7 +971,11 @@ def translation_fraction(body, movement, others):
             if entry > leave:
                 break
         if entry <= leave and leave >= 0.0:
-            fraction = min(fraction, max(0.0, entry))
+            candidate = max(0.0, entry)
+            fraction = min(fraction, candidate)
+            if (contacts is not None and candidate < 1.0 and
+                    (contact_ids is None or other['id'] in contact_ids)):
+                contacts.append((other['id'], candidate))
     return fraction
 
 

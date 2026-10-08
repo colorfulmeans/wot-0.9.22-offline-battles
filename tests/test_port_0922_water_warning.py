@@ -166,7 +166,7 @@ class WaterWarningTests(unittest.TestCase):
             for actual, wanted in zip(actual_bottom, expected_bottom):
                 self.assertAlmostEqual(wanted, actual)
 
-    def test_worker_and_bot_reuse_unblended_hydraulic_collision_pose(self):
+    def test_worker_player_uses_hydraulic_body_and_bot_uses_its_native_sensor(self):
         ground, aim, body, expected_bottom, top = self._hydraulic_body()
         copied_grounds = []
         def collision_matrices(entity_id, canonical_ground):
@@ -193,18 +193,20 @@ class WaterWarningTests(unittest.TestCase):
         sender.assert_called_once_with([
             {'player_id': 1, 'input_seq': 12, 'level': 2}], 1)
         bot = fixture.battle_runtime_module.BotRuntime(
-            1, water_depth_probe=self.battle._water_depth,
-            water_hull_pose=self.battle._bot_water_hull_pose)
+            1, water_depth_probe=self.battle._water_depth)
+        self.entity.typeDescriptor.chassis.topRightCarryingPoint=(1.7,3.5)
         bot._descriptors[11] = self.entity.typeDescriptor
         self.assertFalse(bot._advance_bot_drowning(state, 0.3))
         self.assertTrue(state['_drowning'])
-        self.assertEqual(2, len(copied_grounds))
+        self.assertEqual(1, len(copied_grounds))
         for matrix in copied_grounds:
             self.assertEqual((10.0, 20.0, 30.0), tuple(matrix.translation))
             self.assertAlmostEqual(0.1, matrix.pitch)
-        for call in self.battle._water_depth.call_args_list:
+        for call in self.battle._water_depth.call_args_list[:-1]:
             for actual, wanted in zip(call[0][0], expected_bottom):
                 self.assertAlmostEqual(wanted, actual)
+
+        self.assertEqual((10.,20.,30.),self.battle._water_depth.call_args_list[-1].args[0])
 
     def test_missing_body_provider_retains_known_pose_without_double_hydraulics(self):
         state = {'id': 11, 'x': 10.0, 'y': 20.0, 'z': 30.0,

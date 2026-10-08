@@ -186,8 +186,8 @@ class ClientInstanceGuardTests(unittest.TestCase):
 
     def test_native_bridge_path_is_a_loose_sidecar_beside_the_wotmod(self):
         self.assertEqual(
-            str(Path('/games/wot/mods/0.9.22.0.1') /
-                self.module.NATIVE_FILENAME),
+            str((Path('/games/wot/mods/0.9.22.0.1') /
+                self.module.NATIVE_FILENAME).resolve()),
             self.module._native_bridge_path(
                 '/games/wot/WorldOfTanks.exe'))
 

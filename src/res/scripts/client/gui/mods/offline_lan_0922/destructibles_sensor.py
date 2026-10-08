@@ -2492,14 +2492,20 @@ def _boxes_intersect(left, right):
 		for left_index in range(len(generators))
 		for right_index in range(left_index + 1, len(generators)))
 	for axis in axes:
-		length_squared = _vector_dot(axis, axis)
+		ax, ay, az = axis
+		length_squared = ax * ax + ay * ay + az * az
 		if length_squared <= 1.0e-16:
 			continue
-		left_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in left_half_axes)
-		right_radius = sum(abs(_vector_dot(axis, half_axis))
-			for half_axis in right_half_axes)
-		if (abs(_vector_dot(delta, axis)) > left_radius + right_radius +
+		# This hot path runs for every candidate on every physical slice. Keep
+		# the same SAT axes, summation order and tolerance without allocating
+		# two generator frames and making a Python call for every projection.
+		left_radius = 0
+		for hx, hy, hz in left_half_axes:
+			left_radius += abs(ax * hx + ay * hy + az * hz)
+		right_radius = 0
+		for hx, hy, hz in right_half_axes:
+			right_radius += abs(ax * hx + ay * hy + az * hz)
+		if (abs(delta[0] * ax + delta[1] * ay + delta[2] * az) > left_radius + right_radius +
 				1.0e-7 * length_squared ** 0.5):
 			return False
 	return True
@@ -3128,7 +3134,14 @@ def _stream_baked_motion_instances_1513(spaceID, vehicle_box):
 	instances = globals().get('g_offh_destr_instances', {})
 	unresolved = []
 	cache = globals().get('g_offh_destr_unresolved_obstacles')
-	for identity in sorted(identities):
+	def contact_priority(identity):
+		baked = catalog.get('baked_instances', {}).get(identity)
+		contact = baked is not None and any(_catalog_intersections(
+			baked['boxes'], vehicle_box))
+		return (0 if contact else 1, identity)
+	# The four close-contact name proofs must serve the hull touching a prop
+	# before distant models which merely share its broad-phase spatial bin.
+	for identity in sorted(identities, key=contact_priority):
 		combat_count('destructible_stream_candidates')
 		if identity in instances:
 			if cache is not None:
@@ -4946,8 +4959,10 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		return_status=False, dt=0.04, kinetic_speed=None,
 		return_detail=False, kinetic_commit=False, commit_enabled=True,
 		proposal_only=False, motion_yaw=None, pitch=0.0, roll=0.0,
-		travel_reach=None):
+		travel_reach=None, spawn_overlap=False):
 	"""Resolve exact streamed OBB contact before committing local movement."""
+	if spawn_overlap and (float(vel) != 0.0 or proposal_only):
+		raise ValueError('spawn overlap resolution is stationary and authority-only')
 	if proposal_only and (not return_detail or not kinetic_commit):
 		raise ValueError(
 			'catalog motion proposals require detail and kinetic classification')
@@ -5001,6 +5016,8 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 
 	grouped = {}
 	for candidate in candidates:
+		if spawn_overlap and candidate[4] != 'fragile':
+			continue
 		grouped.setdefault((candidate[0], candidate[1]), []).append(candidate)
 	instances = globals().get('g_offh_destr_instances', {})
 	contact_box = (_vehicle_contact_box(
@@ -5114,6 +5131,8 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			candidate[:5])
 		if _destructible_isolated_1513(chunk_id, item_index):
 			continue
+		if auth.is_destroyed(chunk_id, item_index, mat_kind):
+			continue
 		if proposal_only:
 			exact_token.add((chunk_id, item_index, mat_kind))
 			requires_commit = True
@@ -5153,6 +5172,10 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 		_publish_catalog_once_1513(
 				event_kind, chunk_id, item_index, point, yaw, vel,
 				mat_kind if event_kind == 'module' else None)
+		if kind == 'structure':
+			exact_token.update(_crush_structure_dependencies_1513(
+				spaceID, chunk_id, item_index, mat_kind, candidate[3],
+				point, yaw, vel, now))
 		accepted_now = True
 		used_kinetic_speed = used_kinetic_speed or used_cap
 		_diagnostic_contact_1513(
@@ -5691,6 +5714,64 @@ def LOG_DEBUG(*unused_args):
 	pass
 
 
+def _crush_structure_dependencies_1513(spaceID, chunkID, itemIndex,
+		matKind, filename, point, yaw, speed, now):
+	"""Complete authored collapse dependencies after an accepted hull crush.
+
+	A hull crush can hit either stage of a dependent panel. Include reverse
+	links so a hit on its later module also removes the intact earlier skin.
+	Publish each
+	module separately so streamed replicas replay the same native sequence.
+	Projectile contacts deliberately retain their individual stage order.
+	"""
+	import AreaDestructibles
+	desc = _runtime_material_descriptor_1513(
+		AreaDestructibles, filename, chunkID, itemIndex)
+	if desc is None:
+		return ()
+	modules = desc.get('modules') or {}
+	links = (desc.get('destroyDepends') or {},
+		desc.get('inversedDestroyDepends') or {})
+	if matKind not in modules or len(modules) > 13:
+		return ()
+	dependencies = set((matKind,))
+	pending = [matKind]
+	root_health = modules[matKind].get('health')
+	while pending:
+		current = pending.pop()
+		for reverse, table in enumerate(links):
+			if not isinstance(table, dict):return ()
+			adjacent = table.get(current, ())
+			if (not isinstance(adjacent, (tuple, list, set, frozenset)) or
+					len(adjacent) > 13 or
+					any(type(value) not in _INTEGER_TYPES or value not in modules
+						for value in adjacent)):
+				return ()
+			for value in adjacent:
+				if reverse:
+					# Equal-strength stages share the accepted kinetic gate.
+					# A weak panel cannot authorize crushing its stronger support.
+					health = modules[value].get('health')
+					if (not isinstance(root_health, _INTEGER_TYPES + (float,)) or
+							not isinstance(health, _INTEGER_TYPES + (float,)) or
+							not 0 <= health <= root_health):continue
+				if value not in dependencies:
+					dependencies.add(value);pending.append(value)
+	authority = _get_destr_authority()
+	accepted = []
+	for dependency in sorted(set(dependencies) - set((matKind,))):
+		if authority.is_destroyed(chunkID, itemIndex, dependency):
+			continue
+		if not authority.destroy_module(
+				spaceID, chunkID, itemIndex, dependency, point, False):
+			raise RuntimeError('native crush dependency was not accepted')
+		note_destroyed('module', chunkID, itemIndex, dependency, now)
+		_publish_catalog_once_1513(
+			'module', chunkID, itemIndex, point, yaw, speed, dependency)
+		accepted.append((chunkID, itemIndex, dependency))
+	return tuple(accepted)
+
+
 def _get_destr_authority():
 	from gui.mods.offline_lan_0922 import destructibles_authority
 	return destructibles_authority
@@ -5905,7 +5986,7 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 	if typ == AreaDestructibles.DESTR_TYPE_TREE:
 		_hp_gate = desc.get('health', 0)
 		try:
-			_valid_tree_health = 10 <= _hp_gate <= 1000
+			_valid_tree_health = 0 < _hp_gate <= 1000
 		except TypeError:
 			_valid_tree_health = False
 		if not _valid_tree_health:
@@ -6001,6 +6082,9 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 		# returning the accepted physical result.
 		_publish_catalog_once_1513(
 			_event_kind, chunkID, itemIndex, hitPt, yaw, vel, _event_mat)
+		if typ == AreaDestructibles.DESTR_TYPE_STRUCTURE:
+			_crush_structure_dependencies_1513(
+				spaceID, chunkID, itemIndex, matKind, fname, hitPt, yaw, vel, _now)
 	return True
 
 
@@ -7041,14 +7125,13 @@ def _fell_trees_near(
 								AreaDestructibles.DESTR_TYPE_FALLING_ATOM):
 							_slot_diag['result'] = 'type_unsupported'
 							continue
-						# Data-driven vegetation gate: destructibles.xml gives
-						# soft vegetation (bushes/shrubs/ferns/weeds) health<=5
-						# (or -2); real fallable trees start at health 10.
-						# ChristmasTree sentinels use 40000 = unrammable.
+						# A safely identified native TREE may be small: Airfield's
+						# BananaTree_03 has health 3. Health is not a size/type
+						# classifier. Keep nonpositive and unrammable sentinels out.
 						if typ == AreaDestructibles.DESTR_TYPE_TREE:
 							_hp_gate = desc.get('health', 0)
 							registry['tree_health'][_ti] = _hp_gate
-							if _hp_gate < 10 or _hp_gate > 1000:
+							if _hp_gate <= 0 or _hp_gate > 1000:
 								_slot_diag['result'] = 'health_gate'
 								continue
 						# Destructible matrices are CHUNK-LOCAL: world pos =
@@ -7259,6 +7342,10 @@ def _fell_trees_near(
 						 else 'column'),
 						cid, _ti, _object_pos, fall_yaw, vel,
 						_mat_kind)
+				if _ttyp == structure_type:
+					_st['felled'].update(_crush_structure_dependencies_1513(
+						spaceID, cid, _ti, _mat_kind, _tfn, _object_pos,
+						fall_yaw, vel, BigWorld.time()))
 				LOG_DEBUG('DestrTree: FELLED', cid, _ti, 'type', _ttyp,
 					'hp', _thp, 'mass', _tmass, _tfn)
 		if registration_only:
@@ -7991,7 +8078,7 @@ def _validated_tree_shot_identity_1513(spaceID, decoded):
 		return None
 	health = desc.get('health', 0)
 	try:
-		valid_health = 10 <= health <= 1000
+		valid_health = 0 < health <= 1000
 	except TypeError:
 		valid_health = False
 	if not valid_health:

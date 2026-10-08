@@ -271,7 +271,7 @@ class WindowTest(unittest.TestCase):
             "offerKinds": ("gold", "reward")}))
 
     def test_layout_separates_play_vehicle_and_repair_controls(self):
-        self.assertEqual("0.9.7", wot_launcher.LAUNCHER_VERSION)
+        self.assertEqual("0.10.0", wot_launcher.LAUNCHER_VERSION)
         self.assertEqual(
             "Single player",
             self.window.battle_tabs.tab(self.window.single_panel).get("text"))
@@ -319,12 +319,12 @@ class WindowTest(unittest.TestCase):
 
     def test_launcher_session_identity_is_visible_and_persisted(self):
         self.assertIn(
-            "Launcher session: version=0.9.7 build=unknown role=launcher",
+            "Launcher session: version=0.10.0 build=unknown role=launcher",
             self._log_text())
         with open(core.launcher_log_path(), encoding="utf-8") as stream:
             persisted = stream.read()
         self.assertIn(
-            "Launcher session: version=0.9.7 build=unknown role=launcher",
+            "Launcher session: version=0.10.0 build=unknown role=launcher",
             persisted)
 
     def test_first_run_prompts_once_when_the_launcher_starts(self):
@@ -1292,7 +1292,11 @@ class WindowTest(unittest.TestCase):
         self._saves_root()
         self.assertNotIn(self.window.account_panel, self.window.tools_tabs.tabs)
         self.assertNotIn(self.window.shop_panel, self.window.tools_tabs.tabs)
-        self.assertEqual(self.window.save_dialog, self.window.account_panel.master)
+        self.assertEqual(self.window.save_tabs, self.window.account_panel.master)
+        self.assertEqual(self.window.save_dialog, self.window.save_tabs.master)
+        self.assertIn(self.window.customizations_panel, self.window.save_tabs.tabs)
+        self.assertEqual(self.window._open_customizations,
+                         self.window.edit_customizations_button.options['command'])
         self.assertTrue(self.window._open_save_dialog())
         self.assertTrue(self.window.save_dialog.options['visible'])
         self.assertTrue(self.window.save_dialog.options['grabbed'])
