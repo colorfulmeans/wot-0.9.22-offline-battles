@@ -77,6 +77,17 @@ def empty(name='Default'):
             'behavior': [], 'maps': {}}
 
 
+def default_profile(name='Default'):
+    from gui.mods.offline_lan_0922.bot_tactics_default_data import PROFILE_JSON
+    document = json.loads(PROFILE_JSON)
+    document['name'] = name
+    return document
+
+
+def default_map(name):
+    return default_profile()['maps'].get(name, {})
+
+
 def normalize_values(raw):
     _keys(raw, tuple(PARAMETERS) + ('skill', 'crew_level'))
     out = {}
@@ -195,7 +206,9 @@ def canonical(raw):
             raise TacticsError('Invalid deleted default parking collection')
         deleted = [_id(value) for value in deleted]
         if len(set(deleted)) != len(deleted) or any(
-                not value.startswith(('spg_1_', 'spg_2_')) for value in deleted):
+                not value.startswith(('spg_1_', 'spg_2_')) and
+                value not in set(z['id'] for z in default_map(name).get('positions', ()))
+                for value in deleted):
             raise TacticsError('Invalid deleted default parking identity')
         if deleted:
             entry['deleted_positions'] = sorted(deleted)

@@ -62,6 +62,10 @@ class EditorUITests(unittest.TestCase):
 
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        # Exercise the historical source-graph fixture independently of the adopted baseline.
+        patcher=mock.patch.object(storage.contract,'default_map',return_value={})
+        patcher.start();self.addCleanup(patcher.stop)
+        storage.Store(self.temp.name).save(storage.contract.empty(),apply=True)
         self.root=tk.Tk();self.root.withdraw()
         self.addCleanup(self.root.destroy)
         self.errors=mock.patch.object(ui_module.messagebox,'showerror');self.error_mock=self.errors.start();self.addCleanup(self.errors.stop)

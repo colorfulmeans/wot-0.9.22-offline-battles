@@ -454,8 +454,9 @@ class BotTacticsEditor:
             for tag in tags:
                 if tag == 'SPG':continue
                 weights = route.get('class_weights') or {}
-                if tag != 'all' and weights and weights.get(tag, 0) <= 0:continue
-                if (self._default_edit(route,tag) or {}).get('disabled'):continue
+                edit=self._default_edit(route,tag) or {}
+                if tag != 'all' and weights and weights.get(tag, 0) <= 0 and edit.get('class_tag')!=tag:continue
+                if edit.get('disabled'):continue
                 identity = route['id'] + '@' + tag if self.route_class_var.get() == 'total' else route['id']
                 yield route, tag, identity
 
@@ -645,7 +646,7 @@ class BotTacticsEditor:
         edits=[r for r in self.entry().get('default_routes',()) if r['id']==identity and r['team']==self.team and 'label' in r]
         edit=next((r for r in edits if r.get('class_tag','all')==scope),
                   next((r for r in edits if r.get('class_tag','all')=='all'),None))
-        return edit['label'] if edit else labels.route_label(identity,language or self.language)
+        return labels.tactic_name(edit['label'],language or self.language) if edit else labels.route_label(identity,language or self.language)
 
     def _sync_default_name(self, item):
         # Naming never copies geometry, priorities or deletion state.
@@ -680,7 +681,7 @@ class BotTacticsEditor:
     def _parking_caption(self, identity):
         edit=next((p for p in self.entry()['positions'] if p['id']==identity),None)
         item=edit or next(p for p in self.spg_defaults if p['id']==identity)
-        label=item['label'] if edit else labels.route_label(identity[6:],self.language) if identity[6:] in labels.ROUTE_NAMES else item['label']
+        label=labels.tactic_name(item['label'],self.language)
         name=self.tr('[默认驻炮点] ','[Default parking] ')+label+(self.tr(' 已修改',' edited') if edit else '')
         priority=self._priority_caption(item['priority'])
         return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
@@ -688,7 +689,7 @@ class BotTacticsEditor:
     def _custom_caption(self, kind, item, tag=None):
         caption=('['+labels.enum_label('class_tag',tag,self.language)+'] ') if tag else ''
         priority=self._priority_caption(item.get('class_priorities',{}).get(tag or self.route_class_var.get(),contract.DEFAULT_ROUTE_PRIORITY)) if kind=='routes' and self.route_class_var.get()!='all' else self._priority_caption(item['priority']) if kind=='positions' else ''
-        name=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+item['label']
+        name=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+labels.tactic_name(item['label'],self.language)
         return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
 
     def _refresh_items(self):
@@ -848,6 +849,27 @@ class BotTacticsEditor:
         self.entry()[self.selection[0]].remove(item);self.selection=None;self._refresh_items();self.mark()
 
     def reset_builtin(self):
+        baseline=contract.default_map(self.map_name)
+        if self.selection and self.selection[0]=='builtin_positions':
+            original=next((p for p in baseline.get('positions',()) if p['id']==self.selection[1]),None)
+            if original is not None:
+                self.checkpoint();entry=self._ensure_entry()
+                entry['positions'][:]=[p for p in entry['positions'] if p['id']!=original['id']]
+                entry['positions'].append(copy.deepcopy(original))
+                entry['deleted_positions']=[p for p in entry.get('deleted_positions',()) if p!=original['id']]
+                self.selected_point=None;self._refresh_items();self.mark();return
+        if self.selection and self.selection[0]=='builtin':
+            scope=self._route_scope();item=self._selected()
+            originals=[r for r in baseline.get('default_routes',()) if r['id']==self._route_identity() and
+                (r['team']==self.team or item.get('symmetric')) and
+                (scope=='all' or r.get('class_tag','all')==scope)]
+            if originals:
+                self.checkpoint();entry=self._ensure_entry()
+                keys={(r['team'],r['id'],r.get('class_tag','all')) for r in originals}
+                entry['default_routes']=[r for r in entry.get('default_routes',()) if
+                    (r['team'],r['id'],r.get('class_tag','all')) not in keys]+copy.deepcopy(originals)
+                self.selected_point=None;self.selected_wait=None;self.wait_edit=False
+                self._refresh_items();self.mark();return
         if self.selection and self.selection[0]=='builtin_positions':
             entries=self.entry()['positions'];remaining=[p for p in entries if p['id']!=self.selection[1]]
             if len(entries)!=len(remaining):
@@ -1232,7 +1254,7 @@ class BotTacticsEditor:
                     c.create_oval(x-radius,y-radius,x+radius,y+radius,outline=color,width=2)
                     c.create_rectangle(x-5,y-5,x+5,y+5,fill=color,outline='white')
                     c.create_line(x,y,x+math.sin(angle)*28,y-math.cos(angle)*28,fill=color,width=2,arrow='last')
-                    c.create_text(x+12,y+12,text=item['label'],fill='white',anchor='nw')
+                    c.create_text(x+12,y+12,text=labels.tactic_name(item['label'],self.language),fill='white',anchor='nw')
         if self.navigation_grid_var.get():
             captions = (
                 ('available','有高度及连接','Height and links'),
@@ -1378,10 +1400,10 @@ class BotTacticsEditor:
             except Exception as e:self.error(e)
 
     def new_profile(self):
-        if self.discard_prompt():self.adopt(contract.empty(self.tr('新方案','New profile')))
+        if self.discard_prompt():self.adopt(contract.default_profile(self.tr('新方案','New profile')))
 
     def default_profile(self):
-        if self.discard_prompt():self.adopt(contract.empty('Default'))
+        if self.discard_prompt():self.adopt(contract.default_profile('Default'))
 
     def import_profile(self):
         filename=filedialog.askopenfilename(parent=self.root,filetypes=[(self.tr('Bot 战术配置','Bot tactics'),'*.json')])

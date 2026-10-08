@@ -19,6 +19,20 @@ def run(destination):
             def fail(error):
                 raise AssertionError(str(error))
             ui.error = fail
+            assert ui.document == storage.contract.default_profile()
+            report['adopted_baseline_maps']=len(ui.document['maps'])
+            report['baseline_wait_places']=sum(len(storage.contract.waiting_positions(p))
+                for e in ui.document['maps'].values() for r in e.get('default_routes',()) for p in r['points'])
+            ui.map_var.set('Ruinberg');ui.change_map()
+            ui.route_class_var.set('AT-SPG');ui.change_route_class()
+            original=next(r for r in storage.contract.default_map('08_ruinberg')['default_routes']
+                if r['team']==ui.team and r.get('class_tag')=='AT-SPG' and not r.get('disabled'))
+            ui.selection=('builtin',original['id']);ui._refresh_properties()
+            ui._editable_item()['points'][1][0]+=8;ui.reset_builtin()
+            assert ui._editable_item()==original
+            report['baseline_route_restore']=True
+            ui.store.save(storage.contract.empty(),apply=True)
+            ui.adopt(ui.store.active())
             root.update(); ui.book.select(1); root.update()
             ui.map_var.set('Ruinberg'); ui.change_map()
             ui.route_class_var.set('heavyTank'); ui.change_route_class(); root.update()

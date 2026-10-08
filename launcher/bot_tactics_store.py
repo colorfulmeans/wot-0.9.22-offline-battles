@@ -47,6 +47,9 @@ def default_spg_positions(name, graph, profile=None):
     entry = spg_positions.CATALOG['maps'].get(name)
     if not graph:return []
     deleted = set(contract.map_settings(profile, name).get('deleted_positions', ()))
+    baseline = contract.default_map(name).get('positions')
+    if baseline is not None:
+        return [p for p in baseline if p['id'] not in deleted]
     if entry is None:
         for path in (_source.parents[3]/'server',_bundled.parents[3]/'server'):
             if path.is_dir() and str(path) not in sys.path:sys.path.insert(0,str(path))
@@ -109,7 +112,7 @@ class Store:
 
     def ensure_active(self):
         if not self.active_path.exists():
-            _atomic(self.active_path, contract.empty())
+            _atomic(self.active_path, contract.default_profile())
         contract.load(str(self.active_path))  # a corrupt file never becomes defaults
         return str(self.active_path.resolve())
 
