@@ -15,6 +15,16 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 
 
 class ClimbApproachNavigationTests(unittest.TestCase):
+    def setUp(self):
+        # Lower the configurable guard only in these lifecycle fixtures: their
+        # real 8-degree report bends exercise mandatory-corner consumption.
+        # Production's 25-degree policy is covered by the driver/guard tests.
+        from unittest.mock import patch
+        original=TerrainGrid.shortcut_preserves_climb_approach
+        controlled=lambda path,start,end,*args,**kwargs:original(path,start,end,minimum_grade=.10,minimum_turn=.30)
+        guard=patch.object(TerrainGrid,'shortcut_preserves_climb_approach',staticmethod(controlled))
+        guard.start();self.addCleanup(guard.stop)
+
     def test_owned_overshot_point_advances_only_through_a_proved_forward_link(self):
         for blocked in (False, True):
             with self.subTest(blocked=blocked):
@@ -356,7 +366,11 @@ class ClimbApproachNavigationTests(unittest.TestCase):
             aligned = driver.drive(
                 7, 0, current, aligning['target_yaw'], 0.0, 0.1,
                 selected, [], lambda yaw: True)
-            self.assertEqual(0.0, aligning['throttle'])
+            # Ordinary slopes no longer impose a special facing brake; the
+            # independent short-corner gate can still stop a nearby turn.
+            if math.hypot(selected[0]-current[0],selected[2]-current[2])>8.0:
+                self.assertGreater(aligning['throttle'],0.0)
+            else:self.assertEqual(0.0,aligning['throttle'])
             self.assertGreater(aligned['throttle'], 0.0)
 
     def test_fjord_unreached_climb_setup_is_not_skipped_within_grid_radius(self):

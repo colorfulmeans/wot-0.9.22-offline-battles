@@ -2888,11 +2888,30 @@ class BotAiPortTests(unittest.TestCase):
 
         self.assertLess(escaped[0] * escaped[1], 0.0)
 
+    def test_ordinary_uphill_and_downhill_turns_keep_driving(self):
+        for height in (-12.0,-6.0,6.0,12.0):
+            driver=LocalDriver()
+            order=driver.drive(120,0,(0,0,0),0,0,.1,(20,height,20),(),lambda *args:True)
+            self.assertEqual(1.0,order['throttle'])
+            self.assertFalse(order['brake'])
+        driver=LocalDriver()
+        order=driver.drive(120,0,(0,0,0),-.1,0,.1,(20,-14.5,20),(),lambda *args:True)
+        self.assertEqual(0.0,order['throttle'])
+        self.assertTrue(order['brake'])
+
+    def test_only_steep_bends_block_slope_smoothing_in_both_directions(self):
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        for sign in (-1,1):
+            ordinary=((0,0,0),(20,0,0),(20,sign*6,20))
+            steep=((0,0,0),(20,0,0),(20,sign*10,20))
+            self.assertTrue(TerrainGrid.shortcut_preserves_climb_approach(ordinary,0,2))
+            self.assertFalse(TerrainGrid.shortcut_preserves_climb_approach(steep,0,2))
+
     def test_uphill_route_turn_aligns_before_drive_torque(self):
         driver = LocalDriver()
         uphill = driver.drive(
-            120, 0, (0.0, 0.0, 0.0), 0.0, 0.0, 0.1,
-            (20.0, 6.0, 20.0), (), lambda unused_yaw: True)
+            120, 0, (0.0, 0.0, 0.0), -0.1, 0.0, 0.1,
+            (20.0, 14.5, 20.0), (), lambda unused_yaw: True)
         flat = driver.drive(
             121, 1, (0.0, 0.0, 0.0), 0.0, 0.0, 0.1,
             (20.0, 0.0, 20.0), (), lambda unused_yaw: True)

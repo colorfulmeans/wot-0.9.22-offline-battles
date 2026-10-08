@@ -13,6 +13,8 @@ from gui.mods.offline_lan_0922 import tank_collision
 
 
 WAYPOINT_ARRIVAL_RADIUS = 1.5
+SLOPE_ALIGNMENT_GRADE = math.tan(math.radians(25.0))
+SLOPE_ALIGNMENT_TURN = math.radians(45.0)
 NAVIGATION_WAIT_RECOVERY_SECONDS = 4.0
 TRAFFIC_WAIT_LEASE_SECONDS = 1.5
 # First avoidance branch of the steering fan.
@@ -1140,8 +1142,8 @@ class LocalDriver(object):
 			brake = True
 		climb_grade = ((float(target[1]) - float(position[1])) /
 		               max(0.1, target_distance))
-		if climb_grade > 0.10 and abs(delta) > 0.30:
-			# Enter steep route edges square to the slope. Applying full drive
+		if abs(climb_grade) > SLOPE_ALIGNMENT_GRADE and abs(delta) > SLOPE_ALIGNMENT_TURN:
+			# Enter genuinely steep uphill/downhill edges square to the slope. Full drive
 			# while the hull is still turning makes it circle at the foot of the
 			# climb and repeatedly invalidates the next terrain sample.
 			throttle = 0.0

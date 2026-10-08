@@ -16,7 +16,8 @@ import math
 from collections import deque
 
 from gui.mods.offline_lan_0922.ai.driver import (
-	FIRST_CANDIDATE_OFFSET, WAYPOINT_ARRIVAL_RADIUS)
+	FIRST_CANDIDATE_OFFSET, WAYPOINT_ARRIVAL_RADIUS,
+	SLOPE_ALIGNMENT_GRADE, SLOPE_ALIGNMENT_TURN)
 from gui.mods.offline_lan_0922.vehicle_physics import SLIP_THRESHOLD_TAN
 
 
@@ -1052,11 +1053,11 @@ class TerrainGrid(object):
 
 	@staticmethod
 	def shortcut_preserves_climb_approach(path, start_index, end_index,
-			minimum_grade=0.10, minimum_turn=0.30):
+			minimum_grade=SLOPE_ALIGNMENT_GRADE, minimum_turn=SLOPE_ALIGNMENT_TURN):
 		"""Keep the setup point before a steep path changes direction.
 
 		A collision-free chord is not always a controllable tank manoeuvre. If a
-		climb begins immediately after a bend, skipping the bend point makes the
+		steep ascent/descent begins immediately after a bend, skipping the bend point makes the
 		hull meet the slope diagonally. Flat corners and straight climbs remain
 		eligible for smoothing.
 		"""
@@ -1072,7 +1073,7 @@ class TerrainGrid(object):
 			if out_run <= 0.1:
 				continue
 			grade = (float(after[1]) - float(pivot[1])) / out_run
-			if grade <= float(minimum_grade):
+			if abs(grade) <= float(minimum_grade):
 				continue
 			in_dx = float(pivot[0]) - float(before[0])
 			in_dz = float(pivot[2]) - float(before[2])
