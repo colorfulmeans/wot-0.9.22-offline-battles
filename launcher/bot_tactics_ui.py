@@ -1088,7 +1088,7 @@ class BotTacticsEditor:
             zip(self.view.screen(p),(event.x,event.y))))<10),None)
         if selected is None:
             if (math.hypot(*(a-b for a,b in zip(self.view.screen(point),(event.x,event.y))))<12
-                    and not self._wait_add_at_parent and (places or self._wait_parent_cleared)):
+                    and not self._wait_add_at_parent):
                 self.selected_wait=None;self.drag=None;self._refresh_properties();self.redraw()
                 return 'break'
             if len(places)>=3:

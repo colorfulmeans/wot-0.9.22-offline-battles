@@ -31,6 +31,25 @@ class EditorUITests(unittest.TestCase):
         route=next(r for r in self.ui.entry()['routes'] if r['team']==1)
         self.assertEqual([round(v,4) for v in parent[:2]]+[0],route['points'][0])
 
+    def test_empty_parent_does_not_recreate_wait_after_save_and_reload(self):
+        from types import SimpleNamespace
+        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.selected_point=0;self.ui.edit_point_condition();self.click((-66,306))
+        self.ui.selected_wait=0;self.ui.delete_wait_point()
+        selection=self.ui.selection
+        self.assertEqual(3,len(self.ui._wait_point()))
+        self.ui.save(True);self.ui.adopt(self.ui.store.active())
+        self.ui.selection=selection;self.ui.selected_point=0;self.ui._refresh_properties()
+        parent=copy.deepcopy(self.ui._wait_point())
+        x,y=self.ui.view.screen(parent);event=SimpleNamespace(x=x,y=y)
+        self.ui.edit_point_condition(event)
+        self.ui._press_wait(event);self.ui.release(event)
+        self.assertEqual(parent,self.ui._wait_point())
+        self.assertEqual([],storage.contract.waiting_positions(self.ui._wait_point()))
+        self.ui.save(True)
+        saved=next(r for r in self.ui.store.active()['maps']['08_ruinberg']['routes'] if r['id']==selection[1])
+        self.assertEqual(parent,saved['points'][0])
+
     def test_explicit_add_button_can_add_a_new_place_at_cleared_parent(self):
         from types import SimpleNamespace
         self.ui.new_route();self.click((-66,306));self.click((-126,246))
