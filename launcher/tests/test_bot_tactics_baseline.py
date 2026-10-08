@@ -62,11 +62,14 @@ class BaselineEditorTests(unittest.TestCase):
         original=next(r for r in storage.contract.default_map(e.map_name)['default_routes']
             if r['team']==e.team and r.get('class_tag')=='AT-SPG' and not r.get('disabled'))
         e.selection=('builtin',original['id']);e._refresh_properties()
+        self.assertNotIn('已修改',e._builtin_caption(original['id'],'AT-SPG'))
         item=e._editable_item();item['points'][1][0]+=7;item['priority']=9
+        self.assertIn('已修改',e._builtin_caption(original['id'],'AT-SPG'))
         for point in item['points']:
             if len(point)>4:point[4][0][2]=3
         e.reset_builtin()
         self.assertEqual(original,e._editable_item())
+        self.assertNotIn('已修改',e._builtin_caption(original['id'],'AT-SPG'))
         e.save(True)
         actual=next(r for r in e.store.active()['maps'][e.map_name]['default_routes']
             if r['team']==e.team and r['id']==original['id'] and r.get('class_tag')=='AT-SPG')

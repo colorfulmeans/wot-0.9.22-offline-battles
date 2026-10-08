@@ -597,6 +597,7 @@ class BotTacticsEditor:
 
     def _load_map(self):
         meta=contract.MAPS[self.map_name]
+        self.baseline_entry=contract.default_map(self.map_name)
         self.view=storage.ViewTransform(meta['bounds'],700,600)
         if self.map_name not in self.graph_cache:
             try:self.graph_cache[self.map_name]=storage.graph_data(self.map_name)
@@ -672,8 +673,11 @@ class BotTacticsEditor:
         identity,_,tag=identity.partition('@')
         scope=scope or tag or self._route_scope()
         caption=labels.enum_label('class_tag',scope,self.language)
-        marker=self.tr(' 已修改',' edited') if self._default_edit(dict(id=identity),scope) else ''
         edit=self._default_edit(dict(id=identity),scope)
+        rows=getattr(self,'baseline_entry',{}).get('default_routes',())
+        original=next((r for r in rows if r['team']==self.team and r['id']==identity and r.get('class_tag','all')==scope),
+            next((r for r in rows if r['team']==self.team and r['id']==identity and r.get('class_tag','all')=='all'),None))
+        marker=self.tr(' 已修改',' edited') if edit and edit!=original else ''
         priority=self._priority_caption((edit or {}).get('priority',contract.DEFAULT_ROUTE_PRIORITY)) if scope in contract.CLASSES[:-1] else ''
         name=self.tr('[默认/','[Default/')+caption+'] '+self._default_name(identity,scope)+marker
         return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
@@ -682,7 +686,8 @@ class BotTacticsEditor:
         edit=next((p for p in self.entry()['positions'] if p['id']==identity),None)
         item=edit or next(p for p in self.spg_defaults if p['id']==identity)
         label=labels.tactic_name(item['label'],self.language)
-        name=self.tr('[默认驻炮点] ','[Default parking] ')+label+(self.tr(' 已修改',' edited') if edit else '')
+        original=next((p for p in getattr(self,'baseline_entry',{}).get('positions',()) if p['id']==identity),None)
+        name=self.tr('[默认驻炮点] ','[Default parking] ')+label+(self.tr(' 已修改',' edited') if edit and edit!=original else '')
         priority=self._priority_caption(item['priority'])
         return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
 
