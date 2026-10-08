@@ -104,6 +104,14 @@ def point(raw, bounds):
 WAIT_AVOIDANCE_RADIUS = math.hypot(3.5, 1.7) + 1.0
 
 
+def waiting_heading(place, following=None):
+    """Preferred arrival heading; absent explicit heading faces the next gate."""
+    if len(place)>3:return place[3]
+    if following is None:return None
+    dx,dz=following[0]-place[0],following[1]-place[1]
+    return math.degrees(math.atan2(dx,dz)) if dx*dx+dz*dz>0.0001 else None
+
+
 def waiting_positions(waypoint):
     """Independent single-vehicle parking places attached to one route gate."""
     if len(waypoint) > 4:

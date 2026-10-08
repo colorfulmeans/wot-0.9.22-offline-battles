@@ -58,6 +58,34 @@ class WaitParkingTests(unittest.TestCase):
             raw=copy.deepcopy(p.tactics);raw['maps']['08_ruinberg']['routes'][0]['points'][0][4][0][3]=bad
             with self.assertRaises(cfg.TacticsError):cfg.canonical(raw)
 
+    def test_auto_heading_is_next_gate_and_initial_preference_never_reasserts(self):
+        p,m=self.setup_parking([[0,0,60]])
+        states=[_state(11,1,0,0)]
+        first=self.orders(p,m[:1],states,1)[11]
+        self.assertEqual(90,first['parking_heading'])
+        states[0]['yaw']=1.5707963267948966
+        self.assertNotIn('parking_heading',self.orders(p,m[:1],states,2)[11])
+        states[0]['yaw']=-1.5707963267948966
+        self.assertNotIn('parking_heading',self.orders(p,m[:1],states,3)[11])
+        self.assertEqual(0,self.orders(p,m[:1],states,3)[11]['throttle_override'])
+        p,m=self.setup_parking([[0,0,60]])
+        first=self.orders(p,m[:1],[_state(11,1,0,0)],1)[11]
+        self.assertNotIn('parking_heading',self.orders(p,m[:1],[_state(11,1,0,0)],6)[11])
+
+    def test_enemy_interrupts_initial_heading_and_final_gate_has_no_auto_heading(self):
+        p,m=self.setup_parking([[0,0,60]])
+        first=self.orders(p,m[:1],[_state(11,1,0,0)],1)[11]
+        bot=p._alive_bots(m[:1],[_state(11,1,0,0)])[0]
+        order=dict(first,target_id=7,face_position={'x':0,'y':0,'z':-100})
+        order.pop('parking_heading',None)
+        p._apply_authored_route_order(order,bot,{'x':0,'y':0,'z':0},2)
+        self.assertNotIn('parking_heading',order)
+        self.assertEqual(-100,order['face_position']['z'])
+        self.assertNotIn('parking_heading',self.orders(p,m[:1],[_state(11,1,0,0)],3)[11])
+        self.assertIsNone(cfg.waiting_heading([0,0,60],None))
+        self.assertEqual(-90,cfg.waiting_heading([0,0,60],[-100,0,0]))
+        self.assertEqual(180,cfg.waiting_heading([0,0,60,180],[100,0,0]))
+
     def test_idle_heading_never_overrides_live_target_facing(self):
         from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
         adapter=BotAdapter('08_ruinberg',1)

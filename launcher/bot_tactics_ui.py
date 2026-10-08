@@ -332,10 +332,12 @@ class BotTacticsEditor:
         self.wait_seconds=tk.StringVar(value='60')
         self.wait_entry=ttk.Entry(self.wait_panel,textvariable=self.wait_seconds,width=12)
         self.wait_entry.pack(fill='x');self.wait_entry.bind('<Return>',self.update_wait_time)
-        ttk.Label(self.wait_panel,text=self.tr('偏好朝向（度，0=北；留空为自动）','Preferred heading (deg, 0=N; blank=auto)')).pack(anchor='w')
+        ttk.Label(self.wait_panel,text=self.tr('就位偏好朝向（度，0=北；留空朝向下一点）','Arrival heading (deg, 0=N; blank=next waypoint)')).pack(anchor='w')
         self.wait_heading=tk.StringVar(value='')
         self.wait_heading_entry=ttk.Entry(self.wait_panel,textvariable=self.wait_heading,width=12)
         self.wait_heading_entry.pack(fill='x');self.wait_heading_entry.bind('<Return>',self.update_wait_time)
+        self.wait_heading_preview=tk.StringVar(value='')
+        ttk.Label(self.wait_panel,textvariable=self.wait_heading_preview).pack(anchor='w')
         actions_wait=ttk.Frame(self.wait_panel);actions_wait.pack(fill='x')
         self.wait_apply=ttk.Button(actions_wait,text=self.tr('设置时间和朝向','Set time and heading'),command=self.update_wait_time);self.wait_apply.pack(side='left')
         self.wait_delete=ttk.Button(actions_wait,text=self.tr('删除等待点','Delete wait point'),command=self.delete_wait_point);self.wait_delete.pack(side='left')
@@ -979,6 +981,11 @@ class BotTacticsEditor:
         if self.selected_wait is not None and self.selected_wait<len(places):
             self.wait_list.current(self.selected_wait);self.wait_seconds.set(str(places[self.selected_wait][2]));self.wait_heading.set(str(places[self.selected_wait][3]) if len(places[self.selected_wait])>3 else '')
         else:self.selected_wait=None;self.wait_list.set('')
+        angle=None
+        if self.selected_wait is not None:
+            item=self._selected();following=item['points'][self.selected_point+1] if self.selected_point+1<len(item['points']) else None
+            angle=contract.waiting_heading(places[self.selected_wait],following)
+        self.wait_heading_preview.set(self.tr('自动朝向下一个路线点：%.1f°','Automatic next-waypoint heading: %.1f°')%angle if angle is not None and self.selected_wait is not None and len(places[self.selected_wait])==3 else self.tr('已到末端：保持当前朝向','End of route: keep current heading') if self.selected_wait is not None and angle is None else '')
         enabled=self.wait_edit and self.selected_wait is not None
         for widget in (self.wait_entry,self.wait_heading_entry,self.wait_apply,self.wait_delete):widget.config(state='normal' if enabled else 'disabled')
         self.wait_list.config(state='readonly' if self.wait_edit else 'disabled')
@@ -1259,8 +1266,10 @@ class BotTacticsEditor:
                 ring=contract.WAIT_AVOIDANCE_RADIUS*self.view.frame()[2]
                 self.canvas.create_oval(px-ring,py-ring,px+ring,py+ring,outline=color,width=2,tags=('wait_avoidance',))
                 self.canvas.create_rectangle(px-size,py-size,px+size,py+size,fill=color,outline='white',tags=('wait_place',))
-                if len(place)>3:
-                    angle=math.radians(place[3]);length=max(18,ring)
+                item=self._selected();following=item['points'][index+1] if item and index+1<len(item['points']) else None
+                heading=contract.waiting_heading(place,following)
+                if heading is not None:
+                    angle=math.radians(heading);length=max(18,ring)
                     self.canvas.create_line(px,py,px+math.sin(angle)*length,py-math.cos(angle)*length,fill=color,width=2,arrow='last',tags=('wait_heading',))
                 caption='%d: %s'%(slot+1,self.tr('一直停留','Stay') if place[2]<0 else '%gs'%place[2])
                 self.canvas.create_text(px+size+3,py-size-3,text=caption,fill='white',anchor='w',tags=('wait_caption',))

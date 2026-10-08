@@ -772,7 +772,7 @@ class BotPlanner(object):
                 self._apply_team_order(
                     order, bot, team_order_by_bot.get(bot["id"]),
                     players, defense, route_point, turnback_point)
-                self._apply_authored_route_order(order, bot, route_point)
+                self._apply_authored_route_order(order, bot, route_point, now)
                 self._reroute_wreck_stall(order, bot, manifest, now)
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
@@ -2547,7 +2547,7 @@ class BotPlanner(object):
                          move_position=move, face_position=dict(move),
                          route_anchor=anchor, route_join=join,
                          parking_skip_reason='blocked_approach_timeout')
-            self._apply_authored_route_order(order, bot, move)
+            self._apply_authored_route_order(order, bot, move, now)
             self._wreck_route_progress[bot_id] = {
                 'key': (new_id, new_index), 'goal': _point(move),
                 'since': _number(now)}
@@ -2572,7 +2572,7 @@ class BotPlanner(object):
                          route_anchor=anchor, route_join=join,
                          route_point_skip_reason='blocked_timeout',
                          previous_route_index=index)
-            self._apply_authored_route_order(order, bot, move)
+            self._apply_authored_route_order(order, bot, move, now)
             self._wreck_route_progress[bot_id] = {
                 'key': (new_id, new_index), 'goal': _point(move),
                 'since': _number(now)}
@@ -2619,7 +2619,7 @@ class BotPlanner(object):
                      route_anchor=anchor, route_join=join,
                      route_switch_reason='wreck_stall',
                      previous_route_id=route_id)
-        self._apply_authored_route_order(order, bot, move)
+        self._apply_authored_route_order(order, bot, move, now)
 
     def _route(self, bot, now, stop_before_objective=False):
         assignment = self._route_assignments.get(bot["id"])
@@ -2845,7 +2845,7 @@ class BotPlanner(object):
         self._wait_claims[key]['departing'] = True
         return True, None
 
-    def _apply_authored_route_order(self, order, bot, route_point):
+    def _apply_authored_route_order(self, order, bot, route_point, now=None):
         """Apply explicit parking/travel instructions without suppressing aim."""
         route = (self._route_assignments.get(bot['id']) or {}).get('route') or bot.get('route') or {}
         authored = bot_tactics.route_config(
@@ -2871,15 +2871,23 @@ class BotPlanner(object):
         order['parking_phase'] = phase
         order['parking_slot'] = state.get('parking_slot')
         if phase == 'waiting':
-            places=bot_tactics.waiting_positions(authored['points'][state.get('index',0)])
-            slot=state.get('parking_slot')
-            if slot is not None and slot<len(places) and len(places[slot])>3:
-                heading=places[slot][3]
-                order['parking_heading']=heading
-                if order.get('target_id') is None:
+            index=state.get('index',0);points=authored['points']
+            places=bot_tactics.waiting_positions(points[index]);slot=state.get('parking_slot')
+            done=state.setdefault('parking_heading_done',set())
+            if slot is not None and slot<len(places) and index not in done:
+                following=points[index+1] if index+1<len(points) else None
+                heading=bot_tactics.waiting_heading(places[slot],following)
+                elapsed=0 if now is None else now-state.get('parking_arrived',{}).get(index,now)
+                if heading is None or order.get('target_id') is not None or elapsed>=5.0:
+                    done.add(index)
+                else:
                     angle=math.radians(heading);pose=bot['state']
-                    order['face_position']=dict(x=_number(pose.get('x'))+math.sin(angle)*20,
-                        y=_number(pose.get('y')),z=_number(pose.get('z'))+math.cos(angle)*20)
+                    delta=math.atan2(math.sin(angle-_number(pose.get('yaw'))),math.cos(angle-_number(pose.get('yaw'))))
+                    if abs(delta)<0.05:done.add(index)
+                    else:
+                        order['parking_heading']=heading
+                        order['face_position']=dict(x=_number(pose.get('x'))+math.sin(angle)*20,
+                            y=_number(pose.get('y')),z=_number(pose.get('z'))+math.cos(angle)*20)
         order['arrival_radius'] = 1.0 if phase == 'approach' else None
         order['combat_mode'] = 'hold' if holding else 'parking_approach' if phase == 'approach' else 'route'
         order['throttle_override'] = 0.0 if holding else None

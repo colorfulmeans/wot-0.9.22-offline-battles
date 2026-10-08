@@ -113,6 +113,12 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual(1,len(e.canvas.find_withtag('wait_heading')))
         e.save(True);self.assertEqual(e.document,e.store.active())
         e.wait_heading.set('');e.update_wait_time();self.assertEqual(3,len(e._wait_point()[4][0]))
+        place=e._wait_point()[4][0];e._editable_points()[2][:2]=[place[0]+100,place[1]]
+        e._refresh_properties();e.redraw()
+        self.assertIn('90.0°',e.wait_heading_preview.get())
+        self.assertEqual(1,len(e.canvas.find_withtag('wait_heading')))
+        e._editable_points()[2][:2]=[place[0]-100,place[1]];e._refresh_properties()
+        self.assertIn('-90.0°',e.wait_heading_preview.get())
         e.selected_point=None;e.redraw();self.assertFalse(e.canvas.find_withtag('wait_avoidance'))
 
     def setUp(self):
