@@ -554,7 +554,7 @@ class TrafficCoordinator(object):
                         clear = clear and self._escape_probe._reverse_blocked_by_vehicle(
                             body['position'], body['yaw'], neighbours, length, width) is None
                     if clear:
-                        result.update(throttle=-1.0 if bot_id == retreating else 1.0,
+                        result.update(throttle=-0.65 if bot_id == retreating else 0.65,
                                       brake=False,
                                       turn=0.0, target_yaw=body['yaw'], traffic_mode='head_on_retreat')
                 continue
