@@ -317,7 +317,7 @@ class LocalDriver(object):
 			# an unsafe rear). Keep failed-edge evidence and emit exactly once.
 			result['navigation_replan'] = True
 			return result
-		result.update(throttle=-0.72, brake=False, recovery_mode='reverse_turn',
+		result.update(throttle=-1.0, brake=False, recovery_mode='reverse_turn',
 			navigation_recovery=True)
 		diagnostic.update(source='recovery', reason='navigation_reverse',
 			recovery_mode='reverse_turn')
@@ -723,7 +723,7 @@ class LocalDriver(object):
 					state['short_translation_escape'] = dict(start=tuple(position),
 						yaw=float(yaw), sign=sign, distance=distance,
 						until=state['clock'] + 4.0)
-					return dict(throttle=sign * 0.45, turn=0.0, target_yaw=float(yaw),
+					return dict(throttle=sign * 1.0, turn=0.0, target_yaw=float(yaw),
 						recovery_probe_distance=distance,
 						recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
 		return None
@@ -747,7 +747,7 @@ class LocalDriver(object):
 					half_length, half_width, remaining) is not None):
 			state.pop('short_translation_escape', None)
 			return None
-		return dict(throttle=sign * 0.45, turn=0.0, target_yaw=escape['yaw'],
+		return dict(throttle=sign * 1.0, turn=0.0, target_yaw=escape['yaw'],
 			recovery_probe_distance=remaining,
 			recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
 
@@ -767,7 +767,7 @@ class LocalDriver(object):
 					neighbours, half_length, half_width, remaining) is not None):
 			state.pop('translation_escape', None)
 			return None
-		return dict(throttle=0.72, turn=0.0, target_yaw=escape['yaw'],
+		return dict(throttle=1.0, turn=0.0, target_yaw=escape['yaw'],
 			recovery_mode='forward_escape', recovery_probe_distance=remaining)
 
 	@observed('driver.drive')
@@ -1006,7 +1006,7 @@ class LocalDriver(object):
 								direction_clear, float(yaw), escape_distance)):
 							state['translation_escape'] = dict(start=tuple(position), yaw=float(yaw),
 								distance=escape_distance, until=state['clock'] + 20.0)
-							return {'throttle': 0.72, 'turn': 0.0,
+							return {'throttle': 1.0, 'turn': 0.0,
 								'target_yaw': float(yaw), 'recovery_mode': 'forward_escape'}
 						# A long hull may have room to translate out of a side
 						# contact without room for the full backing manoeuvre.
@@ -1061,7 +1061,7 @@ class LocalDriver(object):
 					recovery_target = float(yaw)
 					break
 			return {
-				'throttle': -0.72,
+				'throttle': -1.0,
 				'turn': recovery_turn,
 				'target_yaw': recovery_target,
 				'recovery_mode': 'reverse_turn',

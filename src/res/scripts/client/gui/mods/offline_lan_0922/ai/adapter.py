@@ -158,7 +158,7 @@ class BotAdapter(object):
                 position[1],
                 position[2] + math.cos(heading) * distance)
             return target, {
-                'throttle': 0.72 * sign,
+                'throttle': 1.0 * sign,
                 'brake': False,
                 'turn': 0.0,
                 'target_yaw': yaw,
@@ -234,7 +234,7 @@ class BotAdapter(object):
                 turn = side*0.4
         target = (position[0]+forward[0]*reach, position[1],
                   position[2]+forward[1]*reach)
-        return target, dict(throttle=0.72, turn=turn, target_yaw=yaw,
+        return target, dict(throttle=1.0, turn=turn, target_yaw=yaw,
                             recovery_mode='wreck_push')
 
     def decide(self, state, direction_clear):

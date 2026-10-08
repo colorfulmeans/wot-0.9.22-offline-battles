@@ -97,7 +97,7 @@ class WreckContactRecoveryTests(unittest.TestCase):
             self.setUp()
             self.peer.update(alive=alive, team=team)
             commands = [self.decide() for unused in range(40)]
-            self.assertEqual({-.72, .72}, set(c['throttle'] for c in commands))
+            self.assertEqual({-1.0, 1.0}, set(c['throttle'] for c in commands))
             for command in commands:
                 self.assertEqual('contact_escape', command['recovery_mode'])
                 self.assertEqual(0., command['turn'])
@@ -113,12 +113,12 @@ class WreckContactRecoveryTests(unittest.TestCase):
         rear = dict(self.peer, id=3, alive=True, position=(0., 0., -8.))
         self.state['neighbours'].append(rear)
         command = self.decide()
-        self.assertEqual(.72, command['throttle'])
+        self.assertEqual(1.0, command['throttle'])
         body = dict(self.state, position=self.state['position'], yaw=0.,
                     shape=self.state['collision_shape'], velocity=(0., 0., 0.))
         safe = TrafficCoordinator().safe_controls(body, command,
                     self.state['neighbours'], 1., lambda: 0.)
-        self.assertEqual(.72, safe['throttle'])
+        self.assertEqual(1.0, safe['throttle'])
 
     def test_world_denial_never_creates_unchecked_translation(self):
         command = self.decide(lambda *args: False)
@@ -137,6 +137,7 @@ class WreckContactRecoveryTests(unittest.TestCase):
         self.assertNotEqual('wreck_push', commands[0]['recovery_mode'])
         first_push=next(c for c in commands if c['recovery_mode']=='wreck_push')
         self.assertEqual(0., first_push['turn'])
+        self.assertTrue(all(c['throttle']==1.0 for c in commands if c['recovery_mode']=='wreck_push'))
         self.assertTrue(any(c['turn'] > 0. for c in commands if c['recovery_mode']=='wreck_push'))
         self.assertTrue(any(c['turn'] < 0. for c in commands if c['recovery_mode']=='wreck_push'))
         self.assertNotEqual('wreck_push', commands[-1]['recovery_mode'])

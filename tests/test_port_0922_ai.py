@@ -2888,6 +2888,20 @@ class BotAiPortTests(unittest.TestCase):
 
         self.assertLess(escaped[0] * escaped[1], 0.0)
 
+    def test_short_escape_uses_full_throttle_and_keeps_distance_deadline_and_veto(self):
+        for sign in (-1.0,1.0):
+            driver=LocalDriver();position=(0,0,0);state=driver._state(1,0,position)
+            allowed=math.pi if sign<0 else 0.0
+            clear=lambda angle,*args:abs(math.sin((angle-allowed)/2))<.01
+            escape=driver._short_escape(state,position,0,0,.1,0,0,(),clear,3.5,1.7)
+            self.assertEqual(sign,escape['throttle'])
+            retained=driver._retained_short_escape(state,position,0,(),clear,3.5,1.7)
+            self.assertEqual(sign,retained['throttle'])
+            self.assertIsNone(driver._retained_short_escape(state,position,0,(),lambda *args:False,3.5,1.7))
+            driver._short_escape(state,position,0,0,.1,0,0,(),clear,3.5,1.7)
+            state['clock']=4.0
+            self.assertIsNone(driver._retained_short_escape(state,position,0,(),clear,3.5,1.7))
+
     def test_ordinary_uphill_and_downhill_turns_keep_driving(self):
         for height in (-12.0,-6.0,6.0,12.0):
             driver=LocalDriver()

@@ -168,7 +168,7 @@ class GroundContactTests(unittest.TestCase):
             state, strategic, lambda *unused: True)
 
         self.assertEqual('contact_escape', command['recovery_mode'])
-        self.assertEqual(-0.72, command['throttle'])
+        self.assertEqual(-1.0, command['throttle'])
         self.assertEqual(0.0, command['turn'])
         self.assertEqual(player['id'], command['target_id'])
         self.assertTrue(command['fire_allowed'])
@@ -340,7 +340,7 @@ class GroundContactTests(unittest.TestCase):
         side = dict(id=2, position=(2.99, 0., -1.), yaw=0., half_length=3.5, half_width=1.5)
         rear = dict(side, id=3, position=(0., 0., -8.))
         front = dict(side, id=4, position=(0., 0., 8.))
-        for peers, mode in (([side, rear], 'forward_escape'), ([side, rear, front], 'blocked')):
+        for peers, mode in (([side, rear], 'forward_escape'), ([side, rear, front], 'short_forward_escape')):
             driver = LocalDriver()
             driver._state(1, 0, (0., 0., 0.)).update(recovery_time=.5, recovery_side=1.)
             order = driver.drive(1, 0, (0., 0., 0.), 0., 0., .04,
@@ -348,7 +348,8 @@ class GroundContactTests(unittest.TestCase):
                                  half_width=1.5, pose_clear=lambda yaw: False)
             self.assertEqual(mode, order['recovery_mode'])
             self.assertEqual(0., order['turn'])
-            self.assertEqual(.72 if mode == 'forward_escape' else 0., order['throttle'])
+            self.assertEqual(1.0, order['throttle'])
+            if mode=='short_forward_escape':self.assertLessEqual(order['recovery_probe_distance'],4.0)
 
     def test_contact_oscillation_cannot_renew_driver_wait_forever(self):
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver

@@ -3303,7 +3303,7 @@ class BotPlanner(object):
         elif phase == "peek":
             order["combat_mode"] = "cover_peek"
             order["move_position"] = dict(peek)
-            order["throttle_override"] = 0.56 if peek_distance > 4.5 else 0.0
+            order["throttle_override"] = 0.75 if peek_distance > 4.5 else 0.0
             order["fire_allowed"] = can_fire
         else:
             order["combat_mode"] = "cover_return"
