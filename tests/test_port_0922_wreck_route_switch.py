@@ -98,12 +98,92 @@ class WreckRouteSwitchTests(unittest.TestCase):
         self.planner._reroute_wreck_stall(order,bot,self.manifest,40)
         self.assertEqual('rail',order['route_id'])
 
-    def test_missing_wreck_evidence_or_immobilization_never_switches(self):
+    def test_missing_owned_pose_or_immobilization_never_switches(self):
         self.states[0]['route_wreck_blocked'] = False
+        self.states[0]['world_pose'] = False
         self.states[1]['critical'] = {'destroyed': ['leftTrackHealth']}
         self.orders(0)
         self.assertEqual('banana', self.orders(100)[17]['route_id'])
         self.assertEqual('banana', self.orders(100)[24]['route_id'])
+
+    def test_native_stall_without_wreck_skips_then_switches(self):
+        for state in self.states:state['route_wreck_blocked']=False
+        first=self.orders(0)[17]
+        skipped=self.orders(20)[17]
+        self.assertEqual(first['route_index']+1,skipped['route_index'])
+        self.assertEqual('rail',self.orders(40)[17]['route_id'])
+
+    def test_capture_and_route_transitions_keep_the_failed_gate_budget(self):
+        self.states[0]['route_wreck_blocked']=False
+        bot=self.planner._alive_bots(self.manifest,self.states)[0]
+        self.planner._route_states[17]=dict(route_id='banana',index=1)
+        order=dict(route_id='banana',route_index=1,combat_mode='route',
+                   move_position=self.lane['waypoints'][1])
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,0)
+        order.update(combat_mode='base_capture',move_position=dict(x=0,y=0,z=-280))
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,20)
+        self.assertEqual(2,order['route_index'])
+        order['combat_mode']='base_capture'
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,40)
+        self.assertEqual('no_route_progress',order['route_switch_reason'])
+
+    def test_forward_progress_refreshes_timer_but_local_orbit_does_not(self):
+        self.states[0]['route_wreck_blocked']=False
+        bot=self.planner._alive_bots(self.manifest,self.states)[0]
+        order=dict(route_id='banana',route_index=1,combat_mode='route',
+                   move_position=dict(x=220,y=0,z=-28))
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,0)
+        bot['state']['x']+=10
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,19)
+        self.assertEqual(19,self.planner._wreck_route_progress[17]['since'])
+        bot['state']['z']+=8
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,30)
+        self.assertEqual(19,self.planner._wreck_route_progress[17]['since'])
+        self.planner._reroute_wreck_stall(order,bot,self.manifest,39)
+        self.assertEqual('blocked_timeout',order['route_point_skip_reason'])
+
+    def test_arrived_capture_and_intentional_hold_do_not_reroute(self):
+        self.states[0]['route_wreck_blocked']=False
+        bot=self.planner._alive_bots(self.manifest,self.states)[0]
+        order=dict(route_id='banana',route_index=1,combat_mode='base_capture',
+                   move_position=dict(x=120,y=0,z=-28),throttle_override=0)
+        for now in (0,100):self.planner._reroute_wreck_stall(order,bot,self.manifest,now)
+        self.assertNotIn(17,self.planner._wreck_route_progress)
+
+    def test_route_alias_with_same_failed_next_gate_is_not_an_exit(self):
+        bot=self.planner._alive_bots(self.manifest,self.states)[0]
+        self.planner._route_states[17]=dict(route_id='banana',index=2,blocked_skip_to=2)
+        self.bypass['waypoints']=[dict(x=120,y=0,z=-28),dict(x=0,y=0,z=-280)]
+        order=dict(route_id='banana',route_index=2,combat_mode='route',
+                   move_position=self.lane['waypoints'][2])
+        for now in (0,20):self.planner._reroute_wreck_stall(order,bot,self.manifest,now)
+        self.assertNotIn('route_switch_reason',order)
+
+    def test_switch_joins_current_entry_instead_of_restoring_old_failed_cursor(self):
+        self.planner._route_history[17]={'rail':dict(index=2,parking_completed={0})}
+        self.orders(0);self.orders(20)
+        order=self.orders(40)[17]
+        self.assertEqual('rail',order['route_id'])
+        self.assertEqual(1,order['route_index'])
+        self.assertTrue(order['route_join'])
+        self.assertEqual({0},self.planner._route_states[17]['parking_completed'])
+
+    def test_artillery_only_capturer_does_not_wait_for_a_stationary_route_cursor(self):
+        bot=self.planner._alive_bots(self.manifest,self.states)[0]
+        bot['profile']['class_tag']='SPG'
+        target=dict(id='enemy',point=dict(x=0,y=0,z=-280),radius=50)
+        order=self.planner._order_for(bot,0,1,None,[],0,team_bots=[bot],
+            capture_target=target,no_known_enemies=True)
+        self.assertEqual('base_capture',order['combat_mode'])
+        self.assertEqual(target['point'],order['move_position'])
+
+    def test_artillery_with_living_regulars_retains_its_staging_policy(self):
+        bots=self.planner._alive_bots(self.manifest,self.states)
+        bot=bots[0];bot['profile']['class_tag']='SPG'
+        target=dict(id='enemy',point=dict(x=0,y=0,z=-280),radius=50)
+        order=self.planner._order_for(bot,0,len(bots),None,[],0,team_bots=bots,
+            capture_target=target,no_known_enemies=True)
+        self.assertNotEqual('base_capture',order['combat_mode'])
 
     def test_no_suitable_route_holds_and_does_not_oscillate(self):
         self.bypass['class_weights'] = {'heavyTank': 0, 'AT-SPG': 0}
