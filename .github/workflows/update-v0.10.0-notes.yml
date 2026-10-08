@@ -1,0 +1,33 @@
+name: Update v0.10.0 release notes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/update-v0.10.0-notes.yml'
+      - 'docs/releases/v0.10.0.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-0100-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Update only the published description
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit v0.10.0 --notes-file docs/releases/v0.10.0.md
+          gh release view v0.10.0 --json body --jq .body > actual-notes.md
+          python - <<'PY'
+          from pathlib import Path
+          assert Path('actual-notes.md').read_text().strip() == Path('docs/releases/v0.10.0.md').read_text().strip()
+          PY
