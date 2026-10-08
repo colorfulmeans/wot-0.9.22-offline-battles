@@ -132,7 +132,7 @@ class TerrainGrid(object):
 	_LINK_COUNTS = tuple(bin(mask).count('1') for mask in range(256))
 
 	def __init__(self, ground_probe, obstacle_probe=None, bounds=None,
-			cell_size=18.0, max_grade_up=0.48, max_grade_down=0.38,
+			cell_size=18.0, max_grade_up=SLIP_THRESHOLD_TAN, max_grade_down=SLIP_THRESHOLD_TAN,
 			baked_graph=None):
 		self.ground_probe = ground_probe
 		self.obstacle_probe = obstacle_probe

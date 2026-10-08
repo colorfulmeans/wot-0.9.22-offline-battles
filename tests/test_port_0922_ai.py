@@ -2899,6 +2899,17 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(0.0,order['throttle'])
         self.assertTrue(order['brake'])
 
+    def test_dynamic_grid_admits_both_directions_up_to_27_point_5_degrees(self):
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        for grade,allowed in ((.51,True),(-.51,True),(.53,False),(-.53,False)):
+            grid=TerrainGrid(lambda x,z,hint:grade*z,obstacle_probe=lambda *args:False,cell_size=4)
+            self.assertEqual(allowed,grid._native_segment_clear((0,0,0),(0,grade*20,20)))
+        for sign in (-1,1):
+            path=((0,0,0),(20,0,0),(20,sign*20*math.tan(math.radians(22)),20))
+            self.assertTrue(TerrainGrid.shortcut_preserves_climb_approach(path,0,2))
+            path=((0,0,0),(20,0,0),(20,sign*20*math.tan(math.radians(23)),20))
+            self.assertFalse(TerrainGrid.shortcut_preserves_climb_approach(path,0,2))
+
     def test_only_steep_bends_block_slope_smoothing_in_both_directions(self):
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
         for sign in (-1,1):

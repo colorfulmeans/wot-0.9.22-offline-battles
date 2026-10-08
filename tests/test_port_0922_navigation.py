@@ -18,7 +18,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
     def setUp(self):
         # Lower the configurable guard only in these lifecycle fixtures: their
         # real 8-degree report bends exercise mandatory-corner consumption.
-        # Production's 25-degree policy is covered by the driver/guard tests.
+        # Production's 22.5-degree policy is covered by the driver/guard tests.
         from unittest.mock import patch
         original=TerrainGrid.shortcut_preserves_climb_approach
         controlled=lambda path,start,end,*args,**kwargs:original(path,start,end,minimum_grade=.10,minimum_turn=.30)
