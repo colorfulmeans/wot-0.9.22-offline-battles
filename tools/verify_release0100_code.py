@@ -35,7 +35,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         raw = archive.read(name)
         assert raw[:4] == b'\x03\xf3\r\n', name
         actual = marshal.loads(raw[8:])
-        accepted = compile(open(path, 'rb').read(), actual.co_filename, 'exec')
+        accepted = compile(open(path, 'rb').read(), actual.co_filename, 'exec', 0, True)
         assert signature(actual) == signature(accepted), name
     assert 'res/gui/flash/lobby.swf' in archive.namelist(), 'Missing warehouse/shop style UI'
 print('Current release client bytecode verified:', len(expected), 'modules')
