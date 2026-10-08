@@ -332,19 +332,24 @@ class BotTacticsEditor:
         self.wait_seconds=tk.StringVar(value='60')
         self.wait_entry=ttk.Entry(self.wait_panel,textvariable=self.wait_seconds,width=12)
         self.wait_entry.pack(fill='x');self.wait_entry.bind('<Return>',self.update_wait_time)
+        ttk.Label(self.wait_panel,text=self.tr('偏好朝向（度，0=北；留空为自动）','Preferred heading (deg, 0=N; blank=auto)')).pack(anchor='w')
+        self.wait_heading=tk.StringVar(value='')
+        self.wait_heading_entry=ttk.Entry(self.wait_panel,textvariable=self.wait_heading,width=12)
+        self.wait_heading_entry.pack(fill='x');self.wait_heading_entry.bind('<Return>',self.update_wait_time)
         actions_wait=ttk.Frame(self.wait_panel);actions_wait.pack(fill='x')
-        self.wait_apply=ttk.Button(actions_wait,text=self.tr('设置时间','Set time'),command=self.update_wait_time);self.wait_apply.pack(side='left')
+        self.wait_apply=ttk.Button(actions_wait,text=self.tr('设置时间和朝向','Set time and heading'),command=self.update_wait_time);self.wait_apply.pack(side='left')
         self.wait_delete=ttk.Button(actions_wait,text=self.tr('删除等待点','Delete wait point'),command=self.delete_wait_point);self.wait_delete.pack(side='left')
-        ttk.Label(self.wait_panel,text=self.tr('勾选后点击地图添加或拖动；选中后 Delete 删除。',
-            'When enabled, click to add or drag; Delete removes the selected place.'),wraplength=250).pack(anchor='w')
+        ttk.Label(self.wait_panel,text=self.tr('圆环为停车避让参考，大车需更多空间；箭头为偏好朝向，交战可自由转向。勾选后点击添加或拖动；Delete删除。',
+            'Ring: parking clearance guide; large hulls need more room. Arrow: preferred idle heading; combat can turn freely. Click to add/drag; Delete removes.'),wraplength=250).pack(anchor='w')
         self.node_legend=ttk.LabelFrame(right,text=self.tr('节点图例','Node legend'))
         self.node_legend.grid(row=23,column=0,sticky='ew',pady=(5,0))
         for row,(radius,zh,en) in enumerate(((4,'普通节点','Normal waypoint'),
                 (7,'大圆点：等待点组（点击展开）','Large circle: wait group (click to expand)'),
-                (4,'展开的小方点：独立等待点','Expanded squares: individual wait places'))):
+                (4,'方点：等待位；圆环：避让范围约4.9米','Square: wait place; ring: ~4.9 m clearance'))):
             marker=tk.Canvas(self.node_legend,width=22,height=20,background='#202529',highlightthickness=0)
             marker.grid(row=row,column=0,padx=4,pady=1)
             draw=marker.create_rectangle if row==2 else marker.create_oval
+            if row==2:marker.create_oval(1,0,21,20,outline='white')
             draw(11-radius,10-radius,11+radius,10+radius,fill=CLASS_COLORS['heavyTank'],outline='white')
             ttk.Label(self.node_legend,text=self.tr(zh,en)).grid(row=row,column=1,sticky='w')
         ttk.Label(self.node_legend,text=self.tr('◇ 出生点中心；虚线圈：占领基地范围',
@@ -972,10 +977,10 @@ class BotTacticsEditor:
         self.wait_edit_check.config(state='normal' if point is not None else 'disabled')
         self.wait_list.config(values=[self.tr('等待点 %d：%gs','Wait place %d: %gs')%(i+1,p[2]) for i,p in enumerate(places)])
         if self.selected_wait is not None and self.selected_wait<len(places):
-            self.wait_list.current(self.selected_wait);self.wait_seconds.set(str(places[self.selected_wait][2]))
+            self.wait_list.current(self.selected_wait);self.wait_seconds.set(str(places[self.selected_wait][2]));self.wait_heading.set(str(places[self.selected_wait][3]) if len(places[self.selected_wait])>3 else '')
         else:self.selected_wait=None;self.wait_list.set('')
         enabled=self.wait_edit and self.selected_wait is not None
-        for widget in (self.wait_entry,self.wait_apply,self.wait_delete):widget.config(state='normal' if enabled else 'disabled')
+        for widget in (self.wait_entry,self.wait_heading_entry,self.wait_apply,self.wait_delete):widget.config(state='normal' if enabled else 'disabled')
         self.wait_list.config(state='readonly' if self.wait_edit else 'disabled')
 
     def change_wait_edit(self):
@@ -1043,12 +1048,14 @@ class BotTacticsEditor:
         try:
             seconds=contract.number(float(self.wait_seconds.get()),-1,3600)
             if -1<seconds<0:raise ValueError()
+            heading=contract.number(float(self.wait_heading.get()),-180,180) if self.wait_heading.get().strip() else None
         except (ValueError,contract.TacticsError):
-            self.error(self.tr('请输入 -1 或 0–3600 秒。','Enter -1 or 0–3600 seconds.'));return False
+            self.error(self.tr('时间应为-1或0–3600秒，朝向应为-180至180度或留空。','Use -1 or 0–3600 seconds; heading must be -180 to 180 or blank.'));return False
         places=copy.deepcopy(contract.waiting_positions(point))
         if self.selected_wait>=len(places):return
-        if places[self.selected_wait][2]!=seconds:
-            self.checkpoint();places[self.selected_wait][2]=seconds;self._store_wait_places(places);self.mark()
+        updated=places[self.selected_wait][:2]+[seconds]+([heading] if heading is not None else [])
+        if places[self.selected_wait]!=updated:
+            self.checkpoint();places[self.selected_wait]=updated;self._store_wait_places(places);self.mark()
         self._refresh_properties();return True
 
     def delete_wait_point(self):
@@ -1249,7 +1256,12 @@ class BotTacticsEditor:
             for slot,place in enumerate(places):
                 px,py=self.view.screen(place);size=6 if self.selected_wait==slot else 4
                 self.canvas.create_line(x,y,px,py,fill=color,dash=(2,3),tags=('wait_connector',))
+                ring=contract.WAIT_AVOIDANCE_RADIUS*self.view.frame()[2]
+                self.canvas.create_oval(px-ring,py-ring,px+ring,py+ring,outline=color,width=2,tags=('wait_avoidance',))
                 self.canvas.create_rectangle(px-size,py-size,px+size,py+size,fill=color,outline='white',tags=('wait_place',))
+                if len(place)>3:
+                    angle=math.radians(place[3]);length=max(18,ring)
+                    self.canvas.create_line(px,py,px+math.sin(angle)*length,py-math.cos(angle)*length,fill=color,width=2,arrow='last',tags=('wait_heading',))
                 caption='%d: %s'%(slot+1,self.tr('一直停留','Stay') if place[2]<0 else '%gs'%place[2])
                 self.canvas.create_text(px+size+3,py-size-3,text=caption,fill='white',anchor='w',tags=('wait_caption',))
 

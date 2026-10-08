@@ -101,6 +101,9 @@ def point(raw, bounds):
             round(number(raw[1], bounds[1], bounds[3]), 4)]
 
 
+WAIT_AVOIDANCE_RADIUS = math.hypot(3.5, 1.7) + 1.0
+
+
 def waiting_positions(waypoint):
     """Independent single-vehicle parking places attached to one route gate."""
     if len(waypoint) > 4:
@@ -122,11 +125,12 @@ def waypoint(raw, bounds):
             raise TacticsError('A waypoint allows zero to three parking places')
         places = []
         for place in raw[4]:
-            if not isinstance(place, (list, tuple)) or len(place) != 3:
-                raise TacticsError('Parking place must be [x, z, wait seconds]')
+            if not isinstance(place, (list, tuple)) or len(place) not in (3, 4):
+                raise TacticsError('Parking place must contain x, z, wait seconds and optional heading')
             seconds = number(place[2], -1, 3600)
             if -1 < seconds < 0:raise TacticsError('Use -1 for a permanent hold')
             parked = point(place[:2], bounds) + [seconds]
+            if len(place)>3:parked.append(number(place[3],-180.0,180.0))
             if any(sum((parked[i]-other[i])**2 for i in (0,1)) < 1 for other in places):
                 raise TacticsError('Parking places need at least one metre separation')
             places.append(parked)

@@ -101,6 +101,20 @@ class NavigationUITests(unittest.TestCase):
         e.reset_builtin()
         scoped=next(r for r in e.entry()['default_routes'] if r.get('class_tag')=='AT-SPG' and r['team']==1)
         self.assertTrue(all(len(p)==3 and p[2]==0 for p in scoped['points']))
+    def test_wait_clearance_ring_heading_save_and_auto_reset(self):
+        e=self.editor;e.route_class_var.set('AT-SPG');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
+        e.items.selection_set(key);e.select_item();e.selected_point=1;e.edit_point_condition()
+        point=e._wait_point();e._store_wait_places([[point[0]+12,point[1],60]])
+        e.selected_wait=0;e._refresh_properties();e.wait_heading.set('90');e.update_wait_time();e.redraw()
+        self.assertEqual(90,e._wait_point()[4][0][3])
+        ring=e.canvas.find_withtag('wait_avoidance');self.assertEqual(1,len(ring))
+        bounds=e.canvas.coords(ring[0]);self.assertAlmostEqual(2*ui.contract.WAIT_AVOIDANCE_RADIUS*e.view.frame()[2],bounds[2]-bounds[0])
+        self.assertEqual(1,len(e.canvas.find_withtag('wait_heading')))
+        e.save(True);self.assertEqual(e.document,e.store.active())
+        e.wait_heading.set('');e.update_wait_time();self.assertEqual(3,len(e._wait_point()[4][0]))
+        e.selected_point=None;e.redraw();self.assertFalse(e.canvas.find_withtag('wait_avoidance'))
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=tk.Tk();self.root.withdraw();self.addCleanup(self.root.destroy)
@@ -335,10 +349,10 @@ class NavigationUITests(unittest.TestCase):
         self.assertFalse(e.canvas.find_withtag('route_node'))
         self.assertEqual(before,e.document)
         captions=[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)]
-        self.assertEqual(['普通节点','大圆点：等待点组（点击展开）','展开的小方点：独立等待点','◇ 出生点中心；虚线圈：占领基地范围'],captions)
+        self.assertEqual(['普通节点','大圆点：等待点组（点击展开）','方点：等待位；圆环：避让范围约4.9米','◇ 出生点中心；虚线圈：占领基地范围'],captions)
         e.set_language('en')
         self.assertEqual('Node legend',e.node_legend.cget('text'))
-        self.assertIn('Expanded squares: individual wait places',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
+        self.assertIn('Square: wait place; ring: ~4.9 m clearance',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
         e.route_class_var.set('total');e.change_route_class();e.redraw()
         self.assertTrue(radii());self.assertTrue(all(r==7. for r in radii()))
         self.assertFalse(e.canvas.find_withtag('route_node'))

@@ -2870,6 +2870,16 @@ class BotPlanner(object):
         order['move_position'] = dict(route_point)
         order['parking_phase'] = phase
         order['parking_slot'] = state.get('parking_slot')
+        if phase == 'waiting':
+            places=bot_tactics.waiting_positions(authored['points'][state.get('index',0)])
+            slot=state.get('parking_slot')
+            if slot is not None and slot<len(places) and len(places[slot])>3:
+                heading=places[slot][3]
+                order['parking_heading']=heading
+                if order.get('target_id') is None:
+                    angle=math.radians(heading);pose=bot['state']
+                    order['face_position']=dict(x=_number(pose.get('x'))+math.sin(angle)*20,
+                        y=_number(pose.get('y')),z=_number(pose.get('z'))+math.cos(angle)*20)
         order['arrival_radius'] = 1.0 if phase == 'approach' else None
         order['combat_mode'] = 'hold' if holding else 'parking_approach' if phase == 'approach' else 'route'
         order['throttle_override'] = 0.0 if holding else None

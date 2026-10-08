@@ -376,7 +376,11 @@ class BotAdapter(object):
             # A parking coordinate is a translation anchor, not a facing
             # order. Losing a target must not turn the hull back toward the
             # sub-metre offset to that anchor and undo fixed-gun laying.
-            face_position = position
+            heading=strategic.get('parking_heading')
+            if heading is None:face_position = position
+            else:
+                angle=math.radians(float(heading))
+                face_position=(position[0]+math.sin(angle)*20,position[1],position[2]+math.cos(angle)*20)
         if aim_position is not None:
             aim_position = _position(aim_position, position)
         if move_position is not None:

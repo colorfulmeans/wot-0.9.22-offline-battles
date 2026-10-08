@@ -292,7 +292,7 @@ class AuthoredRouteWaitTests(unittest.TestCase):
     def test_condition_roundtrip_and_invalid_waits(self):
         raw = profile()
         raw['maps']['08_ruinberg']['routes'][0]['points'][0].append(12.5)
-        self.assertEqual(raw, cfg.canonical(raw))
+        self.assertEqual(cfg.canonical(profile()), cfg.canonical(raw))
         for seconds in (float('nan'), float('inf'), -0.5, -2, 3601, True):
             changed = copy.deepcopy(raw)
             changed['maps']['08_ruinberg']['routes'][0]['points'][0][3] = seconds

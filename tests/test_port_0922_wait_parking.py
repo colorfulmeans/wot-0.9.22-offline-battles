@@ -45,6 +45,33 @@ class WaitParkingTests(unittest.TestCase):
     def orders(self, planner, manifest, states, now):
         return {o['id']:o for o in planner.build_orders(manifest,states,[],now)['orders']}
 
+    def test_optional_heading_roundtrip_and_no_target_idle_order(self):
+        p,m=self.setup_parking([[0,0,60,90]])
+        order=self.orders(p,m[:1],[_state(11,1,0,0)],1)[11]
+        self.assertEqual('waiting',order['parking_phase'])
+        self.assertEqual(90,order['parking_heading'])
+        self.assertAlmostEqual(20,order['face_position']['x'])
+        self.assertAlmostEqual(0,order['face_position']['z'])
+        self.assertEqual(0,order['throttle_override'])
+        self.assertEqual(p.tactics,cfg.canonical(p.tactics))
+        for bad in (181,float('nan'),float('inf'),True):
+            raw=copy.deepcopy(p.tactics);raw['maps']['08_ruinberg']['routes'][0]['points'][0][4][0][3]=bad
+            with self.assertRaises(cfg.TacticsError):cfg.canonical(raw)
+
+    def test_idle_heading_never_overrides_live_target_facing(self):
+        from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+        adapter=BotAdapter('08_ruinberg',1)
+        state=dict(id=11,slot=0,team=1,yaw=0,speed=0,dt=.1)
+        order=dict(parking_phase='waiting',parking_heading=90,combat_mode='hold',
+                   move_position=(0,0,0),throttle_override=0)
+        idle=adapter._drive_order(11,state,(0,0,0),order,lambda *args:True)
+        self.assertAlmostEqual(1.5707963267948966,idle['target_yaw'])
+        self.assertEqual(0,idle['throttle'])
+        order.update(target_id=7,aim_position=(0,0,-100),face_position=(0,0,-100))
+        attack=adapter._drive_order(11,state,(0,0,0),order,lambda *args:True)
+        self.assertAlmostEqual(3.141592653589793,abs(attack['target_yaw']))
+        self.assertEqual(0,attack['throttle'])
+
     def test_three_distinct_places_and_fourth_uses_parent_gate(self):
         p,m=self.setup_parking();states=[_state(i,1,-100-(i-11)*15,0) for i in range(11,15)]
         first=self.orders(p,m,states,1)
