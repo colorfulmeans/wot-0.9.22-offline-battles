@@ -171,7 +171,7 @@ class WaitParkingTests(unittest.TestCase):
         self.assertEqual(0,first['route_index'])
         self.assertEqual(0,first['move_position']['x'])
         self.assertNotIn('parking_phase',first)
-        skipped=order(20)
+        skipped=order(30)
         self.assertEqual(1,skipped['route_index'])
         self.assertEqual('blocked_timeout',skipped['route_point_skip_reason'])
         self.assertEqual(-40,skipped['route_anchor']['x'])
@@ -182,8 +182,8 @@ class WaitParkingTests(unittest.TestCase):
         first=self.orders(p,m[:1],states,0)[11]
         self.assertEqual('parking_approach',first['combat_mode'])
         self.assertEqual(20,first['move_position']['z'])
-        self.assertEqual('parking_approach',self.orders(p,m[:1],states,19.9)[11]['combat_mode'])
-        declined=self.orders(p,m[:1],states,20)[11]
+        self.assertEqual('parking_approach',self.orders(p,m[:1],states,29.9)[11]['combat_mode'])
+        declined=self.orders(p,m[:1],states,30)[11]
         self.assertEqual('blocked_approach_timeout',declined['parking_skip_reason'])
         self.assertEqual('route',declined['combat_mode'])
         self.assertIsNone(declined['parking_phase'])
@@ -192,7 +192,7 @@ class WaitParkingTests(unittest.TestCase):
         self.assertFalse(any(c['bot_id']==11 for c in p._wait_claims.values()))
         # A vacated slot must not restart the failed parking approach.
         self.assertNotEqual('parking_approach',self.orders(p,m[:1],states,30)[11]['combat_mode'])
-        skipped=self.orders(p,m[:1],states,40)[11]
+        skipped=self.orders(p,m[:1],states,60)[11]
         self.assertEqual(1,skipped['route_index'])
         self.assertEqual('blocked_timeout',skipped['route_point_skip_reason'])
 

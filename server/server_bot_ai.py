@@ -53,7 +53,8 @@ CLOSE_THREAT_SCORE_BONUS = 100.0
 CLOSE_THREAT_FOCUS_LIMIT = 4
 ROUTE_REBALANCE_SECONDS = 4.0
 ROUTE_LEASE_SECONDS = 6.0
-WRECK_ROUTE_WAIT_SECONDS = 20.0
+WRECK_ROUTE_WAIT_SECONDS = 30.0
+WRECK_ROUTE_SECOND_WAIT_SECONDS = 60.0
 WRECK_ROUTE_AVOID_SECONDS = 120.0
 MAX_BASE_DEFENDERS = 3
 BASE_DEFENSE_RELEASE_SECONDS = 3.0
@@ -204,6 +205,7 @@ class BotPlanner(object):
         self._wait_claims = {}
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
+        self._route_retreats = {}
         self._route_assignments = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
@@ -238,6 +240,7 @@ class BotPlanner(object):
         self._wait_claims = {}
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
+        self._route_retreats = {}
         self._route_assignments = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
@@ -773,7 +776,8 @@ class BotPlanner(object):
                     order, bot, team_order_by_bot.get(bot["id"]),
                     players, defense, route_point, turnback_point)
                 self._apply_authored_route_order(order, bot, route_point, now)
-                self._reroute_wreck_stall(order, bot, manifest, now)
+                self._reroute_wreck_stall(order, bot, manifest, now,
+                    self._capture_target(defense, 3 - team))
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
         payload = {"orders": orders}
@@ -876,7 +880,7 @@ class BotPlanner(object):
             changed = stage.get('route_id') != key[1] or stage.get('index') != key[2]
             if owner is None or departed or (changed and not claim.get('departing')):
                 self._wait_claims.pop(key, None)
-        for states in (self._wreck_route_progress, self._wreck_route_avoid):
+        for states in (self._wreck_route_progress, self._wreck_route_avoid, self._route_retreats):
             for bot_id in list(states):
                 if bot_id not in live_bots:
                     del states[bot_id]
@@ -2497,11 +2501,14 @@ class BotPlanner(object):
         }
         self._route_states.pop(donor["id"], None)
 
-    def _reroute_wreck_stall(self, order, bot, manifest, now):
-        """Bound each blocked gate attempt; skip once before changing lanes."""
+    def _reroute_wreck_stall(self, order, bot, manifest, now, home_target=None):
+        """Try blocked gates for 30/60 seconds, then return home to change lanes."""
         bot_id = bot['id']
         state = bot['state']
         route_id = str(order.get('route_id') or '')
+        if bot_id in self._route_retreats:
+            self._apply_route_retreat(order, bot, manifest, now)
+            return
         if (order.get('combat_mode') not in ('route', 'advance', 'parking_approach', 'base_capture') or
                 order.get('team_command') or
                 order.get('throttle_override') is not None or
@@ -2537,7 +2544,12 @@ class BotPlanner(object):
                 return
         # A moving recovery orbit still has a finite attempt budget. Only
         # consuming the gate or clearing the physical blocker ends this attempt.
-        if _number(now) - progress['since'] < WRECK_ROUTE_WAIT_SECONDS:
+        route_state = self._route_states.get(bot_id) or {}
+        index = _integer(order.get('route_index'))
+        wait_seconds = (WRECK_ROUTE_SECOND_WAIT_SECONDS
+                        if route_state.get('blocked_skip_to') == index
+                        else WRECK_ROUTE_WAIT_SECONDS)
+        if _number(now) - progress['since'] < wait_seconds:
             return
         route_state = self._route_states.get(bot_id) or {}
         route = (self._route_assignments.get(bot_id) or {}).get('route') or bot.get('route') or {}
@@ -2569,7 +2581,7 @@ class BotPlanner(object):
             return
         if route_state.get('blocked_skip_to') != index and index + 1 < len(waypoints):
             next_index = index + 1
-            route_state.update(index=next_index, blocked_skip_to=next_index,
+            route_state.update(index=next_index, blocked_from=index, blocked_skip_to=next_index,
                                join_index=next_index, join_anchor=dict(point))
             # Abandon the blocked gate's parking lease as well as its geometry.
             route_state.setdefault('parking_completed', set()).add(index)
@@ -2593,6 +2605,87 @@ class BotPlanner(object):
                 'since': _number(now), 'origin': dict(point),
                 'physical_block': physical_block}
             return
+        # Remember the first failed forward gate. The successor was never
+        # reached, so neither failed gate belongs to the return corridor.
+        failed = _integer(route_state.get('blocked_from'), index)
+        if not waypoints:
+            progress['since'] = _number(now)
+            return
+        home = _point(home_target['point']) if home_target else _point(waypoints[0])
+        self._route_assignments[bot_id] = dict(route=route, until=0.0, wreck_detour=True)
+        self._route_retreats[bot_id] = dict(route=route, cursor=max(0, failed - 1),
+            forward_index=failed, home=home, anchor=dict(point), since=_number(now),
+            origin=dict(point), failures=0, home_done=False,
+            reason='wreck_stall' if physical_block else 'no_route_progress')
+        self._wreck_route_progress.pop(bot_id, None)
+        for claim_key, claim in list(self._wait_claims.items()):
+            if claim['bot_id'] == bot_id:
+                self._wait_claims.pop(claim_key, None)
+        self._apply_route_retreat(order, bot, manifest, now)
+
+    def _route_retreat_goal(self, retreat):
+        if retreat['cursor'] < 0:
+            return retreat['home']
+        return _point(retreat['route']['waypoints'][retreat['cursor']])
+
+    def _apply_route_retreat(self, order, bot, manifest, now):
+        bot_id = bot['id']
+        retreat = self._route_retreats[bot_id]
+        if order.get('team_command') or not self._route_donor_eligible(bot):
+            retreat['since'] = _number(now)
+            return
+        point = _point(bot['state'])
+        goal = self._route_retreat_goal(retreat)
+        while not retreat['home_done'] and math.hypot(
+                point['x'] - goal['x'], point['z'] - goal['z']) <= 13.0:
+            if retreat['cursor'] < 0:
+                retreat['home_done'] = True
+                break
+            retreat.update(cursor=retreat['cursor'] - 1, anchor=dict(point),
+                           origin=dict(point), since=_number(now), failures=0)
+            goal = self._route_retreat_goal(retreat)
+        if retreat['home_done']:
+            if self._switch_route_at_home(order, bot, manifest, now, retreat):
+                return
+        else:
+            origin = retreat['origin']
+            distance = math.hypot(goal['x']-point['x'], goal['z']-point['z'])
+            toward = math.hypot(goal['x']-origin['x'], goal['z']-origin['z'])-distance
+            if math.hypot(point['x']-origin['x'], point['z']-origin['z']) >= 6.0 and toward >= 4.0:
+                retreat.update(origin=dict(point), since=_number(now))
+            elif _number(now)-retreat['since'] >= (
+                    WRECK_ROUTE_SECOND_WAIT_SECONDS if retreat['failures']
+                    else WRECK_ROUTE_WAIT_SECONDS):
+                if retreat['failures'] or retreat['cursor'] < 0:
+                    self._route_retreats.pop(bot_id, None)
+                    stage = self._route_states.setdefault(bot_id, {})
+                    stage.update(index=retreat['forward_index'],
+                                 join_index=retreat['forward_index'], join_anchor=dict(point))
+                    stage.pop('blocked_skip_to', None)
+                    stage.pop('blocked_from', None)
+                    self._wreck_route_progress.pop(bot_id, None)
+                    new_id, index, move, anchor, join = self._route(bot, now)
+                    order.update(combat_mode='route', route_id=new_id, route_index=index,
+                        route_anchor=anchor, route_join=join, move_position=move,
+                        face_position=dict(move), throttle_override=None,
+                        parking_phase=None, parking_slot=None, arrival_radius=None,
+                        route_retreat_aborted='second_return_gate_failed')
+                    return
+                retreat.update(cursor=retreat['cursor']-1, failures=1,
+                               origin=dict(point), anchor=dict(point), since=_number(now))
+                goal = self._route_retreat_goal(retreat)
+        order.update(combat_mode='route', route_id=retreat['route']['id'],
+            route_index=max(0, retreat['cursor']), route_anchor=retreat['anchor'],
+            route_join=True, move_position=dict(goal), face_position=dict(goal),
+            throttle_override=0.0 if retreat['home_done'] else None,
+            parking_phase=None, parking_slot=None, arrival_radius=None,
+            route_retreat_phase='at_home' if retreat['home_done'] else 'returning',
+            route_retreat_index=retreat['cursor'])
+
+    def _switch_route_at_home(self, order, bot, manifest, now, retreat):
+        bot_id = bot['id']
+        point = _point(bot['state'])
+        route_id = str(retreat['route']['id'])
         avoided = self._wreck_route_avoid.setdefault(bot_id, {})
         avoided[route_id] = _number(now) + WRECK_ROUTE_AVOID_SECONDS
         catalog = self._route_catalog([
@@ -2613,52 +2706,39 @@ class BotPlanner(object):
             if affinity < MIN_ROUTE_CLASS_AFFINITY:
                 continue
             points = route['waypoints']
-            entry = min(range(len(points)), key=lambda i: math.hypot(
-                _number(points[i].get('x')) - point['x'],
-                _number(points[i].get('z')) - point['z']))
-            while entry < len(points) - 1 and math.hypot(
-                    _number(points[entry].get('x')) - point['x'],
-                    _number(points[entry].get('z')) - point['z']) < 30.0:
-                entry += 1
-            # Different route names may share the same failed next gate.
-            # Do not call that an alternative exit.
-            if math.hypot(_number(points[entry].get('x')) - goal['x'],
-                          _number(points[entry].get('z')) - goal['z']) < 16.0:
-                continue
+            entry = 1 if len(points) > 1 and math.hypot(
+                _number(points[0].get('x')) - point['x'],
+                _number(points[0].get('z')) - point['z']) <= 13.0 else 0
             nearest = min(math.hypot(
                 _number(p.get('x')) - point['x'],
                 _number(p.get('z')) - point['z'])
                 for p in route['waypoints'])
             candidates.append((-affinity, nearest, candidate_id, route, entry))
         if not candidates:
-            # No suitable alternative: keep the physical hold, never force
-            # through a wreck or repeat a route-switch storm each tick.
-            progress['since'] = _number(now)
-            return
+            return False
         chosen = min(candidates, key=lambda value: value[:3])
         route, entry = chosen[3:]
-        self._route_assignments[bot_id] = {
-            'route': route, 'until': 0.0, 'wreck_detour': True}
-        # Join the evaluated entry from the current hull position, rather than
-        # restoring a stale failed cursor from an earlier visit to this lane.
+        self._route_assignments[bot_id] = dict(route=route, until=0.0, wreck_detour=True)
         saved = self._route_history.get(bot_id, {}).get(str(route.get('id'))) or {}
-        self._route_states[bot_id] = dict(
-            route_id=str(route.get('id')), index=entry, join_index=entry,
-            join_anchor=dict(point),
+        self._route_states[bot_id] = dict(route_id=str(route.get('id')), index=entry,
+            join_index=entry, join_anchor=dict(point),
             parking_completed=set(saved.get('parking_completed', ())),
             parking_skipped=set(saved.get('parking_skipped', ())))
-        self._wreck_route_progress.pop(bot_id, None)
+        self._route_retreats.pop(bot_id, None)
         new_id, index, move, anchor, join = self._route(bot, now)
-        order.update(route_id=new_id, route_index=index,
-                     combat_mode='route', parking_phase=None,
-                     parking_slot=None, arrival_radius=None,
-                     move_position=move, face_position=dict(move),
-                     route_anchor=anchor, route_join=join,
-                     route_switch_reason='wreck_stall' if physical_block else 'no_route_progress',
-                     previous_route_id=route_id)
+        order.update(route_id=new_id, route_index=index, combat_mode='route',
+            move_position=move, face_position=dict(move), route_anchor=anchor,
+            route_join=join, throttle_override=None, parking_phase=None,
+            parking_slot=None, arrival_radius=None, previous_route_id=route_id,
+            route_switch_reason='returned_home', route_retreat_phase='complete')
         self._apply_authored_route_order(order, bot, move, now)
+        return True
 
     def _route(self, bot, now, stop_before_objective=False):
+        retreat = self._route_retreats.get(bot['id'])
+        if retreat is not None:
+            return (str(retreat['route']['id']), max(0, retreat['cursor']),
+                    dict(self._route_retreat_goal(retreat)), dict(retreat['anchor']), True)
         assignment = self._route_assignments.get(bot["id"])
         route = assignment.get("route") if isinstance(assignment, dict) else None
         if not isinstance(route, dict):
@@ -2781,6 +2861,7 @@ class BotPlanner(object):
         if (state.get('blocked_skip_to') != index or
                 state.get('parking_phase') == 'waiting'):
             state.pop('blocked_skip_to', None)
+            state.pop('blocked_from', None)
         route_join = (state.get("join_index") == index and
                       isinstance(state.get("join_anchor"), dict))
         if route_join:
@@ -2884,6 +2965,8 @@ class BotPlanner(object):
 
     def _apply_authored_route_order(self, order, bot, route_point, now=None):
         """Apply explicit parking/travel instructions without suppressing aim."""
+        if bot['id'] in self._route_retreats:
+            return
         route = (self._route_assignments.get(bot['id']) or {}).get('route') or bot.get('route') or {}
         authored = bot_tactics.route_config(
             self.tactics, self.tactics_map, order.get('route_id'), bot['team'], route.get('waypoints'))
