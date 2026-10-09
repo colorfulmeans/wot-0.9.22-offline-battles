@@ -268,6 +268,58 @@ class NavigationOwnershipTests(unittest.TestCase):
         self.assertEqual(job.status, 'cancelled')
         self.assertEqual(self.backend.closed, [1])
 
+    def test_pending_native_receipt_supports_release_prefix_consumer(self):
+        with mock.patch.object(native_math, '_backend', self.backend):
+            navigator = TerrainNavigator(lambda *unused: 0., baked_graph=graph())
+        self.addCleanup(navigator.close)
+        start, goal = (0., 0., 0.), (16., 0., 8.)
+        job = navigator._native_navigation.submit(start, goal, 1., 128, False)
+        key = navigator._cache_key(('route_join', 11, 'report-172113'), goal)
+        navigator.searches[key] = job
+        navigator.search_times[key] = 1.
+        state = {}
+        self.assertIsNone(navigator._pending_search_target(
+            11, start, goal, 1., state, key, None))
+        self.assertFalse(job.done)
+        self.assertEqual((), job.proved_prefix(navigator.grid))
+        self.assertEqual(start, job.progress['start'])
+        self.assertEqual(goal, job.progress['goal'])
+        self.assertEqual(0, job.steps)
+        self.assertFalse(job.step(1000))
+        self.backend.completed = [(job.job_id, 'done', (start, goal), 0, 9, .001)]
+        navigator._native_navigation.advance(1.1, 0)
+        self.assertTrue(job.done)
+        self.assertEqual(9, job.steps)
+        navigator._finish_search(key, job, 1.1)
+        self.assertEqual((start, goal), navigator.paths[key])
+        self.assertNotIn(key, navigator.searches)
+
+    def test_public_next_target_keeps_pending_native_job_then_uses_completion(self):
+        with mock.patch.object(native_math, '_backend', self.backend):
+            navigator = TerrainNavigator(lambda *unused: 0., baked_graph=graph())
+        self.addCleanup(navigator.close)
+        start, goal = (0., 0., 0.), (16., 0., 8.)
+        request = ('route_join', 11, 'report-172113')
+        with mock.patch.object(navigator.grid, 'dry_segment_clear', return_value=False), \
+                mock.patch.object(navigator.grid, 'safe_local_target', return_value=None):
+            navigator.begin_frame(0.)
+            try:
+                self.assertEqual(start, navigator.next_target(11, start, goal, request, 1.))
+            finally:
+                navigator.end_frame()
+        key = navigator._cache_key(request, goal)
+        job = navigator.searches[key]
+        self.assertIsInstance(job, native_navigation.NativeSearch)
+        self.assertEqual('pending', navigator.bot_states[11]['navigation_status'])
+        self.backend.completed = [(job.job_id, 'done', (start, goal), 0, 9, .001)]
+        navigator.begin_frame(.1)
+        try:
+            self.assertEqual(goal, navigator.next_target(11, start, goal, request, 1.1))
+        finally:
+            navigator.end_frame()
+        self.assertNotIn(key, navigator.searches)
+        self.assertTrue(job.done)
+
     def test_wreck_invalidates_completion_before_driver_can_receive_it(self):
         with mock.patch.object(native_math, '_backend', self.backend):
             navigator = TerrainNavigator(lambda x, z, y: 0., baked_graph=graph())

@@ -8224,3 +8224,20 @@ the uninstalled older persistent motion/navigation controllers. Existing
 compilation and package inspection do not prove embedded #1513 lifetime safety,
 frame pacing or gameplay feel. Those boundaries require the matching test
 launcher on the exact Chinese HD Windows client.
+
+### October 9 integration startup report 172113
+
+The matching integration package reached battle start on `100_thepit`, then
+the hidden worker raised `AttributeError: NativeSearch has no attribute
+proved_prefix` in the release navigator's `_pending_search_target` path. The
+worker disconnected and the server terminated the round. This is a Python
+receipt contract mismatch, not evidence of a native process crash.
+
+NativeSearch now implements the same consumer interface as the release search
+receipt. Its pending prefix is empty because the background candidate has not
+completed all engine proofs; the existing checked local fallback remains
+available, and completed routes still publish through result. No unproved path
+or synthetic completion is introduced. Regression coverage reproduces both
+the direct pending consumer and public next_target failure, then exercises
+pending streaming columns and completed publication using actual C++ jobs and
+the Python 2 C API. Those checks do not replace exact-client play acceptance.

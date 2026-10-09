@@ -430,8 +430,90 @@ def background_checks():
     checks[0] += 1
 
 
+def release_navigation_receipt_checks():
+    """Report 172113: real C++ jobs cross the release's public pending path.
+
+    Engine proofs deliberately await streamed ground columns. A native
+    candidate cannot complete before its queries are acknowledged, so this
+    exercises the actual pending NativeSearch receipt without a timing race.
+    """
+    from gui.mods.offline_lan_0922 import native_math, native_navigation
+    previous = native_math._backend, native_math._attempted
+    native_math._backend, native_math._attempted = backend, True
+    navigator = None
+    try:
+        graph = graph_for()
+        missing = [True]
+        navigator = navigation.TerrainNavigator(
+            lambda *unused: None if missing[0] else 0.,
+            lambda *unused: False, baked_graph=graph)
+        grid = navigator.grid
+        class Vector(object):
+            def __init__(self,x,y,z): self.x,self.y,self.z=x,y,z
+        class StreamingEngine(object):
+            def wg_collideSegment(self,space,first,last,flags,keep):
+                assert threading.current_thread().ident==owner
+                if missing[0] or first.x!=last.x or first.z!=last.z: return None
+                return Vector(first.x,0.,first.z),Vector(0.,1.,0.)
+        oracle_owner=types.ModuleType('receipt_oracle')
+        oracle_owner._avatar=types.ModuleType('receipt_avatar')
+        oracle_owner._avatar.spaceID=1
+        oracle_owner._runtime=types.ModuleType('receipt_runtime')
+        oracle_owner._runtime.bigworld=StreamingEngine()
+        oracle_owner._runtime.math=types.ModuleType('receipt_math')
+        oracle_owner._runtime.math.Vector3=Vector
+        grid.native_query_oracle=native_navigation_query.Oracle(oracle_owner,backend)
+        grid._native_review_cells = set((x,z)
+            for x in range(graph['width']) for z in range(graph['height']))
+        start, goal = (4.,0.,4.), (60.,0.,40.)
+        request = ('route_join', 11, 'report-20261009-172113')
+        navigator.begin_frame(0.)
+        try:
+            navigator.next_target(11,start,goal,request,0.)
+        finally:
+            navigator.end_frame()
+        key = navigator._cache_key(request,goal)
+        job = navigator.searches[key]
+        assert isinstance(job,native_navigation.NativeSearch)
+        assert not job.done and job.proved_prefix(grid)==()
+        assert job.progress['start']==start and job.progress['goal']==goal
+        deadline = time.time()+10.
+        while not navigator._native_navigation.stats or not navigator._native_navigation.stats[2]:
+            navigator._native_navigation.advance(0.,0)
+            assert not job.done
+            assert time.time()<deadline, 'Expected a native proof acknowledgement frontier'
+        for frame in range(10):
+            navigator.begin_frame(0.)
+            try:
+                navigator.next_target(11,start,goal,request,(frame+1)*.01)
+                assert not job.done and job.proved_prefix(grid)==()
+            finally:
+                navigator.end_frame()
+        now=.1
+        missing[0]=False
+        while key not in navigator.paths:
+            now+=.05
+            navigator.begin_frame(.05)
+            try:
+                target=navigator.next_target(11,start,goal,request,now)
+            finally:
+                navigator.end_frame()
+            assert time.time()<deadline, 'Release navigator failed to publish completed native route'
+        assert job.done and job.status=='done' and job.steps>0
+        assert job.proved_prefix(grid)==()
+        assert job.result and navigator.paths[key]==job.result
+        assert key not in navigator.searches
+        assert target!=start
+        checks[0]+=1
+    finally:
+        if navigator is not None:
+            navigator.close()
+        native_math._backend,native_math._attempted=previous
+
+
 navigation_checks()
 visibility_checks()
 background_checks()
+release_navigation_receipt_checks()
 print('Native worker conformance passed: %d comparisons; navigation, receipts, cancellation, '
       'foliage snapshots, borrowed-input ownership, and progress under the GIL' % checks[0])

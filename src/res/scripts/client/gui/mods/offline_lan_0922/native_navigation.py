@@ -26,6 +26,15 @@ class NativeSearch(object):
     def step(self, unused_budget):
         return self.done
 
+    def proved_prefix(self, unused_grid):
+        """Match the release search receipt without exposing unproved paths.
+
+        The C++ worker keeps its candidate private until all required engine
+        proofs finish. Pending navigation may use its existing checked local
+        fallback; only completion publishes the native route through result.
+        """
+        return ()
+
 
 def _edge_rows(values):
     return tuple((edge[0][0], edge[0][1], edge[1][0], edge[1][1],
