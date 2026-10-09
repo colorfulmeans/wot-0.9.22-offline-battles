@@ -466,9 +466,10 @@ whose profile changed after it started must be restarted first.
 - Live combat statistics, a damage log with assists, hit and critical-damage
   messages, target outlines, vehicle fires, wrecks, and a consumables panel
   that counts down each cooldown.
-- A LAN match is one shared battle: lineups, countdown, orders, projectiles,
-  health, critical damage, destructibles, capture and results stay
-  synchronized through the room's mandatory hidden simulation worker.
+- A LAN match is one shared battle. Each player simulates their own shells;
+  the mandatory hidden worker simulates Bots and their shells. The server
+  commits shared health, critical damage and destruction once, and keeps the
+  lineups, countdown, orders, capture and results synchronized.
 - The results screen awards battle heroes, historical, special and
   commemorative medals from the client's own achievement thresholds, and both
   the vehicle and the account dossier keep counting them. Medals the client
@@ -587,3 +588,21 @@ Default SPG parking is deletable from the total, shared and SPG editor views. A 
 Deleting the last small waiting place restores a three-field ordinary parent gate, with no hold flag or clock. Contract loading/saving discards retired parent-only durations and empty waiting-place collections. Reselecting or double-clicking that parent only focuses its waiting editor; it cannot recreate a sixty-second small place. The explicit Add wait point action still permits intentional placement at the parent's coordinates. Existing nonempty places retain their individual times and geometry.
 
 Bot tactics editor: [English user guide](docs/bot-editor-guide-en.md).
+
+
+### 0.10.0 native performance integration
+
+The integration keeps the 0.10.0 launcher operations, route editor, tactics,
+parking, recovery, artillery, customization and server route-progress rules.
+The hidden worker uses native computation for expensive geometry, background
+path searches, sight/foliage and weapon work. The release's higher-level Bot
+behavior owners remain in place; older native state machines do not replace
+them. Decision cadence is unchanged.
+
+Each visible player advances their own frozen shells; the server validates
+ownership and commits shared damage and destruction once. Bot movement and
+Bot shells remain with the hidden worker. State synchronization sends deltas
+with full initialization/recovery checkpoints and ordered event delivery.
+Use a launcher built from the integration commit so its native module, client
+and server match. This branch is a test candidate; it does not replace the
+published 0.10.0 release or establish a measured frame-time improvement.

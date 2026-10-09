@@ -422,36 +422,22 @@ class LocalDriver(object):
 
 	def _clear(self, direction_clear, yaw, maximum_distance=None,
 			drive_direction=1.0):
-		"""Ask one probe about a heading, optionally over a bounded distance.
-
-		A recovery manoeuvre travels a hull length, not the fifteen to twenty
-		metre travel horizon the ordinary drive candidates are ranked over.
-		Probes that predate the bounded form keep the unbounded answer.
-		"""
-		# A candidate behind the current hull may be a forward route after a
-		# pivot. Only an explicit backing command may use reverse-drive limits.
-		# Inspect Python callbacks before calling; a TypeError in their body
-		# must not execute a native query twice under a guessed legacy arity.
+		"""Dispatch one reviewed probe arity without replaying engine effects."""
 		target = getattr(direction_clear, 'im_func',
 			getattr(direction_clear, '__func__', direction_clear))
 		code = getattr(target, 'func_code', getattr(target, '__code__', None))
+		count = 2 if maximum_distance is not None else 1
+		variadic = False
 		if code is not None:
 			bound = getattr(direction_clear, 'im_self',
 				getattr(direction_clear, '__self__', None))
-			argument_count = code.co_argcount - (1 if bound is not None else 0)
-			if argument_count >= 3:
-				try:
-					return bool(direction_clear(yaw, maximum_distance, drive_direction))
-				except Exception:
-					return False
-		if maximum_distance is not None and self._probe_takes_distance:
-			try:
-				return bool(direction_clear(yaw, maximum_distance))
-			except TypeError:
-				self._probe_takes_distance = False
-			except Exception:
-				return False
+			count = code.co_argcount - (1 if bound is not None else 0)
+			variadic = bool(code.co_flags & 0x04)
 		try:
+			if count >= 3:
+				return bool(direction_clear(yaw, maximum_distance, drive_direction))
+			if (maximum_distance is not None and (count >= 2 or variadic)):
+				return bool(direction_clear(yaw, maximum_distance))
 			return bool(direction_clear(yaw))
 		except Exception:
 			return False
