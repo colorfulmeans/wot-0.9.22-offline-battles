@@ -1372,6 +1372,15 @@ def _destructible_rotation_interval_bbox(bbox, half_angle, pivot_offset=0.0):
     cannot open a gap between sampled yaws.  This is a swept-volume broadphase,
     not a finite ray approximation.
     """
+    operation = getattr(native_math._load(), 'rotation_envelope', None)
+    if callable(operation):
+        result = native_math.call('rotation_envelope', bbox, half_angle, pivot_offset)
+        if result is not None:
+            return result
+    return _reference_rotation_interval_bbox(bbox, half_angle, pivot_offset)
+
+
+def _reference_rotation_interval_bbox(bbox, half_angle, pivot_offset=0.0):
     minimum, maximum = bbox[:2]
     half_angle = abs(float(half_angle))
     horizontal_x = []
@@ -1432,6 +1441,47 @@ def _trig_linear_interval_minimum(a, b, start, end, drift):
 
 
 def _rotation_departing_contact(position, bbox, start_yaw, end_yaw,
+                                pitch=0.0, roll=0.0, previous_contacts=None,
+                                translation=(0.0, 0.0), pivot_offset=0.0):
+    if not callable(getattr(native_math._load(), 'rotation_departure', None)):
+        return _reference_rotation_departing_contact(
+            position, bbox, start_yaw, end_yaw, pitch, roll,
+            previous_contacts, translation, pivot_offset)
+    low, high = bbox[:2]
+    pose_y = world_collision._hull_pose_y(pitch, roll)
+    angles = (float(start_yaw), float(start_yaw) + _angle_delta(start_yaw, end_yaw))
+    pivot = float(pivot_offset or 0.0)
+    drivable_defaults = getattr(world_collision._drivable_surface, 'func_defaults',
+        getattr(world_collision._drivable_surface, '__defaults__', None))
+    gradient = drivable_defaults[0]
+    def departing(collision):
+        point, normal = collision[:2]
+        result = native_math.call('rotation_departure', position, low, high,
+            angles, pose_y, translation, pivot,
+            (point.x, point.y, point.z), (normal.x, normal.y, normal.z),
+            gradient)
+        if result is None:
+            return _reference_rotation_departing_contact(
+                position, bbox, start_yaw, end_yaw, pitch, roll,
+                previous_contacts, translation, pivot_offset)(collision)
+        improves, inside = result
+        if not improves or inside:
+            return bool(improves)
+        # Preserve the lazy exact-footprint witness and its engine query order.
+        for old_point, old_normal in (previous_contacts()
+                if callable(previous_contacts) else ()):
+            alignment = (normal.x * old_normal.x + normal.y * old_normal.y +
+                         normal.z * old_normal.z)
+            difference = ((point.x - old_point.x) * normal.x +
+                          (point.y - old_point.y) * normal.y +
+                          (point.z - old_point.z) * normal.z)
+            if alignment >= 0.9999 and abs(difference) <= 0.001:
+                return True
+        return False
+    return departing
+
+
+def _reference_rotation_departing_contact(position, bbox, start_yaw, end_yaw,
                                 pitch=0.0, roll=0.0, previous_contacts=None,
                                 translation=(0.0, 0.0), pivot_offset=0.0):
     """Permit only reduced penetration of a face already inside this body.
@@ -20334,7 +20384,7 @@ class BattleRuntime(object):
                         start_yaw, direction, actual_descriptor, False, 0.0,
                         True, False, None, commit_enabled=False,
                         pitch=pitch, roll=roll, trace=previous_trace,
-                        exact_footprint=True)
+                        exact_footprint=True, query_owner=self)
                     if 'hit' in previous_trace and 'normal' in previous_trace:
                         previous_contacts.append((self._vector(previous_trace['hit']),
                                                   self._vector(previous_trace['normal'])))
@@ -20377,7 +20427,7 @@ class BattleRuntime(object):
                     pitch=sweep_pitch, roll=sweep_roll,
                     trace=trace, exact_footprint=not travel_length,
                     motion_yaw=math.atan2(*slice_travel) if travel_length else None,
-                    departing_contact=departing)
+                    departing_contact=departing, query_owner=self)
                 if isinstance(world_status, bool):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status != 'clear':
@@ -20515,7 +20565,7 @@ class BattleRuntime(object):
                     True, kinetic_speed, commit_enabled=False,
                     pitch=self._local_pitch, roll=self._local_roll,
                     motion_yaw=world_motion_yaw,
-                    trace=self._local_world_collision_trace)
+                    trace=self._local_world_collision_trace, query_owner=self)
                 if isinstance(world_status, bool):
                     world_status = 'hard' if world_status else 'clear'
                 if world_status not in ('clear', 'kinetic'):
@@ -20534,7 +20584,7 @@ class BattleRuntime(object):
             commit_enabled=False,
             pitch=self._local_pitch, roll=self._local_roll,
             motion_yaw=world_motion_yaw,
-            trace=self._local_world_collision_trace)
+            trace=self._local_world_collision_trace, query_owner=self)
         if isinstance(world_status, bool):
             world_status = 'hard' if world_status else 'clear'
         if world_status == 'hard':
@@ -20594,7 +20644,7 @@ class BattleRuntime(object):
                 bool(kinetic_speed is not None), kinetic_speed,
                 commit_enabled=False, pitch=self._local_pitch,
                 roll=self._local_roll, motion_yaw=world_motion_yaw,
-                trace=self._local_world_collision_trace)
+                trace=self._local_world_collision_trace, query_owner=self)
             if after is True or after not in (False, 'clear', 'kinetic'):
                 self._local_motion_status = 'hard'
                 return False

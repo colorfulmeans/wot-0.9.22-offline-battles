@@ -15,7 +15,7 @@ extension=sys.argv[1]
 backend=imp.load_dynamic('offline_math_batch_native',extension)
 class Legacy(object):
  def __getattr__(self,name):
-  if name=='world_run_native':raise AttributeError(name)
+  if name in ('world_run_native', 'rotation_envelope', 'rotation_departure', 'contact_ground'):raise AttributeError(name)
   return getattr(backend,name)
 drive=check.reference_drive(bot)
 results=[]

@@ -315,15 +315,16 @@ namespace sim_motion_bridge {
             if (!handle || handle>hits_.size())throw Unsupported();
             return hits_[handle-1].get();
         }
-        void ray(unsigned op,const WorldRequest &request,WorldResponse &response,PyObject *query_filter) {
+        void ray(unsigned op,const WorldRequest &request,WorldResponse &response,PyObject *query_filter,
+                 const std::function<bool(PyObject *)> &external_departing={}) {
             auto start=session.vector(request.start),end=session.vector(request.end);
             session.point(start.get(),response.start);session.point(end.get(),response.end);
             auto current=start;
             engine_query::Object result;
             for(unsigned attempt=0;attempt<=recasts_;++attempt) {
                 result=session.collide(current.get(),end.get(),query_filter,op==WORLD_GROUND);
-                if(op!=WORLD_HORIZONTAL || result.get()==none_object || !has_departing_ ||
-                   !(request.flags&1) || !departing(result.get()))break;
+                if(op!=WORLD_HORIZONTAL || result.get()==none_object || (!has_departing_ && !external_departing) ||
+                   !(request.flags&1) || !(external_departing?external_departing(result.get()):departing(result.get())))break;
                 require_sequence(result.get(),1);
                 auto remaining=session.subtract(end.get(),items(result.get())[0]);
                 const double length=session.length(remaining.get());

@@ -603,6 +603,15 @@ Each visible player advances their own frozen shells; the server validates
 ownership and commits shared damage and destruction once. Bot movement and
 Bot shells remain with the hidden worker. State synchronization sends deltas
 with full initialization/recovery checkpoints and ordered event delivery.
+Current turn-sweep envelopes and occupied-wall departure proofs now use native
+numeric laws. Rotation and local movement also use the ordered world-query
+frontier, including supplied departure callbacks and lazy exact-footprint
+witnesses. External contact pushes and the iterative passive wreck track solver
+use current-release C++ laws with live tuning. Collision query order, main-thread
+ownership, native effects and shared damage remain on their existing owners.
+Host numerical comparisons and complete physical-stage fixtures cover these
+boundaries; their component timings do not establish a Windows frame-time gain.
+
 Use a launcher built from the integration commit so its native module, client
 and server match. This branch is a test candidate; it does not replace the
 published 0.10.0 release or establish a measured frame-time improvement.

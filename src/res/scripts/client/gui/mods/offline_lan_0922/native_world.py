@@ -11,7 +11,7 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
     import BigWorld, Math
     query = None
     backend = native_math._load()
-    if query_owner is not None and hasattr(backend, 'world_run_native') and departing_contact is None:
+    if query_owner is not None and hasattr(backend, 'world_run_native'):
         from .native_engine_query import EngineQuery
         query = getattr(query_owner, '_native_world_query', None)
         if query is not None:
@@ -54,6 +54,10 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
             state[0] = module._trace_collision_filter(
                 module.prepare_horizontal_collision_filter(V(*a), V(*b)), trace)
             return state[0] if query is not None else None
+        if op == 8:
+            result = bool(state[1](rows[0]))
+            query._live()
+            return result
         if op == 7:
             a, unused_end, unused_flags = rows[0]
             return module.ground_collision_filter(a[0], a[2])

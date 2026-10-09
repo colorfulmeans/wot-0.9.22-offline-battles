@@ -25,6 +25,7 @@ struct PyMethodDef {
 #include <cstring>
 #include <limits>
 #include <exception>
+#include <functional>
 #include <queue>
 #include "offline_math_batch.h"
 #include "offline_navigation.h"
@@ -361,6 +362,7 @@ PyObject *WOT_CDECL rotation_current(PyObject *,PyObject *args) {
 #include "offline_simulation_navigation_python.inc"
 #include "offline_contact_projection_python.inc"
 #include "offline_world_query_python.inc"
+#include "offline_release_ground_python.inc"
 
 PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(translate);
@@ -380,6 +382,9 @@ PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
 }
 
 PyMethodDef methods[] = {
+    {"contact_ground", contact_ground, 0x0001, "Current external push and passive wreck track friction."},
+    {"rotation_envelope", rotation_envelope, 0x0001, "Exact current analytical yaw sweep bounds."},
+    {"rotation_departure", rotation_departure, 0x0001, "Current occupied-face corner sweep proof."},
     {"control_pose", control_pose, 0x0001, "Project current actor pose and presence mask."},
     {"contact_materialize", contact_materialize, 0x0001, "Materialize current perception rows without Python loops."},
     {"release_drive", release_drive, 0x0001, "Current release drive, traverse, contact torque and coast integral."},

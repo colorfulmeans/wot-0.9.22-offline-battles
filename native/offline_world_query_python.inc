@@ -4,6 +4,7 @@ struct NativeWorldQuery {
     PyObject *dispatcher;
     sim_motion_bridge::WorldFrontier *frontier;
     std::exception_ptr error;
+    bool supplied_departing;
     engine_query::Object invoke(unsigned op,OwnedTuple &rows,size_t count) {
         OwnedTuple args(2);args.set(0,int_new(op));args.set(1,rows.release());
         WorldObject owned(args.release());
@@ -33,7 +34,12 @@ struct NativeWorldQuery {
                     OwnedTuple rows(1);rows.set(0,world_request(WORLD_GROUND,request));
                     local=invoke(7,rows,1);filter=local.get();
                 }
-                frontier->ray(op,request,response,filter);
+                std::function<bool(PyObject *)> departing;
+                if(supplied_departing)departing=[&](PyObject *hit) {
+                    OwnedTuple rows(1);engine_query::borrow(rows,0,hit);
+                    return number(invoke(8,rows,1).get())!=0.;
+                };
+                frontier->ray(op,request,response,filter,departing);
                 stopped=stopped || (op==WORLD_GROUND && !response.status && (request.flags&1));
             }
             return 1;
@@ -80,7 +86,7 @@ PyObject *WOT_CDECL world_run_native(PyObject *,PyObject *args) {
         if(snapshot.dt<0. || snapshot.bounds[0]>snapshot.bounds[1] || snapshot.bounds[2]<0. || snapshot.bounds[3]<0.)throw Unsupported();
         entered=true;
         sim_motion_bridge::WorldFrontier frontier(items(args)[2],items(args)[3],snapshot);
-        NativeWorldQuery context={items(args)[1],&frontier,{}};
+        NativeWorldQuery context={items(args)[1],&frontier,{},snapshot.supplied_departing!=0};
         const int result=profile.run(wot_world_run,&snapshot,native_world_query_dispatch,&context);
         if(context.error)std::rethrow_exception(context.error);
         return int_new(result);

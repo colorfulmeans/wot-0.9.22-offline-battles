@@ -2357,7 +2357,29 @@ def brake_force(p, active, terrainIdx=0, slope_pitch=0.0):
 		p['mass'] * COAST_BRAKE_SHARE * brake)
 
 
+def _native_contact_ground(op, params, values):
+    try:
+        from gui.mods.offline_lan_0922 import native_math
+    except ImportError:
+        return None
+    operation = getattr(native_math._load(), 'contact_ground', None)
+    if not callable(operation):
+        return None
+    tuning = (GRAVITY, GRAVITY_FACTOR, SLIDE_HOLD_TAN,
+        SLOPE_GRIP_SDW_MIN_Y, SLOPE_GRIP_SDW_FULL_Y,
+        SLOPE_GRIP_SDW_MIN, SLOPE_GRIP_SDW_FULL,
+        SERVER_PHYSICS_CONSTRAINT_ITERATIONS)
+    return operation(op, params, values, tuning)
+
+
 def contact_push_decel(p, rolling, terrainIdx=0, normal_y=1.0):
+    result = _native_contact_ground(0, p, (rolling, terrainIdx, normal_y))
+    if result is not None:
+        return result
+    return _reference_contact_push_decel(p, rolling, terrainIdx, normal_y)
+
+
+def _reference_contact_push_decel(p, rolling, terrainIdx=0, normal_y=1.0):
 	'''Return the (longitudinal, lateral) m/s^2 the tracks oppose an EXTERNAL
 	push with. This is the ground reaction to another hull shoving this one, so
 	it is deliberately anisotropic: a track rolls along the hull and scrubs
@@ -2397,6 +2419,19 @@ def _bleed(value, budget):
 
 def contact_push_step(p, push_x, push_z, yaw, dt, rolling=False,
                       terrainIdx=0, normal_y=1.0):
+    dt = float(dt)
+    if dt <= 0.0:
+        return float(push_x), float(push_z)
+    result = _native_contact_ground(1, p,
+        (push_x, push_z, yaw, dt, rolling, terrainIdx, normal_y))
+    if result is not None:
+        return result
+    return _reference_contact_push_step(
+        p, push_x, push_z, yaw, dt, rolling, terrainIdx, normal_y)
+
+
+def _reference_contact_push_step(p, push_x, push_z, yaw, dt, rolling=False,
+                      terrainIdx=0, normal_y=1.0):
 	'''Advance one hull's external contact-push velocity by dt.
 
 	The push is a world-frame velocity a contact impulse gave this hull. Resolve
@@ -2430,6 +2465,19 @@ def contact_push_is_held(p, push_x, push_z, yaw, dt, rolling=False,
 
 
 def wreck_contact_step(p, vx, vz, omega, yaw, shape, dt,
+                       normal_y=1.0, airborne=False):
+    if airborne or dt <= 0.0:
+        return vx, vz, omega
+    width, length = shape[:2]
+    result = _native_contact_ground(2, p,
+        (vx, vz, omega, yaw, width, length, dt, normal_y, airborne))
+    if result is not None:
+        return result
+    return _reference_wreck_contact_step(
+        p, vx, vz, omega, yaw, shape, dt, normal_y, airborne)
+
+
+def _reference_wreck_contact_step(p, vx, vz, omega, yaw, shape, dt,
 		normal_y=1.0, airborne=False):
 	'''Solve translation and yaw against one shared passive track budget.
 
