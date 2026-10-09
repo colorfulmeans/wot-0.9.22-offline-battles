@@ -14,6 +14,32 @@ spec.loader.exec_module(diagnostics)
 
 
 class WorkerCombatDiagnosticsTests(unittest.TestCase):
+    def test_spike_test_keeps_every_actor_after_old_capture_limit(self):
+        ticks = iter(i * 0.001 for i in range(10000))
+        trace = diagnostics.WorkerCombatDiagnostics.spike_test(
+            lambda: next(ticks))
+        for frame in range(1, 10):
+            trace.begin_frame(frame, frame * 30.0, 'profile_window')
+            trace.begin_slice(0.1, True, True)
+            for bot in range(1, 30):
+                trace.actor(bot)
+                trace.phase('bot.motion_plan')
+                trace.phase('bot.integrate')
+            trace.actor(None)
+            row = trace.finish_frame()
+            self.assertTrue(row['detail_sampled'])
+            self.assertEqual(29, row['actors_tracked'])
+            self.assertEqual(6, len(row['actors']))
+            for actor in row['actors']:
+                self.assertIn('bot.motion_plan', actor['stages'])
+                self.assertIn('bot.integrate', actor['stages'])
+            completed = trace.drain_completed()
+            if frame > 1:
+                self.assertEqual(1, len(completed))
+                self.assertEqual(29, len(completed[0]['actors']))
+        self.assertEqual(9, trace.capture)
+        self.assertTrue(trace.enabled)
+
     def test_native_ledger_keeps_reentry_separate_from_python_stage_totals(self):
         trace = diagnostics.WorkerCombatDiagnostics(lambda: 1.0)
         entry = ('sim_motion_advance', -1, 2, 0,

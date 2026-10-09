@@ -117,6 +117,16 @@ def timed(stage):
 class WorkerCombatDiagnostics(object):
     """Capture three combat windows without retaining native objects."""
 
+    @classmethod
+    def spike_test(cls, clock):
+        """Observe every control callback for a bounded 32-minute test.
+
+        Keep the existing bounded frame/actor/native ledgers and 30-second
+        emission boundary. No per-Bot logging runs inside simulation work.
+        """
+        return cls(clock, capture_seconds=30.0, cooldown_seconds=0.0,
+                   maximum_captures=64, detail_stride=1)
+
     def __init__(self, clock, capture_seconds=CAPTURE_SECONDS,
                  cooldown_seconds=CAPTURE_COOLDOWN_SECONDS,
                  maximum_captures=MAX_CAPTURES, detail_stride=1):

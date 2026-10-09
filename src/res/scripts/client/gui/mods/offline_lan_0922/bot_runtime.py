@@ -13211,7 +13211,8 @@ class BotRuntime(object):
                 visibility_frame_open = True
             navigator_tick = getattr(self.navigator, 'tick', None)
             if callable(navigator_tick):
-                navigator_tick(now)
+                timed_call(self._combat_diagnostics, 'bot.navigation_service',
+                           navigator_tick, now)
             try:
                 if not self._fixed_control:
                     elapsed = self._accumulator

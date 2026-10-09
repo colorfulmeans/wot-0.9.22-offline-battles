@@ -2390,8 +2390,11 @@ class BattleRuntime(object):
         # Fine scopes perturb the measured update. Enable bounded captures
         # only for an explicitly opted-in diagnostic process.
         self._combat_diagnostics = (
-            WorkerCombatDiagnostics(_PROFILE_CLOCK, detail_stride=8)
-            if os.environ.get('WOT_OFFLINE_COMBAT_PROFILE') == '1' else None)
+            WorkerCombatDiagnostics.spike_test(_PROFILE_CLOCK)
+            if self._worker_mode and
+            os.environ.get('WOT_OFFLINE_SPIKE_PROFILE') == '1' else
+            (WorkerCombatDiagnostics(_PROFILE_CLOCK, detail_stride=8)
+             if os.environ.get('WOT_OFFLINE_COMBAT_PROFILE') == '1' else None))
         if self._worker_mode:
             self._config['native_remote_vehicles'] = False
             self._config['bot_track_animation'] = False

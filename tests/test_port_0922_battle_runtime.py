@@ -13000,6 +13000,34 @@ class BattleRuntimeContractTests(unittest.TestCase):
                     self.assertIsNone(battle._combat_diagnostics)
                     battle.stop(restore_account=False)
 
+    def test_spike_profile_is_worker_only_and_requires_exact_opt_in(self):
+        for worker, flag in ((False, '1'), (True, '0'), (True, 'true'),
+                             (True, '1')):
+            runtime = _runtime()
+            battle = BattleRuntime(runtime)
+            client = _Client()
+            if worker:
+                client.player_id = -1
+                client.bot_authority_id = -1
+                client.is_bot_authority = lambda: True
+                client.send_bot_manifest = lambda *unused: True
+            start = _minimal_start()
+            if worker:
+                start['players'] = []
+            with mock.patch.dict(battle_runtime_module.os.environ, {
+                    'WOT_OFFLINE_SPIKE_PROFILE': flag}, clear=True):
+                self.assertTrue(battle.start({
+                    'map': '01_karelia', 'vehicle': 'ussr:R11_MS-1',
+                    'name': 'Player', 'worker_mode': worker}, start, client))
+            trace = battle._combat_diagnostics
+            if worker and flag == '1':
+                self.assertEqual(1, trace.detail_stride)
+                self.assertEqual(0.0, trace.cooldown_seconds)
+                self.assertEqual(64, trace.maximum_captures)
+            else:
+                self.assertIsNone(trace)
+            battle.stop(restore_account=False)
+
     def test_combat_profile_start_restart_and_teardown_are_round_local(self):
         from gui.mods.offline_lan_0922.native_navigation_query import Oracle
         for worker in (False, True):
