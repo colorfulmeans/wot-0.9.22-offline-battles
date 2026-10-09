@@ -2733,6 +2733,89 @@ class BattleProjectileTests(unittest.TestCase):
                        kwargs['launch_proof']):
             self.assertEqual(proof, actual)
 
+    def test_future_local_ricochet_waits_without_expiring_or_replaying(self):
+        # Millisecond rounding and the reviewed ten-calibre armour extension
+        # can put the reflected segment just beyond this frame's clock.
+        for resolved_ms in (201, 205):
+            with self.subTest(resolved_ms=resolved_ms):
+                battle, bigworld = _battle()
+                battle._start_message = {'round_id': 9}
+                record = battle._records['player:7']
+                record['state']['vehicle'] = 'ussr:R11_MS-1'
+                event = _event()
+                intent = {'player_id': 7, 'intent_seq': 1, 'shot_seq': 1,
+                          'input_seq': 1, 'shell_index': 0,
+                          'x': 0.0, 'y': 0.0, 'z': 0.0,
+                          'trigger_launch_time_ms': 0}
+                key = battle._preinstall_player_projectile(
+                    intent, record, event['origin'], event['velocity'],
+                    event['gravity'], event['maxDistance'], event['max_time_ms'],
+                    False, 0.0, 1.0, event['source_shot'], 0.0)
+                meta = battle._projectile_meta[key]
+                factory = _NativeTracerFactory()
+                battle._remote_factory = factory
+                battle._resolve_descriptor = lambda unused: battle._server_entity(41).typeDescriptor
+                battle._ensure_projectile_visual(meta, bigworld.now)
+                self.assertEqual(1, len(factory.play_calls))
+                contacts = []
+                def chord(state, start, end, absolute_start, absolute_end):
+                    segment = state['payload']['ricochet_count']
+                    contacts.append(segment)
+                    boundary = 2.006 if segment == 0 else 1.0
+                    crossed = end[0] >= boundary if segment == 0 else end[0] <= boundary
+                    if not crossed:
+                        return None
+                    fraction = (boundary-start[0])/(end[0]-start[0])
+                    impact = tuple(start[i]+(end[i]-start[i])*fraction for i in range(3))
+                    data = {'impact': impact, 'target_key': 'bot:8',
+                            'world_normal': (1.0, 0.0, 0.0)}
+                    if segment == 0:
+                        data['ricochet_contact'] = {
+                            'impact': impact, 'resolved_time_ms': resolved_ms,
+                            'checked_distance': 2.006, 'piercing_loss': 0.0,
+                            'elapsed_delta': resolved_ms/1000.0-.2006}
+                    battle._projectile_terminal_data[key] = data
+                    return {'reason': 'impact', 'fraction': fraction}
+                def direct(meta, unused, data):
+                    return {'target_kind': 'bot', 'target_id': 8,
+                            'damage': 0 if meta['ricochet_count'] == 0 else 50,
+                            'shot_result': 0 if meta['ricochet_count'] == 0 else 2,
+                            'x': data['impact'][0], 'y': data['impact'][1],
+                            'z': data['impact'][2]}
+                battle._projectile_chord = chord
+                battle._projectile_direct_effect = direct
+                bigworld.now = .2006
+                battle._advance_projectiles(bigworld.now)
+                self.assertEqual(1, len(battle.client.ricochets))
+                self.assertEqual([], battle.client.resolutions)
+                self.assertIn('local_ricochet_admission', meta)
+                self.assertFalse(battle._projectiles.contains((key, 1)))
+                canonical = dict(meta)
+                canonical.update(kind='projectile_ricochet',
+                    checked_through_ms=resolved_ms, resolved_time_ms=resolved_ms)
+                self.assertTrue(battle._apply_projectile_ricochet_event(canonical))
+                self.assertEqual([], battle.client.resolutions)
+                self.assertEqual(1, len(factory.play_calls))
+                bigworld.now = .2008
+                battle._advance_projectiles(bigworld.now)
+                self.assertFalse(battle._projectiles.contains((key, 1)))
+                bigworld.now = .21
+                battle._advance_projectiles(bigworld.now)
+                self.assertTrue(battle._projectiles.contains((key, 1)))
+                self.assertNotIn('local_ricochet_admission', meta)
+                self.assertEqual(2, len(factory.play_calls))
+                self.assertEqual([], battle.client.resolutions)
+                bigworld.now = .4
+                battle._advance_projectiles(bigworld.now)
+                self.assertIn(1, contacts)
+                self.assertEqual(1, len(battle.client.ricochets))
+                self.assertEqual(1, len(battle.client.resolutions))
+                self.assertEqual(50, battle.client.resolutions[0][0][6]['damage'])
+                self.assertTrue(battle._apply_projectile_ricochet_event(canonical))
+                self.assertEqual(2, len(factory.play_calls))
+                battle._advance_projectiles(.5)
+                self.assertEqual(1, len(battle.client.resolutions))
+
     def test_over_limit_reflection_falls_back_to_terminal_resolution(self):
         battle, unused_bigworld = _battle(now=1.0)
         battle._projectile_server_time_ms = 1000

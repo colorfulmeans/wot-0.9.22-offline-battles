@@ -13682,6 +13682,11 @@ class BattleRuntime(object):
             self._submit_projectile_ricochet(meta)
             self._submit_projectile_resolution(meta)
             return True
+        if meta.get('local_ricochet_admission') is not None:
+            # The canonical echo may arrive before the reflected segment's
+            # physical start. Keep the queued owner instead of restoring twice.
+            self._admit_local_projectile_ricochet(meta)
+            return True
         accepted = self._admit_projectile_manager_state(normalized, now)
         if not accepted:
             self._projectile_meta.pop(projectile_id, None)
@@ -13950,6 +13955,13 @@ class BattleRuntime(object):
             return False
         projectile_id = normalized['projectile_id']
         if projectile_id in self._projectile_visual_terminals:
+            return False
+        owner = self._projectile_meta.get(projectile_id)
+        if (owner is not None and self._owns_projectile(owner) and
+                (owner.get('local_ricochet_admission') is not None or
+                 owner.get('pending_resolution') is not None or
+                 owner.get('awaiting_resolution'))):
+            # An echo cannot restart a deferred or locally retired segment.
             return False
         confirmed_elapsed = self._projectile_visual_age(normalized)
         visual = self._projectile_visual_meta.get(projectile_id)
@@ -14690,6 +14702,10 @@ class BattleRuntime(object):
         previous = self._projectile_target_positions
         states = self._projectiles.snapshot()
         if not self._worker_mode and not states:
+            if any(meta.get('local_ricochet_admission') is not None
+                   for meta in self._projectile_meta.values()):
+                # Retain pose history while the sole reflected shell waits.
+                return False
             # A player's next shot begins locally and needs no pre-launch
             # history for someone else's delayed canonical projectile.
             self._projectile_position_history = []
@@ -16579,10 +16595,25 @@ class BattleRuntime(object):
             self._admit_local_projectile_ricochet(meta)
 
     def _admit_local_projectile_ricochet(self, meta):
-        normalized = meta.pop('local_ricochet_admission', None)
+        normalized = meta.get('local_ricochet_admission')
         if normalized is None:
             return False
         now = self._clock()
+        snapshot = self._projectile_manager_snapshot(normalized, now)
+        if snapshot['launch_time'] > now:
+            # Rounding to wire milliseconds or an armour-layer contact beyond
+            # the first hull chord can legitimately place this start ahead of
+            # the frame. Wait for the real clock; do not expire or advance time.
+            if not meta.get('local_ricochet_wait_logged'):
+                meta['local_ricochet_wait_logged'] = True
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] PROJECTILE RICOCHET DEFER '
+                    'id=%s segment_ms=%d lead_ms=%.3f\n' % (
+                        meta['projectile_id'], normalized['segment_start_time_ms'],
+                        (snapshot['launch_time'] - now) * 1000.0))
+            return False
+        meta.pop('local_ricochet_wait_logged', None)
+        meta.pop('local_ricochet_admission', None)
         if not self._admit_projectile_manager_state(normalized, now):
             state = {
                 'key': meta['manager_key'], 'elapsed': 0.0,
@@ -16749,6 +16780,8 @@ class BattleRuntime(object):
             return False
         changed = False
         for meta in tuple(self._projectile_meta.values()):
+            if meta.get('local_ricochet_admission') is not None:
+                changed = self._admit_local_projectile_ricochet(meta) or changed
             if (meta.get('pending_resolution') is not None and
                     not meta.get('awaiting_resolution')):
                 changed = self._submit_projectile_resolution(meta) or changed

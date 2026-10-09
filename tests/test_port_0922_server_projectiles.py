@@ -2770,6 +2770,25 @@ class ServerProjectileLedgerTests(unittest.TestCase):
             1, state.vehicle_interactions[
                 ('player', 2)]['player:1']['ricochets_received'])
 
+    def test_reflected_hit_and_retries_apply_health_damage_once(self):
+        state = _state()
+        self.assertTrue(_launch_authority(state, _launch()))
+        key = '1:p:1:1'
+        bounce = _ricochet(state, key)
+        self.assertTrue(state.ricochet_projectile(1, bounce))
+        self.assertTrue(state.ricochet_projectile(1, copy.deepcopy(bounce)))
+        self.assertEqual(1000, state.players[2].health)
+        terminal = _resolve(state, key, base_checked_ms=100,
+            resolved_time_ms=150, checked_distance=20.0,
+            impact=[20.0, 1.0, 0.0], direct=_effect(damage=100, x=20.0))
+        self.assertTrue(state.resolve_projectile(1, terminal))
+        self.assertTrue(state.resolve_projectile(1, copy.deepcopy(terminal)))
+        self.assertEqual(900, state.players[2].health)
+        hits = [event for event in state.pending_events
+                if event.get('kind') == 'hit']
+        self.assertEqual([0, 100], [event['damage'] for event in hits])
+        self.assertNotIn(key, state.projectiles)
+
     def test_ricochet_continuation_cannot_credit_blocked_damage_twice(self):
         state = _state()
         self.assertTrue(_launch_authority(state, _launch()))
