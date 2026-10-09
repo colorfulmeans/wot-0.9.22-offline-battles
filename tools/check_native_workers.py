@@ -511,6 +511,72 @@ def release_navigation_receipt_checks():
         native_math._backend,native_math._attempted=previous
 
 
+def parking_distance_checks():
+    import json
+    import random
+    import timeit
+    from gui.mods.offline_lan_0922 import spg_positions, native_math
+    previous = native_math._backend, native_math._attempted
+    native_math._backend, native_math._attempted = backend, True
+    try:
+        rng = random.Random(49)
+        directions = ((1, 0), (1, 1), (0, 1), (-1, 1),
+                      (-1, 0), (-1, -1), (0, -1), (1, -1))
+        for sample in range(30):
+            width, height = 11, 9
+            graph = dict(game_version=spg_positions.CATALOG['game_version'],
+                         width=width, height=height, cell_size=2.5,
+                         origin=(0., 0.), bounds=(0., 0., 25., 20.),
+                         directions=directions,
+                         heights_mm=[None if rng.random() < .08 else 250 for unused in range(99)],
+                         links=[rng.randrange(256) for unused in range(99)],
+                         hazards=[rng.choice((0, 0, 0, 1, 2, 4, 8, 16)) for unused in range(99)])
+            graph['heights_mm'][0] = 250; graph['hazards'][0] = 0
+            if sample % 3 == 0: graph['bounds'] = (0., 0., 17.5, 12.5)
+            grid = spg_positions._Graph(graph, graph['bounds'])
+            reference = grid._reference_distances(0)
+            actual = grid.distances((0., .25, 0.))
+            assert set(actual) == set(reference), sample
+            for key in reference: equal(actual[key], reference[key])
+        assert backend.parking_distances(1, 1, 2., (0., 0.), (0., 0., 1., 1.),
+            directions, (None,), (255,), (0,), 0) is None
+        # Resolve from the repository, not the interpreter's working directory.
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'navgraphs', '100_thepit.json')
+        with open(path) as stream: graph = json.load(stream)
+        grid = spg_positions._Graph(graph, graph['bounds'])
+        for position in ((213.2, -6.04, 172.49), (216.4, -6.74, 213.22), (208.2, -3.12, -187.47)):
+            start = grid.closest(position)
+            began = timeit.default_timer(); reference = grid._reference_distances(start)
+            reference_ms = (timeit.default_timer() - began) * 1000.
+            began = timeit.default_timer(); actual = grid.distances(position)
+            native_ms = (timeit.default_timer() - began) * 1000.
+            assert set(actual) == set(reference)
+            for key in reference: equal(actual[key], reference[key])
+            print('Parking parity: %d reachable nodes; reference %.3f ms; native bridge %.3f ms' %
+                  (len(reference), reference_ms, native_ms))
+        with open(os.path.join(os.path.dirname(path), '08_ruinberg.json')) as stream:
+            graph = json.load(stream)
+        states = []
+        for team in (1, 2):
+            for slot in range(3):
+                x, y, z, yaw = graph['spawn_formations'][str(team)][slot]
+                states.append(dict(id=team*10+slot, team=team, slot=slot,
+                    vehicle='test:SPG', profile={'class_tag': 'SPG'},
+                    collision_shape=(1.8, 4., -.8, 2.), x=x, y=y, z=z,
+                    yaw=yaw, speed=0., alive=True))
+        for kwargs in ({}, {'actor_ids': (10,)}, {'allocation_seed': 49}):
+            actual = spg_positions.assign_initial_positions('08_ruinberg', graph, states, **kwargs)
+            native_math._backend = None
+            reference = spg_positions.assign_initial_positions('08_ruinberg', graph, states, **kwargs)
+            native_math._backend = backend
+            assert actual == reference, (actual, reference)
+            assert actual[0], 'selection parity must exercise real plans'
+            checks[0] += 1
+    finally:
+        native_math._backend, native_math._attempted = previous
+
+
+parking_distance_checks()
 navigation_checks()
 visibility_checks()
 background_checks()

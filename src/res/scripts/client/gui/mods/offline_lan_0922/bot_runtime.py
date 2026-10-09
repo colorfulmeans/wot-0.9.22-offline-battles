@@ -12206,6 +12206,7 @@ class BotRuntime(object):
         except (KeyError, IndexError, TypeError, ValueError):
             return False
 
+    @timed('parking.retry_deployment')
     def _retry_spg_deployment(self, state, initial, distance, now, occupied=None):
         """Retire a parking goal only after sustained lack of net progress."""
         identity = spg_positions.plan_identity(initial)
@@ -12325,6 +12326,7 @@ class BotRuntime(object):
             episode['proofs'] = episode['proofs'][-8:]
         episode['last_failure'] = now
 
+    @timed('parking.retry_fire_position')
     def _retry_spg_fire_position(self, state, initial, now):
         """Select another checked parking point without new ballistic queries."""
         episode = state.get('_spg_fire_position_failure')
@@ -12376,6 +12378,7 @@ class BotRuntime(object):
         self._cancel_artillery_intent(state['id'])
         return replacement
 
+    @timed('parking.position_order')
     def _artillery_position_order(self, state, order, targets, now):
         """Leave a confirmed muzzle-side obstruction via the existing driver.
 

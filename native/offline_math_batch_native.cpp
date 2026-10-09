@@ -25,6 +25,7 @@ struct PyMethodDef {
 #include <cstring>
 #include <limits>
 #include <exception>
+#include <queue>
 #include "offline_math_batch.h"
 #include "offline_navigation.h"
 #include "offline_visibility.h"
@@ -313,6 +314,7 @@ PyObject *WOT_CDECL rotate(PyObject *, PyObject *args) {
 }
 
 #include "offline_navigation_python.inc"
+#include "offline_parking_distances_python.inc"
 #include "offline_contact_roster_python.inc"
 #include "offline_world_python.inc"
 #include "offline_engine_query_python.inc"
@@ -343,6 +345,7 @@ PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
 }
 
 PyMethodDef methods[] = {
+    {"parking_distances", parking_distances, 0x0001, "Exact directed parking-grid shortest distances."},
     WOT_SIMULATION_METHODS
     WOT_SIM_CONTROL_METHODS
     WOT_SIM_MOTION_METHODS

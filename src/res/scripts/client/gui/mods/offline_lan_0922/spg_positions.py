@@ -11,6 +11,8 @@ No enemy coordinates, ammunition changes, new native methods or wall bypasses.
 import heapq
 import math
 from gui.mods.offline_lan_0922 import initial_allocation
+from gui.mods.offline_lan_0922 import native_math
+from gui.mods.offline_lan_0922.worker_diagnostics import observed
 
 from gui.mods.offline_lan_0922.spg_position_data import CATALOG
 
@@ -263,10 +265,24 @@ class _Graph(object):
         index = row * self.width + col
         return index if self.usable(index) else None
 
+    @observed('parking.distances')
     def distances(self, position):
         start = self.closest(position)
         if start is None:
             return {}
+        backend = native_math._load()
+        operation = getattr(backend, 'parking_distances', None)
+        if callable(operation):
+            result = operation(self.width, self.height, self.cell,
+                               self.origin, self.bounds, self.directions,
+                               self.heights, self.links, self.hazards, start)
+            if result is not None:
+                return dict((index, value) for index, value in enumerate(result)
+                            if value is not None)
+        return self._reference_distances(start)
+
+    def _reference_distances(self, start):
+        """Retained law for engine-free parity and unsupported native input."""
         distance = {start: 0.0}
         todo = [(0.0, start)]
         while todo:
@@ -404,6 +420,7 @@ def parking_point_available(point, clearance, team, excluded, occupied):
     return True
 
 
+@observed('parking.assign_catalog')
 def assign_initial_positions(map_name, graph, states, mode='regular', catalog=None,
                              actor_ids=None, excluded=(), occupied=(), preferred_zone=None,
                              allocation_seed=None, deleted_positions=()):
