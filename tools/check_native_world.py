@@ -132,14 +132,18 @@ checks = 0
 ray_count = 0
 for config, arguments, speed in cases:
     arms = []
-    for selected in (None, backend):
+    for selected, batch in ((None,False),(backend,False),(backend,True)):
         native_math._backend = selected
         scene, queries = scene_for(**config)
         trace = {}
+        if batch:
+            arguments = dict(arguments, query_owner=object_for(
+                _avatar=object_for(spaceID=1), _runtime=object_for(bigworld=scene, math=math_module)))
         status = world.check_horizontal_collision(scene, math_module, 1, Vector(),
                     0., speed, descriptor, return_status=True, trace=trace, **arguments)
         arms.append((status, queries, trace))
     equal(arms[1], arms[0])
+    equal(arms[2], arms[0])
     ray_count += len(arms[1][1])
     checks += 1
     if config.get('corner'):
@@ -188,6 +192,24 @@ finally:
         else:
             sys.modules[name] = previous
 assert len(commits) == 3 and len(queries) == 4, (len(commits), len(queries))
+commits[:], queries[:] = [], []
+previous_modules = dict((name, sys.modules.get(name, missing)) for name in ('BigWorld', 'Math'))
+try:
+    sys.modules['BigWorld'], sys.modules['Math'] = scene, math_module
+    query_owner = object_for(_avatar=object_for(spaceID=1),
+                             _runtime=object_for(bigworld=scene, math=math_module))
+    try:
+        native_world.run(world, 1, Vector(), 0., 5., None, False, .08,
+                         query_owner=query_owner)
+    except RuntimeError as caught:
+        assert caught is error
+    else:
+        raise AssertionError('Native batch swallowed a committed-effect error')
+finally:
+    for name, previous in previous_modules.items():
+        if previous is missing:sys.modules.pop(name,None)
+        else:sys.modules[name]=previous
+assert len(commits)==3 and len(queries)==4,(len(commits),len(queries))
 checks += 1
 
 # The public motion boundary rejects only this operation, without replaying
@@ -305,8 +327,9 @@ for unused in range(100):
 gc.collect()
 assert references == (sys.getrefcount(snapshot), sys.getrefcount(clear_dispatch))
 checks += 1
-assert native_math.snapshot()['world_run'] == len(cases)+1
+assert native_math.snapshot()['world_run'] == 2*len(cases)+1
 assert native_math.snapshot()['fallbacks'] == 0
+assert native_math.snapshot()['world_run_native'] == len(cases)
 print('Native world host checks passed: %d cases; %d ordered engine rays; '
       'same-thread reentry, corner profile, local failure containment and owned refs.' %
       (checks, ray_count))

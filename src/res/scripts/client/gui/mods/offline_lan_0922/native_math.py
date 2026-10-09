@@ -9,7 +9,7 @@ MODULE_NAME = 'offline_math_batch_native'
 _backend = None
 _attempted = sys.platform != 'win32'
 _calls = {'translation_fraction': 0, 'translation_contacts': 0, 'slide_translation': 0,
-          'rotation_fraction': 0, 'contact_roster': 0, 'world_run': 0}
+          'rotation_fraction': 0, 'contact_roster': 0, 'world_run': 0, 'world_run_native': 0, 'rotation_current': 0}
 _fallbacks = 0
 _reported_failure = False
 _world_failures = 0
@@ -108,7 +108,7 @@ def world_available():
     return backend is not None and hasattr(backend, 'world_run')
 
 
-def world_run(snapshot, dispatcher):
+def world_run(snapshot, dispatcher, query=None, tuning=None):
     """Never replay a world operation after an engine callback has started."""
     global _fallbacks
     backend = _load()
@@ -117,7 +117,10 @@ def world_run(snapshot, dispatcher):
         return None
     # Callback exceptions propagate unchanged. The extension returns None only
     # for an unsupported snapshot before invoking the dispatcher at all.
-    result = backend.world_run(snapshot, dispatcher)
+    result = (backend.world_run_native(snapshot, dispatcher, query.capabilities, tuning)
+              if query is not None else backend.world_run(snapshot, dispatcher))
+    if query is not None:
+        query.raise_failure()
     if result is None:
         _fallbacks += 1
         _report_failure('unsupported world input before engine dispatch')
@@ -128,4 +131,6 @@ def world_run(snapshot, dispatcher):
         sys.stdout.write('[Offline LAN 0.9.22] native computation '
                          'active: world_run\n')
     _calls['world_run'] += 1
+    if query is not None:
+        _calls['world_run_native'] += 1
     return result

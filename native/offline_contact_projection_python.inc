@@ -1,4 +1,4 @@
-// Builtin dictionary construction uses the already audited PyObject_Call.
+// Builtin dictionary construction and the exact-build assignment slot.
 // Strict string-key templates and exact sequence rows never invoke user
 // hashing/conversion. No borrowed Python object survives this synchronous call.
 PyObject *WOT_CDECL control_pose(PyObject *,PyObject *args) {
@@ -60,41 +60,30 @@ PyObject *WOT_CDECL contact_materialize(PyObject *,PyObject *args) {
                 const int mask=index_value(pose[2]);if(mask<0||mask>2047)throw Unsupported();
             }
         }
+        if(!dict_set)throw Unsupported();
         return profile.run([&](){
             OwnedTuple targets(size(a[0])),visible(visible_count);size_t vi=0;
             for(Py_ssize_t i=0;i<size(a[0]);++i){
                 PyObject **row=items(items(a[0])[i]);const int flags=index_value(row[1]);
                 PyObject **pose=row[4]==none_object?nullptr:items(row[4]);
                 const int mask=pose?index_value(pose[2]):0;
-                size_t n=3+(pose?1:0);
-                for(int j=0;j<11;++j)if(mask&(1<<j))++n;
-                OwnedTuple pairs(n);size_t at=0;
-                auto append=[&](int name,PyObject *value){
-                    OwnedTuple pair(2);engine_query::borrow(pair,0,items(a[2])[name]);
-                    pair.set(1,value);pairs.set(at++,pair.release());
+                OwnedTuple copy_args(1);engine_query::borrow(copy_args,0,items(a[1])[i]);
+                WorldObject copy_args_owner(copy_args.release());
+                PyObject *target=object_call(reinterpret_cast<PyObject *>(const_cast<void *>(dict_type)),copy_args_owner.get(),0);
+                if(!target)throw PythonAllocationFailed();
+                targets.set(i,target);
+                if(!plain_dict(target))throw Unsupported();
+                auto put=[&](int name,PyObject *value){
+                    if(dict_set(target,items(a[2])[name],value)<0)throw PythonAllocationFailed();
                 };
-                for(int j=0;j<10;++j)if(mask&(1<<j)){
-                    PyObject *value=items(pose[1])[j];++value->ob_refcnt;append(j,value);
-                }
+                for(int j=0;j<10;++j)if(mask&(1<<j))put(j,items(pose[1])[j]);
                 if(mask&(1<<10)){
                     OwnedTuple velocity(3);
                     for(int j=0;j<3;++j)engine_query::borrow(velocity,j,items(pose[1])[10+j]);
-                    append(10,velocity.release());
+                    WorldObject owned(velocity.release());put(10,owned.get());
                 }
-                if(pose){PyObject *position=pose[0];++position->ob_refcnt;append(11,position);}
-                for(int j=0;j<3;++j){
-                    PyObject *value=items(a[3])[(flags&(1<<j))?0:1];++value->ob_refcnt;append(12+j,value);
-                }
-                OwnedTuple kw_args(1);kw_args.set(0,pairs.release());
-                WorldObject kw_args_owner(kw_args.release());
-                PyObject *kwargs=object_call(reinterpret_cast<PyObject *>(const_cast<void *>(dict_type)),kw_args_owner.get(),0);
-                if(!kwargs)throw PythonAllocationFailed();
-                WorldObject kw_owner(kwargs);
-                OwnedTuple copy_args(1);engine_query::borrow(copy_args,0,items(a[1])[i]);
-                WorldObject copy_args_owner(copy_args.release());
-                PyObject *target=object_call(reinterpret_cast<PyObject *>(const_cast<void *>(dict_type)),copy_args_owner.get(),kwargs);
-                if(!target)throw PythonAllocationFailed();
-                targets.set(i,target);
+                if(pose)put(11,pose[0]);
+                for(int j=0;j<3;++j)put(12+j,items(a[3])[(flags&(1<<j))?0:1]);
                 if(flags&1){
                     OwnedTuple pair(2);engine_query::borrow(pair,0,field(target,ID));
                     engine_query::borrow(pair,1,target);visible.set(vi++,pair.release());

@@ -9,7 +9,10 @@ from __future__ import print_function
 
 import functools
 import operator
-import threading
+try:
+    from thread import get_ident as _thread_ident
+except ImportError:
+    from _thread import get_ident as _thread_ident
 
 from . import destructibles_sensor as sensor
 from .worker_diagnostics import observed_ray
@@ -26,7 +29,7 @@ class EngineQuery(object):
         self._generation = getattr(owner, '_generation', None)
         self._bots = getattr(owner, '_bots', None)
         self._round = getattr(self._bots, 'round_id', None)
-        self._thread = threading.current_thread().ident
+        self._thread = _thread_ident()
         self._native_ray = self._runtime.bigworld.wg_collideSegment
         self._ray_label = ray_label
         self._skip_flags = skip_flags
@@ -49,7 +52,7 @@ class EngineQuery(object):
             self._recover_ground)
 
     def _live(self):
-        if (threading.current_thread().ident != self._thread or
+        if (_thread_ident() != self._thread or
                 self.owner._avatar is not self._avatar or
                 self.owner._runtime is not self._runtime or
                 self._avatar.spaceID != self._space or

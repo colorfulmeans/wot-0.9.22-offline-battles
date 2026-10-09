@@ -20824,7 +20824,7 @@ class BattleRuntime(object):
             True, allow_crush_drive, kinetic_speed,
             commit_enabled=commit_enabled,
             pitch=pose_pitch, roll=pose_roll,
-            motion_yaw=motion_yaw, trace=contact_trace)
+            motion_yaw=motion_yaw, trace=contact_trace, query_owner=self)
         if isinstance(world_status, bool):
             world_status = 'hard' if world_status else 'clear'
         self._bot_motion_kinds[int(bot_id)] = '-'
@@ -20877,7 +20877,7 @@ class BattleRuntime(object):
                 descriptor, airborne, dt, True,
                 allow_crush_drive, kinetic_speed, commit_enabled=False,
                 pitch=pose_pitch, roll=pose_roll,
-                motion_yaw=motion_yaw, trace=contact_trace)
+                motion_yaw=motion_yaw, trace=contact_trace, query_owner=self)
             if after is True or after not in (False, 'clear', 'kinetic'):
                 bot_state['_world_contact_trace'] = contact_trace
                 self._bot_motion_kinds[int(bot_id)] = 'world'

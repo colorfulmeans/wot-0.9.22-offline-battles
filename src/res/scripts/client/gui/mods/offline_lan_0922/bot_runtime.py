@@ -6320,6 +6320,20 @@ class BotRuntime(object):
             })
         return result
 
+    def _rotation_fraction_for(self, state, position, yaw, candidate, supplied):
+        # Fresh sequential poses: never freeze an earlier actor's geometry.
+        supplied = tuple(supplied or ())
+        shape = state.get('collision_shape') or tank_collision.DEFAULT_SHAPE
+        from . import native_math
+        result = None
+        if callable(getattr(native_math._load(), 'rotation_current', None)):
+            result = native_math.call('rotation_current', position, yaw, candidate,
+                shape, supplied, tuple(self.states.items()), state.get('id'))
+        if result is not None:
+            return result
+        return tank_collision.rotation_fraction(position, yaw, candidate,
+            shape, self._rotation_neighbours_for(state, supplied))
+
     def _rotation_neighbours_for(self, source, supplied):
         """Project only rotation geometry from the current sequential poses."""
         result = list(supplied or ())
@@ -14477,10 +14491,9 @@ class BotRuntime(object):
                 while candidate_hull_yaw < -math.pi:
                     candidate_hull_yaw += math.pi * 2.0
                 if abs(_angle_delta(candidate_hull_yaw, old_hull_yaw)) > 1.0e-9:
-                    allowed = tank_collision.rotation_fraction(
-                        position, old_hull_yaw, candidate_hull_yaw,
-                        state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
-                        self._rotation_neighbours_for(state, neighbours))
+                    allowed = self._rotation_fraction_for(
+                        state, position, old_hull_yaw, candidate_hull_yaw,
+                        neighbours)
                     if allowed < 1.0:
                         candidate_hull_yaw = old_hull_yaw + _angle_delta(
                             candidate_hull_yaw, old_hull_yaw)*allowed

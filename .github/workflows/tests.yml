@@ -96,12 +96,16 @@ jobs:
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_release_math.py \
               /tmp/offline_math_batch_native.so
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_rotation_current.py \
+              /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_workers.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_contacts.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_world.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_world_pipeline.py \
+              /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_navigation_query.py \
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation.py \

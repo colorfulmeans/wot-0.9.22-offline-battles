@@ -43,6 +43,7 @@ namespace {
 using offline_math::Body;
 using offline_math::Vec;
 typedef PyObject *(WOT_CDECL *DictGetFn)(PyObject *, PyObject *);
+typedef int (WOT_CDECL *DictSetFn)(PyObject *, PyObject *, PyObject *);
 typedef PyObject *(WOT_CDECL *StringNewFn)(const char *);
 typedef PyObject *(WOT_CDECL *FloatNewFn)(double);
 typedef PyObject *(WOT_CDECL *TupleNewFn)(Py_ssize_t);
@@ -53,6 +54,7 @@ typedef PyObject *(WOT_CDECL *ModuleNewFn)(
 typedef void (WOT_CDECL *DeallocFn)(PyObject *);
 
 DictGetFn dict_get = 0;
+DictSetFn dict_set = 0;
 StringNewFn string_new = 0;
 FloatNewFn float_new = 0;
 TupleNewFn tuple_new = 0;
@@ -81,7 +83,7 @@ enum Field { ID, X, Y, Z, YAW, PITCH, ROLL, SHAPE, DESCRIPTOR, DIMS, POSITION,
     MASS, VX, VY, VZ, PUSH_YAW, GRIP, TRAVERSE_SPEED, TRAVERSE_TORQUE, TEAM,
     ALIVE, IMMOVABLE, IMPULSE, POSITION_FIXED, PH_POWER, PH_POWER_RATIO,
     PH_FORWARD, PH_REVERSE, PH_FRICTION, PH_BRAKE, PH_ROTATION, PH_TERRAIN,
-    AIM_YAW, TURRET_YAW, GUN_PITCH, SPEED, VELOCITY,
+    AIM_YAW, TURRET_YAW, GUN_PITCH, SPEED, VELOCITY, COLLISION_SHAPE,
     FIELD_COUNT };
 const char *const field_names[] = {
     "id", "x", "y", "z", "yaw", "pitch", "roll", "shape", "descriptor", "dims", "position",
@@ -89,7 +91,7 @@ const char *const field_names[] = {
     "traverse_torque", "team", "alive", "immovable", "impulse", "position_fixed",
     "powerW", "nativePowerRatio", "speedFwd", "speedBwd", "specificFriction",
     "brakeDecel", "rotSpd", "terrainResist", "aim_yaw", "turret_yaw",
-    "gun_pitch", "speed", "velocity"
+    "gun_pitch", "speed", "velocity", "collision_shape"
 };
 // Fixed owned string references, retained with this process-lived module.
 PyObject *field_keys[FIELD_COUNT] = {};
@@ -319,6 +321,30 @@ PyObject *WOT_CDECL rotate(PyObject *, PyObject *args) {
     } catch (...) { profile.fail(); return fallback(); }
 }
 
+PyObject *WOT_CDECL rotation_current(PyObject *,PyObject *args) {
+    NATIVE_PROFILE_ENTRY(rotation_current);
+    try {
+        require_sequence(args,7,true);PyObject **a=items(args);
+        Body owner={};position(owner,a[0]);owner.yaw=number(a[1]);
+        const double candidate=number(a[2]);owner.shape=shape_values(a[3]);
+        auto peers=peer_values(a[4],true);
+        require_sequence(a[5],0);const auto source=identity(a[6]);
+        peers.reserve(peers.size()+static_cast<size_t>(size(a[5])));
+        for(Py_ssize_t i=0;i<size(a[5]);++i) {
+            PyObject *pair=items(a[5])[i];require_sequence(pair,2,true);
+            if(identity(items(pair)[0])==source)continue;
+            PyObject *raw=items(pair)[1];if(!plain_dict(raw))throw Unsupported();
+            Body body={};body.x=optional_number(raw,X,0.);body.z=optional_number(raw,Z,0.);
+            PyObject *height=field(raw,Y);body.has_y=height!=none_object;
+            body.y=absent(height)?0.:number(height);body.yaw=optional_number(raw,YAW,0.);
+            PyObject *dimensions=field(raw,COLLISION_SHAPE);
+            body.shape=absent(dimensions)?std::array<double,4>{{1.5,3.5,-.8,2.}}:shape_values(dimensions);
+            peers.push_back(body);
+        }
+        return fraction_result(profile.run(offline_math::rotation,owner,candidate,0.,Vec{0.,0.},peers));
+    }catch(...) {profile.fail();return fallback();}
+}
+
 #include "offline_navigation_python.inc"
 #include "offline_parking_distances_python.inc"
 #include "offline_release_drive_python.inc"
@@ -334,6 +360,7 @@ PyObject *WOT_CDECL rotate(PyObject *, PyObject *args) {
 #include "offline_simulation_weapons_python.inc"
 #include "offline_simulation_navigation_python.inc"
 #include "offline_contact_projection_python.inc"
+#include "offline_world_query_python.inc"
 
 PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(translate);
@@ -370,6 +397,7 @@ PyMethodDef methods[] = {
     {"nav_query_run", nav_query_run, 0x0001, "Run a complete same-thread navigation corridor oracle."},
     {"nav_query_filter", nav_query_filter, 0x0001, "Filter original planning materials during a native oracle call."},
     {"thread_cpu_seconds", thread_cpu_seconds, 0x0001, "Read current-thread user and kernel CPU seconds."},
+    {"world_run_native", world_run_native, 0x0001, "Run ordered engine query batches in C++."},
     {"world_run", world_run, 0x0001, "Run the complete world law with same-thread engine frontiers."},
     {"contact_roster", contact_roster, 0x0001, "Solve one complete roster contact stage over frozen bodies."},
     {"vis_open", vis_open, 0x0001, "Load immutable foliage for asynchronous visibility."},
@@ -388,6 +416,7 @@ PyMethodDef methods[] = {
     {"translation_fraction", translate, 0x0001, "Sweep the caller's current body and peer objects."},
     {"translation_contacts", translate_contacts, 0x0001, "Sweep and retain ordered first-contact receipts."},
     {"slide_translation", slide, 0x0001, "Resolve all swept slide segments in one synchronous call."},
+    {"rotation_current", rotation_current, 0x0001, "Project live sequential Bot poses and constrain rotation in one call."},
     {"rotation_fraction", rotate, 0x0001, "Resolve the complete caller-owned rotation sweep."},
     {0, 0, 0, 0}
 };
@@ -410,6 +439,7 @@ bool initialize_keys() {
 #ifdef WOT_HOST_PYTHON
 bool initialize_api() {
     dict_get = PyDict_GetItem;
+    dict_set = PyDict_SetItem;
     string_new = PyString_FromString;
     float_new = PyFloat_FromDouble;
     tuple_new = PyTuple_New;
@@ -489,6 +519,17 @@ bool initialize_api() {
         !type_layout(base, 0x01664bf0U, 12, 0) || !type_layout(base, 0x016608b0U, 12, 0) ||
         !readable(base + 0x0165c798U, 8) || read<void *>(base + 0x0165c79cU) != base + 0x0165c7c0U)
         return false;
+    // Optional exact #1513 dict assignment slot. This cdecl thunk dispatches
+    // a non-NULL value to PyDict_SetItem; no arbitrary key callbacks are used.
+    static const unsigned char dict_slot_bytes[] = {
+        0x55,0x8b,0xec,0x8b,0x45,0x10,0x85,0xc0,0x75,0x10,0xff,0x75,0x0c,
+        0xff,0x75,0x08,0xe8,0x7b,0x06,0x00,0x00,0x83,0xc4,0x08,0x5d,0xc3,
+        0x89,0x45,0x10,0x5d,0xe9,0x9d,0x0f,0x00,0x00};
+    if (read<void *>(base + 0x01664d30U + 56) == base + 0x01665c14U &&
+        readable(base + 0x01665c14U, 12) &&
+        read<void *>(base + 0x01665c14U + 8) == base + 0x00be39c0U &&
+        signature(base + 0x00be39c0U, dict_slot_bytes))
+        dict_set = reinterpret_cast<DictSetFn>(base + 0x00be39c0U);
     dict_get = reinterpret_cast<DictGetFn>(base + 0x00be4190U);
     string_new = reinterpret_cast<StringNewFn>(base + 0x00bd85f0U);
     float_new = reinterpret_cast<FloatNewFn>(base + 0x00bdc460U);

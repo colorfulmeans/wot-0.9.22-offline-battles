@@ -4,11 +4,26 @@
 def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
         return_status=False, allow_kinetic=False, kinetic_speed=None,
         commit_enabled=True, motion_yaw=None, pitch=0.0, roll=0.0,
-        trace=None, exact_footprint=False, departing_contact=None):
+        trace=None, exact_footprint=False, departing_contact=None, query_owner=None):
     from . import native_math
     if not native_math.world_available():
         return None
     import BigWorld, Math
+    query = None
+    backend = native_math._load()
+    if query_owner is not None and hasattr(backend, 'world_run_native') and departing_contact is None:
+        from .native_engine_query import EngineQuery
+        query = getattr(query_owner, '_native_world_query', None)
+        if query is not None:
+            try:
+                query._live()
+            except RuntimeError:
+                query = None
+        if query is None:
+            query = EngineQuery(query_owner, backend)
+            query_owner._native_world_query = query
+        if query._runtime.bigworld is not BigWorld or query._runtime.math is not Math or query._space != spaceID:
+            raise RuntimeError('World query owner does not match its live engine')
     bounds = module._vehicle_motion_bounds(td)
     if bounds is None:
         bounds = (-1.5, 1.5, 3.5, 3.5)
@@ -32,11 +47,16 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
     def xyz(v):
         return (v.x, v.y, v.z)
     def dispatch(op, rows):
+        if query is not None:
+            query._live()
         if op == 1:
             a, b = rows[0]
             state[0] = module._trace_collision_filter(
                 module.prepare_horizontal_collision_filter(V(*a), V(*b)), trace)
-            return None
+            return state[0] if query is not None else None
+        if op == 7:
+            a, unused_end, unused_flags = rows[0]
+            return module.ground_collision_filter(a[0], a[2])
         if op == 2:
             v = rows[0]
             state[1] = module._translation_departing_contact(
@@ -47,14 +67,16 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
         if op == 5:
             a, b, handle = rows[0]
             result = module._destroy_and_recast(
-                spaceID, V(*a), V(*b), hits[handle], yaw, vel, td,
+                spaceID, V(*a), V(*b), handle if query is not None else hits[handle], yaw, vel, td,
                 crush, allow_kinetic, kinetic_speed, commit_enabled, state[0])
+            if query is not None:
+                query._live()
             return (2 if result == 'kinetic' else 1 if result is True else 0,)
         if op == 6:
             a, b, handle, reason, ground_ahead, profile = rows[0]
             module._record_hard_contact(
                 trace, ('', 'raised_wall', 'ground_profile', 'solid_lane', 'upper_lane')[reason],
-                V(*a), V(*b), hits[handle], ground_ahead, profile)
+                V(*a), V(*b), handle if query is not None else hits[handle], ground_ahead, profile)
             return None
         result = []
         stopped = False
@@ -89,7 +111,8 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
                 result.append((xyz(hit[0]), normal, handle, xyz(start), xyz(end)))
         return tuple(result)
     # An exception propagates. Replaying the law could repeat destruction.
-    status = native_math.world_run(snapshot, dispatch)
+    status = native_math.world_run(snapshot, dispatch, query,
+        (module._WORLD_SOFT_RECAST_BUDGET, module._GROUND_HIT_EPSILON, module._MAX_DRIVABLE_GRADIENT))
     if status is None:
         return None
     if return_status:

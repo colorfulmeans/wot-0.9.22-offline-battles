@@ -793,14 +793,14 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 		airborne=False, dt=0.04, return_status=False,
 		allow_kinetic=False, kinetic_speed=None, commit_enabled=True,
 		motion_yaw=None, pitch=0.0, roll=0.0, trace=None,
-		exact_footprint=False, departing_contact=None):
+		exact_footprint=False, departing_contact=None, query_owner=None):
 	import sys
 	from . import native_math, native_world
 	try:
 		result = native_world.run(sys.modules[__name__], spaceID, pos, yaw, vel,
 			td, airborne, dt, return_status, allow_kinetic, kinetic_speed,
 			commit_enabled, motion_yaw, pitch, roll, trace, exact_footprint,
-			departing_contact)
+			departing_contact, query_owner)
 	except Exception as error:
 		# Earlier live effects remain committed. Reject only this motion;
 		# replaying the Python law could repeat destruction.
