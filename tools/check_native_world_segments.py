@@ -94,5 +94,59 @@ try:
     print('Fused segment parity:', checks, 'float32 scenes;', rays,
           'segments;', removed, 'Python boundaries removed; guards and owned refs')
     print('World sweep reference/fused host ms per call:', timings)
+    # Compare the fused 20-slot contract against the explicit pinned-skin
+    # contract. Filters and engine rays are identical in both modes.
+    from gui.mods.offline_lan_0922 import destructibles_sensor as sensor
+    saved_catalog, saved_trees = sensor._destructible_catalog, getattr(sensor, 'g_offh_tree_state', None)
+    class SkinChecked(original):
+        fast_skin = True
+        def __init__(self, *args, **kwargs):
+            original.__init__(self, *args, **kwargs)
+            self.skin_calls = 0
+            caps = list(self.capabilities)
+            assert caps[20] == 1
+            skin = caps[8]
+            def counted_skin(*arguments):
+                self.skin_calls += 1
+                return skin(*arguments)
+            caps[8] = counted_skin
+            self.capabilities = tuple(caps if self.fast_skin else caps[:20])
+    class SkinLegacy(SkinChecked):
+        fast_skin = False
+    sensor._destructible_catalog = {}
+    sensor.g_offh_tree_state = {'native_committed': set(((22, 1),))}
+    removed_skins = 0
+    try:
+        for surface in (None, (0, 0, 3, 22), (87, 128, 3, 22),
+                        (71, 0, 3, 22), (71, 128, 3, 22)):
+            for config, arguments, speed in base.cases:
+                arms = []
+                for implementation in (SkinLegacy, SkinChecked):
+                    native_engine_query.EngineQuery = implementation
+                    scene, queries = base.scene_for(**config)
+                    collide = scene.wg_collideSegment
+                    def filtered_ray(space, start, end, mask, *filters):
+                        if surface is not None and filters:
+                            assert filters[0](*surface)
+                        return collide(space, start, end, mask, *filters)
+                    scene.wg_collideSegment = filtered_ray
+                    owner = base.object_for(_avatar=base.object_for(spaceID=1),
+                        _runtime=base.object_for(bigworld=scene, math=math_module))
+                    args = dict(arguments, query_owner=owner)
+                    trace = {}
+                    result = base.world.check_horizontal_collision(scene, math_module,
+                        1, FloatVector(), 0., speed, base.descriptor,
+                        return_status=True, trace=trace, **args)
+                    arms.append((result, queries, trace, owner._native_world_query.skin_calls))
+                base.equal(arms[0][:3], arms[1][:3])
+                if surface is not None and surface[0] == 71:
+                    assert arms[0][3] == arms[1][3]
+                else:
+                    removed_skins += arms[0][3] - arms[1][3]
+        assert removed_skins > 0
+        print('Pinned skin prefilter parity: 125 scenes;', removed_skins,
+              'no-op callbacks removed; relevant surfaces, rays and verdicts retained')
+    finally:
+        sensor._destructible_catalog, sensor.g_offh_tree_state = saved_catalog, saved_trees
 finally:
     native_engine_query.EngineQuery = original

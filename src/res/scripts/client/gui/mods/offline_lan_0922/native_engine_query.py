@@ -18,6 +18,10 @@ from . import destructibles_sensor as sensor
 from .worker_diagnostics import observed_ray
 from .collision_flags import VEHICLE_SKIP_FLAGS
 
+_SKIN_LAWS = (sensor._compiled_motion_skin_1513,
+              sensor._owned_component_skin_1513,
+              sensor._anonymous_original_surface_1513)
+
 
 class EngineQuery(object):
     def __init__(self, owner, backend, ray_label='native.motion.ray',
@@ -41,6 +45,8 @@ class EngineQuery(object):
         safe = lambda function: functools.partial(self._invoke, function)
         # This tuple is borrowed only by one synchronous native Session.
         # Its indices are documented by engine_query::Capability.
+        skin_method = getattr(type(self), '_skin', None)
+        skin_function = getattr(skin_method, 'im_func', skin_method)
         self.capabilities = (
             safe(self._vector), safe(self._xyz), safe(operator.attrgetter('length')),
             safe(operator.add), safe(operator.sub), safe(self._scale),
@@ -49,7 +55,13 @@ class EngineQuery(object):
             backend.engine_query_filter, self.failed, self.unavailable,
             safe(self._can_recast),
             (sensor._SOFT_STATIC_MAX_SKIPS, sensor._SHOT_RAY_EPSILON),
-            self._recover_ground, safe(self._segment))
+            self._recover_ground, safe(self._segment), int(
+                _SKIN_LAWS == (sensor._compiled_motion_skin_1513,
+                               sensor._owned_component_skin_1513,
+                               sensor._anonymous_original_surface_1513) and
+                all(getattr(law, '__module__', '') == sensor.__name__
+                    for law in _SKIN_LAWS) and
+                skin_function is _PINNED_SKIN))
 
     def _segment(self, start, end):
         # One Python boundary preserves the exact native Vector3 rounding and
@@ -147,3 +159,6 @@ class EngineQuery(object):
     def _skipped():
         sensor.g_offh_destr_ground_skips = getattr(
             sensor, 'g_offh_destr_ground_skips', 0) + 1
+
+
+_PINNED_SKIN = getattr(EngineQuery._skin, 'im_func', EngineQuery._skin)

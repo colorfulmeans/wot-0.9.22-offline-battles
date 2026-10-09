@@ -224,6 +224,32 @@ def body(sensor, chunk_id, registry, position, yaw, speed, bbox, vehicle,
     return [items[index] for index in result[0]], result[1], bool(result[2])
 
 
+def neighbourhood(sensor, area, position, sin_yaw, cos_yaw, speed, neighbours):
+    """Batch only the pinned pure chunk mapper; custom test owners stay Python."""
+    try:
+        import DestructiblesCache
+    except ImportError:
+        return None
+    mapper = getattr(DestructiblesCache, 'chunkIDFromPosition', None)
+    indexes = getattr(DestructiblesCache, 'chunkIndexesFromPosition', None)
+    wire = getattr(DestructiblesCache, 'chunkIDFromChunkIndexes', None)
+    code = lambda f: getattr(f, 'func_code', getattr(f, '__code__', None))
+    if (mapper is None or area.chunkIDFromPosition is not mapper or
+            getattr(DestructiblesCache, '_INV_CHUNK_RANGE', None) != .01 or
+            getattr(code(mapper), 'co_names', None) != (
+                'chunkIDFromChunkIndexes', 'chunkIndexesFromPosition') or
+            getattr(code(indexes), 'co_consts', None) != (None, 0, 2) or
+            getattr(code(indexes), 'co_names', None) != (
+                'int', 'math', 'floor', '_INV_CHUNK_RANGE') or
+            getattr(code(wire), 'co_consts', None) != (None, 127, 8)):
+        return None
+    owner = _get(sensor)
+    if owner is None:
+        return None
+    return owner.query(7, (point(position), float(sin_yaw), float(cos_yaw),
+                           float(speed), int(bool(neighbours))))
+
+
 def catalog(sensor, vehicle, contact=None):
     owner = _get(sensor)
     if owner is None:

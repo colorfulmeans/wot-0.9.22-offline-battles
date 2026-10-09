@@ -112,6 +112,33 @@ PyObject *WOT_CDECL destr_query(PyObject *,PyObject *args) {
             return result.release();
         }else if(op==6){require_sequence(v[2],2,true);auto **row=items(v[2]);const auto sweep=b::box(row[0]);const auto values=b::boxes(row[1]);
             const auto indexes=profile.run([&]{std::vector<int> result;for(std::size_t i=0;i<values.size();++i)if(d::intersects(sweep,values[i]))result.push_back(static_cast<int>(i));return result;});return b::indexes(indexes);
+        }else if(op==7){require_sequence(v[2],5,true);auto **row=items(v[2]);
+            const auto position=b::point(row[0]);const double sy=finite_number(row[1]),cy=finite_number(row[2]);
+            const double travel=finite_number(row[3])>=0.?6.:-6.;const bool neighbours=index_value(row[4])!=0;
+            // Exact #1513 DestructiblesCache law. Each old Python mapper input
+            // was first stored in a native Vector3, so retain float32 rounding
+            // before the double multiplication/floor and integer wire encoding.
+            struct Neighbourhood { int current,forward;std::vector<std::array<double,3>> offsets; };
+            const auto value=profile.run([&]{
+                const auto chunk=[](double x,double z){
+                    const double gx=std::floor(double(float(x))*.01),gz=std::floor(double(float(z))*.01);
+                    if(gx < -127. || gx > 126. || gz < -127. || gz > 126.)throw Unsupported();
+                    return ((static_cast<int>(gx)+127)<<8)|(static_cast<int>(gz)+127);
+                };
+                Neighbourhood out{chunk(position[0],position[2]),
+                    chunk(position[0]+sy*travel,position[2]+cy*travel),{}};
+                if(neighbours)for(double dx:{-100.,0.,100.})for(double dz:{-100.,0.,100.})
+                    out.offsets.push_back({{double(chunk(position[0]+dx,position[2]+dz)),
+                        dx*sy+dz*cy,-std::abs(dx*cy-dz*sy)}});
+                return out;
+            });
+            OwnedTuple result(3);result.set(0,int_new(value.current));result.set(1,int_new(value.forward));
+            OwnedTuple offsets(value.offsets.size());
+            for(std::size_t i=0;i<value.offsets.size();++i){OwnedTuple row_value(3);
+                row_value.set(0,int_new(static_cast<int>(value.offsets[i][0])));
+                row_value.set(1,float_new(value.offsets[i][1]));row_value.set(2,float_new(value.offsets[i][2]));
+                offsets.set(i,row_value.release());}
+            result.set(2,offsets.release());return result.release();
         }
         throw Unsupported();
     }catch(const PythonAllocationFailed &){profile.fail();return 0;}catch(...){profile.fail();return fallback();}

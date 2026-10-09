@@ -11431,13 +11431,13 @@ class BattleRuntime(object):
         self._effect_reports += 1
         sys.stdout.write(
             '[Offline LAN 0.9.22] EFFECT %s material=%r index=%r at=%s '
-            'dir=%s event=%s projectile=%s target=%s damage=%s\n' % (
+            'dir=%s event=%s projectile=%s target=%s damage=%s result=%s\n' % (
                 kind, material, effects_index,
                 _format_xyz(where), _format_xyz(direction),
                 (event or {}).get('event_id'),
                 (event or {}).get('projectile_id'),
-                (event or {}).get('target'),
-                (event or {}).get('damage')))
+                self._event_entity_key(event or {}, 'target'),
+                (event or {}).get('damage'), (event or {}).get('shot_result')))
         return True
 
     @staticmethod
@@ -16584,6 +16584,9 @@ class BattleRuntime(object):
                         ricochet_impact, reflected, data['world_normal'])
                     ricochet = {
                         'state': state,
+                        'contact_key': data.get('target_key'),
+                        'contact_component': (data.get('armor_contact') or {}).get('component'),
+                        'contact_normal': data['world_normal'],
                         'impact': ricochet_impact,
                         'segment_origin': segment_origin,
                         'segment_velocity': reflected,
@@ -16780,6 +16783,12 @@ class BattleRuntime(object):
                         list(meta.get('destructibles_pending', ()))),
                 }
                 pending['wire'] = wire
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] RICOCHET CONTACT id=%s target=%s '
+                    'component=%s normal=%s impact=%s origin=%s velocity=%s\n' % (
+                        meta['projectile_id'], pending.get('contact_key'),
+                        pending.get('contact_component'), pending.get('contact_normal'),
+                        wire['impact'], wire['segment_origin'], wire['segment_velocity']))
         except Exception as error:
             self._report_projectile_terminal_failure(
                 meta, pending.get('state', {}), 'ricochet_build',

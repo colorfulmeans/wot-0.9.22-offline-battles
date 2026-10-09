@@ -6801,37 +6801,51 @@ def _fell_trees_near(
 					_empty_proximity_receipt_valid_1513(
 					_receipt_key, mgr, _st['chunks'])):
 				return
-		cids = set((_current_cid,))
-		_mapped_cid = AreaDestructibles.chunkIDFromPosition(
-			Math.Vector3(pos.x + sin_y * (6.0 if vel >= 0 else -6.0),
-				pos.y, pos.z + cos_y * (6.0 if vel >= 0 else -6.0)))
-		cids.add(_mapped_cid)
-		_prewarm_priority = {}
-		# #1513 chunks are 100 m squares.  Catalog instances can be non-uniformly
-		# scaled, so raw resource bounds cannot determine the origin reach.  Sample
-		# the current chunk plus all eight neighbours through the native mapper.
-		# Registration-only tree prewarm deliberately uses the same neighbourhood:
-		# at 16 name probes per frame it starts the next chunk before contact rather
-		# than waiting 0.5-1 seconds after the vehicle crosses the boundary.
-		if _destructible_catalog is not None or registration_only:
-			for _offset_x in (-_DESTRUCTIBLE_CHUNK_METRES_1513, 0.0,
-					_DESTRUCTIBLE_CHUNK_METRES_1513):
-				for _offset_z in (-_DESTRUCTIBLE_CHUNK_METRES_1513, 0.0,
+		_native_neighbourhood = _native_geometry.neighbourhood(
+			_native_sensor, AreaDestructibles, pos, sin_y, cos_y, vel,
+			_destructible_catalog is not None or registration_only)
+		if _native_neighbourhood is not None:
+			_current_cid, _mapped_cid, _offset_rows = _native_neighbourhood
+			cids = set((_current_cid, _mapped_cid))
+			_prewarm_priority = {}
+			for _neighbour_cid, _forward, _lateral in _offset_rows:
+				cids.add(_neighbour_cid)
+				_prewarm_priority[_neighbour_cid] = max(
+					_prewarm_priority.get(_neighbour_cid,
+						(-float('inf'), -float('inf'))), (_forward, _lateral))
+			combat_count('destructible_neighbourhood_native')
+		else:
+			cids = set((_current_cid,))
+			_mapped_cid = AreaDestructibles.chunkIDFromPosition(
+				Math.Vector3(pos.x + sin_y * (6.0 if vel >= 0 else -6.0),
+					pos.y, pos.z + cos_y * (6.0 if vel >= 0 else -6.0)))
+			cids.add(_mapped_cid)
+			_prewarm_priority = {}
+			# #1513 chunks are 100 m squares.  Catalog instances can be non-uniformly
+			# scaled, so raw resource bounds cannot determine the origin reach.  Sample
+			# the current chunk plus all eight neighbours through the native mapper.
+			# Registration-only tree prewarm deliberately uses the same neighbourhood:
+			# at 16 name probes per frame it starts the next chunk before contact rather
+			# than waiting 0.5-1 seconds after the vehicle crosses the boundary.
+			if _destructible_catalog is not None or registration_only:
+				for _offset_x in (-_DESTRUCTIBLE_CHUNK_METRES_1513, 0.0,
 						_DESTRUCTIBLE_CHUNK_METRES_1513):
-					_neighbour_cid = AreaDestructibles.chunkIDFromPosition(
-						Math.Vector3(pos.x + _offset_x, pos.y,
-							pos.z + _offset_z))
-					cids.add(_neighbour_cid)
-					if _neighbour_cid is not None:
-						_forward_offset = (
-							_offset_x * sin_y + _offset_z * cos_y)
-						_lateral_offset = abs(
-							_offset_x * cos_y - _offset_z * sin_y)
-						_prewarm_priority[_neighbour_cid] = max(
-							_prewarm_priority.get(
-								_neighbour_cid,
-								(-float('inf'), -float('inf'))),
-							(_forward_offset, -_lateral_offset))
+					for _offset_z in (-_DESTRUCTIBLE_CHUNK_METRES_1513, 0.0,
+							_DESTRUCTIBLE_CHUNK_METRES_1513):
+						_neighbour_cid = AreaDestructibles.chunkIDFromPosition(
+							Math.Vector3(pos.x + _offset_x, pos.y,
+								pos.z + _offset_z))
+						cids.add(_neighbour_cid)
+						if _neighbour_cid is not None:
+							_forward_offset = (
+								_offset_x * sin_y + _offset_z * cos_y)
+							_lateral_offset = abs(
+								_offset_x * cos_y - _offset_z * sin_y)
+							_prewarm_priority[_neighbour_cid] = max(
+								_prewarm_priority.get(
+									_neighbour_cid,
+									(-float('inf'), -float('inf'))),
+								(_forward_offset, -_lateral_offset))
 		cids.discard(None)
 		instances = globals().setdefault('g_offh_destr_instances', {})
 		contact_bins = globals().setdefault(

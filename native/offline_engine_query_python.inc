@@ -4,7 +4,7 @@ namespace engine_query {
 enum Capability {
     Vector, XYZ, Length, Add, Subtract, Scale, Normalise, Ray, Skin, Alias,
     Filter, Equal, Skipped, NativeFilter, Failure, Unavailable, CanRecast,
-    Tuning, RecoverGround, Segment, CapabilityCount
+    Tuning, RecoverGround, Segment, SkinContract, CapabilityCount
 };
 struct Failed {};
 
@@ -58,6 +58,7 @@ class Session {
     unsigned budget_;
     double epsilon_;
     bool fused_segment_;
+    bool pinned_skin_;
 
     bool same(PyObject *a, PyObject *b) {
         if (a == b) return true;
@@ -113,9 +114,10 @@ class Session {
 public:
     explicit Session(PyObject *capabilities): capabilities_(Object::borrow(capabilities)) {
         require_sequence(capabilities, RecoverGround+1);
-        if(size(capabilities)!=RecoverGround+1 && size(capabilities)!=CapabilityCount)throw Unsupported();
-        fused_segment_=size(capabilities)==CapabilityCount;
+        if(size(capabilities)!=RecoverGround+1 && size(capabilities)!=Segment+1 && size(capabilities)!=CapabilityCount)throw Unsupported();
+        fused_segment_=size(capabilities)>=Segment+1;
         caps_ = items(capabilities);
+        pinned_skin_=size(capabilities)==CapabilityCount && index_value(caps_[SkinContract])==1;
         require_sequence(caps_[Tuning], 2, true);
         const auto budget = identity(items(caps_[Tuning])[0]);
         epsilon_ = finite_number(items(caps_[Tuning])[1]);
@@ -234,6 +236,22 @@ private:
             if (filter.failed) throw Failed();
             if (hit.get() == caps_[Unavailable]) return Object::borrow(none_object);
             if (hit.get() == none_object) continue;
+            // Only the pinned sensor opts in. Its three skin laws all require
+            // an exact integer material 71..86 with flags zero or bit 0x80.
+            // Preserve the complete filter candidate cap/order; skip only a
+            // proved no-op Python callback, never a collision or a recast.
+            if(pinned_skin_ && sequence(hit.get()) && size(hit.get())>=2){
+                bool relevant=false;
+                for(const auto &candidate:filter.candidates){
+                    auto **row=items(candidate.get());bool integers=true;
+                    for(int i=0;i<4;++i)integers=integers &&
+                        row[i]->ob_type==int_type;
+                    if(!integers){relevant=true;break;}
+                    const auto material=identity(row[0]),flags=identity(row[1]);
+                    if(material>=71 && material<=86 && (flags==0 || (flags&0x80))){relevant=true;break;}
+                }
+                if(!relevant)return hit;
+            }
             OwnedTuple candidates(filter.candidates.size());
             for (size_t i = 0; i < filter.candidates.size(); ++i)
                 borrow(candidates, i, filter.candidates[i].get());

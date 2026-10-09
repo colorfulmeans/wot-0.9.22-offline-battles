@@ -11,6 +11,7 @@ import imp
 import math
 import os
 import random
+import struct
 import sys
 import types
 
@@ -323,11 +324,29 @@ def main():
     # Close is idempotent; stale handles and malformed finite geometry reject.
     raw=backend.backend
     handle=raw.destr_open()
+    # Independent producer law, including Vector3 float32 rounding immediately
+    # on either side of negative and positive 100 m boundaries.
+    rng=random.Random(15130245)
+    f32=lambda x: struct.unpack('f',struct.pack('f',x))[0]
+    def chunk(x,z):
+        return ((int(math.floor(f32(x)*.01))+127)<<8) | (int(math.floor(f32(z)*.01))+127)
+    for index in range(1000):
+        x=rng.randrange(-20,21)*100.+rng.choice((-.00001,0.,.00001,rng.uniform(-100.,100.)))
+        z=rng.randrange(-20,21)*100.+rng.choice((-.00001,0.,.00001,rng.uniform(-100.,100.)))
+        x,z=f32(x),f32(z)
+        yaw=rng.uniform(-math.pi,math.pi);sy,cy=math.sin(yaw),math.cos(yaw)
+        speed=rng.choice((-12.,0.,12.));travel=6. if speed>=0. else -6.
+        neighbours=bool(index%2)
+        expected=(chunk(x,z),chunk(x+sy*travel,z+cy*travel),tuple(
+            (chunk(x+dx,z+dz),dx*sy+dz*cy,-abs(dx*cy-dz*sy))
+            for dx in (-100.,0.,100.) for dz in (-100.,0.,100.)) if neighbours else ())
+        equal(backend.destr_query(handle,7,((x,0.,z),sy,cy,speed,int(neighbours))),
+              expected,'neighbourhood-%d'%index)
     assert raw.destr_query(handle,4,((0.,0.,0.),float('nan'),0.,0.,0.,None,(-1.,-1.,-1.),(1.,1.,1.))) is None
     assert raw.destr_update(handle,2,(22.,((0,(0.,0.,0.),1,1,0,0.),),(((0,0),(1,)),),())) is None
     assert raw.destr_close(handle)==1 and raw.destr_close(handle)==1
     assert raw.destr_query(handle,3,box(0.,0.,0.)) is None
-    assert set(op for (name,op) in backend.calls if name=='destr_query') == set(range(7))
+    assert set(op for (name,op) in backend.calls if name=='destr_query') == set(range(8))
     assert set(op for (name,op) in backend.calls if name=='destr_update') == set(range(5))
     print('Native destructible frontier parity passed: %d field checks; %d accepted calls; geometry, ordered candidates, full body/catalog owners, stream replacement and lifecycle.' % (checks,sum(backend.calls.values())))
 

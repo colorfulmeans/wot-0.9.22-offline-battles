@@ -10,6 +10,29 @@ from gui.mods.offline_lan_0922 import bot_runtime
 
 
 class LatencyRepairsTests(unittest.TestCase):
+    def test_hit_diagnostic_names_bot_and_player_targets(self):
+        battle = fixture.BattleRuntime(fixture._runtime())
+        output = io.StringIO()
+        with mock.patch('sys.stdout', output):
+            for event in ({'target_bot': 25}, {'target': 1}):
+                event.update(event_id='1:20:1', projectile_id='1:b:3:4',
+                             damage=0, shot_result=0)
+                battle._report_effect('armour_hit', 'armorRicochet', 14,
+                    (1., 2., 3.), (0., 0., 1.), event=event)
+        self.assertIn('target=bot:25 damage=0 result=0', output.getvalue())
+        self.assertIn('target=player:1 damage=0 result=0', output.getvalue())
+
+    def test_custom_chunk_mapper_is_not_replaced_by_native_batch(self):
+        from gui.mods.offline_lan_0922 import native_destructibles as geometry
+        owner = types.SimpleNamespace(query=mock.Mock())
+        cache = types.SimpleNamespace(chunkIDFromPosition=lambda position: 22)
+        with mock.patch.dict(sys.modules, {'DestructiblesCache': cache}), \
+                mock.patch.object(geometry, '_get', return_value=owner):
+            self.assertIsNone(geometry.neighbourhood(None, types.SimpleNamespace(
+                chunkIDFromPosition=cache.chunkIDFromPosition),
+                fixture._Vector(), 0., 1., 3., True))
+        owner.query.assert_not_called()
+
     def test_grazing_ricochet_clears_plate_after_wire_rounding(self):
         from gui.mods.offline_lan_0922.projectile_runtime import (
             ideal_reflection_velocity, ricochet_departure_origin)
