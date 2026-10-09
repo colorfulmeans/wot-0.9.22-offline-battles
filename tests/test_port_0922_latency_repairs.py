@@ -1,5 +1,7 @@
 """Captured worker latency classes: publication, queue fairness and gaps."""
 import types
+import io
+import sys
 import unittest
 from unittest import mock
 
@@ -8,6 +10,90 @@ from gui.mods.offline_lan_0922 import bot_runtime
 
 
 class LatencyRepairsTests(unittest.TestCase):
+    def test_grazing_ricochet_clears_plate_after_wire_rounding(self):
+        from gui.mods.offline_lan_0922.projectile_runtime import (
+            ideal_reflection_velocity, ricochet_departure_origin)
+        import struct
+        # Near-parallel travel at this map coordinate rounded the previous
+        # direction-only nudge back onto the plate in the x86 engine.
+        impact = (65.24, 1.06, 104.22)
+        incoming = (-0.001, 0., 1000.)
+        for normal in ((1., 0., 0.), (-3., 0., 0.)):
+            reflected = ideal_reflection_velocity(incoming, normal)
+            origin = ricochet_departure_origin(impact, reflected, normal)
+            f32 = lambda v: struct.unpack('f', struct.pack('f', v))[0]
+            old_x = impact[0] + reflected[0] / 1000. * .002
+            self.assertEqual(f32(impact[0]), f32(old_x))
+            self.assertGreater(f32(origin[0]), f32(impact[0]))
+            self.assertEqual(impact[1:], origin[1:])
+            self.assertAlmostEqual(.002, origin[0] - impact[0])
+
+    def test_chassis_feedback_does_not_call_nonexistent_stock_sticker_owner(self):
+        battle = fixture.BattleRuntime(fixture._runtime())
+        target = fixture._Vehicle(10, fixture._Descriptor(), fixture._Vector(),
+                                  (0., 0., 0.), {'health': 500})
+        battle._runtime.bigworld.entities[10] = target
+        target.appearance.addDamageSticker = mock.Mock(
+            side_effect=KeyError('chassis'))
+        decoder = types.SimpleNamespace(decodeSegment=lambda *unused: (
+            'chassis', 17, fixture._Vector(0., 0., -1.),
+            fixture._Vector(0., 0., 1.)))
+        with mock.patch.dict(sys.modules, {'VehicleEffects':
+                types.SimpleNamespace(DamageFromShotDecoder=decoder)}):
+            self.assertFalse(battle._present_damage_sticker(
+                {'damage_sticker': 123}, {'engine_id': 10}))
+        target.appearance.addDamageSticker.assert_not_called()
+
+    def test_sticker_uses_resolved_plate_after_penetrated_track(self):
+        battle = fixture.BattleRuntime(fixture._runtime())
+        descriptor = fixture._Descriptor()
+        descriptor.hull.hitTester.localHitTest = lambda *unused: [object()]
+        target = fixture._Vehicle(10, descriptor, fixture._Vector(),
+                                  (0., 0., 0.), {'health': 500})
+        battle._runtime.vehicles.g_cache.shotEffects[3]['targetStickers'] = {
+            'armorResisted': 17, 'armorPierced': 29}
+        hits = [types.SimpleNamespace(dist=.13, compName='vehicleChassis'),
+                types.SimpleNamespace(dist=.38, compName='vehicleHull')]
+        decoder = types.SimpleNamespace(decodeSegment=lambda *unused: (
+            'hull', 29, fixture._Vector(0., 0., -1.),
+            fixture._Vector(0., 0., 1.)))
+        with mock.patch.dict(sys.modules, {'VehicleEffects':
+                types.SimpleNamespace(DamageFromShotDecoder=decoder)}), \
+                mock.patch.object(fixture.battle_runtime_module,
+                                  'encode_damage_sticker', return_value=123) as encode:
+            self.assertEqual(123, battle._projectile_damage_sticker(
+                {}, target, descriptor.gun.shots[0], fixture._Vector(),
+                fixture._Vector(0., 0., 2.), hits, 2, historic=True,
+                contact={'component': 'vehicleHull', 'distance': .38}))
+            self.assertEqual('vehicleHull', encode.call_args.args[4])
+            encode.reset_mock()
+            self.assertIsNone(battle._projectile_damage_sticker(
+                {}, target, descriptor.gun.shots[0], fixture._Vector(),
+                fixture._Vector(0., 0., 2.), hits, 1, historic=True,
+                contact={'component': 'vehicleChassis', 'distance': .13}))
+            encode.assert_not_called()
+
+    def test_bot_launch_age_uses_only_simulation_clock(self):
+        battle = fixture.BattleRuntime(fixture._runtime())
+        descriptor = fixture._Descriptor()
+        battle._runtime.bigworld.entities[10] = fixture._Vehicle(
+            10, descriptor, fixture._Vector(), (0., 0., 0.), {'health': 500})
+        battle._records = {'bot:7': {'engine_id': 10, 'kind': 'bot',
+            'network_id': 7, 'ready': True, 'state': {'team': 1}}}
+        battle._bots = types.SimpleNamespace(_sample_time_us=260000)
+        battle._clock = lambda: 5000.
+        battle.client = types.SimpleNamespace(authority_epoch=4,
+            send_projectile_launch=mock.Mock(return_value=3))
+        output = io.StringIO()
+        with mock.patch('sys.stdout', output):
+            self.assertTrue(battle._launch_bot_projectile({
+                'id': 7, 'fire_seq': 3, 'shell_index': 0,
+                'shot_yaw': 0., 'shot_pitch': 0., 'shot_origin': (0., 1.5, 0.),
+                'launch_time_us': 240000, 'launch_pose': (0.,)*6,
+                'profile': {'class_tag': 'mediumTank'}}, 3))
+        self.assertIn('simulation_age_ms=20.000', output.getvalue())
+        self.assertNotIn('frozen_age_ms', output.getvalue())
+
     def test_countdown_native_commit_retains_frozen_publication_until_live(self):
         from gui.mods.offline_lan_0922 import destructibles_sensor as sensor
         battle = fixture.BattleRuntime(fixture._runtime())

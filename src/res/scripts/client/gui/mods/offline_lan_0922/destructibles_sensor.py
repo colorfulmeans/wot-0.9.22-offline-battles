@@ -6857,6 +6857,7 @@ def _fell_trees_near(
 				-_prewarm_priority.get(cid, (0.0, 0.0))[0],
 				-_prewarm_priority.get(cid, (0.0, 0.0))[1], cid))
 		_tree_vehicle_box = None
+		_native_body_pose = None
 		_tree_sweep_hulls = {}
 		for cid in _cid_order:
 			combat_count('destructible_body_chunks')
@@ -7290,8 +7291,10 @@ def _fell_trees_near(
 				continue
 			if not registry['count']:
 				continue
+			if _native_body_pose is None:
+				_native_body_pose = _native_geometry.pose(pos, yaw, bbox)
 			_native_body = _native_geometry.body(_native_sensor, cid, registry,
-				pos, yaw, vel, bbox, vehicle_box)
+				pos, yaw, vel, bbox, vehicle_box, prepared_pose=_native_body_pose)
 			if _native_body is not None:
 				_nearby, _nearby_count, _has_nearby = _native_body
 				combat_count('destructible_nearby_items', _nearby_count)

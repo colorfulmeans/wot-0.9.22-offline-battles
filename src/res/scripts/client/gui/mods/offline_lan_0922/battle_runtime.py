@@ -51,7 +51,7 @@ from gui.mods.offline_lan_0922.entities.runtime import EntityPropertyBuilder
 from gui.mods.offline_lan_0922.projectile_manager import InFlightProjectiles
 from gui.mods.offline_lan_0922.projectile_runtime import (
     PROJECTILE_BROADPHASE_RADIUS, PROJECTILE_MAX_SUBSTEP_SECONDS, lerp3,
-    ideal_reflection_velocity,
+    ideal_reflection_velocity, ricochet_departure_origin,
     point_in_expanded_segment_bounds, point_segment_distance_sq,
     projectile_range_distance, trajectory_position)
 from gui.mods.offline_lan_0922.snapshot_sync import SnapshotSync
@@ -10968,6 +10968,10 @@ class BattleRuntime(object):
             component_name, sticker_id, segment_start, segment_end = \
                 DamageFromShotDecoder.decodeSegment(
                     code, target.typeDescriptor)
+            # #1513 VehicleStickers creates only hull/turret/gun owners.
+            # A decoded chassis hit is valid combat, but has no decal owner.
+            if component_name == 'chassis':
+                return False
             add_sticker = getattr(
                 getattr(target, 'appearance', None),
                 'addDamageSticker', None)
@@ -11342,7 +11346,7 @@ class BattleRuntime(object):
         self._report_effect(
             'armour_hit', effect_group, effects_index,
             (_number(event.get('x')), _number(event.get('y')),
-             _number(event.get('z'))), direction)
+             _number(event.get('z'))), direction, event=event)
         try:
             # #1513's armour-hit sound is a `_SoundEffectDesc` whose only
             # events are the impact trio.  Without the shooter and target
@@ -11415,7 +11419,8 @@ class BattleRuntime(object):
 
     _EFFECT_REPORT_LIMIT = 12
 
-    def _report_effect(self, kind, material, effects_index, where, direction):
+    def _report_effect(self, kind, material, effects_index, where, direction,
+                       event=None):
         """Log the first few visual effects a round plays, then stop.
 
         A black wedge over the terrain has been seen twice; a mis-specified
@@ -11426,9 +11431,13 @@ class BattleRuntime(object):
         self._effect_reports += 1
         sys.stdout.write(
             '[Offline LAN 0.9.22] EFFECT %s material=%r index=%r at=%s '
-            'dir=%s\n' % (
+            'dir=%s event=%s projectile=%s target=%s damage=%s\n' % (
                 kind, material, effects_index,
-                _format_xyz(where), _format_xyz(direction)))
+                _format_xyz(where), _format_xyz(direction),
+                (event or {}).get('event_id'),
+                (event or {}).get('projectile_id'),
+                (event or {}).get('target'),
+                (event or {}).get('damage')))
         return True
 
     @staticmethod
@@ -15660,7 +15669,7 @@ class BattleRuntime(object):
 
     @timed('projectile.sticker')
     def _projectile_damage_sticker(self, record, target, shot, start, end,
-                                   collisions, result, historic=False):
+                                   collisions, result, historic=False, contact=None):
         """Encode one direct hit against the exact sampled component pose."""
         try:
             shell = _field(shot, 'shell', None)
@@ -15676,8 +15685,18 @@ class BattleRuntime(object):
                     not isinstance(sticker_id, _INTEGER_TYPES) or
                     not 0 <= sticker_id <= 255):
                 return None
-            nearest = min(collisions, key=lambda item: float(item.dist))
+            candidates = collisions
+            if contact is not None:
+                candidates = tuple(item for item in collisions
+                    if item.compName == contact.get('component') and
+                    abs(float(item.dist) - float(contact.get('distance', 0.0)))
+                    <= 1.0e-5)
+            if not candidates:
+                return None
+            nearest = min(candidates, key=lambda item: float(item.dist))
             component_name = nearest.compName
+            if component_name == 'vehicleChassis':
+                return None
             chassis_matrix = None
             if historic:
                 body_matrix = getattr(target, 'matrix', None)
@@ -15997,7 +16016,7 @@ class BattleRuntime(object):
         damage_sticker = self._projectile_damage_sticker(
             record, critical_target, shot, trace_start, trace_end,
             collisions, result,
-            historic=isinstance(collision_pose, dict))
+            historic=isinstance(collision_pose, dict), contact=contact)
         damage_roll = combat_rules.shell_damage_roll(shot)
 
         critical_impact = self._vector(terminal_data['impact'])
@@ -16558,13 +16577,11 @@ class BattleRuntime(object):
             if multiplier is not None and reflected is not None:
                 speed = math.sqrt(sum(value * value for value in reflected))
                 if 0.000001 < speed <= lan_protocol.MAX_PROJECTILE_VELOCITY:
-                    direction = tuple(value / speed for value in reflected)
                     ricochet_impact = (
                         tuple(ricochet_contact['impact'])
                         if isinstance(ricochet_contact, dict) else impact)
-                    segment_origin = tuple(
-                        ricochet_impact[index] + direction[index] * 0.002
-                        for index in range(3))
+                    segment_origin = ricochet_departure_origin(
+                        ricochet_impact, reflected, data['world_normal'])
                     ricochet = {
                         'state': state,
                         'impact': ricochet_impact,
@@ -25955,8 +25972,8 @@ class BattleRuntime(object):
         accepted = sender(*args, **kwargs)
         if accepted == shot_seq:
             self._remember_fire_timeline(('bot_publish', bot_id, shot_seq), {'wall': publish_wall})
-            sys.stdout.write('[Offline LAN 0.9.22] BOT SHOT TIMING stage=publish bot=%d seq=%d frozen_age_ms=%.3f send_ms=%.3f\n' % (
-                bot_id, shot_seq, max(0.0, self._clock() * 1000000.0 - launch_time_us) / 1000.0,
+            sys.stdout.write('[Offline LAN 0.9.22] BOT SHOT TIMING stage=publish bot=%d seq=%d simulation_age_ms=%.3f send_ms=%.3f\n' % (
+                bot_id, shot_seq, max(0.0, float(getattr(self._bots, '_sample_time_us', launch_time_us)) - launch_time_us) / 1000.0,
                 max(0.0, _PROFILE_CLOCK() - publish_wall) * 1000.0))
         return accepted == shot_seq
 

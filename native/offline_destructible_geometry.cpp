@@ -4,6 +4,7 @@
 #include <limits>
 #include <mutex>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace offline_destructible {
 namespace {
@@ -196,8 +197,11 @@ std::vector<int> Store::trees(std::int64_t id,const std::vector<Box> &sweeps,dou
 }
 BodyResult Store::body(std::int64_t id,const Pose &pose,double speed,const Box &sweep) const {
     auto at=chunks_.find(id);if(at==chunks_.end())throw std::invalid_argument("missing streamed chunk");
-    const auto &chunk=at->second;BodyResult result;std::set<int> seen;
-    const auto hits=trees(id,{sweep},0.);const std::set<int> tree_hits(hits.begin(),hits.end());
+    const auto &chunk=at->second;BodyResult result;std::unordered_set<int> seen;
+    // Stationary bodies and catalog-only neighbourhoods still need proximity
+    // accounting, but cannot fell a tree. Defer the duplicate tree-bin walk
+    // and swept hull construction until an eligible tree actually needs it.
+    bool trees_prepared=false;std::unordered_set<int> tree_hits;
     const double sy=std::sin(pose.yaw),cy=std::cos(pose.yaw);
     const std::array<double,4> origin{{pose.position[0]-8.,pose.position[0]+8.,pose.position[2]-8.,pose.position[2]+8.}};
     const auto visit=[&](const std::map<Cell,std::vector<int>> &bins,const std::array<double,4> &b){cells(b,[&](Cell c){
@@ -208,7 +212,11 @@ BodyResult Store::body(std::int64_t id,const Pose &pose,double speed,const Box &
             if(!item.catalog)result.found_nearby=true;
             const double dx=item.position[0]-pose.position[0],dz=item.position[2]-pose.position[2],radius=8.+item.radius;
             if(dx*dx+dz*dz>radius*radius||item.catalog||std::abs(speed)<1.)continue;
-            if(item.tree){if(!tree_hits.count(index))continue;}else{
+            if(item.tree){
+                if(!trees_prepared){const auto hits=trees(id,{sweep},0.);
+                    tree_hits.insert(hits.begin(),hits.end());trees_prepared=true;}
+                if(!tree_hits.count(index))continue;
+            }else{
                 const double fwd=dx*sy+dz*cy,lat=dx*cy-dz*sy;
                 if(!(pose.minimum[0]<=lat&&lat<=pose.maximum[0]&&pose.minimum[2]<=fwd&&fwd<=pose.maximum[2]))continue;
             }
