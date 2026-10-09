@@ -1017,6 +1017,13 @@ def _cleanup_runtime():
     global _client_guard_released
     errors = []
 
+    probe = sys.modules.get('gui.mods.offline_lan_0922.native_protocol_probe')
+    if probe is not None:
+        try:
+            probe.fini()
+        except Exception as error:
+            errors.append(error)
+
     callback_id = _callback_id
     if callback_id is not None:
         try:
@@ -1198,6 +1205,26 @@ def _install_lan_session():
         raise
     _session = session
     return True
+
+
+def _suspend_native_probe_session():
+    global _session
+    if _session is not None:
+        _session.stop(show_login=False, restore_account=False,
+                      release_join=True)
+        _session = None
+
+
+def _start_native_protocol_probe():
+    if not os.environ.get('OFFLINE_LAN_0922_NATIVE_PROTOCOL_PROBE'):
+        return False
+    from gui.mods.offline_lan_0922 import native_protocol_probe
+    return native_protocol_probe.maybe_start(g_compatibility, dict(
+        account_context=_account_context,
+        suspend_session=_suspend_native_probe_session,
+        restore_session=_install_lan_session,
+        login_ready=_login_space_is_ready,
+        lobby_ready=_native_lobby_is_ready))
 
 
 def _install_worker_session():
@@ -1411,6 +1438,8 @@ def _wait_for_lobby():
                         raise RuntimeError(
                             'visible player ready marker was not published')
                     _player_ready_signaled = True
+                if _start_native_protocol_probe():
+                    return
                 from gui.mods.offline_lan_0922 import offline_replay
                 if (offline_replay.replay_request() and
                         os.environ.get('WOT_OFFLINE_REPLAY_AUTOSTART') == '1'):

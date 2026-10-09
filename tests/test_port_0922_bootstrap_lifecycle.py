@@ -1930,6 +1930,37 @@ class BootstrapLifecycleTests(unittest.TestCase):
             {(2, 1), (2, 2), (2, 3), (2, 4)}.isdisjoint(
                 set(runtime_vehicles.crewTypeIDs)))
 
+    def test_native_probe_is_inert_without_explicit_environment(self):
+        bootstrap, _, _, _, _, _, modules = self._load()
+        with mock.patch.dict(sys.modules, modules), mock.patch.dict(
+                os.environ, {}, clear=True):
+            self.assertFalse(bootstrap._start_native_protocol_probe())
+
+    def test_native_probe_receives_lifecycle_owners_and_stops_on_cleanup(self):
+        bootstrap, _, compatibility, _, _, _, modules = self._load()
+        probe = types.ModuleType(
+            'gui.mods.offline_lan_0922.native_protocol_probe')
+        probe.maybe_start = mock.Mock(return_value=True)
+        probe.fini = mock.Mock()
+        modules[probe.__name__] = probe
+        with mock.patch.dict(sys.modules, modules), mock.patch.dict(
+                os.environ, {'OFFLINE_LAN_0922_NATIVE_PROTOCOL_PROBE':
+                             '/explicit/manifest.json'}):
+            self.assertTrue(bootstrap._start_native_protocol_probe())
+            owner, context = probe.maybe_start.call_args.args
+            self.assertIs(owner, compatibility)
+            self.assertIs(context['account_context'], bootstrap._account_context)
+            self.assertIs(context['restore_session'], bootstrap._install_lan_session)
+            self.assertIs(context['login_ready'], bootstrap._login_space_is_ready)
+            session = mock.Mock()
+            bootstrap._session = session
+            context['suspend_session']()
+            session.stop.assert_called_once_with(
+                show_login=False, restore_account=False, release_join=True)
+            self.assertIsNone(bootstrap._session)
+            bootstrap._cleanup_runtime()
+            probe.fini.assert_called_once_with()
+
     def test_account_is_created_after_login_state_clear_and_next_tick(self):
         (bootstrap, callbacks, compatibility, app_loader,
          spaces, events, modules) = self._load()
