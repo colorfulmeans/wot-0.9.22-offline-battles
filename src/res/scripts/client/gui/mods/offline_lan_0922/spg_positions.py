@@ -12,7 +12,7 @@ import heapq
 import math
 from gui.mods.offline_lan_0922 import initial_allocation
 from gui.mods.offline_lan_0922 import native_math
-from gui.mods.offline_lan_0922.worker_diagnostics import observed
+from gui.mods.offline_lan_0922.worker_diagnostics import observed, count
 
 from gui.mods.offline_lan_0922.spg_position_data import CATALOG
 
@@ -275,10 +275,12 @@ class _Graph(object):
         if callable(operation):
             result = operation(self.width, self.height, self.cell,
                                self.origin, self.bounds, self.directions,
-                               self.heights, self.links, self.hazards, start)
+                               self.heights, tuple(self.links), tuple(self.hazards), start)
             if result is not None:
+                count('parking_native_accepted')
                 return dict((index, value) for index, value in enumerate(result)
                             if value is not None)
+            count('parking_native_rejected')
         return self._reference_distances(start)
 
     def _reference_distances(self, start):

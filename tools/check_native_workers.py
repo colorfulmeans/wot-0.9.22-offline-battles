@@ -515,7 +515,7 @@ def parking_distance_checks():
     import json
     import random
     import timeit
-    from gui.mods.offline_lan_0922 import spg_positions, native_math
+    from gui.mods.offline_lan_0922 import spg_positions, native_math, prebaked_navigation
     previous = native_math._backend, native_math._attempted
     native_math._backend, native_math._attempted = backend, True
     try:
@@ -542,11 +542,18 @@ def parking_distance_checks():
             directions, (None,), (255,), (0,), 0) is None
         # Resolve from the repository, not the interpreter's working directory.
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'navgraphs', '100_thepit.json')
-        with open(path) as stream: graph = json.load(stream)
+        graph = prebaked_navigation.load_graph(
+            '100_thepit', base_dir=os.path.dirname(os.path.dirname(path)))
+        assert isinstance(graph['links'], bytearray)
+        assert isinstance(graph['hazards'], bytearray)
         grid = spg_positions._Graph(graph, graph['bounds'])
+        reference_distances = grid._reference_distances
+        def forbid_fallback(unused_start):
+            raise AssertionError('packed runtime graph fell back to Python')
+        grid._reference_distances = forbid_fallback
         for position in ((213.2, -6.04, 172.49), (216.4, -6.74, 213.22), (208.2, -3.12, -187.47)):
             start = grid.closest(position)
-            began = timeit.default_timer(); reference = grid._reference_distances(start)
+            began = timeit.default_timer(); reference = reference_distances(start)
             reference_ms = (timeit.default_timer() - began) * 1000.
             began = timeit.default_timer(); actual = grid.distances(position)
             native_ms = (timeit.default_timer() - began) * 1000.
@@ -554,8 +561,17 @@ def parking_distance_checks():
             for key in reference: equal(actual[key], reference[key])
             print('Parking parity: %d reachable nodes; reference %.3f ms; native bridge %.3f ms' %
                   (len(reference), reference_ms, native_ms))
+        position = (213.2, -6.04, 172.49)
+        start = grid.closest(position)
+        old_links = graph['links'][start]
+        graph['links'][start] = 0
+        assert grid.distances(position) == {start: 0.0}
+        graph['links'][start] = old_links
+        assert len(grid.distances(position)) == 10628
+        checks[0] += 2
         with open(os.path.join(os.path.dirname(path), '08_ruinberg.json')) as stream:
             graph = json.load(stream)
+        graph = prebaked_navigation._pack_cell_arrays(graph)
         states = []
         for team in (1, 2):
             for slot in range(3):

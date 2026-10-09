@@ -49,3 +49,19 @@ The diagnostic entry also measures `parking.position_order`, retry operations,
 catalog/manual assignment and `parking.distances`; the native ledger separates
 input parsing, calculation and result packing. Exact-client acceptance should
 confirm whether these scopes remove the observed command spikes.
+
+## Runtime input correction
+
+Report `20261009-190948` runs the matching package but records all observed native
+parking entries rejected during input parsing. `load_graph` packs `links` and
+`hazards` as bytearrays; the original host fixture read raw JSON lists and did
+not exercise that live representation. The native bridge accepts only exact
+list/tuple inputs, so the caller fell back to the reference flood.
+
+The caller now materializes fresh tuples of both packed masks at each request,
+keeping current graph contents and the strict borrowing guard. Host conformance
+loads the graph through the real runtime loader, prohibits reference fallback,
+compares all distances, and mutates/restores a directed mask to prove no stale
+conversion cache. Complete selection parity also uses packed masks. Diagnostic
+counters distinguish `parking_native_accepted` and `parking_native_rejected`.
+Exact-client admission and frame improvement still need another acceptance run.
