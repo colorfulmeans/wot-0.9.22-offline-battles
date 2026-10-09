@@ -11,6 +11,7 @@ on:
       - fix/094-pr40-gameplay-20260925
       - release/v0.9.5
       - fix/097-bot-withdrawal-and-slope-aim
+      - integrate/0100-native-worker
 
 permissions:
   contents: read
