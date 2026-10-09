@@ -8986,6 +8986,11 @@ class BotRuntime(object):
         if abs(current) <= TRAFFIC_DIRECTION_SPEED_EPSILON:
             return 0.0
         step = PUBLICATION_SECONDS
+        native_distance = vehicle_physics.native_stopping_distance(
+            physics_params, current, float(slope_pitch), bool(steering),
+            TRAFFIC_DIRECTION_SPEED_EPSILON, step)
+        if native_distance is not None:
+            return native_distance
         distance = 0.0
         # Valid #1513 vehicle parameters settle in a few dozen steps.  This is
         # only a finite-number guard for malformed/tuned inputs, not a traffic

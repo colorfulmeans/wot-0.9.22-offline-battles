@@ -9,6 +9,7 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
 
 _POSE_NAMES = ('x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
                'turret_yaw', 'gun_pitch', 'speed', 'velocity')
+_CONTACT_KEYS = _POSE_NAMES + ('position', 'visible', 'direct_visible', 'fresh_visible')
 _RECOVERY = ('drive', 'arrived', 'avoid', 'blocked', 'reverse_turn',
              'pivot_recovery')
 _TRAFFIC = (None, 'yield', 'head_on', 'head_on_blocked')
@@ -35,6 +36,18 @@ def _position(source):
 
 
 def _pose(source):
+    from . import native_math
+    operation = getattr(native_math._load(), 'control_pose', None)
+    if callable(operation):
+        result = operation(source)
+        if result is not None:
+            combat_count('frontier_pose_native')
+            return result
+        combat_count('frontier_pose_rejected')
+    return _reference_pose(source)
+
+
+def _reference_pose(source):
     mask = sum(1 << index for index, name in enumerate(_POSE_NAMES)
                if name in source)
     # These fields are mandatory in the original remembered-pose projection.
@@ -715,6 +728,16 @@ class NativeControl(object):
         self.update_actor(source, source.get('kind', 'bot'), processed=False)
         rows = self.contacts(_key(source), self._sight_binding or self._sight)
         combat_count('frontier_contact_rows', len(rows))
+        materialize = getattr(self.backend, 'contact_materialize', None)
+        if callable(materialize):
+            projected = materialize(rows, tuple(
+                self._pose_free[tuple(row[0])] for row in rows),
+                _CONTACT_KEYS, (True, False))
+            if projected is not None:
+                combat_count('frontier_contact_native')
+                self._sync_events(team_visibility=team_spotted)
+                return list(projected[0]), dict(projected[1])
+            combat_count('frontier_contact_rejected')
         contacts, lookup = [], {}
         for key, flags, unused_remaining, unused_sampled, pose in rows:
             target = dict(self._pose_free[tuple(key)])

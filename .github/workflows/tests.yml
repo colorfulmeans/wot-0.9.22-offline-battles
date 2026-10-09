@@ -94,6 +94,8 @@ jobs:
               -o /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_math.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_release_math.py \
+              /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_workers.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_contacts.py \

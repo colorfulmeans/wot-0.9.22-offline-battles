@@ -79,11 +79,17 @@ PyObject *profiled_object_call(NativeCallback family, const char *name,
 
 enum Field { ID, X, Y, Z, YAW, PITCH, ROLL, SHAPE, DESCRIPTOR, DIMS, POSITION,
     MASS, VX, VY, VZ, PUSH_YAW, GRIP, TRAVERSE_SPEED, TRAVERSE_TORQUE, TEAM,
-    ALIVE, IMMOVABLE, IMPULSE, POSITION_FIXED, FIELD_COUNT };
+    ALIVE, IMMOVABLE, IMPULSE, POSITION_FIXED, PH_POWER, PH_POWER_RATIO,
+    PH_FORWARD, PH_REVERSE, PH_FRICTION, PH_BRAKE, PH_ROTATION, PH_TERRAIN,
+    AIM_YAW, TURRET_YAW, GUN_PITCH, SPEED, VELOCITY,
+    FIELD_COUNT };
 const char *const field_names[] = {
     "id", "x", "y", "z", "yaw", "pitch", "roll", "shape", "descriptor", "dims", "position",
     "mass", "vx", "vy", "vz", "push_yaw", "contact_decel", "traverse_speed",
-    "traverse_torque", "team", "alive", "immovable", "impulse", "position_fixed"
+    "traverse_torque", "team", "alive", "immovable", "impulse", "position_fixed",
+    "powerW", "nativePowerRatio", "speedFwd", "speedBwd", "specificFriction",
+    "brakeDecel", "rotSpd", "terrainResist", "aim_yaw", "turret_yaw",
+    "gun_pitch", "speed", "velocity"
 };
 // Fixed owned string references, retained with this process-lived module.
 PyObject *field_keys[FIELD_COUNT] = {};
@@ -315,6 +321,7 @@ PyObject *WOT_CDECL rotate(PyObject *, PyObject *args) {
 
 #include "offline_navigation_python.inc"
 #include "offline_parking_distances_python.inc"
+#include "offline_release_drive_python.inc"
 #include "offline_contact_roster_python.inc"
 #include "offline_world_python.inc"
 #include "offline_engine_query_python.inc"
@@ -326,6 +333,7 @@ PyObject *WOT_CDECL rotate(PyObject *, PyObject *args) {
 #include "offline_simulation_motion_python.inc"
 #include "offline_simulation_weapons_python.inc"
 #include "offline_simulation_navigation_python.inc"
+#include "offline_contact_projection_python.inc"
 
 PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(translate);
@@ -345,6 +353,9 @@ PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
 }
 
 PyMethodDef methods[] = {
+    {"control_pose", control_pose, 0x0001, "Project current actor pose and presence mask."},
+    {"contact_materialize", contact_materialize, 0x0001, "Materialize current perception rows without Python loops."},
+    {"release_drive", release_drive, 0x0001, "Current release drive, traverse, contact torque and coast integral."},
     {"parking_distances", parking_distances, 0x0001, "Exact directed parking-grid shortest distances."},
     WOT_SIMULATION_METHODS
     WOT_SIM_CONTROL_METHODS

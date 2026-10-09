@@ -2198,7 +2198,40 @@ def steering_torque_scale(drive_intent):
 	return 1.0 - 0.75 * min(1.0, abs(float(drive_intent)))
 
 
+def _release_drive(op, params, values):
+    # Lazy: retain the stdlib-only import boundary.
+    try:
+        from gui.mods.offline_lan_0922 import native_math
+    except ImportError:
+        return None
+    operation = getattr(native_math._load(), 'release_drive', None)
+    if not callable(operation):
+        return None
+    # Read current tuning and descriptor values; never cache mutable mechanics.
+    tuning = (GRAVITY, GRAVITY_FACTOR, COHESION, COH_DECAY_Y,
+        COH_DECAY_FACTOR, COH_DECAY_POW, SLOPE_COH_DECAY_Y, SLOPE_COH_DECAY,
+        COH_DECAY_BOUND, POWER_FACTOR, BKWD_POWER_FRACTION, ENGINE_MIN_V,
+        DRIVE_TRACTION, SLOPE_GRIP_LNG_MIN_Y, SLOPE_GRIP_LNG_FULL_Y,
+        SLOPE_GRIP_LNG_MIN, SLOPE_GRIP_LNG_FULL, STEER_RESIST_MULT,
+        SLIDE_HOLD_TAN, SLIDE_KINETIC, SLIP_THRESHOLD_TAN, SLIP_DRAG,
+        COAST_BRAKE_SHARE, OVERSPEED_MAX_FACTOR, ANG_ACCELERATION_TIME,
+        SPEED_AFFECT_ROT_DECREASE)
+    return operation(op, params, values, tuning)
+
+
+def native_stopping_distance(p, speed, pitch, steering, epsilon, step):
+    return _release_drive(2, p, (speed, pitch, steering, epsilon, step))
+
+
 def contact_traverse(p, half_width, speed, turn, dt, drive_intent=0.0,
+                     slope_pitch=0.0):
+    result = _release_drive(3, p, (half_width, speed, turn, dt, drive_intent, slope_pitch))
+    if result is not None:
+        return result
+    return _reference_contact_traverse(p, half_width, speed, turn, dt, drive_intent, slope_pitch)
+
+
+def _reference_contact_traverse(p, half_width, speed, turn, dt, drive_intent=0.0,
                      slope_pitch=0.0):
 	"""Return the commanded yaw rate and the shared-power track couple.
 
@@ -2512,6 +2545,16 @@ def direction_brake(previous_command, active, command, speed):
 @observed('physics.longitudinal')
 def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
                       airborne=False, terrainIdx=0, handbrake=False, service_brake=False):
+    result = _release_drive(0, p, (v, throttle, steering, slope_pitch, dt,
+        airborne, terrainIdx, handbrake, service_brake))
+    if result is not None:
+        return result
+    return _reference_longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
+        airborne, terrainIdx, handbrake, service_brake)
+
+
+def _reference_longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
+                      airborne=False, terrainIdx=0, handbrake=False, service_brake=False):
 	'''One integration step of forward (along-hull) speed. Returns the new v.
 	slope_pitch: fore/aft ground pitch (BigWorld: nose-up negative).
 
@@ -2652,7 +2695,10 @@ def longitudinal_step(p, v, throttle, steering, slope_pitch, dt,
 
 @observed('physics.traverse')
 def traverse_step(p, omega, steer_dir, v, dt, terrainIdx=0, drive_intent=0.0):
-	return _traverse_step(p, omega, steer_dir, v, dt, terrainIdx, drive_intent)
+    result = _release_drive(1, p, (omega, steer_dir, v, dt, terrainIdx, drive_intent))
+    if result is not None:
+        return result
+    return _traverse_step(p, omega, steer_dir, v, dt, terrainIdx, drive_intent)
 
 
 def _traverse_step(p, omega, steer_dir, v, dt, terrainIdx=0, drive_intent=0.0):
