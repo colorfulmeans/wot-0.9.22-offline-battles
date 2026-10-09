@@ -2450,6 +2450,23 @@ class GarageState(object):
         ``time_utils.getTimeDeltaTilNow`` compares against ``datetime.utcnow``,
         so the timestamp is a plain UTC epoch second.
         """
+        # Only a crew member the client itself calls recoverable belongs
+        # in the bin: one with a finished perk, or a 100% role level and
+        # enough experience for a perk. A rookie disappears for good.
+        try:
+            tankmen = self._tankmen_module()
+            descriptor = tankmen.TankmanDescr(compact_descr)
+            has_perk = any(
+                descriptor.skillLevel(name) >= 100
+                for name in descriptor.skills)
+            role_ok = (descriptor.roleLevel >= 100 and
+                       descriptor.freeXP >= 21000)
+            if not has_perk and not role_ok:
+                return
+        except Exception:
+            # If the check cannot run, do not add to the bin.
+            return
+
         import time
 
         now = int(time.time())
