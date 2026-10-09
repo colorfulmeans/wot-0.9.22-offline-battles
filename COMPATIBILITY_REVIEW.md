@@ -1,5 +1,146 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 9 native battle transport experiment
+
+The proposed boundary keeps Account, progression and Hangar offline, retires
+the offline battle adapters, then lets the visible client connect to a local
+Mercury endpoint. The simulation worker remains authoritative. The eventual
+bridge would translate native input RPCs into worker commands and publish
+worker results as native entity, movement and event messages. It must not run
+both the existing Python replica writers and native filters on the same entity.
+This is an experimental path, not a replacement for the production LAN server.
+
+On the exact Chinese #1513 Windows client, isolated run-06 reached real
+`LOGGED_ON`, completed RSA login and Blowfish BaseApp authentication, sent
+`enableEntities`, stayed connected for 45 seconds and returned to the offline
+Hangar (`lobby_restored` at 49.534 seconds). Run-07 additionally accepted a
+54-byte native `createBasePlayer` body: the engine created entity 1 as a stock
+`PlayerAvatar` with `AvatarInputHandler`, while the offline overlay was absent.
+The server received native entity-method messages. This proves transport and
+base-entity creation, not player movement or a playable battle. Run-07 had no
+cell, Vehicle or arena roster; its disconnect returned stage 6 but timed out
+restoring Hangar. Do not describe this partial initialization as clean recovery.
+These runs used x86 emulation in a Windows 11 ARM64 VM, not an FPS benchmark.
+
+Run-08 sent base Avatar, own-cell properties and Karelia geometry in order
+(message bodies 54, 78 and 95 bytes). The stock client logged
+`Loading space: spaces/01_karelia`; at 3.238 seconds it reported space 1,
+`SPACE_LOADED | ENTERED_WORLD` (init bits 3), and 23 entities with the offline
+overlay absent. Own Vehicle was still absent and the remaining readiness bits
+were unset, so no playable camera, driving or shooting is claimed. After the
+45-second observation window, native stage 6 arrived at 46.573 seconds and a
+new offline Account/Hangar was observed at 50.499 seconds. The base-only
+teardown exception did not recur. A stock disconnect modal remained over the
+garage, so this proves entity/space teardown and Account restoration, not a
+finished user-facing recovery flow. Raw logs and isolated package identities
+are retained in the operator's `WoT-Native-Protocol-2026-10-09` experiment folder.
+
+Run-10 repeated the cell/geometry test with a 15-second observation window and
+the stock requested-disconnect path. Native stage 6 arrived at 16.048 seconds,
+and `lobby_restored` at 19.681 seconds; a foreground Windows screenshot confirmed
+the rendered Type 64 Hangar without the disconnect modal. The required call is
+`g_appLoader.goToLoginByRQ(forced=True)`: stock `ConnectionManager.disconnect`
+alone does not set REQUEST, while an unforced request skips disconnect when a
+previous REQUEST remains in the still-incomplete LoginState (reproduced in
+run-09). The test fake now reproduces that guard. Unexpected network termination
+still follows stock error handling. This is not full battle or keyboard-input
+acceptance. Run-10 package identity is `native-protocol-probe-20261009-06`;
+the final source additionally avoids a diagnostic `entities.get(None)` query
+for base-only Avatars, covered by a strict native-map test.
+
+`tools/inspect_native_protocol_0922.py` gates the executable through
+`inspect_client.py`, then extracts the exact native interface registrations.
+Exact handler inspection and accepted packets establish these differences from
+the newer public `wg-toolkit-rs` implementation:
+
+- UDP starts with the two-byte Mercury flags, with no four-byte packet prefix.
+  The Login request is protocol `0x11010001` followed immediately by RSA-OAEP
+  ciphertext, without the newer encryption-marker byte.
+- `BaseAppLogin` is five bytes; `updateFrequencyNotification` is seven bytes;
+  `setGameTime` is four. The probe reuses the toolkit's transport/crypto codecs,
+  not its newer client/base entity message definitions.
+- `createBasePlayer` (5) is entity UINT32, type UINT16, packed opaque blob and
+  base properties. `Avatar` has type ID 2 because space types are registered
+  before `entities.xml`. There is no newer component-count trailer.
+- `createCellPlayer` (6) has a 38-byte header: space UINT32, a UINT16 with
+  unresolved semantics,
+  vehicle UINT32, position VECTOR3, packed-XZ scale FLOAT32 and direction VECTOR3,
+  followed by own-client properties. Geometry (9) is space UINT32, eight-byte
+  entry ID, packed path, 16 FLOAT32 matrix entries and a trailing byte. Cell
+  must precede geometry: the cell thunk installs the space-data handler that
+  the geometry thunk dereferences. Unknown header semantics remain experimental.
+- Avatar full property streams use inherited/declaration order. Vehicle
+  `createEntity` uses a count and sorted client-property index for each value.
+  The fixture generator's `vehicle_all_clients` is only a value catalog, not a
+  ready-to-send Vehicle creation body.
+
+Reproduction starts with an independent launcher staging directory and save
+slot. Never put a second manual mod copy into the game directory. Generate an
+experiment RSA key pair; include only its SPKI public key in the isolated
+package as `src/res/native_protocol_probe.pubkey`. The private key stays on the
+probe host. A shared-folder absolute public-key path failed native resource
+lookup in run-03; the packaged resource path succeeded.
+
+```sh
+export PYTHONDONTWRITEBYTECODE=1
+python3 tools/inspect_client.py "$WOT_0922_CLIENT"
+python3 tools/inspect_native_protocol_0922.py "$WOT_0922_CLIENT"
+python3 tools/native_protocol_probe/prepare.py
+cargo test --locked --manifest-path tools/native_protocol_probe/Cargo.toml
+cargo build --locked --manifest-path tools/native_protocol_probe/Cargo.toml
+tools/native_protocol_probe/target/debug/wot-native-protocol-probe \
+  127.0.0.1:20013 127.0.0.1:20014 /absolute/probe-private.pem 180
+```
+
+Use a reachable private interface instead of loopback for a VM. The server is
+bounded to 1..600 seconds and admits the synthetic `offline_probe` user only;
+never direct this experiment at an official service. Set
+`OFFLINE_LAN_0922_NATIVE_PROTOCOL_PROBE` only in the test client's launcher
+environment to the absolute path of a JSON manifest such as:
+
+```json
+{
+  "endpoint": "127.0.0.1:20013",
+  "key_path": "native_protocol_probe.pubkey",
+  "report_path": "C:/probe/client-probe.jsonl",
+  "timeout": 45,
+  "vehicle_state_path": "C:/probe/vehicle-state.json",
+  "map": "01_karelia"
+}
+```
+
+The optional vehicle export reads the selected native descriptor and serializes
+the mounted outfit through stock `pack().makeCompDescr()`; the default Outfit's
+`strCompactDescr` may be None. Generate base/own-cell property fixtures with
+`tools/build_native_protocol_fixture.py --client "$WOT_0922_CLIENT"
+--arena-type-id 1 --name offline_probe --vehicle-state /absolute/vehicle-state.json
+--output /absolute/fixture.json`, then pass that file as the server's final
+optional argument. Without a fixture the server tests only the handshake;
+the default fixture sends only the base Avatar. Explicit `native_probe.cell`
+and `native_probe.geometry` fields enable further isolated lifecycle probes;
+their exact schema and byte-order tests live beside the Rust implementation.
+
+The probe is opt-in and leaves normal startup unchanged. During the native
+session its observer counts input calls without generating them and polls
+lifecycle state at 2 Hz; it does not manually create entities or write poses
+or filters. Keep client JSONL, visible-client log,
+server JSONL, package identity and a crash dump when present together. A
+recovery timeout is a failed observation, not permission to force a new Account
+over a surviving native player. Restore the prior launcher package/settings
+after testing.
+
+Remaining work includes arena initialization, tagged Vehicle properties,
+native movement/control ownership, actual keyboard/fire RPCs, worker bridging,
+projectile/damage/destruction parity and full battle-to-Hangar recovery. The
+reused transport currently does not implement retransmission or complete
+reconnection cleanup and has not been hardened against untrusted packets;
+use one client session per server process on an isolated trusted LAN only.
+This endpoint is not suitable for gameplay or packet-loss acceptance.
+Native prediction may
+remove custom visible-client work, but it does not remove rendering, stock
+Python callbacks or worker cost. Only a complete comparable Windows scene can
+measure frame-time benefit or latency compensation; none is claimed here.
+
 ## September 24 exchange confirmation and elite-notification audit
 
 Report `20260924-003508-5e4675963357` runs the v0.9.4 original-Bot077
