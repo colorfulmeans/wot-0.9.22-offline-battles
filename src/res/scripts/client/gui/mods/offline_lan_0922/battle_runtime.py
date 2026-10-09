@@ -512,6 +512,10 @@ class _FrameDiagnostics(object):
         self._cpu_max = 0.0
         self._cpu_samples = 0
         self._cpu_wall_sum = 0.0
+        self._between_cpu_sum = 0.0
+        self._between_cpu_max = 0.0
+        self._between_cpu_samples = 0
+        self._between_cpu_wall_sum = 0.0
         self._outside_sum = 0.0
         self._outside_max = 0.0
         self._lan_poll_samples = 0
@@ -667,6 +671,12 @@ class _FrameDiagnostics(object):
                     'outside': max(0.0, wall_gap - pending['exec'] - off),
                     'bw_minus_wall': observed_raw - wall_gap,
                 })
+                previous_cpu = pending.get('end_cpu')
+                row['between_callbacks_cpu'] = (
+                    self._cpu_entry - previous_cpu
+                    if (self._cpu_entry is not None and previous_cpu is not None
+                        and self._cpu_entry >= previous_cpu) else None)
+                row['between_callbacks_wall'] = max(0.0, wall_gap - pending['exec'])
                 row['lan_poll'] = self._lan_poll_delta(
                     pending.get('lan_poll_totals'), lan_poll, row['outside'])
                 row['outside_without_lan_poll'] = (
@@ -700,6 +710,12 @@ class _FrameDiagnostics(object):
         self._raw_max = max(self._raw_max, raw_dt)
         self._exec_sum += execution
         self._exec_max = max(self._exec_max, execution)
+        between_cpu = row.get('between_callbacks_cpu')
+        if between_cpu is not None:
+            self._between_cpu_samples += 1
+            self._between_cpu_sum += between_cpu
+            self._between_cpu_max = max(self._between_cpu_max, between_cpu)
+            self._between_cpu_wall_sum += row['between_callbacks_wall']
         cpu = row.get('thread_cpu')
         if cpu is not None:
             self._cpu_sum += cpu
@@ -814,6 +830,9 @@ class _FrameDiagnostics(object):
             'exec_ms': round(row['exec'] * 1000.0, 3),
             'thread_cpu_ms': (round(row['thread_cpu'] * 1000.0, 3)
                               if row.get('thread_cpu') is not None else None),
+            'between_callbacks_cpu_ms': (round(row['between_callbacks_cpu'] * 1000.0, 3)
+                if row.get('between_callbacks_cpu') is not None else None),
+            'between_callbacks_wall_ms': round(row.get('between_callbacks_wall', 0.0) * 1000.0, 3),
             'outside_ms': round(row['outside'] * 1000.0, 3),
             'lan_poll_ms': (dict((name, round(
                 row['lan_poll'][name + '_wall_seconds'] * 1000.0, 3))
@@ -948,6 +967,18 @@ class _FrameDiagnostics(object):
             # it. Background worker CPU is excluded. OS clock granularity can
             # make an individual CPU sample exceed its wall sample, so retain
             # both instead of fabricating a per-frame "wait" duration.
+            'between_callbacks_cpu': {
+                'samples': self._between_cpu_samples,
+                'avg_ms': (self._milliseconds(self._between_cpu_sum / self._between_cpu_samples)
+                    if self._between_cpu_samples else None),
+                'max_ms': (self._milliseconds(self._between_cpu_max)
+                    if self._between_cpu_samples else None),
+                'matched_wall_avg_ms': (self._milliseconds(self._between_cpu_wall_sum / self._between_cpu_samples)
+                    if self._between_cpu_samples else None),
+                'interval': 'finish_to_begin',
+                'includes': 'engine,other_callbacks,lan_poll',
+                'gpu_measured': False,
+            },
             'main_thread_cpu': {
                 'samples': self._cpu_samples,
                 'avg_ms': (self._milliseconds(self._cpu_sum / self._cpu_samples)
@@ -1225,6 +1256,11 @@ class _FrameDiagnostics(object):
                          name, self._milliseconds(
                              probe_durations.get(name, 0.0)))
                               for name in PROBE_KINDS)))
+            lines.append(prefix + 'PERF between_callbacks rank=%d cause=%d next=%d wall_ms=%.3f cpu_ms=%s includes=engine,other_callbacks,lan_poll gpu_measured=0' % (
+                rank, row['cause'], row['next'],
+                self._milliseconds(row.get('between_callbacks_wall', 0.0)),
+                ('%.3f' % self._milliseconds(row['between_callbacks_cpu'])
+                    if row.get('between_callbacks_cpu') is not None else 'unavailable')))
             if context.get('role') == 'worker':
                 frames = [('focus', 0, self._compact_frame(row))]
                 if rank == 1:
@@ -1280,6 +1316,7 @@ class _FrameDiagnostics(object):
             self._pending = {
                 'cause': int(frame_id), 'entry_wall': float(entry_wall),
                 'exec': max(0.0, end_wall - float(entry_wall)),
+                'end_cpu': end_cpu,
                 'thread_cpu': (end_cpu - self._cpu_entry
                                if (end_cpu is not None and
                                    self._cpu_entry is not None and
@@ -10619,6 +10656,11 @@ class BattleRuntime(object):
                         'projectile destructible receipt limit exceeded')
                 pending.append(frozen)
             return True
+        # Spawn cleanup can commit native geometry during countdown. Do not
+        # confuse transport admission with server admission before combat is
+        # live; the sensor retains its frozen publication for the live retry.
+        if self._worker_mode and not self._battle_live:
+            return False
         if self.client is None:
             raise RuntimeError('LAN client is unavailable for destructible')
         sender = getattr(self.client, 'send_destructible', None)
@@ -17185,6 +17227,21 @@ class BattleRuntime(object):
                     abs(pitch) > GROUND_RAW_TILT_RADIANS or
                     abs(roll) > GROUND_RAW_TILT_RADIANS):
                 continue
+            cache_owner = (self._generation, (self._start_message or {}).get('round_id'))
+            if getattr(self, '_destructible_result_cache_owner', None) != cache_owner:
+                self._destructible_result_cache_owner = cache_owner
+                self._destructible_result_cache = collections.OrderedDict()
+            result_cache = self._destructible_result_cache
+            result_key = (player_id, seq, token, position, yaw, end_position,
+                          end_yaw, speed, dt, pitch, roll)
+            previous_result = result_cache.get(result_key)
+            if previous_result is not None:
+                verdict, next_retry = previous_result
+                if float(now) >= next_retry:
+                    if sender(player_id, seq, verdict, [list(row) for row in token]):
+                        result_cache[result_key] = (verdict, float(now) + 0.25)
+                        resolved += 1
+                continue
             requested = set(token)
             tree_classifier = getattr(
                 self._destructibles,
@@ -17357,9 +17414,16 @@ class BattleRuntime(object):
             self._report_destructible_verdict(
                 'worker', seq, accepted, token, actual_token,
                 world_status, commit_status)
+            # Native effects cannot be replayed just because the ACK snapshot
+            # is delayed. Keep only the frozen terminal verdict until the same
+            # sweep retires; retries send that verdict without geometry work.
+            result_cache[result_key] = (bool(accepted), float(now))
+            while len(result_cache) > 1024:
+                result_cache.popitem(last=False)
             if sender(
                     player_id, seq, accepted,
                     [list(row) for row in token]):
+                result_cache[result_key] = (bool(accepted), float(now) + 0.25)
                 resolved += 1
         return resolved
 
@@ -25717,6 +25781,11 @@ class BattleRuntime(object):
         previous_confirmed = confirmed
         if shot_seq <= confirmed:
             return True
+        timeline = self._fire_timeline.get(('bot_publish', bot_id, shot_seq))
+        if timeline is not None and not timeline.get('echo_logged'):
+            timeline['echo_logged'] = True
+            sys.stdout.write('[Offline LAN 0.9.22] BOT SHOT TIMING stage=echo bot=%d seq=%d echo_wait_ms=%.3f\n' % (
+                bot_id, shot_seq, max(0.0, _PROFILE_CLOCK() - timeline['wall']) * 1000.0))
         pending = self._bot_fire_confirmations.setdefault(bot_id, set())
         pending.add(shot_seq)
         acknowledge = getattr(
@@ -25882,7 +25951,13 @@ class BattleRuntime(object):
             'shells_before_shot': state.get('shells_before_shot'),
         }
         self._bot_launch_payloads[(bot_id, shot_seq)] = (args, kwargs)
+        publish_wall = _PROFILE_CLOCK()
         accepted = sender(*args, **kwargs)
+        if accepted == shot_seq:
+            self._remember_fire_timeline(('bot_publish', bot_id, shot_seq), {'wall': publish_wall})
+            sys.stdout.write('[Offline LAN 0.9.22] BOT SHOT TIMING stage=publish bot=%d seq=%d frozen_age_ms=%.3f send_ms=%.3f\n' % (
+                bot_id, shot_seq, max(0.0, self._clock() * 1000000.0 - launch_time_us) / 1000.0,
+                max(0.0, _PROFILE_CLOCK() - publish_wall) * 1000.0))
         return accepted == shot_seq
 
     def _apply_sync_event(self, event):

@@ -4,7 +4,7 @@ namespace engine_query {
 enum Capability {
     Vector, XYZ, Length, Add, Subtract, Scale, Normalise, Ray, Skin, Alias,
     Filter, Equal, Skipped, NativeFilter, Failure, Unavailable, CanRecast,
-    Tuning, RecoverGround, CapabilityCount
+    Tuning, RecoverGround, Segment, CapabilityCount
 };
 struct Failed {};
 
@@ -57,6 +57,7 @@ class Session {
     PyObject **caps_;
     unsigned budget_;
     double epsilon_;
+    bool fused_segment_;
 
     bool same(PyObject *a, PyObject *b) {
         if (a == b) return true;
@@ -111,7 +112,9 @@ class Session {
 
 public:
     explicit Session(PyObject *capabilities): capabilities_(Object::borrow(capabilities)) {
-        require_sequence(capabilities, CapabilityCount, true);
+        require_sequence(capabilities, RecoverGround+1);
+        if(size(capabilities)!=RecoverGround+1 && size(capabilities)!=CapabilityCount)throw Unsupported();
+        fused_segment_=size(capabilities)==CapabilityCount;
         caps_ = items(capabilities);
         require_sequence(caps_[Tuning], 2, true);
         const auto budget = identity(items(caps_[Tuning])[0]);
@@ -134,6 +137,18 @@ public:
         OwnedTuple args(3);
         for (unsigned i = 0; i < 3; ++i) args.set(i, float_new(point[i]));
         return call(Vector, args);
+    }
+
+    void segment(const double *start,const double *end,Object &first,Object &last,
+                 double *first_point,double *last_point) {
+        if(!fused_segment_) {
+            first=vector(start);last=vector(end);
+            point(first.get(),first_point);point(last.get(),last_point);return;
+        }
+        OwnedTuple args(2);args.set(0,world_numbers(start,3));args.set(1,world_numbers(end,3));
+        auto result=call(Segment,args);require_sequence(result.get(),4,true);
+        first=Object::borrow(items(result.get())[0]);last=Object::borrow(items(result.get())[1]);
+        world_array(items(result.get())[2],first_point,3);world_array(items(result.get())[3],last_point,3);
     }
 
     void point(PyObject *value, double *result) {

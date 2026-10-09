@@ -612,6 +612,19 @@ ownership, native effects and shared damage remain on their existing owners.
 Host numerical comparisons and complete physical-stage fixtures cover these
 boundaries; their component timings do not establish a Windows frame-time gain.
 
+Countdown spawn cleanup retains frozen destruction publications until the
+worker's live gate, so transport admission cannot retire an event the server
+still refuses. Completed player-contact verdicts retry from a round- and
+sweep-fenced cache without rerunning native commits. Server rejection logs now
+name missing publications, token mismatches and stale envelopes. Selected
+firing-lane jobs rotate within their existing priority classes and keep the
+existing query limits and independent final-fire gate. Ray endpoint Vector3
+construction/coordinate reads share one capability crossing instead of four,
+with exact float32 query order retained. Frame diagnostics report end-to-entry
+main-thread CPU alongside wall time (including other callbacks and LAN poll),
+and Bot publication/echo timings distinguish real launch waiting from the
+supplemental lane queue. These measurements do not directly measure GPU time.
+
 Use a launcher built from the integration commit so its native module, client
 and server match. This branch is a test candidate; it does not replace the
 published 0.10.0 release or establish a measured frame-time improvement.

@@ -49,7 +49,13 @@ class EngineQuery(object):
             backend.engine_query_filter, self.failed, self.unavailable,
             safe(self._can_recast),
             (sensor._SOFT_STATIC_MAX_SKIPS, sensor._SHOT_RAY_EPSILON),
-            self._recover_ground)
+            self._recover_ground, safe(self._segment))
+
+    def _segment(self, start, end):
+        # One Python boundary preserves the exact native Vector3 rounding and
+        # attribute contracts formerly crossed four times for every ray.
+        first, last = self._vector(*start), self._vector(*end)
+        return first, last, self._xyz(first), self._xyz(last)
 
     def _live(self):
         if (_thread_ident() != self._thread or

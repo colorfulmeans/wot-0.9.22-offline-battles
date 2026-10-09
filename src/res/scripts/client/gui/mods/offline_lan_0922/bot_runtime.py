@@ -5114,6 +5114,7 @@ class BotRuntime(object):
         self._shot_lane_work = []
         self._shot_lane_work_set = set()
         self._shot_lane_work_cursor = 0
+        self._shot_lane_selected_cursors = {}
         self._shot_lane_enqueued_targets = set()
         self._shot_lane_source_signature = ()
 
@@ -11476,10 +11477,19 @@ class BotRuntime(object):
         selected = sorted(
             (priority, key) for key, priority in selected_priorities.items()
             if key in self._shot_lane_work_set)
-        for unused_priority, key in selected:
-            if materialized[0] >= maximum_jobs:
-                break
-            attempt(key)
+        # Keep existing priority classes, but rotate within each class. A
+        # recurring low-ID selected pair must not monopolise a bounded queue
+        # when more guns have selected targets than fit in this callback.
+        for priority in sorted(set(row[0] for row in selected)):
+            group = [key for value, key in selected if value == priority]
+            cursor = self._shot_lane_selected_cursors.get(priority)
+            first = next((index for index, key in enumerate(group)
+                          if cursor is not None and key > cursor), 0)
+            for key in group[first:] + group[:first]:
+                if materialized[0] >= maximum_jobs:
+                    break
+                attempt(key)
+                self._shot_lane_selected_cursors[priority] = key
 
         work = self._shot_lane_work
         if work:

@@ -317,8 +317,8 @@ namespace sim_motion_bridge {
         }
         void ray(unsigned op,const WorldRequest &request,WorldResponse &response,PyObject *query_filter,
                  const std::function<bool(PyObject *)> &external_departing={}) {
-            auto start=session.vector(request.start),end=session.vector(request.end);
-            session.point(start.get(),response.start);session.point(end.get(),response.end);
+            engine_query::Object start,end;
+            session.segment(request.start,request.end,start,end,response.start,response.end);
             auto current=start;
             engine_query::Object result;
             for(unsigned attempt=0;attempt<=recasts_;++attempt) {

@@ -4481,6 +4481,12 @@ class BattleState:
     def report_player_destructible_contact_result(self, player_id, message):
         """Consume one hidden-worker verdict for an admitted player sweep."""
         with self.lock:
+            self.last_destructible_contact_reject = None
+            def reject(reason, missing=None):
+                self.last_destructible_contact_reject = {
+                    'code': reason, 'player': message.get('player_id'),
+                    'seq': message.get('contact_seq'), 'missing': missing}
+                return False
             if (player_id != SIMULATION_WORKER_AUTHORITY_ID or
                     player_id != self.bot_authority_id or
                     not self._message_round_matches(message) or
@@ -4490,28 +4496,28 @@ class BattleState:
                         "type", "round_id", "player_id", "contact_seq",
                         "accepted", "token"} or
                     not isinstance(message.get("accepted"), bool)):
-                return False
+                return reject("envelope")
             try:
                 target_id = _exact_int(
                     message.get("player_id"), 1, PROJECTILE_MAX_ID)
                 seq = _exact_int(
                     message.get("contact_seq"), 1, PROJECTILE_MAX_ID)
             except (TypeError, ValueError, OverflowError):
-                return False
+                return reject("identity")
             target = self.players.get(target_id)
             token = self._destructible_contact_result_token(
                 message.get("token"))
             if target is None or seq is None or token is None:
-                return False
+                return reject("target_or_token")
             if self._player_destructible_contact_is_resolved(target, seq):
                 return True
             if seq not in target.destructible_contacts:
-                return False
+                return reject("unknown_sequence")
             pending = target.destructible_contacts[seq]
             expected = self._destructible_contact_result_token(
                 pending.get("token"))
             if token != expected:
-                return False
+                return reject("token_mismatch")
             if message["accepted"]:
                 for chunk_id, item_index, mat_kind in token:
                     if mat_kind is None:
@@ -4524,7 +4530,7 @@ class BattleState:
                             "module", chunk_id, item_index, mat_kind) in \
                             self.destructibles
                     if not known:
-                        return False
+                        return reject("missing_publication", (chunk_id, item_index, mat_kind))
             target.destructible_contacts.pop(seq, None)
             if message["accepted"]:
                 self._record_player_destructible_contact_resolution(
@@ -15339,9 +15345,12 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                 "last_%s_reject" % message_type,
                                 "unknown")))
         elif not accepted:
+            detail = (getattr(server.state, 'last_destructible_contact_reject', None)
+                      if message_type == 'player_destructible_contact_result' else None)
             _server_log_limited(
                 "worker-command:%s" % message_type,
-                "WORKER COMMAND rejected type=%s" % message_type)
+                "WORKER COMMAND rejected type=%s%s" % (
+                    message_type, ' detail=%s' % detail if detail is not None else ''))
         return bool(accepted)
 
     def _handle_simulation_worker(self, server, conn, buffer, hello):
