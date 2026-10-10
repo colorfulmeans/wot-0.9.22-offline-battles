@@ -323,7 +323,7 @@ class BattleProjectileTests(unittest.TestCase):
         battle, bigworld = _battle()
         record = battle._records.pop('player:7')
         record.update(kind='bot', local=False, ready=True,
-                      presentation_time_us=1000000, state={'alive': True})
+                      presentation_time_us=1312988, state={'alive': True})
         battle._records['bot:7'] = record
         factory = _NativeTracerFactory()
         battle._remote_factory = factory
@@ -382,6 +382,21 @@ class BattleProjectileTests(unittest.TestCase):
         self.assertEqual(2, len(factory.play_calls))
         self.assertEqual(-10.0, factory.play_calls[1][1]['velocity'][0])
         self.assertEqual(1, len(factory.stop_calls))
+
+    def test_historical_bot_flight_keeps_its_age_without_replaying_a_muzzle(self):
+        battle, bigworld = _battle()
+        record = battle._records.pop('player:7')
+        record.update(kind='bot', local=False, presentation_time_us=1312988)
+        battle._records['bot:7'] = record
+        battle._start_message = {'server_time_ms': 100}
+        factory = _NativeTracerFactory()
+        battle._remote_factory = factory
+        meta = battle._install_projectile_meta(battle._projectile_wire_meta(
+            dict(_bot_event(), bot_presentation_time_us=1000000)))
+        meta['source_descriptor'] = battle._server_entity(41).typeDescriptor
+        self.assertTrue(battle._ensure_projectile_visual(meta, bigworld.now))
+        self.assertAlmostEqual(3.12988, factory.play_calls[0][1]['reference_position'][0])
+        self.assertFalse(meta.get('muzzle_presented', False))
 
     def test_terminal_snapshot_ack_can_overtake_the_queued_launch_event(self):
         for shooter_kind in ('player', 'bot'):

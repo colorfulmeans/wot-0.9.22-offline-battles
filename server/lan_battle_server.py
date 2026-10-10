@@ -9149,6 +9149,11 @@ class BattleState:
                     critical_reject_reason or "stale_target_state")
                 if critical_commit:
                     event.update(critical_commit)
+        if (applied == 0 and was_alive and alive and
+                admitted_critical is None and not record['is_he'] and
+                not proposal['high_explosive'] and
+                not proposal['splash'] and proposal['shot_result'] in (0, 1)):
+            event['cosmetic_only'] = True
         self.pending_events.append(event)
         self._record_damage(
             shooter, victim, applied, critical_before,

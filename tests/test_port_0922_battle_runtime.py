@@ -4805,6 +4805,24 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
             self.assertTrue(battle._drain_event_journal())
             self.assertEqual([mock.call(x) for x in [shot, authority, later]], apply.call_args_list)
 
+    def test_cosmetic_hit_does_not_block_newer_health_for_the_same_target(self):
+        battle = BattleRuntime(_runtime())
+        record = {'ready': True, 'presentation_time_us': 9}
+        battle._records = {'bot:11': record, 'player:1': {'ready': True}}
+        shot = {'event_id': 'shot', 'kind': 'bot_shot', 'attacker_bot': 11,
+                'projectile_id': 'b', 'bot_presentation_time_us': 10}
+        cosmetic = {'event_id': 'zero', 'kind': 'bot_hit', 'attacker': 1,
+                    'target_bot': 11, 'projectile_id': 'b', 'cosmetic_only': True}
+        player = dict(cosmetic, event_id='kill', projectile_id='p', cosmetic_only=False)
+        battle._event_journal = [shot, cosmetic, player]
+        with mock.patch.object(battle, '_apply_ordered_event', return_value=True) as apply:
+            self.assertFalse(battle._drain_event_journal())
+            self.assertEqual([mock.call(player)], apply.call_args_list)
+            self.assertFalse(battle._pending_combat_for_record(record))
+            record['presentation_time_us'] = 10
+            self.assertTrue(battle._drain_event_journal())
+            self.assertEqual([mock.call(x) for x in [player, shot, cosmetic]], apply.call_args_list)
+
     def test_dead_bot_retired_pose_clock_releases_player_hit_feedback(self):
         battle = BattleRuntime(_runtime())
         battle._records['bot:11'] = {
@@ -16070,6 +16088,35 @@ class BattleRuntimeContractTests(unittest.TestCase):
                       'x': 10.0, 'y': 0.0, 'z': 0.0},
             'kind': 'bot', 'network_id': 2, 'local': False}
         return battle, target_record, attacker_record
+
+    def test_late_cosmetic_hit_cannot_restore_health_or_replace_death_attacker(self):
+        battle, target, attacker = self._blocked_hit_fixture()
+        target['state'] = {'team': 1, 'health': 0, 'alive': False}
+        battle._records = {'player:1': target, 'bot:2': attacker}
+        entity = battle._server_entity(target['engine_id'])
+        entity.health = 0
+        entity.last_killer_id = 1234
+        battle._local_last_attacker = ('player', 3)
+        event = {'kind': 'bot_human_hit', 'source': 'shot', 'attacker_bot': 2,
+                 'target': 1, 'projectile_id': 'b', 'damage': 0, 'health': 500,
+                 'dead': False, 'death_reason': 0, 'attack_reason': 0,
+                 'shot_result': 1, 'cosmetic_only': True}
+        battle._prepare_ordered_event(event)
+        self.assertEqual(0, target['state']['health'])
+        with mock.patch.object(battle, '_present_damage_sticker'), \
+                mock.patch.object(battle, '_present_combat_hit') as effects, \
+                mock.patch.object(battle, '_present_combat_feedback'), \
+                mock.patch.object(battle, '_apply_health') as health:
+            self.assertTrue(battle._apply_combat_event(event, update_state=False))
+        health.assert_not_called()
+        effects.assert_called_once()
+        self.assertEqual(0, entity.health)
+        self.assertEqual(1234, entity.last_killer_id)
+        self.assertEqual(('player', 3), battle._local_last_attacker)
+        self.assertEqual(0, target['state']['health'])
+        for changes in ({'damage': 1}, {'dead': True}, {'critical': {}}, {'source': 'ram'}):
+            with self.subTest(changes=changes), self.assertRaises(RuntimeError):
+                battle._validate_combat_event_contract(dict(event, **changes))
 
     def test_blocked_hit_indicator_reports_the_published_shell_damage(self):
         """A bounce labels the marker with the shell, not the lost HP.

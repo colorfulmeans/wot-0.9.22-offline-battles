@@ -2720,6 +2720,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
                 hit = [event for event in state.pending_events
                        if event.get('kind') == 'hit'][-1]
                 self.assertEqual(blocked, hit['blocked_damage'])
+                self.assertEqual(damage == 0, hit.get('cosmetic_only', False))
                 self.assertEqual(damage, hit['damage'])
                 self.assertEqual(health - damage, victim.health)
                 victim_row = state._statistics_row('player', 2)
@@ -2762,6 +2763,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
                 hit = [event for event in state.pending_events
                        if event.get('kind') == 'hit'][-1]
                 self.assertEqual(0, hit['blocked_damage'])
+                self.assertFalse(hit.get('cosmetic_only', False))
                 victim_row = state._statistics_row('player', 2)
                 self.assertEqual(0, victim_row['damage_blocked'])
                 self.assertEqual(0, victim_row['piercings_received'])

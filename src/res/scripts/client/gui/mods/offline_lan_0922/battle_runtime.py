@@ -10214,7 +10214,8 @@ class BattleRuntime(object):
                 self._projectile_lineage.add(normalized['projectile_id'])
         elif kind in _COMBAT_EVENT_KINDS:
             self._validate_combat_event_contract(event)
-            self._merge_combat_event_state(event)
+            if not event.get('cosmetic_only', False):
+                self._merge_combat_event_state(event)
         elif kind == 'stun':
             self._merge_stun_event_state(event)
         elif kind not in _SIMPLE_EVENT_KINDS:
@@ -10653,7 +10654,8 @@ class BattleRuntime(object):
             dependencies = set()
             if event.get('projectile_id') is not None:
                 dependencies.add(('projectile', str(event['projectile_id'])))
-            if event.get('kind') in _COMBAT_EVENT_KINDS:
+            if (event.get('kind') in _COMBAT_EVENT_KINDS and
+                    not event.get('cosmetic_only', False)):
                 dependencies.add(('health', self._event_entity_key(event, 'target')))
             if dependencies & blocked:
                 blocked.update(dependencies)
@@ -10697,6 +10699,7 @@ class BattleRuntime(object):
     def _pending_combat_for_record(self, record):
         for event in self._event_journal:
             if (event.get('kind') in _COMBAT_EVENT_KINDS and
+                    not event.get('cosmetic_only', False) and
                     self._records.get(
                         self._event_entity_key(event, 'target')) is record):
                 return True
@@ -11611,6 +11614,18 @@ class BattleRuntime(object):
         return reason_id
 
     def _validate_combat_event_contract(self, event):
+        cosmetic = event.get('cosmetic_only', False)
+        if not isinstance(cosmetic, bool):
+            raise RuntimeError('combat cosmetic_only flag is invalid')
+        if cosmetic and (event.get('source') != 'shot' or
+                event.get('damage') != 0 or isinstance(event.get('damage'), bool) or
+                event.get('dead', False) or event.get('death_reason') != 0 or
+                isinstance(event.get('health'), bool) or
+                not isinstance(event.get('health'), _INTEGER_TYPES) or
+                event.get('health') <= 0 or
+                event.get('shot_result') not in (0, 1) or
+                event.get('splash', False) or event.get('critical') is not None):
+            raise RuntimeError('state-changing combat cannot be cosmetic_only')
         source = self._combat_event_source(event)
         attack_reason = self._combat_attack_reason(event)
         kind = event.get('kind')
@@ -11895,8 +11910,10 @@ class BattleRuntime(object):
                 'ordered combat event target is unavailable: %s' %
                 target_key)
         latest_state = record.get('state') or {}
-        state = self._combat_event_state(event, latest_state, target_key)
-        if update_state:
+        cosmetic = event.get('cosmetic_only', False)
+        state = (latest_state if cosmetic else
+                 self._combat_event_state(event, latest_state, target_key))
+        if update_state and not cosmetic:
             record['state'] = state
         attacker = event.get('attacker_bot')
         attacker_kind = 'bot'
@@ -11933,9 +11950,9 @@ class BattleRuntime(object):
             self._should_suppress_postmortem_killer(
                 record, state, attacker_id))
         if (entity is not None and attacker is not None and
-                not record.get('local')):
+                not record.get('local') and not cosmetic):
             entity.last_killer_id = int(attacker_id or 0)
-        if record.get('local') and attacker is not None:
+        if record.get('local') and attacker is not None and not cosmetic:
             self._local_last_attacker = (attacker_kind, int(attacker))
         if source == 'player_left' and attacker_record is not None:
             raise RuntimeError('player_left event has an attacker')
@@ -11947,6 +11964,15 @@ class BattleRuntime(object):
         elif source == 'environment':
             self._present_environment_feedback(
                 event, record, attack_reason)
+        if cosmetic:
+            # A resisted shot changes no durable state. It may be displayed
+            # after a newer hit/death, without restoring HP or changing killer.
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] COSMETIC HIT PRESENT projectile=%s '
+                'target=%s current_health=%s event_health=%s\n' % (
+                    event.get('projectile_id'), target_key,
+                    latest_state.get('health'), event.get('health')))
+            return True
         critical = event.get('critical')
         if isinstance(critical, dict):
             canonical = self._critical_state(critical)
@@ -14247,8 +14273,13 @@ class BattleRuntime(object):
                 return False
             actor = self._records.get('bot:%s' % normalized['shooter_id']) or {}
             stamp = actor.get('presentation_time_us')
-            if stamp is not None:
+            if historical and stamp is not None:
                 confirmed_elapsed = max(0.0, (int(stamp) - int(normalized['bot_presentation_time_us'])) / 1000000.0 - normalized['segment_start_time_ms'] / 1000.0)
+            elif 'bot_visual_launch_time' not in (owner or normalized):
+                # A newly displayed muzzle owns a new visual flight. Actor
+                # interpolation may already be past the original launch edge;
+                # that does not place this just-fired tracer in mid-flight.
+                confirmed_elapsed = 0.0
             visual_launch = (owner or normalized).setdefault(
                 'bot_visual_launch_time', float(now) - confirmed_elapsed -
                 normalized['segment_start_time_ms'] / 1000.0)
