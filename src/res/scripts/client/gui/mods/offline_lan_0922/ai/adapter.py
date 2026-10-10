@@ -173,12 +173,16 @@ class BotAdapter(object):
 
         This admits controls only. The normal terrain, hull and contact solver
         still owns every resulting pose and any displacement of the wreck.
-        Route changes or real wreck movement renew the attempt; yaw oscillation
-        and tiny order changes do not.
+        Real forward progress or wreck movement renews the attempt; route,
+        tactical, yaw and tiny order changes do not.
         """
-        side_wreck = bool(contact is not None and not contact['peer_alive'])
+        wreck_contact = bool(contact is not None and not contact['peer_alive'])
+        yaw = float(state.get('yaw', 0.0))
+        side_wreck = bool(wreck_contact and abs(
+            math.sin(yaw)*contact['normal'][0] +
+            math.cos(yaw)*contact['normal'][1]) < 0.35)
         active = self._wreck_attempts.get(bot_id)
-        if not side_wreck and active is None and (strategic.get('combat_mode') not in ('route', 'advance') or
+        if not wreck_contact and active is None and (strategic.get('combat_mode') not in ('route', 'advance') or
                 strategic.get('throttle_override') is not None):
             return None
         yaw = float(state.get('yaw', 0.0))
@@ -189,7 +193,7 @@ class BotAdapter(object):
         neighbours = state.get('neighbours', ())
         wreck = next((peer for peer in neighbours
                       if not peer.get('alive', True) and
-                      ((side_wreck and peer.get('id') == contact['peer_id']) or
+                      ((wreck_contact and peer.get('id') == contact['peer_id']) or
                        (active is not None and peer.get('id') == active['key'] and
                         math.hypot(_position(peer.get('position', peer))[0]-position[0],
                                    _position(peer.get('position', peer))[2]-position[2]) <=
@@ -238,9 +242,14 @@ class BotAdapter(object):
         if not side_wreck and attempt['elapsed'] >= 8.0:
             side = 1.0 if int((attempt['elapsed']-6.0)/2.0) % 2 else -1.0
             sample_yaw = yaw + side*0.45
-            pose_clear = state.get('pose_clear')
+            pose_clear = state.get('push_pose_clear')
+            own_shape = state.get('collision_shape') or (
+                width, length, tank_collision.DEFAULT_SHAPE[2],
+                tank_collision.DEFAULT_SHAPE[3])
             if (self.driver._clear(direction_clear, sample_yaw, reach) and
-                    (pose_clear is None or pose_clear(sample_yaw))):
+                    (pose_clear is None or pose_clear(sample_yaw)) and
+                    tank_collision.rotation_fraction(
+                        position, yaw, sample_yaw, own_shape, living) >= 1.0):
                 turn = side*0.7
         target = (position[0]+forward[0]*reach, position[1],
                   position[2]+forward[1]*reach)

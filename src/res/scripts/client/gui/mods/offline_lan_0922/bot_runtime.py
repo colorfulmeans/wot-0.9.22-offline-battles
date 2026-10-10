@@ -13681,7 +13681,7 @@ class BotRuntime(object):
             controlled_shallow_commit = getattr(
                 self.navigator, 'controlled_shallow_committed', None)
 
-            def sample_pose_clear(sample_yaw):
+            def sample_pose_clear(sample_yaw, allow_wreck_push=False):
                 # Whether this hull may rotate where it stands is a question
                 # about a rectangle, not about a heading. Answer it from the
                 # shipped graph the navigator already owns.
@@ -13697,8 +13697,9 @@ class BotRuntime(object):
                         position, state['yaw'], sample_yaw,
                         state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
                         [peer for peer in self._neighbours_for(state, neighbours)
-                         if (not peer.get('alive', True) or
-                             peer.get('team') == state.get('team'))]) < 1.0:
+                         if ((not allow_wreck_push and not peer.get('alive', True)) or
+                             (peer.get('alive', True) and
+                              peer.get('team') == state.get('team')))]) < 1.0:
                     return False
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
@@ -13824,6 +13825,8 @@ class BotRuntime(object):
                     'speed': state['speed'],
                     'dt': decision_step, 'now': now,
                     'pose_clear': sample_pose_clear,
+                    'push_pose_clear': lambda sample_yaw: sample_pose_clear(
+                        sample_yaw, True),
                     'health': state['health'],
                     'max_health': state['max_health'],
                     'contacts': contacts,

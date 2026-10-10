@@ -61,6 +61,23 @@ class WreckContactRecoveryTests(unittest.TestCase):
         self.assertIs(original,self.state['neighbours'])
         self.assertEqual([self.peer],self.state['neighbours'])
 
+    def test_front_contact_uses_world_checked_push_turn_instead_of_wreck_avoidance(self):
+        self.route()
+        self.peer['position']=(0.,0.,6.99)
+        self.state['pose_clear']=lambda yaw: False
+        checked=[]
+        def push_clear(yaw):
+            checked.append(yaw)
+            return True
+        self.state['push_pose_clear']=push_clear
+        commands=[self.decide() for unused in range(120)]
+        self.assertTrue(any(c['turn']>0. for c in commands))
+        self.assertTrue(any(c['turn']<0. for c in commands))
+        self.assertTrue(all(c['throttle']==1. for c in commands))
+        self.assertTrue(checked)
+        self.state['push_pose_clear']=lambda yaw: False
+        self.assertEqual(0.,self.decide()['turn'])
+
     def setUp(self):
         self.adapter = BotAdapter('04_himmelsdorf', 1)
         self.peer = dict(id=2, team=2, alive=False, position=(2.99, 0., 0.),
