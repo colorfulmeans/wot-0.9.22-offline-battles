@@ -319,6 +319,90 @@ def _bot_event():
 
 
 class BattleProjectileTests(unittest.TestCase):
+    def test_terminal_snapshot_ack_can_overtake_the_queued_launch_event(self):
+        for shooter_kind in ('player', 'bot'):
+            with self.subTest(shooter_kind=shooter_kind):
+                battle, bigworld = (_battle() if shooter_kind == 'player'
+                                    else _worker_battle())
+                event = _event() if shooter_kind == 'player' else _bot_event()
+                key = event['projectile_id']
+                bigworld.wall_x = 2.56
+                self.assertTrue(battle._accept_projectile_event(event))
+                bigworld.now = .27
+                battle._advance_projectiles(.27)
+                self.assertFalse(battle._projectiles.contains(key))
+                self.assertTrue(battle._projectile_meta[key]['awaiting_resolution'])
+                resolutions = list(battle.client.resolutions)
+                # The snapshot acknowledges the terminal while the launch
+                # event still waits behind another Bot's pose in the journal.
+                event['event_id'] = 'late-launch'
+                battle._event_journal = [event]
+                self.assertTrue(battle._reconcile_projectile_snapshot({'projectiles': []}))
+                self.assertNotIn(key, battle._projectile_meta)
+                bigworld.now = .313
+                with mock.patch.object(battle, '_show_shot', return_value=True):
+                    self.assertTrue(battle._drain_event_journal())
+                    self.assertTrue(battle._drain_event_journal())
+                self.assertTrue(battle._accept_projectile_event(event))
+                self.assertFalse(battle._projectiles.contains(key))
+                self.assertNotIn(key, battle._projectile_meta)
+                self.assertEqual(resolutions, battle.client.resolutions)
+                # Neither an older active snapshot nor a delayed bounce can
+                # rebuild the completed physical owner before impact display.
+                with mock.patch.object(battle, '_ensure_projectile_visual') as visual:
+                    self.assertTrue(battle._reconcile_projectile_snapshot({'projectiles': [event]}))
+                visual.assert_not_called()
+                self.assertNotIn(key, battle._projectile_meta)
+                bounce = dict(event, ricochet_count=1,
+                              segment_start_time_ms=100,
+                              checked_through_ms=100, checked_distance=1.0,
+                              segment_origin=[1.002, 1.0, 0.0],
+                              segment_velocity=[-10.0, 0.0, 0.0],
+                              base_penetration_multiplier=.75)
+                self.assertFalse(battle._apply_projectile_ricochet_event(bounce))
+                self.assertNotIn(key, battle._projectile_meta)
+                # The separate ordered terminal still owns native impact and
+                # feedback. A receipt must not pretend it already displayed.
+                self.assertNotIn(key, battle._projectile_visual_terminals)
+                self.assertTrue(battle._apply_projectile_terminal_event({
+                    'kind': 'projectile_impact', 'projectile_id': key}))
+                self.assertIn(key, battle._projectile_visual_terminals)
+
+    def test_resolution_ack_receipts_are_epoch_scoped(self):
+        battle, bigworld = _battle()
+        event = _event()
+        key = event['projectile_id']
+        self.assertTrue(battle._accept_projectile_event(event))
+        battle._projectile_resolution_acks.add(key)
+        self.assertTrue(battle._set_projectile_epoch(2, bigworld.now))
+        self.assertNotIn(key, battle._projectile_resolution_acks)
+        self.assertTrue(battle._accept_projectile_event(dict(event, authority_epoch=2)))
+        self.assertTrue(battle._projectiles.contains(key))
+
+    def test_absence_without_a_sent_terminal_is_not_a_resolution_ack(self):
+        for pending in ('pending_resolution', 'awaiting_ricochet'):
+            with self.subTest(pending=pending):
+                battle, unused_bigworld = _battle()
+                event = _event()
+                key = event['projectile_id']
+                self.assertTrue(battle._accept_projectile_event(event))
+                battle._projectile_meta[key][pending] = {} if pending == 'pending_resolution' else True
+                self.assertTrue(battle._reconcile_projectile_snapshot({'projectiles': []}))
+                self.assertNotIn(key, battle._projectile_resolution_acks)
+
+    def test_malformed_present_snapshot_row_is_not_a_resolution_ack(self):
+        battle, bigworld = _battle()
+        event = _event()
+        key = event['projectile_id']
+        bigworld.wall_x = 2.56
+        self.assertTrue(battle._accept_projectile_event(event))
+        bigworld.now = .27
+        battle._advance_projectiles(.27)
+        self.assertTrue(battle._projectile_meta[key]['awaiting_resolution'])
+        self.assertTrue(battle._reconcile_projectile_snapshot({
+            'projectiles': [{'projectile_id': key}]}))
+        self.assertNotIn(key, battle._projectile_resolution_acks)
+
     def test_worker_restores_self_contained_human_bounce_without_launch_snapshot(self):
         battle, unused = _battle(.5)
         battle._worker_mode = True

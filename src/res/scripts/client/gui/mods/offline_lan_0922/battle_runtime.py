@@ -2447,6 +2447,7 @@ class BattleRuntime(object):
         self._projectile_meta = {}
         self._projectile_visual_meta = {}
         self._projectile_visual_terminals = _RecentIdSet()
+        self._projectile_resolution_acks = _RecentIdSet()
         self._projectile_terminal_data = {}
         self._projectile_scene_stop_reasons = {}
         self._projectile_target_positions = {}
@@ -2794,6 +2795,7 @@ class BattleRuntime(object):
         self._projectile_meta = {}
         self._projectile_visual_meta = {}
         self._projectile_visual_terminals = _RecentIdSet()
+        self._projectile_resolution_acks = _RecentIdSet()
         self._projectile_terminal_data = {}
         self._projectile_scene_stop_reasons = {}
         self._projectile_target_positions = {}
@@ -13182,6 +13184,7 @@ class BattleRuntime(object):
         # and must not emit impact feedback or a world explosion.
         self._reset_projectile_visuals()
         self._projectile_visual_terminals = _RecentIdSet()
+        self._projectile_resolution_acks = _RecentIdSet()
         # Deferred local muzzle callbacks use this identity map as their
         # ownership fence. They must not reinstall a retired epoch's shot.
         self._local_projectile_presentations.clear()
@@ -13838,6 +13841,14 @@ class BattleRuntime(object):
                 normalized['projectile_id'] in
                 self._projectile_visual_terminals):
             return False
+        if normalized['projectile_id'] in self._projectile_resolution_acks:
+            # A full snapshot can acknowledge our terminal while this launch
+            # still waits in the ordered presentation journal. Its physical
+            # owner is finished; only the ordered impact may retire visuals.
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] PROJECTILE LATE LAUNCH ACK id=%s\n' %
+                normalized['projectile_id'])
+            return True
         now = self._clock()
         meta = self._reconcile_provisional_projectile(normalized, now)
         if meta is False:
@@ -13884,6 +13895,9 @@ class BattleRuntime(object):
         rows = message.get('projectiles')
         if not isinstance(rows, (list, tuple)):
             return False
+        reported_ids = set(str(raw['projectile_id']) for raw in rows
+                           if isinstance(raw, dict) and
+                           raw.get('projectile_id') is not None)
         now = self._clock()
         active_ids = set()
         normalized_rows = []
@@ -13897,7 +13911,8 @@ class BattleRuntime(object):
                     diagnostic, {}, 'canonical_snapshot', 'invalid_cursor')
                 continue
             projectile_id = normalized['projectile_id']
-            if projectile_id in self._projectile_visual_terminals:
+            if (projectile_id in self._projectile_visual_terminals or
+                    projectile_id in self._projectile_resolution_acks):
                 # The ordered terminal can overtake an older state snapshot.
                 # Fence that row before it can recreate either presentation
                 # metadata or an authority simulator entry.
@@ -13958,6 +13973,20 @@ class BattleRuntime(object):
                      meta.get('pending_resolution') is not None or
                      meta.get('awaiting_ricochet') or
                      meta.get('pending_ricochet') is not None)):
+                if (meta.get('awaiting_resolution') and
+                        projectile_id not in reported_ids):
+                    # Missing from a full authoritative ledger acknowledges
+                    # a sent terminal, independently of delayed impact FX.
+                    # A malformed but present row is not an absence receipt.
+                    if self._projectile_resolution_acks.add(projectile_id):
+                        queued_launch = any(
+                            item.get('kind') in _SHOT_EVENT_KINDS and
+                            str(item.get('projectile_id')) == projectile_id
+                            for item in self._event_journal)
+                        sys.stdout.write(
+                            '[Offline LAN 0.9.22] PROJECTILE RESOLUTION ACK '
+                            'id=%s queued_launch=%s\n' %
+                            (projectile_id, queued_launch))
                 self._projectile_meta.pop(projectile_id, None)
                 self._projectile_terminal_data.pop(projectile_id, None)
         try:
@@ -13975,7 +14004,8 @@ class BattleRuntime(object):
             raise RuntimeError('canonical projectile ricochet is malformed')
         projectile_id = normalized['projectile_id']
         meta = self._projectile_meta.get(projectile_id)
-        if projectile_id in self._projectile_visual_terminals:
+        if (projectile_id in self._projectile_visual_terminals or
+                projectile_id in self._projectile_resolution_acks):
             return False
         event_epoch = event.get('authority_epoch')
         if (self._projectile_epoch is not None and event_epoch is not None and
@@ -29520,6 +29550,7 @@ class BattleRuntime(object):
         self._projectile_meta = {}
         self._projectile_visual_meta = {}
         self._projectile_visual_terminals = _RecentIdSet()
+        self._projectile_resolution_acks = _RecentIdSet()
         self._projectile_terminal_data = {}
         self._projectile_scene_stop_reasons = {}
         self._projectile_target_positions = {}
