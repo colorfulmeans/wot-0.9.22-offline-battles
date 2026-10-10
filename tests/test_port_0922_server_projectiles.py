@@ -2228,6 +2228,8 @@ class ServerProjectileLedgerTests(unittest.TestCase):
 
     def test_bot_state_edge_waits_for_authorized_launch(self):
         state = _state()
+        # The room existed for 200 seconds before this worker source clock.
+        state._motion_clock_origin -= 200.0
         state.bot_manifest_authority_id = SIMULATION_WORKER_AUTHORITY_ID
         state.bot_roster = [{
             'id': 16, 'team': 2, 'slot': 0, 'name': 'Bot',
@@ -2296,6 +2298,18 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertEqual('1:b:16:1',
                          state.pending_events[-1]['projectile_id'])
         self.assertEqual(200000, state.pending_events[-1]['bot_launch_time_us'])
+        self.assertEqual(state.bot_state_time_us,
+                         state.pending_events[-1]['bot_presentation_time_us'])
+        self.assertGreater(state.pending_events[-1]['bot_presentation_time_us'], 200000000)
+        # Follow the real server event into the visible readiness boundary.
+        import test_port_0922_battle_runtime as visible
+        battle = visible.BattleRuntime(visible._runtime())
+        event = dict(state.pending_events[-1])
+        pose_time = event['bot_presentation_time_us']
+        battle._records['bot:16'] = {'ready': True, 'presentation_time_us': pose_time - 1}
+        self.assertFalse(battle._event_is_ready(event))
+        battle._records['bot:16']['presentation_time_us'] = pose_time
+        self.assertTrue(battle._event_is_ready(event))
         self.assertEqual(
             [20.0, 0.0, 0.0],
             state.projectiles['1:b:16:1']['range_origin'])

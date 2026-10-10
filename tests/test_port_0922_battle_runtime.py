@@ -4751,14 +4751,14 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
 
     def test_bot_muzzle_waits_for_its_frozen_source_pose_clock(self):
         battle = BattleRuntime(_runtime())
-        battle._records['bot:11'] = {'ready': True, 'presentation_time_us': 999999}
+        battle._records['bot:11'] = {'ready': True, 'presentation_time_us': 200999999}
         event = {'event_id': 'one', 'kind': 'bot_shot', 'attacker_bot': 11,
-                 'bot_launch_time_us': 1000000}
+                 'bot_launch_time_us': 1000000, 'bot_presentation_time_us': 201000000}
         battle._event_journal = [event]
         with mock.patch.object(battle, '_apply_ordered_event', return_value=True) as apply:
             self.assertFalse(battle._drain_event_journal())
             apply.assert_not_called()
-            battle._records['bot:11']['presentation_time_us'] = 1000000
+            battle._records['bot:11']['presentation_time_us'] = 201000000
             self.assertTrue(battle._drain_event_journal())
             self.assertTrue(battle._drain_event_journal())
             apply.assert_called_once_with(event)

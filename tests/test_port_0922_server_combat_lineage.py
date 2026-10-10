@@ -562,6 +562,7 @@ class ServerCombatLineageIntegrationTests(unittest.TestCase):
         previous = copy.deepcopy(server.bot_states[11])
         preview = {'fire_seq': 1, 'shot_yaw': 0.0, 'shot_pitch': 0.0,
                    'origin': (0.0, 1.0, 0.0)}
+        state['gun_aligned'] = True
         self.assertTrue(runtime._fire(
             state, gun, 1.0, descriptor, launch_preview=preview))
         frozen = dict(runtime._pending_launches[0])
@@ -609,6 +610,7 @@ class ServerCombatLineageIntegrationTests(unittest.TestCase):
         self.assertTrue(server.launch_projectile(authority_id, launch))
         self.assertEqual(1, len(server.projectiles))
         self.assertTrue(runtime.ack_projectile_launch(11, 1))
+        state['gun_aligned'] = True
         self.assertTrue(runtime._fire(
             state, gun, 1.0, descriptor,
             launch_preview=dict(preview, fire_seq=2)))

@@ -7331,6 +7331,10 @@ class BattleState:
                             "sample_end_us": int(source_time_us),
                             "launch_clock_offset_us": int(
                                 next_launch_clock_offset_us),
+                            # Freeze the separate room-motion mapping on this
+                            # admitted edge; a later batch can re-anchor it.
+                            "presentation_clock_offset_us": int(
+                                next_bot_state_time_us - source_time_us),
                         })
                         pending_projectile_launches[(
                             bot_id, shot_seq)] = edge
@@ -8363,8 +8367,12 @@ class BattleState:
                 "shot_pitch": round(_clamp(shot_pitch, -math.pi, math.pi), 6),
             })
             if shooter_kind == "bot":
-                # Match the visible source-time pose clock, not flight clock.
                 event['bot_launch_time_us'] = launch_time_us
+                # SnapshotSync presents room-motion timestamps. Worker source
+                # time and projectile/server tick time are different clocks.
+                if 'presentation_clock_offset_us' in expected_edge:
+                    event['bot_presentation_time_us'] = max(0, int(launch_time_us) +
+                        int(expected_edge['presentation_clock_offset_us']))
             event["attacker" if shooter_kind == "player"
                   else "attacker_bot"] = shooter_id
             if fire_intent_seq is not None:

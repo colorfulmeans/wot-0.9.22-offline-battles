@@ -10243,18 +10243,18 @@ class BattleRuntime(object):
                 return False
             if (not self._worker_mode and not self._replay_mode and
                     event.get('attacker_bot') is not None and
-                    event.get('bot_launch_time_us') is not None):
+                    event.get('bot_presentation_time_us') is not None):
                 # Muzzle and subsequent combat must not overtake the delayed
                 # hull/turret source-time presentation. Never snap physics.
                 presented = record.get('presentation_time_us')
-                ready = presented is not None and int(presented) >= int(event['bot_launch_time_us'])
+                ready = presented is not None and int(presented) >= int(event['bot_presentation_time_us'])
                 if not ready:
                     event.setdefault('_pose_wait_started', _PROFILE_CLOCK())
                 elif '_pose_wait_started' in event:
                     waited = max(0.0, _PROFILE_CLOCK() - event.pop('_pose_wait_started'))
-                    sys.stdout.write('[Offline LAN 0.9.22] BOT SHOT POSE READY projectile=%s wait_ms=%.3f launch_us=%s presented_us=%s\n' % (
+                    sys.stdout.write('[Offline LAN 0.9.22] BOT SHOT POSE READY projectile=%s wait_ms=%.3f pose_launch_us=%s presented_us=%s\n' % (
                         event.get('projectile_id'), waited * 1000.0,
-                        event['bot_launch_time_us'], presented))
+                        event['bot_presentation_time_us'], presented))
                 return ready
             return True
         if kind in _COMBAT_EVENT_KINDS:
@@ -12966,6 +12966,9 @@ class BattleRuntime(object):
                 sys.stdout.write('[Offline LAN 0.9.22] BOT FIRE PRESENT ' + json.dumps({
                     'round': (self._start_message or {}).get('round_id'), 'projectile': projectile_id,
                     'bot': record.get('network_id'),
+                    'worker_launch_time_us': event.get('bot_launch_time_us'),
+                    'pose_launch_time_us': event.get('bot_presentation_time_us'),
+                    'presented_time_us': record.get('presentation_time_us'),
                     'matrix_angles': matrix_angles,
                     'presented_aim': list(record.get('_remote_aim_signature', ()))[1:],
                     'presented_pose': record.get('_remote_pose_signature'),
