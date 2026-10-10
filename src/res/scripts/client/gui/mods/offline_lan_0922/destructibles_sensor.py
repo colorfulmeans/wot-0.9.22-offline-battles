@@ -4365,7 +4365,16 @@ def _live_broken_collision_filter_1513(members, accepted_trees=()):
 		for chunk_id, item_index in members)
 
 	def keep_native_surface(hit, identity):
-		if _DIAGNOSTICS_ENABLED:
+		if _DIAGNOSTICS_ENABLED and globals().get('g_offh_destr_pending'):
+			# This diagnostic is once per identity. Do not rescan the pending
+			# ledger for every native candidate after its line was admitted.
+			diagnostics = globals().get('g_offh_destr_diagnostics', {})
+			if (diagnostics.get('disabled') or
+					('native_motion_keep', identity[0], identity[1]) in
+					diagnostics.get('seen_contacts', ()) or
+					len(diagnostics.get('seen_contacts', ())) >=
+					_DIAGNOSTIC_CONTACT_LIMIT):
+				return True
 			now = _diagnostic_time_1513()
 			pending = tuple(sorted(key for key, deadline in
 				globals().get('g_offh_destr_pending', {}).items()

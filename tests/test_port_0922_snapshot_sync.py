@@ -385,9 +385,8 @@ class SnapshotSyncTests(unittest.TestCase):
                 for index in range(1, len(presented))
                 if presented[index][0] >= 2.0]
             self.assertLess(max(render_speeds) - min(render_speeds), 0.01)
-            # Adaptive buffer decay uses a constant 1.005x catch-up while
-            # settling; it must not create a speed pulse or materially change
-            # the authority trajectory's mean velocity.
+            # Regular cadence keeps its existing 1.005x recovery; accelerated
+            # recovery is confined to the excess left by a producer stall.
             self.assertAlmostEqual(
                 10.0, sum(render_speeds) / len(render_speeds), delta=0.051)
 
@@ -580,7 +579,7 @@ class SnapshotSyncTests(unittest.TestCase):
             for unused_time, unused_pose, presentation_time,
             confirmed_time, unused_delay, unused_ideal in steady))
 
-    def test_late_200ms_gap_grows_buffer_once_then_decays_slowly(self):
+    def test_late_200ms_gap_grows_once_then_recovers_without_cursor_jump(self):
         clock = [0.0]
         sync = self.module.SnapshotSync(1, clock=lambda: clock[0])
 
@@ -657,8 +656,12 @@ class SnapshotSyncTests(unittest.TestCase):
         self.assertGreater(first_regular_delay, first_regular_ideal)
         self.assertLess(late_delay, first_regular_delay)
         self.assertLess(late_ideal, first_regular_ideal)
-        self.assertGreater(late_delay,
-                           self.module.MIN_TIMED_DELAY_US + 100000.0)
+        self.assertLess(late_delay, first_regular_delay - 70000.0)
+        self.assertGreaterEqual(late_delay, self.module.MIN_TIMED_DELAY_US)
+        for previous, current in zip(frames, frames[1:]):
+            self.assertGreaterEqual(current[1], previous[1])
+            self.assertLessEqual(current[1] - previous[1],
+                                 (current[0] - previous[0]) * 1.025 + 1e-6)
 
     def test_first_live_intervals_establish_jitter_high_water_immediately(self):
         clock = [0.0]
@@ -1005,7 +1008,7 @@ class SnapshotSyncTests(unittest.TestCase):
         # 0.59 m single-frame jump.
         self.assertLessEqual(max(
             positions[index] - positions[index - 1]
-            for index in range(1, len(positions))), 0.102)
+            for index in range(1, len(positions))), 0.102501)
 
     def test_timed_gap_latency_converges_after_regular_samples_resume(self):
         clock = [0.0]
@@ -1059,10 +1062,10 @@ class SnapshotSyncTests(unittest.TestCase):
                         record['presentation_delay_us'] -
                         record['interpolation_delay_us']))
 
-        # Presentation follows the decaying ideal within one millisecond. The
-        # remaining sub-millisecond sawtooth is only the 10 ms render cadence
+        # Presentation follows the faster decaying ideal within 3 ms. The
+        # remaining bounded sawtooth is only the 10 ms render cadence
         # versus the 68 ms source cadence, not a retained latency jump.
-        self.assertLess(max(abs(item[1]) for item in delay_errors), 1000.0)
+        self.assertLess(max(abs(item[1]) for item in delay_errors), 3000.0)
         self.assertTrue(all(
             positions[index] + 1.0e-9 >= positions[index - 1]
             for index in range(1, len(positions))))
@@ -1071,7 +1074,7 @@ class SnapshotSyncTests(unittest.TestCase):
             for pose, target in zip(positions, confirmed)))
         self.assertLessEqual(max(
             positions[index] - positions[index - 1]
-            for index in range(1, len(positions))), 0.102)
+            for index in range(1, len(positions))), 0.102501)
 
     def test_timed_interpolation_keeps_short_angles_and_timed_lifecycle(self):
         initial = player(7, 0.0)

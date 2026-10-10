@@ -56,6 +56,71 @@ def wait_until(predicate, timeout=1.0):
 
 
 class LanClientQueueTests(unittest.TestCase):
+    def test_ready_dispatch_preserves_timer_ping_and_event_snapshot_barriers(self):
+        client = self.activate(worker=True)
+        client._poll_callback = 73
+        first = self.order_snapshot(1, bot_manifest=[])
+        second = self.order_snapshot(2)
+        event = {'type': 'events', 'round_id': 7, 'server_tick': 2, 'events': []}
+        receipt = {'type': 'battle_receipt', 'receipt_id': 'server:7:1'}
+        self.queue_wire_messages(client, [first, second, event, receipt])
+        seen = []
+        client._handle_message = seen.append
+        with mock.patch.object(client, '_schedule_poll') as schedule, mock.patch.object(
+                client, '_send') as send:
+            self.assertEqual(4, client.dispatch_ready_messages())
+            self.assertEqual(0, client.dispatch_ready_messages())
+        self.assertEqual([first, event, second, receipt], seen)
+        self.assertEqual(73, client._poll_callback)
+        schedule.assert_not_called()
+        send.assert_not_called()
+        self.assertEqual(0, client._transport_performance.poll_depth)
+
+    def test_ready_dispatch_does_not_recurse_or_take_callback_added_batch(self):
+        client = self.activate(worker=True)
+        first = {'type': 'events', 'round_id': 7, 'server_tick': 1, 'events': []}
+        second = dict(first, server_tick=2)
+        self.queue_wire_messages(client, [first])
+        seen = []
+        def handle(message):
+            seen.append(message)
+            self.queue_wire_messages(client, [second])
+            self.assertEqual(0, client.dispatch_ready_messages())
+        client._handle_message = handle
+        self.assertEqual(1, client.dispatch_ready_messages())
+        self.assertEqual([first], seen)
+        client._handle_message = seen.append
+        self.assertEqual(1, client.dispatch_ready_messages())
+        self.assertEqual([first, second], seen)
+
+    def test_ready_dispatch_stops_the_detached_batch_after_retirement(self):
+        client = self.activate(worker=True)
+        messages = [{'type': 'events', 'round_id': 7, 'server_tick': tick, 'events': []}
+                    for tick in (1, 2)]
+        self.queue_wire_messages(client, messages)
+        seen = []
+        def handle(message):
+            seen.append(message)
+            client._stopping = True
+            client._transport_generation += 1
+        client._handle_message = handle
+        client.dispatch_ready_messages()
+        self.assertEqual([messages[0]], seen)
+        self.assertEqual(0, client._transport_performance.poll_depth)
+        self.assertEqual(0, client.dispatch_ready_messages())
+
+    def test_ready_dispatch_error_restores_depth_and_keeps_poll_timer(self):
+        client = self.activate(worker=True)
+        client._poll_callback = 73
+        self.queue_wire_messages(client, [
+            {'type': 'events', 'round_id': 7, 'server_tick': 1, 'events': []}])
+        client._handle_message = mock.Mock(side_effect=RuntimeError('handler failure'))
+        with self.assertRaisesRegex(RuntimeError, 'handler failure'):
+            client.dispatch_ready_messages()
+        self.assertEqual(0, client._transport_performance.poll_depth)
+        self.assertEqual(0, client._transport_performance.handle_depth)
+        self.assertEqual(73, client._poll_callback)
+
     def activate(self, sock=None, worker=False):
         if worker:
             client = AuthorityWorkerLANClient(

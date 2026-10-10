@@ -60,7 +60,7 @@ from gui.mods.offline_lan_0922.spawn_planner import SpawnPlanner
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.worker_diagnostics import (
     WorkerCombatDiagnostics, timed, call as timed_call, observed_ray,
-    observed_call)
+    observed_call, observed)
 from gui.mods.offline_lan_0922 import (
     ballistics, burst_mechanics, combat_rules, critical_damage, descriptor_donation,
     destructibles_compat, device_damage, effective_params,
@@ -18037,6 +18037,22 @@ class BattleRuntime(object):
                 return True
         return False
 
+    @observed('worker.transport_drain')
+    def _drain_worker_transport(self):
+        """Admit queued echoes only after the Bot update has fully committed."""
+        drain = getattr(self.client, 'dispatch_ready_messages', None)
+        if not self._worker_mode or not callable(drain):
+            return True
+        generation = self._generation
+        bots = self._bots
+        round_id = (self._start_message or {}).get('round_id')
+        drain()
+        # Dispatch can finish/replace a round or retire this runtime. No old
+        # frame may advance projectiles or publish on that new lifecycle.
+        return (self.state == 'running' and self._generation == generation and
+                self._bots is bots and
+                (self._start_message or {}).get('round_id') == round_id)
+
     def _frame(self):
         if self.state != 'running':
             return
@@ -18417,6 +18433,9 @@ class BattleRuntime(object):
                             self._worker_probe_bot_enqueued += 1
                         else:
                             self._worker_probe_bot_send_failed += 1
+            if self._worker_mode and self._battle_live:
+                if not self._drain_worker_transport():
+                    return
             if (self._battle_live and
                     (self._projectile_is_authority() or
                      self._projectile_visual_meta)):

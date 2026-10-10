@@ -9503,6 +9503,26 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             self.assertTrue(collision_filter(87, 0, 37, 22))
             self.assertTrue(collision_filter(75, 0, 38, 22))
 
+    def test_seen_native_keep_diagnostic_skips_work_but_keeps_live_collision(self):
+        destroyed = set()
+        authority = self._ground_filter_fixture(destroyed)
+        class UnreadPending(dict):
+            def items(self):
+                raise AssertionError('repeated diagnostic scanned pending ledger')
+        with mock.patch.object(destructibles_sensor, '_get_destr_authority',
+                               return_value=authority), mock.patch.object(
+                destructibles_sensor, '_DIAGNOSTICS_ENABLED', True), mock.patch.dict(
+                destructibles_sensor.__dict__, {
+                    'g_offh_destr_pending': UnreadPending({(22, 37, None): 10.0}),
+                    'g_offh_destr_diagnostics': {
+                        'seen_contacts': {('native_motion_keep', 22, 37)}}}):
+            collision_filter = destructibles_sensor.prepare_horizontal_collision_filter(
+                _Vector(-2, 0, -1), _Vector(2, 1, 10))
+            self.assertTrue(collision_filter(75, 0, 37, 22))
+            destroyed.add((37, None))
+            self.assertFalse(collision_filter(75, 0, 37, 22))
+            self.assertTrue(collision_filter(87, 0, 37, 22))
+
     def test_native_fragile_callback_marks_only_successful_current_space_swaps(self):
         manager = types.SimpleNamespace(getSpaceID=lambda: 1)
         area = types.SimpleNamespace(g_destructiblesManager=manager)

@@ -4243,12 +4243,7 @@ class LANClient(object):
     def _poll_messages(self):
         generation = self._transport_generation
         self._poll_callback = None
-        messages = []
-        with self._pending_lock:
-            if self._pending:
-                messages = self._pending
-                self._pending = []
-        self._dispatch_pending_messages(messages, generation)
+        self._take_ready_messages(generation)
         if generation != self._transport_generation:
             return
         now = _monotonic_time()
@@ -4279,6 +4274,38 @@ class LANClient(object):
             self.last_error = None
         if self.running:
             self._schedule_poll()
+
+    def _take_ready_messages(self, generation):
+        """Detach one already-received batch; preserve normal relay barriers."""
+        messages = []
+        with self._pending_lock:
+            if self._pending:
+                messages = self._pending
+                self._pending = []
+        self._dispatch_pending_messages(messages, generation)
+        return len(messages)
+
+    def dispatch_ready_messages(self):
+        """Drain received acknowledgements without touching the poll timer.
+
+        The worker calls this between its completed control slice and shell
+        advancement. Never wait for the socket, recurse into a handler, send
+        another ping, or dispatch a second batch added by a callback.
+        """
+        performance = self._transport_performance
+        if self._stopping or performance.poll_depth or performance.handle_depth:
+            return 0
+        with self._pending_lock:
+            if not self._pending:
+                return 0
+        generation = self._transport_generation
+        started = performance.clock()
+        performance.poll_depth += 1
+        try:
+            return self._take_ready_messages(generation)
+        finally:
+            performance.finish('poll', started)
+            performance.poll_depth -= 1
 
     def _load_server_timing(self, message):
         """Project relative server timing onto this client's receive clock."""

@@ -33628,6 +33628,63 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._projectile_record_poses.assert_not_called()
         battle._schedule.assert_called_once_with(0.0, battle._frame)
 
+    def test_worker_ready_drain_fences_every_runtime_lifecycle_change(self):
+        for change in ('state', 'generation', 'bots', 'round'):
+            with self.subTest(change=change):
+                battle = BattleRuntime(_runtime())
+                battle.state = 'running'
+                battle._worker_mode = True
+                battle._start_message = {'round_id': 7}
+                battle._bots = object()
+                def retire():
+                    if change == 'state':
+                        battle.state = 'stopped'
+                    elif change == 'generation':
+                        battle._generation += 1
+                    elif change == 'bots':
+                        battle._bots = object()
+                    else:
+                        battle._start_message = {'round_id': 8}
+                battle.client = types.SimpleNamespace(dispatch_ready_messages=retire)
+                self.assertFalse(battle._drain_worker_transport())
+
+    def test_ready_drain_keeps_visible_player_transport_on_its_normal_callback(self):
+        battle = BattleRuntime(_runtime())
+        battle.state = 'running'
+        battle.client = types.SimpleNamespace(dispatch_ready_messages=mock.Mock())
+        self.assertTrue(battle._drain_worker_transport())
+        battle.client.dispatch_ready_messages.assert_not_called()
+
+    def test_worker_frame_admits_received_echo_before_shell_advancement(self):
+        runtime = _runtime()
+        runtime.bigworld.now = 1.0
+        battle = BattleRuntime(runtime)
+        battle.state = 'running'
+        battle._worker_mode = True
+        battle._battle_live = True
+        battle._last_frame_time = 0.9
+        battle._frame_diagnostics = None
+        battle._start_message = {'round_id': 7}
+        order = []
+        def update(*unused_args, **unused_kwargs):
+            order.append('control_committed')
+            return []
+        battle._bots = types.SimpleNamespace(
+            update=update, presentation_states=lambda now: [],
+            set_planning_snapshot=lambda *args: None)
+        battle.client = types.SimpleNamespace(
+            dispatch_ready_messages=lambda: order.append('echo_admitted'),
+            is_bot_authority=lambda: True)
+        battle._present_authority_bot_poses = lambda *args: (0,)
+        battle._advance_projectiles = lambda now: order.append('shells_advanced')
+        for name in ('_flush_pending_bot_create', '_flush_pending_entities',
+                     '_drain_event_journal', '_maybe_send_battle_ready',
+                     '_publish_player_environment', '_schedule'):
+            setattr(battle, name, mock.Mock())
+        battle._frame()
+        self.assertEqual(['control_committed', 'echo_admitted', 'shells_advanced'], order,
+                         battle.error)
+
     def test_worker_prebattle_frame_records_real_projectile_pose_history(self):
         runtime = _runtime()
         runtime.bigworld.now = 0.95
