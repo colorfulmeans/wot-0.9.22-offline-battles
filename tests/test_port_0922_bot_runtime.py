@@ -9604,13 +9604,14 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(runtime.states[11]['hull_aiming'])
         self.assertEqual(0, state['fire_seq'])
 
-    def test_reported_retreat_turn_survives_visible_limited_gun_target(self):
-        for yaw, mode in ((-.7429965, 'withdraw'),
-                          (-1.1123639, 'low_health_retreat'),
-                          (-.3324339, 'low_health_retreat')):
+    def test_limited_gun_retreat_keeps_front_threat_but_faces_unreachable_rear(self):
+        for yaw, mode, rear in ((-.7429965, 'withdraw', True),
+                                (-1.1123639, 'low_health_retreat', False),
+                                (-.3324339, 'low_health_retreat', True)):
             with self.subTest(yaw=yaw, mode=mode):
-                # The report's planner wanted turn=+1 and throttle=0, while
-                # the visible target lay left of the SU-122-44's narrow arc.
+                # The old withdrawal policy preserved turn=+1 even for a
+                # rear threat. The requested policy now faces unreachable
+                # rear threats; the forward-left case retains route ownership.
                 command = {
                     'target_yaw': 1.0, 'throttle': 0.0, 'turn': 1.0,
                     'brake': True, 'shell_index': 0, 'fire_allowed': True,
@@ -9639,9 +9640,12 @@ class BotRuntimeTests(unittest.TestCase):
                      'effective_params': _effective_params_snapshot()}
                 ])[0])[0]
 
-                self.assertEqual(1, state['rotation_dir'])
-                self.assertGreater(runtime.states[11]['yaw'], yaw)
-                self.assertFalse(runtime.states[11]['hull_aiming'])
+                self.assertEqual(-1 if rear else 1, state['rotation_dir'])
+                if rear:
+                    self.assertLess(runtime.states[11]['yaw'], yaw)
+                else:
+                    self.assertGreater(runtime.states[11]['yaw'], yaw)
+                self.assertEqual(rear, runtime.states[11]['hull_aiming'])
                 self.assertEqual(0, state['fire_seq'])
 
     def test_no_target_gun_keeps_safe_bearing_and_rests_horizontally(self):
