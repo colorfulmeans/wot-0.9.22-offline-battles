@@ -13,6 +13,8 @@ from gui.mods.offline_lan_0922 import tank_collision
 
 
 WAYPOINT_ARRIVAL_RADIUS = 1.5
+# Route admission is a separate policy from the physical slope-grip curve.
+NAVIGATION_MAX_GRADE = math.tan(math.radians(25.0))
 SLOPE_ALIGNMENT_GRADE = math.tan(math.radians(22.5))
 SLOPE_ALIGNMENT_TURN = math.radians(45.0)
 NAVIGATION_WAIT_RECOVERY_SECONDS = 4.0

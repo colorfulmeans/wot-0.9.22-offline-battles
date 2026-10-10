@@ -43,10 +43,26 @@ class PendingClimbScene:
         sx=int(round((self.start[0]-ox)/cell));sz=int(round((self.start[2]-oz)/cell))
         graph['links'][sz*width+sx] &= 1 << (4 if self.onward[0]>self.start[0] else 3)
 
-        # Native review now requires a supported terrain column. Supply the
-        # recorded baked height; None represents an unloaded column.
-        ground=lambda x,z,hint: self.nav.grid._baked_cell_height(
-            self.nav.grid.cell_for((x,hint,z)))
+        # Native review samples continuous terrain, not a staircase of nearest
+        # grid heights. Interpolate this controlled ground fixture from the
+        # unchanged report graph; a missing contributing column stays missing.
+        # The former nearest-cell fake turned the 9.7-degree setup edge into a
+        # 27.1-degree artificial step at the native sampling interval.
+        def ground(x, z, hint):
+            gx, gz = (x-ox)/cell, (z-oz)/cell
+            ix, iz = int(math.floor(gx)), int(math.floor(gz))
+            fx, fz = gx-ix, gz-iz
+            height = 0.0
+            for dx, wx in ((0, 1.0-fx), (1, fx)):
+                for dz, wz in ((0, 1.0-fz), (1, fz)):
+                    weight = wx*wz
+                    if weight <= 1e-12:
+                        continue
+                    sample_height = self.nav.grid._baked_cell_height((ix+dx, iz+dz))
+                    if sample_height is None:
+                        return None
+                    height += weight*sample_height
+            return height
         self.nav = TerrainNavigator(ground, self.obstacle,
                                     baked_graph=graph)
         self.request = ('route_join', 25, 'report_climb')

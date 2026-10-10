@@ -90,8 +90,8 @@ class Oracle(object):
         snapshot = tuple(start) + tuple(end) + (
             cell_size, max_grade_up, max_grade_down, BOT_WATER_AVOID_DEPTH)
         if slope_limit is not None:
-            from .vehicle_physics import SLIP_THRESHOLD_TAN
-            grade = min(float(slope_limit), SLIP_THRESHOLD_TAN)
+            from .ai.driver import NAVIGATION_MAX_GRADE
+            grade = min(float(slope_limit), NAVIGATION_MAX_GRADE)
             snapshot = tuple(start) + tuple(end) + (
                 cell_size, grade, grade, BOT_WATER_AVOID_DEPTH,
                 min(1.0, cell_size * 0.42))

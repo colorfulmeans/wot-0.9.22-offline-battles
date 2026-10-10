@@ -19,8 +19,7 @@ from gui.mods.offline_lan_0922.native_navigation import NativeNavigation
 
 from gui.mods.offline_lan_0922.ai.driver import (
 	FIRST_CANDIDATE_OFFSET, WAYPOINT_ARRIVAL_RADIUS,
-	SLOPE_ALIGNMENT_GRADE, SLOPE_ALIGNMENT_TURN)
-from gui.mods.offline_lan_0922.vehicle_physics import SLIP_THRESHOLD_TAN
+	SLOPE_ALIGNMENT_GRADE, SLOPE_ALIGNMENT_TURN, NAVIGATION_MAX_GRADE)
 
 
 SQRT_TWO = math.sqrt(2.0)
@@ -134,7 +133,7 @@ class TerrainGrid(object):
 	_LINK_COUNTS = tuple(bin(mask).count('1') for mask in range(256))
 
 	def __init__(self, ground_probe, obstacle_probe=None, bounds=None,
-			cell_size=18.0, max_grade_up=SLIP_THRESHOLD_TAN, max_grade_down=SLIP_THRESHOLD_TAN,
+			cell_size=18.0, max_grade_up=NAVIGATION_MAX_GRADE, max_grade_down=NAVIGATION_MAX_GRADE,
 			baked_graph=None):
 		self.ground_probe = ground_probe
 		self.obstacle_probe = obstacle_probe
@@ -713,9 +712,9 @@ class TerrainGrid(object):
 				# A diagonal can exceed the old 0.38 bake grade even when both
 				# orthogonal ways round the same supported square are legal.
 				# Merge only a bounded, dry square corridor with a fresh native
-				# ground/collision proof inside the exact client's full-grip range.
+				# ground/collision proof inside the requested navigation grade limit.
 				if self._supported_slope_corridor(start, end):
-					return self._native_segment_clear(start, end, SLIP_THRESHOLD_TAN)
+					return self._native_segment_clear(start, end, NAVIGATION_MAX_GRADE)
 				if (self._baked_cell_height(self.cell_for(end)) is None and
 						_distance_2d(start, end) <= 24.0 and
 						tuple(end) in self._live_join_targets):
@@ -847,14 +846,14 @@ class TerrainGrid(object):
 						break
 				if not clear:
 					break
-				# Every corner gradient must retain native full longitudinal grip.
+				# Every corner gradient must stay inside the navigation grade limit.
 				heights = [self._baked_cell_height(c) for c in
 				           (first, corners[0], corners[1], last)]
 				for centre, side_a, side_b in ((0, 1, 2), (1, 0, 3),
 				                               (2, 0, 3), (3, 1, 2)):
 					grade_sq = sum((heights[side] - heights[centre]) ** 2
 					               for side in (side_a, side_b)) / self.cell_size ** 2
-					if grade_sq > SLIP_THRESHOLD_TAN ** 2:
+					if grade_sq > NAVIGATION_MAX_GRADE ** 2:
 						clear = False
 						break
 				if not clear:
@@ -933,7 +932,7 @@ class TerrainGrid(object):
 			combat_count('nav_live_egress_requires_local_join')
 			return False
 		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
-		grade = SLIP_THRESHOLD_TAN
+		grade = NAVIGATION_MAX_GRADE
 		lateral_x = (float(end[2]) - float(start[2])) / max(distance, 0.001)
 		lateral_z = (float(start[0]) - float(end[0])) / max(distance, 0.001)
 		for side in (-2.15, 2.15):
@@ -1003,7 +1002,7 @@ class TerrainGrid(object):
 		key = (self._point_key(start), self._point_key(end))
 		grade_limit = min(self.max_grade_up, self.max_grade_down)
 		if slope_limit is not None:
-			grade_limit = min(float(slope_limit), SLIP_THRESHOLD_TAN)
+			grade_limit = min(float(slope_limit), NAVIGATION_MAX_GRADE)
 			key += (grade_limit,)
 		if key in self._native_review_cache:
 			return self._native_review_cache[key]

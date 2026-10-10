@@ -134,6 +134,11 @@ def fixture(scenario, native, record=True, cell=18.):
 
 
 CASES = [({}, (0., 0., 0.), (0., 0., 12.))]
+for degrees in (24.99, 25.01, 26.0, 27.5):
+    for sign in (-1., 1.):
+        CASES.append(({'gz': sign * math.tan(math.radians(degrees)),
+                       'expected_clear': degrees < 25.0},
+                      (0., 0., 0.), (0., 0., 12.)))
 for key, value in (
         ('missing', True), ('ray_failure', 1), ('ray_failure', 2), ('short_hit', True),
         ('gx', .37), ('gz', .39), ('gz', -.41), ('water', .90), ('water', .91),
@@ -168,6 +173,9 @@ for index, (scenario, start, end) in enumerate(CASES):
         again = grid._native_segment_clear(start, end)
         arms.append((result, again, engine.calls, dict(grid._native_review_cache),
                      set(grid._native_review_pending)))
+    if 'expected_clear' in scenario:
+        assert arms[0][0] == arms[1][0] == scenario['expected_clear'], (
+            'navigation_25_degree_boundary', scenario, arms)
     if scenario.get('water', 0.) > .90:
         # A measured forbidden water depth is a known blocker, unlike absent
         # support. The old ground callback loses that distinction as None.

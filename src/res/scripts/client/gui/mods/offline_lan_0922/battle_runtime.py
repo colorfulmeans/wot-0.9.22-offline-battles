@@ -18,7 +18,7 @@ import traceback
 from gui.mods.offline_lan_0922.ai import maps as tactical_maps
 from gui.mods.offline_lan_0922.ai import planner as bot_planner
 from gui.mods.offline_lan_0922.ai import tactical_geometry
-from gui.mods.offline_lan_0922.ai.driver import gun_yaw_limits
+from gui.mods.offline_lan_0922.ai.driver import gun_yaw_limits, NAVIGATION_MAX_GRADE
 from gui.mods.offline_lan_0922.artillery_controller import \
     ArtilleryController
 from gui.mods.offline_lan_0922.authority_worker_probe import \
@@ -6111,7 +6111,7 @@ class BattleRuntime(object):
         # asymmetric 0.48/-0.38 gate rejected an already planned descent and
         # fed a false blocked edge into recovery. Keep the same two samples,
         # but let their vertical casts cover the whole admitted grade.
-        grade_limit = vehicle_physics.SLIP_THRESHOLD_TAN
+        grade_limit = NAVIGATION_MAX_GRADE
         for height, distance in (
                 (0.7, near_distance), (1.5, far_distance)):
             nx = x + sine * distance

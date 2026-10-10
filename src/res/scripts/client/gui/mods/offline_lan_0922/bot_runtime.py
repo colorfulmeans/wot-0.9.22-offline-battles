@@ -2733,7 +2733,7 @@ class BotRuntime(object):
             if result.get('water', False):
                 return False
             return (abs(_number(result.get('slope', 0.0))) <=
-                    vehicle_physics.SLIP_THRESHOLD_TAN)
+                    ai_driver.NAVIGATION_MAX_GRADE)
         return bool(result)
 
     @observed('bot.parameters')
