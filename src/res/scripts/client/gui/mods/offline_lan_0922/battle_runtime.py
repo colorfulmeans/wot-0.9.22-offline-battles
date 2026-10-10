@@ -10239,7 +10239,24 @@ class BattleRuntime(object):
             if record is None and key not in self._pending_bot_creates:
                 raise RuntimeError(
                     'ordered LAN event lost entity %s before apply' % key)
-            return self._record_is_event_ready(record)
+            if not self._record_is_event_ready(record):
+                return False
+            if (not self._worker_mode and not self._replay_mode and
+                    event.get('attacker_bot') is not None and
+                    event.get('bot_launch_time_us') is not None):
+                # Muzzle and subsequent combat must not overtake the delayed
+                # hull/turret source-time presentation. Never snap physics.
+                presented = record.get('presentation_time_us')
+                ready = presented is not None and int(presented) >= int(event['bot_launch_time_us'])
+                if not ready:
+                    event.setdefault('_pose_wait_started', _PROFILE_CLOCK())
+                elif '_pose_wait_started' in event:
+                    waited = max(0.0, _PROFILE_CLOCK() - event.pop('_pose_wait_started'))
+                    sys.stdout.write('[Offline LAN 0.9.22] BOT SHOT POSE READY projectile=%s wait_ms=%.3f launch_us=%s presented_us=%s\n' % (
+                        event.get('projectile_id'), waited * 1000.0,
+                        event['bot_launch_time_us'], presented))
+                return ready
+            return True
         if kind in _COMBAT_EVENT_KINDS:
             target_key = self._event_entity_key(event, 'target')
             target_record = self._records.get(target_key)

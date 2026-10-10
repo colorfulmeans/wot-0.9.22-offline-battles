@@ -13,6 +13,7 @@ import os
 import random
 import sys
 import types
+import timeit
 sys.dont_write_bytecode = True
 
 
@@ -147,6 +148,7 @@ class Checker(object):
         self.driver, self.traffic = driver, traffic
         self.comparisons = self.driver_ticks = self.traffic_ticks = 0
         self.contacts = self.visibility_queries = self.lifecycle_checks = 0
+        self.contact_bridge_cost = [[], []]
         self.maximum_difference = 0.0
         self.human_frames = 0
         self.arrival_runs = self.arrival_ticks = self.arrival_handoffs = 0
@@ -531,7 +533,7 @@ class Checker(object):
         owner.detach()
         self.backend.sim_close(owner.handle)
 
-    def perception_cases(self):
+    def perception_cases(self, materialized=False):
         from gui.mods.offline_lan_0922 import bot_runtime as laws
         from gui.mods.offline_lan_0922 import spotting
         for asynchronous in (False, True):
@@ -631,7 +633,32 @@ class Checker(object):
                     actor=source['id']
                     reference._note_source_stillness(source,now)
                     expected,unused_lookup=reference._contacts_for(source,[],now,{},tick,processed)
-                    actual=owner.contacts((1,actor),native_probe)
+                    templates=dict(((1,k),dict(id=k,nested=reference.states[k])) for k in reference.states)
+                    began=timeit.default_timer()
+                    if materialized:
+                        provider=lambda:tuple(templates.items())
+                        if index==0 and actor==1:
+                            # Replacement metadata is created after sight callbacks.
+                            provider=lambda:tuple((key,dict(value,query_count=len(traces[1])))
+                                for key,value in templates.items())
+                        projected=owner._call('sim_control_contacts_materialized',
+                            (1,actor),native_probe,provider,self.facade._CONTACT_KEYS,(True,False))
+                        self.contact_bridge_cost[1].append(timeit.default_timer()-began)
+                        actual=[]
+                        for target in projected[0]:
+                            if index==0 and actor==1:
+                                self.equal(target['query_count'],len(traces[1]),'fused.live_metadata')
+                            self.equal(target['nested'] is reference.states[target['id']],True,'fused.shallow')
+                            flags=int(target['visible']) | (int(target['direct_visible'])<<1) | (int(target['fresh_visible'])<<2)
+                            pose=self.facade._pose(target) if 'position' in target else None
+                            actual.append(((1,target['id']),flags,0.,0.,pose))
+                        for identifier,target in projected[1]:
+                            assert target is projected[0][next(i for i,t in enumerate(projected[0]) if t['id']==identifier)]
+                    else:
+                        actual=owner.contacts((1,actor),native_probe)
+                        projected=self.backend.contact_materialize(actual,tuple(templates[row[0]] for row in actual),self.facade._CONTACT_KEYS,(True,False))
+                        assert projected is not None
+                        self.contact_bridge_cost[0].append(timeit.default_timer()-began)
                     self.equal([row[0][1] for row in actual],
                                [row['id'] for row in expected],'perception.order')
                     for row,expected_target in zip(actual,expected):
@@ -1055,6 +1082,8 @@ def main():
     owner.detach()
     backend.sim_close(owner.handle)
     checker.perception_cases()
+    checker.perception_cases(materialized=True)
+    print('Contact query/projection mean ms old/fused:',*(sum(v)*1000./len(v) for v in checker.contact_bridge_cost))
     checker.projection_cases()
     checker.projection_cache_cases()
     checker.human_cases()

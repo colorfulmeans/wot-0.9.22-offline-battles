@@ -4749,6 +4749,26 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         self.assertEqual(120.0, result.armor)
         self.assertEqual(3, len(result))
 
+    def test_bot_muzzle_waits_for_its_frozen_source_pose_clock(self):
+        battle = BattleRuntime(_runtime())
+        battle._records['bot:11'] = {'ready': True, 'presentation_time_us': 999999}
+        event = {'event_id': 'one', 'kind': 'bot_shot', 'attacker_bot': 11,
+                 'bot_launch_time_us': 1000000}
+        battle._event_journal = [event]
+        with mock.patch.object(battle, '_apply_ordered_event', return_value=True) as apply:
+            self.assertFalse(battle._drain_event_journal())
+            apply.assert_not_called()
+            battle._records['bot:11']['presentation_time_us'] = 1000000
+            self.assertTrue(battle._drain_event_journal())
+            self.assertTrue(battle._drain_event_journal())
+            apply.assert_called_once_with(event)
+        battle._worker_mode = True
+        battle._records['bot:11']['presentation_time_us'] = 0
+        self.assertTrue(battle._event_is_ready(event))
+        battle._worker_mode = False
+        battle._replay_mode = True
+        self.assertTrue(battle._event_is_ready(event))
+
     def test_remote_shot_uses_stock_extra_recoil_and_1513_tracer(self):
         runtime = _runtime()
         original_entity = runtime.bigworld.entity

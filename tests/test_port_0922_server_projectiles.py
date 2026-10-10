@@ -2295,6 +2295,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertEqual('bot_shot', state.pending_events[-1]['kind'])
         self.assertEqual('1:b:16:1',
                          state.pending_events[-1]['projectile_id'])
+        self.assertEqual(200000, state.pending_events[-1]['bot_launch_time_us'])
         self.assertEqual(
             [20.0, 0.0, 0.0],
             state.projectiles['1:b:16:1']['range_origin'])

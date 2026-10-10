@@ -24,7 +24,7 @@ enum class EntryCode {
     contact_roster, world_run, nav_query_filter, nav_query_run,
     sim_open, sim_close, sim_lifetime,
     sim_control_configure, sim_control_update, sim_control_begin,
-    sim_control_contacts, sim_control_humans, sim_control_observations,
+    sim_control_contacts, sim_control_contacts_materialized, sim_control_humans, sim_control_observations,
     sim_control_team_contacts, sim_control_finish, sim_control_forget,
     sim_control_drive, sim_control_driver_event, sim_control_driver_restore,
     sim_control_traffic, sim_control_traffic_state, sim_control_snapshot,

@@ -21,6 +21,7 @@ struct PyMethodDef {
 #endif
 #include <stddef.h>
 #include <stdint.h>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>

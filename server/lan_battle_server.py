@@ -8362,6 +8362,9 @@ class BattleState:
                     ((shot_yaw + math.pi) % (2.0 * math.pi)) - math.pi, 6),
                 "shot_pitch": round(_clamp(shot_pitch, -math.pi, math.pi), 6),
             })
+            if shooter_kind == "bot":
+                # Match the visible source-time pose clock, not flight clock.
+                event['bot_launch_time_us'] = launch_time_us
             event["attacker" if shooter_kind == "player"
                   else "attacker_bot"] = shooter_id
             if fire_intent_seq is not None:

@@ -368,6 +368,74 @@ PyObject *WOT_CDECL sim_control_contacts(PyObject *, PyObject *args) {
   }
   CONTROL_CATCH
 }
+// Keep current perception ownership, but project its contacts before allocating
+// a redundant Python row/pose tree and crossing the bridge a second time.
+PyObject *WOT_CDECL sim_control_contacts_materialized(PyObject *, PyObject *args) {
+  NATIVE_PROFILE_ENTRY(sim_control_contacts_materialized);
+  try {
+    require_sequence(args,6,true);auto v=items(args);
+    auto context=simulation_context(identity(v[0]));
+    auto owner=sim_control_bridge::key(v[1]);
+    // Zero means this optional pinned assignment slot is unavailable BEFORE
+    // any perception effects. None remains a fail-closed operation failure.
+    if(!dict_set)return int_new(0);
+    require_sequence(v[4],15,true);require_sequence(v[5],2,true);
+    for(int j=0;j<15;++j)if(items(v[4])[j]->ob_type!=field_keys[ID]->ob_type)throw Unsupported();
+    for(int j=0;j<2;++j)if(items(v[5])[j]->ob_type!=bool_type)throw Unsupported();
+    auto rows=profile.run(&offline_simulation::control::Store::contacts,
+        &context->control,owner,sim_control_bridge::sight(context,v[2]));
+    // Resolve live metadata AFTER synchronous sight callbacks, as the old
+    // caller did. The held result owns every borrowed template reference.
+    WorldObject empty_args(tuple_new(0));
+    if(!empty_args.get())throw PythonAllocationFailed();
+    WorldObject template_rows(object_call(v[3],empty_args.get(),0));
+    if(!template_rows.get())throw PythonAllocationFailed();
+    if(context->closed)throw Unsupported();
+    require_sequence(template_rows.get(),0);
+    using Template=std::pair<offline_simulation::ActorKey,PyObject *>;
+    std::vector<Template> templates;templates.reserve(static_cast<size_t>(size(template_rows.get())));
+    for(Py_ssize_t i=0;i<size(template_rows.get());++i){
+      PyObject *entry=items(template_rows.get())[i];require_sequence(entry,2,true);
+      auto key=sim_control_bridge::key(items(entry)[0]);
+      PyObject *source=items(entry)[1];
+      if(!plain_dict(source))throw Unsupported();
+      identity(field(source,ID));
+      templates.emplace_back(key,source);
+    }
+    std::sort(templates.begin(),templates.end(),[](const Template &a,const Template &b){return a.first<b.first;});
+    for(size_t i=1;i<templates.size();++i)
+      if(!(templates[i-1].first<templates[i].first))throw Unsupported();
+    size_t visible_count=0;for(const auto &c:rows)if(c.visible)++visible_count;
+    OwnedTuple targets(rows.size()),visible(visible_count);size_t vi=0;
+    for(size_t i=0;i<rows.size();++i){
+      const auto &c=rows[i];auto found=std::lower_bound(templates.begin(),templates.end(),c.target,
+          [](const Template &entry,const offline_simulation::ActorKey &key){return entry.first<key;});
+      if(found==templates.end() || c.target<found->first)throw Unsupported();
+      PyObject *source=found->second;
+      OwnedTuple copy_args(1);engine_query::borrow(copy_args,0,source);
+      WorldObject owned_args(copy_args.release());
+      PyObject *target=object_call(reinterpret_cast<PyObject *>(const_cast<void *>(dict_type)),owned_args.get(),0);
+      if(!target)throw PythonAllocationFailed();
+      targets.set(i,target);
+      auto put=[&](int index,PyObject *value){
+        if(!value)throw PythonAllocationFailed();
+        if(dict_set(target,items(v[4])[index],value)<0)throw PythonAllocationFailed();
+      };
+      auto number=[&](int index,double value){WorldObject owned(float_new(value));put(index,owned.get());};
+      if(c.has_pose){
+        for(int j=0;j<10;++j)if(c.pose.mask&(1u<<j))number(j,c.pose.values[j]);
+        if(c.pose.mask&(1u<<10)){WorldObject velocity(world_numbers(c.pose.values.data()+10,3));put(10,velocity.get());}
+        WorldObject position(world_numbers(c.pose.position.data(),3));put(11,position.get());
+      }
+      const bool flags[]={c.visible,c.direct,c.fresh};
+      for(int j=0;j<3;++j)put(12+j,items(v[5])[flags[j]?0:1]);
+      if(c.visible){OwnedTuple pair(2);engine_query::borrow(pair,0,field(target,ID));
+        engine_query::borrow(pair,1,target);visible.set(vi++,pair.release());}
+    }
+    OwnedTuple out(2);out.set(0,targets.release());out.set(1,visible.release());return out.release();
+  }
+  CONTROL_CATCH
+}
 PyObject *WOT_CDECL sim_control_humans(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(sim_control_humans);
   try {
@@ -940,6 +1008,8 @@ PyObject *WOT_CDECL sim_control_source_still(PyObject *, PyObject *args) {
        "Begin one ordered perception frame."},                                 \
       {"sim_control_contacts", sim_control_contacts, 1,                        \
        "Advance one observer and return contacts."},                           \
+      {"sim_control_contacts_materialized", sim_control_contacts_materialized, 1, \
+       "Project current observer contacts in the same synchronous bridge."},   \
       {"sim_control_humans", sim_control_humans, 1,                            \
        "Advance human direct observations."},                                  \
       {"sim_control_observations", sim_control_observations, 1,                \

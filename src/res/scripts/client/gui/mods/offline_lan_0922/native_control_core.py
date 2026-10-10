@@ -720,12 +720,30 @@ class NativeControl(object):
                 visibility_tick.setdefault('player_vision_ranges', []).extend(vision_rows)
         return True
 
+    def _contact_templates(self):
+        return tuple(self._pose_free.items())
+
     @observed('frontier.control_contacts')
     def contacts_for(self, source, players, now, team_spotted=None,
                      visibility_tick=None, processed_bot_ids=None):
         # Current actor input may have changed during its preparation phase.
         # Earlier actors are updated separately after their committed motion.
         self.update_actor(source, source.get('kind', 'bot'), processed=False)
+        fused = getattr(self.backend, 'sim_control_contacts_materialized', None)
+        if callable(fused):
+            # A failure after sight/radio effects is terminal for this slice;
+            # never replay it through a reference/second contact query.
+            projected = self._optional('sim_control_contacts_materialized',
+                _key(source), self._sight_binding or self._sight,
+                self._contact_templates, _CONTACT_KEYS, (True, False))
+            if projected is None:
+                raise RuntimeError('Native control operation failed: sim_control_contacts_materialized')
+            if projected != 0:
+                combat_count('frontier_contact_fused')
+                combat_count('frontier_contact_rows', len(projected[0]))
+                self._sync_events(team_visibility=team_spotted)
+                return list(projected[0]), dict(projected[1])
+            combat_count('frontier_contact_fused_unavailable')
         rows = self.contacts(_key(source), self._sight_binding or self._sight)
         combat_count('frontier_contact_rows', len(rows))
         materialize = getattr(self.backend, 'contact_materialize', None)

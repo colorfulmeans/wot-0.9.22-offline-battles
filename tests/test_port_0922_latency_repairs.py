@@ -10,6 +10,34 @@ from gui.mods.offline_lan_0922 import bot_runtime
 
 
 class LatencyRepairsTests(unittest.TestCase):
+    def test_fused_contacts_never_replay_a_failed_query(self):
+        from gui.mods.offline_lan_0922.native_control_core import NativeControl
+        owner = NativeControl.__new__(NativeControl)
+        owner.backend = types.SimpleNamespace(sim_control_contacts_materialized=lambda *unused: None)
+        owner.handle = 1
+        owner._pose_free = {}
+        owner._sight_binding = lambda *unused: None
+        owner._sight = None
+        owner.update_actor = lambda *args, **kwargs: None
+        owner.contacts = mock.Mock(side_effect=AssertionError('query replayed'))
+        with self.assertRaises(RuntimeError):
+            owner.contacts_for({'id': 1, 'kind': 'bot'}, [], 0.)
+        owner.contacts.assert_not_called()
+
+    def test_unavailable_fused_assignment_slot_uses_untouched_legacy_query(self):
+        from gui.mods.offline_lan_0922.native_control_core import NativeControl
+        owner = NativeControl.__new__(NativeControl)
+        owner.backend = types.SimpleNamespace(sim_control_contacts_materialized=lambda *unused: 0)
+        owner.handle = 1
+        owner._pose_free = {}
+        owner._sight_binding = lambda *unused: None
+        owner._sight = None
+        owner.update_actor = lambda *args, **kwargs: None
+        owner.contacts = mock.Mock(return_value=())
+        owner._sync_events = lambda **unused: None
+        self.assertEqual(([], {}), owner.contacts_for({'id': 1, 'kind': 'bot'}, [], 0.))
+        owner.contacts.assert_called_once()
+
     def test_long_gap_records_window_states_without_disabling_timing(self):
         wall, cpu, window = [0.], [0.], [(1, 0, 1)]
         lines = []
