@@ -56,6 +56,39 @@ def wait_until(predicate, timeout=1.0):
 
 
 class LanClientQueueTests(unittest.TestCase):
+    def _assert_protocol_equal(self, expected, actual):
+        # Queue payload equality excludes measured local presentation cadence.
+        # Retain exact equality of every wire field, order and event barrier.
+        def payload(value):
+            if isinstance(value, list):
+                return [payload(item) for item in value]
+            if isinstance(value, dict):
+                result = dict(value)
+                if result.get('type') == 'snapshot':
+                    cadence = result.pop('_client_coalesced_timing', None)
+                    if cadence is not None:
+                        self.assertIsInstance(cadence, dict)
+                        self.assertTrue(set(cadence).issubset(
+                            {'source_interval_us', 'snapshot_interval_us'}))
+                        self.assertTrue(all(isinstance(n, int) and n > 0
+                                            for n in cadence.values()))
+                return result
+            return value
+        self.assertEqual(payload(expected), payload(actual))
+
+    def test_local_cadence_survives_poll_without_crossing_event_barrier(self):
+        messages = [self.order_snapshot(1), self.order_snapshot(2),
+                    dict(type='events', round_id=7, events=[]),
+                    self.order_snapshot(3), self.order_snapshot(4)]
+        for worker in (False, True):
+            with self.subTest(worker=worker):
+                seen = self.drain_messages(messages, worker=worker)
+                self._assert_protocol_equal([messages[1], messages[2], messages[4]], seen)
+                for snapshot in (seen[0], seen[2]):
+                    self.assertEqual(dict(source_interval_us=100000,
+                                          snapshot_interval_us=100000),
+                                     snapshot['_client_coalesced_timing'])
+
     def test_ready_dispatch_preserves_timer_ping_and_event_snapshot_barriers(self):
         client = self.activate(worker=True)
         client._poll_callback = 73
@@ -182,7 +215,7 @@ class LanClientQueueTests(unittest.TestCase):
                         wraps=snapshot_delta.materialize) as materialize:
                     client._poll()
                 self.assertEqual(1, materialize.call_count)
-                self.assertEqual([messages[-1]], seen)
+                self._assert_protocol_equal([messages[-1]], seen)
                 self.assertEqual(80, seen[0]['bots'][0]['health'])
                 self.assertEqual(50, seen[0]['bots'][0]['critical']['devices'][0]['hp'])
 
@@ -227,7 +260,7 @@ class LanClientQueueTests(unittest.TestCase):
 
                     client._handle_message = handle
                     client._poll()
-                    self.assertEqual(expected, seen)
+                    self._assert_protocol_equal(expected, seen)
 
     def test_pending_sparse_orders_survive_queue_pressure_and_shallow_merge(self):
         client = self.activate()
@@ -244,7 +277,7 @@ class LanClientQueueTests(unittest.TestCase):
                                wraps=snapshot_delta.materialize) as materialize:
             client._poll()
         self.assertEqual(1, materialize.call_count)
-        self.assertEqual([dict(second, bot_orders=first['bot_orders'])], seen)
+        self._assert_protocol_equal([dict(second, bot_orders=first['bot_orders'])], seen)
 
     def test_materialization_failure_is_local_and_keeps_baseline_and_polling(self):
         client = self.activate()
@@ -683,7 +716,7 @@ class LanClientQueueTests(unittest.TestCase):
             with self.subTest(worker=worker):
                 seen = self.drain_messages(messages, worker=worker)
                 self.assertEqual(1, len(seen))
-                self.assertEqual(dict(latest, bot_orders=orders), seen[0])
+                self._assert_protocol_equal(dict(latest, bot_orders=orders), seen[0])
         self.assertNotIn('bot_orders', latest)
         self.assertEqual(30, first['server_tick'])
 
@@ -763,7 +796,7 @@ class LanClientQueueTests(unittest.TestCase):
             lan_client_module.MAX_PENDING_MESSAGES = original_limit
 
         seen = self.drain_messages(client._pending)
-        self.assertEqual([self.order_snapshot(100, bot_orders=orders)], seen)
+        self._assert_protocol_equal([self.order_snapshot(100, bot_orders=orders)], seen)
 
     def test_receive_overflow_retains_latest_orders_before_event_barrier(self):
         client = self.activate()
@@ -781,11 +814,11 @@ class LanClientQueueTests(unittest.TestCase):
         finally:
             lan_client_module.MAX_PENDING_MESSAGES = original_limit
 
-        self.assertEqual([latest, barrier, self.order_snapshot(3), incoming],
+        self._assert_protocol_equal([latest, barrier, self.order_snapshot(3), incoming],
                          client._pending)
         self.assertNotIn('bot_orders', client._pending[-1])
         seen = self.drain_messages(client._pending)
-        self.assertEqual([barrier, latest, incoming], seen)
+        self._assert_protocol_equal([barrier, latest, incoming], seen)
 
     def test_receive_overflow_replaces_one_order_carrier_and_honors_clear(self):
         original_limit = lan_client_module.MAX_PENDING_MESSAGES
@@ -796,13 +829,13 @@ class LanClientQueueTests(unittest.TestCase):
                 1, bot_orders=[{'id': 3}]))
             client._queue_message(self.order_snapshot(
                 2, bot_order_revision=3, bot_orders=[{'id': 5}]))
-            self.assertEqual([self.order_snapshot(
+            self._assert_protocol_equal([self.order_snapshot(
                 2, bot_orders=[{'id': 3}])], client._pending)
             client._queue_message(self.order_snapshot(
                 3, bot_order_revision=5, bot_orders=[]))
             client._queue_message(self.order_snapshot(
                 4, bot_order_revision=5))
-            self.assertEqual([self.order_snapshot(
+            self._assert_protocol_equal([self.order_snapshot(
                 4, bot_order_revision=5, bot_orders=[])], client._pending)
         finally:
             lan_client_module.MAX_PENDING_MESSAGES = original_limit
@@ -824,13 +857,13 @@ class LanClientQueueTests(unittest.TestCase):
                             3, bot_order_revision=5, bot_orders=orders)
                         client._queue_message(incoming)
 
-                        self.assertEqual([first, barrier, incoming],
+                        self._assert_protocol_equal([first, barrier, incoming],
                                          client._pending)
                         seen = self.drain_messages(client._pending)
                         expected = ([barrier, first, incoming]
                                     if kind == 'events'
                                     else [first, barrier, incoming])
-                        self.assertEqual(expected, seen)
+                        self._assert_protocol_equal(expected, seen)
         finally:
             lan_client_module.MAX_PENDING_MESSAGES = original_limit
 
@@ -848,7 +881,7 @@ class LanClientQueueTests(unittest.TestCase):
             lan_client_module.MAX_PENDING_MESSAGES = original_limit
 
         self.assertEqual(first, client._pending[0])
-        self.assertEqual(dict(incoming, bot_orders=[]), client._pending[-1])
+        self._assert_protocol_equal(dict(incoming, bot_orders=[]), client._pending[-1])
         self.assertEqual(3, len(client._pending))
 
     def test_receive_overflow_fails_closed_for_each_new_terminal_message(self):
