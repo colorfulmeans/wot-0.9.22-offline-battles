@@ -172,6 +172,60 @@ def _layout_descriptor(name, crew_roles):
 
 class CriticalDamageTests(unittest.TestCase):
 
+    def test_fitted_pools_survive_a_detached_hit_and_server_rebase(self):
+        descriptor = _descriptor()
+        vehicle = types.SimpleNamespace(
+            id=7, health=500, typeDescriptor=descriptor, devices_hp={},
+            position=object(), matrix=object(), _destroyed_devices=set(),
+            _crew_ko=set(), is_on_fire=False, getComponents=lambda: ())
+        profile = player_critical_mechanics.project_profile(descriptor)
+        for row in profile['devices']:
+            if row['name'] == 'ammoBayHealth':
+                row.update(max_hp=175.0, regen_hp=87.0)
+        critical_damage.bind_device_profile(vehicle, profile)
+        collision = (1.0, 1.0, _Material('ammoBayHealth'), None)
+        shell = types.SimpleNamespace(
+            kind='ARMOR_PIERCING', damage=(100.0, 120.0), caliber=100.0)
+        with mock.patch.dict(sys.modules, {'BigWorld': self.bigworld, 'Math': self.math}), \
+                mock.patch.object(critical_damage.random, 'random', return_value=0.0), \
+                mock.patch.object(critical_damage.random, 'uniform', return_value=120.0):
+            damage, payload, delta = critical_damage.propose_direct(
+                vehicle, (collision,), object(), object(), 100, shell,
+                attacker_id=2, penetrated=False, with_delta=True)
+        rack = next(row for row in payload['devices'] if row['name'] == 'ammoBayHealth')
+        self.assertEqual(175.0, rack['max_hp'])
+        self.assertEqual(55.0, rack['hp'])
+        self.assertFalse(payload['ammo_rack_death'])
+        self.assertEqual({}, vehicle.devices_hp)
+        self.assertIs(descriptor, vehicle.typeDescriptor)
+        sys.path.insert(0, str(ROOT / 'server'))
+        from lan_battle_server import BattleState
+        merged = BattleState._merge_critical_damage(None, payload, delta, profile)
+        self.assertEqual(rack, next(row for row in merged['devices']
+                                   if row['name'] == 'ammoBayHealth'))
+
+    def test_fitted_profile_repair_uses_its_regen_and_releases_old_loadout(self):
+        descriptor = _descriptor()
+        vehicle = types.SimpleNamespace(
+            typeDescriptor=descriptor, health=500,
+            devices_hp={'engineHealth': 0.0},
+            _destroyed_devices={'engineHealth'}, _crew_ko=set(),
+            is_on_fire=False)
+        profile = player_critical_mechanics.project_profile(descriptor)
+        for row in profile['devices']:
+            if row['name'] == 'engineHealth':
+                row.update(max_hp=150.0, regen_hp=75.0)
+        critical_damage.bind_device_profile(vehicle, profile)
+        view = critical_damage._device_td(vehicle)
+        self.assertIs(descriptor.engine, view.engine)
+        self.assertEqual(75.0, device_damage.device_regen_hp(view, 'engineHealth'))
+        critical_damage.bind_device_profile(vehicle, profile)
+        self.assertIs(view, critical_damage._device_td(vehicle))
+        payload = critical_damage.repair_device(vehicle, 'engineHealth')
+        self.assertEqual(150.0, payload['devices'][0]['max_hp'])
+        critical_damage.bind_device_profile(vehicle, None)
+        self.assertIs(descriptor, critical_damage._device_td(vehicle))
+
     def setUp(self):
         self.player = types.SimpleNamespace(
             playerVehicleID=999,

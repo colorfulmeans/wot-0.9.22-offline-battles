@@ -15,10 +15,11 @@ import heapq
 import math
 from collections import deque
 
+from gui.mods.offline_lan_0922.native_navigation import NativeNavigation
+
 from gui.mods.offline_lan_0922.ai.driver import (
 	FIRST_CANDIDATE_OFFSET, WAYPOINT_ARRIVAL_RADIUS,
-	SLOPE_ALIGNMENT_GRADE, SLOPE_ALIGNMENT_TURN)
-from gui.mods.offline_lan_0922.vehicle_physics import SLIP_THRESHOLD_TAN
+	SLOPE_ALIGNMENT_GRADE, SLOPE_ALIGNMENT_TURN, NAVIGATION_MAX_GRADE)
 
 
 SQRT_TWO = math.sqrt(2.0)
@@ -132,7 +133,7 @@ class TerrainGrid(object):
 	_LINK_COUNTS = tuple(bin(mask).count('1') for mask in range(256))
 
 	def __init__(self, ground_probe, obstacle_probe=None, bounds=None,
-			cell_size=18.0, max_grade_up=SLIP_THRESHOLD_TAN, max_grade_down=SLIP_THRESHOLD_TAN,
+			cell_size=18.0, max_grade_up=NAVIGATION_MAX_GRADE, max_grade_down=NAVIGATION_MAX_GRADE,
 			baked_graph=None):
 		self.ground_probe = ground_probe
 		self.obstacle_probe = obstacle_probe
@@ -171,6 +172,9 @@ class TerrainGrid(object):
 		self._native_proof_revision = 0
 		self._proof_deferred = False
 		self._live_join_targets = set()
+		# The runtime explicitly binds its synchronous main-thread corridor oracle.
+		# Pure-data grids retain the same Python proof without an engine owner.
+		self.native_query_oracle = None
 		self._native_review_pending = None
 
 	def _install_baked_graph(self, graph):
@@ -708,9 +712,9 @@ class TerrainGrid(object):
 				# A diagonal can exceed the old 0.38 bake grade even when both
 				# orthogonal ways round the same supported square are legal.
 				# Merge only a bounded, dry square corridor with a fresh native
-				# ground/collision proof inside the exact client's full-grip range.
+				# ground/collision proof inside the requested navigation grade limit.
 				if self._supported_slope_corridor(start, end):
-					return self._native_segment_clear(start, end, SLIP_THRESHOLD_TAN)
+					return self._native_segment_clear(start, end, NAVIGATION_MAX_GRADE)
 				if (self._baked_cell_height(self.cell_for(end)) is None and
 						_distance_2d(start, end) <= 24.0 and
 						tuple(end) in self._live_join_targets):
@@ -842,14 +846,14 @@ class TerrainGrid(object):
 						break
 				if not clear:
 					break
-				# Every corner gradient must retain native full longitudinal grip.
+				# Every corner gradient must stay inside the navigation grade limit.
 				heights = [self._baked_cell_height(c) for c in
 				           (first, corners[0], corners[1], last)]
 				for centre, side_a, side_b in ((0, 1, 2), (1, 0, 3),
 				                               (2, 0, 3), (3, 1, 2)):
 					grade_sq = sum((heights[side] - heights[centre]) ** 2
 					               for side in (side_a, side_b)) / self.cell_size ** 2
-					if grade_sq > SLIP_THRESHOLD_TAN ** 2:
+					if grade_sq > NAVIGATION_MAX_GRADE ** 2:
 						clear = False
 						break
 				if not clear:
@@ -928,7 +932,7 @@ class TerrainGrid(object):
 			combat_count('nav_live_egress_requires_local_join')
 			return False
 		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
-		grade = SLIP_THRESHOLD_TAN
+		grade = NAVIGATION_MAX_GRADE
 		lateral_x = (float(end[2]) - float(start[2])) / max(distance, 0.001)
 		lateral_z = (float(start[0]) - float(end[0])) / max(distance, 0.001)
 		for side in (-2.15, 2.15):
@@ -998,7 +1002,7 @@ class TerrainGrid(object):
 		key = (self._point_key(start), self._point_key(end))
 		grade_limit = min(self.max_grade_up, self.max_grade_down)
 		if slope_limit is not None:
-			grade_limit = min(float(slope_limit), SLIP_THRESHOLD_TAN)
+			grade_limit = min(float(slope_limit), NAVIGATION_MAX_GRADE)
 			key += (grade_limit,)
 		if key in self._native_review_cache:
 			return self._native_review_cache[key]
@@ -1007,6 +1011,30 @@ class TerrainGrid(object):
 		if pending is not None and exact_key in pending:
 			self._proof_deferred = True
 			return False
+		oracle = self.native_query_oracle
+		if oracle is not None:
+			revision = self._native_proof_revision
+			try:
+				arguments = (start, end, self.cell_size,
+				             self.max_grade_up, self.max_grade_down)
+				receipt = (oracle.run(*arguments, slope_limit=slope_limit)
+				           if slope_limit is not None else oracle.run(*arguments))
+			except Exception:
+				# Dispatch may have started: never replay engine work in Python.
+				if pending is not None:
+					pending.add(exact_key)
+				self._proof_deferred = True
+				return False
+			if revision != self._native_proof_revision:
+				self._proof_deferred = True
+				return False
+			if receipt is not None:
+				if receipt[0] < 0:
+					if pending is not None:
+						pending.add(exact_key)
+					self._proof_deferred = True
+					return False
+				return self._store_native_review(key, bool(receipt[0]))
 		step_size = self.cell_size * 0.42
 		if slope_limit is not None:
 			step_size = min(1.0, step_size)
@@ -1022,7 +1050,7 @@ class TerrainGrid(object):
 				hint = previous[1] if previous is not None else start[1]
 				y = self.ground_probe(x, z, hint)
 				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
-					if pending is not None:
+					if pending is not None and oracle is None:
 						pending.add(exact_key)
 					self._proof_deferred = True
 					return False
@@ -1043,9 +1071,13 @@ class TerrainGrid(object):
 					return False
 				clear = not blocked
 		except Exception:
-			if pending is not None:
+			if pending is not None and oracle is None:
 				pending.add(exact_key)
 			return False
+		return self._store_native_review(key, clear)
+
+	def _store_native_review(self, key, clear):
+		"""Share a proved corridor result; unknown columns never reach this cache."""
 		if len(self._native_review_cache) >= 4096:
 			self._native_review_cache.pop(next(iter(self._native_review_cache)))
 		self._native_review_cache[key] = bool(clear)
@@ -1720,6 +1752,24 @@ class TerrainNavigator(object):
 			'safe_local': 0, 'reactive': 0}
 		self.fallback_recovered = 0
 		self.fallback_modes = {}
+		self._native_navigation = NativeNavigation.create(self.grid)
+
+	def close(self):
+		"""Cancel background work before this map or round loses ownership."""
+		if self._native_navigation is not None:
+			self._native_navigation.close()
+		self.searches.clear()
+		self.search_times.clear()
+
+	def _cancel_searches(self, keys):
+		jobs = []
+		for key in keys:
+			job = self.searches.pop(key, None)
+			self.search_times.pop(key, None)
+			if job is not None:
+				jobs.append(job)
+		if self._native_navigation is not None:
+			self._native_navigation.cancel(jobs)
 
 	def _set_fallback_mode(self, bot_id, mode):
 		if mode is None or mode == 'safe_direct':
@@ -1763,6 +1813,8 @@ class TerrainNavigator(object):
 			'total': dict(self.fallback_totals),
 			'active': active,
 			'recovered': int(self.fallback_recovered),
+			'native': (self._native_navigation.snapshot()
+			           if self._native_navigation is not None else None),
 			'search': {
 				'pending': len(self.searches),
 				'completed': int(self.search_completed),
@@ -2753,8 +2805,7 @@ class TerrainNavigator(object):
 		# In-flight searches may have already admitted edges through that wall.
 		for search in self.searches.values():
 			self._retire_pending_prefixes(search)
-		self.searches.clear()
-		self.search_times.clear()
+		self._cancel_searches(list(self.searches))
 		return True
 
 	def _cache_key(self, path_key, goal):
@@ -2800,6 +2851,13 @@ class TerrainNavigator(object):
 			steps=search.steps, result="path" if path else "no_path")
 		self.searches.pop(key, None)
 		self.search_times.pop(key, None)
+		if (path and search.hull_revision != self.grid.static_hull_revision and
+				self.grid.path_crosses_static_hull(path)):
+			# A wreck may appear while a pure worker owns the old map inputs.
+			# Reject at publication, before this call can hand the route to a
+			# driver; waiting for the next cache read exposes one stale command.
+			combat_count('nav_search_stale_hull')
+			return False
 		self.paths[key] = path
 		self.path_times[key] = float(now)
 		# A resumable search may have traversed a cell before a wreck appeared.
@@ -2811,6 +2869,7 @@ class TerrainNavigator(object):
 		else:
 			combat_count('nav_search_failed')
 			self.search_failed += 1
+		return True
 
 	def clear_blocked_contact(self, bot_id):
 		"""End one physical-contact episode without removing a proved veto."""
@@ -2949,8 +3008,7 @@ class TerrainNavigator(object):
 					(kind is None or path_key[0] == kind)):
 				combat_count('nav_search_superseded')
 				self._retire_pending_prefixes(self.searches.get(key))
-				self.searches.pop(key, None)
-				self.search_times.pop(key, None)
+				self._cancel_searches((key,))
 
 	def _accrue_search_credit(self, elapsed):
 		"""Earn elapsed credit and size this frame's expansion ceiling from it."""
@@ -3017,6 +3075,13 @@ class TerrainNavigator(object):
 			return
 		self.search_processed_frame = self.search_frame_serial
 		self.search_frame_time = float(now)
+		if self._native_navigation is not None:
+			self._native_navigation.advance(now, self.search_frame_budget)
+			for key, search in list(self.searches.items()):
+				if search.done:
+					self._finish_search(key, search, now)
+			self._trim_cache(now)
+			return
 		keys = sorted(self.searches, key=lambda value: repr(value))
 		if not keys:
 			self.search_next_key = None
@@ -3151,7 +3216,10 @@ class TerrainNavigator(object):
 			# 28 peers made every expansion scan transient positions, permanently baked
 			# traffic into shared paths, and multiplied probe cost. LocalDriver handles
 			# moving OBBs every frame; A* only owns static terrain and remembered edges.
-			search = self.grid.begin_plan(
+			begin_plan = (self._native_navigation.submit
+			              if self._native_navigation is not None else
+			              self.grid.begin_plan)
+			search = begin_plan(
 				start, goal, avoid_points=None,
 				max_expansions=self.search_max_expansions, now=now,
 				prefer_clearance=self._prefers_baked_clearance(path_key),
@@ -3173,7 +3241,7 @@ class TerrainNavigator(object):
 		# _advance_searches normally caches completed jobs. This branch only covers
 		# a test double or an externally completed task.
 		self._finish_search(key, search, now)
-		return key, self.paths[key]
+		return key, self.paths.get(key)
 
 	def _planned_next_segment_clear(self, current, path, index, now,
 			bot_id=None):

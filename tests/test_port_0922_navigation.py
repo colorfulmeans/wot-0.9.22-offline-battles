@@ -159,7 +159,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
         self.assertEqual(revision+1,grid.static_hull_revision)
 
     @staticmethod
-    def _fjord_route(native_capability=None):
+    def _fjord_route():
         graph = json.loads((PORT_ROOT / 'navgraphs' / '33_fjord.json').read_text())
         navigator = TerrainNavigator(lambda *unused: None, baked_graph=graph)
         grid = navigator.grid
@@ -335,8 +335,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
     def test_fjord_reached_climb_setup_advances_without_target_reversal(self):
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
 
-        graph, navigator, path, pivot, unused_key = self._fjord_route(
-            BotRuntime.navigation_planning_capability())
+        graph, navigator, path, pivot, unused_key = self._fjord_route()
         runtime = BotRuntime(1)
         runtime.navigator = navigator
         runtime.baked_graph = graph
@@ -730,9 +729,9 @@ class StaticHullNavigationTests(unittest.TestCase):
         while not search.done:
             search.step(1)
         self.assertTrue(navigator.grid.path_crosses_static_hull(search.result))
-        navigator._finish_search(key, search, 0.1)
-        self.assertNotEqual(navigator.grid.static_hull_revision,
-                            navigator.path_hull_revisions[key])
+        self.assertFalse(navigator._finish_search(key, search, 0.1))
+        self.assertNotIn(key, navigator.paths)
+        self.assertNotIn(key, navigator.path_hull_revisions)
         navigator._path(path_key, start, goal, 0.2, None)
         if key in navigator.paths:
             self.assertFalse(navigator.grid.path_crosses_static_hull(

@@ -102,12 +102,15 @@ class BotUpdateCollectionRegressionTest(unittest.TestCase):
 
     DRIVER = r"""
 import contextlib, gc, io, sys
+from unittest import mock
 import test_port_0922_bot_runtime as driver
 import effective_params_fixture as fixture
 
 case = driver.BotRuntimeTests('run')
 case.setUp()
-runtime = case._roster_runtime()
+with mock.patch.object(case.module.native_simulation.NativeSimulation,
+                       'create', return_value=None):
+    runtime = case._roster_runtime()
 player = fixture.wire_player(5)
 player.setdefault('team', 1)
 player.setdefault('position', [0.0, 0.0, 0.0])

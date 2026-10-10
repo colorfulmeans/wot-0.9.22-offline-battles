@@ -13,6 +13,7 @@ import random
 from gui.mods.offline_lan_0922 import bot_tactics as config
 from gui.mods.offline_lan_0922 import spg_positions
 from gui.mods.offline_lan_0922 import initial_allocation
+from gui.mods.offline_lan_0922.worker_diagnostics import observed
 
 
 def graph_view(name, graph):
@@ -301,6 +302,7 @@ def _manual_candidates(grid, zone, clearance):
     return sorted(candidates)
 
 
+@observed('parking.assign_manual')
 def assign_manual_positions(profile, name, graph, states, mode='regular',
                             actor_ids=None, excluded=(), occupied=(), preferred_zone=None,
                             allocation_seed=None, paired_routes=None):

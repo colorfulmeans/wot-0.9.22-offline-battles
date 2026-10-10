@@ -65,6 +65,23 @@ def ideal_reflection_velocity(incoming_velocity, surface_normal):
     return reflected
 
 
+def ricochet_departure_origin(impact, reflected_velocity, surface_normal):
+    """Keep the existing 2 mm clearance perpendicular to the struck plate.
+
+    A flight-direction offset loses its normal clearance at grazing angles.
+    Orient the normal onto the reflected side; its stored winding may be either
+    sign. This does not skip a vehicle or any of its other collision surfaces.
+    """
+    normal_length = math.sqrt(sum(float(v) ** 2 for v in surface_normal))
+    if normal_length <= 1.0e-12:
+        raise ValueError('ricochet departure normal is degenerate')
+    normal = tuple(float(v) / normal_length for v in surface_normal)
+    side = sum(float(reflected_velocity[i]) * normal[i] for i in range(3))
+    sign = 1.0 if side >= 0.0 else -1.0
+    return tuple(float(impact[i]) + sign * normal[i] * 0.002
+                 for i in range(3))
+
+
 def trajectory_position(start, velocity, gravity, elapsed):
     """Return ``r0 + v0*t + 1/2*g*t^2`` as a plain three-tuple."""
     time = max(0.0, float(elapsed or 0.0))

@@ -36,6 +36,41 @@ class Pose:
 
 
 class MeshConsumerTests(unittest.TestCase):
+    def test_cone_depth_search_reuses_exact_outside_apex_evidence(self):
+        rack = next(t for t in self.layout['targets']
+                    if t['entity'] == 'ammoBay' and t['parent'] == 'hull')
+        primitive = rack['primitives'][0]
+        mesh = geometry.internal_mesh
+        center = primitive['center']
+        apex = (primitive['minimum'][0] - .2, center[1], center[2])
+        axis, depth = (1., 0., 0.), 4.
+        contains = mesh.contains
+        intersects = mesh.intersects_cone
+        with mock.patch.object(mesh, 'contains', wraps=contains) as cached:
+            actual = layouts._primitive_cone_entry(
+                rack, primitive, apex, axis, depth, 1.)
+        self.assertIsNotNone(actual)
+        self.assertEqual(1, cached.call_count)
+        # Force the old full containment query at each shrinking depth.
+        def uncached(mesh_value, origin, direction, span, tangent, **unused):
+            return intersects(mesh_value, origin, direction, span, tangent)
+        with mock.patch.object(mesh, 'intersects_cone', side_effect=uncached), \
+                mock.patch.object(mesh, 'contains', wraps=contains) as original:
+            expected = layouts._primitive_cone_entry(
+                rack, primitive, apex, axis, depth, 1.)
+        self.assertEqual(expected, actual)
+        self.assertGreater(original.call_count, cached.call_count)
+        target = dict(rack, primitives=(primitive,))
+        with mock.patch.object(layouts, '_primitive_distance_record',
+                               wraps=layouts._primitive_distance_record) as distance:
+            records = layouts.resolve_explosion(
+                {'valid': True, 'targets': (target,)},
+                {'hull': {'point': apex, 'direction': axis}},
+                depth * math.sqrt(2.), mode='cone',
+                cone_cos=1. / math.sqrt(2.), cone_depth_m=depth)
+        self.assertTrue(records)
+        self.assertEqual(1, distance.call_count)
+
     def setUp(self):
         layouts._LAYOUT_CACHE.clear()
         self.record = catalog.CONSOLE_LAYOUTS_0922[layouts._profile_key('ussr:R45_IS-7')]

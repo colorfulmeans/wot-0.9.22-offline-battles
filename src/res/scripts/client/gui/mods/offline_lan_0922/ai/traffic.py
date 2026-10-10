@@ -65,8 +65,10 @@ def _same_level(first, second):
     if first_shape is None or second_shape is None:
         return True
     first_y, second_y = first['position'][1], second['position'][1]
-    return min(first_y + first_shape[3], second_y + second_shape[3]) > max(
-        first_y + first_shape[2], second_y + second_shape[2])
+    return tank_collision.vertical_overlap(
+        first_y, first_shape, second_y, second_shape, slop=0.0,
+        pitch_a=first.get('pitch', 0.0), roll_a=first.get('roll', 0.0),
+        pitch_b=second.get('pitch', 0.0), roll_b=second.get('roll', 0.0))
 
 
 def _separation(first, second):
@@ -327,7 +329,7 @@ class TrafficCoordinator(object):
 
     def safe_controls(self, body, command, neighbours, now, stopping_distance,
                       step=1.0 / 30.0):
-        """Brake before occupied hulls after planning and gun aiming.
+        """Brake before allied hulls after planning and gun aiming.
 
         This guard is independent of friendly leases and tactical modes. In
         particular a player does not have to publish a cooperative Bot order.
@@ -339,6 +341,8 @@ class TrafficCoordinator(object):
         throttle, turn = result.get('throttle', 0.0), result.get('turn', 0.0)
         peers = [peer for peer in neighbours
                  if peer['id'] != body['id'] and peer.get('alive', True) and
+                 (body.get('team') is None or peer.get('team') is None or
+                  peer.get('team') == body.get('team')) and
                  _same_level(body, peer)]
         # Braking against current travel must remain available. At rest the
         # intended gear determines which hull face needs a clear corridor.
@@ -575,6 +579,9 @@ class TrafficCoordinator(object):
                               traffic_mode='head_on_blocked')
                 self._held[bot_id] = now
                 continue
+            # One peer's clear departure does not prove that the other hull's
+            # swing is clear. Keep this pair's original deadline until its
+            # footprints separate; either call order must permit recovery.
             delta = (target - body['yaw'] + math.pi) % (2.0 * math.pi) - math.pi
             result.update(turn=max(-1.0, min(1.0, delta / 0.58)),
                           target_yaw=target, traffic_mode='head_on')

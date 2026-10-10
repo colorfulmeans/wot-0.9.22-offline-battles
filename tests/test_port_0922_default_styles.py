@@ -11,8 +11,8 @@ class DefaultStyleStockTests(unittest.TestCase):
         self.snapshot = {'vehicles':[{'vehicleTypeCompactDescr':101},{'vehicleTypeCompactDescr':102}],
                          'wallet':{'gold':10}}
         self.types = {101:types.SimpleNamespace(name='first'),102:types.SimpleNamespace(name='second')}
-        self.styles = {1:types.SimpleNamespace(rentCount=100,filter=None),
-                       128:types.SimpleNamespace(rentCount=0,filter=types.SimpleNamespace(
+        self.styles = {1:types.SimpleNamespace(isRent=True,rentCount=100,filter=None),
+                       128:types.SimpleNamespace(isRent=False,rentCount=1,filter=types.SimpleNamespace(
                            matchVehicleType=lambda v:v.name=='first'))}
 
     def test_native_filter_controls_hidden_grant_and_exact_rental_units(self):

@@ -26,6 +26,11 @@ MAX_INITIAL_TIMED_INTERVAL_US = int(
 INITIAL_TIMED_DELAY_US = 90000.0
 MIN_TIMED_DELAY_US = 60000.0
 TIMED_DELAY_DECAY_RATIO = 0.005
+# Normal 30 Hz jitter still needs its existing high-water decay. Accelerate
+# only the excess left by a stalled producer; keep the ordinary 60-99 ms
+# cushion intact so recurring short gaps do not cause playback holds.
+TIMED_STALL_RECOVERY_RATIO = 0.025
+TIMED_STALL_RECOVERY_FLOOR_US = 120000.0
 # Ignore sub-frame changes in the measured target after warm-up.  Expanding a
 # confirmed-only cursor cannot rewind it, so a tiny increase would itself add
 # one visible hold.  Material producer stalls still grow the buffer on the
@@ -268,9 +273,23 @@ class SnapshotSync(object):
                         int(record.get('timed_warmup_intervals') or 0) + 1)
                     source_interval_us = (
                         sample_time_us - previous_sample_time_us)
-                    observed_delay_us = (
-                        source_interval_us +
-                        (record.get('snapshot_interval_us') or 0))
+                    exposure_us = record.get('snapshot_interval_us') or 0
+                    if (source_interval_us > TIMED_DELAY_GROW_STALL_US and
+                            exposure_us > TIMED_DELAY_GROW_STALL_US):
+                        # A stalled producer can delay both clocks together.
+                        # Keep its full interval plus one 30 Hz exposure;
+                        # adding that same stall twice retains needless lag.
+                        exposure_us = 1000000.0 / 30.0
+                    cadence = record.pop('_coalesced_timing', None)
+                    observed_interval_us = source_interval_us
+                    if isinstance(cadence, dict):
+                        measured = _number(cadence.get('source_interval_us'), 0.0)
+                        measured_exposure = _number(cadence.get('snapshot_interval_us'), 0.0)
+                        if 0.0 < measured <= source_interval_us:
+                            observed_interval_us = measured
+                            if measured_exposure > 0.0:
+                                exposure_us = min(exposure_us, measured_exposure)
+                    observed_delay_us = observed_interval_us + exposure_us
                     if (record.get('timed_warmup_active') and
                             record['timed_warmup_intervals'] <=
                             TIMED_WARMUP_INTERVALS):
@@ -280,7 +299,7 @@ class SnapshotSync(object):
                         # and cannot permanently inflate normal latency.
                         observed_delay_us += min(
                             TIMED_WARMUP_MAX_HEADROOM_US,
-                            source_interval_us *
+                            observed_interval_us *
                             TIMED_WARMUP_HEADROOM_RATIO)
                     previous_delay_us = record.get(
                         'interpolation_delay_us')
@@ -291,7 +310,9 @@ class SnapshotSync(object):
                             MIN_TIMED_DELAY_US,
                             previous_delay_us -
                             (sample_time_us - previous_sample_time_us) *
-                            TIMED_DELAY_DECAY_RATIO)
+                            (TIMED_STALL_RECOVERY_RATIO if
+                             previous_delay_us > TIMED_STALL_RECOVERY_FLOOR_US
+                             else TIMED_DELAY_DECAY_RATIO))
                     record['interpolation_delay_us'] = max(
                         observed_delay_us, retained_delay_us)
                     if record.get('presentation_delay_us') is None:
@@ -308,7 +329,7 @@ class SnapshotSync(object):
                         material_growth = (
                             delay_growth_us >=
                             TIMED_DELAY_GROW_DEADBAND_US or
-                            source_interval_us >=
+                            observed_interval_us >=
                             TIMED_DELAY_GROW_STALL_US)
                         if (delay_growth_us > 0.0 and
                                 (warmup_growth or material_growth)):
@@ -591,6 +612,9 @@ class SnapshotSync(object):
                 key = _entity_key(kind, state)
                 if key is not None:
                     seen.add(key)
+                if kind == 'bot' and key in self._entities:
+                    self._entities[key]['_coalesced_timing'] = message.get(
+                        '_client_coalesced_timing')
                 self._upsert(
                     kind, state, now, output,
                     update_remote_pose=(kind != 'bot' or update_bot_poses),
@@ -719,9 +743,14 @@ class SnapshotSync(object):
                     # The stock quadratic curve becomes effectively static
                     # for small errors.  Match the jitter high-water decay so
                     # the startup cushion actually returns to its 60 ms
-                    # floor, while limiting catch-up to 1.005x playback.
+                    # floor, using 1.025x playback for an ordinary stall tail.
+                    # A 100 ms excess formerly survived for 20 seconds and
+                    # kept muzzle/impact playback late after the worker recovered.
                     latency_rate = max(
-                        latency_rate, TIMED_DELAY_DECAY_RATIO)
+                        latency_rate,
+                        TIMED_STALL_RECOVERY_RATIO if
+                        delay_us > TIMED_STALL_RECOVERY_FLOOR_US else
+                        TIMED_DELAY_DECAY_RATIO)
                 delay_step_us = (
                     render_delta * latency_rate * 1000000.0)
                 if ideal_delay_us > delay_us:
@@ -736,9 +765,9 @@ class SnapshotSync(object):
                 # extrapolates beyond it. A larger later interval cannot rewind
                 # the presentation clock; a shorter one also cannot make the
                 # clock catch up by more than the stock AvatarFilter latency
-                # curve permits. Its default latency velocity is 1 and curve
-                # power is 2, hence a 100 ms error catches up at only 1.01x
-                # rather than jumping.
+                # curve permits, with bounded recovery from a producer stall.
+                # The stock curve (velocity 1, power 2) and the recovery floor
+                # both advance this confirmed cursor rather than jumping it.
                 maximum_presentation_time_us = (
                     previous_presentation_time_us +
                     render_delta * (1.0 + latency_rate) * 1000000.0)

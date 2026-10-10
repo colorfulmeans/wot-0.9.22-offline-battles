@@ -13,6 +13,8 @@ from gui.mods.offline_lan_0922 import tank_collision
 
 
 WAYPOINT_ARRIVAL_RADIUS = 1.5
+# Route admission is a separate policy from the physical slope-grip curve.
+NAVIGATION_MAX_GRADE = math.tan(math.radians(25.0))
 SLOPE_ALIGNMENT_GRADE = math.tan(math.radians(22.5))
 SLOPE_ALIGNMENT_TURN = math.radians(45.0)
 NAVIGATION_WAIT_RECOVERY_SECONDS = 4.0
@@ -105,13 +107,31 @@ def gun_yaw_limits(descriptor):
 
 def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		turn, throttle, recovery_mode, has_target=True,
-		combat_mode=None, movement_intent=False, withdrawal_aim=False):
+		combat_mode=None, movement_intent=False, withdrawal_aim=False,
+		rear_turn=0.0, allow_rear_start=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn',
 			'pivot_recovery', 'forward_escape', 'short_forward_escape', 'short_reverse_escape',
 			'contact_escape', 'wreck_push', 'friendly_yield',
 			'nav_wait', 'physical_hold'):
 		return float(turn), float(throttle), False
+	limited = not (float(minimum_yaw) <= -math.pi + 0.1 and
+	               float(maximum_yaw) >= math.pi - 0.1)
+	relative = _angle_delta(target_yaw, hull_yaw)
+	margin = min(0.04, max(0.0, maximum_yaw - minimum_yaw) * 0.25)
+	rear_unreachable = (limited and
+	                    (rear_turn or (allow_rear_start and abs(relative) > math.pi * 0.5)) and
+	                    not minimum_yaw + margin <= relative <= maximum_yaw - margin)
+	if rear_unreachable:
+		# A retreat cannot preserve frontal armour or fire at a rear threat
+		# which the installed turret cannot reach. Brake and lay the chassis.
+		# Keep the admitted side across the +/-pi seam for this same target;
+		# target jitter must not repeatedly reverse both hull and turret.
+		center = (float(minimum_yaw) + float(maximum_yaw)) * 0.5
+		delta = _angle_delta(target_yaw - center, hull_yaw)
+		if rear_turn and abs(relative) > math.pi * 0.5 and delta * float(rear_turn) < 0.0:
+			delta += math.copysign(2.0 * math.pi, float(rear_turn))
+		return max(-1.0, min(1.0, delta / 0.58)), 0.0, True
 	if recovery_mode == 'reverse_withdraw':
 		# Only a short, physically admitted backing command may lay a fixed
 		# gun without stopping the escape. Long withdrawals retain steering.
@@ -149,6 +169,17 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 	hull_delta = _angle_delta(target_yaw - center, hull_yaw)
 	aim_turn = max(-1.0, min(1.0, hull_delta / 0.58))
 	return aim_turn, 0.0, True
+
+
+def limited_traverse_target(relative, minimum, maximum, rear_turn=0.0):
+	"""Clamp gun travel without reversing an ongoing rear hull-laying side.
+
+	Callers retain the original bearing for alignment and fire admission.
+	"""
+	if (rear_turn and abs(relative) > math.pi * 0.5 and
+	        not minimum <= relative <= maximum):
+		return maximum if rear_turn > 0.0 else minimum
+	return max(minimum, min(maximum, relative))
 
 
 def gun_aligned(target_yaw, hull_yaw, turret_yaw, desired_pitch, gun_pitch,
@@ -422,36 +453,22 @@ class LocalDriver(object):
 
 	def _clear(self, direction_clear, yaw, maximum_distance=None,
 			drive_direction=1.0):
-		"""Ask one probe about a heading, optionally over a bounded distance.
-
-		A recovery manoeuvre travels a hull length, not the fifteen to twenty
-		metre travel horizon the ordinary drive candidates are ranked over.
-		Probes that predate the bounded form keep the unbounded answer.
-		"""
-		# A candidate behind the current hull may be a forward route after a
-		# pivot. Only an explicit backing command may use reverse-drive limits.
-		# Inspect Python callbacks before calling; a TypeError in their body
-		# must not execute a native query twice under a guessed legacy arity.
+		"""Dispatch one reviewed probe arity without replaying engine effects."""
 		target = getattr(direction_clear, 'im_func',
 			getattr(direction_clear, '__func__', direction_clear))
 		code = getattr(target, 'func_code', getattr(target, '__code__', None))
+		count = 2 if maximum_distance is not None else 1
+		variadic = False
 		if code is not None:
 			bound = getattr(direction_clear, 'im_self',
 				getattr(direction_clear, '__self__', None))
-			argument_count = code.co_argcount - (1 if bound is not None else 0)
-			if argument_count >= 3:
-				try:
-					return bool(direction_clear(yaw, maximum_distance, drive_direction))
-				except Exception:
-					return False
-		if maximum_distance is not None and self._probe_takes_distance:
-			try:
-				return bool(direction_clear(yaw, maximum_distance))
-			except TypeError:
-				self._probe_takes_distance = False
-			except Exception:
-				return False
+			count = code.co_argcount - (1 if bound is not None else 0)
+			variadic = bool(code.co_flags & 0x04)
 		try:
+			if count >= 3:
+				return bool(direction_clear(yaw, maximum_distance, drive_direction))
+			if (maximum_distance is not None and (count >= 2 or variadic)):
+				return bool(direction_clear(yaw, maximum_distance))
 			return bool(direction_clear(yaw))
 		except Exception:
 			return False

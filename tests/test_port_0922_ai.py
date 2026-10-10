@@ -2913,9 +2913,10 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(0.0,order['throttle'])
         self.assertTrue(order['brake'])
 
-    def test_dynamic_grid_admits_both_directions_up_to_27_point_5_degrees(self):
+    def test_dynamic_grid_admits_both_directions_up_to_25_degrees(self):
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
-        for grade,allowed in ((.51,True),(-.51,True),(.53,False),(-.53,False)):
+        for grade,allowed in ((.46,True),(-.46,True),(.48,False),(-.48,False),
+                              (.51,False),(-.51,False)):
             grid=TerrainGrid(lambda x,z,hint:grade*z,obstacle_probe=lambda *args:False,cell_size=4)
             self.assertEqual(allowed,grid._native_segment_clear((0,0,0),(0,grade*20,20)))
         for sign in (-1,1):

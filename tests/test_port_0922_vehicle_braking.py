@@ -8,6 +8,17 @@ from gui.mods.offline_lan_0922 import vehicle_physics
 
 
 class VehicleBrakingTests(unittest.TestCase):
+    def test_sloped_wz_bodies_brake_with_posed_height_but_keep_bridge_separation(self):
+        shape = (1.6741, 3.63869, .002, 2.63102)
+        own = dict(body(9, 0., 0., speed=5.), shape=shape, pitch=.2464, roll=.0491)
+        peer = dict(body(10, 0., 7.5, speed=0.), shape=shape, pitch=.2464,
+                    roll=.0491, position=(0., 3., 7.5))
+        self.assertEqual(0., self.safe(own, [peer], coast=2.)['throttle'])
+        peer['position'] = (0., 8., 7.5)
+        self.assertEqual(1., self.safe(own, [peer], coast=2.)['throttle'])
+        peer.update(position=(0., 3., 7.5), team=2)
+        self.assertEqual(1., self.safe(own, [peer], coast=2.)['throttle'])
+
     def setUp(self):
         self.traffic = TrafficCoordinator()
 
@@ -15,7 +26,7 @@ class VehicleBrakingTests(unittest.TestCase):
         return self.traffic.safe_controls(
             own, order or command(), peers, now, lambda: coast)
 
-    def test_same_heading_player_bot_and_enemy_do_not_receive_continuous_drive(self):
+    def test_same_heading_allies_brake_and_opponents_keep_drive(self):
         for peer_id, team in ((29, 1), (100001, 1), (100002, 2)):
             for mode in ('route', 'advance', 'advance_contact', 'brawl'):
                 own = body(25, 0., 0., speed=0.)
@@ -23,8 +34,8 @@ class VehicleBrakingTests(unittest.TestCase):
                 for now in (0., 1.5, 2., 10., 30.):
                     stopped = self.safe(
                         own, [peer], dict(command(), combat_mode=mode), now=now)
-                    self.assertEqual(0., stopped['throttle'])
-                    self.assertTrue(stopped['brake'])
+                    self.assertEqual(0. if team == 1 else 1., stopped['throttle'])
+                    self.assertEqual(team == 1, bool(stopped.get('brake', False)))
                 self.assertEqual(1., self.safe(own, [])['throttle'])
 
     def test_leader_parallel_side_contact_and_reverse_escape_keep_progress(self):

@@ -485,6 +485,10 @@ def _raw_hp(td, name):
 def device_max_hp(td, name):
     """Real per-tank max HP for a device, scaled by any installed optional-device
     health factor (wet ammo rack 1.5, cyclone filter 1.5, ...). None if N/A."""
+    pools = getattr(td, '_offline_critical_device_pools', None)
+    if pools is not None:
+        row = pools.get(name)
+        return None if row is None else row[0]
     mh, _mrh, fk = _raw_hp(td, name)
     if mh is None:
         return None
@@ -493,6 +497,10 @@ def device_max_hp(td, name):
 
 def device_regen_hp(td, name):
     """The HP level crew auto-repair restores a destroyed module to (~50%)."""
+    pools = getattr(td, '_offline_critical_device_pools', None)
+    if pools is not None:
+        row = pools.get(name)
+        return None if row is None else row[1]
     mh, mrh, fk = _raw_hp(td, name)
     if mh is None:
         return None

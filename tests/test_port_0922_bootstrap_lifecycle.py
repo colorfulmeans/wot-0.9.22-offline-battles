@@ -635,6 +635,12 @@ class BootstrapLifecycleTests(unittest.TestCase):
             'items': items,
             'nations': nations,
         }
+        rules_spec = importlib.util.spec_from_file_location(
+            'gui.mods.offline_lan_0922.customization_rules',
+            BOOTSTRAP.parent / 'customization_rules.py')
+        rules = importlib.util.module_from_spec(rules_spec)
+        rules_spec.loader.exec_module(rules)
+        modules['gui.mods.offline_lan_0922.customization_rules'] = rules
         modules.update(_economy_modules(modules))
         name = 'test_offline_lan_0922_bootstrap_lifecycle'
         spec = importlib.util.spec_from_file_location(name, BOOTSTRAP)

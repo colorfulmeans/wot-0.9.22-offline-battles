@@ -93,31 +93,24 @@ class GroundContactTests(unittest.TestCase):
         peer['x'], peer['z'] = 5., 0.
         self.assertLess(contact.rotation_fraction((0., 0., 0.), 0., math.pi/2, shape, [peer]), 1.)
 
-    def test_hostile_side_contact_overrides_firing_hold_and_preserves_combat_target(self):
+    def test_hostile_side_contact_keeps_hold_and_does_not_block_a_move_order(self):
         from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
-        from gui.mods.offline_lan_0922.ai.driver import combat_hull_aim
         adapter = BotAdapter('test', 1)
-        peer = dict(id=2, team=2, position=(2.99, 0., 0.), shape=(1.5, 3.5, -.8, 2.),
+        peer = dict(id=2, team=2, position=(2.99, 0., 0.),
                     half_width=1.5, half_length=3.5, alive=True)
         state = dict(id=1, slot=0, team=1, position=(0., 0., 0.), yaw=0., speed=0.,
-                     dt=.1, half_width=1.5, half_length=3.5, neighbours=[peer], pose_clear=lambda yaw: False)
-        strategic = dict(target_id=2, aim_position=(3., 0., 0.), move_position=(0., 0., 0.),
-                         face_position=(3., 0., 0.), combat_mode='engage', fire_allowed=True, throttle_override=0.)
-        commands = [adapter.decide_with_order(state, strategic, lambda *args: True) for _ in range(40)]
-        self.assertTrue(all(c['movement_intent'] and c['fire_allowed'] and c['target_id'] == 2 for c in commands))
-        self.assertTrue(any(c['throttle'] > 0. for c in commands))
-        self.assertTrue(any(c['throttle'] < 0. for c in commands))
-        for command in commands:
-            turn, throttle, aiming = combat_hull_aim(0., math.pi/2, -.1, .1,
-                command['turn'], command['throttle'], command['recovery_mode'])
-            self.assertFalse(aiming)
-            self.assertEqual(command['throttle'], throttle)
-        peer['position'] = (3.1, 0., 0.)
-        self.assertTrue(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
-        peer['position'] = (10., 0., 0.)
-        self.assertFalse(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
-        peer.update(position=(2.99, 0., 0.), team=1)
-        self.assertTrue(adapter.decide_with_order(state, strategic, lambda *a: True)['movement_intent'])
+                     dt=.1, half_width=1.5, half_length=3.5, neighbours=[peer])
+        order = dict(target_id=2, aim_position=(3., 0., 0.), move_position=(0., 0., 0.),
+                     face_position=(3., 0., 0.), combat_mode='engage', fire_allowed=True,
+                     throttle_override=0.)
+        held = adapter.decide_with_order(state,order,lambda *args: True)
+        self.assertEqual(0.,held['throttle'])
+        self.assertFalse(held['movement_intent'])
+        self.assertEqual(2,held['target_id'])
+        order.update(combat_mode='route',move_position=(0.,0.,100.),throttle_override=None)
+        driving=adapter.decide_with_order(state,order,lambda *args: True)
+        self.assertEqual(1.,driving['throttle'])
+        self.assertNotEqual('contact_escape',driving['recovery_mode'])
 
     def test_korea_offset_side_contact_selects_checked_separating_end(self):
         """The 181355 Object 212 pose must actively leave the WZ-132."""
@@ -157,6 +150,7 @@ class GroundContactTests(unittest.TestCase):
             'combat_mode': 'artillery_hold',
             'fire_allowed': True, 'throttle_override': 0.0,
         }
+        player['team'] = state['team']
         adapter = BotAdapter('73_asia_korea', 1)
 
         initial = contact._obb_overlap(

@@ -113,7 +113,7 @@ class BotAmmunitionTests(unittest.TestCase):
         runtime.round_id = 7
         state = {
             'id': 11, 'fire_seq': 0, 'shell_index': 0,
-            'aim_yaw': 0.0, 'gun_pitch': 0.0,
+            'aim_yaw': 0.0, 'gun_pitch': 0.0, 'gun_aligned': True,
             'critical': {}, 'profile': _profile(),
         }
         gun.elapsed = 10.0
@@ -182,7 +182,7 @@ class BotAmmunitionTests(unittest.TestCase):
         ammo.remaining = [1, 2, 3]
         state = {
             'id': 11, 'fire_seq': 0, 'shell_index': 0,
-            'aim_yaw': 0.0, 'gun_pitch': 0.0,
+            'aim_yaw': 0.0, 'gun_pitch': 0.0, 'gun_aligned': True,
             'critical': {}, 'profile': _profile(),
         }
         gun.elapsed = 10.0

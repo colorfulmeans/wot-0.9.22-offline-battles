@@ -2,6 +2,8 @@ from __future__ import print_function
 
 import copy
 import os
+from gui.mods.offline_lan_0922.customization_rules import rental_battles
+
 import sys
 import time
 
@@ -705,7 +707,7 @@ def _grant_default_styles(snapshot, styles, vehicle_types):
     for style_id, style in styles.items():
         bindings = stock.setdefault(int(style_id), {})
         restriction = getattr(style, 'filter', None)
-        count = max(1, int(getattr(style, 'rentCount', 0)))
+        count = max(1, rental_battles(style))
         for record in snapshot.get('vehicles') or ():
             compact_descr = int(record['vehicleTypeCompactDescr'])
             vehicle_type = vehicle_types.get(compact_descr)

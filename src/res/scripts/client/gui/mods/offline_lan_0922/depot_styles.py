@@ -1,4 +1,6 @@
 """Read-only #1513 warehouse style category, using its stock table protocol."""
+from gui.mods.offline_lan_0922.customization_rules import is_rental
+
 import copy
 import types
 import sys
@@ -31,7 +33,7 @@ def inventory_rows(stock, styles, localize, nation=None, vehicle_types=None):
         if list(labels.values()).count(name)>1 and len(countries)==1:
             country=next(iter(countries))
             name=tr('%s (%s)') % (name,tr(_NATIONS[country]))
-        rental = int(style.rentCount or 0)>0
+        rental = is_rental(style)
         description=tr('Rental style: %d battles remaining.') % count if rental else tr('Permanent style: %d copies.') % count
         result.append(dict(id=str(style.compactDescr),name=name,desc=description,
             inventoryId=0,inventoryCount=count,vehicleCount=0,price=(0,0,0),
@@ -61,10 +63,10 @@ def shop_rows(snapshot, styles, localize, nation=None, vehicle_types=None, renta
         row.update((key,int(balances.get(key,0))) for key in ('credits','gold','crystal'))
         row['inventoryCount']=sum(stock.get(identifier,{}).values())
         row['notForSaleText']=''
-        row['disabled']=bool(style.rentCount and (rental_vehicle is None or
+        row['disabled']=bool(is_rental(style) and (rental_vehicle is None or
             not style.filter.matchVehicleType(rental_vehicle)))
         row['desc']=(tr('Rental style: %d battles per purchase.') % style.rentCount
-                     if style.rentCount else tr('Permanent style: one copy per purchase.'))
+                     if is_rental(style) else tr('Permanent style: one copy per purchase.'))
         if row['disabled']:row['notForSaleText']=tr('Select a compatible vehicle in the garage.')
     return rows
 
@@ -86,7 +88,7 @@ def purchase(view, compact_descr):
     row=next((item for item in rows if item['id']==str(compact_descr)),None)
     if row is None or row['disabled'] or getattr(view,'_offline_style_purchase_pending',False):return
     style=next(style for style in catalogue.values() if str(style.compactDescr)==str(compact_descr))
-    vehicle_id=selected_id if style.rentCount else 0
+    vehicle_id=selected_id if is_rental(style) else 0
     text=tr('Buy %s for %d %s?') % (as_text(row['name']),sum(row['price']),tr(row['currency']))
     submitted=[False]
     def confirmed(yes):
