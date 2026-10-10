@@ -10244,6 +10244,11 @@ class BattleRuntime(object):
             if (not self._worker_mode and not self._replay_mode and
                     event.get('attacker_bot') is not None and
                     event.get('bot_presentation_time_us') is not None):
+                # SnapshotSync retires the live presentation clock at death.
+                # An admitted shot can outlive its shooter; waiting for that
+                # retired clock would park all subsequent combat feedback.
+                if (record.get('state') or {}).get('alive', True) is False:
+                    return True
                 # Muzzle and subsequent combat must not overtake the delayed
                 # hull/turret source-time presentation. Never snap physics.
                 presented = record.get('presentation_time_us')
@@ -13002,7 +13007,17 @@ class BattleRuntime(object):
                 normalized = self._projectile_wire_meta(event)
                 if normalized is not None:
                     normalized['source_descriptor'] = entity.typeDescriptor
-                    normalized = self._install_projectile_meta(normalized)
+                    current = self._projectile_meta.get(projectile_id)
+                    if current is not None:
+                        # This delayed muzzle is presentation of the immutable
+                        # launch, not a new authority cursor. A snapshot may
+                        # already have advanced the projectile through a bounce.
+                        if any(current.get(name) != normalized.get(name)
+                               for name in _PROJECTILE_IMMUTABLE_FIELDS):
+                            raise RuntimeError('canonical projectile launch changed')
+                        normalized = current
+                    else:
+                        normalized = self._install_projectile_meta(normalized)
                     burst_index = normalized['burst_index']
                 projectile_id = event.get('projectile_id')
                 origin = event.get('origin')

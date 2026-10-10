@@ -4769,6 +4769,52 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         battle._replay_mode = True
         self.assertTrue(battle._event_is_ready(event))
 
+    def test_dead_bot_retired_pose_clock_releases_player_hit_feedback(self):
+        battle = BattleRuntime(_runtime())
+        battle._records['bot:11'] = {
+            'ready': True, 'presentation_time_us': 200999999,
+            'state': {'alive': True}}
+        battle._records['player:1'] = {'ready': True}
+        shot = {'event_id': 'shot', 'kind': 'bot_shot', 'attacker_bot': 11,
+                'bot_presentation_time_us': 201000000}
+        hit = {'event_id': 'hit', 'kind': 'bot_hit', 'attacker': 1,
+               'target_bot': 11}
+        battle._event_journal = [shot, hit]
+        with mock.patch.object(battle, '_apply_ordered_event', return_value=True) as apply:
+            self.assertFalse(battle._drain_event_journal())
+            apply.assert_not_called()
+            # SnapshotSync retires live interpolation at death, before this
+            # queued launch reached its displayed timestamp. No future frame
+            # will ever advance that live timestamp again.
+            battle._records['bot:11']['state'] = {'alive': False, 'health': 0}
+            self.assertTrue(battle._drain_event_journal())
+            self.assertEqual([mock.call(shot), mock.call(hit)], apply.call_args_list)
+            self.assertEqual([], battle._event_journal)
+            self.assertTrue(battle._drain_event_journal())
+            self.assertEqual(2, apply.call_count)
+
+    def test_delayed_muzzle_does_not_rewind_a_confirmed_ricochet(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        remote = _Vehicle(11, _Descriptor(), _Vector(), (0, 0, 0), {'health': 500})
+        runtime.bigworld.entities[11] = remote
+        battle._records['bot:11'] = {'engine_id': 11, 'local': False}
+        launch = {'projectile_id': '1:b:11:1', 'burst_index': 0, 'ricochet_count': 0}
+        current = dict(launch, ricochet_count=1, segment_origin=(4, 2, 1))
+        battle._projectile_meta[launch['projectile_id']] = current
+        event = dict(launch, attacker_bot=11, origin=[0, 2, 0],
+                     velocity=[100, 0, 0], gravity=9.8, maxDistance=720)
+        with mock.patch.object(battle, '_projectile_wire_meta', return_value=launch), \
+                mock.patch.object(battle, '_install_projectile_meta') as install, \
+                mock.patch.object(battle, '_projectile_visual_start', return_value=None), \
+                mock.patch.object(battle, '_ensure_projectile_visual') as visual:
+            battle._show_shot(event)
+        install.assert_not_called()
+        self.assertIs(current, visual.call_args[0][0])
+        self.assertEqual(1, current['ricochet_count'])
+        self.assertEqual((4, 2, 1), current['segment_origin'])
+        self.assertEqual((1, False), remote.last_shot)
+
     def test_remote_shot_uses_stock_extra_recoil_and_1513_tracer(self):
         runtime = _runtime()
         original_entity = runtime.bigworld.entity
