@@ -1231,6 +1231,12 @@ def _valid_active_projectiles(value, authority_epoch, server_time_ms):
         shooter_kind = projectile.get('shooter_kind')
         projectile_fields = set(projectile)
         player_intent_fields = {'fire_intent_seq', 'fire_input_seq'}
+        if 'bot_presentation_time_us' in projectile_fields:
+            if (shooter_kind != 'bot' or _projectile_int_range(
+                    projectile['bot_presentation_time_us'], 0,
+                    MAX_MOTION_TIME_US) is None):
+                return False
+            projectile_fields.remove('bot_presentation_time_us')
         if (projectile_fields != expected and
                 projectile_fields != expected | player_intent_fields):
             return False

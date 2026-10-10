@@ -33,6 +33,19 @@ def player(identifier, x=0, alive=True):
 
 
 class SnapshotSyncTests(unittest.TestCase):
+    def test_stalled_source_and_snapshot_cadences_do_not_double_display_delay(self):
+        clock = [0.0]
+        sync = _load().SnapshotSync(1, clock=lambda: clock[0])
+        for revision in range(1, 9):
+            sample = (revision - 1) * 150000
+            clock[0] = sample / 1000000.0
+            sync.snapshot({'round_id': 1, 'server_tick': revision,
+                           'bot_state_revision': revision, 'motion_time_us': sample,
+                           'bot_state_time_us': sample, 'bots': [player(7, sample / 100000.0)]})
+            output = sync.advance(clock[0])
+            self.assertLessEqual(output[0]['pose']['x'], sample / 100000.0)
+        self.assertLess(sync._entities['bot:7']['interpolation_delay_us'], 225000)
+
     def setUp(self):
         self.module = _load()
         self.now = [0.0]
@@ -923,10 +936,11 @@ class SnapshotSyncTests(unittest.TestCase):
             event = sync.advance(clock[0])[0]
 
         # The latest confirmed target is 40 m away, but the delayed playback
-        # cursor is still at the preceding sample.  It must hold rather than
-        # misclassify ordinary history interpolation as a teleport.
+        # cursor remains inside confirmed history. Even after removing double
+        # stall exposure, it must not jump to the latest target as a teleport.
         self.assertFalse(event['snap'])
-        self.assertAlmostEqual(0.0, event['pose']['x'], places=6)
+        self.assertGreaterEqual(event['pose']['x'], 0.0)
+        self.assertLess(event['pose']['x'], 1.0)
 
     def test_timed_delay_shrink_cannot_jump_the_presentation_cursor(self):
         clock = [0.0]

@@ -319,6 +319,38 @@ def _bot_event():
 
 
 class BattleProjectileTests(unittest.TestCase):
+    def test_bot_snapshot_cannot_start_tracer_before_muzzle_or_advance_impact(self):
+        battle, bigworld = _battle()
+        record = battle._records.pop('player:7')
+        record.update(kind='bot', local=False, ready=True,
+                      presentation_time_us=1000000, state={'alive': True})
+        battle._records['bot:7'] = record
+        factory = _NativeTracerFactory()
+        battle._remote_factory = factory
+        event = dict(_bot_event(), bot_presentation_time_us=1000000,
+                     checked_through_ms=200, checked_distance=2.0)
+        meta = battle._install_projectile_meta(battle._projectile_wire_meta(event))
+        self.assertFalse(battle._ensure_projectile_visual(meta, bigworld.now))
+        self.assertEqual([], factory.play_calls)
+        entity = battle._server_entity(41)
+        muzzle = []
+        entity.showShooting = lambda *args: muzzle.append(len(factory.play_calls))
+        battle._apply_ordered_event(event)
+        self.assertEqual([0], muzzle)
+        self.assertEqual(1, len(factory.play_calls))
+        self.assertAlmostEqual(0.0, factory.play_calls[0][1]['reference_position'][0])
+        terminal = {'kind': 'projectile_impact', 'projectile_id': event['projectile_id'],
+                    'resolved_time_ms': 200, 'outcome': 'impact'}
+        self.assertFalse(battle._event_is_ready(terminal))
+        record['presentation_time_us'] = 1199999
+        bigworld.now = .199999
+        self.assertFalse(battle._event_is_ready(terminal))
+        # A stalled actor must not delay an already launched native motor's
+        # impact. It remains on its own elapsed-flight clock after the muzzle.
+        bigworld.now = .2
+        self.assertTrue(battle._event_is_ready(terminal))
+        self.assertTrue(battle._apply_projectile_terminal_event(terminal))
+
     def test_terminal_snapshot_ack_can_overtake_the_queued_launch_event(self):
         for shooter_kind in ('player', 'bot'):
             with self.subTest(shooter_kind=shooter_kind):

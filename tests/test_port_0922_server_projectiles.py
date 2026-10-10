@@ -2306,6 +2306,10 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         battle = visible.BattleRuntime(visible._runtime())
         event = dict(state.pending_events[-1])
         pose_time = event['bot_presentation_time_us']
+        self.assertEqual(pose_time, state._projectile_snapshot()[0]['bot_presentation_time_us'])
+        from gui.mods.offline_lan_0922 import lan_client
+        self.assertTrue(lan_client._valid_active_projectiles(
+            state._projectile_snapshot(), state.authority_epoch, state._server_time_ms()))
         battle._records['bot:16'] = {'ready': True, 'presentation_time_us': pose_time - 1}
         self.assertFalse(battle._event_is_ready(event))
         battle._records['bot:16']['presentation_time_us'] = pose_time

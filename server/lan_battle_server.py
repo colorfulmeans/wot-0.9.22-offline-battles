@@ -2723,6 +2723,8 @@ class BattleState:
         if record.get("fire_intent_seq") is not None:
             result["fire_intent_seq"] = int(record["fire_intent_seq"])
             result["fire_input_seq"] = int(record["fire_input_seq"])
+        if record.get('bot_presentation_time_us') is not None:
+            result['bot_presentation_time_us'] = record['bot_presentation_time_us']
         return result
 
     def _projectile_snapshot(self):
@@ -8358,6 +8360,10 @@ class BattleState:
             # positive is upward.  Rendered gun pitch uses the opposite sign,
             # but RemoteVehicle explicitly adapts between the two contracts.
             shot_pitch = math.atan2(velocity[1], horizontal)
+            if (shooter_kind == 'bot' and
+                    'presentation_clock_offset_us' in expected_edge):
+                record['bot_presentation_time_us'] = max(0, int(launch_time_us) +
+                    int(expected_edge['presentation_clock_offset_us']))
             event = self._projectile_wire(record)
             event.update({
                 "kind": "shot" if shooter_kind == "player" else "bot_shot",

@@ -268,9 +268,14 @@ class SnapshotSync(object):
                         int(record.get('timed_warmup_intervals') or 0) + 1)
                     source_interval_us = (
                         sample_time_us - previous_sample_time_us)
-                    observed_delay_us = (
-                        source_interval_us +
-                        (record.get('snapshot_interval_us') or 0))
+                    exposure_us = record.get('snapshot_interval_us') or 0
+                    if (source_interval_us > TIMED_DELAY_GROW_STALL_US and
+                            exposure_us > TIMED_DELAY_GROW_STALL_US):
+                        # A stalled producer can delay both clocks together.
+                        # Keep its full interval plus one 30 Hz exposure;
+                        # adding that same stall twice retains needless lag.
+                        exposure_us = 1000000.0 / 30.0
+                    observed_delay_us = source_interval_us + exposure_us
                     if (record.get('timed_warmup_active') and
                             record['timed_warmup_intervals'] <=
                             TIMED_WARMUP_INTERVALS):

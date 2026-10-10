@@ -10235,6 +10235,18 @@ class BattleRuntime(object):
 
     def _event_is_ready(self, event):
         kind = event.get('kind')
+        if (not self._worker_mode and not self._replay_mode and
+                kind in ('projectile_impact', 'projectile_ricochet')):
+            meta = self._projectile_meta.get(str(event.get('projectile_id'))) or {}
+            launch = meta.get('bot_presentation_time_us')
+            if launch is not None:
+                elapsed = event.get('resolved_time_ms', event.get('segment_start_time_ms', 0))
+                visual_launch = meta.get('bot_visual_launch_time')
+                # After the muzzle, the native motor advances on engine time,
+                # even when actor interpolation holds during an authority gap.
+                if visual_launch is None or self._clock() < visual_launch + int(elapsed) / 1000.0:
+                    event['_presentation_wait'] = True
+                    return False
         if kind in _SHOT_EVENT_KINDS:
             key = self._event_entity_key(event, 'attacker')
             record = self._records.get(key)
@@ -10256,6 +10268,7 @@ class BattleRuntime(object):
                 presented = record.get('presentation_time_us')
                 ready = presented is not None and int(presented) >= int(event['bot_presentation_time_us'])
                 if not ready:
+                    event['_presentation_wait'] = True
                     event.setdefault('_pose_wait_started', _PROFILE_CLOCK())
                 elif '_pose_wait_started' in event:
                     waited = max(0.0, _PROFILE_CLOCK() - event.pop('_pose_wait_started'))
@@ -10630,9 +10643,22 @@ class BattleRuntime(object):
         # events behind it.  Give every event present at entry one attempt;
         # rotate only a deliberately retryable destructible to the tail.
         attempts_remaining = len(self._event_journal)
-        while self._event_journal and attempts_remaining > 0:
+        blocked = set()
+        index = 0
+        while index < len(self._event_journal) and attempts_remaining > 0:
             attempts_remaining -= 1
-            event = self._event_journal[0]
+            event = self._event_journal[index]
+            if event.get('kind') == 'authority' and blocked:
+                break
+            dependencies = set()
+            if event.get('projectile_id') is not None:
+                dependencies.add(('projectile', str(event['projectile_id'])))
+            if event.get('kind') in _COMBAT_EVENT_KINDS:
+                dependencies.add(('health', self._event_entity_key(event, 'target')))
+            if dependencies & blocked:
+                blocked.update(dependencies)
+                index += 1
+                continue
             try:
                 ready = self._event_is_ready(event)
             except Exception as error:
@@ -10643,9 +10669,13 @@ class BattleRuntime(object):
                 })
                 event_id = str(event['event_id'])
                 self._applied_event_ids.add(event_id)
-                self._event_journal.pop(0)
+                self._event_journal.pop(index)
                 continue
             if not ready:
+                if event.pop('_presentation_wait', False):
+                    blocked.update(dependencies)
+                    index += 1
+                    continue
                 return False
             try:
                 applied = self._apply_ordered_event(event)
@@ -10657,11 +10687,11 @@ class BattleRuntime(object):
                 })
                 applied = True
             if not applied:
-                self._event_journal.append(self._event_journal.pop(0))
+                self._event_journal.append(self._event_journal.pop(index))
                 continue
             event_id = str(event['event_id'])
             self._applied_event_ids.add(event_id)
-            self._event_journal.pop(0)
+            self._event_journal.pop(index)
         return not self._event_journal
 
     def _pending_combat_for_record(self, record):
@@ -12984,6 +13014,7 @@ class BattleRuntime(object):
             except Exception:
                 pass
         transient_names = []
+        deferred_bot_visual = None
         try:
             normalized = None
             visual_admitted = True
@@ -13020,6 +13051,8 @@ class BattleRuntime(object):
                         normalized = current
                     else:
                         normalized = self._install_projectile_meta(normalized)
+                    normalized['source_descriptor'] = entity.typeDescriptor
+                    normalized['muzzle_presented'] = True
                     burst_index = normalized['burst_index']
                 projectile_id = event.get('projectile_id')
                 origin = event.get('origin')
@@ -13028,8 +13061,11 @@ class BattleRuntime(object):
                 if normalized is not None:
                     visual_start = self._projectile_visual_start(
                         entity, normalized)
-                    self._ensure_projectile_visual(
-                        normalized, self._clock(), visual_start=visual_start)
+                    if normalized.get('bot_presentation_time_us') is not None:
+                        deferred_bot_visual = (normalized, visual_start)
+                    else:
+                        self._ensure_projectile_visual(
+                            normalized, self._clock(), visual_start=visual_start)
                     visual = self._projectile_visual_meta.get(
                         normalized['projectile_id'])
                     visual_admitted = bool(
@@ -13085,6 +13121,10 @@ class BattleRuntime(object):
                         'local shot convergence',
                         self._show_local_shot_without_extra,
                         args=(entity, burst_count))
+            if deferred_bot_visual is not None:
+                self._ensure_projectile_visual(
+                    deferred_bot_visual[0], self._clock(),
+                    visual_start=deferred_bot_visual[1])
         finally:
             for name in transient_names:
                 try:
@@ -13476,6 +13516,12 @@ class BattleRuntime(object):
             result['fire_input_seq'] = fire_input_seq
         elif 'fire_intent_seq' in raw or 'fire_input_seq' in raw:
             return None
+        if raw.get('bot_presentation_time_us') is not None:
+            stamp = raw['bot_presentation_time_us']
+            if (shooter_kind != 'bot' or isinstance(stamp, bool) or
+                    not isinstance(stamp, _INTEGER_TYPES) or stamp < 0):
+                return None
+            result['bot_presentation_time_us'] = stamp
         return result
 
     @staticmethod
@@ -14182,6 +14228,19 @@ class BattleRuntime(object):
             # An echo cannot restart a deferred or locally retired segment.
             return False
         confirmed_elapsed = self._projectile_visual_age(normalized)
+        if (not self._replay_mode and normalized.get('bot_presentation_time_us') is not None):
+            historical = int((self._start_message or {}).get('server_time_ms', 0)) > int(normalized['launch_server_time_ms'])
+            if not normalized.get('muzzle_presented') and not historical:
+                return False
+            actor = self._records.get('bot:%s' % normalized['shooter_id']) or {}
+            stamp = actor.get('presentation_time_us')
+            if stamp is not None:
+                confirmed_elapsed = max(0.0, (int(stamp) - int(normalized['bot_presentation_time_us'])) / 1000000.0 - normalized['segment_start_time_ms'] / 1000.0)
+            visual_launch = normalized.setdefault(
+                'bot_visual_launch_time', float(now) - confirmed_elapsed -
+                normalized['segment_start_time_ms'] / 1000.0)
+            confirmed_elapsed = max(0.0, float(now) - visual_launch -
+                                    normalized['segment_start_time_ms'] / 1000.0)
         visual = self._projectile_visual_meta.get(projectile_id)
         if (visual is not None and
                 int(visual.get('ricochet_count', 0)) >
@@ -14270,6 +14329,13 @@ class BattleRuntime(object):
                     reference_velocity,
                     is_ricochet=bool(normalized['ricochet_count']),
                     visual_start=visual_start))
+            if visual['active'] and normalized.get('bot_presentation_time_us') is not None:
+                sys.stdout.write(
+                    '[Offline LAN 0.9.22] BOT TRACER STARTED projectile=%s '
+                    'pose_age_ms=%.3f checked_age_ms=%.3f muzzle=%s\n' % (
+                        projectile_id, confirmed_elapsed * 1000.0,
+                        self._projectile_visual_age(normalized) * 1000.0,
+                        bool(normalized.get('muzzle_presented'))))
             timeline = self._fire_timeline.get(str(projectile_id))
             if visual['active'] and timeline is not None:
                 # This records the hand-off, not the unobserved native frame

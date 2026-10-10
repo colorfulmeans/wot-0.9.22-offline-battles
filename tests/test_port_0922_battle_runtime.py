@@ -4769,6 +4769,42 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         battle._replay_mode = True
         self.assertTrue(battle._event_is_ready(event))
 
+    def test_pose_wait_does_not_block_unrelated_player_hit_or_reorder_target_health(self):
+        battle = BattleRuntime(_runtime())
+        battle._records = {'bot:11': {'ready': True, 'presentation_time_us': 9},
+                           'bot:12': {'ready': True}, 'player:1': {'ready': True}}
+        shot = {'event_id': 'shot', 'kind': 'bot_shot', 'attacker_bot': 11,
+                'projectile_id': 'b', 'bot_presentation_time_us': 10}
+        impact = {'event_id': 'impact', 'kind': 'projectile_impact', 'projectile_id': 'b'}
+        hit = {'event_id': 'hit', 'kind': 'bot_hit', 'attacker': 1,
+               'target_bot': 11, 'projectile_id': 'b'}
+        player = dict(hit, event_id='player', target_bot=12, projectile_id='p')
+        same_target = dict(hit, event_id='later-health', projectile_id='q')
+        battle._event_journal = [shot, impact, hit, player, same_target]
+        with mock.patch.object(battle, '_apply_ordered_event', return_value=True) as apply:
+            self.assertFalse(battle._drain_event_journal())
+            self.assertEqual([mock.call(player)], apply.call_args_list)
+            self.assertEqual([shot, impact, hit, same_target], battle._event_journal)
+            battle._records['bot:11']['presentation_time_us'] = 10
+            self.assertTrue(battle._drain_event_journal())
+            self.assertEqual([mock.call(x) for x in [player, shot, impact, hit, same_target]], apply.call_args_list)
+
+    def test_pose_wait_keeps_authority_event_as_a_global_barrier(self):
+        battle = BattleRuntime(_runtime())
+        battle._records['bot:11'] = {'ready': True, 'presentation_time_us': 9}
+        shot = {'event_id': 'shot', 'kind': 'bot_shot', 'attacker_bot': 11,
+                'projectile_id': 'b', 'bot_presentation_time_us': 10}
+        authority = {'event_id': 'authority', 'kind': 'authority'}
+        later = {'event_id': 'later', 'kind': 'detection'}
+        battle._event_journal = [shot, authority, later]
+        with mock.patch.object(battle, '_apply_ordered_event', return_value=True) as apply:
+            self.assertFalse(battle._drain_event_journal())
+            apply.assert_not_called()
+            self.assertEqual([shot, authority, later], battle._event_journal)
+            battle._records['bot:11']['presentation_time_us'] = 10
+            self.assertTrue(battle._drain_event_journal())
+            self.assertEqual([mock.call(x) for x in [shot, authority, later]], apply.call_args_list)
+
     def test_dead_bot_retired_pose_clock_releases_player_hit_feedback(self):
         battle = BattleRuntime(_runtime())
         battle._records['bot:11'] = {
@@ -4778,7 +4814,8 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         shot = {'event_id': 'shot', 'kind': 'bot_shot', 'attacker_bot': 11,
                 'bot_presentation_time_us': 201000000}
         hit = {'event_id': 'hit', 'kind': 'bot_hit', 'attacker': 1,
-               'target_bot': 11}
+               'target_bot': 11, 'projectile_id': 'pending-shot'}
+        shot['projectile_id'] = 'pending-shot'
         battle._event_journal = [shot, hit]
         with mock.patch.object(battle, '_apply_ordered_event', return_value=True) as apply:
             self.assertFalse(battle._drain_event_journal())
