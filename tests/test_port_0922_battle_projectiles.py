@@ -351,6 +351,38 @@ class BattleProjectileTests(unittest.TestCase):
         self.assertTrue(battle._event_is_ready(terminal))
         self.assertTrue(battle._apply_projectile_terminal_event(terminal))
 
+    def test_bot_reflected_snapshot_waits_for_the_displayed_bounce_edge(self):
+        battle, bigworld = _battle()
+        record = battle._records.pop('player:7')
+        record.update(kind='bot', local=False, ready=True,
+                      presentation_time_us=1000000, state={'alive': True})
+        battle._records['bot:7'] = record
+        factory = _NativeTracerFactory()
+        battle._remote_factory = factory
+        event = dict(_bot_event(), bot_presentation_time_us=1000000)
+        bounce = dict(event, kind='projectile_ricochet', ricochet_count=1,
+                      segment_start_time_ms=200, checked_through_ms=200,
+                      checked_distance=2.0, segment_origin=[2.002, 1.0, 0.0],
+                      segment_velocity=[-10.0, 0.0, 0.0],
+                      base_penetration_multiplier=.75, resolved_time_ms=200)
+        # The authority already bounced before this delayed muzzle is shown.
+        meta = battle._install_projectile_meta(battle._projectile_wire_meta(bounce))
+        battle._server_entity(41).showShooting = mock.Mock()
+        battle._apply_ordered_event(event)
+        self.assertEqual(1, meta['ricochet_count'])
+        self.assertEqual(10.0, factory.play_calls[0][1]['velocity'][0])
+        self.assertEqual(0.0, factory.play_calls[0][1]['reference_position'][0])
+        bigworld.now = .1
+        self.assertFalse(battle._ensure_projectile_visual(meta, bigworld.now))
+        self.assertFalse(battle._event_is_ready(bounce))
+        self.assertEqual(1, len(factory.play_calls))
+        bigworld.now = .2
+        self.assertTrue(battle._event_is_ready(bounce))
+        self.assertTrue(battle._apply_projectile_ricochet_event(bounce))
+        self.assertEqual(2, len(factory.play_calls))
+        self.assertEqual(-10.0, factory.play_calls[1][1]['velocity'][0])
+        self.assertEqual(1, len(factory.stop_calls))
+
     def test_terminal_snapshot_ack_can_overtake_the_queued_launch_event(self):
         for shooter_kind in ('player', 'bot'):
             with self.subTest(shooter_kind=shooter_kind):

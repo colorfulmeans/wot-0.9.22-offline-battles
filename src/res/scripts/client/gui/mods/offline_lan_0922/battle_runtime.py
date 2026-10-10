@@ -13039,6 +13039,7 @@ class BattleRuntime(object):
                     projectile_id not in self._projectile_visual_terminals):
                 normalized = self._projectile_wire_meta(event)
                 if normalized is not None:
+                    launch_visual = dict(normalized)
                     normalized['source_descriptor'] = entity.typeDescriptor
                     current = self._projectile_meta.get(projectile_id)
                     if current is not None:
@@ -13053,6 +13054,13 @@ class BattleRuntime(object):
                         normalized = self._install_projectile_meta(normalized)
                     normalized['source_descriptor'] = entity.typeDescriptor
                     normalized['muzzle_presented'] = True
+                    if normalized.get('bot_presentation_time_us') is not None:
+                        normalized['presented_ricochet_count'] = 0
+                        rendered = dict(normalized)
+                        for field in ('segment_origin', 'segment_velocity',
+                                      'segment_start_time_ms', 'ricochet_count'):
+                            rendered[field] = launch_visual[field]
+                        normalized = rendered
                     burst_index = normalized['burst_index']
                 projectile_id = event.get('projectile_id')
                 origin = event.get('origin')
@@ -14078,6 +14086,8 @@ class BattleRuntime(object):
         meta = self._install_projectile_meta(normalized)
         meta['awaiting_ricochet'] = False
         meta['pending_ricochet'] = None
+        meta['presented_ricochet_count'] = normalized['ricochet_count']
+        meta['visual_segment_distance'] = normalized['checked_distance']
         now = self._clock()
         self._ensure_projectile_visual(meta, now)
         if self._projectile_is_authority():
@@ -14232,11 +14242,14 @@ class BattleRuntime(object):
             historical = int((self._start_message or {}).get('server_time_ms', 0)) > int(normalized['launch_server_time_ms'])
             if not normalized.get('muzzle_presented') and not historical:
                 return False
+            if (not historical and normalized['ricochet_count'] >
+                    (owner or normalized).get('presented_ricochet_count', 0)):
+                return False
             actor = self._records.get('bot:%s' % normalized['shooter_id']) or {}
             stamp = actor.get('presentation_time_us')
             if stamp is not None:
                 confirmed_elapsed = max(0.0, (int(stamp) - int(normalized['bot_presentation_time_us'])) / 1000000.0 - normalized['segment_start_time_ms'] / 1000.0)
-            visual_launch = normalized.setdefault(
+            visual_launch = (owner or normalized).setdefault(
                 'bot_visual_launch_time', float(now) - confirmed_elapsed -
                 normalized['segment_start_time_ms'] / 1000.0)
             confirmed_elapsed = max(0.0, float(now) - visual_launch -
@@ -14318,13 +14331,20 @@ class BattleRuntime(object):
         if confirmed_elapsed > 0.0 or normalized['ricochet_count']:
             visual_start = None
         try:
+            remaining_distance = max(0.001, normalized['max_distance'] -
+                                     normalized['checked_distance'])
+            if normalized.get('bot_presentation_time_us') is not None:
+                # The authority cursor may already be ahead of this displayed
+                # flight. Only previously displayed segments spend its range.
+                spent = (0.0 if normalized['ricochet_count'] == 0 else
+                         (owner or normalized).get('visual_segment_distance',
+                                                   normalized['checked_distance']))
+                remaining_distance = max(0.001, normalized['max_distance'] - spent)
             visual['active'] = bool(
                 self._remote_factory.play_projectile_tracer(
                     descriptor, normalized['shell_index'],
                     normalized['segment_origin'],
-                    normalized['segment_velocity'], gravity, max(
-                        0.001, normalized['max_distance'] -
-                        normalized['checked_distance']),
+                    normalized['segment_velocity'], gravity, remaining_distance,
                     visual['attacker_id'], projectile_id, reference_origin,
                     reference_velocity,
                     is_ricochet=bool(normalized['ricochet_count']),
