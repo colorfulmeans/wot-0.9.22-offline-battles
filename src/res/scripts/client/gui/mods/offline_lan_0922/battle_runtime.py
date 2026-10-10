@@ -10642,6 +10642,10 @@ class BattleRuntime(object):
                 len(getattr(self._remote_factory, '_hit_testers', ()) or ())))
         return True
 
+    def has_pending_presentation(self):
+        """Fence slow account settlement behind already received combat."""
+        return bool(self._event_journal)
+
     def _drain_event_journal(self):
         # A transient tree-stream boundary must not freeze unrelated combat
         # events behind it.  Give every event present at entry one attempt;

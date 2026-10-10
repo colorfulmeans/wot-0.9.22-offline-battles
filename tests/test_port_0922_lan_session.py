@@ -1094,6 +1094,127 @@ class LANSessionTests(unittest.TestCase):
         self.assertEqual([11001], accepted[0]['equipment_used'])
         self.assertEqual(40, accepted[0]['health'])
 
+    def _deferred_receipt_session(self):
+        callbacks, journal, order = [], [], []
+        store = mock.Mock(account_key='key')
+        store.progress.return_value = {'battles': 0}
+        def accept(message):
+            order.append(('persist', message['receipt_id']))
+            self.assertEqual([], self.client.receipt_acks)
+            return True
+        store.accept.side_effect = accept
+        runtime = types.SimpleNamespace(
+            has_pending_presentation=lambda: bool(journal))
+        def schedule(delay, callback):
+            callbacks.append(callback)
+            return len(callbacks)
+        session = self.module.LANSession(
+            {}, callback=schedule, cancel_callback=mock.Mock(),
+            postbattle_store=store, battle_runtime=runtime)
+        session.client = self.client
+        session._battle_started = True
+        session._active_round_id = 1
+        session._publish_postbattle_progress = mock.Mock(return_value=True)
+        session._publish_postbattle_results = mock.Mock(return_value=True)
+        return session, store, callbacks, journal, order
+
+    def test_receipt_waits_for_combat_dispatched_later_in_the_same_poll(self):
+        session, store, callbacks, journal, order = self._deferred_receipt_session()
+        receipt = {'receipt_id': 'r1', 'round_id': 1, 'shells_fired': {'1': 9}}
+        session._on_event('battle_receipt', receipt)
+        journal.append('last hit')
+        callbacks.pop(0)()
+        store.accept.assert_not_called()
+        journal.clear()
+        order.append(('hit', 1600))
+        callbacks.pop(0)()
+        store.accept.assert_not_called()
+        # The next callback is a separate presentation/persistence boundary.
+        callbacks.pop(0)()
+        self.assertEqual([('hit', 1600), ('persist', 'r1')], order)
+        store.accept.assert_called_once_with(receipt)
+        self.assertEqual(['r1'], self.client.receipt_acks)
+
+    def test_receipt_retry_coalesces_while_combat_is_pending(self):
+        session, store, callbacks, journal, order = self._deferred_receipt_session()
+        receipt = {'receipt_id': 'r1', 'round_id': 1}
+        journal.append('hit')
+        session._on_event('battle_receipt', receipt)
+        session._on_event('battle_receipt', dict(receipt))
+        self.assertEqual(1, len(callbacks))
+        self.assertEqual(1, len(session._pending_battle_receipts))
+        journal.clear()
+        callbacks.pop(0)()
+        callbacks.pop(0)()
+        store.accept.assert_called_once_with(receipt)
+        self.assertEqual(['r1'], self.client.receipt_acks)
+
+    def test_stop_persists_pending_receipt_and_retires_its_callback(self):
+        session, store, callbacks, journal, order = self._deferred_receipt_session()
+        journal.append('hit')
+        receipt = {'receipt_id': 'r1', 'round_id': 1}
+        session._on_event('battle_receipt', receipt)
+        session.stop(show_login=False, stop_runtime=False)
+        store.accept.assert_called_once_with(receipt)
+        self.assertEqual(['r1'], self.client.receipt_acks)
+        callbacks.pop(0)()
+        store.accept.assert_called_once_with(receipt)
+        session._publish_postbattle_results.assert_not_called()
+
+    def test_deferred_old_transport_receipt_cannot_publish_new_round_ui(self):
+        session, store, callbacks, journal, order = self._deferred_receipt_session()
+        receipt = {'receipt_id': 'r1', 'round_id': 1}
+        session._on_event('battle_receipt', receipt)
+        session._client_generation += 1
+        session.client = types.SimpleNamespace()
+        callbacks.pop(0)()
+        callbacks.pop(0)()
+        store.accept.assert_called_once_with(receipt)
+        self.assertEqual(['r1'], self.client.receipt_acks)
+        session._publish_postbattle_progress.assert_not_called()
+        session._publish_postbattle_results.assert_not_called()
+
+    def test_deferred_failed_write_is_not_acknowledged_and_retry_can_succeed(self):
+        session, store, callbacks, journal, order = self._deferred_receipt_session()
+        store.accept.side_effect = [RuntimeError('write failed'), True]
+        receipt = {'receipt_id': 'r1', 'round_id': 1}
+        session._on_event('battle_receipt', receipt)
+        callbacks.pop(0)()
+        callbacks.pop(0)()
+        self.assertEqual([], self.client.receipt_acks)
+        session._on_event('battle_receipt', receipt)
+        callbacks.pop(0)()
+        callbacks.pop(0)()
+        self.assertEqual(['r1'], self.client.receipt_acks)
+
+    def test_stopping_flushes_each_distinct_received_receipt(self):
+        session, store, callbacks, journal, order = self._deferred_receipt_session()
+        store.accept.side_effect = lambda message: True
+        journal.append('hit')
+        for receipt_id in ('r1', 'r2'):
+            session._on_event('battle_receipt', {'receipt_id': receipt_id})
+        session.stop(show_login=False, stop_runtime=False)
+        self.assertEqual(2, store.accept.call_count)
+        self.assertEqual(['r1', 'r2'], self.client.receipt_acks)
+        self.assertEqual([], session._pending_battle_receipts)
+        session.stop(show_login=False, stop_runtime=False)
+        self.assertEqual(2, store.accept.call_count)
+
+    def test_retry_reschedules_a_receipt_after_callback_registration_failed(self):
+        session, store, callbacks, journal, order = self._deferred_receipt_session()
+        callback = session._callback
+        session._callback = mock.Mock(side_effect=RuntimeError('callback unavailable'))
+        receipt = {'receipt_id': 'r1'}
+        with self.assertRaisesRegex(RuntimeError, 'callback unavailable'):
+            session._on_event('battle_receipt', receipt)
+        self.assertEqual([], self.client.receipt_acks)
+        session._callback = callback
+        session._on_event('battle_receipt', dict(receipt))
+        callbacks.pop(0)()
+        callbacks.pop(0)()
+        store.accept.assert_called_once_with(receipt)
+        self.assertEqual(['r1'], self.client.receipt_acks)
+
     def test_rejected_receipt_remains_unacknowledged_and_retry_is_logged_once(self):
         store = mock.Mock(account_key='account')
         store.progress.return_value = {'battles': 0}
