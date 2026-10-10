@@ -6853,6 +6853,10 @@ class BotRuntime(object):
                 desired_gun_pitch=state.get('desired_gun_pitch'),
                 turret_yaw=state.get('turret_yaw'),
                 aim_yaw=state.get('aim_yaw'),
+                aim_intent=state.get('_diagnostic_aim_intent'),
+                yaw_limits=self._gun_yaw_limits.get(state['id']),
+                hull_aiming=state.get('hull_aiming'),
+                rear_hull_aim=state.get('_rear_hull_aim'),
                 clip=state.get('clip'),
                 ammo_reload_pending=state.get('ammo_reload_pending'),
                 reload=state.get('reload_time'), fire_seq=state.get('fire_seq')),
@@ -11128,6 +11132,14 @@ class BotRuntime(object):
 
         minimum_yaw, maximum_yaw, limited = \
             self._effective_gun_yaw_limits(state, descriptor)
+        rear_aim = state.get('_rear_hull_aim')
+        aim_key = ((target.get('kind'), target.get('network_id', target.get('id')))
+                   if target is not None else None)
+        rear_turn = (rear_aim[1] if rear_aim is not None and
+                     rear_aim[0] == aim_key else 0.0)
+        slew_relative = (ai_driver.limited_traverse_target(
+            raw_relative, minimum_yaw, maximum_yaw, rear_turn)
+            if limited and rear_turn else raw_relative)
         if self._native_simulation is not None and weapon_tick is not None:
             weapons = self._native_simulation.weapons
             valid_pitch = weapons.configure_aim_from_descriptor(
@@ -11144,7 +11156,7 @@ class BotRuntime(object):
                 siege_state=int(state.get(
                     'siege_state', siege_mechanics.DISABLED)))
             inputs = weapons.aim_input(
-                raw_relative, raw_pitch, step, target is not None, limited,
+                slew_relative, raw_pitch, step, target is not None, limited,
                 valid_pitch or locked, minimum_yaw, maximum_yaw,
                 max(0.0, modifiers.get('crew_factor', 1.0)),
                 _critical_factor(state, descriptor, 'turret_speed'),
@@ -11172,8 +11184,8 @@ class BotRuntime(object):
             return desired_yaw, horizontal
         desired_relative = raw_relative
         if limited:
-            desired_relative = max(
-                minimum_yaw, min(maximum_yaw, desired_relative))
+            desired_relative = ai_driver.limited_traverse_target(
+                raw_relative, minimum_yaw, maximum_yaw, rear_turn)
         gun_state = self._gun_states.get(state['id'])
         modifier_bundle = (gun_state.loadout
                            if gun_state is not None else {})
@@ -14110,6 +14122,12 @@ class BotRuntime(object):
                     state, desired_aim_yaw, aim_pitch)
                 hull_aim_yaw = (state['yaw'] + local_aim[0]
                                 if local_aim is not None else desired_aim_yaw)
+            aim_target_key = ((target.get('kind'),
+                               target.get('network_id', target.get('id')))
+                              if target is not None else None)
+            rear_aim = state.get('_rear_hull_aim')
+            rear_turn = (rear_aim[1] if rear_aim is not None and
+                         rear_aim[0] == aim_target_key else 0.0)
             turn, throttle, hull_aiming = ai_driver.combat_hull_aim(
                 state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
@@ -14117,7 +14135,15 @@ class BotRuntime(object):
                 command.get('combat_mode') != 'base_defense',
                 combat_mode=command.get('combat_mode'),
                 movement_intent=command.get('movement_intent', True),
-                withdrawal_aim=command.get('withdrawal_aim', False))
+                withdrawal_aim=command.get('withdrawal_aim', False),
+                rear_turn=rear_turn)
+            rear_relative = _angle_delta(hull_aim_yaw, state['yaw'])
+            if (hull_aiming and unused_limited and
+                    abs(rear_relative) > math.pi * 0.5 and
+                    not minimum_yaw <= rear_relative <= maximum_yaw):
+                state['_rear_hull_aim'] = (aim_target_key, turn)
+            else:
+                state.pop('_rear_hull_aim', None)
             state['hull_aiming'] = bool(hull_aiming)
             if hull_aiming and abs(throttle) <= 0.01:
                 command['brake'] = True
