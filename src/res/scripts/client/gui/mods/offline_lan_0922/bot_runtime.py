@@ -6310,6 +6310,7 @@ class BotRuntime(object):
                 'id': bot_id, 'position': _position(raw),
                 'team': int(raw.get('team', 0)),
                 'alive': bool(raw.get('alive', True)),
+                'pitch': raw.get('pitch', 0.0), 'roll': raw.get('roll', 0.0),
                 'shape': raw.get('collision_shape'),
                 'yaw': yaw,
                 'velocity': (
@@ -6367,6 +6368,7 @@ class BotRuntime(object):
                 'id': bot_id, 'position': _position(raw), 'yaw': yaw,
                 'team': int(raw.get('team', 0)),
                 'alive': bool(raw.get('alive', True)),
+                'pitch': raw.get('pitch', 0.0), 'roll': raw.get('roll', 0.0),
                 'shape': raw.get('collision_shape'),
                 'velocity': (math.sin(yaw) * speed + raw.get('push_x', 0.0), 0.0,
                              math.cos(yaw) * speed + raw.get('push_z', 0.0)),
@@ -6857,6 +6859,7 @@ class BotRuntime(object):
                 yaw_limits=self._gun_yaw_limits.get(state['id']),
                 hull_aiming=state.get('hull_aiming'),
                 rear_hull_aim=state.get('_rear_hull_aim'),
+                rear_aim_episode=state.get('_rear_aim_episode'),
                 clip=state.get('clip'),
                 ammo_reload_pending=state.get('ammo_reload_pending'),
                 reload=state.get('reload_time'), fire_seq=state.get('fire_seq')),
@@ -6929,6 +6932,8 @@ class BotRuntime(object):
                 continue
             nearby.append({
                 'id': int(other['id']), 'position': other_position,
+                'team': other.get('team'), 'pitch': other.get('pitch', 0.0),
+                'roll': other.get('roll', 0.0),
                 'yaw': other.get('yaw'), 'speed': other.get('speed'),
                 'alive': other.get('alive', True),
                 'shape': other.get('collision_shape'),
@@ -8981,6 +8986,7 @@ class BotRuntime(object):
                 'id': HUMAN_TARGET_ID_BASE + int(raw['id']),
                 'position': _position(raw),
                 'team': int(raw.get('team', 0)), 'yaw': yaw,
+                'pitch': raw.get('pitch', 0.0), 'roll': raw.get('roll', 0.0),
                 'alive': alive,
                 'velocity': (math.sin(yaw) * speed, 0.0,
                              math.cos(yaw) * speed),
@@ -12684,6 +12690,33 @@ class BotRuntime(object):
         result.pop('throttle_override', None)
         return result
 
+    def _rear_laying_order(self, state, order, targets, now):
+        """Finish one bounded mechanical laying attempt before route handoff."""
+        episode = state.get('_rear_aim_episode')
+        if episode is None:
+            return order
+        target = targets.get(episode['target_id'])
+        changed = (order.get('target_id') != episode['target_id'] or
+                   target is None or not target.get('alive', True) or
+                   order.get('parking_phase') or
+                   order.get('combat_mode') == 'base_defense')
+        fired = int(state.get('fire_seq', 0)) != episode['fire_seq']
+        expired = now - episode['start'] >= 8.0
+        if changed or fired or expired:
+            state.pop('_rear_aim_episode', None)
+            state.pop('_rear_hull_aim', None)
+            if fired or expired:
+                state['_rear_aim_retry'] = (
+                    episode['identity'], now + max(8.0, _number(state.get('reload_time'))))
+            return order
+        # Keep the same selected target/order. Native world and friendly
+        # recovery remain later owners; no position or shot is fabricated.
+        result = dict(order)
+        result.update(move_position=_position(state), combat_mode='engage',
+                      face_position=_point(target.get('position'), _position(target)))
+        result.pop('throttle_override', None)
+        return result
+
     def _gun_angle_order(self, state, order, targets, now, direction_clear):
         """Bound ordinary mechanical-angle recovery; parking and SPGs own theirs.
 
@@ -13878,6 +13911,8 @@ class BotRuntime(object):
                         server_order,
                         targets.get(server_order.get('target_id')),
                         position)
+                    server_order = self._rear_laying_order(
+                        state, server_order, targets, now)
                     server_order = self._artillery_position_order(
                         state, server_order, targets, now)
                     server_order = self._gun_angle_order(
@@ -14128,6 +14163,9 @@ class BotRuntime(object):
             rear_aim = state.get('_rear_hull_aim')
             rear_turn = (rear_aim[1] if rear_aim is not None and
                          rear_aim[0] == aim_target_key else 0.0)
+            retry = state.get('_rear_aim_retry')
+            allow_rear_start = not (retry is not None and
+                retry[0] == aim_target_key and now < retry[1])
             turn, throttle, hull_aiming = ai_driver.combat_hull_aim(
                 state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
@@ -14136,12 +14174,15 @@ class BotRuntime(object):
                 combat_mode=command.get('combat_mode'),
                 movement_intent=command.get('movement_intent', True),
                 withdrawal_aim=command.get('withdrawal_aim', False),
-                rear_turn=rear_turn)
+                rear_turn=rear_turn, allow_rear_start=allow_rear_start)
             rear_relative = _angle_delta(hull_aim_yaw, state['yaw'])
             if (hull_aiming and unused_limited and
-                    abs(rear_relative) > math.pi * 0.5 and
-                    not minimum_yaw <= rear_relative <= maximum_yaw):
+                    (rear_turn or abs(rear_relative) > math.pi * 0.5)):
                 state['_rear_hull_aim'] = (aim_target_key, turn)
+                if state.get('_rear_aim_episode') is None:
+                    state['_rear_aim_episode'] = dict(
+                        identity=aim_target_key, target_id=command.get('target_id'),
+                        start=now, fire_seq=int(state.get('fire_seq', 0)))
             else:
                 state.pop('_rear_hull_aim', None)
             state['hull_aiming'] = bool(hull_aiming)
@@ -14153,6 +14194,7 @@ class BotRuntime(object):
             safety_body = {
                 'id': state['id'], 'position': position, 'yaw': state['yaw'],
                 'team': state.get('team'),
+                'pitch': state.get('pitch', 0.0), 'roll': state.get('roll', 0.0),
                 'shape': state.get('collision_shape'),
                 'half_width': state.get('half_width', 1.7),
                 'half_length': state.get('half_length', 3.5),

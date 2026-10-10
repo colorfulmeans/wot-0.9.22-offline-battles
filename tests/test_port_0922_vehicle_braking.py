@@ -8,6 +8,17 @@ from gui.mods.offline_lan_0922 import vehicle_physics
 
 
 class VehicleBrakingTests(unittest.TestCase):
+    def test_sloped_wz_bodies_brake_with_posed_height_but_keep_bridge_separation(self):
+        shape = (1.6741, 3.63869, .002, 2.63102)
+        own = dict(body(9, 0., 0., speed=5.), shape=shape, pitch=.2464, roll=.0491)
+        peer = dict(body(10, 0., 7.5, speed=0.), shape=shape, pitch=.2464,
+                    roll=.0491, position=(0., 3., 7.5))
+        self.assertEqual(0., self.safe(own, [peer], coast=2.)['throttle'])
+        peer['position'] = (0., 8., 7.5)
+        self.assertEqual(1., self.safe(own, [peer], coast=2.)['throttle'])
+        peer.update(position=(0., 3., 7.5), team=2)
+        self.assertEqual(1., self.safe(own, [peer], coast=2.)['throttle'])
+
     def setUp(self):
         self.traffic = TrafficCoordinator()
 

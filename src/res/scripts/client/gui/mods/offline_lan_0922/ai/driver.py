@@ -108,7 +108,7 @@ def gun_yaw_limits(descriptor):
 def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		turn, throttle, recovery_mode, has_target=True,
 		combat_mode=None, movement_intent=False, withdrawal_aim=False,
-		rear_turn=0.0):
+		rear_turn=0.0, allow_rear_start=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn',
 			'pivot_recovery', 'forward_escape', 'short_forward_escape', 'short_reverse_escape',
@@ -118,8 +118,10 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 	limited = not (float(minimum_yaw) <= -math.pi + 0.1 and
 	               float(maximum_yaw) >= math.pi - 0.1)
 	relative = _angle_delta(target_yaw, hull_yaw)
-	rear_unreachable = (limited and abs(relative) > math.pi * 0.5 and
-	                    not minimum_yaw <= relative <= maximum_yaw)
+	margin = min(0.04, max(0.0, maximum_yaw - minimum_yaw) * 0.25)
+	rear_unreachable = (limited and
+	                    (rear_turn or (allow_rear_start and abs(relative) > math.pi * 0.5)) and
+	                    not minimum_yaw + margin <= relative <= maximum_yaw - margin)
 	if rear_unreachable:
 		# A retreat cannot preserve frontal armour or fire at a rear threat
 		# which the installed turret cannot reach. Brake and lay the chassis.
@@ -127,7 +129,7 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		# target jitter must not repeatedly reverse both hull and turret.
 		center = (float(minimum_yaw) + float(maximum_yaw)) * 0.5
 		delta = _angle_delta(target_yaw - center, hull_yaw)
-		if rear_turn and delta * float(rear_turn) < 0.0:
+		if rear_turn and abs(relative) > math.pi * 0.5 and delta * float(rear_turn) < 0.0:
 			delta += math.copysign(2.0 * math.pi, float(rear_turn))
 		return max(-1.0, min(1.0, delta / 0.58)), 0.0, True
 	if recovery_mode == 'reverse_withdraw':

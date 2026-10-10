@@ -87,6 +87,22 @@ class RearLimitedAimTests(unittest.TestCase):
         self.assertEqual(-.5, driver.limited_traverse_target(
             -.5, -math.pi / 2, math.pi / 2, 1))
 
+    def test_reported_183_finishes_laying_after_crossing_front_hemisphere(self):
+        yaw, target, route, prior = map(math.radians, (84.9, 176.3, 68.4, 0.))
+        for frame in range(100):
+            planner = max(-1., min(1., (route-yaw)/.58))
+            turn, throttle, active = driver.combat_hull_aim(
+                yaw, target, -math.pi/4, math.pi/4, planner, 0., 'drive',
+                True, combat_mode='advance', movement_intent=True, rear_turn=prior)
+            if not active:
+                self.assertLessEqual(abs(driver._angle_delta(target, yaw)), math.pi/4)
+                break
+            self.assertGreater(turn, 0.)
+            prior = turn
+            yaw += turn*.025
+        else:
+            self.fail('reported 183 controller remained at the 90-degree seam')
+
 
 class RearTraverseRuntimeTests(unittest.TestCase):
     def setUp(self):
@@ -173,6 +189,61 @@ class RearTraverseRuntimeTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             runtime.update(.05, .5, players=[])
         self.assertNotIn('_rear_hull_aim', state)
+
+    def test_rear_episode_holds_route_until_shot_or_absolute_deadline(self):
+        state = self.state
+        target = dict(id=2, kind='human', position=(0., 0., -100.), alive=True)
+        order = dict(target_id=2, combat_mode='advance', move_position=(100., 0., 0.),
+                     fire_allowed=True)
+        for end in ('fired', 'timeout', 'changed', 'parking'):
+            with self.subTest(end=end):
+                state.update(fire_seq=0, _rear_hull_aim=(('human', 2), 1.),
+                    _rear_aim_episode=dict(target_id=2, identity=('human', 2),
+                                           fire_seq=0, start=0.))
+                held = self.runtime._rear_laying_order(state, order, {2: target}, 2.)
+                self.assertEqual('engage', held['combat_mode'])
+                self.assertEqual((0., 0., 0.), held['move_position'])
+                self.assertEqual((100., 0., 0.), order['move_position'])
+                ending = dict(order)
+                if end == 'fired': state['fire_seq'] = 1
+                if end == 'changed': ending['target_id'] = 3
+                if end == 'parking': ending['parking_phase'] = 'waiting'
+                self.assertEqual(ending, self.runtime._rear_laying_order(
+                    state, ending, {2: target}, 8. if end == 'timeout' else 3.))
+                self.assertNotIn('_rear_aim_episode', state)
+                self.assertNotIn('_rear_hull_aim', state)
+
+    def test_reported_183_real_adapter_completes_aim_without_false_route_recovery(self):
+        descriptor = harness._combat_descriptor(
+            turret_yaw_limits=(-math.pi/4, math.pi/4), turret_speed=1.)
+        runtime = self.fixture.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: descriptor,
+            direction_probe=lambda *unused: dict(clear=True, slope=0.),
+            ground_probe=lambda *unused: 0., physics_ground_probe=lambda *unused: 0.,
+            spawn_resolver=lambda *unused: ((0., 0., 0.), math.radians(84.9)),
+            visibility_probe=lambda *unused: True, firing_lane_probe=lambda *unused: True,
+            baked_graph=harness._flat_open_graph())
+        runtime.battle_start(self.fixture.start)
+        bearing = math.radians(176.3)
+        point = (math.sin(bearing)*100., 0., math.cos(bearing)*100.)
+        runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[dict(
+            id=11, team=2, combat_mode='advance', target_kind='human', target_id=2,
+            move_position=(50., 0., 20.), aim_position=point, face_position=point,
+            fire_range=500., fire_allowed=True, throttle_override=None)]))
+        player = harness._admit_player(dict(
+            id=2, team=1, alive=True, x=point[0], y=0., z=point[2]))
+        import contextlib
+        import io
+        aligned = False
+        with contextlib.redirect_stdout(io.StringIO()):
+            for frame in range(1, 121):
+                runtime.update(.05, frame*.05, players=[player])
+                aligned = aligned or runtime.states[11]['gun_aligned']
+                if runtime.states[11]['fire_seq']:
+                    break
+        self.assertTrue(aligned)
+        self.assertGreater(runtime.states[11]['fire_seq'], 0)
+        self.assertEqual(0, runtime.adapter.driver.states[11]['recovery_count'])
 
 
 if __name__ == '__main__':

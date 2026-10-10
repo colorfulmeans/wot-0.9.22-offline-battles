@@ -65,8 +65,10 @@ def _same_level(first, second):
     if first_shape is None or second_shape is None:
         return True
     first_y, second_y = first['position'][1], second['position'][1]
-    return min(first_y + first_shape[3], second_y + second_shape[3]) > max(
-        first_y + first_shape[2], second_y + second_shape[2])
+    return tank_collision.vertical_overlap(
+        first_y, first_shape, second_y, second_shape, slop=0.0,
+        pitch_a=first.get('pitch', 0.0), roll_a=first.get('roll', 0.0),
+        pitch_b=second.get('pitch', 0.0), roll_b=second.get('roll', 0.0))
 
 
 def _separation(first, second):

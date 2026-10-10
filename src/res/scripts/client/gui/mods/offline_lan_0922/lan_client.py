@@ -3733,6 +3733,25 @@ class LANClient(object):
         lineage = self._snapshot_lineage(previous)
         if lineage is None or lineage != self._snapshot_lineage(message):
             return message
+        # Consecutive snapshots received during a paused render callback still
+        # prove producer cadence. Keep only measured intervals, not old poses.
+        timing = {}
+        for source in (previous, message):
+            measured = source.get('_client_coalesced_timing')
+            if isinstance(measured, dict):
+                for name in ('source_interval_us', 'snapshot_interval_us'):
+                    value = _projectile_int_range(measured.get(name), 1, MAX_MOTION_TIME_US)
+                    if value is not None:
+                        timing[name] = max(timing.get(name, 0), value)
+        for field, name in (('bot_state_time_us', 'source_interval_us'),
+                            ('motion_time_us', 'snapshot_interval_us')):
+            first = _projectile_int_range(previous.get(field), 0, MAX_MOTION_TIME_US)
+            last = _projectile_int_range(message.get(field), 0, MAX_MOTION_TIME_US)
+            if first is not None and last is not None and last > first:
+                timing[name] = max(timing.get(name, 0), last-first)
+        if timing:
+            message = dict(message)
+            message['_client_coalesced_timing'] = timing
         previous_revision = self._snapshot_order_revision(previous)
         if previous_revision is None:
             return message

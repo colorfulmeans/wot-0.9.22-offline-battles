@@ -67,6 +67,22 @@ class _Socket(object):
 
 
 class LanProtocolTests(unittest.TestCase):
+    def test_coalescing_preserves_measured_cadence_without_crossing_lineage(self):
+        client = LANClient('127.0.0.1', 28782, 'P', 'ussr:MS-1')
+        previous = None
+        for tick in range(1, 16):
+            message = dict(type='snapshot', round_id=1, authority_epoch=1,
+                           motion_time_us=tick*33333,
+                           bot_state_time_us=((tick-1)//3)*100000)
+            previous = client._merge_snapshot_orders(previous, message)
+            self.assertNotIn('_client_coalesced_timing', message)
+        self.assertEqual(dict(source_interval_us=100000, snapshot_interval_us=33333),
+                         previous['_client_coalesced_timing'])
+        changed = dict(type='snapshot', round_id=2, authority_epoch=1,
+                       motion_time_us=900000, bot_state_time_us=800000)
+        self.assertIs(changed, client._merge_snapshot_orders(previous, changed))
+        self.assertNotIn('_client_coalesced_timing', changed)
+
     def setUp(self):
         self.client = LANClient('127.0.0.1', 28782, 'P', 'ussr:MS-1')
         self.client.ready = True

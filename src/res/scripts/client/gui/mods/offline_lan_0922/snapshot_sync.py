@@ -280,7 +280,16 @@ class SnapshotSync(object):
                         # Keep its full interval plus one 30 Hz exposure;
                         # adding that same stall twice retains needless lag.
                         exposure_us = 1000000.0 / 30.0
-                    observed_delay_us = source_interval_us + exposure_us
+                    cadence = record.pop('_coalesced_timing', None)
+                    observed_interval_us = source_interval_us
+                    if isinstance(cadence, dict):
+                        measured = _number(cadence.get('source_interval_us'), 0.0)
+                        measured_exposure = _number(cadence.get('snapshot_interval_us'), 0.0)
+                        if 0.0 < measured <= source_interval_us:
+                            observed_interval_us = measured
+                            if measured_exposure > 0.0:
+                                exposure_us = min(exposure_us, measured_exposure)
+                    observed_delay_us = observed_interval_us + exposure_us
                     if (record.get('timed_warmup_active') and
                             record['timed_warmup_intervals'] <=
                             TIMED_WARMUP_INTERVALS):
@@ -290,7 +299,7 @@ class SnapshotSync(object):
                         # and cannot permanently inflate normal latency.
                         observed_delay_us += min(
                             TIMED_WARMUP_MAX_HEADROOM_US,
-                            source_interval_us *
+                            observed_interval_us *
                             TIMED_WARMUP_HEADROOM_RATIO)
                     previous_delay_us = record.get(
                         'interpolation_delay_us')
@@ -320,7 +329,7 @@ class SnapshotSync(object):
                         material_growth = (
                             delay_growth_us >=
                             TIMED_DELAY_GROW_DEADBAND_US or
-                            source_interval_us >=
+                            observed_interval_us >=
                             TIMED_DELAY_GROW_STALL_US)
                         if (delay_growth_us > 0.0 and
                                 (warmup_growth or material_growth)):
@@ -603,6 +612,9 @@ class SnapshotSync(object):
                 key = _entity_key(kind, state)
                 if key is not None:
                     seen.add(key)
+                if kind == 'bot' and key in self._entities:
+                    self._entities[key]['_coalesced_timing'] = message.get(
+                        '_client_coalesced_timing')
                 self._upsert(
                     kind, state, now, output,
                     update_remote_pose=(kind != 'bot' or update_bot_poses),

@@ -33,6 +33,28 @@ def player(identifier, x=0, alive=True):
 
 
 class SnapshotSyncTests(unittest.TestCase):
+    def test_coalesced_client_pause_does_not_inflate_producer_delay(self):
+        for cadence, expected_max in ((100000, 200000), (500000, 550000)):
+            with self.subTest(cadence=cadence):
+                clock = [0.]
+                sync = _load().SnapshotSync(1, clock=lambda: clock[0])
+                for revision, sample in enumerate((0, 100000, 200000, 700000), 1):
+                    clock[0] = sample/1000000.
+                    message = dict(round_id=1, server_tick=revision,
+                        bot_state_revision=revision, motion_time_us=sample,
+                        bot_state_time_us=sample, bots=[player(7, sample/100000.)])
+                    if revision == 4:
+                        message['_client_coalesced_timing'] = dict(
+                            source_interval_us=cadence, snapshot_interval_us=33333)
+                    sync.snapshot(message)
+                    sync.advance(clock[0])
+                record = sync._entities['bot:7']
+                self.assertLessEqual(record['interpolation_delay_us'], expected_max)
+                if cadence == 500000:
+                    self.assertGreater(record['interpolation_delay_us'], 500000)
+                self.assertEqual(700000, record['target_sample_time_us'])
+                self.assertLessEqual(record['presentation_time_us'], 700000)
+
     def test_stalled_source_and_snapshot_cadences_do_not_double_display_delay(self):
         clock = [0.0]
         sync = _load().SnapshotSync(1, clock=lambda: clock[0])
