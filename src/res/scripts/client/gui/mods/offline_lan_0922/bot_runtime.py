@@ -13696,7 +13696,9 @@ class BotRuntime(object):
                 if tank_collision.rotation_fraction(
                         position, state['yaw'], sample_yaw,
                         state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
-                        self._neighbours_for(state, neighbours)) < 1.0:
+                        [peer for peer in self._neighbours_for(state, neighbours)
+                         if (not peer.get('alive', True) or
+                             peer.get('team') == state.get('team'))]) < 1.0:
                     return False
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
@@ -14121,6 +14123,7 @@ class BotRuntime(object):
             # the owner of momentum and contact, and brake the drive input.
             safety_body = {
                 'id': state['id'], 'position': position, 'yaw': state['yaw'],
+                'team': state.get('team'),
                 'shape': state.get('collision_shape'),
                 'half_width': state.get('half_width', 1.7),
                 'half_length': state.get('half_length', 3.5),
@@ -14210,8 +14213,9 @@ class BotRuntime(object):
                     command.get('recovery_probe_distance'), 2.0))
             elif command.get('recovery_mode') in (
                     'contact_escape', 'forward_escape', 'wreck_push'):
-                maximum_probe_distance = ai_driver.recovery_probe_distance(
-                    state.get('half_length', 3.5))
+                maximum_probe_distance = max(0.5, _number(
+                    command.get('recovery_probe_distance'),
+                    ai_driver.recovery_probe_distance(state.get('half_length', 3.5))))
             elif (travel_sign < 0.0 and reactive_horizon is not None and
                     command.get('recovery_mode') in ('reverse_turn', 'reverse_withdraw')):
                 # Recovery is intentionally a short backing manoeuvre. A wall

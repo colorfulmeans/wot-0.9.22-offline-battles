@@ -327,7 +327,7 @@ class TrafficCoordinator(object):
 
     def safe_controls(self, body, command, neighbours, now, stopping_distance,
                       step=1.0 / 30.0):
-        """Brake before occupied hulls after planning and gun aiming.
+        """Brake before allied hulls after planning and gun aiming.
 
         This guard is independent of friendly leases and tactical modes. In
         particular a player does not have to publish a cooperative Bot order.
@@ -339,6 +339,8 @@ class TrafficCoordinator(object):
         throttle, turn = result.get('throttle', 0.0), result.get('turn', 0.0)
         peers = [peer for peer in neighbours
                  if peer['id'] != body['id'] and peer.get('alive', True) and
+                 (body.get('team') is None or peer.get('team') is None or
+                  peer.get('team') == body.get('team')) and
                  _same_level(body, peer)]
         # Braking against current travel must remain available. At rest the
         # intended gear determines which hull face needs a clear corridor.

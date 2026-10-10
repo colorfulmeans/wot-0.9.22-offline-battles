@@ -26,6 +26,21 @@ def command(yaw=0.0):
 
 
 class TrafficTests(unittest.TestCase):
+    def test_only_allied_bot_and_player_receive_predictive_braking(self):
+        for actor in (2, 1000002):
+            own = body(1, 0., 0., speed=12., team=1)
+            peer = body(actor, 0., 12., speed=0., team=2)
+            driving = dict(command(), turn=.5, movement_intent=True)
+            original = copy.deepcopy((own, peer))
+            hostile = self.traffic.safe_controls(own,driving,[peer],0.,lambda: 20.)
+            self.assertEqual(driving,hostile)
+            self.assertEqual(original,(own,peer))
+            peer['team']=1
+            allied = self.traffic.safe_controls(own,driving,[peer],0.,lambda: 20.)
+            self.assertEqual(0.,allied['throttle'])
+            self.assertTrue(allied['brake'])
+            self.assertEqual(actor,allied['forward_blocked_by'])
+
     def setUp(self):
         self.traffic = TrafficCoordinator()
 

@@ -15,7 +15,7 @@ class VehicleBrakingTests(unittest.TestCase):
         return self.traffic.safe_controls(
             own, order or command(), peers, now, lambda: coast)
 
-    def test_same_heading_player_bot_and_enemy_do_not_receive_continuous_drive(self):
+    def test_same_heading_allies_brake_and_opponents_keep_drive(self):
         for peer_id, team in ((29, 1), (100001, 1), (100002, 2)):
             for mode in ('route', 'advance', 'advance_contact', 'brawl'):
                 own = body(25, 0., 0., speed=0.)
@@ -23,8 +23,8 @@ class VehicleBrakingTests(unittest.TestCase):
                 for now in (0., 1.5, 2., 10., 30.):
                     stopped = self.safe(
                         own, [peer], dict(command(), combat_mode=mode), now=now)
-                    self.assertEqual(0., stopped['throttle'])
-                    self.assertTrue(stopped['brake'])
+                    self.assertEqual(0. if team == 1 else 1., stopped['throttle'])
+                    self.assertEqual(team == 1, bool(stopped.get('brake', False)))
                 self.assertEqual(1., self.safe(own, [])['throttle'])
 
     def test_leader_parallel_side_contact_and_reverse_escape_keep_progress(self):
