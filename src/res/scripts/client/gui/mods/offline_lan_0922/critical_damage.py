@@ -634,12 +634,44 @@ def _offh_internal_cone_hits(target_mock, td, burst_pos, direction, shell,
 	return unique
 
 
+class _CriticalDescriptorView(object):
+    """Keep native geometry while reading the accepted fitted device pools."""
+
+    def __init__(self, descriptor, profile):
+        self._descriptor = descriptor
+        self._offline_critical_device_pools = dict(
+            (row['name'], (float(row['max_hp']), float(row['regen_hp'])))
+            for row in profile['devices'])
+
+    def __getattr__(self, name):
+        if isinstance(self._descriptor, dict) and name in self._descriptor:
+            return self._descriptor[name]
+        return getattr(self._descriptor, name)
+
+
+def bind_device_profile(vehicle, profile):
+    """Bind only a server-accepted loadout; never change the native descriptor."""
+    descriptor = getattr(vehicle, 'typeDescriptor', None)
+    if descriptor is None or not isinstance(profile, dict):
+        vehicle._offline_critical_descriptor = None
+        return
+    previous = getattr(vehicle, '_offline_critical_descriptor', None)
+    pools = dict((row['name'], (float(row['max_hp']), float(row['regen_hp'])))
+                 for row in profile['devices'])
+    if (previous is not None and previous._descriptor is descriptor and
+            previous._offline_critical_device_pools == pools):
+        return
+    vehicle._offline_critical_descriptor = _CriticalDescriptorView(
+        descriptor, profile)
+
+
 def _device_td(mock):
 	# Server projections already own their descriptor and cannot import BigWorld.
 	# An explicit None also belongs to this vehicle; only a missing attribute
 	# retains the stock player-descriptor fallback.
 	try:
-		return mock.typeDescriptor
+		view = getattr(mock, '_offline_critical_descriptor', None)
+		return view if isinstance(view, _CriticalDescriptorView) else mock.typeDescriptor
 	except AttributeError:
 		import BigWorld
 		return getattr(BigWorld.player(), 'vehicleTypeDescriptor', None)
@@ -1265,7 +1297,7 @@ def _state(vehicle):
     devices = dict(getattr(vehicle, 'devices_hp', None) or {})
     destroyed = set(getattr(vehicle, '_destroyed_devices', None) or ())
     critical = set(getattr(vehicle, '_critical_devices', None) or ())
-    descriptor = getattr(vehicle, 'typeDescriptor', None)
+    descriptor = _device_td(vehicle)
     for name, hp in devices.items():
         maximum = _device_damage.device_max_hp(descriptor, name)
         if (name not in destroyed and
@@ -1442,7 +1474,7 @@ def apply_direct(vehicle, collisions, start_pos, end_pos, hull_damage,
         collision_contacts=collision_contacts)
     after = _state(vehicle)
     return damage, _payload(
-        before, after, getattr(vehicle, 'typeDescriptor', None),
+        before, after, _device_td(vehicle),
         'explosion' if by_explosion else 'shot')
 
 
@@ -1466,7 +1498,7 @@ class _CriticalProposalVehicle(object):
     def __init__(self, source):
         self.id = source.id
         self.health = source.health
-        self.typeDescriptor = source.typeDescriptor
+        self.typeDescriptor = _device_td(source)
         self.position = source.position
         self.matrix = source.matrix
         self.devices_hp = dict(
@@ -1551,7 +1583,7 @@ def apply_explosion(vehicle, collisions, burst, direction, hull_damage,
             continue
     try:
         hits = (_offh_internal_cone_hits(
-            vehicle, getattr(vehicle, 'typeDescriptor', None), burst,
+            vehicle, _device_td(vehicle), burst,
             direction, shell, covered) if allow_interior else ())
     except Exception as error:
         LOG_DEBUG('HE interior cone unavailable:', str(error))
@@ -1630,7 +1662,7 @@ def apply_payload(vehicle, payload):
     if events:
         return events
     derived = _payload(
-        before, _state(vehicle), getattr(vehicle, 'typeDescriptor', None),
+        before, _state(vehicle), _device_td(vehicle),
         'network')
     if derived is None:
         return ()
@@ -1654,7 +1686,7 @@ def tick_repair(vehicle, dt, repair_skill=100.0, repair_factor=None):
         return None
     if float(getattr(vehicle, 'health', 0.0) or 0.0) <= 0.0:
         return None
-    descriptor = getattr(vehicle, 'typeDescriptor', None)
+    descriptor = _device_td(vehicle)
     before = _state(vehicle)
     devices = getattr(vehicle, 'devices_hp', None) or {}
     destroyed = set(getattr(vehicle, '_destroyed_devices', None) or ())
@@ -1705,7 +1737,7 @@ def damage_device_over_time(vehicle, name, amount, cause='equipment'):
     name = str(name or '')
     if not name.endswith('Health'):
         name += 'Health'
-    descriptor = getattr(vehicle, 'typeDescriptor', None)
+    descriptor = _device_td(vehicle)
     maximum = _device_damage.device_max_hp(descriptor, name)
     if maximum is None:
         return None
@@ -1734,7 +1766,7 @@ def damage_device_over_time(vehicle, name, amount, cause='equipment'):
 
 def _restore_fuel_regen_cap(vehicle):
     """Keep the copied fire-out law available to engine-free authorities."""
-    descriptor = getattr(vehicle, 'typeDescriptor', None)
+    descriptor = _device_td(vehicle)
     devices = getattr(vehicle, 'devices_hp', None)
     if devices is None:
         return False
@@ -1807,7 +1839,7 @@ def tick_fire(vehicle, dt, now=None, module_test_mode=False):
         _restore_fuel_regen_cap(vehicle)
     after = _state(vehicle)
     return damage, _payload(
-        before, after, getattr(vehicle, 'typeDescriptor', None), 'repair')
+        before, after, _device_td(vehicle), 'repair')
 
 
 def apply_drowning(vehicle):
@@ -1818,7 +1850,7 @@ def apply_drowning(vehicle):
 	_offh_knock_out_everything(vehicle)
 	after = _state(vehicle)
 	return _payload(
-		before, after, getattr(vehicle, 'typeDescriptor', None), 'drowning')
+		before, after, _device_td(vehicle), 'drowning')
 
 
 def propose_drowning(vehicle):
@@ -1838,7 +1870,7 @@ def apply_death(vehicle, cause='shot'):
     _offh_knock_out_everything(vehicle)
     after = _state(vehicle)
     return _payload(
-        before, after, getattr(vehicle, 'typeDescriptor', None), cause)
+        before, after, _device_td(vehicle), cause)
 
 
 def use_extinguisher(vehicle):
@@ -1847,7 +1879,7 @@ def use_extinguisher(vehicle):
     before = _state(vehicle)
     _offh_extinguish(vehicle, False, 'extinguisher')
     return _payload(
-        before, _state(vehicle), getattr(vehicle, 'typeDescriptor', None),
+        before, _state(vehicle), _device_td(vehicle),
         'repair')
 
 
@@ -1855,7 +1887,7 @@ def repair_device(vehicle, name=None, repair_all=False):
     if vehicle is None:
         return None
     before = _state(vehicle)
-    descriptor = getattr(vehicle, 'typeDescriptor', None)
+    descriptor = _device_td(vehicle)
     devices = getattr(vehicle, 'devices_hp', None) or {}
     destroyed = set(getattr(vehicle, '_destroyed_devices', None) or ())
     critical = set(getattr(vehicle, '_critical_devices', None) or ())
@@ -1905,7 +1937,7 @@ def restore_crew(vehicle, name=None, restore_all=False):
     vehicle._crew_ko = crew_ko
     _recompute_crew_impaired(vehicle)
     return _payload(
-        before, _state(vehicle), getattr(vehicle, 'typeDescriptor', None),
+        before, _state(vehicle), _device_td(vehicle),
         'repair')
 
 

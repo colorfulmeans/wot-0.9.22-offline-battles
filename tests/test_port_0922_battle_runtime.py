@@ -10347,6 +10347,22 @@ class BattleRuntimeContractTests(unittest.TestCase):
             0.8, entity._fire_starting_chance_factor)
         self.assertAlmostEqual(0.30, entity._medkit_bonus_value)
 
+    def test_critical_target_binds_the_accepted_remote_fitted_pools(self):
+        from gui.mods.offline_lan_0922 import critical_damage, device_damage
+        battle = BattleRuntime(_runtime())
+        descriptor = types.SimpleNamespace(engine={'maxHealth': 100}, miscAttrs={})
+        entity = types.SimpleNamespace(typeDescriptor=descriptor)
+        record = {'kind': 'player', 'state': {'effective_params': {
+            'critical': {'devices': [{'name': 'engineHealth',
+                                      'max_hp': 150.0, 'regen_hp': 75.0}]}}}}
+        self.assertTrue(battle._install_critical_equipment_effects(record, entity))
+        view = critical_damage._device_td(entity)
+        self.assertEqual(150.0, device_damage.device_max_hp(view, 'engineHealth'))
+        self.assertIs(descriptor, entity.typeDescriptor)
+        record['state'] = {}
+        self.assertTrue(battle._install_critical_equipment_effects(record, entity))
+        self.assertIs(descriptor, critical_damage._device_td(entity))
+
     def test_removed_rpm_limiter_toggles_stock_trigger_stage(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)

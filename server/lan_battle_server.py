@@ -11922,7 +11922,10 @@ class BattleState:
                 raise ValueError("critical delta is outside fitted profile")
             if abs(_finite_float(
                     proposed.get("max_hp"), -1.0) - maximum) > 0.001:
-                raise ValueError("critical delta maximum disagrees")
+                raise ValueError(
+                    "critical delta maximum disagrees device=%s "
+                    "proposed=%s fitted=%s" %
+                    (name, proposed.get("max_hp"), maximum))
             hp_loss = float(change["hp_loss"])
             if hp_loss > maximum + 0.001:
                 raise ValueError("critical delta HP loss exceeds pool")

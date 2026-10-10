@@ -8822,6 +8822,9 @@ class BattleRuntime(object):
         from gui.mods.offline_lan_0922 import crew_battle
         snapshot = (self._local_effective_params if record.get('local') else
                     state.get('effective_params'))
+        critical_damage.bind_device_profile(
+            entity, snapshot.get('critical') if isinstance(snapshot, dict)
+            else None)
         battle_factors = crew_battle.for_critical(
             snapshot, crew_battle.critical_from_vehicle(entity))
         entity._fire_starting_chance_factor = (

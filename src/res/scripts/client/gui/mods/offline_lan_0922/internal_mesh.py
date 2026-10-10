@@ -401,8 +401,11 @@ def triangle_intersects_cone(a, b, c, apex, axis, depth, tangent):
     return False
 
 
-def intersects_cone(mesh, apex, axis, depth, tangent, stats=None):
-    if contains(apex, mesh):
+def intersects_cone(mesh, apex, axis, depth, tangent, stats=None,
+                    apex_inside=None):
+    if apex_inside is None:
+        apex_inside = contains(apex, mesh)
+    if apex_inside:
         return True
     base = _add_scaled(apex, axis, depth)
     radii = tuple(depth * tangent * math.sqrt(max(0.0, 1.0 - axis[a] ** 2))
