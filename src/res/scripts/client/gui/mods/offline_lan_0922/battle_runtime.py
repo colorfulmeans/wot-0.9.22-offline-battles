@@ -12937,6 +12937,25 @@ class BattleRuntime(object):
         if entity is None:
             raise RuntimeError(
                 'ordered shot event attacker has no native entity: %s' % key)
+        if record.get('kind') == 'bot':
+            matrix_angles = {}
+            for name, attribute in (('turretMatrix', 'yaw'), ('gunMatrix', 'pitch')):
+                try:
+                    matrix = self._runtime.math.Matrix(getattr(entity.appearance, name))
+                    matrix_angles[name] = float(getattr(matrix, attribute))
+                except Exception:
+                    matrix_angles[name] = None
+            try:
+                sys.stdout.write('[Offline LAN 0.9.22] BOT FIRE PRESENT ' + json.dumps({
+                    'round': (self._start_message or {}).get('round_id'), 'projectile': projectile_id,
+                    'bot': record.get('network_id'),
+                    'matrix_angles': matrix_angles,
+                    'presented_aim': list(record.get('_remote_aim_signature', ()))[1:],
+                    'presented_pose': record.get('_remote_pose_signature'),
+                    'shot_yaw': event.get('shot_yaw'), 'shot_pitch': event.get('shot_pitch')},
+                    separators=(',', ':')) + '\n')
+            except Exception:
+                pass
         transient_names = []
         try:
             normalized = None

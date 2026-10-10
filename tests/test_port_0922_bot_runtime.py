@@ -11670,6 +11670,57 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, len(runtime._pending_launches))
         self.assertFalse(runtime._burst_states[11].active)
 
+    def test_fire_alignment_record_is_bound_to_one_physical_launch(self):
+        descriptor = _combat_descriptor(
+            reload_time=4.0, clip=(5, 2.0), dispersion=0.01,
+            max_ammo=20)
+        descriptor.gun.burst = (3, 0.1)
+        descriptor.gun.shotDispersionFactors = {
+            'afterShot': 4.0, 'afterShotInBurst': 1.0,
+            'turretRotation': 0.0,
+        }
+        runtime = self.module.BotRuntime(
+            1, friendly_lane_probe=lambda *unused: True)
+        runtime.round_id = 5
+        runtime._descriptors[11] = descriptor
+        state = {
+            'id': 11, 'alive': True, 'health': 1000, 'fire_seq': 0,
+            'x': 0.0, 'y': 0.0, 'z': 0.0,
+            'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0,
+            'aim_yaw': 0.0, 'turret_yaw': 0.0, 'gun_pitch': -0.01,
+            'critical': {}, 'profile': {}, 'gun_aligned': True,
+        }
+        target = {
+            'id': 2, 'network_id': 2, 'kind': 'human', 'alive': True,
+            'position': (0.0, 1.0, 100.0),
+        }
+        solution = {'flight_time': 0.5}
+        gun_state = self.module._BotGunState(descriptor)
+        gun_state.elapsed = 10.0
+        ammo_state = self.module._BotAmmoState(descriptor, {}, state)
+        runtime._gun_states[11] = gun_state
+        runtime._ammo_states[11] = ammo_state
+        initial_ammo = ammo_state.remaining[ammo_state.loaded]
+        preview = runtime._direct_launch_preview(
+            state, descriptor, ammo_state.loaded, gun_state, solution)
+
+        state['_diagnostic_aim_intent'] = {'turret_yaw': 0.0, 'gun_pitch': -0.01}
+        output = io.StringIO()
+        with mock.patch.object(sys, 'stdout', output):
+            self.assertTrue(runtime._fire(
+                state, gun_state, 1.0, descriptor,
+                ammo_state=ammo_state, launch_preview=preview))
+            self.assertFalse(runtime._queue_pending_launch(
+                runtime._pending_launches[0], diagnostic_state=state))
+        rows = [json.loads(line.split('BOT FIRE ALIGN ', 1)[1])
+                for line in output.getvalue().splitlines()]
+        self.assertEqual(1, len(rows))
+        self.assertEqual((5, 11, 1), (rows[0]['round'], rows[0]['bot'], rows[0]['seq']))
+        self.assertTrue(rows[0]['aligned'])
+        self.assertEqual(0.0, rows[0]['yaw_error_rad'])
+        self.assertEqual(0.0, rows[0]['pitch_error_rad'])
+        self.assertEqual(1.0e-6, rows[0]['tolerance_rad'])
+
     def test_bot_burst_launches_and_debits_every_physical_round(self):
         descriptor = _combat_descriptor(
             reload_time=4.0, clip=(5, 2.0), dispersion=0.01,

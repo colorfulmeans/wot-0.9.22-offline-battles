@@ -1,3 +1,5 @@
+import contextlib
+import io
 import copy
 import json
 import math
@@ -1160,18 +1162,25 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         player = state.players[1]
         player.destructible_contact_seq = 1
         player.destructible_contacts[1] = _player_destructible_contact()
+        message = {'type': 'player_destructible_contact_result', 'round_id': state.round_id,
+                   'player_id': 1, 'contact_seq': 1, 'accepted': True, 'token': [[7, 3, None]]}
+        self.assertFalse(state.report_player_destructible_contact_result(
+            SIMULATION_WORKER_AUTHORITY_ID, message))
+        self.assertEqual('missing_publication', state.last_destructible_contact_reject['code'])
+        self.assertEqual(state.round_id, state.last_destructible_contact_reject['round'])
+        self.assertIn(1, player.destructible_contacts)
         state.destructibles[('tree', 7, 3, None)] = {
             'destructible_kind': 'tree', 'chunk_id': 7,
             'item_index': 3, 'mat_kind': None,
         }
 
-        self.assertTrue(state.report_player_destructible_contact_result(
-            SIMULATION_WORKER_AUTHORITY_ID, {
-                'type': 'player_destructible_contact_result',
-                'round_id': state.round_id,
-                'player_id': 1, 'contact_seq': 1,
-                'accepted': True, 'token': [[7, 3, None]],
-            }))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertTrue(state.report_player_destructible_contact_result(
+                SIMULATION_WORKER_AUTHORITY_ID, message))
+        row = json.loads(output.getvalue().split('DESTR CONTACT RESOLVED ', 1)[1])
+        self.assertEqual((1, 1, True), (row['player'], row['seq'], row['accepted']))
+        self.assertEqual([[7, 3, None]], row['token'])
 
         self.assertEqual(1, player.destructible_contact_resolved_seq)
         self.assertFalse(player.destructible_contacts)

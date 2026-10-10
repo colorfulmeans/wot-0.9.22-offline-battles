@@ -11119,6 +11119,13 @@ class BotRuntime(object):
             local_angles = (
                 _angle_delta(desired_yaw, state['yaw']), world_pitch)
         raw_relative, raw_pitch = local_angles
+        state['_diagnostic_aim_intent'] = {
+            'turret_yaw': raw_relative, 'gun_pitch': raw_pitch,
+            'planning_pending': bool(planning_pending),
+            'time_us': self._sample_time_us,
+            'target_kind': target.get('kind') if target is not None else None,
+            'target_id': target.get('network_id', target.get('id')) if target is not None else None}
+
         minimum_yaw, maximum_yaw, limited = \
             self._effective_gun_yaw_limits(state, descriptor)
         if self._native_simulation is not None and weapon_tick is not None:
@@ -12794,7 +12801,7 @@ class BotRuntime(object):
             return None
         return preview_yaw, preview_pitch, preview_origin
 
-    def _queue_pending_launch(self, launch, native_committed=False):
+    def _queue_pending_launch(self, launch, native_committed=False, diagnostic_state=None):
         """Freeze one physical launch in its ordered reliable outbox."""
         try:
             key = (int(launch['id']), int(launch['fire_seq']))
@@ -12811,7 +12818,31 @@ class BotRuntime(object):
         self._pending_launches.append(frozen)
         self._pending_launch_keys[key] = frozen
         self._pending_launch_by_bot.setdefault(key[0], []).append(key)
+        if diagnostic_state is not None:
+            self._report_fire_alignment(diagnostic_state, frozen)
         return True
+
+    def _report_fire_alignment(self, state, launch):
+        """One record per committed round, before presentation/interpolation."""
+        try:
+            intent = state.get('_diagnostic_aim_intent') or {}
+            yaw_error = (_angle_delta(intent['turret_yaw'], state['turret_yaw'])
+                         if 'turret_yaw' in intent else None)
+            pitch_error = (intent['gun_pitch'] - state['gun_pitch']
+                           if 'gun_pitch' in intent else None)
+            sys.stdout.write('[Offline LAN 0.9.22] BOT FIRE ALIGN ' + json.dumps({
+                'round': self.round_id, 'bot': state['id'], 'seq': launch['fire_seq'],
+                'burst_index': launch.get('burst_index'), 'time_us': self._sample_time_us,
+                'intent': intent, 'aligned': bool(state.get('gun_aligned')),
+                'turret_yaw': state.get('turret_yaw'), 'gun_pitch': state.get('gun_pitch'),
+                'hull': [state.get(k) for k in ('yaw', 'pitch', 'roll')],
+                'world_aim_yaw': state.get('aim_yaw'),
+                'yaw_error_rad': yaw_error, 'pitch_error_rad': pitch_error,
+                'tolerance_rad': 1.0e-6,
+                'shot_yaw': launch.get('shot_yaw'), 'shot_pitch': launch.get('shot_pitch')},
+                separators=(',', ':')) + '\n')
+        except Exception:
+            pass
 
     def ack_projectile_launch(self, bot_id, fire_seq):
         """Remove only this Bot's head confirmed by the canonical ledger."""
@@ -12895,7 +12926,7 @@ class BotRuntime(object):
                 state[name] = frozen_state[name]
         state['reload_time'] = gun_state.remaining(reload_factor)
         state['reload_duration'] = gun_state.duration(reload_factor)
-        self._queue_pending_launch(launch, native_committed=True)
+        self._queue_pending_launch(launch, native_committed=True, diagnostic_state=state)
         return True
 
     def _commit_burst_edge(
@@ -12998,7 +13029,7 @@ class BotRuntime(object):
         launch = _local_launch_record(state, launch_time_us)
         if launch is None:
             raise RuntimeError('physical bot burst launch is incomplete')
-        self._queue_pending_launch(launch)
+        self._queue_pending_launch(launch, diagnostic_state=state)
         return True
 
     @observed('bot.fire')

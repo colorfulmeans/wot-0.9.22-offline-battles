@@ -442,8 +442,20 @@ class GarageStateTests(unittest.TestCase):
         self.state._wallet()['gold'] = 100
         self.state.apply_style(9, 7)
         before = copy.deepcopy(self.state.snapshot())
-        for unused in range(3):
-            self.assertFalse(self.state.consume_customization_rental(50001))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.state.report_customization(50001, 'settlement_before', 'round:1')
+            for unused in range(3):
+                self.assertFalse(self.state.consume_customization_rental(50001))
+            self.state.report_customization(50001, 'settlement_committed', 'round:1')
+        rows = [json.loads(line.split('STYLE STATE ', 1)[1])
+                for line in output.getvalue().splitlines()]
+        self.assertEqual(2, len(rows))
+        self.assertFalse(rows[0]['is_rent'])
+        self.assertEqual(1, rows[0]['raw_rent_count'])
+        self.assertEqual(rows[0]['stock'], rows[1]['stock'])
+        self.assertEqual(rows[0]['outfits'], rows[1]['outfits'])
+        self.assertEqual('round:1', rows[1]['receipt'])
         self.assertEqual(before, self.state.snapshot())
         # The same raw descriptor must also remain sellable as a permanent
         # copy, rather than being rejected as remaining rental battles.

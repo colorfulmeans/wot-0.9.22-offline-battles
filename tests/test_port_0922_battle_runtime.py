@@ -4850,10 +4850,22 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
             battle._remote_factory = factory
             battle._records = {
                 'bot:11': {'engine_id': vehicle_id, 'local': False}}
-            battle._show_shot({
-                'kind': 'bot_shot', 'attacker_bot': 11,
-                'shell_index': 1, 'shot_yaw': math.pi / 2.0,
-                'shot_pitch': 0.1})
+            battle._records['bot:11'].update(
+                kind='bot', network_id=11,
+                _remote_aim_signature=((1, vehicle_id), 0., 0., math.pi / 2., -0.1, 0))
+            battle._start_message = {'round_id': 7}
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                battle._show_shot({
+                    'kind': 'bot_shot', 'attacker_bot': 11,
+                    'projectile_id': '7:b:11:1',
+                    'shell_index': 1, 'shot_yaw': math.pi / 2.0,
+                    'shot_pitch': 0.1})
+            row = json.loads(next(line.split('BOT FIRE PRESENT ', 1)[1]
+                for line in output.getvalue().splitlines() if 'BOT FIRE PRESENT ' in line))
+            self.assertEqual((7, 11, '7:b:11:1'), (row['round'], row['bot'], row['projectile']))
+            self.assertEqual([0., 0., math.pi / 2., -0.1, 0], row['presented_aim'])
+            self.assertEqual(0.1, row['shot_pitch'])
 
             self.assertEqual((3, False), vehicle.last_shot)
             self.assertEqual((True, True), vehicle.last_shot_effect)

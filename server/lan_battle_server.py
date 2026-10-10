@@ -4485,7 +4485,11 @@ class BattleState:
             def reject(reason, missing=None):
                 self.last_destructible_contact_reject = {
                     'code': reason, 'player': message.get('player_id'),
-                    'seq': message.get('contact_seq'), 'missing': missing}
+                    'seq': message.get('contact_seq'), 'missing': missing,
+                    'round': self.round_id, 'phase': self.phase,
+                    'bot_revision': self.bot_state_revision,
+                    'bot_time_us': self.bot_state_time_us,
+                    'publication_count': len(self.destructibles)}
                 return False
             if (player_id != SIMULATION_WORKER_AUTHORITY_ID or
                     player_id != self.bot_authority_id or
@@ -4531,6 +4535,11 @@ class BattleState:
                             self.destructibles
                     if not known:
                         return reject("missing_publication", (chunk_id, item_index, mat_kind))
+            _server_log('DESTR CONTACT RESOLVED ' + json.dumps({
+                'round': self.round_id, 'player': target_id, 'seq': seq,
+                'accepted': message['accepted'], 'token': token,
+                'bot_revision': self.bot_state_revision,
+                'publication_count': len(self.destructibles)}, separators=(',', ':')))
             target.destructible_contacts.pop(seq, None)
             if message["accepted"]:
                 self._record_player_destructible_contact_resolution(
@@ -10877,6 +10886,16 @@ class BattleState:
                 return None, 'canonical_ram_motion_mismatch'
             for i, name in enumerate(('x','y','z','yaw','pitch','roll')):
                 if abs(contact[name] - witness[12+i]) > 0.0002:
+                    _server_log('RAM POSE MISMATCH ' + json.dumps({
+                        'round': self.round_id, 'player': player.player_id,
+                        'seq': contact.get('seq'), 'bot': contact['bot_id'],
+                        'motion_seq': contact['bot_ram_motion_seq'],
+                        'presentation_time_us': contact['presentation_time_us'],
+                        'revision': contact['bot_state_revision'],
+                        'field': name, 'actual': contact[name], 'expected': witness[12+i],
+                        'delta': contact[name] - witness[12+i], 'tolerance': 0.0002,
+                        'actual_pose': [contact[k] for k in ('x','y','z','yaw','pitch','roll')],
+                        'expected_pose': list(witness[12:18])}, separators=(',', ':')))
                     return None, 'canonical_ram_motion_pose_mismatch'
                 contact['ram_bot_state'][name] = witness[6+i]
             if any(abs(contact[name] - witness[18+i]) > 0.0002

@@ -1302,6 +1302,7 @@ class GarageState(object):
         record.update(staged)
         self._touched.add(_int(vehicle_inventory_id))
         self.revision += 1
+        self.report_customization(record.get('vehicleTypeCompactDescr'), 'equip_staged')
         return record
 
     def apply_style(self, vehicle_inventory_id, style_id):
@@ -1320,6 +1321,7 @@ class GarageState(object):
             record.setdefault('outfits', {}).pop(CUSTOMIZATION_ALL_SEASONS, None)
             self._touched.add(_int(vehicle_inventory_id))
             self.revision += 1
+            self.report_customization(record.get('vehicleTypeCompactDescr'), 'equip_staged')
             return record
         try:
             styles = self._vehicles_module().g_cache.customization20().styles
@@ -1350,6 +1352,7 @@ class GarageState(object):
         record.update(staged)
         self._touched.add(_int(vehicle_inventory_id))
         self.revision += 1
+        self.report_customization(record.get('vehicleTypeCompactDescr'), 'equip_staged')
         return record
 
     def buy_customizations(self, vehicle_inventory_id, purchases):
@@ -1433,6 +1436,20 @@ class GarageState(object):
             if _int(getattr(style, 'compactDescr', 0)) == _int(compact_descr):
                 return style
         return None
+
+    def report_customization(self, vehicle_type, stage, receipt=None):
+        """Diagnose equipped style/stock without altering the live snapshot."""
+        try:
+            from gui.mods.offline_lan_0922.customization_rules import report_style
+            record = next((row for row in self._records()
+                           if _int(row.get('vehicleTypeCompactDescr')) == _int(vehicle_type)), None)
+            if record is not None:
+                report_style(stage, record, self._snapshot,
+                             self._vehicles_module().g_cache.customization20().styles,
+                             self._customizations_module().parseOutfitDescr,
+                             self._customization_identity, receipt)
+        except Exception:
+            pass
 
     def consume_customization_rental(self, vehicle_type):
         """Consume one played battle, inside the durable battle settlement."""
