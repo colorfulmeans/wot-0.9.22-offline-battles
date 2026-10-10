@@ -10,6 +10,23 @@ from gui.mods.offline_lan_0922 import bot_runtime
 
 
 class LatencyRepairsTests(unittest.TestCase):
+    def test_long_gap_records_window_states_without_disabling_timing(self):
+        wall, cpu, window = [0.], [0.], [(1, 0, 1)]
+        lines = []
+        diagnostic = fixture.battle_runtime_module._FrameDiagnostics(
+            clock=lambda: wall[0], cpu_clock=lambda: cpu[0],
+            window_clock=lambda: window[0], writer=lines.append)
+        frame = diagnostic.begin(0., 0.)
+        wall[0], cpu[0] = .01, .005
+        diagnostic.finish(frame, 0., .01, .01, {}, {}, {'role': 'guest'})
+        wall[0], cpu[0], window[0] = .51, .007, (0, 1, 1)
+        diagnostic.begin(.51, .51)
+        diagnostic.flush()
+        text = ''.join(lines)
+        self.assertIn('window_before=[1,0,1] window_after=[0,1,1]', text)
+        self.assertIn('gpu_measured=0\n', text)
+        self.assertTrue(diagnostic.enabled)
+
     def test_hit_diagnostic_names_bot_and_player_targets(self):
         battle = fixture.BattleRuntime(fixture._runtime())
         output = io.StringIO()

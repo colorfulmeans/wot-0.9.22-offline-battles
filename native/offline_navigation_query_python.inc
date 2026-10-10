@@ -177,3 +177,36 @@ PyObject *WOT_CDECL thread_cpu_seconds(PyObject *, PyObject *args) {
     return float_new(static_cast<double>(k.QuadPart + u.QuadPart) * 1.0e-7);
 #endif
 }
+
+#ifndef WOT_HOST_PYTHON
+template<class Function> Function window_proc(HMODULE module,const char *name) {
+    Function result=nullptr;const auto raw=GetProcAddress(module,name);
+    static_assert(sizeof(result)==sizeof(raw),"Win32 function pointer width");
+    std::memcpy(&result,&raw,sizeof(result));return result;
+}
+#endif
+PyObject *WOT_CDECL window_state(PyObject *, PyObject *args) {
+    if (!sequence(args) || size(args)) return fallback();
+#ifdef WOT_HOST_PYTHON
+    return fallback();
+#else
+    // Passive OS state only; no focus changes, engine calls or waits.
+    const auto module=GetModuleHandleW(L"user32.dll");
+    if(!module)return fallback();
+    const auto foreground=window_proc<HWND (WINAPI *)()>(module,"GetForegroundWindow");
+    const auto process=window_proc<DWORD (WINAPI *)(HWND,LPDWORD)>(module,"GetWindowThreadProcessId");
+    const auto gui=window_proc<BOOL (WINAPI *)(DWORD,PGUITHREADINFO)>(module,"GetGUIThreadInfo");
+    const auto iconic=window_proc<BOOL (WINAPI *)(HWND)>(module,"IsIconic");
+    if(!foreground || !process || !gui || !iconic)return fallback();
+    DWORD foreground_pid=0;const auto front=foreground();
+    if(front)process(front,&foreground_pid);
+    GUITHREADINFO info={};info.cbSize=sizeof(info);
+    const bool known=gui(GetCurrentThreadId(),&info) && info.hwndActive;
+    try {
+        OwnedTuple result(3);
+        result.set(0,int_new(foreground_pid?int(foreground_pid==GetCurrentProcessId()):-1));
+        result.set(1,int_new(known?int(iconic(info.hwndActive)!=0):-1));
+        result.set(2,int_new(known?1:0));return result.release();
+    }catch(const PythonAllocationFailed &){return 0;}catch(...){return fallback();}
+#endif
+}

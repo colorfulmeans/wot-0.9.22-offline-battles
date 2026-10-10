@@ -11607,6 +11607,69 @@ class BotRuntimeTests(unittest.TestCase):
         gun_state.commit_shot_bloom()
         self.assertAlmostEqual(expected, gun_state.dispersion)
 
+    def test_unaligned_trigger_never_debits_or_starts_a_burst(self):
+        descriptor = _combat_descriptor()
+        gun = self.module._BotGunState(descriptor)
+        gun.elapsed = 10.
+        runtime = self.module.BotRuntime(1)
+        state = {'id': 11, 'fire_seq': 0, 'gun_aligned': False,
+                 'aim_yaw': 0., 'gun_pitch': 0., 'critical': {}, 'profile': {}}
+        before = gun.clip
+        self.assertFalse(runtime._fire(state, gun, 1., descriptor))
+        self.assertEqual(before, gun.clip)
+        self.assertEqual(0, state['fire_seq'])
+        self.assertEqual([], runtime._pending_launches)
+        self.assertNotIn(11, runtime._burst_states)
+
+    def test_active_burst_stops_without_debit_when_alignment_is_lost(self):
+        descriptor = _combat_descriptor(
+            reload_time=4.0, clip=(5, 2.0), dispersion=0.01,
+            max_ammo=20)
+        descriptor.gun.burst = (3, 0.1)
+        descriptor.gun.shotDispersionFactors = {
+            'afterShot': 4.0, 'afterShotInBurst': 1.0,
+            'turretRotation': 0.0,
+        }
+        runtime = self.module.BotRuntime(
+            1, friendly_lane_probe=lambda *unused: True)
+        runtime.round_id = 5
+        runtime._descriptors[11] = descriptor
+        state = {
+            'id': 11, 'alive': True, 'health': 1000, 'fire_seq': 0,
+            'x': 0.0, 'y': 0.0, 'z': 0.0,
+            'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0,
+            'aim_yaw': 0.0, 'turret_yaw': 0.0, 'gun_pitch': -0.01,
+            'critical': {}, 'profile': {}, 'gun_aligned': True,
+        }
+        target = {
+            'id': 2, 'network_id': 2, 'kind': 'human', 'alive': True,
+            'position': (0.0, 1.0, 100.0),
+        }
+        solution = {'flight_time': 0.5}
+        gun_state = self.module._BotGunState(descriptor)
+        gun_state.elapsed = 10.0
+        ammo_state = self.module._BotAmmoState(descriptor, {}, state)
+        runtime._gun_states[11] = gun_state
+        runtime._ammo_states[11] = ammo_state
+        initial_ammo = ammo_state.remaining[ammo_state.loaded]
+        preview = runtime._direct_launch_preview(
+            state, descriptor, ammo_state.loaded, gun_state, solution)
+
+        self.assertTrue(runtime._fire(
+            state, gun_state, 1.0, descriptor,
+            ammo_state=ammo_state, launch_preview=preview))
+        state['gun_aligned'] = False
+        remaining = list(ammo_state.remaining)
+        clip = gun_state.clip
+        self.assertEqual(0, runtime._advance_active_burst(
+            state, gun_state, ammo_state, 1.0, descriptor,
+            target, solution, 0.2, set()))
+        self.assertEqual(remaining, ammo_state.remaining)
+        self.assertEqual(clip, gun_state.clip)
+        self.assertEqual(1, state['fire_seq'])
+        self.assertEqual(1, len(runtime._pending_launches))
+        self.assertFalse(runtime._burst_states[11].active)
+
     def test_bot_burst_launches_and_debits_every_physical_round(self):
         descriptor = _combat_descriptor(
             reload_time=4.0, clip=(5, 2.0), dispersion=0.01,
@@ -11625,7 +11688,7 @@ class BotRuntimeTests(unittest.TestCase):
             'x': 0.0, 'y': 0.0, 'z': 0.0,
             'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0,
             'aim_yaw': 0.0, 'turret_yaw': 0.0, 'gun_pitch': -0.01,
-            'critical': {}, 'profile': {},
+            'critical': {}, 'profile': {}, 'gun_aligned': True,
         }
         target = {
             'id': 2, 'network_id': 2, 'kind': 'human', 'alive': True,
@@ -11693,7 +11756,7 @@ class BotRuntimeTests(unittest.TestCase):
                     'fire_seq': 0, 'x': 0.0, 'y': 0.0, 'z': 0.0,
                     'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0,
                     'aim_yaw': 0.0, 'turret_yaw': 0.0,
-                    'gun_pitch': -0.01, 'critical': {}, 'profile': {},
+                    'gun_pitch': -0.01, 'critical': {}, 'profile': {}, 'gun_aligned': True,
                 }
                 target = {
                     'id': 2, 'network_id': 2, 'kind': 'human',
@@ -11774,7 +11837,7 @@ class BotRuntimeTests(unittest.TestCase):
                     'fire_seq': 0, 'x': 0.0, 'y': 0.0, 'z': 0.0,
                     'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0,
                     'aim_yaw': 0.0, 'turret_yaw': 0.0,
-                    'gun_pitch': -0.01, 'critical': {}, 'profile': {},
+                    'gun_pitch': -0.01, 'critical': {}, 'profile': {}, 'gun_aligned': True,
                 }
                 target = {
                     'id': 2, 'network_id': 2, 'kind': 'human',
@@ -12021,6 +12084,7 @@ class BotRuntimeTests(unittest.TestCase):
         gun_state.dispersion = 0.04
         gun_state.elapsed = 10.0
         state = {
+            'gun_aligned': True,
             'id': 11, 'fire_seq': 0, 'aim_yaw': 0.4,
             'gun_pitch': -0.1, 'critical': {},
         }
@@ -12060,6 +12124,7 @@ class BotRuntimeTests(unittest.TestCase):
             'destroyed': [], 'crew_ko': ['gunner1'],
         }
         state = {
+            'gun_aligned': True,
             'id': 11, 'fire_seq': 0, 'aim_yaw': 0.4,
             'gun_pitch': -0.1, 'critical': critical,
         }

@@ -477,9 +477,10 @@ class _FrameDiagnostics(object):
 
     def __init__(self, clock=None, writer=None,
                  window_seconds=DIAGNOSTIC_WINDOW_SECONDS,
-                 initial_window_seconds=None, cpu_clock=None):
+                 initial_window_seconds=None, cpu_clock=None, window_clock=None):
         self._clock = clock or _PROFILE_CLOCK
         self._cpu_clock = cpu_clock
+        self._window_clock = window_clock
         self._writer = writer or sys.stdout.write
         self._steady_window_seconds = max(0.25, float(window_seconds))
         self._initial_window_seconds = max(0.25, float(
@@ -565,6 +566,19 @@ class _FrameDiagnostics(object):
         self.enabled = False
         self._pending = None
         self._slow = []
+
+    def _read_window(self):
+        if self._window_clock is None:
+            return None
+        try:
+            value = self._window_clock()
+            if value is not None and len(value) == 3:
+                result = tuple(int(item) for item in value)
+                if all(item in (-1, 0, 1) for item in result):
+                    return result
+        except Exception:
+            pass
+        return None
 
     def _read_cpu(self):
         if self._cpu_clock is None:
@@ -677,6 +691,8 @@ class _FrameDiagnostics(object):
                     if (self._cpu_entry is not None and previous_cpu is not None
                         and self._cpu_entry >= previous_cpu) else None)
                 row['between_callbacks_wall'] = max(0.0, wall_gap - pending['exec'])
+                row['window_before'] = pending.get('window_state')
+                row['window_after'] = self._read_window() if wall_gap >= .05 else None
                 row['lan_poll'] = self._lan_poll_delta(
                     pending.get('lan_poll_totals'), lan_poll, row['outside'])
                 row['outside_without_lan_poll'] = (
@@ -1256,11 +1272,13 @@ class _FrameDiagnostics(object):
                          name, self._milliseconds(
                              probe_durations.get(name, 0.0)))
                               for name in PROBE_KINDS)))
-            lines.append(prefix + 'PERF between_callbacks rank=%d cause=%d next=%d wall_ms=%.3f cpu_ms=%s includes=engine,other_callbacks,lan_poll gpu_measured=0' % (
+            lines.append(prefix + 'between_callbacks rank=%d cause=%d next=%d wall_ms=%.3f cpu_ms=%s window_before=%s window_after=%s window_fields=focused,minimized,known includes=engine,other_callbacks,lan_poll gpu_measured=0\n' % (
                 rank, row['cause'], row['next'],
                 self._milliseconds(row.get('between_callbacks_wall', 0.0)),
                 ('%.3f' % self._milliseconds(row['between_callbacks_cpu'])
-                    if row.get('between_callbacks_cpu') is not None else 'unavailable')))
+                    if row.get('between_callbacks_cpu') is not None else 'unavailable'),
+                json.dumps(row.get('window_before'), separators=(',', ':')),
+                json.dumps(row.get('window_after'), separators=(',', ':'))))
             if context.get('role') == 'worker':
                 frames = [('focus', 0, self._compact_frame(row))]
                 if rank == 1:
@@ -1311,12 +1329,13 @@ class _FrameDiagnostics(object):
             # A poll re-entered during this callback belongs to exec, and must
             # not also be subtracted from the following outside interval.
             lan_poll = self._read_lan_poll()
+            window_state = self._read_window()
             end_cpu = self._read_cpu()
             end_wall = self._clock()
             self._pending = {
                 'cause': int(frame_id), 'entry_wall': float(entry_wall),
                 'exec': max(0.0, end_wall - float(entry_wall)),
-                'end_cpu': end_cpu,
+                'end_cpu': end_cpu, 'window_state': window_state,
                 'thread_cpu': (end_cpu - self._cpu_entry
                                if (end_cpu is not None and
                                    self._cpu_entry is not None and
@@ -2162,7 +2181,9 @@ class BattleRuntime(object):
         self._frame_diagnostics = (
             _FrameDiagnostics(
                 initial_window_seconds=DIAGNOSTIC_INITIAL_WINDOW_SECONDS,
-                cpu_clock=native_math.thread_cpu_seconds)
+                cpu_clock=native_math.thread_cpu_seconds,
+                window_clock=lambda: (native_math.window_state()
+                    if not self._worker_mode else None))
             if PERFORMANCE_DIAGNOSTICS else None)
         self._combat_diagnostics = None
         self._sixth_sense = None
@@ -13900,8 +13921,20 @@ class BattleRuntime(object):
             raise RuntimeError('canonical projectile ricochet is malformed')
         projectile_id = normalized['projectile_id']
         meta = self._projectile_meta.get(projectile_id)
+        if projectile_id in self._projectile_visual_terminals:
+            return False
+        event_epoch = event.get('authority_epoch')
+        if (self._projectile_epoch is not None and event_epoch is not None and
+                event_epoch != self._projectile_epoch):
+            return False
         if meta is None:
-            raise RuntimeError('canonical projectile ricochet lost its launch')
+            # A non-owner may see an entire short flight between snapshots.
+            # The canonical bounce is self-contained; restore its validated
+            # segment, without inventing a muzzle or replaying ammunition.
+            meta = self._install_projectile_meta(normalized)
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] PROJECTILE RICOCHET RESTORE '
+                'id=%s owner=%s\n' % (projectile_id, self._owns_projectile(meta)))
         if 'local_launch_time' in meta and self._owns_projectile(meta):
             mismatch = self._projectile_launch_mismatches(meta, normalized)
             if mismatch:

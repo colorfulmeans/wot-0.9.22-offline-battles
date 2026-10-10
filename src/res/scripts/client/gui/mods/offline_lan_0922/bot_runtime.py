@@ -11149,6 +11149,10 @@ class BotRuntime(object):
                 _critical_factor(state, descriptor, 'dispersion'),
                 _critical_factor(state, descriptor, 'aim_time'),
                 inputs, state)
+            state['gun_aligned'] = bool(
+                not planning_pending and state.get('gun_aligned') and
+                abs(_angle_delta(raw_relative, state['turret_yaw'])) <= 1.0e-6 and
+                abs(raw_pitch - state['gun_pitch']) <= 1.0e-6)
             if not locked:
                 state[_GUN_PITCH_LIMIT_CACHE] = (
                     descriptor, state['turret_yaw'],
@@ -13001,7 +13005,8 @@ class BotRuntime(object):
     def _fire(self, state, gun_state, reload_factor, descriptor,
               launch_receipt=None, ammo_state=None, launch_preview=None,
               launch_time_us=None):
-        if (state.get('_drowning', False) or
+        if (not state.get('gun_aligned', False) or
+                state.get('_drowning', False) or
                 state.get('_overturned', False) or
                 state.get('_wire_projection_failure') is not None):
             # A later trigger would replace the unavailable checkpoint's
@@ -13106,6 +13111,7 @@ class BotRuntime(object):
                 int(step_end_time_us), int(step_start_time_us) + max(
                     0, int(round(float(edge['due_offset']) * 1000000.0))))
             if (not state.get('alive', False) or
+                    not state.get('gun_aligned', False) or
                     state.get('_drowning', False) or
                     state.get('_overturned', False) or
                     'gunHealth' in destroyed_devices or

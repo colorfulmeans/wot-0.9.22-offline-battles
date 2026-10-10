@@ -73,8 +73,18 @@ def snapshot():
 
 def thread_cpu_seconds():
     """Read this thread's CPU clock without affecting native availability."""
-    backend = _load()
-    operation = getattr(backend, 'thread_cpu_seconds', None)
+    operation = getattr(_load(), 'thread_cpu_seconds', None)
+    if not callable(operation):
+        return None
+    try:
+        return operation()
+    except Exception:
+        return None
+
+
+def window_state():
+    """Passive focus/minimized/known tuple, or unknown on other hosts."""
+    operation = getattr(_load(), 'window_state', None)
     if not callable(operation):
         return None
     try:

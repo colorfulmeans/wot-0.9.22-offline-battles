@@ -280,14 +280,35 @@ def main():
             aim['gun_pitch'] = source.hull_aiming.gun_pitch_step(
                 aim['gun_pitch'], raw_pitch, -0.01, 0.3 * 0.81, dt, rotation_time, limits)
         aim.update(turret_yaw=current, desired_gun_pitch=wanted,
-                   gun_aligned=bool(valid and target and abs(source._angle_delta(raw_yaw, current)) <= 0.06 and
-                                    abs(raw_pitch - aim['gun_pitch']) <= 0.04))
+                   gun_aligned=bool(valid and target and abs(source._angle_delta(raw_yaw, current)) <= 1.0e-6 and
+                                    abs(raw_pitch - aim['gun_pitch']) <= 1.0e-6))
         inputs = owner.aim_input(raw_yaw, raw_pitch, dt, target, limited, valid,
                                  -0.8, 0.8, 0.93, 0.7, 0.81, override)
         output = {}
         owner.after_motion(1, dt, 2.0, 0.1, -999.0, 1.0, 1.0, inputs, output)
         equal(aim, output, 'fused aim %d' % index)
         checks[0] += 1
+    # Explicitly cover the old near-aligned window: no first shell while
+    # 0.05 rad of traverse or 0.025 rad of elevation still remains.
+    owner.install_aim(1, ((0., -.9), (6.2831854, -.9)),
+                      ((0., .9), (6.2831854, .9)), .6, .3, None)
+    raw_yaw = aim['turret_yaw'] + .11
+    raw_pitch = aim['gun_pitch']
+    inputs = owner.aim_input(raw_yaw, raw_pitch, .1, True, False, True,
+                             -math.pi, math.pi, 1., 1., 1., None)
+    output = {}
+    owner.after_motion(1, .1, 0., 0., 0., 1., 1., inputs, output)
+    equal(False, output['gun_aligned'], 'unfinished turret cannot fire')
+    owner.after_motion(1, .1, 0., 0., 0., 1., 1., inputs, output)
+    equal(True, output['gun_aligned'], 'completed turret can fire')
+    inputs = owner.aim_input(raw_yaw, raw_pitch + .055, .1, True, False, True,
+                             -math.pi, math.pi, 1., 1., 1., None)
+    owner.after_motion(1, .1, 0., 0., 0., 1., 1., inputs, output)
+    equal(False, output['gun_aligned'], 'unfinished pitch cannot fire')
+    owner.after_motion(1, .1, 0., 0., 0., 1., 1., inputs, output)
+    equal(True, output['gun_aligned'], 'completed pitch can fire')
+    checks[0] += 4
+    owner.install_aim(1, curves['minPitch'], curves['maxPitch'], 0.6, 0.3, -0.01)
     for index in range(150):
         yaw = rng.uniform(-math.pi, math.pi)
         equal(source.gun_pitch_limits.calc_pitch_limits(yaw, curves), owner.pitch_limits(1, yaw), 'float32 curves')

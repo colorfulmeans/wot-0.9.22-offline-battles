@@ -402,6 +402,7 @@ PyMethodDef methods[] = {
     {"nav_query_run", nav_query_run, 0x0001, "Run a complete same-thread navigation corridor oracle."},
     {"nav_query_filter", nav_query_filter, 0x0001, "Filter original planning materials during a native oracle call."},
     {"thread_cpu_seconds", thread_cpu_seconds, 0x0001, "Read current-thread user and kernel CPU seconds."},
+    {"window_state", window_state, 0x0001, "Read own process focus and main-thread window minimization state."},
     {"world_run_native", world_run_native, 0x0001, "Run ordered engine query batches in C++."},
     {"world_run", world_run, 0x0001, "Run the complete world law with same-thread engine frontiers."},
     {"contact_roster", contact_roster, 0x0001, "Solve one complete roster contact stage over frozen bodies."},

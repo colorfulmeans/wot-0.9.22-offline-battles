@@ -319,6 +319,24 @@ def _bot_event():
 
 
 class BattleProjectileTests(unittest.TestCase):
+    def test_worker_restores_self_contained_human_bounce_without_launch_snapshot(self):
+        battle, unused = _battle(.5)
+        battle._worker_mode = True
+        battle._records['player:7']['local'] = False
+        event = _event()
+        event['max_distance'] = event.pop('maxDistance')
+        event.update(kind='projectile_ricochet', ricochet_count=1,
+            segment_start_time_ms=500, checked_through_ms=500,
+            checked_distance=5., piercing_loss=0., base_penetration_multiplier=.75,
+            segment_origin=[5., 1., 0.], segment_velocity=[-10., 0., 0.],
+            resolved_time_ms=500, impact=[5., 1., 0.])
+        self.assertTrue(battle._apply_projectile_ricochet_event(event))
+        self.assertEqual(1, battle._projectile_meta[event['projectile_id']]['ricochet_count'])
+        self.assertEqual(0, len(battle._projectiles.snapshot()))
+        battle._apply_projectile_terminal_event(dict(event, outcome='miss'))
+        self.assertFalse(battle._apply_projectile_ricochet_event(event))
+        self.assertNotIn(event['projectile_id'], battle._projectile_meta)
+
     def test_combat_capture_preserves_eight_shots_and_local_query_failure(self):
         from gui.mods.offline_lan_0922.worker_diagnostics import WorkerCombatDiagnostics
 

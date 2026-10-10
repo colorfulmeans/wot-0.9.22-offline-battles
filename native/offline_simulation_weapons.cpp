@@ -286,8 +286,10 @@ void advance_aim(AimState &state,const AimConfig &config,const AimInput &input) 
             config.gun_speed*positive(input.gun_factor),input.dt,rotation_time,limits);
     }
     state.turret_yaw=current; state.gun_pitch=pitch; state.desired_gun_pitch=wanted;
-    state.aligned=input.valid_pitch && input.target && std::abs(wrap(input.raw_yaw-current))<=.06 &&
-        std::abs(input.raw_pitch-pitch)<=.04;
+    // Match the current release's completed physical slew gate. Dispersion
+    // and gunner readiness are separate policies, not traverse tolerances.
+    state.aligned=input.valid_pitch && input.target && std::abs(wrap(input.raw_yaw-current))<=1.e-6 &&
+        std::abs(input.raw_pitch-pitch)<=1.e-6;
 }
 std::array<double,2> scatter(const Point &base,double radius,double azimuth,bool normalize_base) {
     demand(std::isfinite(radius) && radius>=0. && std::isfinite(azimuth));

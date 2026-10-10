@@ -14,12 +14,23 @@ STORE_CONSTANTS = types.SimpleNamespace(VEHICLE='vehicle', MODULE='module',
 
 
 class DepotStyleTests(unittest.TestCase):
+    def test_permanent_raw_default_quantity_is_not_a_rental(self):
+        self.setUp()
+        self.styles[34].isRent = False
+        self.styles[34].rentCount = 1
+        rows = self.depot.inventory_rows({34: {0: 1}}, self.styles, lambda x: x)
+        self.assertIn('Permanent style', rows[0]['desc'])
+        snapshot = {'shopItemPrices': {self.styles[34].compactDescr: {'gold': 10}}}
+        rows = self.depot.shop_rows(snapshot, self.styles, lambda x: x)
+        self.assertFalse(rows[0]['disabled'])
+        self.assertIn('Permanent style', rows[0]['desc'])
+
     def setUp(self):
         self.depot = fixture._load_port_module('depot_styles')
         rule = lambda countries: types.SimpleNamespace(nations=countries)
         def style(identifier, countries, rental=0):
             return types.SimpleNamespace(userString='Black Widow',compactDescr=identifier * 256,
-                rentCount=rental,texture='../maps/vehicles/styles/style_01.png',
+                isRent=bool(rental),rentCount=rental,texture='../maps/vehicles/styles/style_01.png',
                 filter=types.SimpleNamespace(include=[rule(countries)],
                     matchVehicleType=lambda vehicle: vehicle.nation in countries))
         self.styles = {34:style(34,[3]), 33:style(33,[0]), 1:style(1,[3],100)}

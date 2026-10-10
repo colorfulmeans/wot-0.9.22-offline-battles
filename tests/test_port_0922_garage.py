@@ -433,6 +433,23 @@ class _Customizations(object):
 
 class GarageStateTests(unittest.TestCase):
 
+    def test_permanent_raw_style_default_count_survives_battle_settlement(self):
+        self.state._customizations = _Customizations
+        style = types.SimpleNamespace(compactDescr=12007, isRent=False, rentCount=1)
+        self.state._vehicles_module().g_cache = types.SimpleNamespace(
+            customization20=lambda: types.SimpleNamespace(styles={7: style}))
+        self.state._snapshot['shopItemPrices'][12007] = {'gold': 10}
+        self.state._wallet()['gold'] = 100
+        self.state.apply_style(9, 7)
+        before = copy.deepcopy(self.state.snapshot())
+        for unused in range(3):
+            self.assertFalse(self.state.consume_customization_rental(50001))
+        self.assertEqual(before, self.state.snapshot())
+        # The same raw descriptor must also remain sellable as a permanent
+        # copy, rather than being rejected as remaining rental battles.
+        self.state.sell_customization(9, 12007, 1)
+
+
     def test_customization_purchase_charges_each_copy_and_sale_matches_stock(self):
         self.state._customizations = _Customizations
         self.state._snapshot['shopItemPrices'][12001] = {'gold': 50}
@@ -467,7 +484,7 @@ class GarageStateTests(unittest.TestCase):
 
     def test_rented_style_charges_once_counts_battles_and_expires(self):
         self.state._customizations = _Customizations
-        style=types.SimpleNamespace(compactDescr=12007,rentCount=100)
+        style=types.SimpleNamespace(compactDescr=12007,isRent=True,rentCount=100)
         self.state._vehicles_module().g_cache=types.SimpleNamespace(
             customization20=lambda:types.SimpleNamespace(styles={7:style}))
         self.state._snapshot['shopItemPrices'][12007]={'credits':75000}
@@ -3457,7 +3474,7 @@ class GaragePersistenceTests(unittest.TestCase):
     def test_rental_battle_counter_survives_restart_and_duplicate_receipt(self):
         vehicles,tankmen=_modules()
         vehicles.g_cache=types.SimpleNamespace(customization20=lambda:types.SimpleNamespace(
-            styles={7:types.SimpleNamespace(compactDescr=12007,rentCount=100)}))
+            styles={7:types.SimpleNamespace(compactDescr=12007,isRent=True,rentCount=100)}))
         state=self.garage.GarageState(SNAPSHOT,vehicles_module=vehicles,
             tankmen_module=tankmen,customizations_module=_Customizations)
         state.snapshot()['shopItemPrices'][12007]={'credits':75000}
