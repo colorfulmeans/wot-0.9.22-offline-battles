@@ -43,7 +43,7 @@ enum class EntryCode {
     sim_navigation_async_snapshot, sim_navigation_receipts,
     sim_navigation_order_events,
     motion_predrive_sweep, contact_solve, contact_pair_build, contact_solve_passes,
-    rotation_current, world_run_native, parking_distances, release_drive, contact_materialize, control_pose, rotation_envelope, rotation_departure, contact_ground, Count
+    rotation_current, world_run_native, parking_distances, release_drive, contact_materialize, control_pose, rotation_envelope, rotation_departure, contact_ground, release_suspension_step, Count
 };
 
 enum class CallbackCode { Motion, ControlSight, ControlDriver, Navigation,

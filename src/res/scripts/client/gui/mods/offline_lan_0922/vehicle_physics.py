@@ -1909,7 +1909,69 @@ def _project_suspension_limits(params, state, ground_heights,
 	return touched
 
 
+_SUSPENSION_RESULT_KEYS = (
+	'height', 'vertical_velocity', 'pitch', 'pitch_velocity', 'roll',
+	'roll_velocity', 'contact_count', 'rigid_contact_count', 'airborne',
+	'left_flying', 'right_flying', 'contacted_this_step',
+	'touched_contact_count', 'impact_speed', 'max_compression', 'max_limit_excess')
+
+
+def _native_suspension_step(params, state, ground, dt, pseudo, support):
+	try:
+		from gui.mods.offline_lan_0922 import native_math
+	except ImportError:
+		return None
+	backend = native_math._load()
+	if (not hasattr(backend, 'release_suspension_step') or
+			type(params) is not dict or type(state) is not dict or
+			type(ground) not in (tuple, list) or
+			(pseudo is not None and type(pseudo) not in (tuple, list))):
+		return None
+	try:
+		if any(type(p) is not dict for p in
+				tuple(params['springs']) + tuple(params.get('pseudo_contacts', ()))):
+			return None
+		springs = tuple((p['x'], p.get('y', 0.0), p['z'], p['stiffness'],
+			p['damping'], p['static_compression'], p['max_compression'],
+			p['max_force'], -1 if p['side'] == 'left' else
+			1 if p['side'] == 'right' else 0) for p in params['springs'])
+		contacts = tuple((p['x'], p.get('y', 0.0), p['z'],
+			p.get('penetration', ALLOWED_PENETRATION),
+			-1 if p.get('side') == 'left' else 1 if p.get('side') == 'right' else 0,
+			int(p.get('kind') == 'rigid')) for p in params.get('pseudo_contacts', ()))
+		pseudo = (None,) * len(contacts) if pseudo is None else tuple(pseudo)
+		result = native_math.call('release_suspension_step',
+			(params['mass'], params['pitch_inertia'], params['roll_inertia'],
+			 params['fixed_step'], params['constraint_iterations']),
+			springs, contacts,
+			tuple(state.get(key, 0.0) for key in _SUSPENSION_RESULT_KEYS[:6]),
+			(tuple(ground), pseudo), (dt, support),
+			(GRAVITY, CONTACT_PENETRATION, AIRBORNE_ANGULAR_DAMPING,
+			 AIRBORNE_ANGULAR_SPEED_LIMIT, FREEZE_ACCEL_EPSILON,
+			 FREEZE_VEL_EPSILON, FREEZE_ANG_ACCEL_EPSILON,
+			 FREEZE_ANG_VEL_EPSILON, SERVER_PHYSICS_MAX_SUBSTEPS))
+	except (KeyError, TypeError, ValueError, OverflowError):
+		return None
+	if result is None:
+		return None
+	result = dict(zip(_SUSPENSION_RESULT_KEYS, result))
+	for key in _SUSPENSION_RESULT_KEYS[8:12]:
+		result[key] = bool(result[key])
+	return result
+
+
 def damper_suspension_step(params, state, ground_heights, dt,
+		pseudo_ground_heights=None, support_vertical_velocity=0.0):
+	'''Use the current numeric law; adapters retain every engine/effect owner.'''
+	result = _native_suspension_step(params, state, ground_heights, dt,
+		pseudo_ground_heights, support_vertical_velocity)
+	if result is not None:
+		return result
+	return _reference_damper_suspension_step(params, state, ground_heights, dt,
+		pseudo_ground_heights, support_vertical_velocity)
+
+
+def _reference_damper_suspension_step(params, state, ground_heights, dt,
 		pseudo_ground_heights=None, support_vertical_velocity=0.0):
 	'''Advance the model-origin ten-spring heave/pitch/roll trial.
 

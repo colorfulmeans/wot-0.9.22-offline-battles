@@ -98,6 +98,8 @@ jobs:
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_release_ground.py \
               /tmp/offline_math_batch_native.so
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_release_suspension.py \
+              /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_rotation_current.py \
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_workers.py \

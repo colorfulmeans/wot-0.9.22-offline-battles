@@ -53,6 +53,8 @@ class NativeMathDispatchTests(unittest.TestCase):
             translation_fraction=0, translation_contacts=0,
             slide_translation=0, rotation_fraction=0,
             contact_roster=0, world_run=0, world_failures=0,
+            world_run_native=0, rotation_current=0, rotation_envelope=0,
+            rotation_departure=0, release_suspension_step=0,
             loaded=False, fallbacks=0))
 
     def test_windows_loads_once_from_the_client_executable_directory(self):
@@ -108,6 +110,8 @@ class NativeMathDispatchTests(unittest.TestCase):
             translation_fraction=1, translation_contacts=0,
             slide_translation=0, rotation_fraction=1,
             contact_roster=0, world_run=0, world_failures=0,
+            world_run_native=0, rotation_current=0, rotation_envelope=0,
+            rotation_departure=0, release_suspension_step=0,
             loaded=True, fallbacks=2))
         self.assertEqual(self.output.getvalue().count('unavailable'), 1)
 
