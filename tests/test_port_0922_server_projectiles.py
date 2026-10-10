@@ -342,6 +342,22 @@ def _player_destructible_contact(seq=1, **changes):
 
 
 class ServerProjectileLedgerTests(unittest.TestCase):
+    def test_codec_crew_order_rebases_without_changing_fitted_membership(self):
+        roster = ['commander', 'gunner1', 'driver', 'loader1', 'loader2']
+        critical = dict(devices=[], destroyed=[], crew_ko=[], crew_roster=roster,
+                        fire=False, ammo_rack_death=False, events=[])
+        encoded = bot_state_rows.row(dict(id=19, critical=critical))
+        current = bot_state_rows.bot_state_codec.decode_row(encoded, {})['critical']
+        self.assertNotEqual(roster, current['crew_roster'])
+        proposal = dict(critical, crew_ko=['driver'])
+        delta = dict(devices=[], crew_ko=['driver'], ignite=False)
+        merged = BattleState._merge_critical_damage(current, proposal, delta, critical)
+        self.assertEqual(roster, merged['crew_roster'])
+        self.assertEqual(['driver'], merged['crew_ko'])
+        altered = dict(proposal, crew_roster=roster[:-1])
+        with self.assertRaisesRegex(ValueError, 'crew roster changed'):
+            BattleState._merge_critical_damage(current, altered, delta, critical)
+
 
     def test_player_pipeline_launch_progress_ricochet_terminal_without_echo(self):
         state = _state(players=3)

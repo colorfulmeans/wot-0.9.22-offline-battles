@@ -12702,10 +12702,14 @@ class BotRuntime(object):
                    order.get('combat_mode') == 'base_defense')
         fired = int(state.get('fire_seq', 0)) != episode['fire_seq']
         expired = now - episode['start'] >= 8.0
-        if changed or fired or expired:
+        blocked = any(now < failed[3] and
+                      _distance(_position(state), failed[0]) <= 0.08 and
+                      abs(_angle_delta(state.get('yaw', 0.0), failed[1])) <= 0.02
+                      for failed in state.get('_blocked_rotations', {}).values())
+        if changed or fired or expired or blocked:
             state.pop('_rear_aim_episode', None)
             state.pop('_rear_hull_aim', None)
-            if fired or expired:
+            if fired or expired or blocked:
                 state['_rear_aim_retry'] = (
                     episode['identity'], now + max(8.0, _number(state.get('reload_time'))))
             return order
@@ -14645,6 +14649,10 @@ class BotRuntime(object):
                     if rotation_blocked:
                         rotation_block_reason = 'native_world'
                 if rotation_blocked:
+                    # Pure hull laying also needs a fresh decision after a
+                    # realised refusal; a cached zero-throttle pivot otherwise
+                    # hides the collision from its bounded recovery owner.
+                    self._decision_cache.pop(state['id'], None)
                     rejected_delta = _angle_delta(candidate_hull_yaw, old_hull_yaw)
                     if abs(rejected_delta) > 1.0e-8:
                         side = 1 if rejected_delta > 0.0 else -1
@@ -14660,7 +14668,6 @@ class BotRuntime(object):
                         throttle = 0.0
                         state['movement_dir'] = 0
                         state.pop('_contact_motor_turn', None)
-                        self._decision_cache.pop(state['id'], None)
                         rotation_drive_held = True
                 self._turn_speeds[state['id']] = turn_speed
                 state['yaw'] = candidate_hull_yaw

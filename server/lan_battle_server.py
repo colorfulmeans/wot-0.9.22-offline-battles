@@ -11970,12 +11970,15 @@ class BattleState:
         profile_roster = tuple(profile.get("crew_roster") or ())
         current_roster = tuple(current.get("crew_roster") or ())
         proposal_roster = tuple(proposal.get("crew_roster") or ())
+        # Compact Bot rows restore mask order; descriptors retain crew order.
+        # These are named health instances, so compare membership and keep the
+        # fitted descriptor order in the resulting payload.
         if ((current_roster and profile_roster and
-             current_roster != profile_roster) or
+             frozenset(current_roster) != frozenset(profile_roster)) or
                 (proposal_roster and profile_roster and
-                 proposal_roster != profile_roster) or
+                 frozenset(proposal_roster) != frozenset(profile_roster)) or
                 (current_roster and proposal_roster and
-                 current_roster != proposal_roster)):
+                 frozenset(current_roster) != frozenset(proposal_roster))):
             raise ValueError("critical crew roster changed mid-round")
         roster = profile_roster or current_roster or proposal_roster
         crew_ko = set(current.get("crew_ko") or ())

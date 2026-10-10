@@ -239,6 +239,13 @@ class BotAdapter(object):
         # motor force even when the realised rotation is clamped by physics.
         heading = attempt['heading']
         turn = max(-0.8, min(0.8, (heading-yaw+math.pi) % (2.0*math.pi)-math.pi))
+        pose_clear = state.get('push_pose_clear')
+        if (abs(turn) > 0.01 and callable(pose_clear) and
+                not pose_clear(yaw + math.copysign(min(0.45, abs(turn)), turn))):
+            # A realised world turn refusal is not a movable-wreck contact.
+            # Release this failed episode to normal checked recovery immediately.
+            attempt['elapsed'] = 14.0
+            return None
         if not side_wreck and attempt['elapsed'] >= 8.0:
             side = 1.0 if int((attempt['elapsed']-6.0)/2.0) % 2 else -1.0
             sample_yaw = yaw + side*0.45

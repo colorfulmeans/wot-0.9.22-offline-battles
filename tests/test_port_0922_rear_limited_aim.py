@@ -105,6 +105,45 @@ class RearLimitedAimTests(unittest.TestCase):
 
 
 class RearTraverseRuntimeTests(unittest.TestCase):
+    def test_world_refused_t95_laying_yields_in_next_real_update(self):
+        descriptor = harness._combat_descriptor(
+            turret_yaw_limits=(-math.radians(10), math.radians(11)), turret_speed=1.)
+        runtime = self.fixture.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: descriptor,
+            direction_probe=lambda *unused: dict(clear=True, slope=0.),
+            ground_probe=lambda *unused: 0., physics_ground_probe=lambda *unused: 0.,
+            rotation_resolver=lambda *unused: False,
+            spawn_resolver=lambda *unused: ((0., 0., 0.), 0.),
+            visibility_probe=lambda *unused: True, firing_lane_probe=lambda *unused: True,
+            baked_graph=harness._flat_open_graph())
+        runtime.battle_start(self.fixture.start)
+        point = (10., 0., -100.)
+        runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[dict(
+            id=11, team=2, combat_mode='advance', target_kind='human', target_id=2,
+            move_position=(50., 0., 20.), aim_position=point, face_position=point,
+            fire_range=500., fire_allowed=True, throttle_override=None)]))
+        player = harness._admit_player(dict(id=2, team=1, alive=True, x=10., y=0., z=-100.))
+        runtime.update(.05, .05, players=[player])
+        state = runtime.states[11]
+        self.assertIn('_rear_aim_episode', state)
+        self.assertTrue(state['_blocked_rotations'])
+        runtime.update(.05, .1, players=[player])
+        self.assertNotIn('_rear_aim_episode', state)
+        self.assertGreater(state['_rear_aim_retry'][1], .1)
+        self.assertEqual(0, state['fire_seq'])
+
+    def test_native_world_refusal_releases_rear_hold_and_keeps_retry_cooldown(self):
+        state = self.state
+        state.update(fire_seq=0, _rear_aim_episode=dict(
+            target_id=2, identity=('human', 2), fire_seq=0, start=0.),
+            _blocked_rotations={1: ((0., 0., 0.), 0., .001, 4.)})
+        order = dict(target_id=2, combat_mode='advance', move_position=(100., 0., 0.))
+        target = dict(id=2, alive=True, position=(0., 0., -100.))
+        self.assertIs(order, self.runtime._rear_laying_order(state, order, {2: target}, 2.))
+        self.assertNotIn('_rear_aim_episode', state)
+        self.assertNotIn('_rear_hull_aim', state)
+        self.assertGreater(state['_rear_aim_retry'][1], 2.)
+
     def setUp(self):
         self.fixture = harness.BotRuntimeTests()
         self.fixture.setUp()

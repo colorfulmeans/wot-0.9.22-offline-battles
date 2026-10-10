@@ -7,6 +7,15 @@ from gui.mods.offline_lan_0922.ai.traffic import TrafficCoordinator
 
 
 class WreckContactRecoveryTests(unittest.TestCase):
+    def test_world_refused_push_hands_back_to_driver_without_fourteen_second_hold(self):
+        self.state['push_pose_clear'] = lambda yaw: False
+        before = dict(self.peer)
+        command = self.decide()
+        self.assertNotEqual('wreck_push', command['recovery_mode'])
+        self.assertEqual(14., self.adapter._wreck_attempts[1]['elapsed'])
+        self.assertEqual(before, self.peer)
+        self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
+
     def test_amx_report_gap_keeps_forward_torque_and_steers_into_wreck(self):
         self.state.update(position=(-18.01417788982463,.26,29.474571555355627),
                           yaw=.6820790716546388,
