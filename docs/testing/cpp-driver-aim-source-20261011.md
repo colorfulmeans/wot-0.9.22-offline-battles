@@ -150,3 +150,54 @@ The shipping extension, launcher/mod package, update cadence, worker count and
 threading architecture are unchanged. The rest of the current driving/traffic
 state machines remain migration targets; this does not enable the older native
 behavior owners or claim their complete replacement.
+
+## Native friendly-crossing continuation
+
+The next source-only batch moves the remaining current traffic-pair numeric
+pipeline to the same synchronous `driver_geometry` frontier. Opcode 5 handles
+complete pair meeting classification (head-on/yield/none), both actual travel
+axes, relative moving-OBB interval overlap, the crossing intersection,
+arrival-order priority including held-vehicle pace, and the exact lease
+parameters. Opcode 6 tests the current lease's exit geometry. Opcode 7
+computes the current SAT clearance gap between hulls. Opcode 8 filters the
+`TrafficCoordinator.adjust` roster in original order, including team,
+life and pitched/rolled vertical-body overlap. Python retains only the
+current lease/order/parked-yield state, callback dispatch and output mappings.
+
+Every native operation receives fresh borrowed numeric rows and retains no
+Python/BigWorld objects. Static world/engine probes, the separate final vehicle
+rotation admission, physical momentum/contact, stationary-yield deadlines and
+Bot strategy remain unchanged. An unsupported input or a monkeypatched source
+law stays on the original Python reference path. The old persistent native
+traffic/driver owner remains disabled; this is a port of the 0.10.0 rules, not
+installation of that older state machine. All control cadences, worker counts,
+network transport and the shipping extension remain unchanged.
+
+In local CPython 3.13 scratch host tests, GCC and Clang compiled the identical
+new production C++ include with `-std=c++14 -O2 -fno-fast-math
+-ffp-contract=off`. Each passed 12,000 random pair decisions, 12,000 SAT
+gaps, 6,000 changing 30-peer adjust rosters, 2,320 lease clearance decisions
+and 50 80-tick complete `TrafficCoordinator.adjust()` history comparisons
+against the previous rules. Float distances are compared at 1e-12 tolerance,
+while branch outcomes, actor IDs, event/lease states and callback traces match
+exactly; some computed clear-after thresholds vary below 1e-15 between libm
+implementations. An independent production-entry conformance script covers
+2,209 pair decisions, 524 lease clearances, 4,400 SAT gaps, 1,000 rosters,
+mutable runtime thresholds, custom-type rejection and missing-binary fallback.
+The new checker is called by the established CPython 2.7 driver-geometry check.
+
+Seven-sample median complete `adjust()` microbenchmarks (29 peer rows,
+1,500 calls per sample, no arbitrary engine collision query) show:
+
+| Scenario | Previous Python (ms) | Native-backed (ms) | Ratio |
+| --- | ---: | ---: | ---: |
+| Distant same-team peers | 0.14567 | 0.06611 | 2.20x |
+| Mixed nearby peers | 0.13374 | 0.06968 | 1.92x |
+| Nearby opposing traffic headings | 0.12406 | 0.07665 | 1.62x |
+
+Those host component figures include the Python frontiers, but are not
+whole-worker or game-latency evidence. The scratch host used controlled
+engine/driver callbacks and CPython 3 dictionary-layout equivalents, not
+#1513's CPython 2.7/x86 runtime. Actual x86 extension compile, real-module
+CI, packaged native admission and Windows gameplay/frame-time acceptance are
+pending. No launcher, `.wotmod`, binary, tag or release was updated.

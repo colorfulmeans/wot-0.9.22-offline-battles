@@ -72,12 +72,24 @@ def _same_level(first, second):
         pitch_b=second.get('pitch', 0.0), roll_b=second.get('roll', 0.0))
 
 
-def _separation(first, second):
+def _reference_separation(first, second):
     """Largest signed gap between the actual hulls on their SAT axes."""
     first_pos, second_pos = _position(first), _position(second)
     delta = (second_pos[0] - first_pos[0], second_pos[1] - first_pos[1])
     return max(abs(_dot(delta, axis)) - _radius(first, axis) -
                _radius(second, axis) for axis in _axes(first) + _axes(second))
+
+
+
+def _separation(first, second):
+    """Signed SAT gap for the latest borrowed hulls, or the original law."""
+    if _crossing_laws() == _PINNED_CROSSING_LAWS:
+        result = native_math.call('driver_geometry', 7, (first, second), (), ())
+        if result is not None:
+            _count('traffic_separation_native')
+            return result
+    _count('traffic_separation_reference')
+    return _reference_separation(first, second)
 
 
 def _dimensions(body):
@@ -233,6 +245,42 @@ def _braking_blocker(body, candidates, position, axis, speed, step,
     _count('traffic_blocker_reference')
     return _reference_braking_blocker(
         body, candidates, position, axis, speed, step, brake_distance)
+
+
+# CPython 2.7 exposes class functions as fresh unbound method objects.
+# Compare the underlying function, not the class attribute object's identity.
+def _method_function(method):
+    return getattr(method, 'im_func', getattr(method, '__func__', method))
+
+
+# The live release permits reference law overrides in tests. Do not silently
+# replace a patched geometry or timing law with the pinned C++ computation.
+def _crossing_laws():
+    return (_dot, _cross, _position, _velocity, _axes, _radius,
+            _travel, _same_level, _dimensions, _contact_time, _intersection,
+            _arrival, tank_collision.vertical_overlap,
+            tank_collision.vertical_interval, tank_collision._axes)
+
+
+_PINNED_CROSSING_LAWS = _crossing_laws()
+
+
+def _reference_adjust_roster(bot_id, body, neighbours):
+    return dict((peer['id'], peer) for peer in neighbours
+                if peer['id'] != bot_id and peer.get('alive', True) and
+                peer.get('team') == body.get('team') and _same_level(body, peer))
+
+
+def _adjust_roster(bot_id, body, neighbours):
+    """Only return filtered live allies; preserve last duplicate-ID ownership."""
+    if (_crossing_laws() == _PINNED_CROSSING_LAWS and
+            bot_id == body.get('id')):
+        result = native_math.call('driver_geometry', 8, body, neighbours, ())
+        if result is not None:
+            _count('traffic_adjust_roster_native')
+            return dict((neighbours[i]['id'], neighbours[i]) for i in result)
+    _count('traffic_adjust_roster_reference')
+    return _reference_adjust_roster(bot_id, body, neighbours)
 
 
 class TrafficCoordinator(object):
@@ -486,6 +534,30 @@ class TrafficCoordinator(object):
         return since is not None and now - since <= YIELD_SECONDS
 
     def _begin(self, first, second, now):
+        """Current-release crossing law; C++ owns the complete numeric solve."""
+        if (_crossing_laws() == _PINNED_CROSSING_LAWS and
+                _method_function(self._holding) is
+                _method_function(TrafficCoordinator._holding)):
+            data = native_math.call('driver_geometry', 5, (first, second),
+                (int(bool(self._holding(first, now))),
+                 int(bool(self._holding(second, now)))),
+                (now, PREDICTION_SECONDS, YIELD_SECONDS, HEAD_ON_OFFSET, _EPSILON))
+            if data is not None:
+                _count('traffic_crossing_native')
+                if data == 0:
+                    return None
+                if data[0] == 1:
+                    return {'mode': 'head_on', 'axis': (data[1], data[2]),
+                            'until': data[3],
+                            'targets': {first['id']: data[4],
+                                        second['id']: data[5]}}
+                return {'mode': 'yield', 'winner': data[6],
+                        'axis': (data[1], data[2]),
+                        'clear_after': data[7], 'until': data[3]}
+        _count('traffic_crossing_reference')
+        return self._reference_begin(first, second, now)
+
+    def _reference_begin(self, first, second, now):
         # A neighbour reversing out of a blockage is not an oncoming route
         # convoy. Its existing recovery and physical contacts retain control.
         if any(_dot(_velocity(body), _axes(body)[1]) < -_EPSILON
@@ -534,6 +606,21 @@ class TrafficCoordinator(object):
 
     @staticmethod
     def _cleared(lease, first, second):
+        """C++ pair geometry with the existing Python lease owner."""
+        if _crossing_laws() == _PINNED_CROSSING_LAWS:
+            mode = int(lease['mode'] == 'yield')
+            axis = lease['axis']
+            data = native_math.call('driver_geometry', 6, (first, second),
+                (mode, lease['winner'] if mode else 0,
+                 axis[0], axis[1], lease['clear_after'] if mode else 0.0), ())
+            if data is not None:
+                _count('traffic_clearance_native')
+                return bool(data)
+        _count('traffic_clearance_reference')
+        return TrafficCoordinator._reference_cleared(lease, first, second)
+
+    @staticmethod
+    def _reference_cleared(lease, first, second):
         if lease['mode'] == 'yield':
             winner = first if first['id'] == lease['winner'] else second
             return _dot(_position(winner), lease['axis']) > lease['clear_after']
@@ -549,9 +636,7 @@ class TrafficCoordinator(object):
     def adjust(self, bot_id, body, command, neighbours, now, direction_clear):
         result = dict(command)
         self._orders[bot_id] = (now, dict(command))
-        peers = dict((peer['id'], peer) for peer in neighbours
-                     if peer['id'] != bot_id and peer.get('alive', True) and
-                     peer.get('team') == body.get('team') and _same_level(body, peer))
+        peers = _adjust_roster(bot_id, body, neighbours)
         parked = self._parked_yield(
             bot_id, body, command, peers, neighbours, now, direction_clear)
         if parked is not None:

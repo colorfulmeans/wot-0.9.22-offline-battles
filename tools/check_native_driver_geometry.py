@@ -53,3 +53,6 @@ print('Driver geometry parity:',checks,'comparisons; reference/native occupancy 
 
 from check_native_traffic_geometry import run as check_traffic_geometry
 check_traffic_geometry(backend)
+
+from check_native_traffic_crossing import run as check_crossing
+check_crossing(backend)
