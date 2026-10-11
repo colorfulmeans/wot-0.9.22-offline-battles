@@ -13,6 +13,62 @@ except ImportError:
 import unicodedata
 import zlib
 import struct
+import sys
+import types
+
+
+class TeamCommandTargetProxy(object):
+    """Supply the rendered cursor owner only to the two reviewed stock readers.
+
+    Other callers and native target attributes (including clear) delegate to
+    the original picker. Stock chat/radial code still owns all command rules.
+    """
+    def __init__(self, original, reader_codes, target_getter):
+        self._original = original
+        self._reader_codes = frozenset(reader_codes)
+        self._target_getter = target_getter
+        self._reported = 0
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+    def __call__(self, *args, **kwargs):
+        if not args and not kwargs and sys._getframe(1).f_code in self._reader_codes:
+            target = self._target_getter()
+            if target is not None:
+                if self._reported < 16:
+                    self._reported += 1
+                    sys.stdout.write('[Offline LAN 0.9.22] TEAM COMMAND TARGET '
+                        'source=rendered id=%s reader=%s\n' %
+                        (target.id, sys._getframe(1).f_code.co_name))
+                return target
+        return self._original(*args, **kwargs)
+
+
+def team_command_reader(original, target_getter):
+    """Keep stock bytecode and isolate its BigWorld binding to this reader."""
+    code = getattr(original, 'func_code', getattr(original, '__code__', None))
+    source_globals = getattr(original, 'func_globals', getattr(original, '__globals__', None))
+    namespace = dict(source_globals)
+    builtin_owner = source_globals['__builtins__']
+    builtins = dict(builtin_owner if isinstance(builtin_owner, dict) else vars(builtin_owner))
+    import_original = builtins['__import__']
+    world = import_original('BigWorld')
+    picker = TeamCommandTargetProxy(world.target, (code,), target_getter)
+    class World(object):
+        target = picker
+        def __getattr__(self, name):
+            return getattr(world, name)
+    local_world = World()
+    def import_local(name, *args, **kwargs):
+        module = import_original(name, *args, **kwargs)
+        return local_world if name == 'BigWorld' else module
+    builtins['__import__'] = import_local
+    namespace['__builtins__'] = builtins
+    namespace['BigWorld'] = local_world
+    defaults = getattr(original, 'func_defaults', getattr(original, '__defaults__', None))
+    closure = getattr(original, 'func_closure', getattr(original, '__closure__', None))
+    return types.FunctionType(code, namespace, original.__name__, defaults, closure)
 
 try:
     _INTEGER_TYPES = (int, long)

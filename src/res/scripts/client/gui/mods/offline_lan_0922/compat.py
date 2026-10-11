@@ -362,6 +362,8 @@ def _load_runtime():
     import AvatarPositionControl
     import BigWorld
     import ChatManager
+    from gui.battle_control.controllers.chat_cmd_ctrl import ChatCommandsController
+    from gui.Scaleform.daapi.view.battle.shared.radial_menu import RadialMenu
     import Math
     import ProjectileMover
     import SoundGroups
@@ -420,6 +422,8 @@ def _load_runtime():
     runtime.arcade_camera_type = ArcadeCamera
     runtime.bigworld = BigWorld
     runtime.chat_manager = ChatManager.chatManager
+    runtime.chat_commands_type = ChatCommandsController
+    runtime.radial_menu_type = RadialMenu
     runtime.compound_appearance_module = CompoundAppearanceModule
     runtime.crashed_tracks_controller_type = CrashedTrackController
     runtime.constants = constants
@@ -720,6 +724,7 @@ class OfflineCompatibility(object):
         self._original_disconnect = None
         self._original_server_time = None
         self._original_target = None
+        self._team_command_readers = []
         self._original_debug_update = None
         self._account_init_wrapper = None
         self._account_getattribute_wrapper = None
@@ -2814,6 +2819,16 @@ class OfflineCompatibility(object):
                         compound_effects_lod)
             runtime.bigworld.connect = connect
             runtime.bigworld.disconnect = disconnect
+            for owner, name in ((getattr(runtime, 'chat_commands_type', None),
+                                 'handleShortcutChatCommand'),
+                                (getattr(runtime, 'radial_menu_type', None), 'show')):
+                if owner is None:
+                    continue
+                from gui.mods.offline_lan_0922.tactical_radio import team_command_reader
+                original = owner.__dict__[name]
+                patched = team_command_reader(original, self._team_command_target)
+                self._team_command_readers.append((owner, name, original, patched))
+                setattr(owner, name, patched)
             runtime.bigworld.serverTime = server_time
             if self._original_debug_update is not None:
                 debug_panel_type.updateDebugInfo = debug_update
@@ -3125,6 +3140,10 @@ class OfflineCompatibility(object):
             runtime.bigworld.connect = self._original_connect
         if runtime.bigworld.disconnect is self._disconnect_wrapper:
             runtime.bigworld.disconnect = self._original_disconnect
+        for owner, name, original, patched in self._team_command_readers:
+            if owner.__dict__.get(name) is patched:
+                setattr(owner, name, original)
+        self._team_command_readers = []
         if runtime.bigworld.serverTime is self._server_time_wrapper:
             runtime.bigworld.serverTime = self._original_server_time
         if (debug_panel_type is not None and
@@ -3565,6 +3584,22 @@ class OfflineCompatibility(object):
             raise TypeError('control-mode listener must be callable')
         self.install()
         self._control_mode_listener = listener
+
+    def _team_command_target(self):
+        """Reuse the current occlusion-checked cursor owner, never a lock target."""
+        vehicle = self._target_lock_candidate
+        if not self._battle_active or vehicle is None:
+            return None
+        alive = getattr(vehicle, 'isAlive', False)
+        if not bool(alive() if callable(alive) else alive):
+            return None
+        if not bool(getattr(vehicle, '_spot_visible', True)):
+            return None
+        entity = getattr(vehicle, 'bw_entity', None) or vehicle
+        if (getattr(entity, 'model', None) is None or
+                not bool(getattr(entity, 'inWorld', False))):
+            return None
+        return entity
 
     def set_target_lock_candidate(self, vehicle):
         """Publish the exact synthetic Vehicle under the native crosshair."""
