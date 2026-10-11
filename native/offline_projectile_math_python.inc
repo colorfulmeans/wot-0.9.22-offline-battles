@@ -124,6 +124,7 @@ PyObject *moving_result(const MovingChord &chord) {
 
 #include "offline_internal_mesh_cone_python.inc"
 #include "offline_projectile_cursor_python.inc"
+#include "offline_internal_mesh_query_python.inc"
 
 PyObject *WOT_CDECL projectile_math(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(projectile_math);
@@ -134,6 +135,10 @@ PyObject *WOT_CDECL projectile_math(PyObject *, PyObject *args) {
         profile.opcode(op);
         if (op >= 32 && op <= 35)
             return projectile_cursor_law::run(op, values[1], values[2], profile);
+        if (op == 3)
+            return internal_mesh_query_law::line_call(values[1], values[2], profile);
+        if (op == 4)
+            return internal_mesh_query_law::distance_call(values[1], values[2], profile);
         if (op == 2)
             return internal_mesh_cone_law::run(values[1], values[2], profile);
         if (op == 0) {

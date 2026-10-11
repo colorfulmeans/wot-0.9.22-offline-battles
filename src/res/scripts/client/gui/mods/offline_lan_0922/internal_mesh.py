@@ -215,7 +215,7 @@ def _triangle_line(start, delta, a, b, c):
     return _dot(e2, q) / det, (1 if det > 0.0 else -1)
 
 
-def _line_hits(mesh, start, delta, first, last, stats=None):
+def _reference_line_hits(mesh, start, delta, first, last, stats=None):
     vertices, faces = mesh['vertices'], mesh['triangles']
     stack, hits = [mesh['bvh']], []
     while stack:
@@ -241,6 +241,26 @@ def _line_hits(mesh, start, delta, first, last, stats=None):
         else:
             groups.append([t, set((sign,))])
     return groups
+
+
+def _line_hits(mesh, start, delta, first, last, stats=None):
+    """Return original grouped hits after a single native BVH/triangle walk."""
+    if (_query_input(mesh, stats, orientations=True) and
+            _ray_laws() == _PINNED_RAY_LAWS):
+        result = _native_math.call(
+            'projectile_math', 3,
+            (mesh['vertices'], mesh['triangles'], mesh['bvh'], mesh['orientations']),
+            (start, delta, first, last, _EPS))
+        if result is not None:
+            groups, tested = result
+            # Sets/lists are the original consumer contract, not mesh copies.
+            result = [[t, set((-1,) if mask == 1 else
+                              (1,) if mask == 2 else (-1, 1))]
+                      for t, mask in groups]
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            return result
+    return _reference_line_hits(mesh, start, delta, first, last, stats)
 
 
 def intervals(start, end, mesh, stats=None):
@@ -324,6 +344,22 @@ def triangle_closest(point, a, b, c):
 def distance(point, mesh, stats=None):
     if contains(point, mesh):
         return 0.0, tuple(point)
+    if (_query_input(mesh, stats) and
+            _distance_laws() == _PINNED_DISTANCE_LAWS):
+        result = _native_math.call(
+            'projectile_math', 4,
+            (mesh['vertices'], mesh['triangles'], mesh['bvh']), (point,))
+        if result is not None:
+            value, closest, vertex, tested = result
+            # The reference returns the original vertex object in a vertex
+            # region, including its tuple/list type and signed coordinates.
+            if vertex >= 0:
+                closest = mesh['vertices'][vertex]
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            return value, closest
+    # Read-only native rejection leaves original counter/error ordering intact.
+    # Containment has already run exactly once above.
     vertices, faces = mesh['vertices'], mesh['triangles']
     best, closest, serial = float('inf'), None, 0
     queue = [(0.0, serial, mesh['bvh'])]
@@ -479,3 +515,32 @@ def intersects_cone(mesh, apex, axis, depth, tangent, stats=None,
 def export_primitive(mesh):
     """Public diagnostic geometry; acceleration nodes are an implementation detail."""
     return dict((key, value) for key, value in mesh.items() if key != 'bvh')
+
+
+# Current laws are checked before a native walk; custom geometry functions,
+# mappings and observable counter objects keep their Python behavior.
+def _ray_laws():
+    return (_sub, _dot, _cross, _line_box, _triangle_line)
+
+
+def _distance_laws():
+    return (_sub, _dot, _add_scaled, _box_distance_sq, triangle_closest,
+            heapq.heappop, heapq.heappush)
+
+
+_PINNED_RAY_LAWS = _ray_laws()
+_PINNED_DISTANCE_LAWS = _distance_laws()
+
+
+def _query_input(mesh, stats, orientations=False):
+    if (_native_math is None or type(mesh) is not dict or
+            not all(type(key) is str for key in mesh)):
+        return False
+    keys = ('vertices', 'triangles', 'bvh')
+    if orientations:
+        keys += ('orientations',)
+    if not all(key in mesh for key in keys):
+        return False
+    return (stats is None or (type(stats) is dict and
+            all(type(key) is str for key in stats) and
+            type(stats.get('triangles', 0)) in _NATIVE_COUNT_TYPES))
