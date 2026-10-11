@@ -93,7 +93,13 @@ def run(backend, module=None, native=None, reference=None):
     counts = dict(ray=0, distance=0, intervals=0, contains=0, cone=0, special=0)
 
     def compare(name, args, stats=False, required=False):
-        opcode = 3 if name == '_line_hits' else 4
+        # The complete distance consumer now fuses containment and nearest
+        # traversal into opcode 7. Earlier source fixtures retain opcode 4.
+        # Require exactly the selected native entry; do not accept fallback
+        # or weaken any value, counter, ordering or vertex-identity assertion.
+        complete_distance = (hasattr(module, '_PINNED_VOLUME_CONTAINS') and
+                             module.contains is module._PINNED_VOLUME_CONTAINS)
+        opcode = 3 if name == '_line_hits' else (7 if complete_distance else 4)
         before = admission.accepted.get(opcode, 0)
         a = {'triangles': 5} if stats else None
         b = copy.deepcopy(a)
