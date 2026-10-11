@@ -29251,9 +29251,12 @@ class BattleRuntime(object):
                 0.0, _number(loss_distance, 0.0))
             piercing_distance = distance_offset + obstacle_distance
             if projectile_state is not None:
+                piercing_point = start + direction.scale(obstacle_distance)
+                # This engine Vector3 is read by the owning Python adapter.
+                # The numeric C++ frontier only borrows plain containers.
                 piercing_distance = projectile_range_distance(
                     projectile_state,
-                    start + direction.scale(obstacle_distance))
+                    tuple(float(piercing_point[i]) for i in range(3)))
             if (result.get('continue_from') is not None and
                     penetration_factor is not None and
                     combat_rules.sampled_piercing(

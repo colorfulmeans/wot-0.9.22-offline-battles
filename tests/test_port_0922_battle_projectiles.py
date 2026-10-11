@@ -5139,11 +5139,21 @@ class BattleProjectileTests(unittest.TestCase):
             'shell': {'kind': 'ARMOR_PIERCING'},
         }
 
-        scene = battle._resolve_shot_scene(
-            _Vector((0.0, 0.0, 0.0)), _Vector((2.0, 0.0, 0.0)),
-            _Vector((1.0, 0.0, 0.0)), shot,
-            penetration_factor=1.0, initial_piercing_loss=70.0,
-            projectile_state=state)
+        function = battle._resolve_shot_scene.__func__
+        while hasattr(function, '__wrapped__'):
+            function = function.__wrapped__
+        owner = function.__globals__
+        with mock.patch.dict(owner, {'projectile_range_distance': mock.Mock(
+                wraps=owner['projectile_range_distance'])}):
+            scene = battle._resolve_shot_scene(
+                _Vector((0.0, 0.0, 0.0)), _Vector((2.0, 0.0, 0.0)),
+                _Vector((1.0, 0.0, 0.0)), shot,
+                penetration_factor=1.0, initial_piercing_loss=70.0,
+                projectile_state=state)
+            point = owner['projectile_range_distance'].call_args[0][1]
+            self.assertIs(type(point), tuple)
+            self.assertEqual((0.5, 0.0, 0.0), point)
+            self.assertTrue(all(type(value) is float for value in point))
 
         # The first ricochet retains 75 penetration before the old 70 and new
         # 10 losses. It therefore stops at this destructible. Reusing the

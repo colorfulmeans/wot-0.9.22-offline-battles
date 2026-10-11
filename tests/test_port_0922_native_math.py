@@ -37,6 +37,36 @@ def _body(identity, x=0.0, z=0.0, **changes):
 
 
 class NativeMathDispatchTests(unittest.TestCase):
+    def test_projectile_fallback_evidence_is_bounded_and_never_inspects_custom_inputs(self):
+        native = self.native
+        class Trap(object):
+            def __repr__(self): raise AssertionError('user repr')
+            def __len__(self): raise AssertionError('user len')
+            def __iter__(self): raise AssertionError('user iter')
+            def __getitem__(self, index): raise AssertionError('user indexing')
+        native._backend = types.SimpleNamespace(projectile_math=lambda *args: None)
+        for i in range(100):
+            self.assertIsNone(native.projectile_math(32, ((float(i), 0., 0.), Trap()), ()))
+        lines = [line for line in self.output.getvalue().splitlines()
+                 if 'NATIVE PROJECTILE FALLBACK ' in line]
+        self.assertEqual(1, len(lines))
+        import json
+        evidence = json.loads(lines[0].split('NATIVE PROJECTILE FALLBACK ', 1)[1])
+        self.assertEqual(32, evidence['operation'])
+        self.assertTrue(evidence['callers'])
+        self.assertIn('Trap', evidence['inputs']['items'][1]['items'][1]['type'])
+        counts = native.projectile_fallback_snapshot()
+        self.assertEqual(100, counts['projectile_math:32:unsupported_input'])
+        counts.clear()
+        self.assertEqual(100, native.projectile_fallback_snapshot()['projectile_math:32:unsupported_input'])
+        native._backend.projectile_spatial = lambda *args: None
+        native.call('projectile_spatial', 2, (Trap(),), ())
+        self.assertEqual(1, native.projectile_fallback_snapshot()['projectile_spatial:2:unsupported_input'])
+        for op in range(100):
+            native.projectile_math(op, (), ())
+        self.assertLessEqual(len(native.projectile_fallback_snapshot()), 33)
+        self.assertLessEqual(len(native._projectile_fallback_reported), 16)
+
     def setUp(self):
         self.native = _fresh_dispatch()
         self.output = io.StringIO()
@@ -50,6 +80,7 @@ class NativeMathDispatchTests(unittest.TestCase):
             self.assertIsNone(self.native.call('translation_fraction', {}, (), []))
         loader.assert_not_called()
         self.assertEqual(self.native.snapshot(), dict(
+            driver_aim=0, driver_geometry=0, projectile_math=0, projectile_spatial=0,
             translation_fraction=0, translation_contacts=0,
             slide_translation=0, rotation_fraction=0,
             contact_roster=0, world_run=0, world_failures=0,
@@ -107,6 +138,7 @@ class NativeMathDispatchTests(unittest.TestCase):
         self.assertIsNone(self.native.call('slide_translation'))
         self.assertEqual(self.native.call('translation_fraction'), 0.75)
         self.assertEqual(self.native.snapshot(), dict(
+            driver_aim=0, driver_geometry=0, projectile_math=0, projectile_spatial=0,
             translation_fraction=1, translation_contacts=0,
             slide_translation=0, rotation_fraction=1,
             contact_roster=0, world_run=0, world_failures=0,

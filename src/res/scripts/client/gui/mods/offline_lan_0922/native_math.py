@@ -3,6 +3,8 @@ from __future__ import print_function
 
 import os
 import sys
+import json
+import math
 
 
 MODULE_NAME = 'offline_math_batch_native'
@@ -14,6 +16,72 @@ _fallbacks = 0
 _reported_failure = False
 _world_failures = 0
 _reported_world_failure = False
+_projectile_fallback_counts = {}
+_projectile_fallback_reported = set()
+try:
+    _PLAIN_SCALARS = (int, long, bool, float)
+except NameError:
+    _PLAIN_SCALARS = (int, bool, float)
+
+
+def _input_description(value, depth=3, values=True):
+    """Bounded builtin-only evidence; never invoke an input's user methods."""
+    kind = type(value)
+    result = {'type': kind.__module__ + '.' + kind.__name__}
+    if kind in _PLAIN_SCALARS and values:
+        result['value'] = ('nonfinite' if kind is float and
+                           (math.isnan(value) or math.isinf(value)) else value)
+    elif kind is tuple or kind is list:
+        result['length'] = len(value)
+        if depth > 0:
+            result['items'] = [_input_description(item, depth-1, values)
+                               for item in value[:3]]
+    elif kind is dict:
+        result['length'] = len(value)
+    return result
+
+
+def _record_projectile_fallback(method, args, reason):
+    if method not in ('projectile_math', 'projectile_spatial'):
+        return
+    try:
+        operation = args[0] if args and type(args[0]) in _PLAIN_SCALARS else None
+        key = '%s:%s:%s' % (method, operation, reason)
+        if key not in _projectile_fallback_counts and len(_projectile_fallback_counts) >= 32:
+            key = 'other'
+        _projectile_fallback_counts[key] = _projectile_fallback_counts.get(key, 0) + 1
+        # Aggregate inside an existing observation scope; no extra callbacks.
+        from gui.mods.offline_lan_0922.worker_diagnostics import count
+        count('native.' + key + '.fallback')
+    except Exception:
+        pass
+    try:
+        evidence = _input_description(args)
+        signature = (method, operation, reason,
+                     json.dumps(_input_description(args, values=False), sort_keys=True))
+        if signature in _projectile_fallback_reported or len(_projectile_fallback_reported) >= 16:
+            return
+        _projectile_fallback_reported.add(signature)
+        stack = []
+        frame = sys._getframe(2)
+        for unused in range(4):
+            if frame is None:
+                break
+            stack.append('%s:%s:%s' % (os.path.basename(frame.f_code.co_filename),
+                         frame.f_code.co_name, frame.f_lineno))
+            frame = frame.f_back
+        del frame
+        sys.stdout.write('[Offline LAN 0.9.22] NATIVE PROJECTILE FALLBACK %s\n' %
+            json.dumps({'method': method, 'operation': operation, 'reason': reason,
+                        'inputs': evidence, 'callers': stack,
+                        'count': _projectile_fallback_counts.get(key, 0)}, sort_keys=True))
+    except Exception:
+        pass
+
+
+def projectile_fallback_snapshot():
+    """Detached counters for diagnostic consumers and tests."""
+    return dict(_projectile_fallback_counts)
 
 
 def _load():
@@ -57,8 +125,10 @@ def call(method, *args):
             _calls[method] += 1
             return result
         _report_failure('unsupported geometry input')
+        _record_projectile_fallback(method, args, 'unsupported_input')
     except Exception as error:
         _report_failure(error)
+        _record_projectile_fallback(method, args, 'exception_' + type(error).__name__)
     _fallbacks += 1
     return None
 
@@ -81,8 +151,12 @@ def projectile_math(operation, vectors, scalars):
             _calls['projectile_math'] = calls + 1
             return result
         _report_failure('unsupported projectile input')
+        _record_projectile_fallback('projectile_math', (operation, vectors, scalars),
+                                    'unsupported_input')
     except Exception as error:
         _report_failure(error)
+        _record_projectile_fallback('projectile_math', (operation, vectors, scalars),
+                                    'exception_' + type(error).__name__)
     _fallbacks += 1
     return None
 
