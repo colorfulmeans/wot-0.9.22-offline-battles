@@ -1,8 +1,8 @@
 """Current driver and complete mesh consumers through the real Python 2 C API.
 
-WOT_NATIVE_BASELINE optionally selects an independent pre-integration checkout.
-Every supported consumer call must enter its native operation, not just agree
-with a reference after silent fallback. Game/Windows rendering is not tested.
+WOT_NATIVE_BASELINE selects an independent pre-integration checkout. Supported
+calls must enter native, and callback overrides must retain their original
+Python behavior. These contracts do not establish Windows game rendering.
 """
 from __future__ import print_function
 import copy
@@ -29,6 +29,7 @@ def bits(value):
 def run(backend):
     from gui.mods.offline_lan_0922 import native_math
     from gui.mods.offline_lan_0922 import internal_mesh as mesh
+    from gui.mods.offline_lan_0922 import internal_hit_layouts as layouts
     from gui.mods.offline_lan_0922.ai import driver
     old_backend, old_attempted, old_mesh_backend = (
         native_math._backend, native_math._attempted, mesh._native_math)
@@ -40,7 +41,7 @@ def run(backend):
     oracle._native_math = None
     rng = random.Random(2026101109)
     counts = dict(rank=0, probes=0, recovery=0, contains=0, intervals=0,
-                  distance=0, cone_depth=0, fallback=0)
+                  distance=0, cone_depth=0, consumer=0, fallback=0)
 
     def counter(method):
         return native_math.snapshot()[method]
@@ -53,8 +54,6 @@ def run(backend):
         before = counter('driver_geometry')
         expected = a._reference_rank_yaw_candidates(x, yaw)
         actual = b._rank_yaw_candidates(y, yaw)
-        # The native frontier returns a tuple of rows; the old local list was
-        # only iterated. Row values, stable order and mutations remain exact.
         assert bits(tuple(actual)) == bits(tuple(expected)), (state, yaw, actual, expected)
         assert bits(x) == bits(y), (x, y)
         if admitted:
@@ -183,7 +182,26 @@ def run(backend):
             actual=raw[1] if raw[0] else None
             assert bits(expected)==bits(actual),('cone depth',expected,actual)
             counts['cone_depth']+=1
-        # A custom containment law must still own both dependent consumers.
+            record=oracle.distance(apex,shape)
+            before=counter('projectile_math')
+            actual=layouts._primitive_cone_entry({},shape,apex,axis,depth,tangent,
+                                                 distance_record=record)
+            assert bits(expected)==bits(actual),('entry consumer',expected,actual)
+            assert counter('projectile_math')==before+1, 'consumer did not fuse depth search'
+            counts['consumer']+=1
+        original_length=layouts._vector_length
+        try:
+            def failed_length(value):
+                raise ValueError('length override sentinel')
+            layouts._vector_length=failed_length
+            try:
+                layouts._primitive_cone_entry({},cube,(-4.,0.,0.),(1.,0.,0.),8.,.5,
+                    distance_record=(3.,(-1.,0.,0.)))
+            except ValueError as error:
+                assert str(error)=='length override sentinel'
+            else:raise AssertionError('fused query bypassed a replaced helper')
+            counts['fallback']+=1
+        finally:layouts._vector_length=original_length
         original=mesh.contains
         try:
             mesh.contains=lambda point, shape:True
@@ -191,7 +209,18 @@ def run(backend):
             assert mesh.distance((3.,0.,0.),cube)==(0.,(3.,0.,0.))
             assert counter('projectile_math')==before
             counts['fallback']+=1
-        finally: mesh.contains=original
+        finally:mesh.contains=original
+        obj=driver.LocalDriver();events=[]
+        def penalty(state,yaw):
+            events.append(yaw)
+            return .125
+        obj._failure_penalty=penalty
+        current={'clock':10.,'failed_yaws':{}}
+        before=counter('driver_geometry')
+        obj._rank_yaw_candidates(current,0.)
+        assert len(events)==len(obj._CANDIDATE_OFFSETS)
+        assert counter('driver_geometry')==before
+        counts['fallback']+=1
         class Trap(object):
             def __float__(self):raise AssertionError('native conversion')
             def __iter__(self):raise AssertionError('native iteration')
@@ -199,19 +228,19 @@ def run(backend):
         assert backend.projectile_math(5,geometry,(Trap(),1.e-8)) is None
         assert backend.projectile_math(6,geometry,((0.,0.,0.),Trap(),1.e-8)) is None
         assert backend.driver_geometry(9,(0.,10.,2.,0.,0.,math.pi,24),(Trap(),),()) is None
-        # A cyclic BVH must be rejected by native without walking it forever.
         node=[(-1.,-1.,-1.),(1.,1.,1.),None,None,()]
         node[2]=node;node[3]=node
         bad=list(geometry);bad[2]=node
         assert backend.projectile_math(5,tuple(bad),((0.,0.,0.),1.e-8)) is None
-        # Python 2 deepcopy legitimately reuses immutable nested tuples.
-        # Freeze first, then take the refcount baseline so this test's own
-        # snapshot cannot masquerade as native retention.
+        # Preserve 06f4e1c's fix: deepcopy can share immutable vertex tuples.
+        # Its legitimate references must exist before measuring native calls.
         frozen=copy.deepcopy(cube)
+        gc.collect()
         refs=(sys.getrefcount(cube),sys.getrefcount(cube['vertices']))
         for unused in range(500):mesh.distance((2.,.5,0.),cube)
         gc.collect()
-        assert refs==(sys.getrefcount(cube),sys.getrefcount(cube['vertices']))
+        after=(sys.getrefcount(cube),sys.getrefcount(cube['vertices']))
+        assert refs==after,('retained native input reference',refs,after)
         assert cube==frozen
         class OldBinary(object):
             def projectile_math(self,*args):return None
@@ -221,7 +250,6 @@ def run(backend):
         rank_case({'clock':10.,'failed_yaws':{12:9.}},0.,admitted=False)
         counts['fallback']+=1
         native_math._backend=backend
-        # Reproducible component measurements include the public bridge.
         clock=getattr(time,'perf_counter',time.time)
         timings={}
         for name,args in (('contains',((.5,0.,0.),cube)),
