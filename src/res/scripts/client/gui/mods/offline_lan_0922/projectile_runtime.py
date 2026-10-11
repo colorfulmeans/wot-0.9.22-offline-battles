@@ -293,3 +293,68 @@ def substep_boundaries(start_time, end_time,
         next_time = min(end_time, cursor + maximum_step)
         yield cursor, next_time
         cursor = next_time
+
+# Current #1513 spatial computation frontier. The original laws remain the
+# reference path for unsupported numeric objects and older shipping binaries.
+_reference_point_segment_distance_sq = point_segment_distance_sq
+_reference_point_in_expanded_segment_bounds = point_in_expanded_segment_bounds
+_reference_ideal_reflection_velocity = ideal_reflection_velocity
+_reference_ricochet_departure_origin = ricochet_departure_origin
+_reference_parabolic_chord_error = parabolic_chord_error
+_reference_curvature_limited_substep = curvature_limited_substep
+
+
+def _spatial_native(op, vectors, scalars=()):
+    if _native_math is None:
+        return None
+    return _native_math.call('projectile_spatial', op, vectors, scalars)
+
+
+def point_segment_distance_sq(point, start, end):
+    result = _spatial_native(0, (point, start, end))
+    if result is not None:
+        return result
+    return _reference_point_segment_distance_sq(point, start, end)
+
+
+def point_in_expanded_segment_bounds(point, start, end, radius):
+    result = _spatial_native(1, (point, start, end), (radius,))
+    if result is not None:
+        return bool(result)
+    return _reference_point_in_expanded_segment_bounds(
+        point, start, end, radius)
+
+
+def ideal_reflection_velocity(incoming_velocity, surface_normal):
+    result = _spatial_native(2, (incoming_velocity, surface_normal))
+    if result is not None:
+        return None if result == 0 else result
+    return _reference_ideal_reflection_velocity(incoming_velocity, surface_normal)
+
+
+def ricochet_departure_origin(impact, reflected_velocity, surface_normal):
+    result = _spatial_native(3, (impact, reflected_velocity, surface_normal))
+    if result is not None:
+        return result
+    return _reference_ricochet_departure_origin(
+        impact, reflected_velocity, surface_normal)
+
+
+def parabolic_chord_error(gravity, duration):
+    result = _spatial_native(4, (gravity,), (duration,))
+    if result is not None:
+        return result
+    return _reference_parabolic_chord_error(gravity, duration)
+
+
+def curvature_limited_substep(
+        gravity, maximum_step=PROJECTILE_MAX_SUBSTEP_SECONDS,
+        maximum_error=PROJECTILE_MAX_CHORD_ERROR_METERS):
+    result = _spatial_native(
+        5, (gravity,), (maximum_step, maximum_error,
+                       PROJECTILE_MAX_SUBSTEP_SECONDS,
+                       PROJECTILE_MAX_CHORD_ERROR_METERS))
+    if result is not None:
+        return result
+    return _reference_curvature_limited_substep(
+        gravity, maximum_step, maximum_error)

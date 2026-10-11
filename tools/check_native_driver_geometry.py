@@ -59,3 +59,6 @@ check_crossing(backend)
 
 from check_native_projectile_math import run as check_projectile_math
 check_projectile_math(backend)
+
+from check_native_projectile_spatial import run as check_projectile_spatial
+check_projectile_spatial(backend)

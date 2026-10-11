@@ -247,3 +247,65 @@ Python 2.7 runtime, package inspection and Windows gameplay acceptance remain
 outstanding. No shipped binary, release, gameplay law, physics constant,
 collision filter, control cadence, callback budget or worker architecture has
 been changed.
+
+## Projectile spatial and ricochet continuation
+
+The next source-only checkpoint extends the *current* 0.10.0 projectile
+calculation frontiers. The existing native `projectile_math` opcodes 0 and 1
+continue to own whole flight-chord preparation and moving-target relative
+projection. A separate synchronous `projectile_spatial` frontier now ports
+six remaining Python numeric laws without installing an old projectile owner:
+
+- Squared distance from a point to the actual finite projectile segment.
+- Conservative expanded-segment AABB candidate admission.
+- Ideal reflected velocity, including the original degenerate-normal behavior.
+- The actual 2 mm plate-normal ricochet departure origin.
+- Parabolic chord-error estimation.
+- Gravity-dependent maximum curvature substep selection.
+
+The original formulas, comparisons, epsilon boundaries, return shapes and
+ordered CPython 2.7 floating arithmetic are retained. Ricochet normal length
+still follows `float(value) ** 2` rather than replacing it with an
+algebraically equivalent dot product; the native shipping build already
+disables compiler fast-math and pow substitution. Invalid reflected normals
+use an explicit integer-zero success sentinel, distinct from `None` meaning
+native rejection. A collapsed departure normal falls back to the original
+Python ValueError. Invalid inputs never trigger Python coercion/iteration
+inside the C++ parser; the existing reference Python law handles the
+unsupported case. The C++ operation holds no Python object, engine handle,
+shot identity or state across calls.
+
+The visible/worker clients still own real hit-tester/BigWorld queries,
+projectile callbacks, frozen launches, canonical hit and damage settlement,
+all collision filters, and the original generator substep boundaries.
+No physics coefficient or update budget changed. The older shipping `.pyd`
+that lacks `projectile_spatial` still follows the original reference Python
+calculations. New per-method admission diagnostics distinguish native and
+fallback paths.
+
+Scratch GCC and Clang `-O2 -std=c++17 -fno-fast-math -ffp-contract=off
+-fno-builtin-pow` CPython 3.13 bridges each passed 16,000 randomized
+comparisons for segment distance, AABB and reflection, 15,600 for departure,
+and 13,000 each for chord error and curvature (89,600 total per compiler).
+The tests also cover signed zero, subnormals, shared endpoints, invalid
+normal lengths, boundary radii, changed input lists, hostile converters,
+one-shot Python fallback, and native object/reference ownership. To match
+the supported embedded CPython 2.7 semantics, scratch Python 3.13's newer
+compensated `sum()` behavior is replaced in the isolated oracle by the
+2.7-style left-to-right sum; no game code changes that built-in. A native
+parity checker with 5,000 cases per primitive and explicit native admission
+is wired into the existing native driver test entrypoint.
+
+Component-only CPython 3.13 host medians (GCC; complete public Python
+function with native dispatch) were 0.513/0.260 us for point-segment
+distance (1.97x), 0.708/0.323 us for expanded AABB (2.19x),
+3.269/0.342 us for ideal reflection (9.56x), 1.789/0.374 us
+for ricochet origin (4.79x), 0.504/0.256 us for chord error (1.97x),
+and 0.622/0.252 us for curvature (2.47x). These are neither
+whole-hidden-worker figures nor embedded-client latency measurements.
+
+The final production CPython 2.7/Win32 extension, ABI import audit,
+complete client regression suite, in-game #1513 parity and Windows
+frame-time measurement remain unverified for this source-only batch.
+No binary, mod, launcher, CI workflow, release, worker count or threading
+configuration is changed here.
