@@ -61,3 +61,32 @@ candidate preparation, and projectile lifecycle/settlement. Keep current
 an existing C++ engine query does not get faster simply by moving its Python
 caller. Actual gameplay and latency acceptance remain pending until the user
 returns. Known unrelated baseline CI failures remain outside this checkpoint.
+
+## Pitch-curve continuation
+
+Opcode 4 extends the same synchronous aiming frontier with both yaw-dependent
+pitch curves as one computation unit: fresh numeric node copies, per-operation
+float32 rounding, binary interval search and the original weighted interpolation.
+The Python adapter retains yaw validation/wrapping, descriptor lookup and the
+unchanged reference/error path. No curve cache, sorting, absolute-envelope
+fallback, targeting rule or existing aiming opcode is changed. Plain list/tuple
+curves with plain list/tuple numeric nodes are admitted; unsupported sequences
+or numeric objects are rejected without invoking their Python conversion or
+iteration. Their original reference behavior remains available.
+
+Local continuation evidence uses CPython 3.13.5 and a scratch CPython-3 adapter
+compiling the exact production C++ include, not the complete CPython-2.7/x86
+extension. GCC and Clang, each with `-O2 -fno-fast-math -ffp-contract=off`, pass
+7,536 bit-exact curve comparisons, including negative angles, independent node
+grids, adjacent float32 knots, signed zero, subnormals and changing input nodes.
+Malformed/collapsed nodes retain the reference ValueError; generator fallback is
+not consumed twice. The seven unchanged gun-pitch oracle tests pass with both
+the reference and native-backed adapter (805 native admissions). Another 10,000
+old/new comparisons preserve opcodes 0-3 exactly; input reference counts stay
+unchanged over 10,000 new calls.
+
+`tools/check_native_gun_pitch_limits.py` is also called by the existing native
+aiming conformance check, so that job exercises the real CPython-2.7 bridge on
+its next run. Exact-target compilation, native descriptor admission and Windows
+gameplay/performance are not established by the local host adapter. No shipping
+binary, launcher/mod package, release, map or Bot behavior is changed here.

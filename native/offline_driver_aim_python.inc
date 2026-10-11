@@ -38,6 +38,59 @@ std::array<double,3> aim(const double *v,int mode,bool has_target,bool engage,
         return {{std::abs(v[5])<=.01?0.:v[4],v[5],0.}};
     return {{clamp(delta(v[1]-(v[2]+v[3])*.5,v[0])/.58,-1.,1.),0.,1.}};
 }
+// Both #1513 pitch curves are copied and solved in one call. The caller
+// has already rounded/wrapped yaw; no engine object or curve is retained.
+using PitchCurve = std::vector<std::array<double,2>>;
+PitchCurve pitch_curve_values(PyObject *object) {
+    require_sequence(object,2);
+    PitchCurve result;
+    result.reserve(static_cast<size_t>(size(object)));
+    for(Py_ssize_t i=0;i<size(object);++i) {
+        PyObject *point=items(object)[i];
+        require_sequence(point,2,true);
+        result.push_back({{finite_number(items(point)[0]),
+                           finite_number(items(point)[1])}});
+    }
+    return result;
+}
+double pitch_single(double value) {
+    // Do the original double operation, then round its result to float32.
+    // Do not fuse arithmetic or replace the weighted sum with lerp.
+    // Out-of-range intermediates defer to the reference's exact exception.
+    if(!std::isfinite(value) ||
+       std::abs(value)>static_cast<double>(std::numeric_limits<float>::max()))
+        throw Unsupported();
+    volatile float rounded=static_cast<float>(value);
+    return static_cast<double>(rounded);
+}
+double sample_pitch_curve(double yaw,PitchCurve &points) {
+    for(auto &point:points) {
+        point[0]=pitch_single(point[0]);
+        point[1]=pitch_single(point[1]);
+    }
+    size_t lower=0,upper=points.size()-1;
+    while(upper-lower>1) {
+        const size_t middle=lower+(upper-lower)/2;
+        if(yaw>points[middle][0])lower=middle;
+        else upper=middle;
+    }
+    const double span=pitch_single(points[upper][0]-points[lower][0]);
+    if(span==0.)throw Unsupported();
+    const double distance=pitch_single(yaw-points[lower][0]);
+    const double fraction=pitch_single(distance/span);
+    const double complement=pitch_single(1.-fraction);
+    const double low=pitch_single(points[lower][1]*complement);
+    const double high=pitch_single(points[upper][1]*fraction);
+    return pitch_single(low+high);
+}
+PyObject *pitch_pair(const std::array<double,2> &value) {
+    PyObject *out=tuple_new(2);if(!out)return 0;
+    for(int i=0;i<2;++i) {
+        items(out)[i]=float_new(value[i]);
+        if(!items(out)[i]){decref(out);return 0;}
+    }
+    return out;
+}
 PyObject *triple(const std::array<double,3> &v) {
     PyObject *out=tuple_new(3);if(!out)return 0;
     for(int i=0;i<3;++i) {
@@ -51,7 +104,22 @@ PyObject *WOT_CDECL driver_aim(PyObject *,PyObject *args) {
     NATIVE_PROFILE_ENTRY(driver_aim);
     try {
         require_sequence(args,3,true);auto a=items(args);
-        const int op=index_value(a[0]);if(op<0 || op>3)throw Unsupported();
+        const int op=index_value(a[0]);
+        if(op==4) {
+            require_sequence(a[1],3,true);require_sequence(a[2],0,true);
+            auto values=items(a[1]);
+            const double yaw=finite_number(values[0]);
+            auto minimum=driver_aim_law::pitch_curve_values(values[1]);
+            auto maximum=driver_aim_law::pitch_curve_values(values[2]);
+            const auto result=profile.run([&] {
+                const double rounded=driver_aim_law::pitch_single(yaw);
+                const double low=driver_aim_law::sample_pitch_curve(rounded,minimum);
+                const double high=driver_aim_law::sample_pitch_curve(rounded,maximum);
+                return std::array<double,2>{{low,high}};
+            });
+            return driver_aim_law::pitch_pair(result);
+        }
+        if(op<0 || op>3)throw Unsupported();
         const int count=op==0?7:op==1?4:op==2?7:2;
         require_sequence(a[1],count,true);double v[7]={};
         for(int i=0;i<count;++i) {

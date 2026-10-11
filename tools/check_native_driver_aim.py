@@ -72,3 +72,5 @@ native_math._backend = None
 args = (0., math.pi, -1.57, 1.57, .5, -.5, None)
 assert driver.combat_hull_aim(*args) == driver._reference_combat_hull_aim(*args)
 print('Driver aim exact parity:', checks, 'comparisons; all supported calls used native')
+from check_native_gun_pitch_limits import run as check_pitch_limits
+check_pitch_limits(backend)

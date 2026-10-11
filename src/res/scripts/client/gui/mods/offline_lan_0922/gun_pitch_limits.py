@@ -5,6 +5,12 @@ from __future__ import print_function
 import math
 import struct
 
+try:
+    from gui.mods.offline_lan_0922 import native_math as _native_math
+except ImportError:
+    # The pure oracle is also imported directly by tools outside the client.
+    _native_math = None
+
 
 def _float32(value):
     """Round one finite Python number exactly as an x86 ``float``."""
@@ -93,6 +99,11 @@ def calc_pitch_limits(turret_yaw, pitch_limits):
         maximum_curve = pitch_limits['maxPitch']
     except (KeyError, TypeError):
         raise ValueError('gun pitch limits have no yaw curves')
+    if _native_math is not None:
+        result = _native_math.call(
+            'driver_aim', 4, (yaw, minimum_curve, maximum_curve), ())
+        if result is not None:
+            return result
     return (
         _sample_curve(yaw, minimum_curve),
         _sample_curve(yaw, maximum_curve),
