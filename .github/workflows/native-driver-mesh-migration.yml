@@ -10,6 +10,9 @@ on:
       - tools/build_verify_native_migration.py
       - tools/apply_native_driver_mesh_migration.py
       - tools/check_native_driver_mesh_migration.py
+      - tools/check_native_internal_mesh_cone.py
+      - tools/check_native_internal_mesh_queries.py
+      - tools/benchmark_native_driver_mesh_migration.py
       - native/offline_driver_candidates_python.inc
       - native/offline_internal_mesh_volume_python.inc
       - src/res/scripts/client/gui/mods/offline_lan_0922/native_input_diagnostics.py
@@ -21,7 +24,7 @@ permissions:
 
 concurrency:
   group: native-driver-mesh-migration-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate-and-publish:
@@ -69,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --prune origin integrate/0100-native-worker
-          actual=$(git rev-parse FETCH_HEAD)
+          actual=$(git revparse FETCH_HEAD 2>/dev/null || git rev-parse FETCH_HEAD)
           if [ "$actual" != "$EXPECTED_SHA" ]; then
             echo "Branch advanced during validation; refusing to overwrite: $actual" >&2
             exit 1
