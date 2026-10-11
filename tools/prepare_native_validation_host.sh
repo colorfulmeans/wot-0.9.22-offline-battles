@@ -2,8 +2,7 @@
 # The exported i386 interpreter initially used GCC's default x87 arithmetic.
 # Build the independent test host with the same double-precision SSE2 policy
 # as the reviewed native extension. Do not weaken any comparison tolerance.
-# A fresh official CPython source archive is supplied by the workflow; this
-# script and the subsequent native validation run have networking disabled.
+# The workflow supplies official CPython source before disabling networking.
 set -eu
 mkdir -p /work/out
 {
@@ -21,4 +20,14 @@ mkdir -p /work/out
     exit 1
 }
 cd /work/repo
-exec /usr/bin/python3 tools/build_verify_native_migration.py
+/usr/bin/python3 tools/build_verify_native_migration.py
+# Compare against the old runtime with its native primitives enabled. These
+# component observations are separate from the required correctness gates.
+PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 WOT_NATIVE_BASELINE=/work/baseline \
+    /opt/python27/bin/python2.7 -B tools/benchmark_native_driver_mesh_migration.py \
+    /work/out/current/offline_math_batch_native.so /work/out/incremental-benchmark.json \
+    > /work/out/incremental-benchmark.log 2>&1 || {
+        cat /work/out/incremental-benchmark.log
+        exit 1
+    }
+cat /work/out/incremental-benchmark.log
