@@ -9,7 +9,7 @@ steering, so it is safe to exercise outside the BigWorld client.
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
 
 import math
-from gui.mods.offline_lan_0922 import tank_collision
+from gui.mods.offline_lan_0922 import tank_collision, native_math
 
 
 WAYPOINT_ARRIVAL_RADIUS = 1.5
@@ -105,7 +105,7 @@ def gun_yaw_limits(descriptor):
 	return minimum, maximum, limited
 
 
-def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
+def _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		turn, throttle, recovery_mode, has_target=True,
 		combat_mode=None, movement_intent=False, withdrawal_aim=False,
 		rear_turn=0.0, allow_rear_start=True):
@@ -171,7 +171,7 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 	return aim_turn, 0.0, True
 
 
-def limited_traverse_target(relative, minimum, maximum, rear_turn=0.0):
+def _reference_limited_traverse_target(relative, minimum, maximum, rear_turn=0.0):
 	"""Clamp gun travel without reversing an ongoing rear hull-laying side.
 
 	Callers retain the original bearing for alignment and fire admission.
@@ -182,7 +182,7 @@ def limited_traverse_target(relative, minimum, maximum, rear_turn=0.0):
 	return max(minimum, min(maximum, relative))
 
 
-def gun_aligned(target_yaw, hull_yaw, turret_yaw, desired_pitch, gun_pitch,
+def _reference_gun_aligned(target_yaw, hull_yaw, turret_yaw, desired_pitch, gun_pitch,
 		yaw_tolerance=0.06, pitch_tolerance=0.04):
 	"""Require both rendered traverse and elevation to settle before firing."""
 	abs_yaw = float(hull_yaw) + float(turret_yaw)
@@ -192,12 +192,62 @@ def gun_aligned(target_yaw, hull_yaw, turret_yaw, desired_pitch, gun_pitch,
 	        pitch_error <= float(pitch_tolerance))
 
 
-def barrel_direction(yaw, pitch):
+def _reference_barrel_direction(yaw, pitch):
 	"""Unit direction for BigWorld's negative-pitch-is-up convention."""
 	horizontal = math.cos(float(pitch))
 	return (math.sin(float(yaw)) * horizontal,
 	        -math.sin(float(pitch)),
 	        math.cos(float(yaw)) * horizontal)
+
+
+
+# Engine state and installed descriptors stay with their existing callers.
+# Each frontier transfers one complete aiming decision, with no retained state.
+def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
+        turn, throttle, recovery_mode, has_target=True,
+        combat_mode=None, movement_intent=False, withdrawal_aim=False,
+        rear_turn=0.0, allow_rear_start=True):
+    held = recovery_mode in ('avoid', 'blocked', 'reverse_turn',
+        'pivot_recovery', 'forward_escape', 'short_forward_escape',
+        'short_reverse_escape', 'contact_escape', 'wreck_push', 'friendly_yield',
+        'nav_wait', 'physical_hold')
+    mode = 1 if held else 2 if recovery_mode == 'reverse_withdraw' else 0
+    result = native_math.call('driver_aim', 0,
+        (hull_yaw, target_yaw, minimum_yaw, maximum_yaw, turn, throttle, rear_turn),
+        (mode, int(bool(has_target)), int(combat_mode == 'engage'),
+         int(bool(movement_intent)), int(bool(withdrawal_aim)),
+         int(bool(allow_rear_start))))
+    if result is not None:
+        return result[0], result[1], bool(result[2])
+    return _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw,
+        maximum_yaw, turn, throttle, recovery_mode, has_target, combat_mode,
+        movement_intent, withdrawal_aim, rear_turn, allow_rear_start)
+
+
+def limited_traverse_target(relative, minimum, maximum, rear_turn=0.0):
+    result = native_math.call('driver_aim', 1,
+        (relative, minimum, maximum, rear_turn), ())
+    if result is not None:
+        return result
+    return _reference_limited_traverse_target(relative, minimum, maximum, rear_turn)
+
+
+def gun_aligned(target_yaw, hull_yaw, turret_yaw, desired_pitch, gun_pitch,
+        yaw_tolerance=0.06, pitch_tolerance=0.04):
+    result = native_math.call('driver_aim', 2,
+        (target_yaw, hull_yaw, turret_yaw, desired_pitch, gun_pitch,
+         yaw_tolerance, pitch_tolerance), ())
+    if result is not None:
+        return bool(result)
+    return _reference_gun_aligned(target_yaw, hull_yaw, turret_yaw,
+        desired_pitch, gun_pitch, yaw_tolerance, pitch_tolerance)
+
+
+def barrel_direction(yaw, pitch):
+    result = native_math.call('driver_aim', 3, (yaw, pitch), ())
+    if result is not None:
+        return result
+    return _reference_barrel_direction(yaw, pitch)
 
 
 class LocalDriver(object):

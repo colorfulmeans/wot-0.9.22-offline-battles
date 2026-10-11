@@ -366,6 +366,7 @@ PyObject *WOT_CDECL rotation_current(PyObject *,PyObject *args) {
 #include "offline_release_ground_python.inc"
 #include "offline_release_suspension_python.inc"
 #include "offline_driver_geometry_python.inc"
+#include "offline_driver_aim_python.inc"
 
 PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(translate);
@@ -385,6 +386,7 @@ PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
 }
 
 PyMethodDef methods[] = {
+    {"driver_aim", driver_aim, 0x0001, "Current limited-traverse hull aiming and fire alignment."},
     {"driver_geometry", driver_geometry, 0x0001, "Current local-driver rear/front sweeps and recovery occupancy."},
     {"contact_ground", contact_ground, 0x0001, "Current external push and passive wreck track friction."},
     {"release_suspension_step", release_suspension_step, 0x0001, "Current release spring forces and hard support projection."},
