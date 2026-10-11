@@ -226,22 +226,7 @@ def body(sensor, chunk_id, registry, position, yaw, speed, bbox, vehicle,
 
 def neighbourhood(sensor, area, position, sin_yaw, cos_yaw, speed, neighbours):
     """Batch only the pinned pure chunk mapper; custom test owners stay Python."""
-    try:
-        import DestructiblesCache
-    except ImportError:
-        return None
-    mapper = getattr(DestructiblesCache, 'chunkIDFromPosition', None)
-    indexes = getattr(DestructiblesCache, 'chunkIndexesFromPosition', None)
-    wire = getattr(DestructiblesCache, 'chunkIDFromChunkIndexes', None)
-    code = lambda f: getattr(f, 'func_code', getattr(f, '__code__', None))
-    if (mapper is None or area.chunkIDFromPosition is not mapper or
-            getattr(DestructiblesCache, '_INV_CHUNK_RANGE', None) != .01 or
-            getattr(code(mapper), 'co_names', None) != (
-                'chunkIDFromChunkIndexes', 'chunkIndexesFromPosition') or
-            getattr(code(indexes), 'co_consts', None) != (None, 0, 2) or
-            getattr(code(indexes), 'co_names', None) != (
-                'int', 'math', 'floor', '_INV_CHUNK_RANGE') or
-            getattr(code(wire), 'co_consts', None) != (None, 127, 8)):
+    if not _chunk_mapper_1513(area):
         return None
     owner = _get(sensor)
     if owner is None:
@@ -284,3 +269,76 @@ def refresh_baked(sensor):
                                   for cell, members in bins.items()))
         except Exception as error:
             _fail(error)
+
+
+def _chunk_mapper_1513(area):
+    """Existing bytecode/constant identity gate for the pure #1513 mapper."""
+    try:
+        import DestructiblesCache
+    except ImportError:
+        return False
+    mapper = getattr(DestructiblesCache, 'chunkIDFromPosition', None)
+    indexes = getattr(DestructiblesCache, 'chunkIndexesFromPosition', None)
+    wire = getattr(DestructiblesCache, 'chunkIDFromChunkIndexes', None)
+    code = lambda f: getattr(f, 'func_code', getattr(f, '__code__', None))
+    if (mapper is None or area.chunkIDFromPosition is not mapper or
+            getattr(DestructiblesCache, '_INV_CHUNK_RANGE', None) != .01 or
+            getattr(code(mapper), 'co_names', None) != (
+                'chunkIDFromChunkIndexes', 'chunkIndexesFromPosition') or
+            getattr(code(indexes), 'co_consts', None) != (None, 0, 2) or
+            getattr(code(indexes), 'co_names', None) != (
+                'int', 'math', 'floor', '_INV_CHUNK_RANGE') or
+            getattr(code(wire), 'co_consts', None) != (None, 127, 8)):
+        return False
+    return True
+
+
+def _chunk_vector_1513(math_module):
+    # A Python replacement must retain its callbacks/rounding/errors. Only
+    # the existing native Math.Vector3 constructor/index slots are bypassed.
+    factory = getattr(math_module, 'Vector3', None)
+    return (type(factory) is type and
+            getattr(factory, '__module__', None) == 'Math' and
+            getattr(factory, '__name__', None) == 'Vector3' and
+            type(getattr(factory, '__init__', None)) is type(object.__init__) and
+            type(getattr(factory, '__getitem__', None)) is type(object.__init__) and
+            type(getattr(factory, '__new__', None)) is type(object.__new__))
+
+def _chunk_environment_1513(area, math_module):
+    import math
+    import sys
+    import types
+    cache = sys.modules.get('DestructiblesCache')
+    if any(type(module) is not types.ModuleType
+           for module in (cache, area, math_module, math)):
+        return False
+    if (cache is None or getattr(cache, 'math', None) is not math or
+            type(math.floor) is not types.BuiltinFunctionType or
+            getattr(math.floor, '__name__', None) != 'floor' or
+            getattr(cache, 'int', int) is not int):
+        return False
+    for name in ('chunkIDFromPosition', 'chunkIndexesFromPosition',
+                 'chunkIDFromChunkIndexes'):
+        function = getattr(cache, name, None)
+        if type(function) is not types.FunctionType:
+            return False
+        namespace = getattr(function, 'func_globals',
+                            getattr(function, '__globals__', None))
+        if namespace is not cache.__dict__:
+            return False
+    return True
+
+
+def required_chunks(sensor, area, math_module, sweep_boxes):
+    """Batch the current mapper's numeric work, never a custom callback."""
+    if (not _chunk_environment_1513(area, math_module) or
+            not callable(getattr(area, 'chunkIDFromPosition', None)) or
+            not _chunk_mapper_1513(area) or not _chunk_vector_1513(math_module)):
+        return None
+    from gui.mods.offline_lan_0922 import native_math
+    result = native_math.call('destr_required_chunks', sweep_boxes,
+        (sensor._SOLID_CONTACT_RADIUS_1513,
+         sensor._DESTRUCTIBLE_CHUNK_METRES_1513))
+    if result is None:
+        return None
+    return ('ready', 'pending', 'hard')[result[0]], result[1]

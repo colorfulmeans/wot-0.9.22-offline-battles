@@ -143,7 +143,10 @@ PyObject *WOT_CDECL destr_query(PyObject *,PyObject *args) {
         throw Unsupported();
     }catch(const PythonAllocationFailed &){profile.fail();return 0;}catch(...){profile.fail();return fallback();}
 }
+#include "offline_destructible_chunks_python.inc"
+
 #define WOT_DESTRUCTIBLE_METHODS \
+    {"destr_required_chunks",destr_required_chunks,1,"Current swept-hull chunk planning."}, \
     {"destr_open",destr_open,1,"Create one pure streamed-geometry index."}, \
     {"destr_close",destr_close,1,"Retire one streamed-geometry index."}, \
     {"destr_update",destr_update,1,"Apply one typed streamed geometry mutation."}, \

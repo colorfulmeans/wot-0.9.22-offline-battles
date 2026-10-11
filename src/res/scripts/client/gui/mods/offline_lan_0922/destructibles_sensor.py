@@ -6216,7 +6216,7 @@ def _tree_motion_axis_samples_1513(minimum, maximum):
 		for index in range(segments + 1))
 
 
-def _tree_motion_required_chunks_1513(sweep_boxes):
+def _reference_tree_motion_required_chunks_1513(sweep_boxes):
 	"""Map only chunk cells intersected by the segmented sweep broadphase."""
 	import AreaDestructibles
 	import Math
@@ -6252,6 +6252,30 @@ def _tree_motion_required_chunks_1513(sweep_boxes):
 	if not chunk_ids:
 		return 'pending', ()
 	return 'ready', tuple(sorted(chunk_ids))
+
+
+
+_PINNED_TREE_CHUNK_LAWS_1513 = (_box_xz_bounds, _tree_motion_axis_samples_1513)
+
+
+def _tree_motion_required_chunks_1513(sweep_boxes):
+	"""Plan the same chunk set before the unchanged registry/effect owners."""
+	import AreaDestructibles
+	import Math
+	# There is no geometric computation for an empty builtin sweep. Avoid
+	# admission/FFI work while keeping the original mapper availability rule.
+	if type(sweep_boxes) in (tuple, list) and not sweep_boxes:
+		return ('pending' if callable(getattr(
+			AreaDestructibles, 'chunkIDFromPosition', None)) else 'hard'), ()
+	if ((_box_xz_bounds, _tree_motion_axis_samples_1513) ==
+			_PINNED_TREE_CHUNK_LAWS_1513):
+		result = _native_geometry.required_chunks(
+			_native_sensor, AreaDestructibles, Math, sweep_boxes)
+		if result is not None:
+			combat_count('destructible_required_chunks_native')
+			return result
+	combat_count('destructible_required_chunks_reference')
+	return _reference_tree_motion_required_chunks_1513(sweep_boxes)
 
 
 def prewarm_tree_registry(spaceID, pos, yaw, td=None, now=None,

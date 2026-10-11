@@ -353,3 +353,7 @@ def main():
 
 if __name__=='__main__':
     main()
+
+if __name__ == '__main__':
+    from check_native_destructible_chunks import run as check_chunks
+    check_chunks(native_math._backend.backend)
