@@ -63,6 +63,30 @@ def call(method, *args):
     return None
 
 
+def projectile_math(operation, vectors, scalars):
+    """Fixed-arity hot frontier without generic dispatch or repeated loading."""
+    global _fallbacks
+    backend = _backend
+    if backend is None:
+        backend = _load()
+    if backend is None:
+        return None
+    try:
+        result = backend.projectile_math(operation, vectors, scalars)
+        if result is not None:
+            calls = _calls['projectile_math']
+            if not calls:
+                sys.stdout.write('[Offline LAN 0.9.22] native computation '
+                                 'active: projectile_math\n')
+            _calls['projectile_math'] = calls + 1
+            return result
+        _report_failure('unsupported projectile input')
+    except Exception as error:
+        _report_failure(error)
+    _fallbacks += 1
+    return None
+
+
 def snapshot():
     """Return cumulative counters for diagnostics and caller benchmarks."""
     result = dict(_calls)
