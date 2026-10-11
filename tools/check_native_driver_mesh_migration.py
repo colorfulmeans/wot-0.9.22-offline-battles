@@ -204,8 +204,11 @@ def run(backend):
         node[2]=node;node[3]=node
         bad=list(geometry);bad[2]=node
         assert backend.projectile_math(5,tuple(bad),((0.,0.,0.),1.e-8)) is None
-        refs=(sys.getrefcount(cube),sys.getrefcount(cube['vertices']))
+        # Python 2 deepcopy legitimately reuses immutable nested tuples.
+        # Freeze first, then take the refcount baseline so this test's own
+        # snapshot cannot masquerade as native retention.
         frozen=copy.deepcopy(cube)
+        refs=(sys.getrefcount(cube),sys.getrefcount(cube['vertices']))
         for unused in range(500):mesh.distance((2.,.5,0.),cube)
         gc.collect()
         assert refs==(sys.getrefcount(cube),sys.getrefcount(cube['vertices']))
