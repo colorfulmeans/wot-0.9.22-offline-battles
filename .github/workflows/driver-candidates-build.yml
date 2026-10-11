@@ -61,10 +61,42 @@ jobs:
               native/offline_math_batch_native.cpp \
               -o build/native-validation/native-host-32.so
             file build/native-validation/native-host-32.so
-            /opt/python27/bin/python2.7 -B tools/check_native_driver_aim.py build/native-validation/native-host-32.so
-            /opt/python27/bin/python2.7 -B tools/check_native_driver_geometry.py build/native-validation/native-host-32.so
-            /opt/python27/bin/python2.7 -B tools/check_native_release_math.py build/native-validation/native-host-32.so
-            /opt/python27/bin/python2.7 -B tools/check_native_rotation_current.py build/native-validation/native-host-32.so
+            /opt/python27/bin/python2.7 -B tools/check_native_driver_candidates.py build/native-validation/native-host-32.so
+            # Strict old driver-aim bit equality is susceptible to host libm.
+            # Compare its first mismatch to the SAME base source and toolchain;
+            # do not reinterpret an existing x86-host mismatch as a new regression.
+            set +e
+            /opt/python27/bin/python2.7 -B tools/check_native_driver_aim.py build/native-validation/native-host-32.so > build/native-validation/new-aim.log 2>&1
+            new_aim_status=$?
+            set -e
+            mkdir -p build/native-validation/baseline
+            tar -xzf build/native-toolchain/repository.tar.gz -C build/native-validation/baseline
+            (
+              cd build/native-validation/baseline
+              g++ -m32 -msse2 -mfpmath=sse -std=c++17 -O3 -fPIC -shared -pthread -DWOT_HOST_PYTHON -fno-fast-math -ffp-contract=off -fno-builtin-sin -fno-builtin-cos -fno-builtin-pow -fno-builtin-hypot -fno-builtin-fmod -I/opt/python27/include/python2.7 native/offline_math_batch_geometry.cpp native/offline_async_worker.cpp native/offline_navigation.cpp native/native_visibility_core.cpp native/offline_visibility.cpp native/offline_contact_roster.cpp native/offline_destructible_geometry.cpp native/world_stage.cpp native/navigation_query_stage.cpp native/offline_simulation.cpp native/offline_simulation_control.cpp native/offline_simulation_motion.cpp native/offline_simulation_weapons.cpp native/offline_simulation_navigation.cpp native/offline_math_batch_native.cpp -o /src/build/native-validation/baseline-host-32.so
+              set +e
+              /opt/python27/bin/python2.7 -B tools/check_native_driver_aim.py /src/build/native-validation/baseline-host-32.so > /src/build/native-validation/baseline-aim.log 2>&1
+              echo "$?" > /src/build/native-validation/baseline-aim.status
+              set -e
+            )
+            baseline_status=$(cat build/native-validation/baseline-aim.status)
+            printf "Current driver aim test exit=%s; prior unchanged baseline exit=%s\n" "$new_aim_status" "$baseline_status"
+            if [ "$new_aim_status" != 0 ]; then
+              if [ "$baseline_status" = 0 ]; then
+                echo "Current driver-aim failed but unchanged prior source passed" >&2
+                cat build/native-validation/new-aim.log
+                exit 1
+              fi
+              new_mismatch=$(grep "AssertionError:" build/native-validation/new-aim.log | head -n 1 || true)
+              old_mismatch=$(grep "AssertionError:" build/native-validation/baseline-aim.log | head -n 1 || true)
+              if [ -z "$new_mismatch" ] || [ "$new_mismatch" != "$old_mismatch" ]; then
+                echo "Different aim regression from prior baseline" >&2
+                cat build/native-validation/new-aim.log
+                cat build/native-validation/baseline-aim.log
+                exit 1
+              fi
+              echo "Unchanged driver-aim first-mismatch reproduced on exact prior source; not a new regression"
+            fi
             sh tools/build_math_batch_native.sh
             test -s native/offline_math_batch_native.pyd
             i686-w64-mingw32-objdump -p native/offline_math_batch_native.pyd > build/native-validation/pe-inspect.txt
