@@ -7,6 +7,12 @@ responsible for clocks, BigWorld collision queries, and vehicle matrices.
 
 import math
 
+try:
+    from gui.mods.offline_lan_0922 import native_math as _native_math
+except ImportError:
+    # Standalone engine-free fixtures also import this file without gui.
+    _native_math = None
+
 PROJECTILE_CALLBACK_SECONDS = 0.01
 PROJECTILE_MAX_SUBSTEP_SECONDS = 0.05
 PROJECTILE_MAX_CHORD_ERROR_METERS = 0.05
@@ -106,6 +112,58 @@ def lerp3(first, second, fraction):
     )
 
 
+def _reference_prepare_chord(origin, velocity, gravity, launch_time,
+                             absolute_start, absolute_end, max_distance, distance):
+    """Original complete one-chord mathematics without callback or state writes."""
+    start = trajectory_position(origin, velocity, gravity,
+                                absolute_start - launch_time)
+    unconstrained_end = trajectory_position(origin, velocity, gravity,
+                                            absolute_end - launch_time)
+    delta_x = float(unconstrained_end[0]) - float(start[0])
+    delta_y = float(unconstrained_end[1]) - float(start[1])
+    delta_z = float(unconstrained_end[2]) - float(start[2])
+    chord_distance = math.sqrt(delta_x * delta_x + delta_y * delta_y +
+                               delta_z * delta_z)
+    remaining_distance = max(0.0, max_distance - distance)
+    distance_fraction = 1.0
+    distance_terminal = False
+    if chord_distance > remaining_distance:
+        distance_fraction = remaining_distance / chord_distance
+        distance_terminal = True
+    elif remaining_distance <= 0.0:
+        distance_fraction = 0.0
+        distance_terminal = True
+    end = lerp3(start, unconstrained_end, distance_fraction)
+    constrained_absolute_end = (
+        absolute_start + (absolute_end - absolute_start) * distance_fraction)
+    return start, end, constrained_absolute_end, distance_terminal
+
+
+# Do not override a custom/patchable reference trajectory law.
+_NATIVE_TRAJECTORY = trajectory_position
+_NATIVE_LERP = lerp3
+
+
+def prepare_chord(origin, velocity, gravity, launch_time, absolute_start,
+                  absolute_end, max_distance, distance):
+    """Return the entire numeric chord with one synchronous native operation.
+
+    The manager still owns the real collision callback, immutable launch,
+    projectile/round ledger, clock and terminal settlement.
+    """
+    if (_native_math is not None and
+            trajectory_position is _NATIVE_TRAJECTORY and
+            lerp3 is _NATIVE_LERP):
+        result = _native_math.call(
+            'projectile_math', 0, (origin, velocity, gravity),
+            (launch_time, absolute_start, absolute_end, max_distance, distance))
+        if result is not None:
+            return result[0], result[1], result[2], bool(result[3])
+    return _reference_prepare_chord(
+        origin, velocity, gravity, launch_time, absolute_start,
+        absolute_end, max_distance, distance)
+
+
 def compensate_segment_for_moving_target(projectile_start, projectile_end,
                                          target_previous, target_current,
                                          interval_start=0.0,
@@ -116,6 +174,21 @@ def compensate_segment_for_moving_target(projectile_start, projectile_end,
     the target displacement remaining at that endpoint converts the query into
     a relative-motion sweep without requiring an engine-owned historic matrix.
     """
+    if _native_math is not None and lerp3 is _NATIVE_LERP:
+        result = _native_math.call(
+            'projectile_math', 1,
+            (projectile_start, projectile_end, target_previous, target_current),
+            (interval_start, interval_end))
+        if result is not None:
+            return result
+    return _reference_compensate_segment_for_moving_target(
+        projectile_start, projectile_end, target_previous, target_current,
+        interval_start, interval_end)
+
+
+def _reference_compensate_segment_for_moving_target(
+        projectile_start, projectile_end, target_previous, target_current,
+        interval_start=0.0, interval_end=1.0):
     previous_at_start = lerp3(
         target_previous, target_current, interval_start)
     previous_at_end = lerp3(

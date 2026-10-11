@@ -56,3 +56,6 @@ check_traffic_geometry(backend)
 
 from check_native_traffic_crossing import run as check_crossing
 check_crossing(backend)
+
+from check_native_projectile_math import run as check_projectile_math
+check_projectile_math(backend)

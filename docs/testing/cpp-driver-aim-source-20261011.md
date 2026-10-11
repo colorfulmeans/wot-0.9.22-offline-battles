@@ -201,3 +201,49 @@ engine/driver callbacks and CPython 3 dictionary-layout equivalents, not
 #1513's CPython 2.7/x86 runtime. Actual x86 extension compile, real-module
 CI, packaged native admission and Windows gameplay/frame-time acceptance are
 pending. No launcher, `.wotmod`, binary, tag or release was updated.
+
+## Current-release projectile chord and moving-target continuation
+
+This source-only batch adds a `projectile_math` entry point to the exact-client
+native extension, with new timing diagnostics and method admission counters.
+Opcode 0 handles the complete numeric flight-chord preparation from frozen
+start/velocity/gravity and the current distance cursor: two absolute-time
+trajectories, three-axis segment distance, remaining-range clipping, endpoint
+interpolation, and the constrained callback timestamp. One operation replaces
+the previous multi-call Python math in `InFlightProjectiles._advance_one`.
+Substep boundaries, global chord budget, real collision callbacks, impact and
+terminal ordering, cursor commits, cancellation and owner identity remain
+unchanged. Opcode 1 performs the complete relative-motion projection of a
+moving target's current collision-frame chord in one operation.
+
+Both operations borrow only plain numeric tuples/lists, retain no Python
+objects, and reject custom numeric types, nonfinite input and unsupported
+shapes without invoking Python conversion callbacks. Unsupported inputs and
+older binaries use the original precise Python reference laws. The adapter
+avoids bypassing patched `trajectory_position` or `lerp3` implementations.
+The old `projectile_runtime` position, range and curvature helpers remain as
+public reference interfaces for other clients and the manager's takeover path.
+No original #1513 engine callback ownership is moved across threads.
+
+Local scratch bridge validation uses the exact production C++ include compiled
+with GCC 14.2 and Clang 17, `-std=c++17 -O2 -fno-fast-math -ffp-contract=off`.
+Both pass 40,000 bit-for-bit prepared-chord comparisons, 40,000 moving-target
+projection comparisons, 5,000 mutable-input comparisons and malformed-input
+rejection tests. A separate production-host conformance checker
+`tools/check_native_projectile_math.py` is wired into the native driver
+geometry test runner; its 15,000 paired-operation and manager lifecycle checks
+still require actual CPython 2.7 host execution.
+
+A scratch host microbenchmark of the entire Python adapter boundary, using one
+frozen chord and one moving-target pair, records roughly 1.319 to 0.401
+microseconds (3.29x) for a full chord and 1.182 to 0.320 microseconds (3.70x)
+for moving-target compensation. The scratch bridge is CPython 3.13 and does
+not reproduce the embedded CPython 2.7/x86 dictionary or DLL ABI. The values
+are component observations, **not** whole-worker, in-game latency or visible
+projectile timing measurements.
+
+Exact #1513 Win32 extension packaging, real-manager conformance on the pinned
+Python 2.7 runtime, package inspection and Windows gameplay acceptance remain
+outstanding. No shipped binary, release, gameplay law, physics constant,
+collision filter, control cadence, callback budget or worker architecture has
+been changed.
