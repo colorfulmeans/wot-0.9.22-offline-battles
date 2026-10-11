@@ -24,7 +24,13 @@ concurrency:
 
 jobs:
   validate-and-publish:
-    if: github.repository == 'colorfulmeans/wot-0.9.22-offline-battles' && github.ref == 'refs/heads/integrate/0100-native-worker'
+    # This recipe applies an unintegrated staged batch. Ordinary fixes to the
+    # integrated runtime use tests.yml and must not apply/publish it again.
+    if: >-
+      github.repository == 'colorfulmeans/wot-0.9.22-offline-battles' &&
+      github.ref == 'refs/heads/integrate/0100-native-worker' &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.head_commit.message, '[native-only]'))
     runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:
