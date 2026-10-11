@@ -20,9 +20,16 @@ mkdir -p /work/out
     exit 1
 }
 cd /work/repo
-if [ "${WOT_NATIVE_VALIDATION_BATCH:-driver-mesh}" = destructible-chunks ]; then
-    exec /usr/bin/python3 tools/build_verify_native_destructible_chunks.py
-fi
+case "${WOT_NATIVE_VALIDATION_BATCH:-driver-mesh}" in
+    destructible-chunks)
+        exec /usr/bin/python3 tools/build_verify_native_destructible_chunks.py
+        ;;
+    destructible-preparation)
+        exec /usr/bin/python3 tools/build_verify_native_destructible_prepare.py
+        ;;
+    driver-mesh) ;;
+    *) echo 'Unsupported native validation batch' >&2; exit 1 ;;
+esac
 /usr/bin/python3 tools/build_verify_native_migration.py
 # Compare against the old runtime with its native primitives enabled. These
 # component observations are separate from the required correctness gates.
