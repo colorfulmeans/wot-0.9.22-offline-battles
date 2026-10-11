@@ -122,12 +122,16 @@ PyObject *moving_result(const MovingChord &chord) {
 }
 }  // namespace projectile_math_law
 
+#include "offline_internal_mesh_cone_python.inc"
+
 PyObject *WOT_CDECL projectile_math(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(projectile_math);
     try {
         require_sequence(args, 3, true);
         PyObject **values = items(args);
         const int op = index_value(values[0]);
+        if (op == 2)
+            return internal_mesh_cone_law::run(values[1], values[2], profile);
         if (op == 0) {
             require_sequence(values[1], 3, true);
             require_sequence(values[2], 5, true);

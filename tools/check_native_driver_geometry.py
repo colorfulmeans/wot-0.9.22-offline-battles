@@ -62,3 +62,6 @@ check_projectile_math(backend)
 
 from check_native_projectile_spatial import run as check_projectile_spatial
 check_projectile_spatial(backend)
+
+from check_native_internal_mesh_cone import run as check_internal_mesh_cone
+check_internal_mesh_cone(backend)

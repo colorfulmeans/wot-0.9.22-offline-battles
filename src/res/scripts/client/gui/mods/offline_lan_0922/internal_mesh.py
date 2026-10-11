@@ -12,6 +12,15 @@ import math
 import struct
 import zlib
 
+try:
+    from gui.mods.offline_lan_0922 import native_math as _native_math
+except ImportError:
+    _native_math = None
+try:
+    _NATIVE_COUNT_TYPES = (int, long, bool)
+except NameError:
+    _NATIVE_COUNT_TYPES = (int, bool)
+
 
 _EPS = 1.0e-8
 _LEAF_SIZE = 8
@@ -401,7 +410,7 @@ def triangle_intersects_cone(a, b, c, apex, axis, depth, tangent):
     return False
 
 
-def intersects_cone(mesh, apex, axis, depth, tangent, stats=None,
+def _reference_intersects_cone(mesh, apex, axis, depth, tangent, stats=None,
                     apex_inside=None):
     if apex_inside is None:
         apex_inside = contains(apex, mesh)
@@ -429,6 +438,42 @@ def intersects_cone(mesh, apex, axis, depth, tangent, stats=None,
             if triangle_intersects_cone(a, b, c, apex, axis, depth, tangent):
                 return True
     return False
+
+
+def _cone_laws():
+    return (_sub, _dot, _add_scaled, _clip_axial, triangle_intersects_cone)
+
+
+_PINNED_CONE_LAWS = _cone_laws()
+
+
+def intersects_cone(mesh, apex, axis, depth, tangent, stats=None,
+                    apex_inside=None):
+    """Run the complete current surface query without per-triangle callbacks."""
+    if apex_inside is None:
+        apex_inside = contains(apex, mesh)
+    if apex_inside:
+        return True
+    # Custom mappings/counters retain their exact reference side effects.
+    plain_stats = (stats is None or (type(stats) is dict and
+                   all(type(key) is str for key in stats) and
+                   type(stats.get('triangles', 0)) in _NATIVE_COUNT_TYPES))
+    if (_native_math is not None and type(mesh) is dict and plain_stats and
+            _cone_laws() == _PINNED_CONE_LAWS and
+            all(key in mesh for key in ('vertices', 'triangles', 'bvh'))):
+        result = _native_math.call(
+            'projectile_math', 2,
+            (mesh['vertices'], mesh['triangles'], mesh['bvh']),
+            (apex, axis, depth, tangent, _EPS))
+        if result is not None:
+            hit, tested = result
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            return bool(hit)
+    # Native rejection is read-only, so the reference owns every observable
+    # error/counter write. Do not redo the apex containment query on fallback.
+    return _reference_intersects_cone(
+        mesh, apex, axis, depth, tangent, stats, apex_inside=False)
 
 
 def export_primitive(mesh):
