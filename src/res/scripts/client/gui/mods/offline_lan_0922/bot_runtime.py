@@ -14194,7 +14194,11 @@ class BotRuntime(object):
                 state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
                 target is not None and
-                command.get('combat_mode') != 'base_defense',
+                command.get('combat_mode') != 'base_defense' and
+                # Parking releases rear laying in _rear_laying_order. Do not
+                # recreate that episode later in the same control update and
+                # replace destination steering with an opposing firing pivot.
+                not command.get('parking_phase'),
                 combat_mode=command.get('combat_mode'),
                 movement_intent=command.get('movement_intent', True),
                 withdrawal_aim=command.get('withdrawal_aim', False),

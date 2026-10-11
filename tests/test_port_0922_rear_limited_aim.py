@@ -252,6 +252,42 @@ class RearTraverseRuntimeTests(unittest.TestCase):
                 self.assertNotIn('_rear_aim_episode', state)
                 self.assertNotIn('_rear_hull_aim', state)
 
+    def test_parking_approach_keeps_steering_after_releasing_rear_episode(self):
+        descriptor = harness._combat_descriptor(
+            turret_yaw_limits=(-math.radians(12), math.radians(12)), turret_speed=1.)
+        runtime = self.fixture.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: descriptor,
+            direction_probe=lambda *unused: dict(clear=True, slope=0.),
+            ground_probe=lambda *unused: 0., physics_ground_probe=lambda *unused: 0.,
+            spawn_resolver=lambda *unused: ((0., 0., 0.), -.5735985158321341),
+            visibility_probe=lambda *unused: True,
+            firing_lane_probe=lambda *unused: True,
+            baked_graph=harness._flat_open_graph())
+        runtime.battle_start(self.fixture.start)
+        bearing = -.5735985158321341 + math.pi / 2 + .001
+        point = (math.sin(bearing)*100., 0., math.cos(bearing)*100.)
+        runtime.states[11].update(_rear_hull_aim=(('human', 2), 1.),
+            _rear_aim_episode=dict(target_id=1000002, identity=('human', 2),
+                                   fire_seq=0, start=0.))
+        runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[dict(
+            id=11, team=2, combat_mode='parking_approach', parking_phase='approach',
+            parking_slot=0, target_kind='human', target_id=2,
+            move_position=(-22., 0., -1.3), aim_position=point, face_position=point,
+            arrival_radius=1., fire_range=500., fire_allowed=True,
+            throttle_override=None)]))
+        player = harness._admit_player(dict(
+            id=2, team=1, alive=True, x=point[0], y=0., z=point[2]))
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            for frame in range(1, 9):
+                runtime.update(.05, frame*.05, players=[player])
+                self.assertNotIn('_rear_aim_episode', runtime.states[11])
+                self.assertNotIn('_rear_hull_aim', runtime.states[11])
+                self.assertFalse(runtime.states[11]['hull_aiming'])
+        self.assertLess(runtime.states[11]['yaw'], -.5735985158321341)
+        self.assertEqual(0, runtime.states[11]['fire_seq'])
+
     def test_reported_183_real_adapter_completes_aim_without_false_route_recovery(self):
         descriptor = harness._combat_descriptor(
             turret_yaw_limits=(-math.pi/4, math.pi/4), turret_speed=1.)
