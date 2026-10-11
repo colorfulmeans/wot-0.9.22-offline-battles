@@ -80,7 +80,8 @@ class NativeMathDispatchTests(unittest.TestCase):
             self.assertIsNone(self.native.call('translation_fraction', {}, (), []))
         loader.assert_not_called()
         self.assertEqual(self.native.snapshot(), dict(
-            driver_aim=0, driver_geometry=0, projectile_math=0, projectile_spatial=0,
+            destr_required_chunks=0, driver_aim=0, driver_geometry=0,
+            projectile_math=0, projectile_spatial=0,
             translation_fraction=0, translation_contacts=0,
             slide_translation=0, rotation_fraction=0,
             contact_roster=0, world_run=0, world_failures=0,
@@ -138,7 +139,8 @@ class NativeMathDispatchTests(unittest.TestCase):
         self.assertIsNone(self.native.call('slide_translation'))
         self.assertEqual(self.native.call('translation_fraction'), 0.75)
         self.assertEqual(self.native.snapshot(), dict(
-            driver_aim=0, driver_geometry=0, projectile_math=0, projectile_spatial=0,
+            destr_required_chunks=0, driver_aim=0, driver_geometry=0,
+            projectile_math=0, projectile_spatial=0,
             translation_fraction=1, translation_contacts=0,
             slide_translation=0, rotation_fraction=1,
             contact_roster=0, world_run=0, world_failures=0,
