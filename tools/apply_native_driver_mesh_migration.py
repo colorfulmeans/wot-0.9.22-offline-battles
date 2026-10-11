@@ -200,6 +200,16 @@ CONE_INSERT = '''\tif (apex_outside and type(primitive) is dict and
 \t\t\treturn result[1] if result[0] else None
 '''
 
+DIAGNOSTIC_IMPORT = '''
+# Standalone native conformance tools also load this adapter by filename.
+# Observation is optional outside the client package, never a new dependency
+# for loading an otherwise usable numeric backend.
+try:
+    from gui.mods.offline_lan_0922 import native_input_diagnostics as _input_diagnostics
+except ImportError:
+    _input_diagnostics = None
+'''
+
 
 def replace_once(text, old, new):
     if text.count(old) != 1:
@@ -240,15 +250,15 @@ def prepare():
     out[p] = s
     p = PREFIX + 'native_math.py'
     s = (ROOT / p).read_text()
-    s = replace_once(s, '\nimport math\n', '\nimport math\nfrom . import native_input_diagnostics as _input_diagnostics\n')
+    s = replace_once(s, '\nimport math\n', '\nimport math\n' + DIAGNOSTIC_IMPORT)
     a = "        _record_projectile_fallback(method, args, 'unsupported_input')"
-    s = replace_once(s, a, a + "\n        _input_diagnostics.record(method, args, 'unsupported_input')")
+    s = replace_once(s, a, a + "\n        if _input_diagnostics is not None:\n            _input_diagnostics.record(method, args, 'unsupported_input')")
     a = "        _record_projectile_fallback(method, args, 'exception_' + type(error).__name__)"
-    s = replace_once(s, a, a + "\n        _input_diagnostics.record(method, args, 'exception', error)")
+    s = replace_once(s, a, a + "\n        if _input_diagnostics is not None:\n            _input_diagnostics.record(method, args, 'exception', error)")
     out[p] = s
     p = PREFIX + 'native_control_core.py'
     s = (ROOT / p).read_text()
-    s = replace_once(s, '\nimport copy\n', '\nimport copy\nfrom . import native_input_diagnostics as _native_input_diagnostics\n')
+    s = replace_once(s, '\nimport copy\n', '\nimport copy\nfrom gui.mods.offline_lan_0922 import native_input_diagnostics as _native_input_diagnostics\n')
     old = "    if callable(operation):\n        result = operation(source)\n        if result is not None:\n            combat_count('frontier_pose_native')\n            return result\n        combat_count('frontier_pose_rejected')"
     new = "    if callable(operation):\n        try:\n            result = operation(source)\n        except Exception as error:\n            _native_input_diagnostics.record('control_pose', (source,), 'exception', error)\n            raise\n        if result is not None:\n            combat_count('frontier_pose_native')\n            return result\n        combat_count('frontier_pose_rejected')\n        _native_input_diagnostics.record('control_pose', (source,))"
     out[p] = replace_once(s, old, new)
