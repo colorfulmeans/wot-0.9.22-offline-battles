@@ -14,7 +14,8 @@ for case in range(500):
  for actor in range(1,31):
   span=12. if case%3==0 else 150.
   states[actor]=dict(id=actor,x=rng.uniform(-span,span),y=rng.uniform(-2.,2.),z=rng.uniform(-span,span),
-                   yaw=rng.uniform(-math.pi,math.pi),collision_shape=(rng.uniform(1.,2.5),rng.uniform(2.,5.),-.8,2.))
+                   yaw=rng.uniform(-math.pi,math.pi),team=1 if actor<16 else 2,
+                   alive=actor%7!=0,collision_shape=(rng.uniform(1.,2.5),rng.uniform(2.,5.),-.8,2.))
  runtime.states=states;source=states[1];position=(source['x'],source['y'],source['z']);yaw=source['yaw'];target=yaw+rng.uniform(-.4,.4)
  supplied=[dict(position=(30.,0.,10.),shape=(1.5,3.5,-.8,2.),yaw=.5)]
  for revision in range(2):
@@ -23,7 +24,16 @@ for case in range(500):
   assert actual is not None,'native projection rejected a current producer'
   assert abs(actual-expected)<=1.e-10,(case,actual,expected)
   assert actual==runtime._rotation_fraction_for(source,position,yaw,target,supplied)
-  checks+=1;states[2]['x']+=2.;states[2]['yaw']+=.2
+  checks+=1
+  for push in (False,True):
+   eligible=[peer for peer in runtime._neighbours_for(source,supplied)
+             if (not peer.get('alive',True) and not push) or
+             (peer.get('alive',True) and peer.get('team')==source.get('team'))]
+   expected=tank_collision.rotation_fraction(position,yaw,target,source['collision_shape'],eligible)
+   actual=runtime._planning_rotation_fraction_for(source,position,yaw,target,supplied,push)
+   assert abs(actual-expected)<=1.e-10,(case,push,actual,expected)
+   checks+=1
+  states[2]['x']+=2.;states[2]['yaw']+=.2
 class Trap(dict):
  def get(self,*args):raise AssertionError('native invoked arbitrary mapping code')
 assert backend.rotation_current(position,yaw,target,source['collision_shape'],(),((2,Trap()),),1) is None
@@ -39,3 +49,13 @@ start=time.clock()
 for unused in range(1000):runtime._rotation_fraction_for(source,position,yaw,target,supplied)
 native=(time.clock()-start)*1000/1000
 print('Current rotation parity:',checks,'fresh rosters; reference/native ms per call:',legacy,native)
+start=time.clock()
+for unused in range(3000):
+ eligible=[peer for peer in runtime._neighbours_for(source,supplied)
+           if not peer.get('alive',True) or peer.get('team')==source.get('team')]
+ tank_collision.rotation_fraction(position,yaw,target,source['collision_shape'],eligible)
+legacy=(time.clock()-start)*1000/3000
+start=time.clock()
+for unused in range(3000):runtime._planning_rotation_fraction_for(source,position,yaw,target,supplied)
+native=(time.clock()-start)*1000/3000
+print('Planning projection/reference-native ms per call:',legacy,native)

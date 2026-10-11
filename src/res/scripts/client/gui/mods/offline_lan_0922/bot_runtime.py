@@ -6336,6 +6336,30 @@ class BotRuntime(object):
         return tank_collision.rotation_fraction(position, yaw, candidate,
             shape, self._rotation_neighbours_for(state, supplied))
 
+    def _planning_rotation_fraction_for(self, state, position, yaw, candidate,
+                                        supplied, allow_wreck_push=False):
+        """Keep traffic policy while projecting fresh numeric poses in C++."""
+        def admitted(peer):
+            return ((not peer.get('alive', True) and not allow_wreck_push) or
+                    (peer.get('alive', True) and peer.get('team') == state.get('team')))
+        supplied = tuple(peer for peer in (supplied or ()) if admitted(peer))
+        current = tuple((actor, raw) for actor, raw in self.states.items()
+                        if actor != state.get('id') and admitted(raw))
+        shape = state.get('collision_shape') or tank_collision.DEFAULT_SHAPE
+        from . import native_math
+        # Legacy/missing shapes retain their original half-size projection.
+        # Real current-release actors carry fitted shapes and x/y/z poses.
+        if (callable(getattr(native_math._load(), 'rotation_current', None)) and
+                all(raw.get('collision_shape') is not None for actor, raw in current)):
+            result = native_math.call('rotation_current', position, yaw, candidate,
+                                     shape, supplied, current, state.get('id'))
+            if result is not None:
+                combat_count('planning_rotation_current_native')
+                return result
+        combat_count('planning_rotation_current_reference')
+        return tank_collision.rotation_fraction(position, yaw, candidate, shape,
+            [peer for peer in self._neighbours_for(state, supplied) if admitted(peer)])
+
     def _rotation_neighbours_for(self, source, supplied):
         """Project only rotation geometry from the current sequential poses."""
         result = list(supplied or ())
@@ -13742,13 +13766,9 @@ class BotRuntime(object):
                         del state['_blocked_rotations'][side]
                     elif delta * side > 0.0 and abs(delta) >= abs(rejected_delta):
                         return False
-                if tank_collision.rotation_fraction(
-                        position, state['yaw'], sample_yaw,
-                        state.get('collision_shape') or tank_collision.DEFAULT_SHAPE,
-                        [peer for peer in self._neighbours_for(state, neighbours)
-                         if ((not allow_wreck_push and not peer.get('alive', True)) or
-                             (peer.get('alive', True) and
-                              peer.get('team') == state.get('team')))]) < 1.0:
+                if self._planning_rotation_fraction_for(
+                        state, position, state['yaw'], sample_yaw,
+                        neighbours, allow_wreck_push) < 1.0:
                     return False
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
