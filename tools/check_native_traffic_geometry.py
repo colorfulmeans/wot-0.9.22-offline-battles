@@ -89,8 +89,11 @@ def run(backend):
                 result = coordinator.safe_controls(
                     own, command, peers, 3., stopping_distance, step)
                 outcome = ('ok', result)
-            except ValueError as error:
-                outcome = ('error', str(error))
+            except (ValueError, TypeError) as error:
+                # Missing-height rows intentionally test the geometry phases.
+                # The complete driver can reject those rows during backing;
+                # compare that original exception as well as successful output.
+                outcome = ('error', type(error).__name__, str(error))
             return outcome, coordinator._orders, calls, own, peers, command
         finally:
             traffic._braking_roster, traffic._braking_blocker = saved

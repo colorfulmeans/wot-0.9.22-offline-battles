@@ -31,7 +31,12 @@ class _Calls(object):
         self.rejected = 0
 
     def call(self, name, *args):
-        assert name == 'projectile_math' and args[0] == 2
+        assert name == 'projectile_math' and args[0] in (2, 3)
+        # Containment now uses the ray frontier. Exercise it without counting
+        # those calls as cone admission; cone-specific override gates still
+        # assert that opcode 2 was not invoked.
+        if args[0] == 3:
+            return self.backend.projectile_math(*args)
         result = self.backend.projectile_math(*args)
         if result is None:
             self.rejected += 1
