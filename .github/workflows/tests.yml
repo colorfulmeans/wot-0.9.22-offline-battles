@@ -92,6 +92,12 @@ jobs:
               native/offline_simulation_navigation.cpp \
               native/offline_math_batch_native.cpp \
               -o /tmp/offline_math_batch_native.so
+            g++ -std=c++17 -O2 -fPIC -shared -msse2 -mfpmath=sse \
+              -fno-fast-math -ffp-contract=off \
+              -I/usr/local/include/python2.7 \
+              tools/check_native_destructible_chunks_vector.cpp \
+              -o /tmp/native_chunk_vector.so
+            export WOT_NATIVE_CHUNK_VECTOR=/tmp/native_chunk_vector.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_math.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_release_math.py \

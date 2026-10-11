@@ -12,8 +12,10 @@ bool named(PyObject *raw) {
     // Unicode/subclasses retain the original Python normalization path.
     if (!raw || raw->ob_type != field_keys[0]->ob_type) throw Unsupported();
 #ifdef WOT_HOST_PYTHON
-    static_assert(offsetof(PyStringObject, ob_sval) == 20,
-                  "This conformance bridge must use the 32-bit CPython layout");
+    // Host builds use the header-owned accessor on either CI architecture.
+    // Keep the game-layout assertion when that host is also 32-bit.
+    static_assert(sizeof(void *) != 4 || offsetof(PyStringObject, ob_sval) == 20,
+                  "The 32-bit host must match the CPython string layout");
     const char *text = PyString_AS_STRING(raw);
 #else
     const char *text = reinterpret_cast<const char *>(raw) + 20;
