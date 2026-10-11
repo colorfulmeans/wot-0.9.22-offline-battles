@@ -39,7 +39,7 @@ jobs:
             set -eu
             export PYTHONDONTWRITEBYTECODE=1
             /opt/python27/bin/python2.7 -B -c "import os; root=\"src/res/scripts/client\"; paths=[os.path.join(p,n) for p,d,files in os.walk(root) for n in files if n.endswith(\".py\")]; assert len(paths)>=179, len(paths); [compile(open(path,\"rb\").read(), path, \"exec\") for path in paths]; print(\"Client CP2 compile: %d sources\" % len(paths))"
-            g++ -m32 -std=c++17 -O3 -fPIC -shared -pthread -DWOT_HOST_PYTHON \
+            g++ -m32 -msse2 -mfpmath=sse -std=c++17 -O3 -fPIC -shared -pthread -DWOT_HOST_PYTHON \
               -fno-fast-math -ffp-contract=off \
               -fno-builtin-sin -fno-builtin-cos -fno-builtin-pow \
               -fno-builtin-hypot -fno-builtin-fmod \
