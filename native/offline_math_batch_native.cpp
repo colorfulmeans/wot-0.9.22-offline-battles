@@ -86,14 +86,14 @@ enum Field { ID, X, Y, Z, YAW, PITCH, ROLL, SHAPE, DESCRIPTOR, DIMS, POSITION,
     ALIVE, IMMOVABLE, IMPULSE, POSITION_FIXED, PH_POWER, PH_POWER_RATIO,
     PH_FORWARD, PH_REVERSE, PH_FRICTION, PH_BRAKE, PH_ROTATION, PH_TERRAIN,
     AIM_YAW, TURRET_YAW, GUN_PITCH, SPEED, VELOCITY, COLLISION_SHAPE,
-    FIELD_COUNT };
+    DRIVER_POS, DRIVER_HALF_LENGTH, DRIVER_HALF_WIDTH, FIELD_COUNT };
 const char *const field_names[] = {
     "id", "x", "y", "z", "yaw", "pitch", "roll", "shape", "descriptor", "dims", "position",
     "mass", "vx", "vy", "vz", "push_yaw", "contact_decel", "traverse_speed",
     "traverse_torque", "team", "alive", "immovable", "impulse", "position_fixed",
     "powerW", "nativePowerRatio", "speedFwd", "speedBwd", "specificFriction",
     "brakeDecel", "rotSpd", "terrainResist", "aim_yaw", "turret_yaw",
-    "gun_pitch", "speed", "velocity", "collision_shape"
+    "gun_pitch", "speed", "velocity", "collision_shape", "pos", "half_length", "half_width"
 };
 // Fixed owned string references, retained with this process-lived module.
 PyObject *field_keys[FIELD_COUNT] = {};
@@ -365,6 +365,7 @@ PyObject *WOT_CDECL rotation_current(PyObject *,PyObject *args) {
 #include "offline_world_query_python.inc"
 #include "offline_release_ground_python.inc"
 #include "offline_release_suspension_python.inc"
+#include "offline_driver_geometry_python.inc"
 
 PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(translate);
@@ -384,6 +385,7 @@ PyObject *WOT_CDECL translate_contacts(PyObject *, PyObject *args) {
 }
 
 PyMethodDef methods[] = {
+    {"driver_geometry", driver_geometry, 0x0001, "Current local-driver rear/front sweeps and recovery occupancy."},
     {"contact_ground", contact_ground, 0x0001, "Current external push and passive wreck track friction."},
     {"release_suspension_step", release_suspension_step, 0x0001, "Current release spring forces and hard support projection."},
     {"rotation_envelope", rotation_envelope, 0x0001, "Exact current analytical yaw sweep bounds."},

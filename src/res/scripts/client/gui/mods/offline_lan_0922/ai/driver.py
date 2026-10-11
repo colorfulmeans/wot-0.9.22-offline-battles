@@ -508,6 +508,33 @@ class LocalDriver(object):
 	@observed('driver.reverse_contacts')
 	def _reverse_blocked_by_vehicle(self, position, yaw, neighbours,
 			half_length, half_width, maximum_distance=None):
+		distance = (max(0.0, float(half_length)) * 1.6 if maximum_distance is None
+			else max(0.0, float(maximum_distance)))
+		result = self._native_geometry(0, position, yaw, neighbours, half_length, half_width, distance)
+		if result is not None:
+			if result < 0:
+				return None
+			peer = neighbours[result]
+			return peer['id'] if isinstance(peer, dict) and peer.get('id') is not None else True
+		return self._reference_reverse_blocked_by_vehicle(position, yaw, neighbours,
+			half_length, half_width, maximum_distance)
+
+	def _native_geometry(self, op, position, yaw, neighbours, half_length, half_width, amount):
+		if not isinstance(neighbours, (tuple, list)):
+			return None
+		for name in ('_obb_overlap', '_neighbour_position'):
+			method = getattr(self, name)
+			original = getattr(LocalDriver, name)
+			if getattr(method, 'im_func', getattr(method, '__func__', method)) is not getattr(
+					original, 'im_func', getattr(original, '__func__', original)):
+				return None
+		from gui.mods.offline_lan_0922 import native_math
+		return native_math.call('driver_geometry', op,
+			(tuple(position) + (yaw, half_length, half_width, amount)),
+			neighbours, RECOVERY_SWEEP_FRACTIONS)
+
+	def _reference_reverse_blocked_by_vehicle(self, position, yaw, neighbours,
+			half_length, half_width, maximum_distance=None):
 		"""Reject a blind reverse whose reachable hull sweep is occupied.
 
 		``direction_clear`` answers for terrain and static world geometry only.
@@ -575,6 +602,15 @@ class LocalDriver(object):
 
 	def _static_hull_ahead(self, position, candidate_yaw, neighbours,
 			half_length, half_width):
+		result = self._native_geometry(1, position, candidate_yaw, neighbours,
+			half_length, half_width, half_length * 1.6)
+		if result is not None:
+			return bool(result)
+		return self._reference_static_hull_ahead(position, candidate_yaw, neighbours,
+			half_length, half_width)
+
+	def _reference_static_hull_ahead(self, position, candidate_yaw, neighbours,
+			half_length, half_width):
 		"""Reject a candidate occupied by a wreck or a stationary living hull.
 
 		Moving traffic retains crossing coordination and contact physics. A
@@ -621,6 +657,15 @@ class LocalDriver(object):
 		return False
 
 	def _recovery_occupancy(self, position, yaw, direction, neighbours,
+			half_length, half_width):
+		result = self._native_geometry(2, position, yaw, neighbours,
+			half_length, half_width, direction * RECOVERY_YAW_OFFSET)
+		if result is not None:
+			return result
+		return self._reference_recovery_occupancy(position, yaw, direction, neighbours,
+			half_length, half_width)
+
+	def _reference_recovery_occupancy(self, position, yaw, direction, neighbours,
 			half_length, half_width):
 		"""Count occupied sampled poses in one in-place recovery turn."""
 		occupied = 0
