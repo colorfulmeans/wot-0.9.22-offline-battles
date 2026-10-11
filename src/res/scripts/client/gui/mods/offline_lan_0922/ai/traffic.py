@@ -3,7 +3,8 @@
 
 import math
 from gui.mods.offline_lan_0922.ai.driver import LocalDriver
-from gui.mods.offline_lan_0922 import tank_collision
+from gui.mods.offline_lan_0922 import tank_collision, native_math
+from gui.mods.offline_lan_0922.worker_diagnostics import count as _count
 
 
 PREDICTION_SECONDS = 1.0
@@ -135,6 +136,103 @@ def _arrival(body, axis, speed, gate, reference=0.0):
     pace = speed if speed > _EPSILON else reference
     return (1, front_distance / pace if pace > _EPSILON else float('inf'),
             body['id'])
+
+
+def _reference_braking_roster(body, neighbours, throttle):
+    speed = _dot(_velocity(body), _axes(body)[1])
+    peers = [peer for peer in neighbours
+             if peer['id'] != body['id'] and peer.get('alive', True) and
+             (body.get('team') is None or peer.get('team') is None or
+              peer.get('team') == body.get('team')) and
+             _same_level(body, peer)]
+    # Braking against current travel must remain available. At rest the
+    # intended gear determines which hull face needs a clear corridor.
+    sign = -1.0 if throttle < -0.01 or (
+        abs(throttle) <= 0.01 and speed < 0.0) else 1.0
+    forward = _axes(body)[1]
+    axis = forward[0] * sign, forward[1] * sign
+    position = _position(body)
+    candidates = []
+    for peer in peers:
+        delta = (_position(peer)[0] - position[0],
+                 _position(peer)[1] - position[1])
+        if _dot(delta, axis) <= 0.0:
+            continue  # Do not brake a leader because of a rear follower.
+        reach = sum(_dimensions(body)) + sum(_dimensions(peer))
+        if math.hypot(*delta) > reach + max(2.0, speed * speed):
+            continue
+        candidates.append(peer)
+    return speed, sign, position, axis, peers, candidates
+
+
+def _reference_braking_blocker(body, candidates, position, axis, speed, step,
+                               brake_distance):
+    # One integration slice of reaction plus a small standstill gap.
+    # The brake integral is based on this vehicle's real parameters.
+    distance = min(80.0, brake_distance) + abs(speed) * step + 0.12
+    horizon = min(1.0, max(step, 2.0 * min(brake_distance, 80.0) /
+                            max(abs(speed), 0.1)))
+    swept = dict(body, velocity=(axis[0] * distance, 0.0,
+                                 axis[1] * distance))
+    for peer in candidates:
+        own_shape = body.get('shape') or (
+            body['half_width'], body['half_length'])
+        peer_shape = peer.get('shape') or (
+            peer['half_width'], peer['half_length'])
+        contact = tank_collision._obb_overlap(
+            position[0], position[1], body['yaw'], own_shape,
+            _position(peer)[0], _position(peer)[1], peer['yaw'], peer_shape)
+        if contact[2] >= -1.0e-9:
+            if _dot(axis, contact[:2]) >= -1.0e-9:
+                continue  # Existing side contact can slide or separate.
+            return peer['id']
+        velocity = _velocity(peer)
+        predicted = dict(peer, velocity=(velocity[0] * horizon, 0.0,
+                                         velocity[1] * horizon))
+        if _contact_time(swept, predicted) is not None:
+            return peer['id']
+    return None
+
+
+# The bridge must not bypass a replaced reference law. Only the two pure
+# calculation phases cross into C++; the stopping-distance callback remains
+# between them, and the second phase rereads the current borrowed body rows.
+def _braking_laws():
+    return (_dot, _position, _velocity, _axes, _radius, _dimensions,
+            _same_level, _contact_time, tank_collision.vertical_overlap,
+            tank_collision.vertical_interval, tank_collision._obb_overlap,
+            tank_collision._axes)
+
+
+_PINNED_BRAKING_LAWS = _braking_laws()
+
+
+def _braking_roster(body, neighbours, throttle):
+    if _braking_laws() == _PINNED_BRAKING_LAWS:
+        result = native_math.call('driver_geometry', 3, body, neighbours,
+                                  (throttle,))
+        if result is not None:
+            _count('traffic_roster_native')
+            values, peers, candidates = result
+            return (values[0], values[1], tuple(values[2:4]), tuple(values[4:6]),
+                    [neighbours[index] for index in peers],
+                    [neighbours[index] for index in candidates])
+    _count('traffic_roster_reference')
+    return _reference_braking_roster(body, neighbours, throttle)
+
+
+def _braking_blocker(body, candidates, position, axis, speed, step,
+                     brake_distance):
+    if _braking_laws() == _PINNED_BRAKING_LAWS:
+        result = native_math.call('driver_geometry', 4, body, candidates,
+            (position[0], position[1], axis[0], axis[1], speed, step,
+             brake_distance, PREDICTION_SECONDS, _EPSILON))
+        if result is not None:
+            _count('traffic_blocker_native')
+            return candidates[result]['id'] if result >= 0 else None
+    _count('traffic_blocker_reference')
+    return _reference_braking_blocker(
+        body, candidates, position, axis, speed, step, brake_distance)
 
 
 class TrafficCoordinator(object):
@@ -337,59 +435,14 @@ class TrafficCoordinator(object):
         remain owned by physics. Re-evaluate even when a decision is cached.
         """
         result = dict(command)
-        speed = _dot(_velocity(body), _axes(body)[1])
         throttle, turn = result.get('throttle', 0.0), result.get('turn', 0.0)
-        peers = [peer for peer in neighbours
-                 if peer['id'] != body['id'] and peer.get('alive', True) and
-                 (body.get('team') is None or peer.get('team') is None or
-                  peer.get('team') == body.get('team')) and
-                 _same_level(body, peer)]
-        # Braking against current travel must remain available. At rest the
-        # intended gear determines which hull face needs a clear corridor.
-        sign = -1.0 if throttle < -0.01 or (
-            abs(throttle) <= 0.01 and speed < 0.0) else 1.0
-        forward = _axes(body)[1]
-        axis = forward[0] * sign, forward[1] * sign
-        position = _position(body)
-        candidates = []
-        for peer in peers:
-            delta = (_position(peer)[0] - position[0],
-                     _position(peer)[1] - position[1])
-            if _dot(delta, axis) <= 0.0:
-                continue  # Do not brake a leader because of a rear follower.
-            reach = sum(_dimensions(body)) + sum(_dimensions(peer))
-            if math.hypot(*delta) > reach + max(2.0, speed * speed):
-                continue
-            candidates.append(peer)
+        speed, sign, position, axis, peers, candidates = _braking_roster(
+            body, neighbours, throttle)
         blocker = None
         if candidates and (abs(throttle) > 0.01 or abs(speed) > 0.01):
             brake_distance = max(0.0, stopping_distance())
-            # One integration slice of reaction plus a small standstill gap.
-            # The brake integral is based on this vehicle's real parameters.
-            distance = min(80.0, brake_distance) + abs(speed) * step + 0.12
-            horizon = min(1.0, max(step, 2.0 * min(brake_distance, 80.0) /
-                                    max(abs(speed), 0.1)))
-            swept = dict(body, velocity=(axis[0] * distance, 0.0,
-                                         axis[1] * distance))
-            for peer in candidates:
-                own_shape = body.get('shape') or (
-                    body['half_width'], body['half_length'])
-                peer_shape = peer.get('shape') or (
-                    peer['half_width'], peer['half_length'])
-                contact = tank_collision._obb_overlap(
-                    position[0], position[1], body['yaw'], own_shape,
-                    _position(peer)[0], _position(peer)[1], peer['yaw'], peer_shape)
-                if contact[2] >= -1.0e-9:
-                    if _dot(axis, contact[:2]) >= -1.0e-9:
-                        continue  # Existing side contact can slide or separate.
-                    blocker = peer['id']
-                    break
-                velocity = _velocity(peer)
-                predicted = dict(peer, velocity=(velocity[0] * horizon, 0.0,
-                                                 velocity[1] * horizon))
-                if _contact_time(swept, predicted) is not None:
-                    blocker = peer['id']
-                    break
+            blocker = _braking_blocker(
+                body, candidates, position, axis, speed, step, brake_distance)
         if blocker is not None and speed * throttle >= -0.01:
             result.update(throttle=0.0, brake=True, traffic_mode='vehicle_brake')
             result['forward_blocked_by' if sign > 0.0 else

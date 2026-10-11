@@ -90,3 +90,63 @@ aiming conformance check, so that job exercises the real CPython-2.7 bridge on
 its next run. Exact-target compilation, native descriptor admission and Windows
 gameplay/performance are not established by the local host adapter. No shipping
 binary, launcher/mod package, release, map or Bot behavior is changed here.
+
+## Traffic braking continuation
+
+The next source-only batch migrates the current traffic guard's complete
+neighbour filtering/candidate loop and its ordered predictive-braking loop.
+`driver_geometry` opcode 3 copies fresh plain rows, retains friendly/live and
+pitch/roll-projected height admission, and returns ordered peer/candidate
+indices. Opcode 4 retains the exact stopping-distance sweep, current-contact
+SAT normal, tangent/departing exception, relative-velocity interval prediction
+and first-blocker order. No body dimensions, stopping coefficients, traffic
+lease, parked-yield state, recovery deadline or physical contact law changes.
+
+The phases deliberately surround the existing lazy Python stopping-distance
+callback. It still runs at most once, only when the original guard requires
+it. The second phase reads current body/candidate dictionaries after that
+callback while retaining the original pre-callback position and travel axis;
+there is no stale cross-phase pose cache. Rotation admission and order/clearance
+bookkeeping remain in the existing Python owner. Replaced reference laws and
+unsupported native inputs use the local reference phase, never a replay of the
+stopping callback. Both C++ phases retain no Python objects or engine handles.
+`traffic_roster_native/reference` and `traffic_blocker_native/reference` counters
+identify admission in detailed worker diagnostics.
+
+Local evidence for this batch is CPython 3.13.5 with a scratch bridge compiling
+the exact production driver/traffic includes. GCC 14.2 and Clang 17 both compile
+with `-O2 -std=c++14 -fno-fast-math -ffp-contract=off`. Each passes 6,163 roster
+comparisons, 6,162 ordered-blocker comparisons and 508 full-control comparisons
+(12,833 total); supported phases assert native admission. Cases include mutable
+30-peer rosters, missing heights/shapes, slope/bridge separation, gear/contact
+boundaries, unchanged caller data, unsupported-object traps, iterator fallback,
+live numeric tuning and callback mutation/failure without duplicate invocation.
+Unchanged rotation/escape callbacks are controlled fakes in this scratch harness;
+SAT and vertical-interval reference arithmetic are exact prior-source copies.
+
+A separate comparison against the complete, unmodified previous traffic source
+passes 3,000 full-control cases, including callback traces and all coordinator
+ledgers. Every other TrafficCoordinator method has an unchanged AST. Another
+15,000 baseline/new C++ comparisons preserve driver_geometry opcodes 0-2.
+The new checker is invoked from `tools/check_native_driver_geometry.py`, which
+will exercise the production CPython 2.7 bridge when run with a rebuilt host
+extension; that complete build/test run was not available in this environment.
+
+Isolated complete-safe_controls medians with 29 neighbours (seven samples of
+1,000 calls, a constant stopping-distance callback and no rotation request):
+
+| Scene | Previous Python ms | Native-backed ms | Ratio |
+| --- | ---: | ---: | ---: |
+| Distant neighbours | 0.05721 | 0.01695 | 3.38x |
+| Nearby but clear lanes | 0.18217 | 0.03004 | 6.06x |
+| First candidate blocks | 0.06488 | 0.02158 | 3.01x |
+
+These are scratch component measurements, including the new Python wrappers and
+C++ boundary, not a whole-worker, embedded-client or ping improvement. The
+scratch CPython 3 dictionary gate is not the production CPython 2.7 ABI. Exact
+x86 extension compilation, the full real-module regression suite, packaged
+admission and Windows gameplay/frame timing remain unverified for this batch.
+The shipping extension, launcher/mod package, update cadence, worker count and
+threading architecture are unchanged. The rest of the current driving/traffic
+state machines remain migration targets; this does not enable the older native
+behavior owners or claim their complete replacement.

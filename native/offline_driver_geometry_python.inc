@@ -41,10 +41,14 @@ double dimension(PyObject *row,Field key,double fallback_value) {
     const double result=finite_number(value);return result==0.?fallback_value:result;
 }
 }
+#include "offline_traffic_geometry_python.inc"
+
 PyObject *WOT_CDECL driver_geometry(PyObject *,PyObject *args) {
     NATIVE_PROFILE_ENTRY(driver_geometry);
     try {
         require_sequence(args,4,true);auto a=items(args);const int op=index_value(a[0]);
+        if(op==3)return traffic_geometry_law::prepare_call(a[1],a[2],a[3],profile);
+        if(op==4)return traffic_geometry_law::blocker_call(a[1],a[2],a[3],profile);
         if(op<0 || op>2)throw Unsupported();
         require_sequence(a[1],7,true);double v[7];for(int i=0;i<7;++i)v[i]=finite_number(items(a[1])[i]);
         require_sequence(a[2],0);require_sequence(a[3],0);

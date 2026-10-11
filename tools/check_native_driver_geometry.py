@@ -50,3 +50,6 @@ def measure(function):
 reference();legacy=measure(lambda:driver._reference_recovery_occupancy(position,yaw,1.,peers,length,width))
 native();current=measure(lambda:driver._recovery_occupancy(position,yaw,1.,peers,length,width))
 print('Driver geometry parity:',checks,'comparisons; reference/native occupancy ms:',legacy,current)
+
+from check_native_traffic_geometry import run as check_traffic_geometry
+check_traffic_geometry(backend)
