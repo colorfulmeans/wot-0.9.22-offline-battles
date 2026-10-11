@@ -9,6 +9,7 @@ steering, so it is safe to exercise outside the BigWorld client.
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
 
 import math
+import types as _types
 from gui.mods.offline_lan_0922 import tank_collision, native_math
 
 
@@ -787,12 +788,41 @@ class LocalDriver(object):
 				return False
 		return True
 
-	@observed('driver.choose_yaw')
-	def _choose_yaw(self, state, desired_yaw, direction_clear,
-			position=None, neighbours=None,
-			half_length=3.5, half_width=1.7, pose_clear=None):
-		# Teammate proximity never replaces the route with a repulsion heading.
-		# Crossing priority is coordinated separately; real contact owns overlap.
+	# Pin the current local failure law, and reject replacement/custom methods.
+	_candidate_rank_failure_law = _failure_penalty
+	_candidate_rank_yaw_law = _yaw_key
+
+	def _rank_yaw_candidates(self, state, desired_yaw):
+		if (type(self) is LocalDriver and type(state) is dict and
+				all(type(key) is str for key in state) and 'clock' in state and
+				all(type(key) is str for key in self.__dict__) and
+				'failure_ttl' in self.__dict__ and 'failure_ttl' not in LocalDriver.__dict__):
+			def implementation(name):
+				value = self.__dict__.get(name, LocalDriver.__dict__.get(name))
+				if type(value) is _types.FunctionType:
+					return value
+				if type(value) is _types.MethodType:
+					return getattr(value, 'im_func', getattr(value, '__func__', None))
+				return None
+			failed = state.get('failed_yaws')
+			offsets = self.__dict__.get('_CANDIDATE_OFFSETS',
+				LocalDriver.__dict__.get('_CANDIDATE_OFFSETS'))
+			if (type(failed) is dict and (type(offsets) is tuple or type(offsets) is list) and
+					implementation('_failure_penalty') is LocalDriver.__dict__['_candidate_rank_failure_law'] and
+					implementation('_yaw_key') is LocalDriver.__dict__['_candidate_rank_yaw_law']):
+				result = native_math.call('driver_geometry', 9,
+					(desired_yaw, state['clock'], self.failure_ttl,
+					 state.get('escape_side_until', 0.0), state.get('escape_side', 0.0),
+					 math.pi, FAILED_YAW_BUCKET_COUNT),
+					offsets, tuple(failed.items()))
+				if result is not None:
+					candidates, expired = result
+					for key in expired:
+						failed.pop(key, None)
+					return candidates
+		return self._reference_rank_yaw_candidates(state, desired_yaw)
+
+	def _reference_rank_yaw_candidates(self, state, desired_yaw):
 		candidates = []
 		for offset in self._CANDIDATE_OFFSETS:
 			candidate = desired_yaw + offset
@@ -805,6 +835,15 @@ class LocalDriver(object):
 				score += 1.25
 			candidates.append((score, candidate))
 		candidates.sort(key=lambda item: item[0])
+		return candidates
+
+	@observed('driver.choose_yaw')
+	def _choose_yaw(self, state, desired_yaw, direction_clear,
+			position=None, neighbours=None,
+			half_length=3.5, half_width=1.7, pose_clear=None):
+		# Teammate proximity never replaces the route with a repulsion heading.
+		# Crossing priority is coordinated separately; real contact owns overlap.
+		candidates = self._rank_yaw_candidates(state, desired_yaw)
 		# Probe in score order and return the first fully viable direction. Most
 		# frames need one terrain ray set instead of probing all seven candidates.
 		for unused_score, candidate in candidates:

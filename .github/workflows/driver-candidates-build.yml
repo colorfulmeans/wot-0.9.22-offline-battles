@@ -1,0 +1,100 @@
+name: Validate driver C++ migration and rebuild x86
+
+on:
+  push:
+    branches: [validate/cpp-driver-candidates-20261011]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  cpp2-x86-shipping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: wot-native-environment-38142371281
+          run-id: 38142371281
+          github-token: ${{ github.token }}
+          path: build/native-toolchain
+      - name: Import the validated 32-bit CPython 2.7.18 and MinGW toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build/native-toolchain/toolchain-rootfs.tar.gz
+          gzip -dc build/native-toolchain/toolchain-rootfs.tar.gz | docker import - wot-native-2x86:verified
+          docker run --rm wot-native-2x86:verified /opt/python27/bin/python2.7 -B -c             "import sys,struct; assert sys.version_info[:3] == (2,7,18); assert struct.calcsize('P') == 4; print(sys.version)"
+      - name: Compile exact production modules and run all relevant CPython 2.7 native tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/native-validation
+          docker run --rm -v "$PWD:/src" -w /src wot-native-2x86:verified /bin/bash -ec '
+            set -eu
+            export PYTHONDONTWRITEBYTECODE=1
+            /opt/python27/bin/python2.7 -B -c "import os; root=\"src/res/scripts/client\"; paths=[os.path.join(p,n) for p,d,files in os.walk(root) for n in files if n.endswith(\".py\")]; assert len(paths)>=179, len(paths); [compile(open(path,\"rb\").read(), path, \"exec\") for path in paths]; print(\"Client CP2 compile: %d sources\" % len(paths))"
+            g++ -m32 -std=c++17 -O3 -fPIC -shared -pthread -DWOT_HOST_PYTHON \
+              -fno-fast-math -ffp-contract=off \
+              -fno-builtin-sin -fno-builtin-cos -fno-builtin-pow \
+              -fno-builtin-hypot -fno-builtin-fmod \
+              -I/opt/python27/include/python2.7 \
+              native/offline_math_batch_geometry.cpp \
+              native/offline_async_worker.cpp \
+              native/offline_navigation.cpp \
+              native/native_visibility_core.cpp \
+              native/offline_visibility.cpp \
+              native/offline_contact_roster.cpp \
+              native/offline_destructible_geometry.cpp \
+              native/world_stage.cpp \
+              native/navigation_query_stage.cpp \
+              native/offline_simulation.cpp \
+              native/offline_simulation_control.cpp \
+              native/offline_simulation_motion.cpp \
+              native/offline_simulation_weapons.cpp \
+              native/offline_simulation_navigation.cpp \
+              native/offline_math_batch_native.cpp \
+              -o build/native-validation/native-host-32.so
+            file build/native-validation/native-host-32.so
+            /opt/python27/bin/python2.7 -B tools/check_native_driver_aim.py build/native-validation/native-host-32.so
+            /opt/python27/bin/python2.7 -B tools/check_native_driver_geometry.py build/native-validation/native-host-32.so
+            /opt/python27/bin/python2.7 -B tools/check_native_release_math.py build/native-validation/native-host-32.so
+            /opt/python27/bin/python2.7 -B tools/check_native_rotation_current.py build/native-validation/native-host-32.so
+            sh tools/build_math_batch_native.sh
+            test -s native/offline_math_batch_native.pyd
+            i686-w64-mingw32-objdump -p native/offline_math_batch_native.pyd > build/native-validation/pe-inspect.txt
+            grep -q "file format pei-i386" build/native-validation/pe-inspect.txt
+            grep -q initoffline_math_batch_native build/native-validation/pe-inspect.txt
+            sha256sum native/offline_math_batch_native.pyd > build/native-validation/binary-sha256.txt
+          ' 2>&1 | tee build/native-validation/build-and-native-tests.log
+      - name: Upload independently built source-synchronized 32-bit binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-driver-candidates-x86-${{ github.run_id }}
+          path: |
+            native/offline_math_batch_native.pyd
+            build/native-validation/build-and-native-tests.log
+            build/native-validation/pe-inspect.txt
+            build/native-validation/binary-sha256.txt
+          retention-days: 7
+          if-no-files-found: error
+      - name: Commit the actually rebuilt binary on the isolated validation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "validate/cpp-driver-candidates-20261011"
+          git fetch origin "$GITHUB_REF_NAME"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$GITHUB_REF_NAME")"
+          chmod +x native/offline_math_batch_native.pyd
+          git add -- native/offline_math_batch_native.pyd
+          if ! git diff --cached --quiet; then
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
+            git commit -m "Update source-matched #1513 Win32 native extension [skip ci]"
+            git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
+          fi

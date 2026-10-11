@@ -71,3 +71,6 @@ check_projectile_cursor(backend)
 
 from check_native_internal_mesh_queries import run as check_internal_mesh_queries
 check_internal_mesh_queries(backend)
+
+from check_native_driver_candidates import run as check_candidates
+check_candidates(backend)

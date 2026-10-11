@@ -43,6 +43,7 @@ double dimension(PyObject *row,Field key,double fallback_value) {
 }
 #include "offline_traffic_geometry_python.inc"
 #include "offline_traffic_crossing_python.inc"
+#include "offline_driver_candidates_python.inc"
 
 PyObject *WOT_CDECL driver_geometry(PyObject *,PyObject *args) {
     NATIVE_PROFILE_ENTRY(driver_geometry);
@@ -54,6 +55,8 @@ PyObject *WOT_CDECL driver_geometry(PyObject *,PyObject *args) {
         if(op==6)return traffic_crossing_law::cleared_call(a[1],a[2],a[3],profile);
         if(op==7)return traffic_crossing_law::separation_call(a[1],a[2],a[3],profile);
         if(op==8)return traffic_crossing_law::adjust_roster_call(a[1],a[2],a[3],profile);
+        if(op==9) { profile.opcode(op);
+            return driver_candidates_law::run(a[1],a[2],a[3],profile); }
         if(op<0 || op>2)throw Unsupported();
         require_sequence(a[1],7,true);double v[7];for(int i=0;i<7;++i)v[i]=finite_number(items(a[1])[i]);
         require_sequence(a[2],0);require_sequence(a[3],0);
