@@ -102,6 +102,10 @@ def _normalized_filename(filename):
 	return filename.replace('\\', '/').strip().lower()
 
 
+# Pinned only for native chunk-preparation truth-value projection.
+_NATIVE_FILENAME_LAW = (_normalized_filename, _STRING_TYPES)
+
+
 def is_excluded_1513(chunk_id, item_index):
 	"""An authored mode-excluded slot has no native scene object in standard battle."""
 	return (int(chunk_id), int(item_index)) in (_destructible_catalog or {}).get(

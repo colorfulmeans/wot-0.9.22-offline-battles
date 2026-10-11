@@ -5,6 +5,12 @@ Only validated numeric geometry is copied here; calls never invoke BigWorld.
 """
 from __future__ import print_function
 
+import types
+try:
+    _CHUNK_ID_TYPES = (int, long, float, bool)
+except NameError:
+    _CHUNK_ID_TYPES = (int, float, bool)
+
 _owner = None
 _disabled = False
 
@@ -76,7 +82,7 @@ class Geometry(object):
         else:
             self.update(1, (float(chunk_id), int(item_index)))
 
-    def chunk(self, sensor, chunk_id, registry, tree_type=None):
+    def _reference_chunk(self, sensor, chunk_id, registry, tree_type=None):
         current = self.chunks.get(int(chunk_id))
         if current is not None and current[0] is registry:
             return current[1]
@@ -108,6 +114,48 @@ class Geometry(object):
         self.update(2, (float(chunk_id), values, indexes[0], indexes[1]))
         self.chunks[int(chunk_id)] = registry, items
         return items
+
+
+    def chunk(self, sensor, chunk_id, registry, tree_type=None):
+        """Prepare and register a complete fresh chunk in one native call."""
+        if type(chunk_id) not in _CHUNK_ID_TYPES:
+            return self._reference_chunk(sensor, chunk_id, registry, tree_type)
+        current = self.chunks.get(int(chunk_id))
+        if current is not None and current[0] is registry:
+            return current[1]
+        # Keep the hot cache return above all expensive admission and input
+        # preparation. Replaced Python mutation/query owners keep their path.
+        ordinary_owner = (type(self) is Geometry and
+            'update' not in self.__dict__ and 'query' not in self.__dict__ and
+            Geometry.__dict__['update'] is _NATIVE_CHUNK_METHODS[0] and
+            Geometry.__dict__['query'] is _NATIVE_CHUNK_METHODS[1])
+        if (ordinary_owner and type(sensor) is types.ModuleType and
+                type(registry) is dict and all(type(key) is str for key in registry)):
+            pinned = getattr(sensor, '_NATIVE_FILENAME_LAW', None)
+            if (type(pinned) is tuple and len(pinned) == 2 and
+                    pinned[0] is sensor._normalized_filename and
+                    pinned[1] is sensor._STRING_TYPES):
+                import AreaDestructibles
+                if type(AreaDestructibles) is types.ModuleType:
+                    tree = AreaDestructibles.DESTR_TYPE_TREE if tree_type is None else tree_type
+                    labels = (tree, AreaDestructibles.DESTR_TYPE_FRAGILE,
+                              getattr(AreaDestructibles, 'DESTR_TYPE_STRUCTURE', None),
+                              AreaDestructibles.DESTR_TYPE_FALLING_ATOM)
+                    origins = registry.get('bins', {})
+                    extended = registry.get('extended_bins', {})
+                    if type(origins) is dict and type(extended) is dict:
+                        prepared = self.query(8, (
+                            float(chunk_id), tuple(origins.items()),
+                            tuple(extended.items()), labels))
+                        if prepared is not None:
+                            items = dict(prepared)
+                            self.chunks[int(chunk_id)] = registry, items
+                            return items
+        # Rejection has not changed the Store or invoked user conversions.
+        return self._reference_chunk(sensor, chunk_id, registry, tree_type)
+
+
+_NATIVE_CHUNK_METHODS = (Geometry.__dict__['update'], Geometry.__dict__['query'])
 
 
 def reset():

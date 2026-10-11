@@ -46,6 +46,8 @@ PyObject *candidates(const std::vector<d::Candidate> &values) {
 }
 std::shared_ptr<d::Store> store(PyObject *object) {auto value=d::find(wide(object));if(!value)throw Unsupported();return value;}
 }
+#include "offline_destructible_prepare_python.inc"
+
 PyObject *WOT_CDECL destr_open(PyObject *,PyObject *args) {
     NATIVE_PROFILE_ENTRY(destr_open);
     try {require_sequence(args,0,true);return integer_result(profile.run(offline_destructible::open));}
@@ -91,6 +93,7 @@ PyObject *WOT_CDECL destr_query(PyObject *,PyObject *args) {
     try {
         namespace d=offline_destructible;namespace b=destructible_bridge;
         require_sequence(args,3,true);auto **v=items(args);auto store=b::store(v[0]);const int op=index_value(v[1]);profile.opcode(op);
+        if(op==8)return destructible_prepare_law::run(store.get(),v[2],profile);
         if(op==0){require_sequence(v[2],2,true);auto **row=items(v[2]);const auto sweep=b::box(row[0]);d::Box contact;
             const bool has_contact=!absent(row[1]);if(has_contact)contact=b::box(row[1]);
             const auto value=profile.run(&d::Store::catalog,store.get(),sweep,has_contact?&contact:nullptr);

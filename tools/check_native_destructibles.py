@@ -346,8 +346,15 @@ def main():
     assert raw.destr_update(handle,2,(22.,((0,(0.,0.,0.),1,1,0,0.),),(((0,0),(1,)),),())) is None
     assert raw.destr_close(handle)==1 and raw.destr_close(handle)==1
     assert raw.destr_query(handle,3,box(0.,0.,0.)) is None
-    assert set(op for (name,op) in backend.calls if name=='destr_query') == set(range(8))
+    assert set(op for (name,op) in backend.calls if name=='destr_query') == set(range(9))
+    # Retain independent coverage of the original typed update opcode.
+    legacy = backend.destr_open()
+    assert backend.destr_update(legacy,2,(22.,((0,(0.,0.,0.),1,1,0,0.),),(((0,0),(0,)),),())) == 1
+    assert backend.destr_close(legacy) == 1
     assert set(op for (name,op) in backend.calls if name=='destr_update') == set(range(5))
+    from check_native_destructible_prepare import run as check_prepare
+    check_prepare(raw)
+
     print('Native destructible frontier parity passed: %d field checks; %d accepted calls; geometry, ordered candidates, full body/catalog owners, stream replacement and lifecycle.' % (checks,sum(backend.calls.values())))
 
 
