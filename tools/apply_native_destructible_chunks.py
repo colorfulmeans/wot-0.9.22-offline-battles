@@ -53,11 +53,14 @@ def _chunk_vector_1513(math_module):
             type(getattr(factory, '__getitem__', None)) is type(object.__init__) and
             type(getattr(factory, '__new__', None)) is type(object.__new__))
 
-def _chunk_environment_1513():
+def _chunk_environment_1513(area, math_module):
     import math
     import sys
     import types
     cache = sys.modules.get('DestructiblesCache')
+    if any(type(module) is not types.ModuleType
+           for module in (cache, area, math_module, math)):
+        return False
     if (cache is None or getattr(cache, 'math', None) is not math or
             type(math.floor) is not types.BuiltinFunctionType or
             getattr(math.floor, '__name__', None) != 'floor' or
@@ -66,6 +69,8 @@ def _chunk_environment_1513():
     for name in ('chunkIDFromPosition', 'chunkIndexesFromPosition',
                  'chunkIDFromChunkIndexes'):
         function = getattr(cache, name, None)
+        if type(function) is not types.FunctionType:
+            return False
         namespace = getattr(function, 'func_globals',
                             getattr(function, '__globals__', None))
         if namespace is not cache.__dict__:
@@ -75,9 +80,9 @@ def _chunk_environment_1513():
 
 def required_chunks(sensor, area, math_module, sweep_boxes):
     """Batch the current mapper's numeric work, never a custom callback."""
-    if (not callable(getattr(area, 'chunkIDFromPosition', None)) or
-            not _chunk_mapper_1513(area) or not _chunk_vector_1513(math_module) or
-            not _chunk_environment_1513()):
+    if (not _chunk_environment_1513(area, math_module) or
+            not callable(getattr(area, 'chunkIDFromPosition', None)) or
+            not _chunk_mapper_1513(area) or not _chunk_vector_1513(math_module)):
         return None
     from gui.mods.offline_lan_0922 import native_math
     result = native_math.call('destr_required_chunks', sweep_boxes,

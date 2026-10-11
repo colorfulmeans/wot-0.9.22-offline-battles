@@ -156,6 +156,28 @@ def run(backend):
             counters['callback_traces'] += 1
         area.chunkIDFromPosition = original
 
+        # Callable objects can implement the mapping without function metadata.
+        # Admission must not execute __getattr__ merely to inspect their code.
+        class MapperObject(object):
+            def __init__(self, value):
+                self.value = value
+            def __call__(self, *args):
+                return self.value
+            def __getattr__(self, name):
+                raise AssertionError('native admission inspected custom mapper')
+        for name, value in (('chunkIDFromPosition', 17),
+                            ('chunkIndexesFromPosition', (-1, 1)),
+                            ('chunkIDFromChunkIndexes', 23)):
+            function = getattr(cache, name)
+            setattr(cache, name, MapperObject(value))
+            if name == 'chunkIDFromPosition':
+                area.chunkIDFromPosition = getattr(cache, name)
+            try:
+                compare(probe, admitted=False)
+            finally:
+                setattr(cache, name, function)
+                area.chunkIDFromPosition = original
+
         # A custom constructor is never bypassed even with the pinned mapper.
         original_vector = engine_math.Vector3
         vector_calls = []
