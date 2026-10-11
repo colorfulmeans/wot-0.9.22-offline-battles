@@ -1,8 +1,8 @@
 """Apply reviewed integration anchors in a disposable validation checkout.
 
-The build workflow applies this recipe, tests the complete CPython 2.7/x86
-extension, then commits the resulting integration and shipping binary together.
-No engine query, driver policy, source cadence or projectile owner is replaced.
+The workflow tests the complete CPython 2.7/x86 extension, then commits the
+runtime integration and matching shipping binary together. Current engine
+queries, policies, callback cadence and physical owners remain unchanged.
 """
 from pathlib import Path
 import json
@@ -43,7 +43,7 @@ RANK_METHODS = '''\t# Pin the current law without executing descriptors during a
 \t\t\tfailed = state.get('failed_yaws')
 \t\t\toffsets = self.__dict__.get('_CANDIDATE_OFFSETS',
 \t\t\t\tLocalDriver.__dict__.get('_CANDIDATE_OFFSETS'))
-\t\t\tif (type(failed) is dict and type(offsets) in (tuple, list) and
+\t\t\tif (type(failed) is dict and (type(offsets) is tuple or type(offsets) is list) and
 \t\t\t\t\timplementation('_failure_penalty') is LocalDriver.__dict__['_candidate_rank_failure_law'] and
 \t\t\t\t\timplementation('_yaw_key') is LocalDriver.__dict__['_candidate_rank_yaw_law']):
 \t\t\t\tresult = native_math.call('driver_geometry', 9,
@@ -68,8 +68,9 @@ OLD_PAIR = '''\t\tnegative = self._recovery_occupancy(
 \t\tpositive = self._recovery_occupancy(
 \t\t\tposition, yaw, 1.0, neighbours, half_length, half_width)'''
 NEW_PAIR = '''\t\tpair = None
-\t\tif (type(self) is LocalDriver and type(position) in (tuple, list) and
-\t\t\t\ttype(neighbours) in (tuple, list) and
+\t\tif (type(self) is LocalDriver and
+\t\t\t\t(type(position) is tuple or type(position) is list) and
+\t\t\t\t(type(neighbours) is tuple or type(neighbours) is list) and
 \t\t\t\tnot any(name in self.__dict__ for name in
 \t\t\t\t\t('_recovery_occupancy', '_native_geometry')) and
 \t\t\t\tLocalDriver.__dict__['_recovery_occupancy'] is
@@ -126,7 +127,8 @@ _PINNED_VOLUME_CONE = intersects_cone
 def _volume_input(mesh, stats=None):
     return (_query_input(mesh, stats, orientations=True) and
             all(key in mesh for key in ('closed', 'minimum', 'maximum')) and
-            _volume_laws() == _PINNED_VOLUME_LAWS)
+            all(current is pinned for current, pinned in
+                zip(_volume_laws(), _PINNED_VOLUME_LAWS)))
 
 
 def _volume_geometry(mesh):
@@ -175,7 +177,8 @@ def distance(point, mesh, stats=None):
 def cone_entry_depth(mesh, apex, axis, depth, tangent):
     """Optional complete 14-step depth search; caller proved apex is outside."""
     if (intersects_cone is _PINNED_VOLUME_CONE and
-            _cone_laws() == _PINNED_CONE_LAWS and _query_input(mesh, None)):
+            all(current is pinned for current, pinned in
+                zip(_cone_laws(), _PINNED_CONE_LAWS)) and _query_input(mesh, None)):
         return _native_math.call('projectile_math', 8,
             (mesh['vertices'], mesh['triangles'], mesh['bvh']),
             (apex, axis, depth, tangent, _EPS))
@@ -183,9 +186,13 @@ def cone_entry_depth(mesh, apex, axis, depth, tangent):
 '''
 
 CONE_INSERT = '''\tif (apex_outside and type(primitive) is dict and
-\t\t\tprimitive.get('shape') == 'mesh' and
+\t\t\tall(type(key) is str for key in primitive) and
+\t\t\ttype(primitive.get('shape')) is str and primitive['shape'] == 'mesh' and
 \t\t\t_primitive_intersects_cone is _PINNED_PRIMITIVE_CONE_LAW and
-\t\t\ttype(closest) in (tuple, list) and len(closest) == 3 and
+\t\t\tall(current is pinned for current, pinned in zip(
+\t\t\t\t(_vector_subtract, _vector_dot, _vector_length, _vector_scale),
+\t\t\t\t_PINNED_PRIMITIVE_CONE_NUMERICS)) and
+\t\t\t(type(closest) is tuple or type(closest) is list) and len(closest) == 3 and
 \t\t\tall(type(value) is float and -1.e6 <= value <= 1.e6 for value in closest)):
 \t\tresult = _internal_geometry.internal_mesh.cone_entry_depth(
 \t\t\tprimitive, apex, axis, depth, tangent)
@@ -227,7 +234,8 @@ def prepare():
     out[p] = (ROOT / p).read_text() + VOLUME_WRAPPERS
     p = PREFIX + 'internal_hit_layouts.py'
     s = (ROOT / p).read_text()
-    s = replace_once(s, '\ndef _primitive_cone_entry(', '\n_PINNED_PRIMITIVE_CONE_LAW = _primitive_intersects_cone\n\n\ndef _primitive_cone_entry(')
+    pinned = '\n_PINNED_PRIMITIVE_CONE_LAW = _primitive_intersects_cone\n_PINNED_PRIMITIVE_CONE_NUMERICS = (_vector_subtract, _vector_dot, _vector_length, _vector_scale)\n\n\ndef _primitive_cone_entry('
+    s = replace_once(s, '\ndef _primitive_cone_entry(', pinned)
     s = replace_once(s, '\tapex_outside = distance > 0.0000001\n', '\tapex_outside = distance > 0.0000001\n' + CONE_INSERT)
     out[p] = s
     p = PREFIX + 'native_math.py'
@@ -246,7 +254,6 @@ def prepare():
     out[p] = replace_once(s, old, new)
     p = 'tools/check_native_driver_geometry.py'
     out[p] = (ROOT / p).read_text() + '\nfrom check_native_driver_mesh_migration import run as check_driver_mesh_migration\ncheck_driver_mesh_migration(backend)\n'
-    # Validate every anchor and Python source before writing any production file.
     for path, text in out.items():
         if path.endswith('.py'):
             compile(text, path, 'exec')
