@@ -188,7 +188,6 @@ def main():
             raise RuntimeError('Baseline native gates failed: ' + ', '.join(failures))
         paths = sorted(set(p for pattern in PATTERNS for p in (ROOT / 'tests').glob(pattern)))
         assert len(paths) >= 25, ('too few regression files', len(paths))
-        REPORT['baseline_reference'] = python_tests(BASE, 'baseline', paths)
         run('apply-integration', ['/usr/bin/python3', ROOT / 'tools/apply_native_driver_mesh_migration.py',
                                  OUT / 'changed-paths.json'])
         compile_code = "import os; paths=sorted(os.path.join(b,n) for b,d,fs in os.walk('src/res/scripts/client') for n in fs if n.endswith('.py')); assert len(paths)>=179,len(paths); [compile(open(p,'rb').read(),p,'exec') for p in paths]; print('CPython 2.7 source compile:',len(paths))"
@@ -205,6 +204,17 @@ def main():
         failures = [r['name'] for r in REPORT['current_native'] if r['returncode']]
         if failures:
             raise RuntimeError('Current native gates failed: ' + ', '.join(failures))
+        # Compile and audit the separate shipping target before the long
+        # behavior comparison. Publication still requires every later gate.
+        run('current/build-shipping-x86', ['sh', ROOT / 'tools/build_math_batch_native.sh'], timeout=1200)
+        shipping = ROOT / 'native/offline_math_batch_native.pyd'
+        audit_pe(shipping)
+        shutil.copy2(shipping, OUT / 'current/offline_math_batch_native.pyd')
+        print('NATIVE_BUILD_PASSED ' + json.dumps(REPORT['shipping'], sort_keys=True), flush=True)
+        # The independent baseline copy remains untouched by integration.
+        # This ordering catches binding/import failures before rerunning long
+        # scenes, without dropping any baseline or current regression checks.
+        REPORT['baseline_reference'] = python_tests(BASE, 'baseline', paths)
         REPORT['current_reference'] = python_tests(ROOT, 'current', paths)
         new_failures = {}
         for name, current in REPORT['current_reference'].items():
@@ -219,10 +229,6 @@ def main():
         REPORT['new_reference_failures'] = new_failures
         if new_failures:
             raise RuntimeError('New reference regressions: ' + repr(new_failures))
-        run('current/build-shipping-x86', ['sh', ROOT / 'tools/build_math_batch_native.sh'], timeout=1200)
-        shipping = ROOT / 'native/offline_math_batch_native.pyd'
-        audit_pe(shipping)
-        shutil.copy2(shipping, OUT / 'current/offline_math_batch_native.pyd')
         changed = json.loads((OUT / 'changed-paths.json').read_text())
         diff = []
         for name in changed:
