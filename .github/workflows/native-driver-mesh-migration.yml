@@ -1,0 +1,116 @@
+name: Validate native driver and mesh migration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [integrate/0100-native-worker]
+    paths:
+      - .github/workflows/native-driver-mesh-migration.yml
+      - tools/build_verify_native_migration.py
+      - tools/apply_native_driver_mesh_migration.py
+      - tools/check_native_driver_mesh_migration.py
+      - native/offline_driver_candidates_python.inc
+      - native/offline_internal_mesh_volume_python.inc
+      - src/res/scripts/client/gui/mods/offline_lan_0922/native_input_diagnostics.py
+      - tests/test_native_input_diagnostics.py
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-driver-mesh-migration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    if: github.repository == 'colorfulmeans/wot-0.9.22-offline-battles' && github.ref == 'refs/heads/integrate/0100-native-worker'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - name: Download independently built 32-bit Python and MinGW environment
+        uses: actions/download-artifact@v4
+        with:
+          name: wot-native-environment-38142371281
+          run-id: 38142371281
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/wot-native-environment
+      - name: Create a credential-free disposable validation checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wot-native-validation/repo" "$RUNNER_TEMP/wot-native-validation/out"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/wot-native-validation/repo"
+          docker import "$RUNNER_TEMP/wot-native-environment/toolchain-rootfs.tar.gz" wot-native-validate
+      - name: Compile full baseline and current CPython 2.7 x86 extension and Win32 shipping module
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network none \
+            -v "$RUNNER_TEMP/wot-native-validation:/work" \
+            -e VALIDATION_SOURCE_SHA="${{ github.sha }}" \
+            -w /work/repo wot-native-validate \
+            /usr/bin/python3 tools/build_verify_native_migration.py
+      - name: Commit validated runtime integration and matching x86 binary together
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --prune origin integrate/0100-native-worker
+          actual=$(git rev-parse FETCH_HEAD)
+          if [ "$actual" != "$EXPECTED_SHA" ]; then
+            echo "Branch advanced during validation; refusing to overwrite: $actual" >&2
+            exit 1
+          fi
+          export VALIDATED_WORK="$RUNNER_TEMP/wot-native-validation"
+          python3 - <<'PY'
+          import json, os, pathlib, shutil, subprocess
+          work = pathlib.Path(os.environ['VALIDATED_WORK'])
+          report = json.loads((work/'out/report.json').read_text())
+          assert report['passed'] is True, report.get('error')
+          assert report['validation_source'] == os.environ['EXPECTED_SHA']
+          assert report['shipping']['machine'] == '0x014c'
+          prefix = 'src/res/scripts/client/gui/mods/offline_lan_0922/'
+          allowed = {
+              prefix+'ai/driver.py', prefix+'internal_mesh.py', prefix+'internal_hit_layouts.py',
+              prefix+'native_math.py', prefix+'native_control_core.py',
+              'native/offline_driver_geometry_python.inc',
+              'native/offline_projectile_math_python.inc',
+              'native/offline_math_batch_native.pyd', 'tools/check_native_driver_geometry.py'}
+          manifest = json.loads((work/'out/changed-paths.json').read_text())
+          assert set(manifest) == allowed and len(manifest) == len(allowed), manifest
+          for name in manifest:
+              source, destination = work/'repo'/name, pathlib.Path(name)
+              assert source.is_file() and not source.is_symlink(), name
+              shutil.copy2(source, destination)
+          pathlib.Path('native/offline_math_batch_native.pyd').chmod(0o755)
+          subprocess.check_call(['git', 'diff', '--check'])
+          subprocess.check_call(['git', 'add', '--'] + manifest)
+          subprocess.check_call(['git', 'update-index', '--chmod=+x', 'native/offline_math_batch_native.pyd'])
+          staged = subprocess.check_output(['git','diff','--cached','--name-only'], text=True).splitlines()
+          assert set(staged).issubset(allowed) and 'native/offline_math_batch_native.pyd' in staged, staged
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Integrate validated driver and mesh C++ frontiers with rebuilt x86 module [skip ci]' \
+            -m "Full 32-bit CPython 2.7.18 native validation and strict Win32 build passed for source $EXPECTED_SHA. Preserve existing rules, callbacks, native admission and Work fixes. No new reference failures against the pre-integration baseline. See native migration validation run ${{ github.run_id }} for actual logs; Windows #1513 gameplay acceptance is not established by these host tests."
+          git push origin HEAD:refs/heads/integrate/0100-native-worker
+          git rev-parse HEAD | tee "$RUNNER_TEMP/wot-native-validation/out/published-commit.txt"
+          git status --short
+      - name: Upload exact build evidence and native modules
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-driver-mesh-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/wot-native-validation/out/
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 14
