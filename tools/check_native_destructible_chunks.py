@@ -35,6 +35,19 @@ def load_extension(name, path):
     return module
 
 
+def ensure_client_packages():
+    """CPython 2.7 needs explicit packages for the engine-owned gui namespace."""
+    if 'gui.mods.offline_lan_0922' in sys.modules:
+        return
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    client = os.path.join(root, 'src/res/scripts/client')
+    for name in ('gui', 'gui.mods', 'gui.mods.offline_lan_0922'):
+        if name not in sys.modules:
+            package = types.ModuleType(name)
+            package.__path__ = [os.path.join(client, *name.split('.'))]
+            sys.modules[name] = package
+
+
 def fixture():
     path = os.environ.get('WOT_NATIVE_CHUNK_VECTOR')
     if not path:
@@ -59,6 +72,7 @@ def box(x, z, length=3.5, width=1.7, yaw=0., y=0., fourth=None):
 
 
 def run(backend):
+    ensure_client_packages()
     from gui.mods.offline_lan_0922 import native_math
     from gui.mods.offline_lan_0922 import native_destructibles as adapter
     from gui.mods.offline_lan_0922 import destructibles_sensor as sensor

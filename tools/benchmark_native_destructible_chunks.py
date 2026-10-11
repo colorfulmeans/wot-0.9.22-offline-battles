@@ -5,10 +5,12 @@ import math
 import os
 import sys
 import time
-from check_native_destructible_chunks import box, fixture, load_extension
+from check_native_destructible_chunks import (
+    box, fixture, load_extension, ensure_client_packages)
 
 
 def main():
+    ensure_client_packages()
     from gui.mods.offline_lan_0922 import native_math
     from gui.mods.offline_lan_0922 import destructibles_sensor as sensor
     native_math._backend = load_extension('offline_math_batch_native', sys.argv[1])
