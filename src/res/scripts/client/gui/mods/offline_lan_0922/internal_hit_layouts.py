@@ -2320,6 +2320,10 @@ def _primitive_intersects_cone(target, primitive, apex, axis, depth,
 	return _gjk_intersects(support, initial)
 
 
+_PINNED_PRIMITIVE_CONE_LAW = _primitive_intersects_cone
+_PINNED_PRIMITIVE_CONE_NUMERICS = (_vector_subtract, _vector_dot, _vector_length, _vector_scale)
+
+
 def _primitive_cone_entry(target, primitive, apex, axis, depth, tangent,
 		distance_record=None):
 	'''First axial depth at which the growing finite cone touches a primitive.'''
@@ -2329,6 +2333,19 @@ def _primitive_cone_entry(target, primitive, apex, axis, depth, tangent,
 	# immutable primitive. The nested depth search need not repeat its full
 	# containment ray cast on all fifteen cone queries.
 	apex_outside = distance > 0.0000001
+	if (apex_outside and type(primitive) is dict and
+			all(type(key) is str for key in primitive) and
+			type(primitive.get('shape')) is str and primitive['shape'] == 'mesh' and
+			_primitive_intersects_cone is _PINNED_PRIMITIVE_CONE_LAW and
+			all(current is pinned for current, pinned in zip(
+				(_vector_subtract, _vector_dot, _vector_length, _vector_scale),
+				_PINNED_PRIMITIVE_CONE_NUMERICS)) and
+			(type(closest) is tuple or type(closest) is list) and len(closest) == 3 and
+			all(type(value) is float and -1.e6 <= value <= 1.e6 for value in closest)):
+		result = _internal_geometry.internal_mesh.cone_entry_depth(
+			primitive, apex, axis, depth, tangent)
+		if result is not None:
+			return result[1] if result[0] else None
 	if not _primitive_intersects_cone(
 			target, primitive, apex, axis, depth, tangent,
 			apex_outside=apex_outside):

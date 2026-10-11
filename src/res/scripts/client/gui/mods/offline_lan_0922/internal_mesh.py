@@ -544,3 +544,79 @@ def _query_input(mesh, stats, orientations=False):
     return (stats is None or (type(stats) is dict and
             all(type(key) is str for key in stats) and
             type(stats.get('triangles', 0)) in _NATIVE_COUNT_TYPES))
+
+
+# Complete consumer frontiers preserve the old functions as error/override
+# oracles. No query rebuilds or retains the mesh between calls.
+_reference_volume_contains = contains
+_reference_volume_intervals = intervals
+_reference_volume_distance = distance
+
+
+def _volume_laws():
+    return _ray_laws() + _distance_laws() + (_line_hits, math.sqrt)
+
+
+_PINNED_VOLUME_LAWS = _volume_laws()
+_PINNED_VOLUME_CONE = intersects_cone
+
+
+def _volume_input(mesh, stats=None):
+    return (_query_input(mesh, stats, orientations=True) and
+            all(key in mesh for key in ('closed', 'minimum', 'maximum')) and
+            all(current is pinned for current, pinned in
+                zip(_volume_laws(), _PINNED_VOLUME_LAWS)))
+
+
+def _volume_geometry(mesh):
+    return (mesh['vertices'], mesh['triangles'], mesh['bvh'],
+            mesh['orientations'], mesh['closed'], mesh['minimum'], mesh['maximum'])
+
+
+def contains(point, mesh):
+    if _volume_input(mesh):
+        result = _native_math.call('projectile_math', 5,
+                                  _volume_geometry(mesh), (point, _EPS))
+        if result is not None:
+            return bool(result)
+    return _reference_volume_contains(point, mesh)
+
+
+_PINNED_VOLUME_CONTAINS = contains
+
+
+def intervals(start, end, mesh, stats=None):
+    if contains is _PINNED_VOLUME_CONTAINS and _volume_input(mesh, stats):
+        result = _native_math.call('projectile_math', 6,
+                                  _volume_geometry(mesh), (start, end, _EPS))
+        if result is not None:
+            values, tested = result
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            return values
+    return _reference_volume_intervals(start, end, mesh, stats)
+
+
+def distance(point, mesh, stats=None):
+    if contains is _PINNED_VOLUME_CONTAINS and _volume_input(mesh, stats):
+        result = _native_math.call('projectile_math', 7,
+                                  _volume_geometry(mesh), (point, _EPS))
+        if result is not None:
+            value, closest, vertex, tested, inside = result
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            if inside:
+                return 0.0, tuple(point)
+            return value, mesh['vertices'][vertex] if vertex >= 0 else closest
+    return _reference_volume_distance(point, mesh, stats)
+
+
+def cone_entry_depth(mesh, apex, axis, depth, tangent):
+    """Optional complete 14-step depth search; caller proved apex is outside."""
+    if (intersects_cone is _PINNED_VOLUME_CONE and
+            all(current is pinned for current, pinned in
+                zip(_cone_laws(), _PINNED_CONE_LAWS)) and _query_input(mesh, None)):
+        return _native_math.call('projectile_math', 8,
+            (mesh['vertices'], mesh['triangles'], mesh['bvh']),
+            (apex, axis, depth, tangent, _EPS))
+    return None

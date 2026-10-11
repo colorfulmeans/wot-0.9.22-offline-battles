@@ -43,6 +43,7 @@ double dimension(PyObject *row,Field key,double fallback_value) {
 }
 #include "offline_traffic_geometry_python.inc"
 #include "offline_traffic_crossing_python.inc"
+#include "offline_driver_candidates_python.inc"
 
 PyObject *WOT_CDECL driver_geometry(PyObject *,PyObject *args) {
     NATIVE_PROFILE_ENTRY(driver_geometry);
@@ -54,7 +55,9 @@ PyObject *WOT_CDECL driver_geometry(PyObject *,PyObject *args) {
         if(op==6)return traffic_crossing_law::cleared_call(a[1],a[2],a[3],profile);
         if(op==7)return traffic_crossing_law::separation_call(a[1],a[2],a[3],profile);
         if(op==8)return traffic_crossing_law::adjust_roster_call(a[1],a[2],a[3],profile);
-        if(op<0 || op>2)throw Unsupported();
+        if(op==9) { profile.opcode(op); return driver_candidates_law::run(a[1],a[2],a[3],profile); }
+        if((op<0 || op>2) && op!=10)throw Unsupported();
+        profile.opcode(op);
         require_sequence(a[1],7,true);double v[7];for(int i=0;i<7;++i)v[i]=finite_number(items(a[1])[i]);
         require_sequence(a[2],0);require_sequence(a[3],0);
         std::vector<double> fractions;for(Py_ssize_t i=0;i<size(a[3]);++i)fractions.push_back(finite_number(items(a[3])[i]));
@@ -86,6 +89,25 @@ PyObject *WOT_CDECL driver_geometry(PyObject *,PyObject *args) {
             driver_geometry_law::Peer p={finite_number(items(where)[0]),finite_number(items(where)[1]),
                 finite_number(items(where)[2]),yaw,length,width,stationary,i};
             if(std::abs(p.y-v[1])<=5.)peers.push_back(p);
+        }
+        if(op==10) {
+            const auto counts=profile.run([&] {
+                std::array<long,2> result={{0,0}};
+                for(int side=0;side<2;++side) {
+                    const double amount=(side==0?-1.:1.)*v[6];
+                    for(const auto &p:peers)for(double f:fractions) {
+                        if(driver_geometry_law::overlaps(
+                                v[0],v[2],v[3]+amount*f,v[4],v[5],p)) {
+                            if(result[side]==std::numeric_limits<long>::max())throw Unsupported();
+                            ++result[side];
+                        }
+                    }
+                }
+                return result;
+            });
+            OwnedTuple out(2);
+            out.set(0,int_new(counts[0]));out.set(1,int_new(counts[1]));
+            return out.release();
         }
         const long result=profile.run([&]()->long {
             using namespace driver_geometry_law;

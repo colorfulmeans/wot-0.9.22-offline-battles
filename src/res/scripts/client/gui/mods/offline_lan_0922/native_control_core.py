@@ -2,6 +2,7 @@
 from __future__ import print_function
 
 import copy
+from gui.mods.offline_lan_0922 import native_input_diagnostics as _native_input_diagnostics
 
 from gui.mods.offline_lan_0922.ai.driver import LocalDriver
 from gui.mods.offline_lan_0922.worker_diagnostics import (
@@ -39,11 +40,16 @@ def _pose(source):
     from . import native_math
     operation = getattr(native_math._load(), 'control_pose', None)
     if callable(operation):
-        result = operation(source)
+        try:
+            result = operation(source)
+        except Exception as error:
+            _native_input_diagnostics.record('control_pose', (source,), 'exception', error)
+            raise
         if result is not None:
             combat_count('frontier_pose_native')
             return result
         combat_count('frontier_pose_rejected')
+        _native_input_diagnostics.record('control_pose', (source,))
     return _reference_pose(source)
 
 

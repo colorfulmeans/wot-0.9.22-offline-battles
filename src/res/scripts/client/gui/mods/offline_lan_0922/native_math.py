@@ -6,6 +6,14 @@ import sys
 import json
 import math
 
+# Standalone native conformance tools also load this adapter by filename.
+# Observation is optional outside the client package, never a new dependency
+# for loading an otherwise usable numeric backend.
+try:
+    from gui.mods.offline_lan_0922 import native_input_diagnostics as _input_diagnostics
+except ImportError:
+    _input_diagnostics = None
+
 
 MODULE_NAME = 'offline_math_batch_native'
 _backend = None
@@ -126,9 +134,13 @@ def call(method, *args):
             return result
         _report_failure('unsupported geometry input')
         _record_projectile_fallback(method, args, 'unsupported_input')
+        if _input_diagnostics is not None:
+            _input_diagnostics.record(method, args, 'unsupported_input')
     except Exception as error:
         _report_failure(error)
         _record_projectile_fallback(method, args, 'exception_' + type(error).__name__)
+        if _input_diagnostics is not None:
+            _input_diagnostics.record(method, args, 'exception', error)
     _fallbacks += 1
     return None
 
