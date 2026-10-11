@@ -148,29 +148,81 @@ def python_tests(root, label, paths):
 
 def audit_pe(path):
     raw = path.read_bytes()
+    def bounded(offset, length):
+        assert 0 <= offset <= len(raw) and 0 <= length <= len(raw) - offset, (
+            'PE field outside file', offset, length, len(raw))
+        return offset
+    def u16(offset):
+        return struct.unpack_from('<H', raw, bounded(offset, 2))[0]
+    def u32(offset):
+        return struct.unpack_from('<I', raw, bounded(offset, 4))[0]
     assert raw[:2] == b'MZ'
-    header = struct.unpack_from('<I', raw, 0x3c)[0]
+    header = u32(0x3c)
+    bounded(header, 24)
     assert raw[header:header + 4] == b'PE\0\0'
-    machine = struct.unpack_from('<H', raw, header + 4)[0]
+    machine, section_count, optional_size = u16(header + 4), u16(header + 6), u16(header + 20)
     assert machine == 0x14c, ('expected x86 PE', machine)
+    assert 0 < section_count <= 96 and optional_size >= 104
+    optional = header + 24
+    bounded(optional, optional_size)
+    assert u16(optional) == 0x10b, 'expected PE32 optional header'
+    assert u32(optional + 92) >= 1, 'missing export data directory'
+    headers_size = u32(optional + 60)
+    sections = []
+    table = optional + optional_size
+    bounded(table, section_count * 40)
+    for index in range(section_count):
+        entry = table + index * 40
+        sections.append((u32(entry + 12), u32(entry + 16),
+                         u32(entry + 20), u32(entry + 36)))
+    def file_offset(rva, length):
+        assert rva > 0, 'null PE RVA'
+        if rva < headers_size and length <= headers_size - rva:
+            return bounded(rva, length)
+        matches = [(start, size, offset, flags) for start, size, offset, flags in sections
+                   if start <= rva and rva - start < size and length <= size - (rva - start)]
+        assert len(matches) == 1, ('unmapped or ambiguous PE RVA', rva, length)
+        start, unused_size, offset, unused_flags = matches[0]
+        return bounded(offset + rva - start, length)
+    # Decode the binary export directory rather than parsing binutils'
+    # human-readable table, whose column layout differs between versions.
+    export_rva, export_size = u32(optional + 96), u32(optional + 100)
+    assert export_size >= 40
+    directory = file_offset(export_rva, 40)
+    functions, name_count = u32(directory + 20), u32(directory + 24)
+    assert functions == 1 and name_count == 1, ('unexpected export counts', functions, name_count)
+    address_table = file_offset(u32(directory + 28), functions * 4)
+    names_table = file_offset(u32(directory + 32), name_count * 4)
+    ordinal_table = file_offset(u32(directory + 36), name_count * 2)
+    names = []
+    for index in range(name_count):
+        name_rva = u32(names_table + index * 4)
+        spelling = bytearray()
+        for position in range(128):
+            byte = raw[file_offset(name_rva + position, 1)]
+            if byte == 0:
+                break
+            spelling.append(byte)
+        else:
+            raise AssertionError('unterminated or oversized export name')
+        names.append(spelling.decode('ascii'))
+        ordinal = u16(ordinal_table + index * 2)
+        assert ordinal < functions
+        function_rva = u32(address_table + ordinal * 4)
+        assert not export_rva <= function_rva < export_rva + export_size, 'forwarded export is not permitted'
+        file_offset(function_rva, 1)
+        assert any(start <= function_rva < start + size and flags & 0x20000000
+                   for start, size, unused_offset, flags in sections), 'export is not executable code'
+    assert names == ['initoffline_math_batch_native'], ('unexpected exports', names)
     _, text = run('current/shipping-pe-audit', ['i686-w64-mingw32-objdump', '-p', path])
     imports = re.findall(r'DLL Name: (\S+)', text)
     assert imports, 'no PE import evidence'
     for name in imports:
         assert name in ('KERNEL32.dll', 'msvcrt.dll') or re.match(r'api-ms-win-crt-.*\.dll$', name), name
-    assert '[Ordinal/Name Pointer] Table' in text, 'export table missing'
-    names = []
-    suffix = text.split('[Ordinal/Name Pointer] Table', 1)[1]
-    for line in suffix.splitlines():
-        match = re.match(r'\s*\[\s*\d+\]\s+(\S+)\s*$', line)
-        if match:
-            names.append(match.group(1))
-        elif names and not line.strip():
-            break
-    assert names == ['initoffline_math_batch_native'], ('unexpected exports', names)
     path.chmod(0o755)
     REPORT['shipping'] = {'bytes': len(raw), 'machine': '0x014c',
-                          'imports': imports, 'exports': names, 'mode': '100755'}
+                          'imports': imports, 'exports': names, 'mode': '100755',
+                          'export_audit': 'PE32 directory and executable RVA'}
 
 
 def main():
@@ -204,16 +256,13 @@ def main():
         failures = [r['name'] for r in REPORT['current_native'] if r['returncode']]
         if failures:
             raise RuntimeError('Current native gates failed: ' + ', '.join(failures))
-        # Compile and audit the separate shipping target before the long
-        # behavior comparison. Publication still requires every later gate.
         run('current/build-shipping-x86', ['sh', ROOT / 'tools/build_math_batch_native.sh'], timeout=1200)
         shipping = ROOT / 'native/offline_math_batch_native.pyd'
         audit_pe(shipping)
         shutil.copy2(shipping, OUT / 'current/offline_math_batch_native.pyd')
         print('NATIVE_BUILD_PASSED ' + json.dumps(REPORT['shipping'], sort_keys=True), flush=True)
         # The independent baseline copy remains untouched by integration.
-        # This ordering catches binding/import failures before rerunning long
-        # scenes, without dropping any baseline or current regression checks.
+        # Publication also requires the complete selected behavior comparison.
         REPORT['baseline_reference'] = python_tests(BASE, 'baseline', paths)
         REPORT['current_reference'] = python_tests(ROOT, 'current', paths)
         new_failures = {}
