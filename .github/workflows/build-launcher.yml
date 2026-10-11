@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   windows-server:
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[native-only]')
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
