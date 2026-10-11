@@ -131,6 +131,8 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_control.py \
               --extension /tmp/offline_math_batch_native.so \
               --client-scripts /src/src/res/scripts/client
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_control_projection.py \
+              /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_weapons.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_destructibles.py \

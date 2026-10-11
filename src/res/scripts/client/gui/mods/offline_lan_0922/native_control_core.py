@@ -10,6 +10,10 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
 
 _POSE_NAMES = ('x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
                'turret_yaw', 'gun_pitch', 'speed', 'velocity')
+try:
+    _POSE_KEY_TYPES = (str, unicode)
+except NameError:
+    _POSE_KEY_TYPES = (str,)
 _CONTACT_KEYS = _POSE_NAMES + ('position', 'visible', 'direct_visible', 'fresh_visible')
 _RECOVERY = ('drive', 'arrived', 'avoid', 'blocked', 'reverse_turn',
              'pivot_recovery')
@@ -36,12 +40,22 @@ def _position(source):
                   source.get('z', 0.0)))
 
 
-def _pose(source):
+def _pose(source, wire_fields=True):
     from . import native_math
     operation = getattr(native_math._load(), 'control_pose', None)
     if callable(operation):
+        native_source = source
+        # JSON fields are Unicode on CPython 2.7. Project only the consumed
+        # fields into a fresh byte-key dictionary; never coerce arbitrary keys
+        # or numeric values and never mutate the authoritative source.
+        if (wire_fields and type(source) is dict and
+                all(any(type(key) is kind for kind in _POSE_KEY_TYPES)
+                    for key in source) and
+                any(type(key) is not str for key in source)):
+            native_source = dict((name, source[name])
+                for name in _POSE_NAMES + ('position',) if name in source)
         try:
-            result = operation(source)
+            result = operation(native_source)
         except Exception as error:
             _native_input_diagnostics.record('control_pose', (source,), 'exception', error)
             raise
@@ -73,6 +87,28 @@ def _pose_dict(row):
         result['velocity'] = tuple(values[10:13])
     result['position'] = tuple(position)
     return result
+
+
+_POSE_DICT_LAW = _pose_dict
+
+
+def _observation_rows(backend, rows):
+    """Prepare one consumed observation batch before any Python mutation."""
+    operation = getattr(backend, 'control_observation_rows', None)
+    if ((type(rows) is tuple or type(rows) is list) and rows and
+            _pose_dict is _POSE_DICT_LAW and callable(operation)):
+        result = operation(rows)
+        if result is not None:
+            combat_count('frontier_observation_rows_native', len(result))
+            return result
+    # Unsupported/overridden owners retain their original sequential error
+    # and mutation order; do not eagerly consume a later invalid row.
+    def reference():
+        for source, target, sampled, duration, pose in rows:
+            projected = _pose_dict(pose)
+            combat_count('frontier_observation_rows_reference')
+            yield source, target, sampled, duration, projected
+    return reference()
 
 
 def _body(raw, half_length=3.5, half_width=1.7):
@@ -550,7 +586,7 @@ class NativeControl(object):
             due, selected = self._scheduling[key]
         flags = (bool(source.get('alive', True)) | (last_effort << 1) |
                  (designated << 2) | (bool(due) << 3))
-        return key, _pose(source), -1 if fire is None else int(fire), flags, selected
+        return key, _pose(source, wire_fields=key[0] == 0), -1 if fire is None else int(fire), flags, selected
 
     @observed('frontier.control_template')
     def _install_template(self, source, key, processed=False):
@@ -684,11 +720,11 @@ class NativeControl(object):
     @observed('frontier.control_events')
     def _sync_events(self, aggregate=None, team_visibility=None):
         runtime = self.runtime
-        for source, target, sampled, duration, pose_row in self.observations():
+        rows = _observation_rows(self.backend, self.observations())
+        for source, target, sampled, duration, pose in rows:
             source, target = tuple(source), tuple(target)
             source_team = int(self._sources[source].get('team', 0))
             key = (source_team,) + _wire_key(target)
-            pose = _pose_dict(pose_row)
             runtime._visible_target_poses[key] = pose
             runtime._spot_until[key] = max(runtime._spot_until.get(key, 0.0),
                                           sampled + min(12.0, max(0.0, duration)))

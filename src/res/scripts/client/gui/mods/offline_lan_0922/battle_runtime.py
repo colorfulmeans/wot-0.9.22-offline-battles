@@ -16369,7 +16369,73 @@ class BattleRuntime(object):
             else None)
         self._report_projectile_track_outcome(
             meta, target, traced_collisions, collisions, contact, effect)
+        self._report_ricochet_contact_evidence(
+            meta, state, terminal_data, contact, effect, traced_collisions)
         return effect
+
+    def _report_ricochet_contact_evidence(self, meta, state, data, contact,
+                                         effect, collisions):
+        """Observe both bounce and rehit surfaces; never change settlement."""
+        if contact is None:
+            return
+        try:
+            segment = int(meta.get('ricochet_count', 0))
+            if segment == 0 and int(contact.get('result', -1)) != 0:
+                return
+            phase = 'reflected_contact' if segment else 'bounce_contact'
+            marker = 'ricochet_evidence_' + phase
+            if meta.get(marker):
+                return
+            round_id = meta.get('round_id')
+            budget = getattr(self, '_ricochet_evidence_budget', None)
+            if budget is None or budget[0] != round_id:
+                budget = [round_id, 0]
+                self._ricochet_evidence_budget = budget
+            if budget[1] >= 64:
+                return
+            material = contact.get('material')
+            payload = {
+                'projectile': meta.get('projectile_id'), 'round': round_id,
+                'phase': phase, 'target': data.get('target_key'),
+                'segment': segment, 'elapsed_ms': self._projectile_elapsed_ms(meta, state),
+                'segment_start_ms': meta.get('segment_start_time_ms', 0),
+                'origin': meta.get('segment_origin'),
+                'velocity': meta.get('segment_velocity'),
+                'impact': data.get('impact'), 'normal': data.get('world_normal'),
+                'query': [_xyz(point) for point in data.get('query') or ()],
+                'collision_pose': dict((name, data['collision_pose'][name])
+                    for name in ('x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw', 'gun_pitch')
+                    if name in data['collision_pose'])
+                    if isinstance(data.get('collision_pose'), dict) else None,
+                'component': contact.get('component'),
+                'material_kind': _field(material, 'kind'),
+                'armor': _field(material, 'armor'),
+                'vehicle_damage_factor': _field(material, 'vehicleDamageFactor'),
+                'layer': contact.get('layer'), 'angle_cos': contact.get('angle_cos'),
+                'distance': contact.get('distance'),
+                'effective_armor': contact.get('effective_armor'),
+                'piercing': contact.get('piercing'),
+                'penetration_multiplier': meta.get('base_penetration_multiplier', 1.0),
+                'result': int(effect['shot_result']), 'damage': int(effect['damage']),
+                'contacts': [{'component': item.compName, 'distance': float(item.dist),
+                    'material_kind': _field(item.matInfo, 'kind'),
+                    'armor': _field(item.matInfo, 'armor'),
+                    'vehicle_damage_factor': _field(item.matInfo, 'vehicleDamageFactor')}
+                    for item in tuple(collisions)[:8]],
+            }
+            if segment:
+                payload['bounce'] = meta.get('ricochet_first_contact_evidence')
+            else:
+                meta['ricochet_first_contact_evidence'] = dict(
+                    (key, payload[key]) for key in ('target', 'component', 'material_kind',
+                    'layer', 'impact', 'normal', 'elapsed_ms', 'angle_cos'))
+            encoded = json.dumps(payload, sort_keys=True)
+            meta[marker] = True
+            budget[1] += 1
+            sys.stdout.write('[Offline LAN 0.9.22] RICOCHET SURFACE EVIDENCE %s\n' % encoded)
+        except Exception:
+            # Diagnostics cannot invalidate an otherwise complete HP proposal.
+            pass
 
     @staticmethod
     def _report_projectile_track_outcome(meta, target, traced, retained,

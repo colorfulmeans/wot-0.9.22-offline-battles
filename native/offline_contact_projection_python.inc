@@ -39,6 +39,73 @@ PyObject *WOT_CDECL control_pose(PyObject *,PyObject *args) {
     }catch(const PythonAllocationFailed &){profile.fail();return 0;}
      catch(...){profile.fail();return fallback();}
 }
+PyObject *WOT_CDECL control_observation_rows(PyObject *, PyObject *args) {
+    NATIVE_PROFILE_ENTRY(control_pose);
+    profile.opcode(1);
+    try {
+        require_sequence(args, 1, true);
+        PyObject *rows = items(args)[0];
+        require_sequence(rows, 0);
+        for (Py_ssize_t i = 0; i < size(rows); ++i) {
+            PyObject *row = items(rows)[i];
+            require_sequence(row, 5, true);
+            PyObject *pose = items(row)[4];
+            require_sequence(pose, 3, true);
+            require_sequence(items(pose)[0], 3, true);
+            require_sequence(items(pose)[1], 13, true);
+            const int mask = index_value(items(pose)[2]);
+            if (mask < 0 || mask > 2047) throw Unsupported();
+        }
+        if (!dict_set) throw Unsupported();
+        return profile.run([&]() {
+            constexpr Field names[] = {X,Y,Z,YAW,PITCH,ROLL,AIM_YAW,
+                TURRET_YAW,GUN_PITCH,SPEED};
+            OwnedTuple out(size(rows));
+            for (Py_ssize_t i = 0; i < size(rows); ++i) {
+                PyObject **row = items(items(rows)[i]);
+                PyObject **pose = items(row[4]);
+                const int mask = index_value(pose[2]);
+                OwnedTuple empty(0);
+                WorldObject arguments(empty.release());
+                PyObject *target = object_call(reinterpret_cast<PyObject *>(
+                    const_cast<void *>(dict_type)), arguments.get(), 0);
+                if (!target) throw PythonAllocationFailed();
+                WorldObject owned(target);
+                auto put = [&](Field key, PyObject *value) {
+                    if (dict_set(target, field_keys[key], value) < 0)
+                        throw PythonAllocationFailed();
+                };
+                for (int j = 0; j < 10; ++j)
+                    if (mask & (1 << j)) put(names[j], items(pose[1])[j]);
+                if (mask & (1 << 10)) {
+                    OwnedTuple velocity(3);
+                    for (int j = 0; j < 3; ++j)
+                        engine_query::borrow(velocity, j, items(pose[1])[10+j]);
+                    WorldObject value(velocity.release());
+                    put(VELOCITY, value.get());
+                }
+                if (pose[0]->ob_type == tuple_type) put(POSITION, pose[0]);
+                else {
+                    OwnedTuple position(3);
+                    for (int j = 0; j < 3; ++j)
+                        engine_query::borrow(position, j, items(pose[0])[j]);
+                    WorldObject value(position.release());
+                    put(POSITION, value.get());
+                }
+                OwnedTuple result(5);
+                for (int j = 0; j < 4; ++j)
+                    engine_query::borrow(result, j, row[j]);
+                engine_query::borrow(result, 4, target);
+                out.set(i, result.release());
+            }
+            return out.release();
+        });
+    } catch (const PythonAllocationFailed &) {
+        profile.fail(); return 0;
+    } catch (...) {
+        profile.fail(); return fallback();
+    }
+}
 PyObject *WOT_CDECL contact_materialize(PyObject *,PyObject *args) {
     NATIVE_PROFILE_ENTRY(contact_materialize);
     try {

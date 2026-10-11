@@ -397,6 +397,7 @@ PyMethodDef methods[] = {
     {"rotation_envelope", rotation_envelope, 0x0001, "Exact current analytical yaw sweep bounds."},
     {"rotation_departure", rotation_departure, 0x0001, "Current occupied-face corner sweep proof."},
     {"control_pose", control_pose, 0x0001, "Project current actor pose and presence mask."},
+    {"control_observation_rows", control_observation_rows, 0x0001, "Prepare a fresh observation pose batch without Python loops."},
     {"contact_materialize", contact_materialize, 0x0001, "Materialize current perception rows without Python loops."},
     {"release_drive", release_drive, 0x0001, "Current release drive, traverse, contact torque and coast integral."},
     {"parking_distances", parking_distances, 0x0001, "Exact directed parking-grid shortest distances."},
