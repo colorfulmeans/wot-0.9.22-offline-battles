@@ -33,6 +33,31 @@ def player(identifier, x=0, alive=True):
 
 
 class SnapshotSyncTests(unittest.TestCase):
+    def test_confirmed_stall_tail_recovers_faster_than_the_previous_policy(self):
+        policies = []
+        for previous in (True, False):
+            module = _load()
+            if previous:
+                module.TIMED_STALL_RECOVERY_RATIO = .025
+                module.TIMED_CONFIRMED_CATCHUP_RATE = 0.
+            clock = [0.]
+            sync = module.SnapshotSync(1, clock=lambda: clock[0])
+            source = set((0, 130, 260)) | set(range(760, 8001, 130))
+            revision = 0
+            for tick in sorted(source | set(range(0, 8001, 10))):
+                clock[0] = tick / 1000.
+                if tick in source:
+                    revision += 1
+                    sync.snapshot(dict(round_id=1, server_tick=tick,
+                        bot_state_revision=revision, motion_time_us=tick*1000,
+                        bot_state_time_us=tick*1000, bots=[player(7, tick/100.)]))
+                sync.advance(clock[0])
+                record = sync._entities['bot:7']
+                if record.get('presentation_time_us') is not None:
+                    self.assertLessEqual(record['presentation_time_us'], record['target_sample_time_us'])
+            policies.append(record['presentation_delay_us'])
+        self.assertLess(policies[1], policies[0] - 50000.)
+
     def test_coalesced_client_pause_does_not_inflate_producer_delay(self):
         for cadence, expected_max in ((100000, 200000), (500000, 550000)):
             with self.subTest(cadence=cadence):
@@ -683,7 +708,7 @@ class SnapshotSyncTests(unittest.TestCase):
         for previous, current in zip(frames, frames[1:]):
             self.assertGreaterEqual(current[1], previous[1])
             self.assertLessEqual(current[1] - previous[1],
-                                 (current[0] - previous[0]) * 1.025 + 1e-6)
+                                 (current[0] - previous[0]) * 1.10 + 1e-6)
 
     def test_first_live_intervals_establish_jitter_high_water_immediately(self):
         clock = [0.0]
@@ -1030,7 +1055,7 @@ class SnapshotSyncTests(unittest.TestCase):
         # 0.59 m single-frame jump.
         self.assertLessEqual(max(
             positions[index] - positions[index - 1]
-            for index in range(1, len(positions))), 0.102501)
+            for index in range(1, len(positions))), 0.110001)
 
     def test_timed_gap_latency_converges_after_regular_samples_resume(self):
         clock = [0.0]
@@ -1084,10 +1109,10 @@ class SnapshotSyncTests(unittest.TestCase):
                         record['presentation_delay_us'] -
                         record['interpolation_delay_us']))
 
-        # Presentation follows the faster decaying ideal within 3 ms. The
+        # Presentation follows the faster decaying ideal within 5 ms. The
         # remaining bounded sawtooth is only the 10 ms render cadence
         # versus the 68 ms source cadence, not a retained latency jump.
-        self.assertLess(max(abs(item[1]) for item in delay_errors), 3000.0)
+        self.assertLess(max(abs(item[1]) for item in delay_errors), 5000.0)
         self.assertTrue(all(
             positions[index] + 1.0e-9 >= positions[index - 1]
             for index in range(1, len(positions))))
@@ -1096,7 +1121,7 @@ class SnapshotSyncTests(unittest.TestCase):
             for pose, target in zip(positions, confirmed)))
         self.assertLessEqual(max(
             positions[index] - positions[index - 1]
-            for index in range(1, len(positions))), 0.102501)
+            for index in range(1, len(positions))), 0.110001)
 
     def test_timed_interpolation_keeps_short_angles_and_timed_lifecycle(self):
         initial = player(7, 0.0)

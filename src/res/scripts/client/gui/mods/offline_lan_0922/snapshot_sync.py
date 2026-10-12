@@ -29,7 +29,8 @@ TIMED_DELAY_DECAY_RATIO = 0.005
 # Normal 30 Hz jitter still needs its existing high-water decay. Accelerate
 # only the excess left by a stalled producer; keep the ordinary 60-99 ms
 # cushion intact so recurring short gaps do not cause playback holds.
-TIMED_STALL_RECOVERY_RATIO = 0.025
+TIMED_STALL_RECOVERY_RATIO = 0.05
+TIMED_CONFIRMED_CATCHUP_RATE = 0.10
 TIMED_STALL_RECOVERY_FLOOR_US = 120000.0
 # Ignore sub-frame changes in the measured target after warm-up.  Expanding a
 # confirmed-only cursor cannot rewind it, so a tiny increase would itself add
@@ -743,7 +744,7 @@ class SnapshotSync(object):
                     # The stock quadratic curve becomes effectively static
                     # for small errors.  Match the jitter high-water decay so
                     # the startup cushion actually returns to its 60 ms
-                    # floor, using 1.025x playback for an ordinary stall tail.
+                    # floor, using 1.05x playback for an ordinary stall tail.
                     # A 100 ms excess formerly survived for 20 seconds and
                     # kept muzzle/impact playback late after the worker recovered.
                     latency_rate = max(
@@ -751,6 +752,16 @@ class SnapshotSync(object):
                         TIMED_STALL_RECOVERY_RATIO if
                         delay_us > TIMED_STALL_RECOVERY_FLOOR_US else
                         TIMED_DELAY_DECAY_RATIO)
+                    # Spend confirmed history to shed a stall tail sooner.
+                    # Keep the normal cushion when that history is not yet
+                    # available; the cursor still cannot pass the newest sample.
+                    confirmed_headroom = (
+                        samples[-1]['time_us'] - previous_presentation_time_us)
+                    if (delay_us > TIMED_STALL_RECOVERY_FLOOR_US and
+                            confirmed_headroom > ideal_delay_us):
+                        latency_rate = max(latency_rate, min(
+                            TIMED_CONFIRMED_CATCHUP_RATE,
+                            (delay_us - ideal_delay_us) / 1000000.0))
                 delay_step_us = (
                     render_delta * latency_rate * 1000000.0)
                 if ideal_delay_us > delay_us:

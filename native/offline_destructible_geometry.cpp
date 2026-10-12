@@ -195,7 +195,7 @@ std::vector<int> Store::trees(std::int64_t id,const std::vector<Box> &sweeps,dou
     }
     return result;
 }
-BodyResult Store::body(std::int64_t id,const Pose &pose,double speed,const Box &sweep) const {
+BodyResult Store::body(std::int64_t id,const Pose &pose,double speed,const Box &sweep,const std::set<int> &retired) const {
     auto at=chunks_.find(id);if(at==chunks_.end())throw std::invalid_argument("missing streamed chunk");
     const auto &chunk=at->second;BodyResult result;std::unordered_set<int> seen;
     // Stationary bodies and catalog-only neighbourhoods still need proximity
@@ -206,7 +206,7 @@ BodyResult Store::body(std::int64_t id,const Pose &pose,double speed,const Box &
     const std::array<double,4> origin{{pose.position[0]-8.,pose.position[0]+8.,pose.position[2]-8.,pose.position[2]+8.}};
     const auto visit=[&](const std::map<Cell,std::vector<int>> &bins,const std::array<double,4> &b){cells(b,[&](Cell c){
         auto bin=bins.find(c);if(bin==bins.end())return;for(int index:bin->second){
-            if (!seen.insert(index).second) continue;
+            if (retired.count(index) || !seen.insert(index).second) continue;
             ++result.nearby;
             const auto &item=chunk.items.at(index);
             if(!item.catalog)result.found_nearby=true;

@@ -57,7 +57,7 @@ public:
     void baked(std::map<Cell, std::set<Key>> value);
     CatalogResult catalog(const Box &sweep, const Box *contact) const;
     BodyResult body(std::int64_t chunk_id, const Pose &pose, double speed,
-                    const Box &sweep) const;
+                    const Box &sweep, const std::set<int> &retired = {}) const;
     std::vector<int> trees(std::int64_t chunk_id, const std::vector<Box> &sweeps,
                            double radius) const;
     std::vector<Key> missing(const Box &sweep) const;

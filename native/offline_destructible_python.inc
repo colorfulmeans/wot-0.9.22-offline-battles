@@ -99,8 +99,10 @@ PyObject *WOT_CDECL destr_query(PyObject *,PyObject *args) {
             const auto value=profile.run(&d::Store::catalog,store.get(),sweep,has_contact?&contact:nullptr);
             OwnedTuple result(5);result.set(0,b::candidates(value.candidates));result.set(1,b::candidates(value.grouped));
             result.set(2,integer_result(value.members));result.set(3,integer_result(value.duplicates));result.set(4,int_new(value.had_members));return result.release();
-        }else if(op==1){require_sequence(v[2],4,true);auto **row=items(v[2]);
-            const auto value=profile.run(&d::Store::body,store.get(),b::wide(row[0]),b::pose(row[1]),finite_number(row[2]),b::box(row[3]));
+        }else if(op==1 || op==11){require_sequence(v[2],op==11?5:4,true);auto **row=items(v[2]);
+            std::set<int> retired;
+            if(op==11){require_sequence(row[4],0);for(Py_ssize_t i=0;i<size(row[4]);++i)retired.insert(index_value(items(row[4])[i]));}
+            const auto value=profile.run(&d::Store::body,store.get(),b::wide(row[0]),b::pose(row[1]),finite_number(row[2]),b::box(row[3]),retired);
             OwnedTuple result(3);result.set(0,b::indexes(value.items));result.set(1,integer_result(value.nearby));result.set(2,int_new(value.found_nearby));return result.release();
         }else if(op==2){require_sequence(v[2],3,true);auto **row=items(v[2]);
             const auto value=profile.run(&d::Store::trees,store.get(),b::wide(row[0]),b::boxes(row[1]),finite_number(row[2]));return b::indexes(value);

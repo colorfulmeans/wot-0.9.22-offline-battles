@@ -603,6 +603,9 @@ class NativeMotion(object):
 
     def _world_dispatch(self, bot_id, state, row):
         owner = self._owner()
+        from . import destructibles_sensor
+        ground_provider = world.ground_collision_filter
+        ground_batch = destructibles_sensor.ground_filter_batch_1513(ground_provider)
         V = owner._runtime.math.Vector3
         space = owner._avatar.spaceID
         descriptor = self.runtime._descriptors[bot_id]
@@ -636,7 +639,10 @@ class NativeMotion(object):
                 return collision[0]
             if op == 7:
                 a, unused_b, unused_flags = rows[0]
-                return world.ground_collision_filter(a[0], a[2])
+                provider = (ground_batch if ground_batch is not None and
+                            world.ground_collision_filter is ground_provider else
+                            world.ground_collision_filter)
+                return provider(a[0], a[2])
             if op == 5:
                 a, b, hit = rows[0]
                 result = world._destroy_and_recast(space, V(*a), V(*b), hit,

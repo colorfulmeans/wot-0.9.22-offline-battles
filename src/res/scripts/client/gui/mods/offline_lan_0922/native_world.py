@@ -44,6 +44,9 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
     state = [module._UNPREPARED_COLLISION_FILTER, departing_contact]
     crush = [False]
     V = Math.Vector3
+    from . import destructibles_sensor
+    ground_provider = module.ground_collision_filter
+    ground_batch = destructibles_sensor.ground_filter_batch_1513(ground_provider)
     def xyz(v):
         return (v.x, v.y, v.z)
     def dispatch(op, rows):
@@ -60,7 +63,10 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
             return result
         if op == 7:
             a, unused_end, unused_flags = rows[0]
-            return module.ground_collision_filter(a[0], a[2])
+            provider = (ground_batch if ground_batch is not None and
+                        module.ground_collision_filter is ground_provider else
+                        module.ground_collision_filter)
+            return provider(a[0], a[2])
         if op == 2:
             v = rows[0]
             state[1] = module._translation_departing_contact(

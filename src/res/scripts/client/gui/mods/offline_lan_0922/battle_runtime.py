@@ -13027,6 +13027,8 @@ class BattleRuntime(object):
                 'ordered shot event attacker has no native entity: %s' % key)
         if record.get('kind') == 'bot':
             matrix_angles = {}
+            sync_record = (getattr(self._sync, '_entities', {}).get(key, {})
+                           if self._sync is not None else {})
             for name, attribute in (('turretMatrix', 'yaw'), ('gunMatrix', 'pitch')):
                 try:
                     matrix = self._runtime.math.Matrix(getattr(entity.appearance, name))
@@ -13043,6 +13045,9 @@ class BattleRuntime(object):
                     'matrix_angles': matrix_angles,
                     'presented_aim': list(record.get('_remote_aim_signature', ()))[1:],
                     'presented_pose': record.get('_remote_pose_signature'),
+                    'ideal_delay_us': sync_record.get('interpolation_delay_us'),
+                    'display_delay_us': sync_record.get('presentation_delay_us'),
+                    'snapshot_interval_us': sync_record.get('snapshot_interval_us'),
                     'shot_yaw': event.get('shot_yaw'), 'shot_pitch': event.get('shot_pitch')},
                     separators=(',', ':')) + '\n')
             except Exception:
@@ -13773,15 +13778,29 @@ class BattleRuntime(object):
         return meta
 
     def _projectile_manager_snapshot(self, normalized, now):
-        owner = self._projectile_meta.get(normalized['projectile_id']) or {}
+        owner = self._projectile_meta.get(normalized['projectile_id'])
+        if owner is None:
+            owner = {}
         if ('local_launch_time' in owner and
                 not self._worker_mode and self._owns_projectile(normalized)):
             launch_time = (float(owner['local_launch_time']) +
                            normalized['segment_start_time_ms'] / 1000.0)
         else:
-            launch_time = self._projectile_local_launch_time(
-                normalized['launch_server_time_ms'] +
-                normalized['segment_start_time_ms'], now)
+            anchor = owner.get('physics_launch_time')
+            if anchor is None:
+                # A cold restore may first observe an already-reflected
+                # segment. Establish its epoch from that observed segment,
+                # rather than fabricating an earlier unobserved local launch.
+                segment_seconds = normalized['segment_start_time_ms'] / 1000.0
+                anchor = self._projectile_local_launch_time(
+                    normalized['launch_server_time_ms'] +
+                    normalized['segment_start_time_ms'], now) - segment_seconds
+                owner['physics_launch_time'] = anchor
+            # Freeze the local epoch across every reflected segment and
+            # restoration. A later server-clock sample cannot rewind a shot
+            # against the retained local-time vehicle pose history.
+            launch_time = (float(anchor) +
+                           normalized['segment_start_time_ms'] / 1000.0)
         cursor_time = min(
             float(now),
             launch_time + max(
@@ -13820,18 +13839,22 @@ class BattleRuntime(object):
     def _admit_projectile_manager_state(
             self, normalized, now, replacement_key=None):
         snapshot = self._projectile_manager_snapshot(normalized, now)
+        # A canonical segment can be ahead of the local clock after a clock
+        # calibration. Retain it at its frozen epoch; the manager does not
+        # advance it until local time reaches that cursor.
+        horizon = max(float(now), snapshot['cursor_time'])
         if replacement_key is not None:
             return bool(self._projectiles.replace_authoritative(
                 snapshot, provisional_key=replacement_key,
-                admission_time=now))
+                admission_time=horizon))
         if normalized['ricochet_count'] != 0:
             return bool(self._projectiles.restore(
-                snapshot, admission_time=now))
+                snapshot, admission_time=horizon))
         return bool(self._projectiles.launch(
             snapshot['key'], snapshot['start'], snapshot['velocity'],
             snapshot['gravity'], snapshot['launch_time'],
             snapshot['max_time'], snapshot['max_distance'],
-            payload=snapshot['payload'], admission_time=now))
+            payload=snapshot['payload'], admission_time=horizon))
 
     def _find_provisional_projectile(self, normalized):
         direct = self._projectile_meta.get(normalized['projectile_id'])
@@ -16464,7 +16487,7 @@ class BattleRuntime(object):
                 'source_shot': meta.get('source_shot'),
                 'target_vehicle': _field(_field(target, 'typeDescriptor'), 'name'),
                 'segment_state': dict((name, state.get(name)) for name in
-                    ('elapsed', 'cursor_time', 'distance', 'position', 'velocity', 'gravity')),
+                    ('elapsed', 'launch_time', 'cursor_time', 'distance', 'position', 'velocity', 'gravity')),
                 'surface_evidence': [{'component': item.collision.compName,
                     'native_query_index': query_index(item),
                     'material_identity': id(item.collision.matInfo),

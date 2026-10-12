@@ -807,7 +807,7 @@ def _invalidate_chunk_native_names_1513(chunk_id):
 		if key[1] == chunk_id:
 			cache.pop(key, None)
 	from gui.mods.offline_lan_0922 import destructibles_compat
-	destructibles_compat.invalidate_safe_descriptor_chunk(chunk_id)
+	destructibles_compat.invalidate_safe_descriptor_chunk(chunk_id, retire_calls=True)
 	# Placement proof belongs to this streaming lifetime too: a reload can
 	# reuse the same native slot count with a different item matrix.
 	unresolved = globals().get('g_offh_destr_unresolved_obstacles', {})
@@ -1364,9 +1364,15 @@ def _resolve_catalog_tree_name_1513(bigworld, area, space_id, chunk_id,
 		import Math
 		chunk = observed_call('native.destructible.chunk_matrix',
 			bigworld.wg_getChunkMatrix, space_id, chunk_id)
-		matrix = Math.Matrix(observed_call(
-			'native.destructible.item_matrix',
-			bigworld.wg_getDestructibleMatrix, space_id, chunk_id, item_index))
+		# Stock __dropDestructible retains the initial matrix before the tree
+		# animator changes its live transform. Resolve effects from that exact
+		# retained native matrix after cache invalidation, not the fallen pose.
+		manager = getattr(area, 'g_destructiblesManager', None)
+		initial = getattr(manager, '_DestructiblesManager__destrInitialMatrices', {})
+		original_matrix = initial.get(wire) if isinstance(initial, dict) else None
+		matrix = Math.Matrix(original_matrix if original_matrix is not None else
+			observed_call('native.destructible.item_matrix',
+				bigworld.wg_getDestructibleMatrix, space_id, chunk_id, item_index))
 		signature, unused_located = _catalog_instance_for_matrix_1513(
 			matrix, chunk.translation, Math, (chunk_id, item_index))
 		if _layout_repair_pending_1513(chunk_id):
@@ -4440,6 +4446,35 @@ def ground_collision_filter(x, z):
 	return _broken_collision_filter(members, accepted_trees)
 
 
+_DEFAULT_GROUND_FILTER = ground_collision_filter
+
+
+def ground_filter_batch_1513(provider):
+	"""Share live column filters within one synchronous collision operation."""
+	if (provider is not _DEFAULT_GROUND_FILTER or
+			_get_destr_authority is not _DEFAULT_DESTR_AUTHORITY):
+		return None
+	cache = {}
+	def query(x, z):
+		cell = _destructible_bin_key(x, z)
+		trees = _accepted_tree_collision_keys_1513()
+		key = (globals().get('g_offh_destr_runtime_space'),
+			_spatial_revision_1513(), cell, id(trees), len(trees))
+		batch = globals().get('g_offh_destr_spatial_mutation_batch', {})
+		dirty = batch.get('global') or cell in batch.get('bin_keys', ())
+		if not dirty and key in cache:
+			combat_count('destructible_ground_filter_batch_hits')
+			return cache[key]
+		members = globals().get('g_offh_destr_contact_bins', {}).get(cell, ())
+		value = _live_broken_collision_filter_1513(members, trees)
+		if not dirty:
+			if len(cache) >= 64:
+				cache.clear()
+			cache[key] = value
+		return value
+	return query
+
+
 def _live_broken_collision_filter_1513(members, accepted_trees=()):
 	"""Return one sweep-local callback backed by the live accepted ledger."""
 	accepted_trees = accepted_trees or ()
@@ -5924,6 +5959,9 @@ def _crush_structure_dependencies_1513(spaceID, chunkID, itemIndex,
 def _get_destr_authority():
 	from gui.mods.offline_lan_0922 import destructibles_authority
 	return destructibles_authority
+
+
+_DEFAULT_DESTR_AUTHORITY = _get_destr_authority
 
 
 def set_event_sink(callback):
@@ -7430,8 +7468,20 @@ def _fell_trees_near(
 				continue
 			if _native_body_pose is None:
 				_native_body_pose = _native_geometry.pose(pos, yaw, bbox)
+			# Accepted whole-item destruction is monotonic in this chunk
+			# lifetime. Retire it before native proximity accounting, not after
+			# it repeatedly defeats empty-cell receipts for every nearby Bot.
+			_authority = (_get_destr_authority()
+				if _get_destr_authority is _DEFAULT_DESTR_AUTHORITY else None)
+			_reader = getattr(_authority, 'destroyed_keys', None)
+			_retired = tuple(sorted(int(item) for item, material in
+				(_reader(cid) if callable(_reader) else ()) if material is None and
+				(cid, item) not in _st['publish_pending']))
+			_body_options = {'prepared_pose': _native_body_pose}
+			if _retired:
+				_body_options['retired'] = _retired
 			_native_body = _native_geometry.body(_native_sensor, cid, registry,
-				pos, yaw, vel, bbox, vehicle_box, prepared_pose=_native_body_pose)
+				pos, yaw, vel, bbox, vehicle_box, **_body_options)
 			if _native_body is not None:
 				_nearby, _nearby_count, _has_nearby = _native_body
 				combat_count('destructible_nearby_items', _nearby_count)
@@ -7447,6 +7497,8 @@ def _fell_trees_near(
 				_nearby = _nearby_destructibles(registry, pos, vehicle_box)
 			for (_ti, _tx, _ty, _tz, _ttyp, _tfn, _thp, _tmass,
 					_world_boxes, _contact_radius) in _nearby:
+				if _ti in _retired:
+					continue
 				_mat_kind = None
 				if _native_body is not None:
 					if _destructible_isolated_1513(cid, _ti):

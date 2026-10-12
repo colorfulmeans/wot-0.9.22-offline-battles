@@ -275,15 +275,15 @@ def trees(sensor, chunk_id, registry, sweeps, tree_type, radius):
 
 
 def body(sensor, chunk_id, registry, position, yaw, speed, bbox, vehicle,
-         prepared_pose=None):
+         prepared_pose=None, retired=()):
     owner = _get(sensor)
     if owner is None:
         return None
     items = owner.chunk(sensor, chunk_id, registry)
     if prepared_pose is None:
         prepared_pose = pose(position, yaw, bbox)
-    result = owner.query(1, (float(chunk_id), prepared_pose,
-                             float(speed), vehicle))
+    payload = (float(chunk_id), prepared_pose, float(speed), vehicle)
+    result = owner.query(11, payload + (retired,)) if retired else owner.query(1, payload)
     if result is None:
         return None
     return [items[index] for index in result[0]], result[1], bool(result[2])
