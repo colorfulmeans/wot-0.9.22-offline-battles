@@ -230,7 +230,15 @@ def contact_members(sensor, bounds):
     """Use the current contact-bin index without rebuilding geometry."""
     if _owner is None or _disabled:
         return None
-    return _owner.query(12, tuple(bounds))
+    result = _owner.query(13, tuple(bounds))
+    if result is None:
+        return None
+    rows, cache_hit = result
+    if cache_hit:
+        sensor.combat_count('destructible_contact_member_index_cache_hits')
+    else:
+        sensor.combat_count('destructible_contact_member_index_cache_misses')
+    return rows
 
 
 def vehicle_box(sensor, position, yaw, bbox, travel, motion_yaw, pitch, roll):

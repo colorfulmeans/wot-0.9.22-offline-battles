@@ -7,7 +7,8 @@
 #include <unordered_set>
 
 namespace offline_destructible {
-std::vector<Key> Store::contact_members(const std::array<double, 4> &limits) const {
+std::vector<Key> Store::contact_members(const std::array<double, 4> &limits, bool *cache_hit) const {
+    if (cache_hit) *cache_hit=false;
     if (!std::all_of(limits.begin(),limits.end(),[](double v){return std::isfinite(v);}))
         throw std::invalid_argument("non-finite contact member bounds");
     const double x0=std::floor(limits[0]/8.), x1=std::floor(limits[1]/8.);
@@ -17,6 +18,13 @@ std::vector<Key> Store::contact_members(const std::array<double, 4> &limits) con
         z0<std::numeric_limits<int>::min() || z1>=std::numeric_limits<int>::max() ||
         (x1-x0+1.)*(z1-z0+1.)>65536.)
         throw std::invalid_argument("invalid contact member bounds");
+    const std::array<int,4> key{{static_cast<int>(x0),static_cast<int>(x1),
+                               static_cast<int>(z0),static_cast<int>(z1)}};
+    const auto cached=contact_cache_.find(key);
+    if (cached!=contact_cache_.end()) {
+        if (cache_hit) *cache_hit=true;
+        return cached->second;
+    }
     std::set<Key> result;
     // Only visit populated cells. The index stores exactly the registered
     // contact bins; resource bounds never substitute for collision geometry.
@@ -27,7 +35,10 @@ std::vector<Key> Store::contact_members(const std::array<double, 4> &limits) con
             ++entry;
         }
     }
-    return {result.begin(),result.end()};
+    std::vector<Key> members{result.begin(),result.end()};
+    if (contact_cache_.size()>=256) contact_cache_.clear();
+    contact_cache_.emplace(key,members);
+    return members;
 }
 namespace {
 constexpr double PI = 3.14159265358979323846;
@@ -167,10 +178,19 @@ std::vector<Box> tree_sweep(const Point &start,double start_yaw,const Point &end
     return output;
 }
 void Store::put(Instance value) {
+    const auto existing=reverse_.find(value.key);
+    if (existing!=reverse_.end() && existing->second==value.bins) {
+        // Updating boxes/materials within the same bins changes collision
+        // geometry, never the candidate member list cached here.
+        instances_[value.key]=std::move(value);
+        return;
+    }
+    contact_cache_.clear();
     std::set<Cell> bins=value.bins;
     remove(value.key);for(auto c:bins)contacts_[c].insert(value.key);reverse_[value.key]=std::move(bins);instances_[value.key]=std::move(value);
 }
 void Store::remove(Key key) {
+    if (reverse_.count(key)) contact_cache_.clear();
     auto at=reverse_.find(key);if(at!=reverse_.end())for(auto c:at->second){auto bin=contacts_.find(c);if(bin!=contacts_.end()){bin->second.erase(key);if(bin->second.empty())contacts_.erase(bin);}}
     reverse_.erase(key);instances_.erase(key);
 }

@@ -4302,6 +4302,45 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 lambda *surface: True)
         self.assertIs(original, result)
 
+    def test_anonymous_he_recovery_uses_the_real_bounded_observer(self):
+        point = _Vector(0, 0, 5)
+        key = (111, 0, 38, 31618)
+        def collide(space, start, end, mask, keep=None):
+            return (point, _Vector(0, 1, 0)) if keep is None or keep(*key) else None
+        bw = types.SimpleNamespace(wg_collideSegment=collide,
+            wg_getMatInfoNearPoint=lambda *args: _mat_info_1513(
+                True, point, _Vector(), 111, '', 58416, 1759988))
+        profiler_calls = []
+        def profiled(stage, function, *args):
+            profiler_calls.append(stage)
+            return function(*args)
+        # The real wrapper has call(), not append(). Exercise both layers,
+        # including pending identity and accepted exact-resource recovery.
+        for outer in (None, types.SimpleNamespace(call=profiled)):
+            for status, filename in (('exact', 'content/Environment/wall.model'),
+                                     ('pending', None)):
+                with self.subTest(profiled=outer is not None, status=status):
+                    with mock.patch.dict(destructibles_sensor.__dict__, {'_destructible_catalog': {}}), \
+                            mock.patch.object(destructibles_sensor, '_catalog_shot_intersection', return_value=None), \
+                            mock.patch.object(destructibles_sensor, '_stream_baked_shot_instance_1513', return_value=None), \
+                            mock.patch.object(destructibles_sensor, '_validated_tree_shot_identity_1513', return_value=None), \
+                            mock.patch.object(destructibles_sensor, '_already_broken_shot_surface_1513', return_value=None), \
+                            mock.patch.object(destructibles_sensor, 'resolve_native_item_name_1513', return_value=(status, filename)), \
+                            mock.patch.object(destructibles_sensor, '_try_destroy_destructible', return_value=False) as destroy:
+                        result = destructibles_sensor.shot_world_distance(
+                            bw, 1, _Vector(), _Vector(0, 0, 10), _Vector(0, 0, 1),
+                            types.SimpleNamespace(shell=types.SimpleNamespace(kind='HIGH_EXPLOSIVE')), outer)
+                    self.assertAlmostEqual(5., result['stop_distance'])
+                    rows = [x for x in result['collision_evidence']
+                            if x['stage'] == 'native.projectile.identity_resource']
+                    self.assertEqual(1, len(rows))
+                    self.assertEqual((31618, 38, status),
+                                     (rows[0]['chunk'], rows[0]['item'], rows[0]['status']))
+                    self.assertLessEqual(len(result['collision_evidence']), 24)
+                    if status == 'exact':
+                        self.assertEqual((111, filename, 38, 31618), destroy.call_args.args[1][3:])
+        self.assertIn('native.projectile.identity', profiler_calls)
+
     def _standing_tree_shot(self, tree_health, item_scale, shell_kind):
         """Fire one shell at a single standing #1513 SpeedTree."""
         filename = 'speedtree/45_North_America/Maple.spt'

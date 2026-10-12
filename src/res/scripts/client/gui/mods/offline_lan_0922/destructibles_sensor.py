@@ -4449,6 +4449,7 @@ def ground_collision_filter(x, z):
 
 _DEFAULT_GROUND_FILTER = ground_collision_filter
 _DEFAULT_CONTACT_BOUNDS = _bin_keys_for_bounds
+_DEFAULT_CONTACT_CELL = _destructible_bin_key
 
 
 @contextmanager
@@ -4481,20 +4482,26 @@ def _contact_members_for_bounds_1513(bounds):
 def ground_filter_batch_1513(provider):
 	"""Share live column filters within one synchronous collision operation."""
 	if (provider is not _DEFAULT_GROUND_FILTER or
+			_destructible_bin_key is not _DEFAULT_CONTACT_CELL or
 			_get_destr_authority is not _DEFAULT_DESTR_AUTHORITY):
+		combat_count('destructible_ground_filter_batch_disabled')
 		return None
 	scope = globals().get('g_offh_destr_collision_preparation_scope')
 	cache = scope.setdefault('ground', {}) if isinstance(scope, dict) else {}
 	def query(x, z):
+		combat_count('destructible_ground_filter_queries')
 		cell = _destructible_bin_key(x, z)
 		trees = _accepted_tree_collision_keys_1513()
 		key = (globals().get('g_offh_destr_runtime_space'),
 			_spatial_revision_1513(), cell, id(trees), len(trees))
 		batch = globals().get('g_offh_destr_spatial_mutation_batch', {})
 		dirty = batch.get('global') or cell in batch.get('bin_keys', ())
+		if dirty:
+			combat_count('destructible_ground_filter_batch_dirty')
 		if not dirty and key in cache:
 			combat_count('destructible_ground_filter_batch_hits')
 			return cache[key]
+		combat_count('destructible_ground_filter_batch_misses')
 		members = globals().get('g_offh_destr_contact_bins', {}).get(cell, ())
 		value = _live_broken_collision_filter_1513(members, trees)
 		if not dirty:
@@ -4507,7 +4514,8 @@ def ground_filter_batch_1513(provider):
 
 def _live_broken_collision_filter_1513(members, accepted_trees=()):
 	"""Return one sweep-local callback backed by the live accepted ledger."""
-	accepted_trees = accepted_trees or ()
+	if accepted_trees is None:
+		accepted_trees = ()
 	if not members and not accepted_trees:
 		return None
 	authority = _get_destr_authority() if members else None
@@ -4582,6 +4590,7 @@ def prepare_horizontal_collision_filter(start, end):
 	later lane without rebuilding the spatial candidate set.
 	"""
 	accepted_trees = _accepted_tree_collision_keys_1513()
+	combat_count('destructible_horizontal_filter_queries')
 	if _destructible_catalog is None and not accepted_trees:
 		return None
 	try:
@@ -4592,8 +4601,39 @@ def prepare_horizontal_collision_filter(start, end):
 			max(float(start.z), float(end.z)))
 	except (AttributeError, TypeError, ValueError):
 		return None
+	scope = globals().get('g_offh_destr_collision_preparation_scope')
+	cache = None
+	if (isinstance(scope, dict) and
+			_bin_keys_for_bounds is _DEFAULT_CONTACT_BOUNDS and
+			_destructible_bin_key is _DEFAULT_CONTACT_CELL and
+			_get_destr_authority is _DEFAULT_DESTR_AUTHORITY):
+		lower = _destructible_bin_key(bounds[0], bounds[2])
+		upper = _destructible_bin_key(bounds[1], bounds[3])
+		key = (globals().get('g_offh_destr_runtime_space'),
+			_spatial_revision_1513(), lower, upper,
+			id(accepted_trees), len(accepted_trees))
+		batch = globals().get('g_offh_destr_spatial_mutation_batch', {})
+		dirty = batch.get('global') or any(
+			lower[0] <= cell[0] <= upper[0] and
+			lower[1] <= cell[1] <= upper[1]
+			for cell in batch.get('bin_keys', ()))
+		if dirty:
+			combat_count('destructible_horizontal_filter_batch_dirty')
+		else:
+			cache = scope.setdefault('horizontal', {})
+			if key in cache:
+				combat_count('destructible_horizontal_filter_batch_hits')
+				return cache[key]
+	else:
+		combat_count('destructible_horizontal_filter_scope_unavailable')
+	combat_count('destructible_horizontal_filter_batch_misses')
 	members = _contact_members_for_bounds_1513(bounds)
-	return _live_broken_collision_filter_1513(members, accepted_trees)
+	value = _live_broken_collision_filter_1513(members, accepted_trees)
+	if cache is not None:
+		if len(cache) >= 128:
+			cache.clear()
+		cache[key] = value
+	return value
 
 
 def horizontal_collision_filter(start, end):
@@ -8612,6 +8652,12 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 	def point(value):
 		return [float(value[index]) for index in (0, 1, 2)]
 	class Observer(object):
+		def append(self, row):
+			# Resource evidence uses the same bounded sink as measured calls.
+			# The optional outer profiler only supplies call(), not a list API.
+			if len(evidence) < 24:
+				evidence.append(row)
+
 		def call(self, stage, function, *args):
 			surfaces = []
 			if stage in ('native.projectile.world', 'native.projectile.identity') and len(args) > 4:

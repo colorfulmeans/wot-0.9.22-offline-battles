@@ -49,6 +49,7 @@ class Store {
     std::map<Cell, std::set<Key>> contacts_, baked_;
     std::map<Key, std::set<Cell>> reverse_;
     std::map<std::int64_t, Chunk> chunks_;
+    mutable std::map<std::array<int, 4>, std::vector<Key>> contact_cache_;
 public:
     void put(Instance instance);
     void remove(Key key);
@@ -61,7 +62,8 @@ public:
     std::vector<int> trees(std::int64_t chunk_id, const std::vector<Box> &sweeps,
                            double radius) const;
     std::vector<Key> missing(const Box &sweep) const;
-    std::vector<Key> contact_members(const std::array<double, 4> &bounds) const;
+    std::vector<Key> contact_members(const std::array<double, 4> &bounds,
+                                    bool *cache_hit = nullptr) const;
 };
 std::int64_t open();
 void close(std::int64_t handle);
