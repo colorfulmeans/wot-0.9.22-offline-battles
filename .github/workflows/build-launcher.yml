@@ -74,6 +74,8 @@ jobs:
       - name: Reproduce the verified recorder resource
         run: python tools/build_replay_runtime.py
       - name: Stage verified style UI
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python tools/stage_release_style_ui.py
       - name: Build Python 2.7 0.9.22 client package
         run: >-
