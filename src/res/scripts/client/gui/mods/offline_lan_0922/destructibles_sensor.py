@@ -13,6 +13,7 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
     current as current_combat, count as combat_count)
 
 import sys as _sys
+from contextlib import contextmanager
 from gui.mods.offline_lan_0922 import native_destructibles as _native_geometry
 _native_sensor = _sys.modules[__name__]
 
@@ -4447,6 +4448,34 @@ def ground_collision_filter(x, z):
 
 
 _DEFAULT_GROUND_FILTER = ground_collision_filter
+_DEFAULT_CONTACT_BOUNDS = _bin_keys_for_bounds
+
+
+@contextmanager
+def collision_preparation_scope_1513():
+	"""Bound filter preparation to one synchronous Bot update, including retries."""
+	previous = globals().get('g_offh_destr_collision_preparation_scope')
+	globals()['g_offh_destr_collision_preparation_scope'] = {}
+	try:
+		yield
+	finally:
+		globals()['g_offh_destr_collision_preparation_scope'] = previous
+
+
+def _contact_members_for_bounds_1513(bounds):
+	batch = globals().get('g_offh_destr_spatial_mutation_batch', {})
+	if (not batch.get('global') and not batch.get('bin_keys') and
+			_bin_keys_for_bounds is _DEFAULT_CONTACT_BOUNDS and
+			_DESTRUCTIBLE_BIN_METRES == 8.0):
+		members = _native_geometry.contact_members(_native_sensor, bounds)
+		if members is not None:
+			combat_count('destructible_contact_members_native')
+			return members
+	members = set()
+	contact_bins = globals().get('g_offh_destr_contact_bins', {})
+	for key in _bin_keys_for_bounds(*bounds):
+		members.update(contact_bins.get(key, ()))
+	return members
 
 
 def ground_filter_batch_1513(provider):
@@ -4454,7 +4483,8 @@ def ground_filter_batch_1513(provider):
 	if (provider is not _DEFAULT_GROUND_FILTER or
 			_get_destr_authority is not _DEFAULT_DESTR_AUTHORITY):
 		return None
-	cache = {}
+	scope = globals().get('g_offh_destr_collision_preparation_scope')
+	cache = scope.setdefault('ground', {}) if isinstance(scope, dict) else {}
 	def query(x, z):
 		cell = _destructible_bin_key(x, z)
 		trees = _accepted_tree_collision_keys_1513()
@@ -4554,19 +4584,15 @@ def prepare_horizontal_collision_filter(start, end):
 	accepted_trees = _accepted_tree_collision_keys_1513()
 	if _destructible_catalog is None and not accepted_trees:
 		return None
-	contact_bins = globals().get('g_offh_destr_contact_bins')
 	try:
-		keys = _bin_keys_for_bounds(
+		bounds = (
 			min(float(start.x), float(end.x)),
 			max(float(start.x), float(end.x)),
 			min(float(start.z), float(end.z)),
 			max(float(start.z), float(end.z)))
 	except (AttributeError, TypeError, ValueError):
 		return None
-	members = set()
-	if contact_bins:
-		for key in keys:
-			members.update(contact_bins.get(key, ()))
+	members = _contact_members_for_bounds_1513(bounds)
 	return _live_broken_collision_filter_1513(members, accepted_trees)
 
 
@@ -8528,7 +8554,7 @@ def _shot_broken_surface_advance_1513(measured, bigworld, spaceID,
 
 
 def _recover_shot_material_1513(measured, bigworld, spaceID, start, end,
-        world_collision, mat_info, surface_filter):
+        world_collision, mat_info, surface_filter, diagnostic=None):
 	decoded = _decode_mat_info_1513(mat_info)
 	if decoded is not None and _normalized_filename(decoded[5]):
 		return mat_info
@@ -8536,7 +8562,8 @@ def _recover_shot_material_1513(measured, bigworld, spaceID, start, end,
 	def collect(*key):
 		if surface_filter(*key) and len(key) == 4:
 			if (isinstance(key[0], _INTEGER_TYPES) and
-					_DESTRUCTIBLE_MAT_KIND_MIN_1513 <= key[0] <= 86 and
+					key[0] >= _DESTRUCTIBLE_MAT_KIND_MIN_1513 and
+					not 87 <= key[0] <= 100 and
 					key not in keys and len(keys) < 17):
 				keys.append(key)
 			return True
@@ -8558,8 +8585,15 @@ def _recover_shot_material_1513(measured, bigworld, spaceID, start, end,
 		if instance is None and _destructible_catalog is not None:
 			instance = _stream_baked_shot_instance_1513(spaceID, (chunk_id, item_index))
 		filename = _instance_descriptor_filename_1513(instance) if instance is not None else None
+		status = 'catalog_exact' if filename else None
 		if not filename:
 			status, filename = resolve_native_item_name_1513(spaceID, chunk_id, item_index)
+		if diagnostic is not None:
+			diagnostic.append({'stage': 'native.projectile.identity_resource',
+				'chunk': chunk_id, 'item': item_index, 'material': key[0],
+				'status': status, 'filename': filename or '',
+				'hit': (hit[0].x, hit[0].y, hit[0].z)})
+		if status != 'catalog_exact':
 			if status != 'exact':
 				continue
 		matches.append((True, hit[0], hit[1], key[0], filename, item_index, chunk_id))
@@ -8653,7 +8687,7 @@ def _shot_world_distance_impl_1513(bigworld, spaceID, start_pos, end_pos, dir_ve
 		if (_destructible_catalog is not None and shot is not None and
 				_shot_kind_1513(shot) in ('HIGH_EXPLOSIVE', 'ARMOR_PIERCING_HE')):
 			mat_info = _recover_shot_material_1513(measured, bigworld, spaceID,
-				start_pos, end_pos, world_collision, mat_info, surface_filter)
+				start_pos, end_pos, world_collision, mat_info, surface_filter, diagnostic)
 		decoded = _decode_mat_info_1513(mat_info)
 		tree_identity = _validated_tree_shot_identity_1513(spaceID, decoded)
 		if tree_identity is not None:

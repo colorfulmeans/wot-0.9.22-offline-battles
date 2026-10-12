@@ -2689,26 +2689,27 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertEqual([-100.0, 0.0, 0.0], record['segment_velocity'])
         self.assertEqual(100, record['segment_start_time_ms'])
         self.assertEqual(1, record['ricochet_count'])
+
         self.assertEqual(0.75, record['base_penetration_multiplier'])
         self.assertEqual(revision + 1, state.projectile_revision)
         self.assertEqual(1, state.destructible_revision)
         self.assertEqual(1000, state.players[2].health)
         events = [event for event in state.pending_events
                   if event.get('projectile_id') == '1:p:1:1']
-        self.assertEqual(['shot', 'projectile_ricochet', 'hit'],
+        self.assertEqual(['shot', 'hit', 'projectile_ricochet'],
                          [event['kind'] for event in events])
-        self.assertEqual(0, events[-1]['damage'])
-        self.assertEqual(0, events[-1]['shot_result'])
+        self.assertEqual(0, events[-2]['damage'])
+        self.assertEqual(0, events[-2]['shot_result'])
         self.assertEqual(
             request['direct']['damage_sticker'],
-            events[-1]['damage_sticker'])
+            events[-2]['damage_sticker'])
         snapshot = state._projectile_snapshot()[0]
         for key, value in snapshot.items():
-            self.assertEqual(value, events[1][key])
-        self.assertEqual(request['impact'], events[1]['impact'])
-        self.assertEqual(request['direct'], events[1]['direct'])
+            self.assertEqual(value, events[2][key])
+        self.assertEqual(request['impact'], events[2]['impact'])
+        self.assertEqual(request['direct'], events[2]['direct'])
         self.assertEqual(request['resolved_time_ms'],
-                         events[1]['resolved_time_ms'])
+                         events[2]['resolved_time_ms'])
         self.assertEqual(record['segment_origin'], snapshot['segment_origin'])
         self.assertEqual(record['segment_velocity'],
                          snapshot['segment_velocity'])
@@ -2736,6 +2737,22 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertFalse(state.ricochet_projectile(
             _projectile_owner(second), second))
         self.assertEqual(1, record['ricochet_count'])
+
+    def test_committed_bounce_survives_effect_failure_without_repeated_effect(self):
+        state = _state()
+        self.assertTrue(_launch_authority(state, _launch()))
+        request = _ricochet(state, '1:p:1:1')
+        revision = state.projectile_revision
+        with mock.patch.object(state, '_apply_projectile_effect',
+                side_effect=RuntimeError('effect failure')) as effect:
+            with self.assertRaises(RuntimeError):
+                state.ricochet_projectile(_projectile_owner(request), request)
+            self.assertEqual(revision + 1, state.projectile_revision)
+            self.assertEqual(['shot', 'projectile_ricochet'],
+                             [x['kind'] for x in state.pending_events])
+            self.assertTrue(state.ricochet_projectile(_projectile_owner(request), request))
+            effect.assert_called_once()
+            self.assertEqual(revision + 1, state.projectile_revision)
 
     def test_worker_potential_becomes_the_victim_blocked_damage_ledger(self):
         for shot_result, damage, blocked in (
@@ -3051,7 +3068,7 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertEqual(0.75, record['base_penetration_multiplier'])
         self.assertEqual(1000, state.players[2].health)
         self.assertEqual(
-            ['shot', 'projectile_ricochet', 'hit'],
+            ['shot', 'hit', 'projectile_ricochet'],
             [event['kind'] for event in state.pending_events
              if event.get('projectile_id') == '1:p:1:1'])
 

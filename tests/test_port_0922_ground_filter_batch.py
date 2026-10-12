@@ -54,3 +54,24 @@ class GroundFilterBatchTests(unittest.TestCase):
 
     def test_custom_provider_retains_its_original_call_path(self):
         self.assertIsNone(sensor.ground_filter_batch_1513(lambda x, z: None))
+
+    def test_distinct_world_operations_share_preparation_only_inside_update(self):
+        with mock.patch.object(sensor, '_live_broken_collision_filter_1513', side_effect=lambda *args: object()):
+            with sensor.collision_preparation_scope_1513():
+                a = sensor.ground_filter_batch_1513(sensor.ground_collision_filter)(1., 2.)
+                b = sensor.ground_filter_batch_1513(sensor.ground_collision_filter)(2., 3.)
+                self.assertIs(a, b)
+                sensor.g_offh_destr_spatial_revision += 1
+                c = sensor.ground_filter_batch_1513(sensor.ground_collision_filter)(2., 3.)
+                self.assertIsNot(a, c)
+            self.assertIsNot(c, sensor.ground_filter_batch_1513(sensor.ground_collision_filter)(2., 3.))
+
+    def test_scope_restores_outer_preparation_after_exception(self):
+        with sensor.collision_preparation_scope_1513():
+            outer = sensor.g_offh_destr_collision_preparation_scope
+            with self.assertRaises(ValueError):
+                with sensor.collision_preparation_scope_1513():
+                    self.assertIsNot(outer, sensor.g_offh_destr_collision_preparation_scope)
+                    raise ValueError('interrupted update')
+            self.assertIs(outer, sensor.g_offh_destr_collision_preparation_scope)
+        self.assertIsNone(sensor.g_offh_destr_collision_preparation_scope)

@@ -226,6 +226,13 @@ def drop(chunk_id, item_index=None):
             _fail(error)
 
 
+def contact_members(sensor, bounds):
+    """Use the current contact-bin index without rebuilding geometry."""
+    if _owner is None or _disabled:
+        return None
+    return _owner.query(12, tuple(bounds))
+
+
 def vehicle_box(sensor, position, yaw, bbox, travel, motion_yaw, pitch, roll):
     owner = _get(sensor)
     if owner is None:

@@ -4275,6 +4275,33 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 lambda *surface: True)
         self.assertIs(original, hit)
 
+    def test_anonymous_stone_skin_can_recover_its_exact_authored_identity(self):
+        original = _mat_info_1513(True, _Vector(), _Vector(), 111, '', 58416, 1759988)
+        point = _Vector(0, 0, 5)
+        key = (111, 0, 38, 31618)
+        bw = types.SimpleNamespace(wg_collideSegment=lambda space, start, end, mask, keep:
+            (point, _Vector(0, 1, 0)) if keep(*key) else None)
+        with mock.patch.object(destructibles_sensor, 'resolve_native_item_name_1513',
+                return_value=('exact', 'content/Environment/wall.model')):
+            result = destructibles_sensor._recover_shot_material_1513(
+                lambda stage, function, *args: function(*args), bw, 1,
+                _Vector(), _Vector(0, 0, 10), (point, _Vector()), original,
+                lambda *surface: True)
+        self.assertEqual((111, 'content/Environment/wall.model', 38, 31618), result[3:])
+
+    def test_generic_material_with_pending_name_does_not_invent_a_descriptor(self):
+        original = _mat_info_1513(True, _Vector(), _Vector(), 111, '', 58416, 1759988)
+        point = _Vector(0, 0, 5)
+        bw = types.SimpleNamespace(wg_collideSegment=lambda space, start, end, mask, keep:
+            (point, _Vector()) if keep(111, 0, 38, 31618) else None)
+        with mock.patch.object(destructibles_sensor, 'resolve_native_item_name_1513',
+                return_value=('pending', None)):
+            result = destructibles_sensor._recover_shot_material_1513(
+                lambda stage, function, *args: function(*args), bw, 1,
+                _Vector(), _Vector(0, 0, 10), (point, _Vector()), original,
+                lambda *surface: True)
+        self.assertIs(original, result)
+
     def _standing_tree_shot(self, tree_health, item_scale, shell_kind):
         """Fire one shell at a single standing #1513 SpeedTree."""
         filename = 'speedtree/45_North_America/Maple.spt'

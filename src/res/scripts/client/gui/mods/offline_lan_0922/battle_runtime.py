@@ -14288,6 +14288,13 @@ class BattleRuntime(object):
         if projectile_id in self._projectile_visual_terminals:
             return False
         owner = self._projectile_meta.get(projectile_id)
+        if (owner is not None and 'local_launch_time' in owner and
+                self._owns_projectile(owner) and
+                normalized['ricochet_count'] >
+                owner.get('presented_ricochet_count', 0)):
+            # Physical continuation may run ahead of the server echo, but its
+            # tracer must follow the committed armour response in the journal.
+            return False
         if (owner is not None and self._owns_projectile(owner) and
                 (owner.get('local_ricochet_admission') is not None or
                  owner.get('pending_resolution') is not None or
@@ -18534,8 +18541,10 @@ class BattleRuntime(object):
                     self._bots, '_sample_time_us', None)
                 # The worker's injected body sensor runs inside this update,
                 # once at the final pose after all catch-up slices.
-                outgoing_messages = self._bots.update(
-                    rule_dt, now, players=players)
+                from .destructibles_sensor import collision_preparation_scope_1513
+                with collision_preparation_scope_1513():
+                    outgoing_messages = self._bots.update(
+                        rule_dt, now, players=players)
                 if self._worker_mode:
                     self._record_worker_control_diagnostics(
                         control_sample_before)

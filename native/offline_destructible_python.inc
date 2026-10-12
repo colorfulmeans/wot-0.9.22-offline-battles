@@ -94,6 +94,13 @@ PyObject *WOT_CDECL destr_query(PyObject *,PyObject *args) {
         namespace d=offline_destructible;namespace b=destructible_bridge;
         require_sequence(args,3,true);auto **v=items(args);auto store=b::store(v[0]);const int op=index_value(v[1]);profile.opcode(op);
         if(op==8)return destructible_prepare_law::run(store.get(),v[2],profile);
+        if(op==12){require_sequence(v[2],4,true);auto **row=items(v[2]);
+            const std::array<double,4> limits{{finite_number(row[0]),finite_number(row[1]),finite_number(row[2]),finite_number(row[3])}};
+            const auto value=profile.run(&d::Store::contact_members,store.get(),limits);
+            OwnedTuple result(value.size());
+            for(std::size_t i=0;i<value.size();++i){OwnedTuple key(2);key.set(0,float_new(double(value[i].first)));key.set(1,int_new(value[i].second));result.set(i,key.release());}
+            return result.release();
+        }
         if(op==0){require_sequence(v[2],2,true);auto **row=items(v[2]);const auto sweep=b::box(row[0]);d::Box contact;
             const bool has_contact=!absent(row[1]);if(has_contact)contact=b::box(row[1]);
             const auto value=profile.run(&d::Store::catalog,store.get(),sweep,has_contact?&contact:nullptr);

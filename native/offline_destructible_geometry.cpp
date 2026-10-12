@@ -7,6 +7,28 @@
 #include <unordered_set>
 
 namespace offline_destructible {
+std::vector<Key> Store::contact_members(const std::array<double, 4> &limits) const {
+    if (!std::all_of(limits.begin(),limits.end(),[](double v){return std::isfinite(v);}))
+        throw std::invalid_argument("non-finite contact member bounds");
+    const double x0=std::floor(limits[0]/8.), x1=std::floor(limits[1]/8.);
+    const double z0=std::floor(limits[2]/8.), z1=std::floor(limits[3]/8.);
+    if (limits[0]>limits[1] || limits[2]>limits[3] ||
+        x0<std::numeric_limits<int>::min() || x1>=std::numeric_limits<int>::max() ||
+        z0<std::numeric_limits<int>::min() || z1>=std::numeric_limits<int>::max() ||
+        (x1-x0+1.)*(z1-z0+1.)>65536.)
+        throw std::invalid_argument("invalid contact member bounds");
+    std::set<Key> result;
+    // Only visit populated cells. The index stores exactly the registered
+    // contact bins; resource bounds never substitute for collision geometry.
+    for (int x=static_cast<int>(x0); x<=static_cast<int>(x1); ++x) {
+        auto entry=contacts_.lower_bound({x,static_cast<int>(z0)});
+        while (entry!=contacts_.end() && entry->first.first==x && entry->first.second<=z1) {
+            result.insert(entry->second.begin(),entry->second.end());
+            ++entry;
+        }
+    }
+    return {result.begin(),result.end()};
+}
 namespace {
 constexpr double PI = 3.14159265358979323846;
 double dot(const Point &a, const Point &b) {

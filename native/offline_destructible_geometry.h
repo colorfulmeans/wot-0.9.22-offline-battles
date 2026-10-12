@@ -61,6 +61,7 @@ public:
     std::vector<int> trees(std::int64_t chunk_id, const std::vector<Box> &sweeps,
                            double radius) const;
     std::vector<Key> missing(const Box &sweep) const;
+    std::vector<Key> contact_members(const std::array<double, 4> &bounds) const;
 };
 std::int64_t open();
 void close(std::int64_t handle);

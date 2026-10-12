@@ -8917,6 +8917,12 @@ class BattleState:
             record["base_penetration_multiplier"] = (
                 base_penetration_multiplier)
             record["last_ricochet_fingerprint"] = request_fingerprint
+            record["ricochet_first_contact"] = {
+                "target_kind": direct["target_kind"],
+                "target_id": direct["target_id"],
+                "impact": list(impact), "checked_distance": checked_distance,
+                "resolved_time_ms": resolved_time_ms,
+            }
             self._commit_projectile_destructibles(
                 player_id, destructibles)
             ricochet_event = self._projectile_wire(record)
@@ -8926,12 +8932,16 @@ class BattleState:
                 "impact": list(impact),
                 "direct": dict(message["direct"]),
             })
-            self.pending_events.append(ricochet_event)
             # The original shot bounced. A continuing shell cannot undo that
             # interruption if it later penetrates another vehicle.
             self._record_projectile_piercing(record, False)
-            self._apply_projectile_effect_observed(record, direct, 'ricochet_commit')
             self.projectile_revision += 1
+            try:
+                self._apply_projectile_effect_observed(record, direct, 'ricochet_commit')
+            finally:
+                # Publish the armour response before the continuing tracer.
+                # A failed effect cannot erase an already committed segment.
+                self.pending_events.append(ricochet_event)
             return True
 
     def _apply_projectile_effect_observed(self, record, proposal, phase):
@@ -8974,6 +8984,19 @@ class BattleState:
                 'critical_supplied': proposal['critical'] is not None,
                 'actual_hp_loss': before - after if before is not None else None,
                 'retired_target': bool(proposal.get('retired_target'))}
+            first = record.get('ricochet_first_contact')
+            if first is not None:
+                row['first_contact'] = first
+                row['same_target_recontact'] = (
+                    phase != 'ricochet_commit' and
+                    (proposal['target_kind'], proposal['target_id']) ==
+                    (first['target_kind'], first['target_id']))
+                cursor = (record.get('terminal_contact_cursor') or first
+                          if phase == 'terminal_commit' else first)
+                row['distance_after_bounce'] = max(0.0,
+                    cursor['checked_distance'] - first['checked_distance'])
+                row['time_after_bounce_ms'] = max(0,
+                    cursor['resolved_time_ms'] - first['resolved_time_ms'])
             _server_log('PROJECTILE SETTLEMENT ' + json.dumps(row, sort_keys=True))
             budget[1] += 1
         except Exception:
@@ -9539,6 +9562,10 @@ class BattleState:
             self.projectile_revision += 1
             self.pending_events.append(impact_event)
             effects = ([direct] if direct is not None else []) + splash
+            record['terminal_contact_cursor'] = {
+                'checked_distance': checked_distance,
+                'resolved_time_ms': resolved_time_ms,
+            }
             record["_mission_kill_events"] = []
             for proposal in effects:
                 try:

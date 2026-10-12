@@ -1038,6 +1038,11 @@ class BattleProjectileTests(unittest.TestCase):
         self.assertTrue(battle._advance_projectiles(battle._clock()))
         self.assertEqual(1, meta['ricochet_count'])
         self.assertTrue(battle._projectiles.contains((projectile_id, 1)))
+        self.assertNotIn(projectile_id, battle._projectile_visual_meta)
+        # Physics continues immediately; presentation waits for the canonical
+        # bounce journal, whose armour response now precedes this event.
+        canonical = dict(meta, checked_through_ms=meta['segment_start_time_ms'])
+        self.assertTrue(battle._apply_projectile_ricochet_event(canonical))
         self.assertEqual(1, battle._projectile_visual_meta[projectile_id]['ricochet_count'])
         visual = copy.deepcopy(factory.active[projectile_id])
         play_count, stop_count = len(factory.play_calls), len(factory.stop_calls)
