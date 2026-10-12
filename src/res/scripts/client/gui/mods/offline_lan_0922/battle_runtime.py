@@ -29404,8 +29404,12 @@ class BattleRuntime(object):
                     (result.get('stop_distance') is not None or traced_prop)):
                 phase = ('world_stop' if result.get('stop_distance') is not None
                          else 'world_traverse')
-                self._report_projectile_interface(dict(scene_meta,
-                    projectile_id=self._projectile_destructible_context), phase, {
+                interface_meta = getattr(self, '_projectile_meta', {}).get(
+                    self._projectile_destructible_context)
+                if interface_meta is None:
+                    interface_meta = dict(scene_meta,
+                        projectile_id=self._projectile_destructible_context)
+                self._report_projectile_interface(interface_meta, phase, {
                     'interface': 'destructibles_sensor.shot_world_distance',
                     'shell_kind': _field(_field(shot, 'shell', {}), 'kind', None),
                     'result': result, 'start': tuple(start), 'end': tuple(end)})

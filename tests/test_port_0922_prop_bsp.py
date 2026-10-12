@@ -41,6 +41,9 @@ class PropBspTests(unittest.TestCase):
         self.assertIsNone(self.query())
         args=self.model.collideSegment.call_args.args
         self.assertEqual(5.,args[0].z);self.assertEqual(25.,args[1].z)
+    def test_native_none_miss_is_an_open_gap(self):
+        self.model.collideSegment.return_value=None
+        self.assertIsNone(self.query())
     def test_triangle_distance_owns_contact_and_model_is_cached(self):
         self.model.collideSegment.return_value=[(7.,Vector(),1.,73)]
         self.assertEqual(7.,self.query());self.assertEqual(7.,self.query())

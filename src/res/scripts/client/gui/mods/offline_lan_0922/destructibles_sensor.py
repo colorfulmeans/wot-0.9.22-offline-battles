@@ -2873,7 +2873,6 @@ def _stream_baked_shot_instance_1513(spaceID, identity):
 	return instance
 
 
-@observed('destructible.shot_catalog')
 def _catalog_precise_shot_distance_1513(spaceID, identity, instance, world_box, start, end):
 	"""OBBs only nominate candidates; stock BSP triangles own shell contact."""
 	import BigWorld
@@ -2898,7 +2897,7 @@ def _catalog_precise_shot_distance_1513(spaceID, identity, instance, world_box, 
 	if local_length <= 1.0e-9:
 		return None
 	distances = []
-	for row in model.collideSegment(local_start, local_end):
+	for row in model.collideSegment(local_start, local_end) or ():
 		if len(row) != 4:
 			raise RuntimeError('#1513 prop BSP hit must contain four fields')
 		distance = float(row[0])
@@ -2913,6 +2912,7 @@ def _catalog_precise_shot_distance_1513(spaceID, identity, instance, world_box, 
 	return min(distances) if distances else None
 
 
+@observed('destructible.shot_catalog')
 def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None, diagnostic=None):
 	"""Resolve the nearest live-validated catalog OBB along a shell ray."""
 	segment = end - start
