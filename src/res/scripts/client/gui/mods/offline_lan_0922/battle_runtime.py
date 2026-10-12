@@ -15647,8 +15647,8 @@ class BattleRuntime(object):
                     nearest_fraction = fraction
                     nearest_query = (query_start, query_end)
                     nearest_trajectory_query = {
-                        'start': tuple(projectile_start),
-                        'end': tuple(projectile_end),
+                        'start': tuple(lerp3(start, end, segment_start_fraction)),
+                        'end': tuple(lerp3(start, end, segment_end_fraction)),
                         'absolute_start': float(absolute_start) +
                         (float(absolute_end) - float(absolute_start)) *
                         segment_start_fraction,
@@ -29397,9 +29397,15 @@ class BattleRuntime(object):
                     '#1513 destructible shot result must be a dictionary')
             scene_meta = ((projectile_state.get('payload') or {})
                           if isinstance(projectile_state, dict) else {})
-            if (result.get('stop_distance') is not None and
-                    scene_meta.get('shooter_kind') == 'player'):
-                self._report_projectile_interface(scene_meta, 'world_stop', {
+            traced_prop = any(row.get('stage') in (
+                'native.projectile.destroy', 'native.projectile.prop_bsp')
+                for row in result.get('collision_evidence', ()))
+            if (scene_meta.get('shooter_kind') == 'player' and
+                    (result.get('stop_distance') is not None or traced_prop)):
+                phase = ('world_stop' if result.get('stop_distance') is not None
+                         else 'world_traverse')
+                self._report_projectile_interface(dict(scene_meta,
+                    projectile_id=self._projectile_destructible_context), phase, {
                     'interface': 'destructibles_sensor.shot_world_distance',
                     'shell_kind': _field(_field(shot, 'shell', {}), 'kind', None),
                     'result': result, 'start': tuple(start), 'end': tuple(end)})

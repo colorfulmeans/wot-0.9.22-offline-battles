@@ -872,6 +872,9 @@ class LocalDriver(object):
 				state['steering_reason'] = (
 					'route' if abs(_angle_delta(candidate, desired_yaw)) <= 0.05
 					else 'obstacle')
+				if state['steering_reason'] == 'obstacle':
+					state['escape_side'] = 1.0 if _angle_delta(candidate, desired_yaw) > 0.0 else -1.0
+					state['escape_side_until'] = state['clock'] + 2.5
 				return candidate
 		return None
 

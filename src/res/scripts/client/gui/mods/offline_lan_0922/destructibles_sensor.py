@@ -1596,6 +1596,7 @@ def _diagnostic_static_recast_1513(cleared, now=None):
 
 
 def _clear_runtime_registry(preserve_spatial_batch=False):
+	globals().pop('g_offh_shot_collision_models', None)
 	_native_geometry.reset()
 	names = ('g_offh_destr_seen', 'g_offh_destr_nodesc',
 			'g_offh_tree_state', 'g_offh_destr_ordered',
@@ -2873,7 +2874,46 @@ def _stream_baked_shot_instance_1513(spaceID, identity):
 
 
 @observed('destructible.shot_catalog')
-def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None):
+def _catalog_precise_shot_distance_1513(spaceID, identity, instance, world_box, start, end):
+	"""OBBs only nominate candidates; stock BSP triangles own shell contact."""
+	import BigWorld
+	import Math
+	filename = _instance_descriptor_filename_1513(instance)
+	cache = globals().setdefault('g_offh_shot_collision_models', {})
+	model = cache.get(filename)
+	if model is None:
+		model = BigWorld.WGBspCollisionModel()
+		if not model.setModelName(filename):
+			raise RuntimeError('#1513 prop collision model unavailable: %s' % filename)
+		if len(cache) >= 64:
+			cache.pop(next(iter(cache)))
+		cache[filename] = model
+	matrix = Math.Matrix(BigWorld.wg_getDestructibleMatrix(spaceID, *identity))
+	chunk = BigWorld.wg_getChunkMatrix(spaceID, identity[0])
+	matrix.translation = matrix.translation + chunk.translation
+	matrix.invert()
+	local_start, local_end = matrix.applyPoint(start), matrix.applyPoint(end)
+	local_length = (local_end - local_start).length
+	world_length = (end - start).length
+	if local_length <= 1.0e-9:
+		return None
+	distances = []
+	for row in model.collideSegment(local_start, local_end):
+		if len(row) != 4:
+			raise RuntimeError('#1513 prop BSP hit must contain four fields')
+		distance = float(row[0])
+		if not (0.0 <= distance <= local_length + 1.0e-6):
+			continue
+		fraction = distance / local_length
+		point = start + (end - start).scale(fraction)
+		# A building model contains multiple modules. Keep the exact compiled
+		# module envelope as an owner selector, never as the impact surface.
+		if _point_in_world_box(point, world_box):
+			distances.append(fraction * world_length)
+	return min(distances) if distances else None
+
+
+def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None, diagnostic=None):
 	"""Resolve the nearest live-validated catalog OBB along a shell ray."""
 	segment = end - start
 	segment_length = segment.length
@@ -2946,7 +2986,16 @@ def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None):
 			if interval is None:
 				continue
 			entry, exit = interval
-			distance = entry * segment_length
+			if pending:
+				raise RuntimeError('#1513 prop shot identity is pending: %s' % (identity,))
+			precise_args = (spaceID, identity, instance, world_box, start, end)
+			distance = (_catalog_precise_shot_distance_1513(*precise_args)
+				if diagnostic is None else diagnostic.call(
+					'native.projectile.prop_bsp', _catalog_precise_shot_distance_1513,
+					*precise_args))
+			if distance is None:
+				continue
+			entry = distance / segment_length
 			if (maximum_distance is not None and
 					distance > float(maximum_distance) + 1.0e-6):
 				continue
@@ -8463,6 +8512,12 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 					elif stage == 'native.projectile.material':
 						row.update(collided=value[0], material=value[3],
 							filename=value[4], item=value[5], chunk=value[6])
+					elif stage == 'native.projectile.prop_bsp':
+						row.update(interface='WGBspCollisionModel.collideSegment',
+							identity=list(args[1]),
+							filename=_instance_descriptor_filename_1513(args[2]),
+							start=point(args[4]), end=point(args[5]),
+							distance=value, gap=value is None)
 					elif stage == 'native.projectile.destroy':
 						row.update(accepted=bool(value), material=args[1][3],
 							filename=args[1][4], item=args[1][5], chunk=args[1][6])
@@ -8517,7 +8572,7 @@ def _shot_world_distance_impl_1513(bigworld, spaceID, start_pos, end_pos, dir_ve
 			# A catalog-only prop may be closer than this native tree.  Resolve
 			# it before publishing tree destruction so unreachable trees stay put.
 			catalog_hit = _catalog_shot_intersection(
-				spaceID, start_pos, end_pos, world_dist)
+				spaceID, start_pos, end_pos, world_dist, diagnostic=diagnostic)
 			if catalog_hit is not None:
 				break
 		destruction_accepted = (False if tree_identity is not None else
@@ -8620,11 +8675,9 @@ def _shot_world_distance_impl_1513(bigworld, spaceID, start_pos, end_pos, dir_ve
 	# destroyed by this fallback.
 	if catalog_hit is None and world_collision is not None:
 		point_candidate = None
-		if decoded is not None:
+		if decoded is not None and (decoded[0] - world_collision[0]).length <= 1.0e-4:
 			point_candidate = _catalog_candidate_for_native_identity_1513(
 				decoded[2], decoded[3], decoded[4], decoded[0])
-		if point_candidate is None:
-			point_candidate = _catalog_candidate_at_contact(world_collision[0])
 		if (point_candidate is not None and
 				_get_destr_authority().is_destroyed(
 					point_candidate[0], point_candidate[1],
@@ -8650,7 +8703,7 @@ def _shot_world_distance_impl_1513(bigworld, spaceID, start_pos, end_pos, dir_ve
 	if catalog_hit is None:
 		catalog_hit = _catalog_shot_intersection(
 			spaceID, start_pos, end_pos,
-			world_dist if world_collision is not None else None)
+			world_dist if world_collision is not None else None, diagnostic=diagnostic)
 	if catalog_hit is None:
 		if world_collision is not None:
 			_diagnostic_contact_1513(

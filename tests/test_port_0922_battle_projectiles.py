@@ -3415,6 +3415,18 @@ class BattleProjectileTests(unittest.TestCase):
             return_value=((types.SimpleNamespace(dist=5.0),), ()))
         return battle, target
 
+    def test_selected_sweep_segment_keeps_its_own_trajectory_endpoints(self):
+        battle, unused_target = self._moving_target_battle()
+        state = battle._projectiles.get('player:7:1')
+        battle._projectile_pose_sweep_fractions = mock.Mock(return_value=(0.0, 0.5, 1.0))
+        battle._projectile_vehicle_collisions = mock.Mock(side_effect=[
+            ((types.SimpleNamespace(dist=1.0),), ()), ((), ())])
+        battle._projectile_chord(state, (0.0,1.0,0.0), (10.0,1.0,0.0), 0.0, 0.1)
+        mapping = battle._projectile_terminal_data['player:7:1']['trajectory_query']
+        self.assertEqual((0.0,1.0,0.0), mapping['start'])
+        self.assertEqual((5.0,1.0,0.0), mapping['end'])
+        self.assertEqual(0.05, mapping['absolute_end'])
+
     def test_player_shot_collides_the_target_timeline_it_displayed(self):
         # The visible client already recorded the 90 ms delayed Bot pose.
         battle, unused_target = self._moving_target_battle(

@@ -207,6 +207,15 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
     def setUp(self):
         destructibles_sensor.set_diagnostics(False)
         destructibles_compat.reset_safe_descriptor_cache()
+        # These catalog-owner fixtures model solid box-shaped BSP surfaces.
+        # Separate native BSP contract tests below exercise holes and failures.
+        def solid_box(space, identity, instance, box, start, end):
+            interval = destructibles_sensor._segment_world_box_interval(start, end, box, 0.0)
+            return None if interval is None else interval[0] * (end-start).length
+        patcher = mock.patch.object(destructibles_sensor,
+            '_catalog_precise_shot_distance_1513', side_effect=solid_box)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         destructibles_sensor.set_event_sink(None)
@@ -5481,7 +5490,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                         1, _Vector(), _Vector(0.0, 0.0, 20.0))
                 self.assertEqual((22, 0), hit['candidate'][:2])
                 self.assertAlmostEqual(4.0, hit['distance'])
-                self.assertEqual(1, intersections.call_count)
+                self.assertEqual(2, intersections.call_count)
 
     def test_shot_query_keeps_live_modules_at_bin_edges_and_native_cap(self):
         destructibles_sensor.xrange = range
@@ -5618,12 +5627,11 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 mock.patch.object(
                     destructibles_sensor, '_get_destr_authority',
                     return_value=authority):
-            result = destructibles_sensor.shot_world_distance(
+            with self.assertRaisesRegex(RuntimeError, "shot identity is pending"):
+                destructibles_sensor.shot_world_distance(
                 bigworld, 1, _Vector(), _Vector(0, 0, 20),
                 _Vector(0, 0, 1), shot)
 
-        self.assertTrue(result['stopped_by_destructible'])
-        self.assertAlmostEqual(4.0, result['stop_distance'])
         self.assertNotIn((22, 0), getattr(
             destructibles_sensor, 'g_offh_destr_instances', {}))
 
