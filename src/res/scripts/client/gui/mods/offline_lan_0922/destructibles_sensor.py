@@ -4758,6 +4758,65 @@ def _original_side_face_1513(normal, box):
 		_vector_dot(up, face) ** 2 <= 1.0e-10 * length_squared)
 
 
+_MOTION_SKIN_LAWS_1513 = (_point_in_world_box, _segment_world_box_interval,
+    _projected_box_interval_1513, _original_side_face_1513)
+
+
+class _MotionSkinWitnesses1513(object):
+    """Numeric witnesses owned by exactly one synchronous contact query."""
+    def __init__(self, point, start, end, normal):
+        self.point, self.start, self.end, self.normal = point, start, end, normal
+        self.rows = {}
+        self.enabled = all(left is right for left, right in zip(
+            (_point_in_world_box, _segment_world_box_interval,
+             _projected_box_interval_1513, _original_side_face_1513),
+            _MOTION_SKIN_LAWS_1513))
+
+    def prime(self, boxes):
+        if not self.enabled or type(boxes) not in (tuple, list):
+            return
+        missing = []
+        for box in boxes:
+            if id(box) in self.rows:
+                continue
+            # Cache only immutable numeric geometry. Mutable/custom protocols
+            # retain their evaluation order on the reference path.
+            if (type(box) is not tuple or len(box) < 2 or
+                    type(box[0]) is not tuple or type(box[1]) is not tuple or
+                    any(type(axis) is not tuple for axis in box[1]) or
+                    any(type(value) not in _INTEGER_TYPES + (float,)
+                        for vector in (box[0],) + box[1] for value in vector)):
+                return
+            missing.append(box)
+        if not missing:
+            return
+        rows = _native_geometry.motion_witnesses(_native_sensor,
+            tuple(missing), self.point, self.start, self.end, self.normal)
+        if rows is not None:
+            for box, row in zip(missing, rows):
+                self.rows[id(box)] = (box, row)
+
+    def inside(self, box):
+        row = self.rows.get(id(box))
+        return bool(row[1][0]) if row is not None else _point_in_world_box(self.point, box)
+
+    def interval(self, box):
+        row = self.rows.get(id(box))
+        return row[1][1] if row is not None else _segment_world_box_interval(self.start, self.end, box)
+
+    def footprint(self, box):
+        row = self.rows.get(id(box))
+        return bool(row[1][3]) if row is not None else _projected_box_interval_1513(self.point, self.point, box) is not None
+
+    def projected(self, box):
+        row = self.rows.get(id(box))
+        return row[1][2] if row is not None else _projected_box_interval_1513(self.start, self.end, box)
+
+    def side(self, box):
+        row = self.rows.get(id(box))
+        return bool(row[1][4]) if row is not None else _original_side_face_1513(self.normal, box)
+
+
 def _owned_component_skin_1513(point, start, end, surfaces):
 	"""Bound a stale original material to its proved, broken live component.
 
@@ -4849,6 +4908,7 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		return None
 	members = globals().get('g_offh_destr_contact_bins', {}).get(
 		_destructible_bin_key(point.x, point.z), ())
+	witness = _MotionSkinWitnesses1513(point, start, end, normal)
 	owners = []
 	for identity in members:
 		instance = instances.get(identity)
@@ -4857,10 +4917,13 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 				_destructible_isolated_1513(*identity)):
 			continue
 		envelope = _instance_motion_envelope_1513(instance)
-		if envelope is None or not _point_in_world_box(point, envelope):
+		if envelope is not None:
+			witness.prime((envelope,))
+		if envelope is None or not witness.inside(envelope):
 			continue
-		interval = _segment_world_box_interval(start, end, envelope)
+		interval = witness.interval(envelope)
 		if interval is not None:
+			witness.prime(instance['boxes'])
 			owners.append((identity, instance, interval))
 	for surface in remapped:
 		wire = (surface[3], surface[2])
@@ -4875,10 +4938,12 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		registered = instances.get(wire) or catalog.get('baked_instances', {}).get(wire)
 		if registered is not None:
 			envelope = _instance_motion_envelope_1513(registered)
-			if envelope is not None and _point_in_world_box(point, envelope):
+			if envelope is not None:
+				witness.prime((envelope,))
+			if envelope is not None and witness.inside(envelope):
 				continue
 		if any(identity[0] == wire[0] and
-				_point_in_world_box(point, box)
+				witness.inside(box)
 				for identity, instance, unused_interval in owners
 				for box in instance['boxes']):
 			# The exact 3-D box already bounds this original face. Westfield's
@@ -4894,9 +4959,9 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 	# actual material belongs to a tilted component just outside its Y bounds.
 	needs_projection = not all(any(
 		(instance['kind'] != 'structure' or box[2] == surface[0]) and
-		(_point_in_world_box(point, box) or
-		 (_original_side_face_1513(normal, box) and
-		  _projected_box_interval_1513(point, point, box) is not None))
+		(witness.inside(box) or
+		 (witness.side(box) and
+		  witness.footprint(box)))
 		for unused_identity, instance, unused_interval in owners
 		for box in instance['boxes']) for surface in aliases)
 	if (needs_projection and normal is not None and
@@ -4920,14 +4985,16 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 			if instance is None:
 				continue
 			envelope = _instance_motion_envelope_1513(instance)
+			if envelope is not None:
+				witness.prime((envelope,))
 			if (envelope is None or
-					_projected_box_interval_1513(point, point, envelope) is None):
+					not witness.footprint(envelope)):
 				continue
 			if identity not in instances or _destructible_isolated_1513(*identity):
 				return None
-			has_side_face = has_side_face or _original_side_face_1513(
-				normal, envelope)
-			interval = _projected_box_interval_1513(start, end, envelope)
+			witness.prime(instance['boxes'])
+			has_side_face = has_side_face or witness.side(envelope)
+			interval = witness.projected(envelope)
 			if interval is not None:
 				projected_owners.append((identity, instance, interval))
 		if has_side_face:
@@ -4946,9 +5013,9 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		for identity, instance, interval in owners:
 			material = surface[0] if instance['kind'] == 'structure' else None
 			if any((material is None or box[2] == material) and
-					(_point_in_world_box(point, box) or
-					 ((projected or _original_side_face_1513(normal, box)) and
-					  _projected_box_interval_1513(point, point, box) is not None))
+					(witness.inside(box) or
+					 ((projected or witness.side(box)) and
+					  witness.footprint(box)))
 					for box in instance['boxes']):
 				component_owners.append((identity, instance, interval))
 		# Original BSP faces can extend beyond damage-module bounds. In that
@@ -4989,8 +5056,8 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 			other = baked.get(other_identity)
 		if other is None:
 			continue
-		clip = (_projected_box_interval_1513 if projected else
-			_segment_world_box_interval)
+		witness.prime(other['boxes'])
+		clip = witness.projected if projected else witness.interval
 		for material in (set(surface[0] for surface in excluded)
 				if other['kind'] == 'structure' else (None,)):
 			key = other_identity + (material,)
@@ -5001,7 +5068,7 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 			for other_box in other['boxes']:
 				if material is not None and other_box[2] != material:
 					continue
-				other_interval = clip(start, end, other_box)
+				other_interval = clip(other_box)
 				if (other_interval is not None and
 						other_interval[1] * (end - start).length >=
 						(point - start).length):

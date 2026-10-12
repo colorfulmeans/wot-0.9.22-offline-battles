@@ -289,6 +289,24 @@ def box_probe(sensor, boxes, point_value=None, start=None, end=None,
     return result
 
 
+def motion_witnesses(sensor, boxes, point, start, end, normal=None):
+    if not _box_laws_1513(sensor):
+        return None
+    rows = _numeric_box_rows(boxes)
+    if rows is None:
+        return None
+    vectors = tuple(_native_box_point(value) for value in (point, start, end))
+    face = None if normal is None else _native_box_point(normal)
+    if any(value is None for value in vectors) or (normal is not None and face is None):
+        return None
+    from . import native_math
+    result = native_math.call('destr_box_geometry', 2,
+        (rows,) + vectors + (sensor._CATALOG_POINT_EPSILON, face))
+    if result is not None:
+        sensor.combat_count('destructible_motion_witness_native', len(rows))
+    return result
+
+
 def box_envelope(sensor, boxes):
     if not _box_laws_1513(sensor):
         return None

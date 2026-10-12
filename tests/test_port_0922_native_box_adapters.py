@@ -84,3 +84,58 @@ class NativeBoxAdapterTests(unittest.TestCase):
             self.assertFalse(sensor._point_in_world_box(Vector(100.), box))
             self.assertIsNone(sensor._segment_world_box_interval(Vector(100.), Vector(200.), box))
             self.assertIsNone(sensor._projected_box_interval_1513(Vector(100.), Vector(200.), box))
+
+
+class MotionWitnessTests(unittest.TestCase):
+    box = ((0., 0., 0.), ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.)), 73)
+
+    def test_complete_row_is_reused_only_within_one_contact(self):
+        row = (0, None, (.2, .8), 1, 1)
+        with mock.patch.object(native, 'motion_witnesses', return_value=(row,)) as call:
+            query = sensor._MotionSkinWitnesses1513(Vector(0.), Vector(-2.), Vector(2.), Vector(1.))
+            query.prime((self.box,))
+            query.prime((self.box,))
+            self.assertFalse(query.inside(self.box))
+            self.assertIsNone(query.interval(self.box))
+            self.assertEqual((.2, .8), query.projected(self.box))
+            self.assertTrue(query.footprint(self.box))
+            self.assertTrue(query.side(self.box))
+            call.assert_called_once()
+            fresh = sensor._MotionSkinWitnesses1513(Vector(3.), Vector(-2.), Vector(2.), None)
+            fresh.prime((self.box,))
+            self.assertEqual(2, call.call_count)
+
+    def test_mutable_or_custom_geometry_keeps_reference_evaluation(self):
+        class Number:
+            def __float__(self):
+                raise AssertionError('coercion')
+        mutable = ([0., 0., 0.], self.box[1], 73)
+        custom = ((Number(), 0., 0.), self.box[1], 73)
+        with mock.patch.object(native, 'motion_witnesses') as call:
+            query = sensor._MotionSkinWitnesses1513(Vector(0.), Vector(-2.), Vector(2.), None)
+            query.prime((mutable,))
+            query.prime((custom,))
+            self.assertFalse(query.rows)
+            call.assert_not_called()
+
+    def test_changed_helper_retains_its_callbacks_and_no_native_batch(self):
+        with mock.patch.object(sensor, '_point_in_world_box', return_value=True) as point, \
+                mock.patch.object(native, 'motion_witnesses') as call:
+            query = sensor._MotionSkinWitnesses1513(Vector(0.), Vector(-2.), Vector(2.), None)
+            query.prime((self.box,))
+            self.assertTrue(query.inside(self.box))
+            point.assert_called_once()
+            call.assert_not_called()
+
+    def test_native_rejection_does_not_turn_into_negative_witness(self):
+        query = sensor._MotionSkinWitnesses1513(Vector(0.), Vector(-2.), Vector(2.), None)
+        with mock.patch.object(native, 'motion_witnesses', return_value=None):
+            query.prime((self.box,))
+        self.assertTrue(query.inside(self.box))
+        self.assertIsNotNone(query.interval(self.box))
+
+    def test_motion_witness_rejection_logs_opcode_two(self):
+        with mock.patch.dict(diagnostics.__dict__, {'_counts': {}, '_reported': set(), '_reports_by_method': {}}), \
+                mock.patch.object(diagnostics, '_write_record') as write:
+            diagnostics.record('destr_box_geometry', (2, ((), None, None, None, .05, None)))
+            self.assertEqual({'family': 'destr_box_geometry', 'opcode': 2}, write.call_args.args[0]['native_profile'])

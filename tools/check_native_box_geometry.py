@@ -17,6 +17,7 @@ for name in ('gui', 'gui.mods', 'gui.mods.offline_lan_0922'):
 from gui.mods.offline_lan_0922 import destructibles_sensor as ref
 ref._native_geometry.box_probe = lambda *args, **kwargs: None
 ref._native_geometry.box_envelope = lambda *args, **kwargs: None
+ref._native_geometry.motion_witnesses = lambda *args, **kwargs: None
 b = imp.load_dynamic('offline_math_batch_native', sys.argv[1])
 
 
@@ -76,6 +77,15 @@ for box, point, start, end in cases:
         close(b.destr_box_geometry(0, ((box,), None, start, end, padding, 2))[0][1],
               ref._segment_world_box_interval(Vector(start), Vector(end), box, padding))
 
+for box, point, start, end in cases:
+    for normal in (None, (1., 0., 0.), (.1, 1.e-6, .3), (0., 0., 0.)):
+        expected = (ref._point_in_world_box(Vector(point), box),
+                    ref._segment_world_box_interval(Vector(start), Vector(end), box),
+                    ref._projected_box_interval_1513(Vector(start), Vector(end), box),
+                    ref._projected_box_interval_1513(Vector(point), Vector(point), box) is not None,
+                    ref._original_side_face_1513(None if normal is None else Vector(normal), box))
+        close(b.destr_box_geometry(2, ((box,), point, start, end, epsilon, normal))[0], expected)
+
 for index in range(0, len(cases), 3):
     boxes = tuple(row[0] for row in cases[index:index+3])
     expected = ref._instance_motion_envelope_1513({'boxes': boxes})
@@ -100,3 +110,22 @@ for unused in range(1000):
 native_ms = (time.clock() - stamp) * 1000.
 print('Box conformance passed: %d probes, 502 envelopes, degeneracy and rejection' % (len(cases) * 10))
 print('16-box batch only: reference %.3f ms, native %.3f ms; excludes engine/adapter work' % (reference_ms, native_ms))
+
+print('Motion witness conformance passed: %d complete rows' % (len(cases)*4))
+
+assert b.destr_box_geometry(2, ((unit,), (0.,)*3, (0.,)*3, (1.,)*3, epsilon, ('wrong', 0., 0.))) is None
+normal = (1., 0., 0.)
+stamp = time.clock()
+for unused in range(1000):
+    for box in boxes:
+        ref._point_in_world_box(Vector(point), box)
+        ref._segment_world_box_interval(Vector(start), Vector(end), box)
+        ref._projected_box_interval_1513(Vector(start), Vector(end), box)
+        ref._projected_box_interval_1513(Vector(point), Vector(point), box)
+        ref._original_side_face_1513(Vector(normal), box)
+witness_reference_ms = (time.clock() - stamp) * 1000.
+stamp = time.clock()
+for unused in range(1000):
+    b.destr_box_geometry(2, (boxes, point, start, end, epsilon, normal))
+witness_native_ms = (time.clock() - stamp) * 1000.
+print('Complete 16-box witness batch: reference %.3f ms, native %.3f ms; excludes engine/adapter work' % (witness_reference_ms, witness_native_ms))

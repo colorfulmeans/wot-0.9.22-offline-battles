@@ -49,6 +49,10 @@ struct BoxProbe { bool inside=false; Interval segment, projected; };
 std::vector<BoxProbe> probe_boxes(const std::vector<Box> &boxes,
     const Point &point, const Point &start, const Point &end,
     double padding, unsigned flags);
+struct MotionWitness { BoxProbe probe; bool footprint=false, side=false; };
+std::vector<MotionWitness> motion_witnesses(const std::vector<Box> &boxes,
+    const Point &point, const Point &start, const Point &end,
+    double padding, const Point *normal);
 bool motion_envelope(const std::vector<Box> &boxes, Box &result);
 class Store {
     std::map<Key, Instance> instances_;

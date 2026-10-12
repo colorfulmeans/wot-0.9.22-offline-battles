@@ -257,6 +257,23 @@ std::vector<BoxProbe> probe_boxes(const std::vector<Box> &boxes,
     }
     return result;
 }
+std::vector<MotionWitness> motion_witnesses(const std::vector<Box> &boxes,
+    const Point &point, const Point &start, const Point &end,
+    double padding, const Point *normal) {
+    const auto probes=probe_boxes(boxes,point,start,end,padding,7);
+    const auto footprints=probe_boxes(boxes,point,point,point,0.,4);
+    std::vector<MotionWitness> result;result.reserve(boxes.size());
+    for (std::size_t i=0;i<boxes.size();++i) {
+        MotionWitness row;row.probe=probes[i];row.footprint=footprints[i].projected.valid;
+        if (normal) {
+            const auto &up=boxes[i].axes[1];
+            const double length=dot(up,up)*dot(*normal,*normal);
+            row.side=length>1.e-12 && std::pow(dot(up,*normal),2.)<=1.e-10*length;
+        }
+        result.push_back(row);
+    }
+    return result;
+}
 bool motion_envelope(const std::vector<Box> &boxes, Box &result) {
     if (boxes.empty()) return false;
     const auto &basis=boxes.front();
