@@ -2884,16 +2884,37 @@ def _catalog_precise_shot_distance_1513(spaceID, identity, instance, world_box,
 	"""
 	import BigWorld
 	if scene_cache is None or 'payload' not in scene_cache:
-		payload = BigWorld.wg_getMatInfoNearPoint(
-			spaceID, start, end, start, lambda *unused: False)
+		skipped = set()
+		# Exact EffectMaterialCalculation.pyc isDestructibleBroken ABI:
+		# (chunkID, itemIndex, matKind, itemFilename), True excludes the skin.
+		# This is NOT wg_collideSegment's material/flags/item/chunk callback.
+		def skip_surface(chunk, item, material, filename):
+			if 87 <= material <= 100:
+				return False  # The replacement is new physical geometry.
+			return (chunk, item, None) in skipped or (chunk, item, material) in skipped
+		for unused in range(65):
+			payload = BigWorld.wg_getMatInfoNearPoint(
+				spaceID, start, end, start, skip_surface)
+			decoded = _decode_mat_info_1513(payload)
+			tree = _validated_tree_shot_identity_1513(spaceID, decoded)
+			broken = (_already_broken_shot_surface_1513(decoded)
+				if tree is None else tree + (None,))
+			if broken is None:
+				break
+			if broken in skipped or len(skipped) >= 64:
+				raise RuntimeError('#1513 material shot filter did not advance')
+			skipped.add(broken)
 		if scene_cache is not None:
 			scene_cache['payload'] = payload
+			scene_cache['skipped_surfaces'] = sorted(skipped)
 	else:
 		payload = scene_cache['payload']
 	decoded = _decode_mat_info_1513(payload)
 	if evidence is not None:
 		evidence.update(interface='BigWorld.wg_getMatInfoNearPoint',
 			reference=[float(start[i]) for i in (0, 1, 2)])
+		evidence['skipped_surfaces'] = (scene_cache.get('skipped_surfaces', ())
+			if scene_cache is not None else list(skipped))
 		if decoded is not None:
 			evidence.update(native_identity=list(decoded[2:4]),
 				native_material=decoded[4], native_filename=decoded[5],

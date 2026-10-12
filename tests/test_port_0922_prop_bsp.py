@@ -28,6 +28,9 @@ class PropSceneTests(unittest.TestCase):
         patcher.start(); self.addCleanup(patcher.stop)
         bounds = mock.patch.object(sensor, '_point_in_world_box', return_value=True)
         bounds.start(); self.addCleanup(bounds.stop)
+        for name in ('_validated_tree_shot_identity_1513', '_already_broken_shot_surface_1513'):
+            patcher = mock.patch.object(sensor, name, return_value=None)
+            patcher.start(); self.addCleanup(patcher.stop)
         self.instance = {'filename': 'prop.model', 'kind': 'fragile'}
         self.evidence = {}
 
@@ -50,7 +53,7 @@ class PropSceneTests(unittest.TestCase):
         self.assertEqual(7., self.query())
         args = self.bw.wg_getMatInfoNearPoint.call_args.args
         self.assertIs(args[1], args[3])
-        self.assertFalse(args[4](73, 0, 7, 22))
+        self.assertFalse(args[4](22, 7, 73, 'prop.model'))
         self.assertTrue(self.evidence['contact_proved'])
         self.assertEqual([22, 7], self.evidence['native_identity'])
 
@@ -106,4 +109,31 @@ class PropSceneTests(unittest.TestCase):
             self.assertEqual(7., result['distance'])
             self.assertTrue(result['ambiguous'])
             self.assertIsNone(result['candidate'])
+
+    def test_broken_skin_is_skipped_without_hiding_the_backing_contact(self):
+        self.hit()
+        final = self.bw.wg_getMatInfoNearPoint.return_value
+        stale = (True, Vector(0., 0., 24.), Vector(0., 1., 0.), 73, 'broken.model', 8, 22)
+        self.bw.wg_getMatInfoNearPoint.side_effect = (stale, final)
+        with mock.patch.object(sensor, '_already_broken_shot_surface_1513',
+                side_effect=((22, 8, None), None)):
+            self.assertEqual(7., self.query())
+        filters = [row.args[4] for row in self.bw.wg_getMatInfoNearPoint.call_args_list]
+        self.assertTrue(filters[1](22, 8, 73, 'broken.model'))
+        self.assertFalse(filters[1](22, 7, 73, 'prop.model'))
+        self.assertFalse(filters[1](500, 400, 105, ''))
+        self.assertFalse(filters[1](22, 8, 87, 'replacement.model'))
+        self.assertEqual([(22, 8, None)], self.evidence['skipped_surfaces'])
+
+    def test_tree_query_skip_does_not_destroy_tree_or_charge_penetration(self):
+        self.hit()
+        final = self.bw.wg_getMatInfoNearPoint.return_value
+        tree = (True, Vector(0., 0., 24.), Vector(0., 1., 0.), 73, 'tree', 8, 22)
+        self.bw.wg_getMatInfoNearPoint.side_effect = (tree, final)
+        with mock.patch.object(sensor, '_validated_tree_shot_identity_1513',
+                side_effect=((22, 8), None)), \
+                mock.patch.object(sensor, '_try_destroy_destructible',
+                    side_effect=AssertionError('shell must not fell tree')):
+            self.assertEqual(7., self.query())
+        self.assertEqual([(22, 8, None)], self.evidence['skipped_surfaces'])
 
