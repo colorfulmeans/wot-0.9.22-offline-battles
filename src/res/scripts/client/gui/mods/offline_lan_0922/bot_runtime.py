@@ -6880,6 +6880,8 @@ class BotRuntime(object):
                 turret_yaw=state.get('turret_yaw'),
                 aim_yaw=state.get('aim_yaw'),
                 aim_intent=state.get('_diagnostic_aim_intent'),
+                traverse=state.get('_diagnostic_traverse'),
+                critical=_canonical_critical(state.get('critical')),
                 yaw_limits=self._gun_yaw_limits.get(state['id']),
                 hull_aiming=state.get('hull_aiming'),
                 rear_hull_aim=state.get('_rear_hull_aim'),
@@ -11192,12 +11194,25 @@ class BotRuntime(object):
                 _critical_factor(state, descriptor, 'turret_speed'),
                 max(0.0, modifiers.get('gun_rotation_factor', 1.0)),
                 (static_pitch, static_pitch) if locked else None)
+            previous_yaw = state.get('turret_yaw', 0.0)
             weapon_tick['edges'] = weapons.after_motion(
                 state['id'], step, abs(state['speed']),
                 abs(self._turn_speeds.get(state['id'], 0.0)), 0.0,
                 _critical_factor(state, descriptor, 'dispersion'),
                 _critical_factor(state, descriptor, 'aim_time'),
                 inputs, state)
+            state['_diagnostic_traverse'] = {
+                'interface': 'Store.after_motion/advance_aim',
+                'time_us': self._sample_time_us,
+                'input_columns': ('raw_yaw', 'raw_pitch', 'dt', 'target',
+                    'limited_yaw', 'valid_pitch', 'minimum_yaw', 'maximum_yaw',
+                    'crew_factor', 'turret_factor', 'gun_factor',
+                    'override_pitch', 'minimum_pitch', 'maximum_pitch'),
+                'input': inputs, 'previous_yaw': previous_yaw,
+                'published_yaw': state.get('turret_yaw'),
+                'native_aim': tuple(weapons.actors[int(state['id'])].aim),
+                'base_turret_speed': _rotation_speed(
+                    _value(descriptor, 'turret', {}) or {}, 0.5)}
             state['gun_aligned'] = bool(
                 not planning_pending and state.get('gun_aligned') and
                 abs(_angle_delta(raw_relative, state['turret_yaw'])) <= 1.0e-6 and

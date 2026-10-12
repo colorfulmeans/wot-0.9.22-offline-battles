@@ -1847,31 +1847,37 @@ def _collision_matrix_evidence(matrix, math_module):
 def _collision_interface_evidence(tester, component, component_index,
         component_start, component_end, world_start, world_end,
         root_to_world, world_to_root, root_to_component, component_to_root, math_module):
-    try:
-        bbox = _component_value(tester, 'bbox')
-        # #1513 ModelHitTester.localHitTest(start, stop, value=0) directly
-        # returns __getBspModel(value).collideSegment(start, stop).
-        # getBspModel() only reads the default model; never load or re-query it.
-        getter = getattr(tester, 'getBspModel', None)
-        bsp = getter() if callable(getter) else None
-        return {'interface': 'hitTester.localHitTest', 'tester_type': type(tester).__name__,
-                'native_interface': 'BSPModel.collideSegment' if bsp is not None else None,
-                'bsp_model_name': _component_value(tester, 'bspModelName'),
-                'bsp_instance_identity': id(bsp) if bsp is not None else None,
-                'bsp_type': type(bsp).__name__ if bsp is not None else None,
-                'model_variant': 0,
-                'component': _component_value(component, 'itemTypeName'),
-                'component_index': component_index,
-                'world_segment': [_point_xyz(world_start), _point_xyz(world_end)],
-                'local_segment': [_point_xyz(component_start), _point_xyz(component_end)],
-                'bbox': [_point_xyz(point) for point in bbox] if bbox is not None else None,
-                'root_to_world': _collision_matrix_evidence(root_to_world, math_module),
-                'world_to_root': _collision_matrix_evidence(world_to_root, math_module),
-                'root_to_component': _collision_matrix_evidence(root_to_component, math_module),
-                'component_to_root': _collision_matrix_evidence(component_to_root, math_module),
-                'raw_hits': []}
-    except Exception as error:
-        return {'interface': 'hitTester.localHitTest', 'capture_error': type(error).__name__}
+    # Optional metadata must never discard the actual input and raw BSP rows.
+    errors = {}
+    def observe(name, read):
+        try:
+            return read()
+        except Exception as error:
+            errors[name] = {'type': type(error).__name__, 'message': str(error)}
+            return None
+    bbox = observe('bbox', lambda: _component_value(tester, 'bbox'))
+    bsp = observe('getBspModel', lambda: tester.getBspModel())
+    row = {'interface': 'hitTester.localHitTest',
+           'native_interface': 'BSPModel.collideSegment',
+           'tester_type': type(tester).__name__,
+           'bsp_model_name': observe('bspModelName',
+               lambda: _component_value(tester, 'bspModelName')),
+           'bsp_instance_identity': id(bsp) if bsp is not None else None,
+           'bsp_type': type(bsp).__name__ if bsp is not None else None,
+           'model_variant': 0,
+           'component': observe('itemTypeName',
+               lambda: _component_value(component, 'itemTypeName')),
+           'component_index': component_index,
+           'world_segment': [_point_xyz(world_start), _point_xyz(world_end)],
+           'local_segment': [_point_xyz(component_start), _point_xyz(component_end)],
+           'bbox': observe('bbox_points', lambda:
+               [_point_xyz(point) for point in bbox]) if bbox is not None else None,
+           'root_to_world': _collision_matrix_evidence(root_to_world, math_module),
+           'world_to_root': _collision_matrix_evidence(world_to_root, math_module),
+           'root_to_component': _collision_matrix_evidence(root_to_component, math_module),
+           'component_to_root': _collision_matrix_evidence(component_to_root, math_module),
+           'raw_hits': [], 'metadata_errors': errors}
+    return row
 
 
 def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,

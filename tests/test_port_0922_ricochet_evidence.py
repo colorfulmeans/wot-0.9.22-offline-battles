@@ -113,5 +113,28 @@ class RicochetEvidenceTests(unittest.TestCase):
         self.assertTrue(row['surface_evidence'][0]['selected'])
         self.assertEqual([native_query],self.meta['ricochet_first_contact_evidence']['native_queries'])
 
+    def test_optional_metadata_failure_preserves_native_query_inputs(self):
+        from gui.mods.offline_lan_0922.entities import remote_vehicle as rv
+        class Tester:
+            bbox = None
+            def getBspModel(self):
+                raise KeyError('not_loaded')
+            @property
+            def bspModelName(self):
+                raise KeyError('model_name')
+        class Matrix:
+            def applyPoint(self, point): return point
+            def applyVector(self, point): return point
+        matrix = Matrix()
+        maths = types.SimpleNamespace(Vector3=lambda *xyz: xyz)
+        row = rv._collision_interface_evidence(Tester(),
+            {'itemTypeName': 'vehicleHull'}, 1, (1.,2.,3.), (4.,5.,6.),
+            (7.,8.,9.), (10.,11.,12.), matrix, matrix, matrix, matrix, maths)
+        self.assertEqual([(1.,2.,3.), (4.,5.,6.)], row['local_segment'])
+        self.assertEqual([], row['raw_hits'])
+        self.assertEqual('KeyError', row['metadata_errors']['getBspModel']['type'])
+        self.assertEqual('KeyError', row['metadata_errors']['bspModelName']['type'])
+        self.assertNotIn('capture_error', row)
+
 
 if __name__=='__main__': unittest.main()
