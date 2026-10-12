@@ -120,7 +120,20 @@ def run(backend):
             value = {'bins': {(0,0): [row]}, 'extended_bins': {}}
             compare(value)
             counts['byte_names'] += 1
-        for filename in (u'\u00a0', u'\u6811.model', 7):
+        counts['unicode_names'] = 0
+        # Exhaust the UCS2 code-unit domain, including whitespace, NUL and
+        # surrogates, against the original filename normalization owner.
+        for codepoint in range(65536):
+            row = (codepoint, 0.,0.,0.,1, unichr(codepoint), 1.,1.,(),0.)
+            compare({'bins': {(0,0): [row]}, 'extended_bins': {}})
+            counts['unicode_names'] += 1
+        for filename in (u'', u'\u00a0', u'\u6811.model', u'  trees\\Oak.MODEL ',
+                         u'\ud83c\udf33.model'):
+            row = (1, 0.,0.,0.,1, filename, 1.,1.,(),0.)
+            compare({'bins': {(0,0): [row]}, 'extended_bins': {}})
+        class UnicodeSubclass(unicode):
+            pass
+        for filename in (7, UnicodeSubclass(u'tree.model')):
             row = (1, 0.,0.,0.,1, filename, 1.,1.,(),0.)
             compare({'bins': {(0,0): [row]}, 'extended_bins': {}}, admitted=False)
             counts['fallbacks'] += 1

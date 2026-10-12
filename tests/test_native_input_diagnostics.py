@@ -22,8 +22,49 @@ class NativeInputDiagnosticsTests(unittest.TestCase):
         self.addCleanup(self.stream.stop)
 
     def records(self):
-        return [json.loads(line.split('NATIVE INPUT FALLBACK ', 1)[1])
-                for line in self.output.getvalue().splitlines()]
+        records, pending = [], {}
+        for line in self.output.getvalue().splitlines():
+            if 'NATIVE INPUT FALLBACK PART ' in line:
+                part=json.loads(line.split('NATIVE INPUT FALLBACK PART ',1)[1])
+                key=(part['pid'],part['record'])
+                pending.setdefault(key,[]).append(part['data'])
+                if part['part']==part['parts']:
+                    records.append(json.loads(''.join(pending.pop(key))))
+            else:
+                records.append(json.loads(line.split('NATIVE INPUT FALLBACK ',1)[1]))
+        self.assertFalse(pending)
+        return records
+
+    def test_large_record_roundtrips_without_crossing_engine_line_limit(self):
+        payload={'text':'"\\'*50000,'method':'destr_prepare'}
+        self.module._write_record(payload)
+        self.assertEqual([payload],self.records())
+        self.assertTrue(all(len(line.encode('utf-8'))<7000
+                            for line in self.output.getvalue().splitlines()))
+
+    def test_prepare_quota_preserves_counts_and_other_method_reports(self):
+        for i in range(20):
+            self.module.record('destr_prepare',tuple(range(i)))
+        self.module.record('control_pose',({'x':1.},))
+        self.assertEqual(5,len(self.records()))
+        self.assertEqual(21,sum(self.module.snapshot()['counts'].values()))
+
+    def test_native_profile_mapping_matches_the_two_destructible_interfaces(self):
+        self.module.record('destr_prepare',())
+        self.module.record('destr_required_chunks',())
+        rows=self.records()
+        self.assertEqual({'family':'destr_query','opcode':8},rows[0]['native_profile'])
+        self.assertEqual({'family':'destr_query','opcode':9},rows[1]['native_profile'])
+
+    def test_summary_keeps_suppressed_counts_and_round_identity(self):
+        for i in range(20):self.module.record('destr_prepare',tuple(range(i)))
+        self.output.seek(0);self.output.truncate()
+        self.module.log_summary('round_end',2)
+        row=json.loads(self.output.getvalue().split('NATIVE INPUT SUMMARY ',1)[1])
+        self.assertEqual(20,sum(row['counts'].values()))
+        self.assertEqual(4,row['reports'])
+        self.assertEqual(2,row['round'])
+        self.assertEqual('round_end',row['phase'])
 
     def test_only_requested_entrypoints_are_observed(self):
         self.module.record('projectile_math', (0, (), ()))

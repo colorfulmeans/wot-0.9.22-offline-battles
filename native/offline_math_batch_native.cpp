@@ -64,7 +64,7 @@ IntNewFn int_new = 0;
 ObjectCallFn object_call = 0;
 ModuleNewFn module_new = 0;
 const void *dict_type = 0, *tuple_type = 0, *list_type = 0;
-const void *float_type = 0, *int_type = 0, *bool_type = 0;
+const void *float_type = 0, *int_type = 0, *bool_type = 0, *unicode_type = 0;
 void *string_lookup = 0;
 PyObject *none_object = 0;
 
@@ -466,6 +466,7 @@ bool initialize_api() {
     module_new = Py_InitModule4;
     dict_type = &PyDict_Type; tuple_type = &PyTuple_Type; list_type = &PyList_Type;
     float_type = &PyFloat_Type; int_type = &PyInt_Type; bool_type = &PyBool_Type;
+    unicode_type = &PyUnicode_Type;
     none_object = Py_None;
     PyObject *probe = PyDict_New();
     if (!probe) return false;
@@ -557,6 +558,13 @@ bool initialize_api() {
     module_new = reinterpret_cast<ModuleNewFn>(base + 0x00be1940U);
     dict_type = base + 0x01664d30U; tuple_type = base + 0x0165c398U; list_type = base + 0x01660a88U;
     float_type = base + 0x01664370U; int_type = base + 0x01664bf0U; bool_type = base + 0x016608b0U;
+    // #1513 PyUnicode_Type: name="unicode", basicsize=24, UCS2 data at +12.
+    // Verified against the exact client's PE type table, not a guessed layout.
+    unicode_type = base + 0x0166b290U;
+    const char *unicode_layout = static_cast<const char *>(unicode_type);
+    if (std::strcmp(read<const char *>(unicode_layout + 12), "unicode") != 0 ||
+        read<int>(unicode_layout + 16) != 24 ||
+        !(read<unsigned>(unicode_layout + 84) & 0x10000000U)) return false;
     string_lookup = base + 0x00be57a0U;
     none_object = reinterpret_cast<PyObject *>(base + 0x0165c798U);
     return true;

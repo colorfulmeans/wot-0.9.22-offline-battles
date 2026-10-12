@@ -5,11 +5,31 @@ namespace destructible_prepare_law {
 namespace d = offline_destructible;
 namespace b = destructible_bridge;
 
+bool unicode_space(unsigned c) {
+    // CPython 2.7's Unicode 5.2 whitespace law; byte strip remains separate.
+    return (c >= 9 && c <= 13) || (c >= 28 && c <= 32) || c == 0x85 ||
+        c == 0xa0 || c == 0x1680 || c == 0x180e ||
+        (c >= 0x2000 && c <= 0x200a) || c == 0x2028 || c == 0x2029 ||
+        c == 0x202f || c == 0x205f || c == 0x3000;
+}
+
 bool named(PyObject *raw) {
     if (raw == none_object) return false;
+    if (raw && raw->ob_type == unicode_type) {
+#ifdef WOT_HOST_PYTHON
+        const auto *text = PyUnicode_AS_UNICODE(raw);
+        const Py_ssize_t length = PyUnicode_GET_SIZE(raw);
+#else
+        const auto *text = read<const uint16_t *>(reinterpret_cast<const char *>(raw) + 12);
+        const Py_ssize_t length = size(raw);
+#endif
+        for (Py_ssize_t i = 0; i < length; ++i)
+            if (!unicode_space(static_cast<unsigned>(text[i]))) return true;
+        return false;
+    }
     // Normalization only supplies its truth value. Replacing slashes and
     // lowercasing cannot change emptiness; bytes.strip uses ASCII spaces.
-    // Unicode/subclasses retain the original Python normalization path.
+    // Subclasses retain the original Python normalization path.
     if (!raw || raw->ob_type != field_keys[0]->ob_type) throw Unsupported();
 #ifdef WOT_HOST_PYTHON
     // Host builds use the header-owned accessor on either CI architecture.

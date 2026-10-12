@@ -18,6 +18,26 @@ _FIELDS = frozenset(('x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
 _MAX_REPORTS, _MAX_COUNTERS = 16, 32
 _MAX_DICT_ITEMS, _MAX_ITEMS, _MAX_NODES, _MAX_TEXT = 64, 8, 96, 80
 _counts, _reported = {}, set()
+_reports_by_method, _record_sequence = {}, 0
+
+
+def _write_record(payload):
+    write_json_record('NATIVE INPUT FALLBACK', payload)
+
+
+def write_json_record(label, payload):
+    """Keep every engine stdout line below its 8 KiB truncation boundary."""
+    global _record_sequence
+    encoded = json.dumps(payload, sort_keys=True)
+    if len(encoded) <= 6000:
+        sys.stdout.write('[Offline LAN 0.9.22] %s %s\n' % (label, encoded))
+        return
+    _record_sequence += 1
+    pieces = [encoded[i:i + 3000] for i in range(0, len(encoded), 3000)]
+    for index, piece in enumerate(pieces):
+        sys.stdout.write('[Offline LAN 0.9.22] %s PART %s\n' % (label,
+            json.dumps({'schema': 1, 'pid': os.getpid(), 'record': _record_sequence,
+                'part': index + 1, 'parts': len(pieces), 'data': piece}, sort_keys=True)))
 
 
 def _type_name(value):
@@ -105,6 +125,8 @@ def record(method, args, reason='unsupported_input', error=None):
         _counts[key] = _counts.get(key, 0) + 1
         if len(_reported) >= _MAX_REPORTS:
             return
+        if method == 'destr_prepare' and _reports_by_method.get(method, 0) >= 4:
+            return
         # A swept hull nests boxes, axes and numeric points. The normal pose
         # depth omits those coordinates, making chunk rejection unreplayable.
         chunk_query = method in ('destr_required_chunks', 'destr_prepare')
@@ -128,13 +150,29 @@ def record(method, args, reason='unsupported_input', error=None):
         finally:
             del frame
         _reported.add(signature)
-        sys.stdout.write('[Offline LAN 0.9.22] NATIVE INPUT FALLBACK %s\n' %
-            json.dumps({'method': method, 'operation': operation, 'reason': reason,
+        _reports_by_method[method] = _reports_by_method.get(method, 0) + 1
+        profile = {'control_pose': ('control_pose', -1),
+                   'destr_prepare': ('destr_query', 8),
+                   'destr_required_chunks': ('destr_query', 9)}.get(method)
+        if method == 'driver_geometry':
+            profile = (method, operation if operation in (0, 1, 9, 10) else -1)
+        _write_record({'method': method, 'operation': operation, 'reason': reason,
+                        'native_profile': {'family': profile[0], 'opcode': profile[1]},
                         'inputs': evidence, 'callers': callers, 'exception_type': error_type,
-                        'count': _counts[key]}, sort_keys=True))
+                        'count': _counts[key]})
     except Exception:
         pass
 
 
 def snapshot():
     return {'counts': dict(_counts), 'reports': len(_reported), 'report_limit': _MAX_REPORTS}
+
+
+def log_summary(phase, round_id):
+    """Cumulative process counters remain visible after the evidence quota."""
+    try:
+        payload = snapshot()
+        payload.update(schema=1, pid=os.getpid(), phase=phase, round=round_id)
+        write_json_record('NATIVE INPUT SUMMARY', payload)
+    except Exception:
+        pass

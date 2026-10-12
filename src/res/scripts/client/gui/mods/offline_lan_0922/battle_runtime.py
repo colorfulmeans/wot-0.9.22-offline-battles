@@ -66,7 +66,7 @@ from gui.mods.offline_lan_0922 import (
     destructibles_compat, device_damage, effective_params,
     equipment_mechanics, gun_mechanics, hull_aiming,
     lan_client as lan_protocol,
-    gc_sweep, graphics_probe, loadout as loadout_law,
+    gc_sweep, graphics_probe, native_input_diagnostics, loadout as loadout_law,
     world_census, prebaked_destructibles,
     prebaked_foliage,
     prebaked_navigation, native_mapping_mask, native_math, shot_geometry, spotting,
@@ -2915,6 +2915,7 @@ class BattleRuntime(object):
             # it lowers.  Record the preset at both boundaries so a round that
             # ran on different ground than the one before it is visible.
             graphics_probe.log('round_start', round_identity)
+            native_input_diagnostics.log_summary('round_start', round_identity)
             self._install_battle_gui_guard()
             self._enter_battle_loading()
             self._retire_lobby_entities(lobby_boundary)
@@ -16457,10 +16458,9 @@ class BattleRuntime(object):
                     (key, payload[key]) for key in ('target', 'component', 'material_kind',
                     'layer', 'impact', 'selected_contact_impact', 'resolved_ricochet',
                     'normal', 'elapsed_ms', 'angle_cos'))
-            encoded = json.dumps(payload, sort_keys=True)
+            native_input_diagnostics.write_json_record('RICOCHET SURFACE EVIDENCE', payload)
             meta[marker] = True
             budget[1] += 1
-            sys.stdout.write('[Offline LAN 0.9.22] RICOCHET SURFACE EVIDENCE %s\n' % encoded)
         except Exception:
             # Diagnostics cannot invalidate an otherwise complete HP proposal.
             pass
@@ -29565,6 +29565,7 @@ class BattleRuntime(object):
         round_identity = (self._start_message or {}).get('round_id', '-')
         world_census.log('round_end', round_identity)
         graphics_probe.log('round_end', round_identity)
+        native_input_diagnostics.log_summary('round_end', round_identity)
 
         def restore_after_native_boundary():
             if self._lobby_restore_token is not token:
