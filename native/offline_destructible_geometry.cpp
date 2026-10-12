@@ -178,6 +178,7 @@ std::vector<Box> tree_sweep(const Point &start,double start_yaw,const Point &end
     return output;
 }
 void Store::put(Instance value) {
+    // Candidate caching is independent of the probe/envelope geometry below.
     const auto existing=reverse_.find(value.key);
     if (existing!=reverse_.end() && existing->second==value.bins) {
         // Updating boxes/materials within the same bins changes collision
@@ -188,6 +189,105 @@ void Store::put(Instance value) {
     contact_cache_.clear();
     std::set<Cell> bins=value.bins;
     remove(value.key);for(auto c:bins)contacts_[c].insert(value.key);reverse_[value.key]=std::move(bins);instances_[value.key]=std::move(value);
+}
+std::vector<BoxProbe> probe_boxes(const std::vector<Box> &boxes,
+        const Point &point, const Point &start, const Point &end,
+        double padding, unsigned flags) {
+    std::vector<BoxProbe> result;
+    result.reserve(boxes.size());
+    for (const auto &box : boxes) {
+        if (box.axes.size()<3) throw std::invalid_argument("incomplete box axes");
+        const std::array<Point,3> normals{{cross(box.axes[1],box.axes[2]),
+            cross(box.axes[2],box.axes[0]),cross(box.axes[0],box.axes[1])}};
+        Point delta{}, first{}, last{}, travel{};
+        for (unsigned i=0;i<3;++i) {
+            delta[i]=point[i]-box.center[i];first[i]=start[i]-box.center[i];
+            last[i]=end[i]-box.center[i];travel[i]=end[i]-start[i];
+        }
+        BoxProbe row;
+        if (flags&1) {
+            row.inside=true;
+            for (const auto &axis : normals) {
+                const double length=std::pow(dot(axis,axis),.5);
+                if (length<=1.e-8) {row.inside=false;break;}
+                double radius=0.;
+                for (const auto &half : box.axes) radius+=std::abs(dot(axis,half));
+                if (std::abs(dot(delta,axis))>radius+padding*length) {row.inside=false;break;}
+            }
+        }
+        if (flags&2) {
+            row.segment.valid=true;
+            for (unsigned i=0;i<3;++i) {
+                const auto &axis=normals[i];
+                const double denominator=dot(axis,box.axes[i]);
+                const double length=std::pow(dot(axis,axis),.5);
+                if (std::abs(denominator)<=1.e-12 || length<=1.e-12) {row.segment.valid=false;break;}
+                const double bound=1.+padding*length/std::abs(denominator);
+                const double a=dot(first,axis)/denominator, b=dot(last,axis)/denominator;
+                const double change=b-a;
+                if (std::abs(change)<=1.e-12) {
+                    if (std::abs(a)>bound) {row.segment.valid=false;break;}
+                    continue;
+                }
+                double near=(-bound-a)/change, far=(bound-a)/change;
+                if (near>far) std::swap(near,far);
+                row.segment.entry=std::max(row.segment.entry,near);
+                row.segment.leave=std::min(row.segment.leave,far);
+                if (row.segment.entry>row.segment.leave) {row.segment.valid=false;break;}
+            }
+        }
+        if (flags&4) {
+            row.projected.valid=true;
+            for (unsigned i : {0u,2u}) {
+                const auto &axis=normals[i];
+                const double radius=std::abs(dot(axis,box.axes[i]));
+                if (radius<=1.e-12) {row.projected.valid=false;break;}
+                const double value=dot(first,axis), change=dot(travel,axis);
+                if (std::abs(change)<=1.e-12) {
+                    if (std::abs(value)>radius) {row.projected.valid=false;break;}
+                    continue;
+                }
+                const double near=(-radius-value)/change, far=(radius-value)/change;
+                row.projected.entry=std::max(row.projected.entry,std::min(near,far));
+                row.projected.leave=std::min(row.projected.leave,std::max(near,far));
+                if (row.projected.entry>row.projected.leave) {row.projected.valid=false;break;}
+            }
+        }
+        result.push_back(row);
+    }
+    return result;
+}
+bool motion_envelope(const std::vector<Box> &boxes, Box &result) {
+    if (boxes.empty()) return false;
+    const auto &basis=boxes.front();
+    if (basis.axes.size()<3) throw std::invalid_argument("incomplete envelope axes");
+    const std::array<Point,3> normals{{cross(basis.axes[1],basis.axes[2]),
+        cross(basis.axes[2],basis.axes[0]),cross(basis.axes[0],basis.axes[1])}};
+    std::array<std::pair<double,double>,3> limits;
+    for (unsigned i=0;i<3;++i) {
+        const double denominator=dot(normals[i],basis.axes[i]);
+        if (std::abs(denominator)<=1.e-12) return false;
+        double low=std::numeric_limits<double>::infinity(), high=-low;
+        for (const auto &box : boxes) {
+            Point delta{};for (unsigned j=0;j<3;++j) delta[j]=box.center[j]-basis.center[j];
+            const double middle=dot(normals[i],delta)/denominator;
+            double radius=0.;for (const auto &axis : box.axes) radius+=std::abs(dot(normals[i],axis)/denominator);
+            low=std::min(low,middle-radius);high=std::max(high,middle+radius);
+        }
+        limits[i]={low,high};
+    }
+    result.center=basis.center;
+    for (unsigned i=0;i<3;++i) {
+        double offset=0.;for (unsigned j=0;j<3;++j)
+            offset+=basis.axes[j][i]*(limits[j].first+limits[j].second)*.5;
+        result.center[i]+=offset;
+    }
+    for (unsigned i=0;i<3;++i) {
+        Point axis{};for (unsigned j=0;j<3;++j)
+            axis[j]=basis.axes[i][j]*(limits[i].second-limits[i].first)*.5;
+        result.axes.push_back(axis);
+    }
+    return true;
 }
 void Store::remove(Key key) {
     if (reverse_.count(key)) contact_cache_.clear();

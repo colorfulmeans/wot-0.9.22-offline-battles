@@ -241,6 +241,67 @@ def contact_members(sensor, bounds):
     return rows
 
 
+def _box_laws_1513(sensor):
+    return all(left is right for left, right in zip(
+        (sensor._box_face_axes, sensor._vector_dot, sensor._vector_cross), sensor._BOX_LAWS_1513))
+
+
+def _numeric_box_rows(boxes):
+    if type(boxes) not in (tuple, list):
+        return None
+    result = []
+    for box in boxes:
+        if type(box) not in (tuple, list) or len(box) < 2:
+            return None
+        result.append((box[0], box[1]))
+    return tuple(result)
+
+
+def _native_box_point(value):
+    if type(value).__module__ != 'Math':
+        return None
+    try:
+        import Math
+    except ImportError:
+        return None
+    if type(value) is not Math.Vector3 or not _chunk_vector_1513(Math):
+        return None
+    return value.x, value.y, value.z
+
+
+def box_probe(sensor, boxes, point_value=None, start=None, end=None,
+              padding=0., flags=1):
+    """Borrow numeric boxes; custom vector/helper protocols keep their path."""
+    if not _box_laws_1513(sensor):
+        return None
+    rows = _numeric_box_rows(boxes)
+    if rows is None:
+        return None
+    p = _native_box_point(point_value) if flags & 1 else None
+    a = _native_box_point(start) if flags & 6 else None
+    b = _native_box_point(end) if flags & 6 else None
+    if (flags & 1 and p is None) or (flags & 6 and (a is None or b is None)):
+        return None
+    from . import native_math
+    result = native_math.call('destr_box_geometry', 0, (rows, p, a, b, padding, flags))
+    if result is not None:
+        sensor.combat_count('destructible_box_geometry_native', len(rows))
+    return result
+
+
+def box_envelope(sensor, boxes):
+    if not _box_laws_1513(sensor):
+        return None
+    rows = _numeric_box_rows(boxes)
+    if rows is None:
+        return None
+    from . import native_math
+    result = native_math.call('destr_box_geometry', 1, rows)
+    if result is not None:
+        sensor.combat_count('destructible_box_envelope_native')
+    return result
+
+
 def vehicle_box(sensor, position, yaw, bbox, travel, motion_yaw, pitch, roll):
     owner = _get(sensor)
     if owner is None:

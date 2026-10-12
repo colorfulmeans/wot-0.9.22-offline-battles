@@ -44,6 +44,12 @@ std::vector<Box> tree_sweep(const Point &start, double start_yaw,
     const Point &end, double end_yaw, const Point &minimum,
     const Point &maximum, double pivot);
 bool intersects(const Box &left, const Box &right);
+struct Interval { bool valid=false; double entry=0., leave=1.; };
+struct BoxProbe { bool inside=false; Interval segment, projected; };
+std::vector<BoxProbe> probe_boxes(const std::vector<Box> &boxes,
+    const Point &point, const Point &start, const Point &end,
+    double padding, unsigned flags);
+bool motion_envelope(const std::vector<Box> &boxes, Box &result);
 class Store {
     std::map<Key, Instance> instances_;
     std::map<Cell, std::set<Key>> contacts_, baked_;

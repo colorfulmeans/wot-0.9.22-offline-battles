@@ -2531,6 +2531,10 @@ def _boxes_intersect(left, right):
 
 
 def _point_in_world_box(point, world_box):
+	rows = _native_geometry.box_probe(_native_sensor, (world_box,), point,
+		padding=_CATALOG_POINT_EPSILON, flags=1)
+	if rows is not None:
+		return bool(rows[0][0])
 	center, half_axes = world_box[:2]
 	delta = (point.x - center[0], point.y - center[1],
 		point.z - center[2])
@@ -2550,6 +2554,10 @@ def _segment_world_box_interval(start, end, world_box, padding=None):
 	"""Return the exact normalized ray interval inside one transformed OBB."""
 	if padding is None:
 		padding = _CATALOG_POINT_EPSILON
+	rows = _native_geometry.box_probe(_native_sensor, (world_box,),
+		start=start, end=end, padding=padding, flags=2)
+	if rows is not None:
+		return rows[0][1]
 	center, half_axes = world_box[:2]
 	start_delta = (start.x - center[0], start.y - center[1],
 		start.z - center[2])
@@ -2579,6 +2587,11 @@ def _segment_world_box_interval(start, end, world_box, padding=None):
 		if entry > exit:
 			return None
 	return entry, exit
+
+
+_BOX_LAWS_1513 = (_box_face_axes, _vector_dot, _vector_cross)
+_DEFAULT_POINT_BOX_PROBE_1513 = _point_in_world_box
+_DEFAULT_SEGMENT_BOX_PROBE_1513 = _segment_world_box_interval
 
 
 def _instance_descriptor_filename_1513(instance):
@@ -4654,6 +4667,13 @@ def _instance_motion_envelope_1513(instance):
 	cached = instance.get('_motion_envelope')
 	if cached is not None and cached[0] is boxes:
 		return cached[1]
+	native = _native_geometry.box_envelope(_native_sensor, boxes)
+	if native is not None:
+		if native[0] is None:
+			return None
+		envelope = tuple(native[0]) + (None,)
+		instance['_motion_envelope'] = (boxes, envelope)
+		return envelope
 	center, axes = boxes[0][:2]
 	normals = _box_face_axes(axes)
 	limits = []
@@ -4697,6 +4717,10 @@ def _anonymous_original_surface_1513(surface):
 
 def _projected_box_interval_1513(start, end, box):
 	"""Clip to the authored footprint, extruded along the model's own up axis."""
+	rows = _native_geometry.box_probe(_native_sensor, (box,),
+		start=start, end=end, flags=4)
+	if rows is not None:
+		return rows[0][2]
 	center, axes = box[:2]
 	entry, leave = 0.0, 1.0
 	normals = _box_face_axes(axes)
@@ -4764,7 +4788,14 @@ def _owned_component_skin_1513(point, start, end, surfaces):
 		boxes = instance['boxes']
 		if surface[0] not in set(box[2] for box in boxes):
 			continue
-		containing = [box for box in boxes if _point_in_world_box(point, box)]
+		probes = None
+		if (_point_in_world_box is _DEFAULT_POINT_BOX_PROBE_1513 and
+				_segment_world_box_interval is _DEFAULT_SEGMENT_BOX_PROBE_1513):
+			probes = _native_geometry.box_probe(_native_sensor, boxes,
+				point, start, end, _CATALOG_POINT_EPSILON, 3)
+		containing = ([box for index, box in enumerate(boxes) if probes[index][0]]
+			if probes is not None else
+			[box for box in boxes if _point_in_world_box(point, box)])
 		if not containing:
 			continue
 		if authority is None:
@@ -4775,15 +4806,17 @@ def _owned_component_skin_1513(point, start, end, surfaces):
 		if (not containing or any(not broken(box) for box in containing) or
 				any(box[2] == surface[0] for box in containing)):
 			continue
-		intervals = [_segment_world_box_interval(start, end, box)
-			for box in containing]
+		intervals = ([probes[index][1] for index, box in enumerate(boxes)
+			if probes[index][0]] if probes is not None else
+			[_segment_world_box_interval(start, end, box) for box in containing])
 		if any(interval is None for interval in intervals):
 			continue
 		local_limit = min(interval[1] for interval in intervals)
-		for box in boxes:
+		for index, box in enumerate(boxes):
 			if broken(box):
 				continue
-			interval = _segment_world_box_interval(start, end, box)
+			interval = (probes[index][1] if probes is not None else
+				_segment_world_box_interval(start, end, box))
 			if interval is not None and interval[1] * length >= (point - start).length:
 				local_limit = min(local_limit,
 					max(0.0, interval[0] - 2.0 * _SHOT_RAY_EPSILON / length))

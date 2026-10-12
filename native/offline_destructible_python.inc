@@ -159,7 +159,35 @@ PyObject *WOT_CDECL destr_query(PyObject *,PyObject *args) {
 }
 #include "offline_destructible_chunks_python.inc"
 
+PyObject *WOT_CDECL destr_box_geometry(PyObject *,PyObject *args) {
+    NATIVE_PROFILE_ENTRY(destr_box_geometry);
+    try {
+        namespace d=offline_destructible;namespace b=destructible_bridge;
+        require_sequence(args,2,true);auto **v=items(args);const int op=index_value(v[0]);profile.opcode(op);
+        if(op==1){const auto boxes=b::boxes(v[1]);d::Box envelope;
+            const bool ready=profile.run(d::motion_envelope,boxes,envelope);
+            OwnedTuple result(1);result.set(0,ready?b::box_result(envelope):fallback());return result.release();
+        }
+        if(op!=0)throw Unsupported();
+        require_sequence(v[1],6,true);auto **row=items(v[1]);const int flags=index_value(row[5]);
+        if(flags<=0 || flags>7)throw Unsupported();
+        const auto boxes=b::boxes(row[0]);d::Point point{},start{},end{};
+        if(flags&1)point=b::point(row[1]);
+        if(flags&6){start=b::point(row[2]);end=b::point(row[3]);}
+        const auto values=profile.run(d::probe_boxes,boxes,point,start,end,finite_number(row[4]),static_cast<unsigned>(flags));
+        auto interval=[](const d::Interval &value)->PyObject *{
+            if(!value.valid)return fallback();
+            OwnedTuple pair(2);pair.set(0,float_new(value.entry));pair.set(1,float_new(value.leave));return pair.release();
+        };
+        OwnedTuple result(values.size());
+        for(std::size_t i=0;i<values.size();++i){OwnedTuple out(3);out.set(0,int_new(values[i].inside));
+            out.set(1,interval(values[i].segment));out.set(2,interval(values[i].projected));result.set(i,out.release());}
+        return result.release();
+    }catch(const PythonAllocationFailed &){profile.fail();return 0;}catch(...){profile.fail();return fallback();}
+}
+
 #define WOT_DESTRUCTIBLE_METHODS \
+    {"destr_box_geometry",destr_box_geometry,1,"Batch point, ray, footprint and envelope geometry."}, \
     {"destr_required_chunks",destr_required_chunks,1,"Current swept-hull chunk planning."}, \
     {"destr_open",destr_open,1,"Create one pure streamed-geometry index."}, \
     {"destr_close",destr_close,1,"Retire one streamed-geometry index."}, \

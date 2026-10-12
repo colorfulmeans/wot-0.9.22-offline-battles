@@ -11,7 +11,7 @@ try:
 except NameError:
     _NUMBERS = (int, bool, float)
     _STRINGS = (str,)
-_METHODS = ('control_pose', 'driver_geometry', 'destr_required_chunks', 'destr_prepare')
+_METHODS = ('control_pose', 'driver_geometry', 'destr_required_chunks', 'destr_prepare', 'destr_box_geometry')
 _FIELDS = frozenset(('x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
     'turret_yaw', 'gun_pitch', 'speed', 'velocity', 'position', 'id',
     'network_id', 'kind', 'team', 'alive', 'half_length', 'half_width', 'shape', 'pos'))
@@ -114,7 +114,7 @@ def record(method, args, reason='unsupported_input', error=None):
     try:
         reason = reason[:_MAX_TEXT] if type(reason) is str else 'unknown'
         operation = None
-        if (method == 'driver_geometry' and type(args) is tuple and args and
+        if (method in ('driver_geometry', 'destr_box_geometry') and type(args) is tuple and args and
                 any(type(args[0]) is t for t in _NUMBERS) and type(args[0]) is not float):
             operation = args[0]
             if not -2147483648 <= operation <= 2147483647:
@@ -129,7 +129,7 @@ def record(method, args, reason='unsupported_input', error=None):
             return
         # A swept hull nests boxes, axes and numeric points. The normal pose
         # depth omits those coordinates, making chunk rejection unreplayable.
-        chunk_query = method in ('destr_required_chunks', 'destr_prepare')
+        chunk_query = method in ('destr_required_chunks', 'destr_prepare', 'destr_box_geometry')
         evidence = _describe(args, 7 if chunk_query else 4,
             [4096 if chunk_query else _MAX_NODES], 64 if chunk_query else _MAX_ITEMS)
         error_type = _type_name(error) if error is not None else None
@@ -156,6 +156,8 @@ def record(method, args, reason='unsupported_input', error=None):
                    'destr_required_chunks': ('destr_query', 9)}.get(method)
         if method == 'driver_geometry':
             profile = (method, operation if operation in (0, 1, 9, 10) else -1)
+        elif method == 'destr_box_geometry':
+            profile = (method, operation if operation in (0, 1) else -1)
         _write_record({'method': method, 'operation': operation, 'reason': reason,
                         'native_profile': {'family': profile[0], 'opcode': profile[1]},
                         'inputs': evidence, 'callers': callers, 'exception_type': error_type,
