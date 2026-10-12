@@ -11,7 +11,7 @@ try:
 except NameError:
     _NUMBERS = (int, bool, float)
     _STRINGS = (str,)
-_METHODS = ('control_pose', 'driver_geometry')
+_METHODS = ('control_pose', 'driver_geometry', 'destr_required_chunks')
 _FIELDS = frozenset(('x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
     'turret_yaw', 'gun_pitch', 'speed', 'velocity', 'position', 'id',
     'network_id', 'kind', 'team', 'alive', 'half_length', 'half_width', 'shape', 'pos'))
@@ -35,7 +35,7 @@ def _type_name(value):
         return '<custom>'
 
 
-def _describe(value, depth, budget):
+def _describe(value, depth, budget, max_items=_MAX_ITEMS):
     if budget[0] <= 0:
         return {'truncated': True}
     budget[0] -= 1
@@ -52,7 +52,9 @@ def _describe(value, depth, budget):
     elif kind is tuple or kind is list:
         result['length'] = len(value)
         if depth > 0:
-            result['items'] = [_describe(item, depth - 1, budget) for item in value[:_MAX_ITEMS]]
+            result['items'] = [_describe(item, depth - 1, budget, max_items)
+                               for item in value[:max_items]]
+            result['complete'] = len(result['items']) == len(value)
     elif kind is dict:
         result['length'] = len(value)
         if depth <= 0:
@@ -69,7 +71,7 @@ def _describe(value, depth, budget):
                 other_keys.append(_type_name(key))
         fields.sort(key=lambda row: (row[0], row[1]))
         result['fields'] = [{'name': name, 'key_type': key_type,
-                             'input': _describe(item, depth - 1, budget)}
+                             'input': _describe(item, depth - 1, budget, max_items)}
                             for name, key_type, item in fields]
         result['other_key_types'] = sorted(other_keys)
         result['scanned'] = inspected
@@ -103,7 +105,11 @@ def record(method, args, reason='unsupported_input', error=None):
         _counts[key] = _counts.get(key, 0) + 1
         if len(_reported) >= _MAX_REPORTS:
             return
-        evidence = _describe(args, 4, [_MAX_NODES])
+        # A swept hull nests boxes, axes and numeric points. The normal pose
+        # depth omits those coordinates, making chunk rejection unreplayable.
+        chunk_query = method == 'destr_required_chunks'
+        evidence = _describe(args, 7 if chunk_query else 4,
+            [4096 if chunk_query else _MAX_NODES], 64 if chunk_query else _MAX_ITEMS)
         error_type = _type_name(error) if error is not None else None
         signature = (method, operation, reason, error_type,
                      json.dumps(_without_samples(evidence), sort_keys=True))

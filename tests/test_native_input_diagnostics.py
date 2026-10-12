@@ -40,6 +40,16 @@ class NativeInputDiagnosticsTests(unittest.TestCase):
         self.assertEqual('control_pose', records[0]['method'])
         self.assertTrue(records[0]['callers'])
 
+    def test_chunk_failure_captures_later_boxes_and_all_point_values(self):
+        boxes=tuple(((float(i),0.,1.),((1.,0.,0.),(0.,1.,0.),(0.,0.,1.))) for i in range(20))
+        self.module.record('destr_required_chunks',(boxes,(.25,100.)))
+        row=self.records()[0]
+        inputs=row['inputs']['items']
+        self.assertTrue(inputs[0]['complete'])
+        self.assertEqual(19.,inputs[0]['items'][19]['items'][0]['items'][0]['value'])
+        self.assertEqual(1.,inputs[0]['items'][19]['items'][1]['items'][2]['items'][2]['value'])
+        self.assertEqual(100.,inputs[1]['items'][1]['value'])
+
     def test_reports_are_capped_but_counts_continue(self):
         for i in range(100):
             self.module.record('driver_geometry', (i, (), (), ()))

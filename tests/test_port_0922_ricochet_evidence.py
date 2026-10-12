@@ -14,11 +14,12 @@ from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime
 class RicochetEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.battle=BattleRuntime.__new__(BattleRuntime)
+        self.battle._start_message={'round_id':2}
         self.material=types.SimpleNamespace(kind=17,armor=100.,vehicleDamageFactor=1.)
         self.contact=dict(component='vehicleHull',distance=.4,material=self.material,
             result=0,layer='structural',angle_cos=.1,effective_armor=1000.,piercing=200.)
         self.data=dict(target_key='bot:21',impact=(1.,2.,3.),world_normal=(0.,1.,0.))
-        self.meta=dict(projectile_id='2:p:1:5',round_id=2,ricochet_count=0,
+        self.meta=dict(projectile_id='2:p:1:5',ricochet_count=0,
             segment_origin=[0.,0.,0.],segment_velocity=[100.,0.,0.])
 
     def emit(self, meta, contact, effect):
@@ -38,6 +39,7 @@ class RicochetEvidenceTests(unittest.TestCase):
         rows=[json.loads(line.split('RICOCHET SURFACE EVIDENCE ',1)[1])
               for line in output.getvalue().splitlines()]
         self.assertEqual(2,len(rows))
+        self.assertEqual(2,rows[0]['round'])
         self.assertEqual('vehicleHull',rows[1]['bounce']['component'])
         self.assertEqual('vehicleTurret',rows[1]['component'])
         self.assertEqual(504,rows[1]['damage'])
@@ -47,13 +49,28 @@ class RicochetEvidenceTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             for unused in range(100):
                 self.emit(dict(self.meta),self.contact,{'shot_result':0,'damage':0})
-            fresh=dict(self.meta,round_id=3)
+            self.battle._start_message={'round_id':3}
+            fresh=dict(self.meta)
             self.emit(fresh,self.contact,{'shot_result':0,'damage':0})
         self.assertEqual(65,len(output.getvalue().splitlines()))
         self.data['impact']=object()
         effect={'shot_result':2,'damage':504}
         self.emit(dict(self.meta,ricochet_count=1),self.contact,effect)
         self.assertEqual({'shot_result':2,'damage':504},effect)
+
+    def test_rehit_preserves_native_surface_and_physical_inputs(self):
+        collision=types.SimpleNamespace(compName='_reserved',dist=.26,hitAngleCos=.26)
+        self.data.update(penetration_factor=1.1,piercing_loss=3.,
+            collision_evidence=[types.SimpleNamespace(collision=collision,
+                worldNormal=(0.,-1.,0.),localPoint=(1.,2.,3.))])
+        self.meta.update(ricochet_count=1,source_shot={'shell':{'kind':'ARMOR_PIERCING','caliber':90.}})
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.emit(self.meta,self.contact,{'shot_result':2,'damage':216})
+        row=json.loads(output.getvalue().split('RICOCHET SURFACE EVIDENCE ',1)[1])
+        self.assertEqual([0.,-1.,0.],row['surface_evidence'][0]['world_normal'])
+        self.assertEqual([1.,2.,3.],row['surface_evidence'][0]['local_point'])
+        self.assertEqual(90.,row['source_shot']['shell']['caliber'])
+        self.assertEqual(1.1,row['penetration_factor'])
 
 
 if __name__=='__main__': unittest.main()
