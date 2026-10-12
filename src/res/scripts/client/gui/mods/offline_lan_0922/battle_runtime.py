@@ -16370,11 +16370,13 @@ class BattleRuntime(object):
         self._report_projectile_track_outcome(
             meta, target, traced_collisions, collisions, contact, effect)
         self._report_ricochet_contact_evidence(
-            meta, state, terminal_data, contact, effect, traced_collisions, target)
+            meta, state, terminal_data, contact, effect, traced_collisions,
+            target, collision_evidence, (trace_start, trace_end))
         return effect
 
     def _report_ricochet_contact_evidence(self, meta, state, data, contact,
-                                         effect, collisions, target=None):
+                                         effect, collisions, target=None,
+                                         surface_evidence=None, resolved_query=None):
         """Observe both bounce and rehit surfaces; never change settlement."""
         if contact is None:
             return
@@ -16403,6 +16405,7 @@ class BattleRuntime(object):
                 'velocity': meta.get('segment_velocity'),
                 'impact': data.get('impact'), 'normal': data.get('world_normal'),
                 'query': [_xyz(point) for point in data.get('query') or ()],
+                'resolved_query': [_xyz(point) for point in resolved_query or ()],
                 'collision_pose': dict((name, data['collision_pose'][name])
                     for name in ('x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw', 'gun_pitch')
                     if name in data['collision_pose'])
@@ -16427,7 +16430,8 @@ class BattleRuntime(object):
                     'angle_cos': float(item.collision.hitAngleCos),
                     'world_normal': _xyz(item.worldNormal) if item.worldNormal is not None else None,
                     'local_point': _xyz(item.localPoint) if item.localPoint is not None else None}
-                    for item in tuple(data.get('collision_evidence') or ())[:16]],
+                    for item in tuple(surface_evidence if surface_evidence is not None
+                        else data.get('collision_evidence') or ())[:16]],
                 'result': int(effect['shot_result']), 'damage': int(effect['damage']),
                 'contacts': [{'component': item.compName, 'distance': float(item.dist),
                     'material_kind': _field(item.matInfo, 'kind'),

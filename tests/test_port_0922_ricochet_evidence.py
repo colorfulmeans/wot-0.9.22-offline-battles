@@ -72,5 +72,18 @@ class RicochetEvidenceTests(unittest.TestCase):
         self.assertEqual(90.,row['source_shot']['shell']['caliber'])
         self.assertEqual(1.1,row['penetration_factor'])
 
+    def test_extended_armour_query_uses_extended_surface_evidence(self):
+        collision=types.SimpleNamespace(compName='vehicleTurret',dist=4.,hitAngleCos=.9)
+        evidence=types.SimpleNamespace(collision=collision,
+            worldNormal=(0.,1.,0.),localPoint=(4.,0.,0.))
+        self.data['collision_evidence']=[]
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.battle._report_ricochet_contact_evidence(self.meta,{},self.data,
+                self.contact,{'shot_result':0,'damage':0},(),None,[evidence],
+                ((0.,0.,0.),(5.,0.,0.)))
+        row=json.loads(output.getvalue().split('RICOCHET SURFACE EVIDENCE ',1)[1])
+        self.assertEqual(4.,row['surface_evidence'][0]['distance'])
+        self.assertEqual([[0.,0.,0.],[5.,0.,0.]],row['resolved_query'])
+
 
 if __name__=='__main__': unittest.main()
