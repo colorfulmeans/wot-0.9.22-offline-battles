@@ -542,7 +542,11 @@ _SegmentCollisionResultExt = namedtuple(
 # native distance is measured along that same component-local ray, so the
 # point is a pure function of the collision and never a later pose.
 _VehicleCollisionEvidence = namedtuple(
-    'VehicleCollisionEvidence', ('collision', 'worldNormal', 'localPoint'))
+    'VehicleCollisionEvidence', ('collision', 'worldNormal', 'localPoint', 'nativeQuery'))
+if hasattr(_VehicleCollisionEvidence.__new__, 'func_defaults'):
+    _VehicleCollisionEvidence.__new__.func_defaults = (None,)
+else:
+    _VehicleCollisionEvidence.__new__.__defaults__ = (None,)
 
 
 class _AliveFlag(object):
@@ -1830,6 +1834,46 @@ def encode_damage_sticker(vehicle, vehicle_matrix, start_point, end_point,
     return None
 
 
+def _collision_matrix_evidence(matrix, math_module):
+    """Freeze affine bases at the actual native query, never at log time."""
+    try:
+        return {'origin': _point_xyz(matrix.applyPoint(math_module.Vector3(0.,0.,0.))),
+                'axes': [_point_xyz(matrix.applyVector(math_module.Vector3(*axis)))
+                         for axis in ((1.,0.,0.),(0.,1.,0.),(0.,0.,1.))]}
+    except Exception as error:
+        return {'capture_error': type(error).__name__}
+
+
+def _collision_interface_evidence(tester, component, component_index,
+        component_start, component_end, world_start, world_end,
+        root_to_world, world_to_root, root_to_component, component_to_root, math_module):
+    try:
+        bbox = _component_value(tester, 'bbox')
+        # #1513 ModelHitTester.localHitTest(start, stop, value=0) directly
+        # returns __getBspModel(value).collideSegment(start, stop).
+        # getBspModel() only reads the default model; never load or re-query it.
+        getter = getattr(tester, 'getBspModel', None)
+        bsp = getter() if callable(getter) else None
+        return {'interface': 'hitTester.localHitTest', 'tester_type': type(tester).__name__,
+                'native_interface': 'BSPModel.collideSegment' if bsp is not None else None,
+                'bsp_model_name': _component_value(tester, 'bspModelName'),
+                'bsp_instance_identity': id(bsp) if bsp is not None else None,
+                'bsp_type': type(bsp).__name__ if bsp is not None else None,
+                'model_variant': 0,
+                'component': _component_value(component, 'itemTypeName'),
+                'component_index': component_index,
+                'world_segment': [_point_xyz(world_start), _point_xyz(world_end)],
+                'local_segment': [_point_xyz(component_start), _point_xyz(component_end)],
+                'bbox': [_point_xyz(point) for point in bbox] if bbox is not None else None,
+                'root_to_world': _collision_matrix_evidence(root_to_world, math_module),
+                'world_to_root': _collision_matrix_evidence(world_to_root, math_module),
+                'root_to_component': _collision_matrix_evidence(root_to_component, math_module),
+                'component_to_root': _collision_matrix_evidence(component_to_root, math_module),
+                'raw_hits': []}
+    except Exception as error:
+        return {'interface': 'hitTester.localHitTest', 'capture_error': type(error).__name__}
+
+
 def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
                                end_point, math_module, include_world_normal,
                                chassis_matrix=None, diagnostic=None):
@@ -1854,6 +1898,7 @@ def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
     body_end = world_to_vehicle.applyPoint(end_point)
     chassis_start = body_start
     chassis_end = body_end
+    world_to_chassis = world_to_vehicle
     if chassis_matrix is not None and chassis_matrix is not vehicle_matrix:
         if include_world_normal:
             chassis_to_world = math_module.Matrix(chassis_matrix)
@@ -1890,10 +1935,20 @@ def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
         if include_world_normal:
             component_to_vehicle = math_module.Matrix(component_matrix)
             component_to_vehicle.invert()
+        native_query = None
+        if include_world_normal and type(collisions) in (tuple, list) and collisions:
+            native_query = _collision_interface_evidence(tester, component, component_index,
+                component_start, component_end, start_point, end_point,
+                chassis_to_world if component_index == 0 else vehicle_to_world,
+                world_to_chassis if component_index == 0 else world_to_vehicle,
+                component_matrix, component_to_vehicle, math_module)
+            native_query['native_result_count'] = len(collisions)
         for collision in collisions or ():
             try:
                 dist, local_normal, angle_cos, material_kind = collision
             except (TypeError, ValueError):
+                if native_query is not None:
+                    native_query['malformed_result'] = True
                 continue
             materials = _component_value(component, 'materials', {}) or {}
             material = materials.get(material_kind)
@@ -1920,8 +1975,31 @@ def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
                         world_normal.normalise()
                     else:
                         world_normal = None
+                if native_query is not None:
+                    try:
+                        delta = tuple(native_query['local_segment'][1][i] -
+                                      native_query['local_segment'][0][i] for i in range(3))
+                        ray_length = math.sqrt(sum(value * value for value in delta))
+                        normal_values = _point_xyz(local_normal) if local_normal is not None else None
+                        world_point = (chassis_to_world if component_index == 0 else
+                            vehicle_to_world).applyPoint(component_to_vehicle.applyPoint(
+                                math_module.Vector3(local_point)))
+                        if len(native_query['raw_hits']) < 64:
+                            native_query['raw_hits'].append({'distance': float(dist),
+                                'local_normal': normal_values, 'angle_cos': float(angle_cos),
+                                'material_kind': material_kind, 'local_point': _point_xyz(local_point),
+                                'mapped_material_identity': id(material),
+                                'mapped_material_kind': _component_value(material, 'kind'),
+                                'mapped_armor': _component_value(material, 'armor'),
+                                'mapped_vehicle_damage_factor': _component_value(material, 'vehicleDamageFactor'),
+                                'world_point': _point_xyz(world_point),
+                                'signed_ray_normal_dot': sum(delta[i] * normal_values[i]
+                                    for i in range(3)) / ray_length
+                                    if normal_values is not None and ray_length > 1.e-9 else None})
+                    except Exception as error:
+                        native_query['capture_error'] = type(error).__name__
                 result = _VehicleCollisionEvidence(
-                    result, world_normal, local_point)
+                    result, world_normal, local_point, native_query)
             hits.append(result)
     if include_world_normal:
         hits.sort(key=lambda item: item.collision.dist)

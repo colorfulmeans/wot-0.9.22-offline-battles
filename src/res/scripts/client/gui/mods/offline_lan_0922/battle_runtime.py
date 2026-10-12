@@ -16247,9 +16247,7 @@ class BattleRuntime(object):
             matching = []
             for evidence in collision_evidence:
                 collision = evidence.collision
-                if (collision.compName == contact.get('component') and
-                        abs(float(collision.dist) -
-                            float(contact.get('distance', 0.0))) <= 1.0e-5 and
+                if (self._projectile_contact_evidence_matches(collision, contact) and
                         evidence.worldNormal is not None):
                     matching.append(evidence)
             if matching:
@@ -16375,6 +16373,15 @@ class BattleRuntime(object):
             target, collision_evidence, (trace_start, trace_end))
         return effect
 
+    @staticmethod
+    def _projectile_contact_evidence_matches(collision, contact):
+        """A coincident plate must not borrow another material's normal."""
+        return (collision.compName == contact.get('component') and
+            abs(float(collision.dist) - float(contact.get('distance', 0.0))) <= 1.0e-5 and
+            ('material' not in contact or collision.matInfo is contact['material']) and
+            ('angle_cos' not in contact or abs(float(collision.hitAngleCos) -
+                float(contact['angle_cos'])) <= 1.0e-8))
+
     def _report_ricochet_contact_evidence(self, meta, state, data, contact,
                                          effect, collisions, target=None,
                                          surface_evidence=None, resolved_query=None):
@@ -16397,6 +16404,17 @@ class BattleRuntime(object):
             if budget[1] >= 64:
                 return
             material = contact.get('material')
+            initial_evidence = tuple(data.get('collision_evidence') or ())
+            resolved_evidence = tuple(surface_evidence if surface_evidence is not None
+                else initial_evidence)
+            native_queries, query_indices = [], {}
+            for item in initial_evidence + resolved_evidence:
+                native_query = getattr(item, 'nativeQuery', None)
+                if native_query is not None and id(native_query) not in query_indices:
+                    query_indices[id(native_query)] = len(native_queries)
+                    native_queries.append(native_query)
+            def query_index(item):
+                return query_indices.get(id(getattr(item, 'nativeQuery', None)))
             selected_impact = None
             query = tuple(data.get('query') or ())
             if len(query) == 2:
@@ -16416,6 +16434,8 @@ class BattleRuntime(object):
                 'impact': data.get('impact'), 'normal': data.get('world_normal'),
                 'selected_contact_impact': selected_impact,
                 'resolved_ricochet': data.get('ricochet_contact'),
+                'trajectory_query': data.get('trajectory_query'),
+                'launch_server_time_ms': meta.get('launch_server_time_ms'),
                 'query': [_xyz(point) for point in data.get('query') or ()],
                 'resolved_query': [_xyz(point) for point in resolved_query or ()],
                 'collision_pose': dict((name, data['collision_pose'][name])
@@ -16423,6 +16443,14 @@ class BattleRuntime(object):
                     if name in data['collision_pose'])
                     if isinstance(data.get('collision_pose'), dict) else None,
                 'component': contact.get('component'),
+                'contact_material_identity': id(material),
+                'native_queries': native_queries,
+                'initial_native_query_indices': sorted(set(query_index(item)
+                    for item in initial_evidence if query_index(item) is not None)),
+                'resolved_native_query_indices': sorted(set(query_index(item)
+                    for item in resolved_evidence if query_index(item) is not None)),
+                'selected_evidence_matches': sum(self._projectile_contact_evidence_matches(
+                    item.collision, contact) for item in resolved_evidence),
                 'material_kind': _field(material, 'kind'),
                 'armor': _field(material, 'armor'),
                 'vehicle_damage_factor': _field(material, 'vehicleDamageFactor'),
@@ -16438,12 +16466,16 @@ class BattleRuntime(object):
                 'segment_state': dict((name, state.get(name)) for name in
                     ('elapsed', 'cursor_time', 'distance', 'position', 'velocity', 'gravity')),
                 'surface_evidence': [{'component': item.collision.compName,
+                    'native_query_index': query_index(item),
+                    'material_identity': id(item.collision.matInfo),
+                    'selected': self._projectile_contact_evidence_matches(item.collision, contact),
                     'distance': float(item.collision.dist),
                     'angle_cos': float(item.collision.hitAngleCos),
                     'world_normal': _xyz(item.worldNormal) if item.worldNormal is not None else None,
                     'local_point': _xyz(item.localPoint) if item.localPoint is not None else None}
-                    for item in tuple(surface_evidence if surface_evidence is not None
-                        else data.get('collision_evidence') or ())[:16]],
+                    for item in resolved_evidence[:16]],
+                'surface_count': len(resolved_evidence),
+                'surface_evidence_truncated': len(resolved_evidence) > 16,
                 'result': int(effect['shot_result']), 'damage': int(effect['damage']),
                 'contacts': [{'component': item.compName, 'distance': float(item.dist),
                     'material_kind': _field(item.matInfo, 'kind'),
@@ -16457,12 +16489,34 @@ class BattleRuntime(object):
                 meta['ricochet_first_contact_evidence'] = dict(
                     (key, payload[key]) for key in ('target', 'component', 'material_kind',
                     'layer', 'impact', 'selected_contact_impact', 'resolved_ricochet',
-                    'normal', 'elapsed_ms', 'angle_cos'))
+                    'normal', 'elapsed_ms', 'angle_cos', 'native_queries',
+                    'collision_pose', 'selected_evidence_matches'))
             native_input_diagnostics.write_json_record('RICOCHET SURFACE EVIDENCE', payload)
             meta[marker] = True
             budget[1] += 1
         except Exception:
             # Diagnostics cannot invalidate an otherwise complete HP proposal.
+            pass
+
+    def _report_projectile_interface(self, meta, phase, payload):
+        """Join real sender calls to BSP evidence and server HP commits."""
+        try:
+            reports = meta.setdefault('interface_reports', {})
+            if reports.get(phase):
+                return
+            round_id = (self._start_message or {}).get('round_id')
+            budget = getattr(self, '_projectile_interface_budget', None)
+            if budget is None or budget[0] != round_id:
+                budget = [round_id, 0]
+                self._projectile_interface_budget = budget
+            if budget[1] >= 128:
+                return
+            row = dict(payload)
+            row.update(projectile=meta.get('projectile_id'), phase=phase, round=round_id)
+            native_input_diagnostics.write_json_record('PROJECTILE INTERFACE', row)
+            reports[phase] = True
+            budget[1] += 1
+        except Exception:
             pass
 
     @staticmethod
@@ -16922,6 +16976,7 @@ class BattleRuntime(object):
                         'contact_key': data.get('target_key'),
                         'contact_component': (data.get('armor_contact') or {}).get('component'),
                         'contact_normal': data['world_normal'],
+                        'incoming_at_contact': incoming,
                         'impact': ricochet_impact,
                         'segment_origin': segment_origin,
                         'segment_velocity': reflected,
@@ -17124,6 +17179,11 @@ class BattleRuntime(object):
                         meta['projectile_id'], pending.get('contact_key'),
                         pending.get('contact_component'), pending.get('contact_normal'),
                         wire['impact'], wire['segment_origin'], wire['segment_velocity']))
+                self._report_projectile_interface(meta, 'reflection_built', {
+                    'interface': 'ideal_reflection_velocity/ricochet_departure_origin',
+                    'target': pending.get('contact_key'),
+                    'incoming': pending.get('incoming_at_contact'),
+                    'normal': pending.get('contact_normal'), 'wire': wire})
         except Exception as error:
             self._report_projectile_terminal_failure(
                 meta, pending.get('state', {}), 'ricochet_build',
@@ -17155,6 +17215,9 @@ class BattleRuntime(object):
         else:
             self._report_projectile_terminal_failure(
                 meta, pending['state'], 'ricochet_send', 'rejected')
+        self._report_projectile_interface(meta,
+            'ricochet_queued' if sent else 'ricochet_queue_rejected', {
+                'interface': 'client.send_projectile_ricochet', 'queued': bool(sent), 'wire': wire})
         return bool(sent)
 
     @timed('projectile.publish_resolution')
@@ -17226,6 +17289,10 @@ class BattleRuntime(object):
         else:
             self._report_projectile_terminal_failure(
                 meta, pending['state'], 'resolution_send', 'rejected')
+        if meta.get('ricochet_count', 0):
+            self._report_projectile_interface(meta,
+                'terminal_queued' if sent else 'terminal_queue_rejected', {
+                    'interface': 'client.send_projectile_resolve', 'queued': bool(sent), 'wire': wire})
         return bool(sent)
 
     def _flush_pending_projectile_resolutions(self):

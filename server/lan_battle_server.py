@@ -8930,9 +8930,54 @@ class BattleState:
             # The original shot bounced. A continuing shell cannot undo that
             # interruption if it later penetrates another vehicle.
             self._record_projectile_piercing(record, False)
-            self._apply_projectile_effect(record, direct)
+            self._apply_projectile_effect_observed(record, direct, 'ricochet_commit')
             self.projectile_revision += 1
             return True
+
+    def _apply_projectile_effect_observed(self, record, proposal, phase):
+        if not record.get('ricochet_count', 0):
+            return self._apply_projectile_effect(record, proposal)
+        before = None
+        try:
+            target = proposal['target']
+            before = int(target.health if proposal['target_kind'] == 'player'
+                         else target['health'])
+        except Exception:
+            pass
+        try:
+            result = self._apply_projectile_effect(record, proposal)
+        except Exception as error:
+            self._log_reflected_settlement(record, proposal, phase, before, type(error).__name__)
+            raise
+        self._log_reflected_settlement(record, proposal, phase, before, None)
+        return result
+
+    def _log_reflected_settlement(self, record, proposal, phase, before, error):
+        try:
+            budget = getattr(self, '_reflected_settlement_budget', None)
+            if budget is None or budget[0] != self.round_id:
+                budget = [self.round_id, 0]
+                self._reflected_settlement_budget = budget
+            if budget[1] >= 128:
+                return
+            target = proposal['target']
+            after = int(target.health if proposal['target_kind'] == 'player' else target['health'])
+            row = {'interface': 'BattleState._apply_projectile_effect', 'round': self.round_id,
+                'projectile': record['projectile_id'], 'phase': phase, 'error': error,
+                'target': '%s:%s' % (proposal['target_kind'], proposal['target_id']),
+                'segment': record.get('ricochet_count'), 'segment_origin': record.get('segment_origin'),
+                'segment_velocity': record.get('segment_velocity'),
+                'segment_start_ms': record.get('segment_start_time_ms'),
+                'proposed_damage': proposal['damage'], 'proposed_hull_damage': proposal['hull_damage'],
+                'shot_result': proposal['shot_result'], 'health_before': before, 'health_after': after,
+                'splash': proposal['splash'], 'high_explosive': proposal['high_explosive'],
+                'critical_supplied': proposal['critical'] is not None,
+                'actual_hp_loss': before - after if before is not None else None,
+                'retired_target': bool(proposal.get('retired_target'))}
+            _server_log('PROJECTILE SETTLEMENT ' + json.dumps(row, sort_keys=True))
+            budget[1] += 1
+        except Exception:
+            pass
 
     def _apply_projectile_effect(self, record, proposal):
         target_kind = proposal["target_kind"]
@@ -9497,7 +9542,7 @@ class BattleState:
             record["_mission_kill_events"] = []
             for proposal in effects:
                 try:
-                    self._apply_projectile_effect(record, proposal)
+                    self._apply_projectile_effect_observed(record, proposal, 'terminal_commit')
                 except Exception as error:
                     # Contain this victim's failure; other independently
                     # validated direct/splash contacts still need a result.

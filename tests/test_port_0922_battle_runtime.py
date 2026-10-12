@@ -4465,6 +4465,9 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
         chassis_tester = types.SimpleNamespace(
             localHitTest=mock.Mock(return_value=[
                 (12.0, None, 1.0, 21), (12.0, None, 1.0, 22)]))
+        bsp=object()
+        chassis_tester.getBspModel=lambda:bsp
+        chassis_tester.bspModelName='test/chassis.model'
         descriptor.chassis.hitTester = chassis_tester
         descriptor.chassis.materials = {21: material, 22: material}
         descriptor.hull.hitTester = types.SimpleNamespace(
@@ -4491,6 +4494,19 @@ class RemoteVehicleFactoryTests(unittest.TestCase):
             self.assertAlmostEqual(2.0, item.localPoint[2])
         # Equal-distance duplicates on one component share one contact.
         self.assertEqual(evidence[0].localPoint, evidence[1].localPoint)
+        query=evidence[0].nativeQuery
+        self.assertIs(query,evidence[1].nativeQuery)
+        self.assertEqual('BSPModel.collideSegment',query['native_interface'])
+        self.assertEqual('test/chassis.model',query['bsp_model_name'])
+        self.assertEqual(id(bsp),query['bsp_instance_identity'])
+        self.assertEqual(-10.,query['local_segment'][0][2])
+        self.assertEqual(10.,query['root_to_world']['origin'][2])
+        self.assertEqual(12.,query['raw_hits'][0]['world_point'][2])
+        self.assertEqual(2,query['native_result_count'])
+        chassis_tester.localHitTest.assert_called_once()
+        legacy=remote_vehicle_module._VehicleCollisionEvidence(
+            evidence[0].collision,evidence[0].worldNormal,evidence[0].localPoint)
+        self.assertIsNone(legacy.nativeQuery)
 
     def test_combat_timing_counts_only_callable_native_component_testers(self):
         from gui.mods.offline_lan_0922.worker_diagnostics import WorkerCombatDiagnostics

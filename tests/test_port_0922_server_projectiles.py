@@ -2,6 +2,7 @@ import contextlib
 import io
 import copy
 import json
+import json
 import math
 from pathlib import Path
 import sys
@@ -2641,6 +2642,26 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertTrue(state.progress_projectiles(_projectile_owner(dict(message)), dict(message)))
         self.assertEqual(1, state.destructible_revision)
         self.assertEqual(events, len(state.pending_events))
+
+    def test_reflected_settlement_logs_actual_hp_and_keeps_retry_idempotent(self):
+        state=_state()
+        self.assertTrue(_launch_authority(state,_launch()))
+        projectile='1:p:1:1'
+        with mock.patch.object(lan_server_module,'_server_log') as log:
+            bounce=_ricochet(state,projectile)
+            self.assertTrue(state.ricochet_projectile(_projectile_owner(bounce),bounce))
+            terminal=_resolve(state,projectile,base_checked_ms=100,
+                resolved_time_ms=150,checked_distance=20.,impact=[20.,1.,0.],
+                direct=_effect(damage=100,x=20.))
+            self.assertTrue(state.resolve_projectile(1,terminal))
+            self.assertTrue(state.resolve_projectile(1,copy.deepcopy(terminal)))
+        rows=[json.loads(call.args[0].split('PROJECTILE SETTLEMENT ',1)[1])
+              for call in log.call_args_list if call.args[0].startswith('PROJECTILE SETTLEMENT ')]
+        self.assertEqual(['ricochet_commit','terminal_commit'],[r['phase'] for r in rows])
+        self.assertEqual([0,100],[r['actual_hp_loss'] for r in rows])
+        self.assertEqual([1000,900],[r['health_after'] for r in rows])
+        self.assertTrue(all(r['projectile']==projectile for r in rows))
+        self.assertEqual(900,state.players[2].health)
 
     def test_first_ricochet_advances_segment_and_is_idempotent(self):
         state = _state()

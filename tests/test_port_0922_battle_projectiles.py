@@ -5587,9 +5587,15 @@ class BattleProjectileTests(unittest.TestCase):
             dist=10.0, hitAngleCos=0.1, matInfo=object(), compName='hull')
         evidence = types.SimpleNamespace(
             collision=collision, worldNormal=_Vector((1.0, 0.0, 0.0)))
+        wrong_material = types.SimpleNamespace(dist=10.0,hitAngleCos=.1,
+            matInfo=object(),compName='hull')
+        wrong_angle = types.SimpleNamespace(dist=10.0,hitAngleCos=.2,
+            matInfo=collision.matInfo,compName='hull')
         terminal = {
-            'target_key': 'bot:17', 'collisions': [collision],
-            'collision_evidence': [evidence],
+            'target_key': 'bot:17', 'collisions': [wrong_material,wrong_angle,collision],
+            'collision_evidence': [
+                types.SimpleNamespace(collision=wrong_material,worldNormal=_Vector((0.,1.,0.))),
+                types.SimpleNamespace(collision=wrong_angle,worldNormal=_Vector((0.,0.,1.))),evidence],
             'query': (_Vector((0.0, 1.0, 0.0)),
                       _Vector((12.0, 1.0, 0.0))),
             'impact': (10.0, 1.0, 0.0),
@@ -5599,6 +5605,7 @@ class BattleProjectileTests(unittest.TestCase):
         with mock.patch.object(
                 combat_rules, 'resolve_armor_contact', return_value={
                     'result': 0, 'component': 'hull', 'distance': 10.0,
+                    'material': collision.matInfo, 'angle_cos': .1,
                     'layer': 'structural',
                 }) as resolved, mock.patch.object(
                     combat_rules, 'he_nominal_armor', return_value=100.0), \

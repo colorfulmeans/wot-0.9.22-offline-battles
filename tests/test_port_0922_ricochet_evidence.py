@@ -59,7 +59,7 @@ class RicochetEvidenceTests(unittest.TestCase):
         self.assertEqual({'shot_result':2,'damage':504},effect)
 
     def test_rehit_preserves_native_surface_and_physical_inputs(self):
-        collision=types.SimpleNamespace(compName='_reserved',dist=.26,hitAngleCos=.26)
+        collision=types.SimpleNamespace(compName='_reserved',dist=.26,hitAngleCos=.26,matInfo=self.material)
         self.data.update(penetration_factor=1.1,piercing_loss=3.,
             collision_evidence=[types.SimpleNamespace(collision=collision,
                 worldNormal=(0.,-1.,0.),localPoint=(1.,2.,3.))])
@@ -73,7 +73,7 @@ class RicochetEvidenceTests(unittest.TestCase):
         self.assertEqual(1.1,row['penetration_factor'])
 
     def test_extended_armour_query_uses_extended_surface_evidence(self):
-        collision=types.SimpleNamespace(compName='vehicleTurret',dist=4.,hitAngleCos=.9)
+        collision=types.SimpleNamespace(compName='vehicleTurret',dist=4.,hitAngleCos=.9,matInfo=self.material)
         evidence=types.SimpleNamespace(collision=collision,
             worldNormal=(0.,1.,0.),localPoint=(4.,0.,0.))
         self.data['collision_evidence']=[]
@@ -95,6 +95,23 @@ class RicochetEvidenceTests(unittest.TestCase):
         self.assertEqual([.1,0.,0.],row['impact'])
         self.assertEqual([4.,0.,0.],row['selected_contact_impact'])
         self.assertEqual((4.,0.,0.),self.meta['ricochet_first_contact_evidence']['selected_contact_impact'])
+
+    def test_raw_interface_input_output_is_linked_to_selected_surface(self):
+        self.contact.update(component='vehicleHull',distance=.4,angle_cos=.1)
+        collision=types.SimpleNamespace(compName='vehicleHull',dist=.4,hitAngleCos=.1,matInfo=self.material)
+        native_query={'interface':'hitTester.localHitTest','native_interface':'BSPModel.collideSegment',
+            'local_segment':[[0.,0.,0.],[1.,0.,0.]],
+            'raw_hits':[{'distance':.4,'local_normal':[0.,1.,0.],'material_kind':17}]}
+        evidence=types.SimpleNamespace(collision=collision,worldNormal=(0.,1.,0.),
+            localPoint=(.4,0.,0.),nativeQuery=native_query)
+        self.data['collision_evidence']=[evidence,evidence]
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.emit(self.meta,self.contact,{'shot_result':0,'damage':0})
+        row=json.loads(output.getvalue().split('RICOCHET SURFACE EVIDENCE ',1)[1])
+        self.assertEqual([native_query],row['native_queries'])
+        self.assertEqual(0,row['surface_evidence'][0]['native_query_index'])
+        self.assertTrue(row['surface_evidence'][0]['selected'])
+        self.assertEqual([native_query],self.meta['ricochet_first_contact_evidence']['native_queries'])
 
 
 if __name__=='__main__': unittest.main()

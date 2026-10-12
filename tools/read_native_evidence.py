@@ -5,14 +5,14 @@ from pathlib import Path
 import zipfile
 
 LABELS = ('NATIVE INPUT FALLBACK', 'NATIVE INPUT SUMMARY',
-          'RICOCHET SURFACE EVIDENCE')
+          'RICOCHET SURFACE EVIDENCE', 'PROJECTILE INTERFACE', 'PROJECTILE SETTLEMENT')
 
 
 def parse_lines(lines, source='log'):
     records, issues, pending = [], [], {}
     for number, line in enumerate(lines, 1):
         for label in LABELS:
-            marker = '[Offline LAN 0.9.22] ' + label + ' '
+            marker = ('' if label == 'PROJECTILE SETTLEMENT' else '[Offline LAN 0.9.22] ') + label + ' '
             if marker not in line:
                 continue
             text = line.split(marker, 1)[1]
@@ -56,7 +56,7 @@ def read_path(path):
         result = {'records': [], 'issues': []}
         with zipfile.ZipFile(path) as archive:
             for name in archive.namelist():
-                if name.endswith(('hidden-worker.log', 'visible-client.log')):
+                if name.endswith(('hidden-worker.log', 'visible-client.log', 'server.log')):
                     rows = parse_lines(archive.read(name).decode('utf-8', 'replace').splitlines(), name)
                     for key in result: result[key].extend(rows[key])
         return result

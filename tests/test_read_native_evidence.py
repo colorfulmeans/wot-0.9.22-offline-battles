@@ -47,3 +47,10 @@ class EvidenceReaderTests(unittest.TestCase):
         result=self.reader.parse_lines(['[Offline LAN 0.9.22] NATIVE INPUT FALLBACK {"inputs":'])
         self.assertEqual([],result['records'])
         self.assertEqual(1,len(result['issues']))
+
+    def test_server_settlement_joins_by_projectile_identity(self):
+        result=self.reader.parse_lines(['[19:25:00] PROJECTILE SETTLEMENT '+json.dumps({
+            'projectile':'1:b:18:4','phase':'terminal_commit','actual_hp_loss':448})],'server.log')
+        self.assertEqual([],result['issues'])
+        self.assertEqual('1:b:18:4',result['records'][0]['data']['projectile'])
+        self.assertEqual('server.log',result['records'][0]['source'])
