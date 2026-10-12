@@ -207,9 +207,9 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
     def setUp(self):
         destructibles_sensor.set_diagnostics(False)
         destructibles_compat.reset_safe_descriptor_cache()
-        # These catalog-owner fixtures model solid box-shaped BSP surfaces.
-        # Separate native BSP contract tests below exercise holes and failures.
-        def solid_box(space, identity, instance, box, start, end):
+        # These owner fixtures inject a proved scene contact. Separate scene
+        # contract tests exercise absent geometry, wrong wires and off-ray hits.
+        def solid_box(space, identity, instance, box, start, end, evidence=None, scene_cache=None):
             interval = destructibles_sensor._segment_world_box_interval(start, end, box, 0.0)
             return None if interval is None else interval[0] * (end-start).length
         patcher = mock.patch.object(destructibles_sensor,
@@ -5589,7 +5589,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         self.assertIn('native=-1 wire=live_validated', writes[0])
         self.assertIn('repeats=suppressed_for_battle', writes[0])
 
-    def test_far_baked_fragile_fails_closed_until_chunk_is_streamed(self):
+    def test_unstreamed_baked_box_without_scene_contact_does_not_expire_shell(self):
         filename = 'content/MilitaryEnvironment/mle008_Canisters.model'
         matrix = _ItemMatrix(_Vector(0.0, 0.0, 5.0))
         math_module = types.ModuleType('Math')
@@ -5626,11 +5626,14 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                               'Math': math_module}), \
                 mock.patch.object(
                     destructibles_sensor, '_get_destr_authority',
-                    return_value=authority):
-            with self.assertRaisesRegex(RuntimeError, "shot identity is pending"):
-                destructibles_sensor.shot_world_distance(
+                    return_value=authority), \
+                mock.patch.object(destructibles_sensor,
+                    '_catalog_precise_shot_distance_1513', return_value=None):
+            result = destructibles_sensor.shot_world_distance(
                 bigworld, 1, _Vector(), _Vector(0, 0, 20),
                 _Vector(0, 0, 1), shot)
+            self.assertIsNone(result['stop_distance'])
+            self.assertFalse(result['stopped_by_destructible'])
 
         self.assertNotIn((22, 0), getattr(
             destructibles_sensor, 'g_offh_destr_instances', {}))

@@ -30,12 +30,14 @@ if __package__ in (None, ""):
     import save_slots
     import vehicle_editor_ui
     import vehicle_overlays
+    import window_diagnostics
 else:
     from . import customizations_ui
     from . import (
         bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
         save_personal_missions, personal_missions_ui, replay_launch)
+    from . import window_diagnostics
 
 
 # The account balances a save carries, in the order the panel shows them.
@@ -3570,6 +3572,15 @@ class LauncherWindow(object):
         self._game_starter_root = (
             game_root if port_version == core.PORT_0_9_22 else None)
         closed_for_required_process = False
+        focus_stop = threading.Event()
+        focus_thread = None
+        if (os.name == 'nt' and port_version == core.PORT_0_9_22 and
+                os.environ.get('WOT_OFFLINE_SPIKE_PROFILE') == '1'):
+            focus_thread = threading.Thread(
+                target=window_diagnostics.monitor_focus,
+                args=(focus_stop, core.game_executable(game_root), _append_launcher_log),
+                name='game-focus-evidence', daemon=True)
+            focus_thread.start()
         try:
             if paired_worker:
                 exit_code, closed_for_required_process = (
@@ -3579,6 +3590,9 @@ class LauncherWindow(object):
             else:
                 exit_code = game_process.wait()
         finally:
+            focus_stop.set()
+            if focus_thread is not None:
+                focus_thread.join(timeout=1.0)
             self._game = None
             self._game_starter_root = None
         worker_exit = (self._worker.poll()

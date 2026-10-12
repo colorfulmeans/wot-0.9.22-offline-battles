@@ -1596,7 +1596,6 @@ def _diagnostic_static_recast_1513(cleared, now=None):
 
 
 def _clear_runtime_registry(preserve_spatial_batch=False):
-	globals().pop('g_offh_shot_collision_models', None)
 	_native_geometry.reset()
 	names = ('g_offh_destr_seen', 'g_offh_destr_nodesc',
 			'g_offh_tree_state', 'g_offh_destr_ordered',
@@ -2873,43 +2872,55 @@ def _stream_baked_shot_instance_1513(spaceID, identity):
 	return instance
 
 
-def _catalog_precise_shot_distance_1513(spaceID, identity, instance, world_box, start, end):
-	"""OBBs only nominate candidates; stock BSP triangles own shell contact."""
+def _catalog_precise_shot_distance_1513(spaceID, identity, instance, world_box,
+		start, end, evidence=None, scene_cache=None):
+	"""Ask the current scene for contact, never reload an intact prop model.
+
+	The catalog descriptor names an authored original model, not the live
+	geometry after destruction or mode-specific scene assembly. The stock
+	material query also sees dynamic-only skins excluded by mask 128. Using
+	the ray start as its reference selects the nearest scene contact; the
+	exact returned wire and material must still match this candidate.
+	"""
 	import BigWorld
-	import Math
-	filename = _instance_descriptor_filename_1513(instance)
-	cache = globals().setdefault('g_offh_shot_collision_models', {})
-	model = cache.get(filename)
-	if model is None:
-		model = BigWorld.WGBspCollisionModel()
-		if not model.setModelName(filename):
-			raise RuntimeError('#1513 prop collision model unavailable: %s' % filename)
-		if len(cache) >= 64:
-			cache.pop(next(iter(cache)))
-		cache[filename] = model
-	matrix = Math.Matrix(BigWorld.wg_getDestructibleMatrix(spaceID, *identity))
-	chunk = BigWorld.wg_getChunkMatrix(spaceID, identity[0])
-	matrix.translation = matrix.translation + chunk.translation
-	matrix.invert()
-	local_start, local_end = matrix.applyPoint(start), matrix.applyPoint(end)
-	local_length = (local_end - local_start).length
-	world_length = (end - start).length
-	if local_length <= 1.0e-9:
+	if scene_cache is None or 'payload' not in scene_cache:
+		payload = BigWorld.wg_getMatInfoNearPoint(
+			spaceID, start, end, start, lambda *unused: False)
+		if scene_cache is not None:
+			scene_cache['payload'] = payload
+	else:
+		payload = scene_cache['payload']
+	decoded = _decode_mat_info_1513(payload)
+	if evidence is not None:
+		evidence.update(interface='BigWorld.wg_getMatInfoNearPoint',
+			reference=[float(start[i]) for i in (0, 1, 2)])
+		if decoded is not None:
+			evidence.update(native_identity=list(decoded[2:4]),
+				native_material=decoded[4], native_filename=decoded[5],
+				native_point=[float(decoded[0][i]) for i in (0, 1, 2)])
+	if decoded is None or tuple(decoded[2:4]) != tuple(identity):
 		return None
-	distances = []
-	for row in model.collideSegment(local_start, local_end) or ():
-		if len(row) != 4:
-			raise RuntimeError('#1513 prop BSP hit must contain four fields')
-		distance = float(row[0])
-		if not (0.0 <= distance <= local_length + 1.0e-6):
-			continue
-		fraction = distance / local_length
-		point = start + (end - start).scale(fraction)
-		# A building model contains multiple modules. Keep the exact compiled
-		# module envelope as an owner selector, never as the impact surface.
-		if _point_in_world_box(point, world_box):
-			distances.append(fraction * world_length)
-	return min(distances) if distances else None
+	point, unused_normal, unused_chunk, unused_item, material, filename = decoded
+	if (instance['kind'] == 'structure' and world_box[2] != material):
+		return None
+	# A neighbouring skin may be returned by a point/material probe. Neither
+	# proximity to an envelope nor an authored filename proves ray contact.
+	segment = end - start
+	length = segment.length
+	if length <= 1.0e-9:
+		return None
+	distance = sum((float(point[i]) - float(start[i])) * float(segment[i])
+		for i in (0, 1, 2)) / length
+	if not (0.0 <= distance <= length + 1.0e-6):
+		return None
+	projected = start + segment.scale(distance / length)
+	if (point - projected).length > 1.0e-4:
+		return None
+	if not _point_in_world_box(point, world_box):
+		return None
+	if evidence is not None:
+		evidence['contact_proved'] = True
+	return distance
 
 
 @observed('destructible.shot_catalog')
@@ -2946,6 +2957,9 @@ def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None, diagn
 		identities.update(baked_bins.get(bin_key, ()))
 	combat_count('destructible_shot_candidates', len(identities))
 	hits = {}
+	# All candidates belong to this exact ray; the current-scene probe is
+	# performed once, including a miss, instead of once per model/module box.
+	scene_cache = {}
 	for identity in sorted(identities):
 		if _destructible_isolated_1513(identity[0], identity[1]):
 			continue
@@ -2986,22 +3000,22 @@ def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None, diagn
 			if interval is None:
 				continue
 			entry, exit = interval
-			if pending:
-				raise RuntimeError('#1513 prop shot identity is pending: %s' % (identity,))
-			precise_args = (spaceID, identity, instance, world_box, start, end)
+			mat_kind = (world_box[2]
+				if instance['kind'] == 'structure' else None)
+			if authority.is_destroyed(identity[0], identity[1], mat_kind):
+				continue
+			contact_evidence = {'pending_identity': pending, 'registered': not pending}
+			precise_args = (spaceID, identity, instance, world_box, start, end,
+				contact_evidence, scene_cache)
 			distance = (_catalog_precise_shot_distance_1513(*precise_args)
 				if diagnostic is None else diagnostic.call(
-					'native.projectile.prop_bsp', _catalog_precise_shot_distance_1513,
+					'native.projectile.prop_material', _catalog_precise_shot_distance_1513,
 					*precise_args))
 			if distance is None:
 				continue
 			entry = distance / segment_length
 			if (maximum_distance is not None and
 					distance > float(maximum_distance) + 1.0e-6):
-				continue
-			mat_kind = (world_box[2]
-				if instance['kind'] == 'structure' else None)
-			if authority.is_destroyed(identity[0], identity[1], mat_kind):
 				continue
 			key = (identity[0], identity[1], mat_kind)
 			previous = hits.get(key)
@@ -8512,8 +8526,9 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 					elif stage == 'native.projectile.material':
 						row.update(collided=value[0], material=value[3],
 							filename=value[4], item=value[5], chunk=value[6])
-					elif stage == 'native.projectile.prop_bsp':
-						row.update(interface='WGBspCollisionModel.collideSegment',
+					elif stage == 'native.projectile.prop_material':
+						row.update(args[6])
+						row.update(
 							identity=list(args[1]),
 							filename=_instance_descriptor_filename_1513(args[2]),
 							start=point(args[4]), end=point(args[5]),

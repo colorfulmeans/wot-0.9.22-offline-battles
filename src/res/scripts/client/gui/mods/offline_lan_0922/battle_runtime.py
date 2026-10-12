@@ -29398,7 +29398,7 @@ class BattleRuntime(object):
             scene_meta = ((projectile_state.get('payload') or {})
                           if isinstance(projectile_state, dict) else {})
             traced_prop = any(row.get('stage') in (
-                'native.projectile.destroy', 'native.projectile.prop_bsp')
+                'native.projectile.destroy', 'native.projectile.prop_material')
                 for row in result.get('collision_evidence', ()))
             if (scene_meta.get('shooter_kind') == 'player' and
                     (result.get('stop_distance') is not None or traced_prop)):
