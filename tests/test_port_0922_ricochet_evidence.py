@@ -116,7 +116,7 @@ class RicochetEvidenceTests(unittest.TestCase):
     def test_optional_metadata_failure_preserves_native_query_inputs(self):
         from gui.mods.offline_lan_0922.entities import remote_vehicle as rv
         class Tester:
-            bbox = None
+            bbox = ((0.,0.,0.), (1.,2.,3.), 4.0)
             def getBspModel(self):
                 raise KeyError('not_loaded')
             @property
@@ -131,6 +131,7 @@ class RicochetEvidenceTests(unittest.TestCase):
             {'itemTypeName': 'vehicleHull'}, 1, (1.,2.,3.), (4.,5.,6.),
             (7.,8.,9.), (10.,11.,12.), matrix, matrix, matrix, matrix, maths)
         self.assertEqual([(1.,2.,3.), (4.,5.,6.)], row['local_segment'])
+        self.assertEqual([(0.,0.,0.), (1.,2.,3.)], row['bbox'])
         self.assertEqual([], row['raw_hits'])
         self.assertEqual('KeyError', row['metadata_errors']['getBspModel']['type'])
         self.assertEqual('KeyError', row['metadata_errors']['bspModelName']['type'])

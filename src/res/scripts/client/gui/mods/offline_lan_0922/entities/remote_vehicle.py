@@ -1871,7 +1871,7 @@ def _collision_interface_evidence(tester, component, component_index,
            'world_segment': [_point_xyz(world_start), _point_xyz(world_end)],
            'local_segment': [_point_xyz(component_start), _point_xyz(component_end)],
            'bbox': observe('bbox_points', lambda:
-               [_point_xyz(point) for point in bbox]) if bbox is not None else None,
+               [_point_xyz(bbox[index]) for index in (0, 1)]) if bbox is not None else None,
            'root_to_world': _collision_matrix_evidence(root_to_world, math_module),
            'world_to_root': _collision_matrix_evidence(world_to_root, math_module),
            'root_to_component': _collision_matrix_evidence(root_to_component, math_module),

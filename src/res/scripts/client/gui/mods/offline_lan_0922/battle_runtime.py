@@ -29395,6 +29395,14 @@ class BattleRuntime(object):
             if not isinstance(result, dict):
                 raise RuntimeError(
                     '#1513 destructible shot result must be a dictionary')
+            scene_meta = ((projectile_state.get('payload') or {})
+                          if isinstance(projectile_state, dict) else {})
+            if (result.get('stop_distance') is not None and
+                    scene_meta.get('shooter_kind') == 'player'):
+                self._report_projectile_interface(scene_meta, 'world_stop', {
+                    'interface': 'destructibles_sensor.shot_world_distance',
+                    'shell_kind': _field(_field(shot, 'shell', {}), 'kind', None),
+                    'result': result, 'start': tuple(start), 'end': tuple(end)})
             added_loss = max(0.0, _number(
                 result.get('piercing_loss'), 0.0))
             piercing_loss += added_loss

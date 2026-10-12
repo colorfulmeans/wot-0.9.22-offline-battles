@@ -6048,6 +6048,8 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 			record = _destructible_catalog['resources'].get(normalized_fname)
 			if record is None or record['kind'] != expected_kind:
 				return False
+	if typ == AreaDestructibles.DESTR_TYPE_TREE and isShotDamage:
+		return False
 	if typ == AreaDestructibles.DESTR_TYPE_TREE:
 		_hp_gate = desc.get('health', 0)
 		try:
@@ -8389,7 +8391,84 @@ def _shot_broken_surface_advance_1513(measured, bigworld, spaceID,
 	return max(floor, maximum - _SHOT_RAY_EPSILON)
 
 
+def _recover_shot_material_1513(measured, bigworld, spaceID, start, end,
+        world_collision, mat_info, surface_filter):
+	decoded = _decode_mat_info_1513(mat_info)
+	if decoded is not None and _normalized_filename(decoded[5]):
+		return mat_info
+	keys = []
+	def collect(*key):
+		if surface_filter(*key) and len(key) == 4:
+			if (isinstance(key[0], _INTEGER_TYPES) and
+					_DESTRUCTIBLE_MAT_KIND_MIN_1513 <= key[0] <= 86 and
+					key not in keys and len(keys) < 17):
+				keys.append(key)
+			return True
+		return False
+	replay = measured('native.projectile.identity', bigworld.wg_collideSegment,
+		spaceID, start, end, 128, collect)
+	if len(keys) > 16 or replay is None or (replay[0] - world_collision[0]).length > 1.0e-4:
+		return mat_info
+	matches = []
+	for key in keys:
+		hit = measured('native.projectile.identity', bigworld.wg_collideSegment,
+			spaceID, start, end, 128, lambda *surface: surface == key)
+		if hit is None or (hit[0] - world_collision[0]).length > 1.0e-4:
+			continue
+		chunk_id, item_index = key[3], key[2]
+		if _destructible_isolated_1513(chunk_id, item_index):
+			continue
+		instance = globals().get('g_offh_destr_instances', {}).get((chunk_id, item_index))
+		if instance is None and _destructible_catalog is not None:
+			instance = _stream_baked_shot_instance_1513(spaceID, (chunk_id, item_index))
+		filename = _instance_descriptor_filename_1513(instance) if instance is not None else None
+		if not filename:
+			status, filename = resolve_native_item_name_1513(spaceID, chunk_id, item_index)
+			if status != 'exact':
+				continue
+		matches.append((True, hit[0], hit[1], key[0], filename, item_index, chunk_id))
+	# Coincident different identities remain unresolved; never destroy a prop
+	# behind a wall or infer identity merely from callback visitation order.
+	return matches[0] if len(matches) == 1 else mat_info
+
+
 def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
+		shot=None, diagnostic=None):
+	"""Keep bounded actual ray/material/destruction evidence on typed results."""
+	if shot is None:
+		return _shot_world_distance_impl_1513(bigworld, spaceID, start_pos,
+			end_pos, dir_vec, shot, diagnostic)
+	evidence = []
+	def point(value):
+		return [float(value[index]) for index in (0, 1, 2)]
+	class Observer(object):
+		def call(self, stage, function, *args):
+			value = function(*args) if diagnostic is None else diagnostic.call(stage, function, *args)
+			try:
+				if len(evidence) < 24:
+					row = {'stage': stage}
+					if stage in ('native.projectile.world', 'native.projectile.identity'):
+						row.update(start=point(args[1]), end=point(args[2]),
+							filtered=len(args) > 4,
+							hit=None if value is None else point(value[0]))
+					elif stage == 'native.projectile.material':
+						row.update(collided=value[0], material=value[3],
+							filename=value[4], item=value[5], chunk=value[6])
+					elif stage == 'native.projectile.destroy':
+						row.update(accepted=bool(value), material=args[1][3],
+							filename=args[1][4], item=args[1][5], chunk=args[1][6])
+					evidence.append(row)
+			except Exception:
+				pass
+			return value
+	result = _shot_world_distance_impl_1513(bigworld, spaceID, start_pos,
+		end_pos, dir_vec, shot, Observer())
+	if isinstance(result, dict):
+		result['collision_evidence'] = evidence
+	return result
+
+
+def _shot_world_distance_impl_1513(bigworld, spaceID, start_pos, end_pos, dir_vec,
 		shot=None, diagnostic=None):
 	"""Resolve the first native or exact-catalog destructible on a shell ray.
 
@@ -8419,6 +8498,10 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 			spaceID, start_pos,
 			world_collision[0] + dir_vec.scale(0.3),
 			world_collision[0], lambda *unused: False)
+		if (_destructible_catalog is not None and shot is not None and
+				_shot_kind_1513(shot) in ('HIGH_EXPLOSIVE', 'ARMOR_PIERCING_HE')):
+			mat_info = _recover_shot_material_1513(measured, bigworld, spaceID,
+				start_pos, end_pos, world_collision, mat_info, surface_filter)
 		decoded = _decode_mat_info_1513(mat_info)
 		tree_identity = _validated_tree_shot_identity_1513(spaceID, decoded)
 		if tree_identity is not None:
@@ -8428,8 +8511,9 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 				spaceID, start_pos, end_pos, world_dist)
 			if catalog_hit is not None:
 				break
-		destruction_accepted = _try_destroy_destructible(
-			spaceID, mat_info, shot_yaw, 12.0, True)
+		destruction_accepted = (False if tree_identity is not None else
+			measured('native.projectile.destroy', _try_destroy_destructible,
+				spaceID, mat_info, shot_yaw, 12.0, True))
 		if destruction_accepted:
 			if decoded is not None:
 				_diagnostic_contact_1513(
@@ -8587,7 +8671,7 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 	mat_info = (True, point, normal,
 		mat_kind if mat_kind is not None else 73,
 		candidate[3], item_index, chunk_id)
-	if not _try_destroy_destructible(
+	if not measured('native.projectile.destroy', _try_destroy_destructible,
 			spaceID, mat_info, shot_yaw, 12.0, True):
 		_diagnostic_contact_1513(
 			'shot_native_reject', chunk_id, item_index,

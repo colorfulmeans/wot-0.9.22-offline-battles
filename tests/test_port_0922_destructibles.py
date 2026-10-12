@@ -4231,6 +4231,41 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 self.assertFalse(result['stopped_by_destructible'])
             self.assertEqual([], calls, shell_kind)
 
+    def test_anonymous_he_surface_recovery_requires_exact_native_hit(self):
+        original = _mat_info_1513(False, _Vector(), _Vector(), 0, '', 0, 0)
+        point = _Vector(0, 0, 5)
+        key = (73, 0, 1, 22)
+        def collide(space, start, end, mask, keep):
+            return (point, _Vector(0, 1, 0)) if keep(*key) else None
+        bw = types.SimpleNamespace(wg_collideSegment=collide)
+        measured = lambda stage, function, *args: function(*args)
+        with mock.patch.object(destructibles_sensor, 'resolve_native_item_name_1513',
+                return_value=('exact', 'content/Environment/fence.model')):
+            hit = destructibles_sensor._recover_shot_material_1513(measured,
+                bw, 1, _Vector(), _Vector(0,0,10), (point, _Vector()),
+                original, lambda *surface: True)
+            self.assertEqual((73, 'content/Environment/fence.model', 1, 22), hit[3:])
+            # A nearby prop behind the authoritative wall cannot inherit its hit.
+            hit = destructibles_sensor._recover_shot_material_1513(measured,
+                bw, 1, _Vector(), _Vector(0,0,10), (_Vector(0,0,4), _Vector()),
+                original, lambda *surface: True)
+            self.assertIs(original, hit)
+
+    def test_coincident_native_identities_do_not_guess_a_destroy_target(self):
+        original = _mat_info_1513(False, _Vector(), _Vector(), 0, '', 0, 0)
+        point = _Vector(0,0,5)
+        def collide(space, start, end, mask, keep):
+            values = [keep(73,0,item,22) for item in (1,2)]
+            return (point, _Vector(0,1,0)) if any(values) else None
+        bw = types.SimpleNamespace(wg_collideSegment=collide)
+        with mock.patch.object(destructibles_sensor, 'resolve_native_item_name_1513',
+                return_value=('exact', 'content/Environment/fence.model')):
+            hit = destructibles_sensor._recover_shot_material_1513(
+                lambda stage, function, *args: function(*args), bw, 1,
+                _Vector(), _Vector(0,0,10), (point,_Vector()), original,
+                lambda *surface: True)
+        self.assertIs(original, hit)
+
     def _standing_tree_shot(self, tree_health, item_scale, shell_kind):
         """Fire one shell at a single standing #1513 SpeedTree."""
         filename = 'speedtree/45_North_America/Maple.spt'
@@ -4305,8 +4340,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             for health, scale in ((18, 1.0), (20, 1.0), (1000, 2.0)):
                 result, felled, queries = self._standing_tree_shot(
                     health, scale, shell_kind)
-                self.assertEqual(1, len(felled), shell_kind)
-                self.assertEqual((1, 22, 1), felled[0][:3])
+                self.assertEqual([], felled, shell_kind)
                 # The real wall behind the tree owns the stop. Ram health and
                 # scale neither detonate HE/HEAT nor take 25 mm from AP.
                 self.assertAlmostEqual(9.0, result['stop_distance'])
