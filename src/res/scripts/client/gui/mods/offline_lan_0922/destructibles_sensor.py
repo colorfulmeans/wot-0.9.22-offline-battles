@@ -8443,13 +8443,22 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 		return [float(value[index]) for index in (0, 1, 2)]
 	class Observer(object):
 		def call(self, stage, function, *args):
+			surfaces = []
+			if stage in ('native.projectile.world', 'native.projectile.identity') and len(args) > 4:
+				original_filter = args[4]
+				def observed_filter(*surface):
+					kept = original_filter(*surface)
+					if len(surfaces) < 64:
+						surfaces.append({'key': list(surface), 'kept': bool(kept)})
+					return kept
+				args = args[:4] + (observed_filter,) + args[5:]
 			value = function(*args) if diagnostic is None else diagnostic.call(stage, function, *args)
 			try:
 				if len(evidence) < 24:
 					row = {'stage': stage}
 					if stage in ('native.projectile.world', 'native.projectile.identity'):
 						row.update(start=point(args[1]), end=point(args[2]),
-							filtered=len(args) > 4,
+							filtered=len(args) > 4, surfaces=surfaces,
 							hit=None if value is None else point(value[0]))
 					elif stage == 'native.projectile.material':
 						row.update(collided=value[0], material=value[3],
