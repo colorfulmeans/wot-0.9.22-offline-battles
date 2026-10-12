@@ -62,7 +62,24 @@ class Geometry(object):
             raise RuntimeError('Native destructible index mutation was rejected')
 
     def query(self, opcode, payload):
-        return self.backend.destr_query(self.handle, opcode, payload)
+        try:
+            result = self.backend.destr_query(self.handle, opcode, payload)
+        except Exception as error:
+            if opcode == 8:
+                self._report_prepare_rejection(payload, error)
+            raise
+        if opcode == 8 and result is None:
+            self._report_prepare_rejection(payload)
+        return result
+
+    @staticmethod
+    def _report_prepare_rejection(payload, error=None):
+        try:
+            from gui.mods.offline_lan_0922 import native_input_diagnostics
+            native_input_diagnostics.record('destr_prepare', (payload,),
+                'exception' if error is not None else 'unsupported_input', error)
+        except Exception:
+            pass
 
     def instance(self, sensor, key, instance):
         kind = {'fragile': 0, 'structure': 1, 'falling': 2}[instance['kind']]

@@ -68,7 +68,8 @@ Result query(PyObject *boxes, double radius, double chunk_size) {
 }
 PyObject *WOT_CDECL destr_required_chunks(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(destr_query);
-    profile.opcode(8);
+    // Opcode 8 belongs to persistent chunk preparation in destr_query.
+    profile.opcode(9);
     try {
         require_sequence(args, 2, true);
         PyObject **a = items(args);

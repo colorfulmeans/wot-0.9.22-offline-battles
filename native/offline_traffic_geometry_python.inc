@@ -219,7 +219,12 @@ PyObject *blocker_call(PyObject *source, PyObject *raw, PyObject *tuning,
     require_sequence(raw, 0);
     require_sequence(tuning, 9, true);
     double v[9];
-    for (int i = 0; i < 9; ++i) v[i] = finite_number(items(tuning)[i]);
+    for (int i = 0; i < 9; ++i)
+        v[i] = i == 6 ? number(items(tuning)[i]) : finite_number(items(tuning)[i]);
+    // The coast integral deliberately returns +inf when the slope cannot
+    // stop a vehicle. The reference consumes only min(brake_distance, 80).
+    if (std::isinf(v[6]) && v[6] > 0.) v[6] = 80.;
+    if (!std::isfinite(v[6])) throw Unsupported();
     if (v[7] < 0. || v[8] < 0.) throw Unsupported();
     Row own = row_values(source, true, true);
     std::vector<Row> rows;

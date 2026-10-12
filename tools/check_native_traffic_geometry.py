@@ -123,7 +123,8 @@ def run(backend):
             throttle = rng.choice((-1., -.01, 0., .01, 1.))
             for revision in range(2):
                 check_blocker(own, peers, throttle,
-                              rng.choice((1./30., .1, .2, .53)), rng.uniform(0., 110.))
+                              rng.choice((1./30., .1, .2, .53)),
+                              float('inf') if case % 7 == 0 else rng.uniform(0., 110.))
                 # Do not cache positions, inclinations or mutable fitted shapes.
                 own['yaw'] += .03
                 peers[1]['position'] = (own['position'][0], own['position'][1],

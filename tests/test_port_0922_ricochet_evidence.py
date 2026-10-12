@@ -85,5 +85,16 @@ class RicochetEvidenceTests(unittest.TestCase):
         self.assertEqual(4.,row['surface_evidence'][0]['distance'])
         self.assertEqual([[0.,0.,0.],[5.,0.,0.]],row['resolved_query'])
 
+    def test_selected_plate_is_distinct_from_the_first_contact(self):
+        self.data.update(query=((0.,0.,0.),(10.,0.,0.)),impact=(.1,0.,0.),
+            ricochet_contact={'impact':(4.,0.,0.),'resolved_time_ms':200})
+        self.contact['distance']=4.
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.emit(self.meta,self.contact,{'shot_result':0,'damage':0})
+        row=json.loads(output.getvalue().split('RICOCHET SURFACE EVIDENCE ',1)[1])
+        self.assertEqual([.1,0.,0.],row['impact'])
+        self.assertEqual([4.,0.,0.],row['selected_contact_impact'])
+        self.assertEqual((4.,0.,0.),self.meta['ricochet_first_contact_evidence']['selected_contact_impact'])
+
 
 if __name__=='__main__': unittest.main()

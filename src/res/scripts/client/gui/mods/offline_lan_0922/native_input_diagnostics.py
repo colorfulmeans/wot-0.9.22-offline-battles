@@ -11,7 +11,7 @@ try:
 except NameError:
     _NUMBERS = (int, bool, float)
     _STRINGS = (str,)
-_METHODS = ('control_pose', 'driver_geometry', 'destr_required_chunks')
+_METHODS = ('control_pose', 'driver_geometry', 'destr_required_chunks', 'destr_prepare')
 _FIELDS = frozenset(('x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
     'turret_yaw', 'gun_pitch', 'speed', 'velocity', 'position', 'id',
     'network_id', 'kind', 'team', 'alive', 'half_length', 'half_width', 'shape', 'pos'))
@@ -107,7 +107,7 @@ def record(method, args, reason='unsupported_input', error=None):
             return
         # A swept hull nests boxes, axes and numeric points. The normal pose
         # depth omits those coordinates, making chunk rejection unreplayable.
-        chunk_query = method == 'destr_required_chunks'
+        chunk_query = method in ('destr_required_chunks', 'destr_prepare')
         evidence = _describe(args, 7 if chunk_query else 4,
             [4096 if chunk_query else _MAX_NODES], 64 if chunk_query else _MAX_ITEMS)
         error_type = _type_name(error) if error is not None else None

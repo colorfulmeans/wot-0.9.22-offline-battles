@@ -16396,6 +16396,15 @@ class BattleRuntime(object):
             if budget[1] >= 64:
                 return
             material = contact.get('material')
+            selected_impact = None
+            query = tuple(data.get('query') or ())
+            if len(query) == 2:
+                begin, end = _xyz(query[0]), _xyz(query[1])
+                delta = tuple(end[i] - begin[i] for i in range(3))
+                length = math.sqrt(sum(v * v for v in delta))
+                if length > 1.e-6:
+                    selected_impact = tuple(begin[i] + delta[i] *
+                        float(contact.get('distance', 0.0)) / length for i in range(3))
             payload = {
                 'projectile': meta.get('projectile_id'), 'round': round_id,
                 'phase': phase, 'target': data.get('target_key'),
@@ -16404,6 +16413,8 @@ class BattleRuntime(object):
                 'origin': meta.get('segment_origin'),
                 'velocity': meta.get('segment_velocity'),
                 'impact': data.get('impact'), 'normal': data.get('world_normal'),
+                'selected_contact_impact': selected_impact,
+                'resolved_ricochet': data.get('ricochet_contact'),
                 'query': [_xyz(point) for point in data.get('query') or ()],
                 'resolved_query': [_xyz(point) for point in resolved_query or ()],
                 'collision_pose': dict((name, data['collision_pose'][name])
@@ -16444,7 +16455,8 @@ class BattleRuntime(object):
             else:
                 meta['ricochet_first_contact_evidence'] = dict(
                     (key, payload[key]) for key in ('target', 'component', 'material_kind',
-                    'layer', 'impact', 'normal', 'elapsed_ms', 'angle_cos'))
+                    'layer', 'impact', 'selected_contact_impact', 'resolved_ricochet',
+                    'normal', 'elapsed_ms', 'angle_cos'))
             encoded = json.dumps(payload, sort_keys=True)
             meta[marker] = True
             budget[1] += 1
