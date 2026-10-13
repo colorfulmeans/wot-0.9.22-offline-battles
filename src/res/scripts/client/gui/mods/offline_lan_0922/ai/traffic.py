@@ -356,7 +356,8 @@ class TrafficCoordinator(object):
         route_order = (command.get('combat_mode') in ('route', 'advance') and
                        command.get('recovery_mode') in
                        ('drive', 'avoid', 'blocked', 'reverse_turn',
-                        'pivot_recovery', 'forward_escape', 'nav_wait'))
+                        'pivot_recovery', 'forward_escape', 'short_forward_escape',
+                        'short_reverse_escape', 'contact_escape', 'nav_wait'))
         # A route tank can itself be the neighbour occupying a proved reverse
         # escape. The driver already waited through its stuck threshold and
         # checked both pivots/forward travel before naming this blocker. Honour
@@ -513,18 +514,24 @@ class TrafficCoordinator(object):
             # while its safe command holds both tracks. Retain that request
             # while the named hull still blocks it; otherwise only the rear
             # member of a crowded queue is ever asked to make room.
-            requested = order.get('forward_blocked_by')
-            requested_peer = next((peer for peer in peers
-                                   if peer['id'] == requested), None)
             length, width = _dimensions(body)
-            if (command.get('recovery_mode') != 'blocked' or
-                    requested_peer is None or
-                    self._escape_probe._reverse_blocked_by_vehicle(
-                        body['position'], body['yaw'] + math.pi,
-                        [requested_peer], length, width) != requested):
-                order.pop('forward_blocked_by', None)
-            if blocker is not None and sign > 0.0:
-                order['forward_blocked_by'] = blocker
+            for field, heading in (
+                    ('forward_blocked_by', body['yaw'] + math.pi),
+                    ('reverse_blocked_by', body['yaw'])):
+                requested = order.get(field)
+                requested_peer = next((peer for peer in peers
+                                       if peer['id'] == requested), None)
+                if (command.get('recovery_mode') != 'blocked' or
+                        requested_peer is None or
+                        self._escape_probe._reverse_blocked_by_vehicle(
+                            body['position'], heading,
+                            [requested_peer], length, width) != requested):
+                    order.pop(field, None)
+            # Publish either gear's final braking veto to the same clearance
+            # owner. Braking against existing momentum is not a blocked drive.
+            if blocker is not None and speed * throttle >= -0.01:
+                order['forward_blocked_by' if sign > 0.0 else
+                      'reverse_blocked_by'] = blocker
             self._orders[body['id']] = (now, order)
         return result
 

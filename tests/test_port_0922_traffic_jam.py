@@ -1,5 +1,7 @@
 """A stationary firing hold must not permanently plug friendly traffic."""
 import math
+import json
+from pathlib import Path
 import collections
 import unittest
 from unittest import mock
@@ -107,6 +109,106 @@ class ParkedTrafficTests(unittest.TestCase):
             self.assertEqual('friendly_yield', self.tick(now, order=route)['traffic_mode'])
         for now in (PARKED_YIELD_SECONDS, 8., 12.):
             self.assertEqual(route, self.tick(now, order=route))
+
+    def test_short_recovery_modes_can_clear_an_explicit_blockage(self):
+        for mode in ('short_forward_escape', 'short_reverse_escape',
+                     'contact_escape'):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.parked['position'] = (0., 0., -7.)
+                self.move.update(throttle=0., recovery_mode='blocked',
+                                 reverse_blocked_by=29)
+                route = dict(command(), recovery_mode=mode,
+                             movement_intent=True)
+                yielding = self.tick(0., order=route)
+                self.assertEqual('friendly_yield', yielding.get('traffic_mode'))
+                self.assertLess(yielding['throttle'], 0.)
+
+    def test_short_recovery_refresh_does_not_cancel_or_renew_clearance(self):
+        self.parked['position'] = (0., 0., -7.)
+        self.move.update(throttle=0., recovery_mode='blocked', reverse_blocked_by=29)
+        route = dict(command(), movement_intent=True)
+        self.assertEqual('friendly_yield', self.tick(0., order=route)['traffic_mode'])
+        for now, mode in ((1., 'short_forward_escape'),
+                          (2., 'short_reverse_escape'), (3., 'contact_escape')):
+            route['recovery_mode'] = mode
+            self.assertEqual('friendly_yield', self.tick(now, order=route).get('traffic_mode'))
+            self.assertEqual(PARKED_YIELD_SECONDS, self.traffic._parked[29]['until'])
+        for now in (PARKED_YIELD_SECONDS, 8., 20.):
+            self.assertEqual(route, self.tick(now, order=route))
+
+    def test_final_reverse_brake_publishes_and_revalidates_clearance_request(self):
+        self.parked['position'] = (0., 0., -7.05)
+        reverse = dict(command(), throttle=-1., recovery_mode='reverse_turn',
+                       movement_intent=True)
+        peers = [self.parked]
+        self.traffic.adjust(25, self.mover, reverse, peers, 0., lambda *args: True)
+        safe = self.traffic.safe_controls(self.mover, reverse, peers, 0., lambda: 0.)
+        self.assertEqual(0., safe['throttle'])
+        self.assertEqual(29, safe['reverse_blocked_by'])
+        self.assertEqual(29, self.traffic._orders[25][1].get('reverse_blocked_by'))
+        route = dict(command(), movement_intent=True)
+        yielding = self.traffic.adjust(29, self.parked, route, [self.mover],
+                                      .1, lambda *args: True)
+        self.assertEqual('friendly_yield', yielding.get('traffic_mode'))
+        self.assertLess(yielding['throttle'], 0.)
+        # A cached reverse order cannot retain an obsolete blocker.
+        self.parked['position'] = (0., 0., -30.)
+        self.traffic.safe_controls(self.mover, reverse, peers, .2, lambda: 0.)
+        self.assertNotIn('reverse_blocked_by', self.traffic._orders[25][1])
+        self.assertEqual(route, self.traffic.adjust(
+            29, self.parked, route, [self.mover], .2, lambda *args: True))
+
+    def test_reverse_braking_against_forward_momentum_is_not_a_yield_request(self):
+        self.parked['position'] = (0., 0., -7.05)
+        self.mover['velocity'] = (0., 0., 2.)
+        reverse = dict(command(), throttle=-1., recovery_mode='reverse_turn',
+                       movement_intent=True)
+        peers = [self.parked]
+        self.traffic.adjust(25, self.mover, reverse, peers, 0., lambda *args: True)
+        safe = self.traffic.safe_controls(self.mover, reverse, peers, 0., lambda: 0.)
+        self.assertEqual(-1., safe['throttle'])
+        self.assertNotIn('reverse_blocked_by', self.traffic._orders[25][1])
+
+    def test_short_recovery_without_a_request_or_with_blocked_sweeps_keeps_control(self):
+        for mode in ('short_forward_escape', 'short_reverse_escape', 'contact_escape'):
+            with self.subTest(mode=mode):
+                self.setUp()
+                self.parked['position'] = (0., 0., -7.)
+                route = dict(command(), recovery_mode=mode, movement_intent=True)
+                self.assertEqual(route, self.tick(0., order=route))
+                self.move.update(throttle=0., recovery_mode='blocked', reverse_blocked_by=29)
+                rear = body(30, 0., -15., speed=0.)
+                self.assertEqual(route, self.tick(.1, order=route, extras=[rear]))
+                self.assertEqual(route, self.tick(.2, order=route, clear=lambda *args: False))
+
+    def test_checked_reverse_request_survives_zero_throttle_but_not_separation(self):
+        self.parked['position'] = (0., 0., -8.)
+        self.move.update(throttle=0., brake=True, recovery_mode='blocked',
+                         reverse_blocked_by=29)
+        peers = [self.parked]
+        self.traffic.adjust(25, self.mover, self.move, peers, 0., lambda *args: True)
+        self.traffic.safe_controls(self.mover, self.move, peers, 0., lambda: 0.)
+        self.assertEqual(29, self.traffic._orders[25][1].get('reverse_blocked_by'))
+        self.parked['position'] = (0., 0., -30.)
+        self.traffic.safe_controls(self.mover, self.move, peers, .1, lambda: 0.)
+        self.assertNotIn('reverse_blocked_by', self.traffic._orders[25][1])
+
+    def test_reported_emil_requests_are_rechecked_against_latest_hulls(self):
+        fixture = json.loads((Path(__file__).parent / 'fixtures' /
+                              'emil_163705_boxed_traffic.json').read_text())
+        own, order = fixture['body'], fixture['order']
+        neighbours = fixture['neighbours']
+        traffic = TrafficCoordinator()
+        traffic.adjust(own['id'], own, order, neighbours, 0., lambda *args: True)
+        traffic.safe_controls(own, order, neighbours, 0., lambda: 0.)
+        shared = traffic._orders[own['id']][1]
+        # The sampled forward hull has moved outside the straight sweep;
+        # the rear T-44 is still inside it. Raw planner IDs are not geometry.
+        self.assertNotIn('forward_blocked_by', shared)
+        self.assertEqual(22, shared.get('reverse_blocked_by'))
+        rear = next(peer for peer in neighbours if peer['id'] == 22)
+        self.assertTrue(traffic._blocks_requester(rear, own, order, .15))
 
     def test_boxed_driver_requests_both_proved_vehicle_exits(self):
         driver = LocalDriver(stuck_seconds=0.4)
