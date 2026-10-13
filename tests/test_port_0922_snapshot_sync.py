@@ -33,6 +33,59 @@ def player(identifier, x=0, alive=True):
 
 
 class SnapshotSyncTests(unittest.TestCase):
+    def test_consumer_resume_does_not_remove_a_real_slow_producer_cushion(self):
+        clock = [0.]
+        sync = _load().SnapshotSync(1,clock=lambda: clock[0])
+        for tick in range(0,4001,10):
+            if 2000 < tick < 2500: continue
+            clock[0]=tick/1000.
+            if tick%30==0 or tick==2500:
+                source=tick//500*500
+                sync.snapshot(dict(round_id=1,server_tick=tick,
+                    bot_state_revision=source//500+1,motion_time_us=tick*1000,
+                    bot_state_time_us=source*1000,bots=[player(7,source/100.)]))
+            sync.advance(clock[0])
+            record=sync._entities['bot:7']
+            if record.get('presentation_time_us') is not None:
+                self.assertLessEqual(record['presentation_time_us'],record['target_sample_time_us'])
+            if tick>3000:
+                self.assertGreaterEqual(record['interpolation_delay_us'],500000.)
+
+    def test_consumer_pause_recovers_on_confirmed_history_without_rewinding(self):
+        module = _load()
+        clock = [0.]
+        sync = module.SnapshotSync(1, clock=lambda: clock[0])
+        revision = 0
+        last_cursor = None
+        last_render = None
+        late_delay = None
+        # A 130 ms producer continues during a 500 ms consumer pause. Only
+        # its latest snapshot is delivered on resume, then cadence is normal.
+        for tick in range(0, 4001, 10):
+            if 2000 < tick < 2500:
+                continue
+            clock[0] = tick/1000.
+            if tick % 30 == 0 or tick == 2500:
+                source = tick//130*130
+                revision = source//130+1
+                sync.snapshot(dict(round_id=1, server_tick=tick,
+                    bot_state_revision=revision, motion_time_us=tick*1000,
+                    bot_state_time_us=source*1000, bots=[player(7,source/100.)]))
+            sync.advance(clock[0])
+            record = sync._entities['bot:7']
+            cursor = record.get('presentation_time_us')
+            if cursor is not None:
+                self.assertLessEqual(cursor,record['target_sample_time_us'])
+                if last_cursor is not None:
+                    self.assertGreaterEqual(cursor,last_cursor)
+                    if tick > 2500:
+                        self.assertLessEqual(cursor-last_cursor,
+                            (tick-last_render)*1000.*1.5+1.)
+                last_cursor,last_render=cursor,tick
+            if tick == 3500:
+                late_delay=record['presentation_delay_us']
+        self.assertLess(late_delay,250000.)
+
     def test_confirmed_stall_tail_recovers_faster_than_the_previous_policy(self):
         policies = []
         for previous in (True, False):

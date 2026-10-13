@@ -31,6 +31,11 @@ TIMED_DELAY_DECAY_RATIO = 0.005
 # cushion intact so recurring short gaps do not cause playback holds.
 TIMED_STALL_RECOVERY_RATIO = 0.05
 TIMED_CONFIRMED_CATCHUP_RATE = 0.10
+# A paused consumer can retain half a second of obsolete display history.
+# On normal callbacks again, replay confirmed history at at most 1.5x while
+# returning to the actually observed producer cushion. Never skip that cursor.
+TIMED_CONSUMER_PAUSE_SECONDS = 0.1
+TIMED_CONSUMER_RESUME_RATE = 0.5
 TIMED_STALL_RECOVERY_FLOOR_US = 120000.0
 # Ignore sub-frame changes in the measured target after warm-up.  Expanding a
 # confirmed-only cursor cannot rewind it, so a tiny increase would itself add
@@ -267,6 +272,8 @@ class SnapshotSync(object):
                 record['timed_warmup_intervals'] = 0
                 record['timed_warmup_active'] = True
                 record['timed_samples'] = []
+                record['consumer_resume_pending'] = False
+                record['consumer_resume_sample_us'] = None
                 record['presentation_time_us'] = sample_time_us
             if previous is not None and previous_sample_time_us is not None:
                 if not stale_initial_anchor:
@@ -304,6 +311,9 @@ class SnapshotSync(object):
                             TIMED_WARMUP_HEADROOM_RATIO)
                     previous_delay_us = record.get(
                         'interpolation_delay_us')
+                    record['observed_delay_us'] = observed_delay_us
+                    consumer_recovery = bool(record.get('consumer_resume_pending') and
+                        record.get('consumer_render_delta', 0.0) < TIMED_CONSUMER_PAUSE_SECONDS)
                     if previous_delay_us is None:
                         retained_delay_us = INITIAL_TIMED_DELAY_US
                     else:
@@ -311,7 +321,8 @@ class SnapshotSync(object):
                             MIN_TIMED_DELAY_US,
                             previous_delay_us -
                             (sample_time_us - previous_sample_time_us) *
-                            (TIMED_STALL_RECOVERY_RATIO if
+                            (TIMED_CONSUMER_RESUME_RATE if consumer_recovery else
+                             TIMED_STALL_RECOVERY_RATIO if
                              previous_delay_us > TIMED_STALL_RECOVERY_FLOOR_US
                              else TIMED_DELAY_DECAY_RATIO))
                     record['interpolation_delay_us'] = max(
@@ -377,6 +388,10 @@ class SnapshotSync(object):
         record['motion_anchor_time_us'] = int(time_us)
         record['motion_anchor_local_time'] = float(local_time)
         record['snapshot_interval_us'] = None
+        record['consumer_resume_pending'] = False
+        record['consumer_resume_sample_us'] = None
+        record['consumer_render_delta'] = 0.0
+        record['observed_delay_us'] = None
         record['interpolation_delay_us'] = None
         record['presentation_delay_us'] = None
         record['timed_warmup_intervals'] = 0
@@ -717,6 +732,10 @@ class SnapshotSync(object):
             elapsed = max(0.0, now - record['target_time'])
             timed = record.get('timed_prediction')
             if timed and len(record.get('timed_samples') or ()) >= 2:
+                record['consumer_render_delta'] = render_delta
+                if render_delta >= TIMED_CONSUMER_PAUSE_SECONDS:
+                    record['consumer_resume_pending'] = True
+                    record['consumer_resume_sample_us'] = record['target_sample_time_us']
                 samples = record['timed_samples']
                 anchor_time_us = record.get('motion_anchor_time_us')
                 anchor_local_time = record.get('motion_anchor_local_time')
@@ -762,6 +781,12 @@ class SnapshotSync(object):
                         latency_rate = max(latency_rate, min(
                             TIMED_CONFIRMED_CATCHUP_RATE,
                             (delay_us - ideal_delay_us) / 1000000.0))
+                        if (record.get('consumer_resume_pending') and
+                                render_delta < TIMED_CONSUMER_PAUSE_SECONDS):
+                            latency_rate = max(latency_rate, TIMED_CONSUMER_RESUME_RATE)
+                if (record.get('consumer_resume_pending') and
+                        render_delta < TIMED_CONSUMER_PAUSE_SECONDS):
+                    latency_rate = min(latency_rate, TIMED_CONSUMER_RESUME_RATE)
                 delay_step_us = (
                     render_delta * latency_rate * 1000000.0)
                 if ideal_delay_us > delay_us:
@@ -771,6 +796,13 @@ class SnapshotSync(object):
                     delay_us = max(
                         ideal_delay_us, delay_us - delay_step_us)
                 record['presentation_delay_us'] = delay_us
+                observed_delay_us = record.get('observed_delay_us')
+                if (observed_delay_us is not None and
+                        render_delta < TIMED_CONSUMER_PAUSE_SECONDS and
+                        record['target_sample_time_us'] > (record.get('consumer_resume_sample_us') or 0) and
+                        max(delay_us, ideal_delay_us) <=
+                        max(MIN_TIMED_DELAY_US, observed_delay_us) + TIMED_DELAY_GROW_DEADBAND_US):
+                    record['consumer_resume_pending'] = False
                 # Playback uses an adaptive confirmed-history high-water mark.
                 # It may hold at the newest confirmed sample, but it never
                 # extrapolates beyond it. A larger later interval cannot rewind

@@ -13047,6 +13047,8 @@ class BattleRuntime(object):
                     'presented_pose': record.get('_remote_pose_signature'),
                     'ideal_delay_us': sync_record.get('interpolation_delay_us'),
                     'display_delay_us': sync_record.get('presentation_delay_us'),
+                    'observed_delay_us': sync_record.get('observed_delay_us'),
+                    'consumer_resume_pending': bool(sync_record.get('consumer_resume_pending')),
                     'snapshot_interval_us': sync_record.get('snapshot_interval_us'),
                     'shot_yaw': event.get('shot_yaw'), 'shot_pitch': event.get('shot_pitch')},
                     separators=(',', ':')) + '\n')

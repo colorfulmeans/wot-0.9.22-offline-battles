@@ -476,16 +476,19 @@ class BotAdapter(object):
             attempt = {'goal': tuple(destination), 'position': tuple(position),
                        'distance': goal_distance, 'age': 0.0, 'fallback': False}
             self._withdrawal_attempts[bot_id] = attempt
-        moved = math.hypot(position[0] - attempt['position'][0],
-                           position[2] - attempt['position'][2])
-        progressed = (goal_distance + 2.0 <= attempt['distance']
-                      if attempt['fallback'] else moved >= 0.08)
+        # Net progress towards cover renews this owner. Small alternating
+        # displacements must not buy another eight seconds at the same jam.
+        progressed = goal_distance + (2.0 if attempt['fallback'] else 0.08) <= attempt['distance']
         if progressed:
             attempt.update(position=tuple(position), distance=goal_distance,
                            age=0.0, fallback=False)
         attempt['age'] += max(0.0, float(state.get('dt', 0.0)))
         if attempt['age'] >= 8.0:
             attempt['fallback'] = True
+        evidence = dict(goal=attempt['goal'], distance=goal_distance,
+                        best_distance=attempt['distance'], age=attempt['age'],
+                        phase='fallback' if attempt['fallback'] else 'active')
+        state['_withdrawal_evidence'] = evidence
         if attempt['fallback']:
             return None
         yaw = float(state.get('yaw', 0.0))
@@ -494,6 +497,7 @@ class BotAdapter(object):
         face_yaw = travel_yaw + math.pi
         error = (face_yaw - yaw + math.pi) % (2.0 * math.pi) - math.pi
         if abs(error) > math.pi / 3.0:
+            evidence['phase'] = 'orientation_handoff'
             return None
         length = float(state.get('half_length', 3.5))
         width = float(state.get('half_width', 1.7))
@@ -513,11 +517,12 @@ class BotAdapter(object):
             except Exception:
                 clear = False
         if not clear or blocker is not None:
-            result = {'throttle': 0.0, 'turn': 0.0, 'target_yaw': yaw,
-                      'recovery_mode': 'blocked'}
-            if blocker is not None:
-                result['reverse_blocked_by'] = blocker
-            return result
+            # The rear-only owner has no admitted move. Let the normal driver
+            # prove another exit now, rather than freezing its progress clock.
+            attempt['fallback'] = True
+            evidence.update(phase='rear_refused', reverse_blocked_by=blocker,
+                            world_clear=clear)
+            return None
         # Reverse steering has the opposite input sign. Align gently before
         # backing rather than turning the chassis around toward the waypoint.
         braking_distance = max(0.0, float(state.get('stopping_distance') or 0.0))
@@ -551,6 +556,7 @@ class BotAdapter(object):
                               direction_clear):
         state.pop('_contact_escape_evidence', None)
         state.pop('_wreck_push_evidence', None)
+        state.pop('_withdrawal_evidence', None)
         aim_position = strategic.get('aim_position')
         move_position = strategic.get('move_position')
         face_position = strategic.get('face_position')
@@ -610,9 +616,9 @@ class BotAdapter(object):
         movement_intent = not (
             throttle_override is not None and
             float(throttle_override) <= 0.0)
-        if (not movement_intent or strategic.get('combat_mode') not in (
+        if strategic.get('combat_mode') not in (
                 'withdraw', 'low_health_retreat', 'under_fire_withdraw',
-                'crossfire_withdraw')):
+                'crossfire_withdraw'):
             self._withdrawal_attempts.pop(bot_id, None)
         requested_dx = float(move_position[0]) - float(position[0])
         requested_dz = float(move_position[2]) - float(position[2])
@@ -715,6 +721,8 @@ class BotAdapter(object):
             result['contact_escape'] = dict(state['_contact_escape_evidence'])
         if state.get('_wreck_push_evidence') is not None:
             result['wreck_push'] = dict(state['_wreck_push_evidence'])
+        if state.get('_withdrawal_evidence') is not None:
+            result['withdrawal'] = dict(state['_withdrawal_evidence'])
         difference = target_yaw - float(state.get('yaw', 0.0))
         while difference > math.pi:
             difference -= 2.0 * math.pi
