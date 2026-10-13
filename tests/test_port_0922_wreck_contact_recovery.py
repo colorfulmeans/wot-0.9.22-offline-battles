@@ -7,6 +7,68 @@ from gui.mods.offline_lan_0922.ai.traffic import TrafficCoordinator
 
 
 class WreckContactRecoveryTests(unittest.TestCase):
+    def test_failed_push_is_not_renewed_by_normal_recovery_progress(self):
+        self.route()
+        for unused in range(160):
+            self.decide()
+        self.state['position'] = (0., 0., .75)
+        self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
+
+    def test_missing_candidate_does_not_erase_failed_push(self):
+        self.route()
+        for unused in range(160):
+            self.decide()
+        self.state['neighbours'] = []
+        self.decide()
+        self.state['neighbours'] = [self.peer]
+        self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
+
+    def test_switching_wrecks_does_not_restart_spent_attempt(self):
+        self.route()
+        for unused in range(160):
+            self.decide()
+        other = dict(self.peer, id=3)
+        self.state['neighbours'] = [other]
+        self.assertEqual('wreck_push', self.decide()['recovery_mode'])
+        self.state['neighbours'] = [self.peer]
+        self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
+
+    def test_leaving_jam_region_allows_a_new_encounter(self):
+        self.route()
+        for unused in range(160):
+            self.decide()
+        self.state.update(position=(0., 0., -30.), neighbours=[])
+        self.decide()
+        self.state.update(position=(0., 0., 0.), neighbours=[self.peer])
+        self.assertEqual('wreck_push', self.decide()['recovery_mode'])
+
+    def test_partial_attempt_survives_a_candidate_gap(self):
+        self.route()
+        for unused in range(100):
+            self.decide()
+        self.state['neighbours'] = []
+        self.assertEqual('candidate_missing', self.decide()['wreck_push']['phase'])
+        self.state['neighbours'] = [self.peer]
+        for unused in range(60):
+            command = self.decide()
+        self.assertNotEqual('wreck_push', command['recovery_mode'])
+        self.assertEqual('exhausted', command['wreck_push']['phase'])
+
+    def test_wreck_evidence_does_not_leak_into_a_parked_command(self):
+        self.route()
+        self.assertIn('wreck_push', self.decide())
+        self.order.update(combat_mode='hold', parking_phase='waiting', throttle_override=0.)
+        self.assertNotIn('wreck_push', self.decide())
+
+    def test_world_refusal_cannot_be_erased_by_small_recovery_motion(self):
+        self.state['push_pose_clear'] = lambda yaw: False
+        self.assertEqual('world_turn_refused', self.decide()['wreck_push']['phase'])
+        self.state['position'] = (0., 0., .75)
+        self.state['push_pose_clear'] = lambda yaw: True
+        command = self.decide()
+        self.assertNotEqual('wreck_push', command['recovery_mode'])
+        self.assertEqual('exhausted', command['wreck_push']['phase'])
+
     def test_world_refused_push_hands_back_to_driver_without_fourteen_second_hold(self):
         self.state['push_pose_clear'] = lambda yaw: False
         before = dict(self.peer)
@@ -263,6 +325,7 @@ class WreckContactRecoveryTests(unittest.TestCase):
         self.assertNotIn(1, self.adapter._contact_peers)
         self.assertNotIn(1, self.adapter._contact_attempts)
         self.assertNotIn(1, self.adapter._wreck_attempts)
+        self.assertNotIn(1, self.adapter._wreck_history)
 
 
 if __name__ == '__main__':

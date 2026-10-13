@@ -6861,6 +6861,7 @@ class BotRuntime(object):
             'native_motion': bool(self.native_motion),
             'navigation': navigation, 'driver': driver_trace,
             'contact_escape': command.get('contact_escape'),
+            'wreck_push': command.get('wreck_push'),
             'decision': {key: command.get(key) for key in (
                 'combat_mode', 'recovery_mode', 'movement_intent',
                 'traffic_mode', 'move_position', 'target_yaw', 'brake')},

@@ -48,6 +48,7 @@ class BotAdapter(object):
         self._contact_attempts = {}
         self._contact_escapes = {}
         self._wreck_attempts = {}
+        self._wreck_history = {}
         self._withdrawal_attempts = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
@@ -60,6 +61,7 @@ class BotAdapter(object):
         self._contact_attempts.pop(int(bot_id), None)
         self._contact_escapes.pop(int(bot_id), None)
         self._wreck_attempts.pop(int(bot_id), None)
+        self._wreck_history.pop(int(bot_id), None)
         self._withdrawal_attempts.pop(int(bot_id), None)
 
     def _hull_contact(self, bot_id, state, position):
@@ -268,6 +270,16 @@ class BotAdapter(object):
         yaw = float(state.get('yaw', 0.0))
         length = float(state.get('half_length', 3.5))
         width = float(state.get('half_width', 1.7))
+        history = self._wreck_history.setdefault(bot_id, {})
+        # A short candidate gap or a second nearby corpse is still the same
+        # local jam. Retire receipts only after leaving their encounter region.
+        for peer_id, receipt in list(history.items()):
+            anchor = receipt.get('exhausted_position', receipt['origin'])
+            if math.hypot(position[0]-anchor[0], position[2]-anchor[2]) > 2.0*length + 2.0*width:
+                history.pop(peer_id, None)
+                if active is receipt:
+                    active = None
+                    self._wreck_attempts.pop(bot_id, None)
         goal = _position(strategic.get('move_position'), position)
         desired = math.atan2(goal[0]-position[0], goal[2]-position[2])
         neighbours = state.get('neighbours', ())
@@ -281,37 +293,57 @@ class BotAdapter(object):
                        self.driver._static_hull_ahead(
                           position, desired, [peer], length, width))), None)
         if wreck is None:
+            if active is not None:
+                state['_wreck_push_evidence'] = dict(
+                    peer_id=active['key'], phase='candidate_missing',
+                    elapsed=active['elapsed'], best_progress=active['best_progress'])
             self._wreck_attempts.pop(bot_id, None)
             return None
         where = _position(wreck.get('position', wreck))
         forward = math.sin(yaw), math.cos(yaw)
         # Tactical engage/route switches cannot restart the same jam episode.
         key = wreck.get('id')
-        attempt = self._wreck_attempts.get(bot_id)
-        if (attempt is None or attempt['key'] != key or
+        attempt = history.get(key)
+        phase = 'resumed'
+        if (attempt is None or
                 math.hypot(where[0]-attempt['position'][0],
                            where[2]-attempt['position'][2]) >= 1.0):
             heading = (math.atan2(where[0]-position[0], where[2]-position[2])
                        if side_wreck else desired)
             attempt = dict(key=key, position=where, elapsed=0.0, heading=heading,
-                           origin=position, best_progress=0.0)
-            self._wreck_attempts[bot_id] = attempt
+                           origin=position, best_progress=0.0, exhausted=False)
+            history[key] = attempt
+            phase = 'started'
+        self._wreck_attempts[bot_id] = attempt
         progress = ((position[0]-attempt['origin'][0])*math.sin(attempt['heading']) +
                     (position[2]-attempt['origin'][2])*math.cos(attempt['heading']))
+        evidence = dict(peer_id=key, phase=phase, elapsed=attempt['elapsed'],
+                        progress=progress, best_progress=attempt['best_progress'])
+        state['_wreck_push_evidence'] = evidence
+        # Ordinary recovery movement must not resurrect a spent motor attempt.
+        if attempt['exhausted']:
+            evidence['phase'] = 'exhausted'
+            return None
         if progress >= attempt['best_progress'] + 0.5:
             attempt['best_progress'] = progress
             attempt['elapsed'] = 0.0
+            evidence['phase'] = 'progress_renewed'
         attempt['elapsed'] += max(0.0, float(state.get('dt', 0.0)))
+        evidence.update(elapsed=attempt['elapsed'], best_progress=attempt['best_progress'])
         if attempt['elapsed'] >= 14.0:
             # Resume the ordinary driver and its progress/replanning clocks.
             # Never turn an exhausted motor attempt into a permanent hold.
+            attempt.update(exhausted=True, exhausted_position=position)
+            evidence['phase'] = 'stalled'
             return None
         reach = 2.0 * length + WAYPOINT_ARRIVAL_RADIUS
         if not self.driver._clear(direction_clear, yaw, reach):
+            evidence['phase'] = 'world_blocked'
             return None
         living = [peer for peer in neighbours if peer.get('alive', True)]
         if self.driver._reverse_blocked_by_vehicle(
                 position, yaw+math.pi, living, length, width) is not None:
+            evidence['phase'] = 'live_hull_blocked'
             return None
         # Keep forward torque throughout one admitted episode. Side contact
         # requires steering towards the wreck, not translating parallel to it.
@@ -325,6 +357,8 @@ class BotAdapter(object):
             # A realised world turn refusal is not a movable-wreck contact.
             # Release this failed episode to normal checked recovery immediately.
             attempt['elapsed'] = 14.0
+            attempt.update(exhausted=True, exhausted_position=position)
+            evidence.update(phase='world_turn_refused', elapsed=14.0)
             return None
         if not side_wreck and attempt['elapsed'] >= 8.0:
             side = 1.0 if int((attempt['elapsed']-6.0)/2.0) % 2 else -1.0
@@ -493,6 +527,7 @@ class BotAdapter(object):
     def _drive_order_controls(self, bot_id, state, position, strategic,
                               direction_clear):
         state.pop('_contact_escape_evidence', None)
+        state.pop('_wreck_push_evidence', None)
         aim_position = strategic.get('aim_position')
         move_position = strategic.get('move_position')
         face_position = strategic.get('face_position')
@@ -533,7 +568,8 @@ class BotAdapter(object):
             math.sin(state.get('yaw', 0.0))*contact['normal'][0] +
             math.cos(state.get('yaw', 0.0))*contact['normal'][1]) < 0.35)
         exhausted_wreck = bool(contact is not None and not contact['peer_alive'] and
-            self._wreck_attempts.get(bot_id, {}).get('elapsed', 0.0) >= 14.0)
+            self._wreck_history.get(bot_id, {}).get(
+                contact['peer_id'], {}).get('exhausted', False))
         if (not parked and not exhausted_wreck and contact_plan is None and contact is not None and
                 (side_contact or (strategic.get('throttle_override') is not None and
                  (not contact['peer_alive'] or contact['peer_team'] != state.get('team'))))):
@@ -654,6 +690,8 @@ class BotAdapter(object):
                 result[name] = local[name]
         if state.get('_contact_escape_evidence') is not None:
             result['contact_escape'] = dict(state['_contact_escape_evidence'])
+        if state.get('_wreck_push_evidence') is not None:
+            result['wreck_push'] = dict(state['_wreck_push_evidence'])
         difference = target_yaw - float(state.get('yaw', 0.0))
         while difference > math.pi:
             difference -= 2.0 * math.pi
