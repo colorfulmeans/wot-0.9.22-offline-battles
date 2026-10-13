@@ -14500,7 +14500,8 @@ class BattleRuntime(object):
             return None
         direction.normalise()
         self._report_effect(
-            'world_explosion', material, effects_index, impact, direction)
+            'world_explosion', material, effects_index, impact, direction,
+            event=dict(projectile_id=projectile_id))
         return (effects_descr, material, direction)
 
     def _surface_effect_material(self, impact):
@@ -16541,7 +16542,7 @@ class BattleRuntime(object):
             if budget is None or budget[0] != round_id:
                 budget = [round_id, 0]
                 self._projectile_interface_budget = budget
-            if budget[1] >= 128:
+            if budget[1] >= 512:
                 return
             row = dict(payload)
             row.update(projectile=meta.get('projectile_id'), phase=phase, round=round_id)
@@ -17321,10 +17322,12 @@ class BattleRuntime(object):
         else:
             self._report_projectile_terminal_failure(
                 meta, pending['state'], 'resolution_send', 'rejected')
-        if meta.get('ricochet_count', 0):
-            self._report_projectile_interface(meta,
-                'terminal_queued' if sent else 'terminal_queue_rejected', {
-                    'interface': 'client.send_projectile_resolve', 'queued': bool(sent), 'wire': wire})
+        self._report_projectile_interface(meta,
+            'terminal_queued' if sent else 'terminal_queue_rejected', {
+                'interface': 'client.send_projectile_resolve', 'queued': bool(sent),
+                'wire': wire, 'launch': dict((key, meta.get(key)) for key in
+                    ('origin', 'velocity', 'launch_server_time_ms', 'shooter_kind',
+                     'shooter_id', 'shell_index', 'shot_yaw', 'shot_pitch'))})
         return bool(sent)
 
     def _flush_pending_projectile_resolutions(self):
@@ -29434,10 +29437,12 @@ class BattleRuntime(object):
             traced_prop = any(row.get('stage') in (
                 'native.projectile.destroy', 'native.projectile.prop_material')
                 for row in result.get('collision_evidence', ()))
-            if (scene_meta.get('shooter_kind') == 'player' and
-                    (result.get('stop_distance') is not None or traced_prop)):
+            native_hit = any(row.get('stage') == 'native.projectile.world' and
+                             row.get('hit') is not None
+                             for row in result.get('collision_evidence', ()))
+            if result.get('stop_distance') is not None or traced_prop or native_hit:
                 phase = ('world_stop' if result.get('stop_distance') is not None
-                         else 'world_traverse')
+                         else 'world_contact' if native_hit else 'world_traverse')
                 interface_meta = getattr(self, '_projectile_meta', {}).get(
                     self._projectile_destructible_context)
                 if interface_meta is None:

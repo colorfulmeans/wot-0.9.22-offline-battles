@@ -1634,6 +1634,7 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_diagnostics', 'g_offh_destr_diag_last_static',
 			'g_offh_destr_contact_diagnostic_times',
 			'g_offh_destr_spatial_revision',
+			'g_offh_destr_spatial_published_revision',
 			'g_offh_destr_spatial_global_generation',
 			'g_offh_destr_spatial_cell_generations',
 			'g_offh_destr_spatial_chunk_generations',
@@ -2052,7 +2053,8 @@ def _publish_spatial_mutation_1513(bin_keys=(), chunk_ids=(),
 	chunk_ids = set(int(chunk_id) for chunk_id in chunk_ids)
 	if not bin_keys and not chunk_ids and not global_invalidation:
 		return _spatial_revision_1513()
-	if global_invalidation:
+	if (global_invalidation or globals().get(
+			'g_offh_destr_spatial_published_revision', 0) != _spatial_revision_1513()):
 		name = 'g_offh_destr_spatial_global_generation'
 		globals()[name] = int(globals().get(name, 0)) + 1
 	cell_generations = globals().setdefault(
@@ -2067,6 +2069,7 @@ def _publish_spatial_mutation_1513(bin_keys=(), chunk_ids=(),
 			chunk_generations.get(chunk_id, 0)) + 1
 	revision = _spatial_revision_1513() + 1
 	globals()['g_offh_destr_spatial_revision'] = revision
+	globals()['g_offh_destr_spatial_published_revision'] = revision
 	_receipt_stat_1513('spatial_invalidations')
 	return revision
 
@@ -2153,6 +2156,16 @@ def _spatial_cell_signature_1513(rectangles):
 		'g_offh_destr_spatial_global_generation', 0)), tuple(
 			(key, int(cell_generations.get(key, 0)))
 			for key in sorted(keys)))
+
+
+def _collision_region_revision_1513(lower, upper):
+	"""Keep unrelated index mutations out of a scoped filter cache key."""
+	revision = _spatial_revision_1513()
+	if globals().get('g_offh_destr_spatial_published_revision') != revision:
+		# A replaced writer with unknown locality retains global invalidation.
+		return ('global_revision', revision)
+	return _spatial_cell_signature_1513((
+		(lower[0], upper[0], lower[1], upper[1]),))
 
 
 def _spatial_chunk_signature_1513(chunk_ids):
@@ -4506,7 +4519,7 @@ def ground_filter_batch_1513(provider):
 		cell = _destructible_bin_key(x, z)
 		trees = _accepted_tree_collision_keys_1513()
 		key = (globals().get('g_offh_destr_runtime_space'),
-			_spatial_revision_1513(), cell, id(trees), len(trees))
+			_collision_region_revision_1513(cell, cell), cell, id(trees), len(trees))
 		batch = globals().get('g_offh_destr_spatial_mutation_batch', {})
 		dirty = batch.get('global') or cell in batch.get('bin_keys', ())
 		if dirty:
@@ -4623,7 +4636,7 @@ def prepare_horizontal_collision_filter(start, end):
 		lower = _destructible_bin_key(bounds[0], bounds[2])
 		upper = _destructible_bin_key(bounds[1], bounds[3])
 		key = (globals().get('g_offh_destr_runtime_space'),
-			_spatial_revision_1513(), lower, upper,
+			_collision_region_revision_1513(lower, upper), lower, upper,
 			id(accepted_trees), len(accepted_trees))
 		batch = globals().get('g_offh_destr_spatial_mutation_batch', {})
 		dirty = batch.get('global') or any(
@@ -8786,8 +8799,11 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 					if stage in ('native.projectile.world', 'native.projectile.identity'):
 						row.update(start=point(args[1]), end=point(args[2]),
 							filtered=len(args) > 4, surfaces=surfaces,
-							hit=None if value is None else point(value[0]))
+							hit=None if value is None else point(value[0]),
+							normal=None if value is None else point(value[1]))
 					elif stage == 'native.projectile.material':
+						row.update(identity_status=('identified' if value[4] else
+							'missing_resource' if value[0] else 'no_hit'))
 						row.update(collided=value[0], material=value[3],
 							filename=value[4], item=value[5], chunk=value[6])
 					elif stage == 'native.projectile.prop_material':

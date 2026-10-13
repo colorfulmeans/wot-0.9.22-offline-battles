@@ -411,6 +411,22 @@ class LocalDriver(object):
 			recovery_mode='reverse_turn')
 		return result
 
+	def recovery_replan(self, bot_id, position, half_length):
+		"""Request one fresh follower after repeated recovery in the same pocket."""
+		state = self.states.get(bot_id)
+		if state is None or state['recovery_count'] == 0:
+			return False
+		episode = state.get('recovery_replan_episode')
+		if episode is None or _distance(position, episode['origin']) >= 2.0 * half_length + WAYPOINT_ARRIVAL_RADIUS:
+			episode = dict(origin=tuple(position), at=state['clock'],
+				count=state['recovery_count'], issued=False)
+			state['recovery_replan_episode'] = episode
+		if (episode['issued'] or state['clock'] - episode['at'] < 8.0 or
+				state['recovery_count'] <= episode['count']):
+			return False
+		episode['issued'] = True
+		return True
+
 	def _state(self, bot_id, team_slot, position):
 		team_slot = _team_slot(team_slot)
 		state = self.states.get(bot_id)
@@ -987,6 +1003,7 @@ class LocalDriver(object):
 			state.pop('translation_escape', None)
 			state['translation_progress_at'] = state['clock']
 			state.pop('objective_progress', None)
+			state.pop('recovery_replan_episode', None)
 			# Cover/engagement orders intentionally stop within a tolerance. Do not
 			# reinterpret that commanded hold as a stuck tank 1.8 seconds later.
 			state['stuck_time'] = 0.0
@@ -1209,12 +1226,11 @@ class LocalDriver(object):
 						if forward_blocker is not None:
 							blocked['forward_blocked_by'] = forward_blocker
 						return blocked
-				return {
-					'throttle': 0.0,
-					'turn': direction,
-					'target_yaw': recovery_yaw,
-					'recovery_mode': 'pivot_recovery',
-				}
+				result = dict(throttle=0.0, turn=direction,
+					target_yaw=recovery_yaw, recovery_mode='pivot_recovery')
+				if reverse_blocker is not None:
+					result['reverse_blocked_by'] = reverse_blocker
+				return result
 			# Reverse recovery is an explicit reverse command. The traverse law flips
 			# steering from that command immediately, not from signed velocity.
 			recovery_turn = -direction

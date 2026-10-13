@@ -6849,6 +6849,7 @@ class BotRuntime(object):
             'clock', 'stuck_time', 'recovery_time', 'recovery_count',
             'alignment_target', 'heading_progress_yaw', 'best_heading_error')}
         driver_trace['objective_progress'] = dict(driver_state.get('objective_progress') or {})
+        driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
         driver_trace['navigation_wait'] = dict(
             driver_state.get('navigation_wait') or {})
         # Finish this rare diagnostic after every authority gate has run.
@@ -12936,6 +12937,9 @@ class BotRuntime(object):
                 'turret_yaw': state.get('turret_yaw'), 'gun_pitch': state.get('gun_pitch'),
                 'hull': [state.get(k) for k in ('yaw', 'pitch', 'roll')],
                 'world_aim_yaw': state.get('aim_yaw'),
+                'launch_origin': launch.get('shot_origin', launch.get('origin')),
+                'launch_velocity': launch.get('shot_velocity', launch.get('velocity')),
+                'aim_position': state.get('aim_position'),
                 'yaw_error_rad': yaw_error, 'pitch_error_rad': pitch_error,
                 'tolerance_rad': 1.0e-6,
                 'shot_yaw': launch.get('shot_yaw'), 'shot_pitch': launch.get('shot_pitch')},

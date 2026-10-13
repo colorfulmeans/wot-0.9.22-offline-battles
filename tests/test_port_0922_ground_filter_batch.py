@@ -52,6 +52,44 @@ class GroundFilterBatchTests(unittest.TestCase):
             self.assertFalse(callback(73, 0, 7, 22))
             self.assertTrue(callback(105, 8, 700, 500))
 
+    def test_published_remote_mutation_reuses_local_ground_and_horizontal_filters(self):
+        point = lambda x, z: types.SimpleNamespace(x=x, z=z)
+        with mock.patch.dict(sensor.__dict__, {
+                '_destructible_catalog': {},
+                'g_offh_destr_spatial_cell_generations': {},
+                'g_offh_destr_spatial_global_generation': 0,
+                'g_offh_destr_spatial_published_revision': 0, 'xrange': range}), \
+                mock.patch.object(sensor, '_live_broken_collision_filter_1513',
+                                  side_effect=lambda *args: object()), \
+                mock.patch.object(sensor, '_contact_members_for_bounds_1513', return_value={(22, 7)}):
+            with sensor.collision_preparation_scope_1513():
+                batch = sensor.ground_filter_batch_1513(sensor.ground_collision_filter)
+                ground = batch(1., 2.)
+                horizontal = sensor.prepare_horizontal_collision_filter(point(1, 1), point(2, 2))
+                sensor._bump_spatial_revision_1513(bin_keys={(99, 99)})
+                self.assertIs(ground, batch(1., 2.))
+                self.assertIs(horizontal, sensor.prepare_horizontal_collision_filter(point(1, 1), point(2, 2)))
+                sensor._bump_spatial_revision_1513(bin_keys={(0, 0)})
+                self.assertIsNot(ground, batch(1., 2.))
+                self.assertIsNot(horizontal, sensor.prepare_horizontal_collision_filter(point(1, 1), point(2, 2)))
+                changed = batch(1., 2.)
+                sensor._bump_spatial_revision_1513()
+                self.assertIsNot(changed, batch(1., 2.))
+
+    def test_unknown_revision_cannot_resurrect_old_local_filter_after_remote_publish(self):
+        with mock.patch.dict(sensor.__dict__, {
+                'xrange': range, 'g_offh_destr_spatial_cell_generations': {},
+                'g_offh_destr_spatial_global_generation': 0,
+                'g_offh_destr_spatial_published_revision': 0}), \
+                mock.patch.object(sensor, '_live_broken_collision_filter_1513', side_effect=lambda *args: object()):
+            batch = sensor.ground_filter_batch_1513(sensor.ground_collision_filter)
+            before = batch(1., 2.)
+            sensor.g_offh_destr_spatial_revision += 1
+            unknown = batch(1., 2.)
+            self.assertIsNot(before, unknown)
+            sensor._bump_spatial_revision_1513(bin_keys={(99, 99)})
+            self.assertIsNot(before, batch(1., 2.))
+
     def test_custom_provider_retains_its_original_call_path(self):
         self.assertIsNone(sensor.ground_filter_batch_1513(lambda x, z: None))
 

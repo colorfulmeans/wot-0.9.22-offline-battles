@@ -678,6 +678,12 @@ class BotAdapter(object):
         # their stable 12-30 degree hull angle while the turret keeps tracking
         # ``aim_position``.  Local recovery directions still outrank it.
         recovery_mode = local.get('recovery_mode', 'drive')
+        if (movement_intent and recovery_mode in (
+                'blocked', 'pivot_recovery', 'reverse_turn', 'short_forward_escape',
+                'short_reverse_escape', 'forward_escape', 'avoid') and
+                self.driver.recovery_replan(bot_id, position,
+                    float(state.get('half_length', 3.5)))):
+            local['navigation_replan'] = True
         target_yaw = float(local['target_yaw'])
         turn = float(local['turn'])
         dx = float(face_position[0]) - float(position[0])

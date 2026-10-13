@@ -671,6 +671,12 @@ def _server_event_log_message(event, players, bot_states):
         return "BATTLE RESULT winner=%s reason=%s base_team=%s" % (
             event.get("winner"), event.get("reason"),
             event.get("base_team"))
+    if (kind == "projectile_impact" and event.get("shooter_kind") == "bot"
+            and event.get("outcome") is not None):
+        return "PROJECTILE TERMINAL id=%s outcome=%s elapsed_ms=%s shooter=bot:%s impact=%s hit_vehicle=%s" % (
+            event.get("projectile_id"), event.get("outcome"),
+            event.get("resolved_time_ms"), event.get("shooter_id"),
+            event.get("impact"), event.get("hit_vehicle"))
     if (kind == "projectile_impact" and
             event.get("shooter_kind") == "player"):
         return "PROJECTILE TERMINAL id=%s outcome=%s elapsed_ms=%s" % (
