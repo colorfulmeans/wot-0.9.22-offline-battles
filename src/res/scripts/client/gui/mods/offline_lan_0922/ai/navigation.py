@@ -2492,6 +2492,34 @@ class TerrainNavigator(object):
 		state['index'] = 0
 		self._cancel_bot_searches(bot_id)
 
+	def driver_progress_target(self, bot_id, current, target, now=0.0):
+		"""Admit a cached path edge or an unexpired proved local leg.
+
+		The local-leg lease and visited-cell macro watchdog retain ownership of
+		temporary bypasses. An arbitrary or expired tip cannot renew the driver.
+		"""
+		state = self.bot_states.get(int(bot_id), {})
+		if (state.get('navigation_status') != 'safe' or
+				tuple(state.get('last_target') or ()) != tuple(target) or
+				_distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS):
+			return None
+		local = state.get('local_fallback_target')
+		if local is not None:
+			progress_at = state.get('local_target_progress_at')
+			intent = state.get('local_fallback_intent')
+			if (tuple(local) == tuple(target) and
+					state.get('local_fallback_start') is not None and
+					intent is not None and intent == state.get('local_fallback_episode') and
+					progress_at is not None and
+					float(now) - float(progress_at) < MACRO_STALL_SECONDS and
+					not state.get('temporary_stalled', False)):
+				return tuple(target)
+			return None
+		if (state.get('macro_progress_kind') == 'path' and
+				self.paths.get(state.get('path_key'))):
+			return tuple(target)
+		return None
+
 	def _observe_macro_progress(self, bot_id, state, current, goal, now):
 		"""Observe progress along the issued path target, not arbitrary motion."""
 		target = state.get('last_target')

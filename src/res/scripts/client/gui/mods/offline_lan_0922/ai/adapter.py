@@ -580,6 +580,7 @@ class BotAdapter(object):
             self.driver.resolve_order_positions(
                 position, aim_position, move_position, face_position))
         target = move_position
+        state.pop('navigation_progress_target', None)
         if callable(self.navigation_target):
             target = _position(self.navigation_target(
                 bot_id, position, target, strategic, state), target)
@@ -668,7 +669,7 @@ class BotAdapter(object):
                     stopping_distance=state.get('stopping_distance'),
                     stop_at_target=stop_at_target,
                     decision_horizon=float(state.get('decision_horizon', 0.0)),
-                    progress_target=move_position,
+                    progress_target=state.get('navigation_progress_target', move_position),
                     turn_speed_limit=state.get('turn_speed_limit'),
                     pose_clear=state.get('pose_clear'),
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
@@ -723,6 +724,8 @@ class BotAdapter(object):
             result['wreck_push'] = dict(state['_wreck_push_evidence'])
         if state.get('_withdrawal_evidence') is not None:
             result['withdrawal'] = dict(state['_withdrawal_evidence'])
+        if state.get('navigation_progress_target') is not None:
+            result['driver_progress_target'] = state['navigation_progress_target']
         difference = target_yaw - float(state.get('yaw', 0.0))
         while difference > math.pi:
             difference -= 2.0 * math.pi

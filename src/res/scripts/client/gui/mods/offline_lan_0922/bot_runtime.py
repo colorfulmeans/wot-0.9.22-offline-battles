@@ -6863,6 +6863,7 @@ class BotRuntime(object):
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
             'withdrawal': command.get('withdrawal'),
+            'driver_progress_target': command.get('driver_progress_target'),
             'decision': {key: command.get(key) for key in (
                 'combat_mode', 'recovery_mode', 'movement_intent',
                 'traffic_mode', 'move_position', 'target_yaw', 'brake')},
@@ -8832,6 +8833,7 @@ class BotRuntime(object):
 
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
+        state.pop('navigation_progress_target', None)
         mode = strategic.get('combat_mode', 'route')
         authority_state = self.states.get(int(bot_id))
         if authority_state is not None:
@@ -9000,6 +9002,11 @@ class BotRuntime(object):
             remember(bot_id, position, goal, target, now)
         state['navigation_status'] = getattr(self.navigator, 'bot_states', {}).get(
             int(bot_id), {}).get('navigation_status', 'pending')
+        progress_receipt = getattr(self.navigator, 'driver_progress_target', None)
+        if movement_intent and callable(progress_receipt):
+            progress_target = progress_receipt(bot_id, position, target, now)
+            if progress_target is not None:
+                state['navigation_progress_target'] = progress_target
         return target
 
     def _player_neighbours(self, players):
