@@ -107,6 +107,23 @@ class LocalRetryCycleTests(unittest.TestCase):
                 goal if change=='arrival' else current,goal,30.,change!='hold'))
             self.assertNotIn('local_retry_progress',state)
 
+    def test_shortcut_hold_clears_recorded_wz132a_retry_age(self):
+        nav,state,current,goal = self.scene((-5.19,-4.82,25.39))
+        self.refuse(nav,state,current,goal,0.)
+        path_key=('route_join',3,'hold')
+        state['request_path_key']=path_key
+        state['planned_goal']=goal
+        self.assertIsNone(nav.retained_local_target(3,current,goal,path_key,36.,False))
+        self.assertNotIn('local_retry_progress',state)
+
+    def test_direct_hold_and_arrival_clear_old_local_retry(self):
+        for arrived in (False,True):
+            nav,state,current,goal = self.scene()
+            self.refuse(nav,state,current,goal,0.)
+            nav.observe_direct_target(3,goal if arrived else current,goal,
+                ('direct',3),36.,movement_intent=arrived)
+            self.assertNotIn('local_retry_progress',state)
+
     def test_retry_is_bounded_and_needs_more_actual_refusals(self):
         nav,state,current,goal = self.scene()
         self.refuse(nav,state,current,goal,0.)

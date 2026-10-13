@@ -1996,6 +1996,7 @@ class TerrainNavigator(object):
 		if (not movement_intent or state.get('request_path_key') != tuple(path_key) or
 				_distance_2d(planned, goal) >= self.grid.cell_size * 2.0):
 			state.pop('local_fallback_target', None)
+			state.pop('local_retry_progress', None)
 			return None
 		target = state.get('local_fallback_target')
 		if target is not None and yaw is not None:
@@ -2427,6 +2428,8 @@ class TerrainNavigator(object):
 		"""Return a bounded local escape when a proved direct edge stalls."""
 		bot_id = int(bot_id)
 		path_identity = tuple(path_key)
+		if not movement_intent or _distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS:
+			self.bot_states.get(bot_id, {}).pop('local_retry_progress', None)
 		state = self.bot_direct_progress.get(bot_id)
 		if state is None:
 			state = {'path_key': path_identity, 'target': tuple(goal),

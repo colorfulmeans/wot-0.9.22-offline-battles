@@ -119,6 +119,41 @@ class RearLimitedAimTests(unittest.TestCase):
 
 
 class RearTraverseRuntimeTests(unittest.TestCase):
+    def test_switching_rear_enemies_cannot_renew_stationary_movement_budget(self):
+        state=self.state
+        state['_rear_motion_lease']=dict(start=0.,origin=(0.,0.,0.))
+        targets={2:dict(alive=True),3:dict(alive=True)}
+        for now,target_id in ((1.,2),(4.,3),(7.,2),(9.,3)):
+            state['_rear_aim_episode']=dict(identity=('human',target_id),
+                target_id=target_id,start=now-.1,fire_seq=state.get('fire_seq',0))
+            order=dict(combat_mode='withdraw',target_id=target_id,
+                       move_position=(0.,0.,20.))
+            result=self.runtime._rear_laying_order(state,order,targets,now)
+            self.assertEqual(0.,state['_rear_motion_lease']['start'])
+            if now<8.:
+                self.assertEqual('engage',result['combat_mode'])
+            else:
+                self.assertEqual('withdraw',result['combat_mode'])
+                self.assertTrue(state['_rear_motion_blocked'])
+                self.assertNotIn('_rear_aim_episode',state)
+                control=driver.combat_hull_aim(0.,2.9,-.1,.1,.2,1.,'drive',True,
+                    combat_mode='withdraw',movement_intent=True,
+                    allow_rear_start=not state['_rear_motion_blocked'])
+                self.assertEqual((.2,1.,False),control)
+
+    def test_real_travel_arrival_and_cooldown_release_rear_motion_budget(self):
+        for action in ('travel','arrival','cooldown'):
+            state=dict(self.state)
+            state.pop('_rear_aim_episode',None)
+            state['_rear_motion_lease']=dict(start=0.,origin=(0.,0.,0.))
+            if action=='travel':state['z']=20.
+            if action=='cooldown':state['_rear_motion_lease']['retry_until']=8.
+            goal=(state['x'],state['y'],state['z']) if action=='arrival' else (0.,0.,50.)
+            order=dict(combat_mode='withdraw',target_id=2,move_position=goal)
+            self.runtime._rear_laying_order(state,order,{2:dict(alive=True)},9.)
+            self.assertNotIn('_rear_motion_lease',state)
+            self.assertFalse(state['_rear_motion_blocked'])
+
     def test_world_refused_t95_laying_yields_in_next_real_update(self):
         descriptor = harness._combat_descriptor(
             turret_yaw_limits=(-math.radians(10), math.radians(11)), turret_speed=1.)

@@ -6892,6 +6892,8 @@ class BotRuntime(object):
                 hull_aiming=state.get('hull_aiming'),
                 rear_hull_aim=state.get('_rear_hull_aim'),
                 rear_aim_episode=state.get('_rear_aim_episode'),
+                rear_motion_lease=state.get('_rear_motion_lease'),
+                rear_motion_blocked=state.get('_rear_motion_blocked', False),
                 clip=state.get('clip'),
                 ammo_reload_pending=state.get('ammo_reload_pending'),
                 reload=state.get('reload_time'), fire_seq=state.get('fire_seq')),
@@ -12743,6 +12745,26 @@ class BotRuntime(object):
 
     def _rear_laying_order(self, state, order, targets, now):
         """Finish one bounded mechanical laying attempt before route handoff."""
+        # A new enemy cannot renew the same stationary movement attempt.
+        lease = state.get('_rear_motion_lease')
+        motion_blocked = False
+        if lease is not None:
+            position = _position(state)
+            goal = _point(order.get('move_position'), position)
+            completed = (_distance(position, lease['origin']) >=
+                2.0 * float(state.get('half_length', 3.5)) + 1.5 or
+                _distance(position, goal) <= 1.5 or
+                order.get('parking_phase') or order.get('combat_mode') in
+                ('base_defense', 'support_hold', 'cover_hold', 'hold',
+                 'artillery_deploy', 'artillery_relocate'))
+            retry_until = lease.get('retry_until')
+            if completed or (retry_until is not None and now >= retry_until):
+                state.pop('_rear_motion_lease', None)
+            elif retry_until is not None or now - lease['start'] >= 8.0:
+                if retry_until is None:
+                    lease['retry_until'] = now + max(8.0, _number(state.get('reload_time')))
+                motion_blocked = True
+        state['_rear_motion_blocked'] = motion_blocked
         episode = state.get('_rear_aim_episode')
         if episode is None:
             return order
@@ -12753,7 +12775,7 @@ class BotRuntime(object):
                    order.get('combat_mode') in
                    ('base_defense', 'artillery_deploy', 'artillery_relocate'))
         fired = int(state.get('fire_seq', 0)) != episode['fire_seq']
-        expired = now - episode['start'] >= 8.0
+        expired = motion_blocked or now - episode['start'] >= 8.0
         blocked = any(now < failed[3] and
                       _distance(_position(state), failed[0]) <= 0.08 and
                       abs(_angle_delta(state.get('yaw', 0.0), failed[1])) <= 0.02
@@ -14223,6 +14245,7 @@ class BotRuntime(object):
             retry = state.get('_rear_aim_retry')
             allow_rear_start = not (retry is not None and
                 retry[0] == aim_target_key and now < retry[1])
+            allow_rear_start = allow_rear_start and not state.get('_rear_motion_blocked', False)
             turn, throttle, hull_aiming = ai_driver.combat_hull_aim(
                 state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
@@ -14240,6 +14263,10 @@ class BotRuntime(object):
             if (hull_aiming and unused_limited and
                     (rear_turn or abs(rear_relative) > math.pi * 0.5)):
                 state['_rear_hull_aim'] = (aim_target_key, turn)
+                if (state.get('_rear_motion_lease') is None and
+                        command.get('movement_intent', True) and
+                        command.get('combat_mode') != 'engage'):
+                    state['_rear_motion_lease'] = dict(start=now, origin=tuple(position))
                 if state.get('_rear_aim_episode') is None:
                     state['_rear_aim_episode'] = dict(
                         identity=aim_target_key, target_id=command.get('target_id'),
