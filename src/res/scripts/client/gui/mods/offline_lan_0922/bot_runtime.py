@@ -14653,6 +14653,7 @@ class BotRuntime(object):
                         turn, state['speed'], step,
                         drive_intent=throttle))
                 old_hull_yaw = state['yaw']
+                allowed = 1.0
                 candidate_hull_yaw = old_hull_yaw + turn_speed * step
                 while candidate_hull_yaw > math.pi:
                     candidate_hull_yaw -= math.pi * 2.0
@@ -14792,6 +14793,8 @@ class BotRuntime(object):
                     trace.update({
                         'dt': step, 'drive_speed': speed,
                         'rotation_blocked': rotation_blocked,
+                        'hull_rotation_contact_blocked': allowed < 1.0,
+                        'hull_rotation_fraction': allowed,
                         'rotation_block_reason': rotation_block_reason,
                         'rotation_drive_held': rotation_drive_held,
                         'actual_turn_speed': turn_speed,

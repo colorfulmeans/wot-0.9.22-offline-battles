@@ -255,8 +255,9 @@ class BotAdapter(object):
 
         This admits controls only. The normal terrain, hull and contact solver
         still owns every resulting pose and any displacement of the wreck.
-        Real forward progress or wreck movement renews the attempt; route,
-        tactical, yaw and tiny order changes do not.
+        Real forward progress renews the motor budget. Wreck movement refreshes
+        geometry without hiding the bot's own stall; route, tactical, yaw and
+        tiny order changes do not renew either budget.
         """
         wreck_contact = bool(contact is not None and not contact['peer_alive'])
         yaw = float(state.get('yaw', 0.0))
@@ -305,20 +306,35 @@ class BotAdapter(object):
         key = wreck.get('id')
         attempt = history.get(key)
         phase = 'resumed'
+        wreck_displacement = (0.0 if attempt is None else math.hypot(
+            where[0]-attempt['position'][0], where[2]-attempt['position'][2]))
         if (attempt is None or
-                math.hypot(where[0]-attempt['position'][0],
-                           where[2]-attempt['position'][2]) >= 1.0):
+                wreck_displacement >= 1.0):
+            previous = attempt
             heading = (math.atan2(where[0]-position[0], where[2]-position[2])
                        if side_wreck else desired)
             attempt = dict(key=key, position=where, elapsed=0.0, heading=heading,
-                           origin=position, best_progress=0.0, exhausted=False)
+                           origin=position, best_progress=0.0, exhausted=False,
+                           own_origin=position, own_heading=heading,
+                           own_best_progress=0.0, own_elapsed=0.0)
+            # A corpse can slide a metre while this hull stays pinned. Refresh
+            # its geometry, but keep the active motor's own progress receipt.
+            if previous is not None and not previous['exhausted']:
+                for name in ('own_origin', 'own_heading', 'own_best_progress', 'own_elapsed'):
+                    attempt[name] = previous[name]
             history[key] = attempt
-            phase = 'started'
+            phase = 'started' if previous is None else 'wreck_moved'
         self._wreck_attempts[bot_id] = attempt
         progress = ((position[0]-attempt['origin'][0])*math.sin(attempt['heading']) +
                     (position[2]-attempt['origin'][2])*math.cos(attempt['heading']))
         evidence = dict(peer_id=key, phase=phase, elapsed=attempt['elapsed'],
-                        progress=progress, best_progress=attempt['best_progress'])
+                        progress=progress, best_progress=attempt['best_progress'],
+                        wreck_displacement=wreck_displacement,
+                        own_elapsed=attempt['own_elapsed'],
+                        own_origin=attempt['own_origin'], own_heading=attempt['own_heading'])
+        own_progress = ((position[0]-attempt['own_origin'][0])*math.sin(attempt['own_heading']) +
+                        (position[2]-attempt['own_origin'][2])*math.cos(attempt['own_heading']))
+        evidence.update(own_progress=own_progress, own_best_progress=attempt['own_best_progress'])
         state['_wreck_push_evidence'] = evidence
         # Ordinary recovery movement must not resurrect a spent motor attempt.
         if attempt['exhausted']:
@@ -328,13 +344,20 @@ class BotAdapter(object):
             attempt['best_progress'] = progress
             attempt['elapsed'] = 0.0
             evidence['phase'] = 'progress_renewed'
-        attempt['elapsed'] += max(0.0, float(state.get('dt', 0.0)))
-        evidence.update(elapsed=attempt['elapsed'], best_progress=attempt['best_progress'])
-        if attempt['elapsed'] >= 14.0:
+        if own_progress >= attempt['own_best_progress'] + 0.5:
+            attempt['own_best_progress'] = own_progress
+            attempt['own_elapsed'] = 0.0
+        step = max(0.0, float(state.get('dt', 0.0)))
+        attempt['elapsed'] += step
+        attempt['own_elapsed'] += step
+        evidence.update(elapsed=attempt['elapsed'], best_progress=attempt['best_progress'],
+                        own_elapsed=attempt['own_elapsed'], own_best_progress=attempt['own_best_progress'])
+        if attempt['elapsed'] >= 14.0 or attempt['own_elapsed'] >= 14.0:
             # Resume the ordinary driver and its progress/replanning clocks.
             # Never turn an exhausted motor attempt into a permanent hold.
             attempt.update(exhausted=True, exhausted_position=position)
-            evidence['phase'] = 'stalled'
+            attempt['elapsed'] = max(14.0, attempt['elapsed'])
+            evidence.update(phase='own_stalled', elapsed=attempt['elapsed'])
             return None
         reach = 2.0 * length + WAYPOINT_ARRIVAL_RADIUS
         if not self.driver._clear(direction_clear, yaw, reach):

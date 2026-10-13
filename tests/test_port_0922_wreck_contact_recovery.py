@@ -7,6 +7,45 @@ from gui.mods.offline_lan_0922.ai.traffic import TrafficCoordinator
 
 
 class WreckContactRecoveryTests(unittest.TestCase):
+    def test_moving_wreck_does_not_renew_a_stationary_bot_motor_budget(self):
+        self.route()
+        for unused in range(100):
+            self.decide()
+        self.peer['position'] = (0., 0., 9.1)
+        commands = [self.decide() for unused in range(60)]
+        self.assertNotEqual('wreck_push', commands[-1]['recovery_mode'])
+        self.assertGreater(self.adapter.driver.states[1]['clock'], 0.)
+
+    def test_real_forward_progress_survives_wreck_reference_refreshes(self):
+        self.route()
+        for frame in range(300):
+            self.state['position'] = (0., 0., frame*.03)
+            self.peer['position'] = (0., 0., frame*.03+8.)
+            self.assertEqual('wreck_push', self.decide()['recovery_mode'])
+
+    def test_amx_144634_wreck_motion_cannot_hide_own_stall(self):
+        # Replay reported geometry and a proved one-metre corpse displacement.
+        # Clear proof callbacks isolate recovery ownership, not engine physics.
+        self.state.update(position=(93.910738935806,-1.465207695961,19.133250948984),
+                          yaw=2.193431851522, half_width=1.256786942482,
+                          half_length=2.462629079819,
+                          collision_shape=(1.256786942482,2.462629079819,.003748,1.358249008656),
+                          pose_clear=lambda yaw: True, push_pose_clear=lambda yaw: True)
+        self.peer.update(id=21, team=1, position=(97.281170137582,-1.774807929993,15.715094941299),
+                         yaw=1.928851197405, half_width=1.579941987991,
+                         half_length=2.906608104706,
+                         shape=(1.579941987991,2.906608104706,-.004689,1.528550028801))
+        self.order.update(combat_mode='route', throttle_override=None,
+                          move_position=(82.853,0.,-23.44))
+        first = self.decide()
+        self.assertEqual('wreck_push', first['recovery_mode'])
+        for frame in range(160):
+            if frame == 100:
+                self.peer['position'] = (98.229316334064,-1.933077692986,15.3488074128)
+                self.state['position'] = (93.95541539605,-1.468433022499,19.106468319677)
+            command = self.decide()
+        self.assertNotEqual('wreck_push', command['recovery_mode'])
+
     def test_failed_push_is_not_renewed_by_normal_recovery_progress(self):
         self.route()
         for unused in range(160):

@@ -17207,6 +17207,35 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual([0.0, 0.0], row['controls']['motion'])
         self.assertEqual(27, row['controls']['forward_blocked_by'])
 
+    def test_motion_evidence_distinguishes_hull_contact_from_world_turn_refusal(self):
+        from contextlib import redirect_stdout
+        self.runtime.battle_start(self.start)
+        state = self.runtime.states[11]
+        state['_motion_stall_log'] = ((state['x'], state['y'], state['z']), 0.0)
+        original_decide = self.runtime.adapter.decide
+
+        def decide(*args):
+            command = original_decide(*args)
+            command.update(throttle=1.0, turn=-.4, fire_allowed=False)
+            return command
+
+        self.runtime.adapter.decide = decide
+        output = io.StringIO()
+        with redirect_stdout(output), mock.patch.object(
+                self.runtime, '_rotation_fraction_for', return_value=0.0), mock.patch.object(
+                self.runtime._traffic_coordinator, 'safe_controls',
+                side_effect=lambda body, command, *args: dict(command)):
+            self.runtime.update(.04, 3.0)
+        rows = [json.loads(line.split('[BOT MOTION] ', 1)[1])
+                for line in output.getvalue().splitlines() if '[BOT MOTION] ' in line]
+        self.assertTrue(rows)
+        row = next(row for row in rows if row['id'] == 11)
+        self.assertTrue(row['hull_rotation_contact_blocked'])
+        self.assertEqual(0.0, row['hull_rotation_fraction'])
+        self.assertEqual(0.0, row['actual_turn_speed'])
+        self.assertFalse(row['rotation_blocked'])
+        self.assertIsNone(row['rotation_block_reason'])
+
     def test_local_roaming_diagnostic_survives_half_metre_timer_resets(self):
         from contextlib import redirect_stdout
         self.runtime.battle_start(self.start)
