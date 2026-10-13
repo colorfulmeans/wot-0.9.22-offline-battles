@@ -7844,6 +7844,57 @@ class BattleRuntime(object):
         update_scroll(
             max(minimum, min(maximum, left)),
             max(minimum, min(maximum, right)))
+        self._report_track_surface(entity, 'player', self.__dict__)
+        return True
+
+    def _report_track_surface(self, entity, owner, receipt, now=None):
+        """Read stock terrain/effect inputs without changing presentation."""
+        if not getattr(getattr(self, '_frame_diagnostics', None),
+                       'enabled', False):
+            return False
+        if now is None:
+            now = self._clock()
+        if now < receipt.get('_surface_report_at', 0.0):
+            return False
+        receipt['_surface_report_at'] = now + 5.0
+        try:
+            appearance = getattr(entity, 'appearance', None)
+            sensor = getattr(appearance, 'terrainMatKindSensor', None)
+            manager = getattr(appearance, 'customEffectManager', None)
+            args = getattr(manager, '_CustomEffectManager__variableArgs', {})
+            scroll = getattr(appearance, 'trackScrollController', None)
+            materials = getattr(self._runtime, 'material_kinds', None)
+            indexes = getattr(materials, 'EFFECT_MATERIAL_INDEXES_BY_IDS', {})
+            names = getattr(materials, 'EFFECT_MATERIALS', ())
+            effect_names = {}
+            for side in ('L', 'R'):
+                index = indexes.get(args.get('matkind' + side))
+                effect_names[side] = (names[index] if index is not None and
+                                     0 <= index < len(names) else None)
+            row = {
+                'owner': owner,
+                'round': (self._start_message or {}).get('round_id'),
+                'entity': getattr(entity, 'bw_entity_id',
+                                  getattr(entity, 'id', None)),
+                'position': str(getattr(entity, 'position', None))[:160],
+                'sensor_present': sensor is not None,
+                'sensor_materials': list(getattr(sensor, 'matKinds', ()) or ())[:4],
+                'appearance_materials': list(getattr(
+                    appearance, 'terrainMatKind', ()) or ())[:4],
+                'in_water': bool(getattr(appearance, 'isInWater', False)),
+                'effect_inputs': dict((key, args.get(key)) for key in (
+                    'matkindL', 'matkindR', 'deltaL', 'deltaR',
+                    'directionL', 'directionR', 'speed', 'isUnderWater')),
+                'effect_materials': effect_names,
+                'scroll': dict((key, getattr(scroll, key, None)) for key in (
+                    'leftScroll', 'rightScroll', 'leftContact', 'rightContact')),
+            }
+            sys.stdout.write('[Offline LAN 0.9.22] TRACK SURFACE %s\n' %
+                             json.dumps(row, separators=(',', ':')))
+        except Exception as error:
+            self._warn_optional_failure(
+                'track surface diagnostics', error, disable=False)
+            return False
         return True
 
     def _detach_local_presentation(self):
@@ -8776,6 +8827,10 @@ class BattleRuntime(object):
             selected=None if equipment_kind == 'rpm_limiter' else selected,
             requested_active=(bool(extra_index)
                               if equipment_kind == 'rpm_limiter' else None))
+        self._report_critical_presentation(record, {
+            'phase': 'equipment_intent', 'sequence': sequence,
+            'equipment_id': equipment_id, 'kind': equipment_kind,
+            'selected': selected, 'extra_index': extra_index})
         return sequence is not None
 
     def _active_engine_power_factor(self):
@@ -12346,7 +12401,35 @@ class BattleRuntime(object):
                     record['engine_id'], int(damage_index), extra_index,
                     int(attacker_id or 0)):
                 shown = True
+        self._report_critical_presentation(record, {
+            'phase': 'critical_present', 'events': list(events)[:24],
+            'shown': shown})
         return shown
+
+    def _report_critical_presentation(self, record, details):
+        """Join repair intent, applied HP and the stock damage-panel state."""
+        if (not record.get('local') or not getattr(
+                getattr(self, '_frame_diagnostics', None), 'enabled', False)):
+            return False
+        try:
+            entity = self._server_entity(record['engine_id'])
+            row = dict(details)
+            row.update({
+                'round': (self._start_message or {}).get('round_id'),
+                'entity': record['engine_id'],
+                'devices_hp': dict(getattr(entity, 'devices_hp', None) or {}),
+                'destroyed': sorted(getattr(entity, '_destroyed_devices', ()) or ()),
+                'critical': sorted(getattr(entity, '_critical_devices', ()) or ()),
+                'panel_states': dict(getattr(
+                    self._avatar, '_PlayerAvatar__deviceStates', None) or {}),
+            })
+            sys.stdout.write('[Offline LAN 0.9.22] MODULE PRESENT %s\n' %
+                             json.dumps(row, separators=(',', ':')))
+        except Exception as error:
+            self._warn_optional_failure(
+                'module presentation diagnostics', error, disable=False)
+            return False
+        return True
 
     def _damage_info_is_serviceable(self):
         """Whether #1513 can still service a damage-info notification.
@@ -12374,8 +12457,6 @@ class BattleRuntime(object):
     def _show_damage_info(self, engine_id, damage_index, extra_index,
                           attacker_id):
         """Publish one stock damage-info notification, never fatally."""
-        if not self._optional_feature_enabled('damage-info presentation'):
-            return False
         try:
             codes = getattr(self._runtime.constants, 'DAMAGE_INFO_CODES', ())
             extras = getattr(
@@ -12392,11 +12473,12 @@ class BattleRuntime(object):
                 int(engine_id), damage_index, extra_index,
                 int(attacker_id), 0)
         except Exception as error:
-            # A repaint failure is presentation, not authority.  Ending the
-            # round over it loses the whole battle.
+            # Stock updates module icons before publishing the message. A
+            # failed Flash message must not retire later damage/repair edges.
+            # Contain this call only; the next stock call can repaint normally.
             self._damage_info_failure_reported = True
             self._warn_optional_failure(
-                'damage-info presentation', error)
+                'damage-info presentation', error, disable=False)
             return False
         return True
 
@@ -25255,6 +25337,8 @@ class BattleRuntime(object):
         is the real defect: the controller's 20 Hz updater never ran, which is
         what a filter with no owning entity looks like from Python.
         """
+        self._report_track_surface(
+            vehicle, 'remote', vehicle.__dict__, now=now)
         if self._track_report_time is not None and (
                 now - self._track_report_time) < TRACK_REPORT_SECONDS:
             return False

@@ -34179,8 +34179,54 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([], battle._avatar.damage_info)
         self.assertEqual(
             1, log.getvalue().count(
-                'optional damage-info presentation disabled for this '
+                'optional damage-info presentation degraded for this '
                 'round'))
+
+    def test_failed_damage_message_does_not_block_later_ammo_repair(self):
+        battle = BattleRuntime(_runtime())
+        battle._avatar = battle._runtime.bigworld.avatar
+        panel = {}
+        def stock_call(engine_id, damage_index, extra_index, attacker_id, equipment_id):
+            panel['ammoBay'] = 'critical' if len(panel) == 0 else 'normal'
+            if panel['ammoBay'] == 'critical':
+                raise RuntimeError('PyGFxValue - Failed to invoke method as_showYellowMessage')
+        battle._avatar.showVehicleDamageInfo = mock.Mock(side_effect=stock_call)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(battle._show_damage_info(10, 0, 0, 11))
+            self.assertTrue(battle._show_damage_info(10, 0, 0, 11))
+        self.assertEqual('normal', panel['ammoBay'])
+        self.assertEqual(2, battle._avatar.showVehicleDamageInfo.call_count)
+        self.assertTrue(battle._optional_feature_enabled('damage-info presentation'))
+
+    def test_invalid_damage_index_does_not_disable_valid_followup(self):
+        battle = BattleRuntime(_runtime())
+        battle._avatar = battle._runtime.bigworld.avatar
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(battle._show_damage_info(10, 999, 0, 11))
+            self.assertTrue(battle._show_damage_info(10, 0, 0, 11))
+        self.assertEqual(1, len(battle._avatar.damage_info))
+
+    def test_track_surface_evidence_reads_actual_sides_without_writes(self):
+        battle = BattleRuntime(_runtime())
+        battle._frame_diagnostics.enabled = True
+        appearance = types.SimpleNamespace(
+            terrainMatKindSensor=types.SimpleNamespace(matKinds=[7, 12]),
+            terrainMatKind=[7, 12], isInWater=False,
+            trackScrollController=types.SimpleNamespace(leftContact=True, rightContact=False),
+            customEffectManager=types.SimpleNamespace(
+                _CustomEffectManager__variableArgs={'matkindL': 7, 'matkindR': -1}))
+        entity = types.SimpleNamespace(id=10, appearance=appearance, position=(1, 2, 3))
+        receipt = {}
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertTrue(battle._report_track_surface(entity, 'player', receipt, now=10))
+            self.assertFalse(battle._report_track_surface(entity, 'player', receipt, now=11))
+            appearance.terrainMatKindSensor.matKinds = [2, 3]
+            self.assertTrue(battle._report_track_surface(entity, 'player', receipt, now=15))
+        rows = [json.loads(line.split('TRACK SURFACE ', 1)[1]) for line in log.getvalue().splitlines()]
+        self.assertEqual([7, 12], rows[0]['sensor_materials'])
+        self.assertEqual([2, 3], rows[1]['sensor_materials'])
+        self.assertEqual(-1, rows[0]['effect_inputs']['matkindR'])
+        self.assertEqual([7, 12], appearance.terrainMatKind)
 
     def test_far_bots_sample_the_suspension_less_than_near_bots(self):
         near = {'id': 1, 'x': 10.0, 'y': 2.0, 'z': 0.0, 'yaw': 0.0,
