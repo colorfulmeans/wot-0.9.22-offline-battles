@@ -1907,9 +1907,11 @@ class TerrainNavigator(object):
 				not self._bot_edges_penalized(bot_id, current, target, now)):
 			revision = self.grid._native_proof_revision
 			clear = self.grid.dry_segment_clear(current, target, now)
-			deferred = revision != self.grid._native_proof_revision
+			deferred = (revision != self.grid._native_proof_revision or
+				getattr(self.grid, '_proof_deferred', False))
 			if not clear and not deferred:
 				state['local_target_end_reason'] = 'unsafe'
+				self._record_local_retry_refusal(state, current, goal, now)
 			else:
 				remaining = _distance_2d(current, target)
 				best = state.get('local_target_best_distance', remaining)
@@ -1938,6 +1940,42 @@ class TerrainNavigator(object):
 		state.pop('local_target_best_distance', None)
 		state.pop('local_target_best_heading', None)
 		return None
+
+	def _record_local_retry_refusal(self, state, current, goal, now):
+		"""A proved short-leg refusal survives reacquiring the same cached path."""
+		tracker = state.get('local_retry_progress')
+		request = state.get('request_key')
+		if tracker is None or tracker['request'] != request:
+			tracker = dict(request=request, at=float(now),
+				visited=set((self.grid.cell_for(current),)), failures=0, replans=0)
+			state['local_retry_progress'] = tracker
+		tracker['failures'] = min(2, tracker['failures'] + 1)
+
+	def _local_retry_stalled(self, state, current, goal, now, movement_intent):
+		"""Only new realised terrain renews an unsafe-leg retry episode."""
+		tracker = state.get('local_retry_progress')
+		if tracker is None:
+			return False
+		if (not movement_intent or tracker['request'] != state.get('request_key') or
+				_distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS):
+			state.pop('local_retry_progress', None)
+			return False
+		cell = self.grid.cell_for(current)
+		if cell not in tracker['visited']:
+			if len(tracker['visited']) >= MAX_BAKED_SEARCH_EDGE_CACHE:
+				tracker['visited'].clear()
+			tracker['visited'].add(cell)
+			tracker['at'] = float(now)
+			tracker['failures'] = 0
+			return False
+		if (tracker['failures'] < 2 or
+				float(now) - tracker['at'] < MACRO_STALL_SECONDS or
+				float(now) - tracker.get('replan_at', tracker['at']) < MACRO_STALL_SECONDS):
+			return False
+		tracker['replan_at'] = float(now)
+		tracker['replans'] += 1
+		tracker['failures'] = 0
+		return True
 
 	def _remember_local_fallback(self, target, goal, state, start=None, now=None):
 		if state.get('local_fallback_target') != tuple(target):
@@ -2626,6 +2664,10 @@ class TerrainNavigator(object):
 		return {
 			'local_target': state.get('local_fallback_target'),
 			'local_target_end_reason': state.get('local_target_end_reason'),
+			'local_retry_age_ms': int(max(0.0, float(now) - float(
+				state.get('local_retry_progress', {}).get('at', now))) * 1000.0),
+			'local_retry_failures': state.get('local_retry_progress', {}).get('failures', 0),
+			'local_retry_replans': state.get('local_retry_progress', {}).get('replans', 0),
 			'local_target_progress_age_ms': int(max(0.0, float(now) - float(state.get('local_target_progress_at', now))) * 1000.0),
 			'current_cell': cell,
 			'current_cell_height': self.grid._baked_cell_height(cell),
@@ -3467,6 +3509,10 @@ class TerrainNavigator(object):
 			state.pop('controlled_shallow_target', None)
 			self._reset_macro_progress(
 				state, current, state.get('last_target'), now)
+		if self._local_retry_stalled(state, current, goal, now, movement_intent):
+			# A local/path handoff is not physical progress. Replan only this
+			# follower from its realised hull pose; never invent an edge veto.
+			self.request_replan(bot_id, current, now)
 		if not movement_intent:
 			state.pop('local_fallback_target', None)
 		elif not request_changed:
