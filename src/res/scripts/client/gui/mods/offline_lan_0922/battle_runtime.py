@@ -7895,6 +7895,8 @@ class BattleRuntime(object):
                 'sensor_present': sensor is not None,
                 'manager_present': manager is not None,
                 'scroll_present': scroll is not None,
+                'speed_info': list(read_value(
+                    read_value(entity, 'speedInfo'), 'value', ()) or ())[:4],
                 'sensor_materials': list(read_value(sensor, 'matKinds', ()) or ())[:4],
                 'appearance_materials': list(read_value(
                     appearance, 'terrainMatKind', ()) or ())[:4],

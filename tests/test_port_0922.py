@@ -4184,6 +4184,36 @@ class OfflineCompatibilityTests(unittest.TestCase):
         self.assertEqual('native-position', vehicle.position)
         self.assertEqual('native-matrix', vehicle.matrix)
         self.assertEqual(2.0, vehicle.getSpeed())
+
+    def test_copied_pose_speed_reaches_stock_effect_reader_and_restores(self):
+        module = _load_port_source('compat')
+        runtime, unused_operations = self._runtime()
+        compatibility = module.OfflineCompatibility(runtime)
+        class EffectReader(object):
+            def update(self, vehicle):
+                return vehicle.speedInfo.value[2], vehicle.filter.velocity
+        runtime.custom_effect_manager_type = EffectReader
+        compatibility.install()
+        vehicle = runtime.vehicle_module.Vehicle()
+        stock = types.SimpleNamespace(value=(0., 0., 0., 9.))
+        vehicle.speedInfo = stock
+        native_filter = types.SimpleNamespace(velocity='native-velocity')
+        vehicle.filter = native_filter
+        compatibility.configure_battle()
+        compatibility.set_vehicle_pose_overlay(vehicle, 'pose', 0., 'matrix', 7.5, .25,
+                                               velocity='copied-velocity')
+        self.assertEqual((7.5, .25, 7.5, 9.), vehicle.speedInfo.value)
+        self.assertEqual((7.5, 'copied-velocity'), EffectReader().update(vehicle))
+        self.assertIs(native_filter, vehicle.filter)
+        self.assertEqual((0., 0., 0., 9.), stock.value)
+        stock.value = (0., 0., 0., 13.)
+        compatibility.set_vehicle_pose_overlay(vehicle, 'next', 0., 'matrix', -2., -.3)
+        self.assertEqual((-2., -.3, -2., 13.), vehicle.speedInfo.value)
+        compatibility.set_vehicle_pose_overlay(vehicle, 'stop', 0., 'matrix', 0., 0.)
+        self.assertEqual((0., 0., 0., 13.), vehicle.speedInfo.value)
+        self.assertTrue(compatibility.clear_vehicle_pose_overlay(vehicle))
+        self.assertIs(stock, vehicle.speedInfo)
+        self.assertEqual((0., 'native-velocity'), EffectReader().update(vehicle))
         compatibility.fini()
 
     def test_native_remote_aim_collides_at_the_one_visible_pose(self):

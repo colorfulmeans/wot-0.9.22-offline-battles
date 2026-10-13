@@ -365,6 +365,7 @@ def _load_runtime():
     from gui.battle_control.controllers.chat_cmd_ctrl import ChatCommandsController
     from gui.Scaleform.daapi.view.battle.shared.radial_menu import RadialMenu
     import Math
+    import CustomEffectManager
     import ProjectileMover
     import SoundGroups
     import Vehicle
@@ -432,6 +433,7 @@ def _load_runtime():
     runtime.consumables_panel_type = ConsumablesPanel
     runtime.login_status = LOGIN_STATUS
     runtime.math = Math
+    runtime.custom_effect_manager_type = CustomEffectManager.CustomEffectManager
     runtime.offline_map_creator = g_offlineMapCreator
     runtime.player_events = g_playerEvents
     runtime.projectile_mover_module = ProjectileMover
@@ -557,6 +559,23 @@ class _OfflineEventSink(object):
 
     def __isub__(self, callback):
         return self
+
+
+class _CopiedVehicleSpeedInfo(object):
+    """Read-only #1513 speed columns owned by the copied pose publisher."""
+
+    def __init__(self, source, overlay):
+        self._source = source
+        self._overlay = overlay
+
+    @property
+    def value(self):
+        # Vehicle.getSpeed reads column 0; CustomEffectManager reads signed
+        # movement in column 2 and rotation in column 1. Keep the unrelated
+        # native fourth column live, including stock provider resets.
+        original = self._source.value
+        speed = self._overlay['speed']
+        return (speed, self._overlay['turn_speed'], speed, original[3])
 
 
 class _OfflineVehicleFilterSyncProxy(object):
@@ -711,6 +730,7 @@ class OfflineCompatibility(object):
         self._original_projectile_collidable_entities = None
         self._projectile_collidable_entities_wrapper = None
         self._camera_acceleration_update_code = None
+        self._custom_effect_update_code = None
         self._arcade_oscillator_acceleration_code = None
         self._sniper_oscillator_acceleration_code = None
         self._crashed_track_setup_assembler_code = None
@@ -1068,6 +1088,10 @@ class OfflineCompatibility(object):
         (self._camera_acceleration_update_code,
          self._arcade_oscillator_acceleration_code,
          self._sniper_oscillator_acceleration_code) = camera_motion_codes
+        effect_type = getattr(runtime, 'custom_effect_manager_type', None)
+        effect_update = getattr(effect_type, 'update', None)
+        self._custom_effect_update_code = getattr(
+            effect_update, 'func_code', getattr(effect_update, '__code__', None))
         if crashed_tracks_controller_type is None:
             raise RuntimeError('#1513 crashed-track controller is unavailable')
         crashed_track_setup_assembler = getattr(
@@ -1909,7 +1933,7 @@ class OfflineCompatibility(object):
                 entity, startPoint, endPoint)
 
         vehicle_overlay_names = frozenset((
-            'health', 'isCrewActive', 'position', 'yaw', 'matrix'))
+            'health', 'isCrewActive', 'position', 'yaw', 'matrix', 'speedInfo'))
         vehicle_special_names = vehicle_overlay_names.union((
             'filter', 'cell', 'show', 'guiSessionProvider'))
 
@@ -2025,6 +2049,10 @@ class OfflineCompatibility(object):
                     compatibility._arcade_oscillator_acceleration_code,
                     compatibility._sniper_oscillator_acceleration_code) and
                 overlay is not None and overlay.get('_pose_active'))
+            direct_effect_motion = (
+                caller_code is compatibility._custom_effect_update_code and
+                caller_code is not None and overlay is not None and
+                overlay.get('_pose_active'))
             direct_crashed_track_pose = (
                 caller_code in (
                     compatibility._crashed_track_setup_assembler_code,
@@ -2057,7 +2085,7 @@ class OfflineCompatibility(object):
                     return collision_filter
             if (direct_start_filter or direct_gun_sync or
                     direct_avatar_aux_sync or direct_avatar_pose_init or
-                    direct_fixed_turret_pose or direct_camera_motion or
+                    direct_fixed_turret_pose or direct_camera_motion or direct_effect_motion or
                     direct_crashed_track_pose):
                 vehicle_filter = (
                     compatibility._original_vehicle_getattribute(
@@ -2067,9 +2095,9 @@ class OfflineCompatibility(object):
                     if direct_fixed_turret_pose else
                     (overlay['matrix'] if direct_crashed_track_pose else None))
                 velocity = (overlay.get('velocity')
-                            if direct_camera_motion else None)
+                            if direct_camera_motion or direct_effect_motion else None)
                 acceleration = (overlay.get('acceleration')
-                                if direct_camera_motion else None)
+                                if direct_camera_motion or direct_effect_motion else None)
                 return _OfflineVehicleFilterSyncProxy(
                     vehicle_filter, pose_matrix, velocity, acceleration)
             return compatibility._original_vehicle_getattribute(vehicle, name)
@@ -3181,6 +3209,7 @@ class OfflineCompatibility(object):
         self._original_projectile_collidable_entities = None
         self._projectile_collidable_entities_wrapper = None
         self._camera_acceleration_update_code = None
+        self._custom_effect_update_code = None
         self._arcade_oscillator_acceleration_code = None
         self._sniper_oscillator_acceleration_code = None
         self._avatar_syncing_aux_physics = None
@@ -3727,6 +3756,15 @@ class OfflineCompatibility(object):
             matrix if stabilised_matrix is None else stabilised_matrix)
         overlay['speed'] = float(speed)
         overlay['turn_speed'] = float(turn_speed)
+        if 'speedInfo' not in overlay:
+            try:
+                stock_speed = self._original_vehicle_getattribute(
+                    vehicle, 'speedInfo')
+            except AttributeError:
+                # A partially constructed Vehicle has no stock provider yet.
+                stock_speed = None
+            if stock_speed is not None:
+                overlay['speedInfo'] = _CopiedVehicleSpeedInfo(stock_speed, overlay)
         if velocity is not None:
             overlay['velocity'] = velocity
         if acceleration is not None:
@@ -3862,7 +3900,7 @@ class OfflineCompatibility(object):
             return False
         for name in ('_pose_active', 'position', 'yaw', 'matrix',
                      'steady_rotation_matrix', 'stabilised_matrix',
-                     'speed', 'turn_speed', 'velocity', 'acceleration',
+                     'speed', 'turn_speed', 'speedInfo', 'velocity', 'acceleration',
                      '_collision_filter'):
             overlay.pop(name, None)
         if not overlay:

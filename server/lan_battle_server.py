@@ -12229,13 +12229,33 @@ class BattleState:
         """CAS one owner-timed repair or acknowledge canonical convergence."""
         with self.lock:
             player = self.players.get(player_id)
+            rows = []
+            def reject(reason):
+                canonical = getattr(player, 'critical', None) or {}
+                if not isinstance(canonical, dict):
+                    canonical = {}
+                canonical_tracks = [row for row in canonical.get('devices') or ()
+                    if isinstance(row, dict) and row.get('name') in
+                    ('leftTrackHealth', 'rightTrackHealth')][:2]
+                _server_log_limited(
+                    "track-repair:%s:%s" % (player_id, reason),
+                    "TRACK REPAIR rejected sender=%s seq=%s reason=%s "
+                    "base=%s current_base=%s ack=%s current_revision=%s tracks=%s canonical_tracks=%s" % (
+                        player_id, _exact_int(message.get("repair_seq"), 1, PROJECTILE_MAX_ID),
+                        reason, _exact_int(message.get("critical_base_revision"), 0, PROJECTILE_MAX_ID),
+                        getattr(player, "critical_report_base_revision", None),
+                        getattr(player, "critical_ack_seq", None),
+                        getattr(player, "critical_revision", None),
+                        json.dumps(rows[:2], separators=(",", ":")),
+                        json.dumps(canonical_tracks, separators=(",", ":"))))
+                return False
             if (self.client_build != CLIENT_BUILD_0922 or
                     not self._message_round_matches(message) or
                     not self._combat_accepting() or
                     self.battle_result is not None or player is None or
                     not player.connected or not player.participating or
                     not player.alive):
-                return False
+                return reject("inactive_round_or_player")
             base_revision = _exact_int(
                 message.get("critical_base_revision"), 0,
                 PROJECTILE_MAX_ID)
@@ -12244,10 +12264,10 @@ class BattleState:
             try:
                 rows = _track_repair_rows(message.get("tracks"))
             except ValueError:
-                return False
+                return reject("invalid_track_rows")
             if (base_revision is None or repair_seq is None or
                     base_revision != player.critical_report_base_revision):
-                return False
+                return reject("invalid_sequence_or_base_revision")
             fingerprint = tuple(
                 (row["name"], row["hp"], row["max_hp"], row["state"])
                 for row in rows)
@@ -12262,10 +12282,11 @@ class BattleState:
                 if record.get("name") is not None
             }
             if any(row["name"] not in by_name for row in rows):
-                return False
+                return reject("track_missing_from_canonical_state")
             if repair_seq <= player.critical_ack_seq:
                 accepted = player.track_repair_fingerprints.get(repair_seq)
-                return accepted is None or accepted == fingerprint
+                return (True if accepted is None or accepted == fingerprint else
+                        reject("conflicting_retry"))
 
             destroyed = set(current.get("destroyed") or ())
             events = []
@@ -12277,7 +12298,7 @@ class BattleState:
                 old_maximum = _finite_float(
                     previous.get("max_hp"), -1.0)
                 if old_hp < 0.0 or old_maximum <= 0.0:
-                    return False
+                    return reject("invalid_canonical_track_hp")
                 if (previous.get("state") in ("normal", "critical") and
                         row["name"] not in destroyed):
                     converged.add(row["name"])
@@ -12286,7 +12307,7 @@ class BattleState:
                         row["name"] not in destroyed or
                         abs(old_maximum - row["max_hp"]) > 0.001 or
                         row["hp"] + 0.001 < old_hp):
-                    return False
+                    return reject("nonmonotone_or_inconsistent_track_repair")
                 if (row["hp"] > old_hp + 0.001 or
                         row["state"] == "critical"):
                     improved = True
@@ -12301,7 +12322,7 @@ class BattleState:
                         "cause": "repair",
                     })
             if not improved and len(converged) != len(rows):
-                return False
+                return reject("no_repair_progress")
             if not improved:
                 candidate = current
             else:
@@ -12312,14 +12333,14 @@ class BattleState:
             try:
                 candidate = _critical_payload(candidate)
             except ValueError:
-                return False
+                return reject("invalid_critical_candidate")
             commit, accepted = self._commit_reported_player_critical(
                 player, candidate, {
                     "reported_critical_base_revision": base_revision,
                     "reported_critical_seq": repair_seq,
                 })
             if not accepted or int(commit["critical_ack_seq"]) != repair_seq:
-                return False
+                return reject("critical_commit_not_acknowledged")
             player.track_repair_fingerprints[repair_seq] = fingerprint
             while len(player.track_repair_fingerprints) > 64:
                 player.track_repair_fingerprints.popitem(last=False)
@@ -15855,13 +15876,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     player_input_rejection_log(
                                         player.player_id))
                         elif message_type == "track_repair":
-                            if not server.state.report_track_repair(
-                                    player.player_id, message):
-                                _server_log_limited(
-                                    "track-repair:%d" % player.player_id,
-                                    "TRACK REPAIR rejected sender=%d seq=%s" % (
-                                        player.player_id,
-                                        message.get("repair_seq")))
+                            server.state.report_track_repair(player.player_id, message)
                         elif message_type in (
                                 'projectile_launch', 'projectile_progress',
                                 'projectile_ricochet', 'projectile_resolve'):

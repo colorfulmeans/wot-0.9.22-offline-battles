@@ -814,6 +814,7 @@ EXPECTED_ABI = {
         'CompoundAppearance.__attachSplodge': ('self', 'splodge'),
     },
     'scripts/client/CustomEffectManager.pyc': {
+        'CustomEffectManager.update': ('self',),
         'CustomEffectManager.enable': ('self', 'enable', 'settingsFlags'),
         'CustomEffectManager.activate': ('self',),
         'CustomEffectManager.deactivate': ('self',),
@@ -1922,6 +1923,9 @@ EXPECTED_CODE_NAMES = {
             'HULL', '_CompoundAppearance__splodge', 'attach'),
     },
     'scripts/client/CustomEffectManager.pyc': {
+        'CustomEffectManager.update': (
+            'speedInfo', 'value', 'filter', 'velocity',
+            '_CustomEffectManager__variableArgs'),
         'CustomEffectManager.enable': (
             '_CustomEffectManager__selectors', 'settingsFlags', 'start',
             'stop'),

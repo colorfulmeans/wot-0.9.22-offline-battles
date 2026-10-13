@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import sys
 import unittest
+from unittest import mock
 
 import bot_state_rows
 
@@ -414,6 +415,25 @@ class ServerCaptureTests(unittest.TestCase):
         }))
         self.assertEqual(3, state.rules_state['bases']['1']['points'])
         self.assertEqual({'human:2': 3}, state.capture_contributors[1])
+
+    def test_track_repair_rejection_exposes_versions_without_changing_hp(self):
+        state = self._state()
+        player = _player(2, 2, 0., 0.)
+        player.critical_report_base_revision = 3
+        player.critical_ack_seq = 2
+        player.critical_revision = 5
+        player.critical = {'devices': [{'name': 'leftTrackHealth', 'hp': 0.,
+            'max_hp': 100., 'state': 'destroyed'}], 'destroyed': ['leftTrackHealth']}
+        state.players[2] = player
+        message = {'round_id': state.round_id, 'critical_base_revision': 1,
+            'repair_seq': 4, 'tracks': [{'name': 'leftTrackHealth', 'hp': 10.,
+            'max_hp': 100., 'state': 'destroyed'}]}
+        with mock.patch('lan_battle_server._server_log_limited') as logger:
+            self.assertFalse(state.report_track_repair(2, message))
+        text = logger.call_args.args[1]
+        self.assertIn('reason=invalid_sequence_or_base_revision', text)
+        self.assertIn('base=1 current_base=3 ack=2 current_revision=5', text)
+        self.assertEqual(0., player.critical['devices'][0]['hp'])
 
     def test_stale_track_repair_converges_to_canonical_equipment_repair(self):
         state = self._state()
