@@ -53,10 +53,13 @@ class WithdrawalTests(unittest.TestCase):
 
     def test_reverse_sweep_rejects_rear_hulls_of_every_team_and_wrecks(self):
         for team, alive in ((1, True), (2, True), (2, False)):
+            self.setUp()
             self.state['neighbours'] = [dict(id=22, team=team, alive=alive,
                 position=(0., 0., -8.), yaw=0., half_length=3.5, half_width=1.5)]
             result = self.decide()
-            self.assertEqual((0., 0.), (result['throttle'], result['turn']))
+            self.assertGreaterEqual(result['throttle'], 0.)
+            self.assertEqual(22, result['withdrawal']['reverse_blocked_by'])
+            self.assertGreater(self.adapter.driver.states[11]['clock'], 0.)
 
     def test_water_cliff_or_static_probe_denial_holds_instead_of_turning(self):
         result = self.decide(lambda *args: False)
@@ -134,13 +137,14 @@ class WithdrawalTests(unittest.TestCase):
         self.adapter.forget(11)
         self.assertNotIn(11, self.adapter._withdrawal_attempts)
 
-    def test_real_reverse_progress_and_explicit_hold_reset_attempt(self):
+    def test_real_reverse_progress_and_explicit_hold_preserve_attempt(self):
         for unused in range(150):
             self.state['position'] = (0., 0., self.state['position'][2] - .1)
             self.assertEqual('reverse_withdraw', self.decide()['recovery_mode'])
         self.order['throttle_override'] = 0.
-        self.decide()
-        self.assertNotIn(11, self.adapter._withdrawal_attempts)
+        receipt = self.adapter._withdrawal_attempts[11]
+        self.assertEqual(0., self.decide()['throttle'])
+        self.assertIs(receipt, self.adapter._withdrawal_attempts[11])
 
 
 if __name__ == '__main__':
