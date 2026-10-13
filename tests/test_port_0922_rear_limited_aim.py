@@ -26,6 +26,20 @@ class RearLimitedAimTests(unittest.TestCase):
                 self.assertEqual((1., 0., True), self.aim(2.9, mode))
                 self.assertEqual((-1., 0., True), self.aim(-2.9, mode))
 
+    def test_artillery_departure_keeps_travel_controls_against_rear_threat(self):
+        for mode in ('artillery_deploy', 'artillery_relocate'):
+            for bearing in (2.9, -2.9):
+                with self.subTest(mode=mode, bearing=bearing), \
+                        mock.patch.object(driver.native_math, 'call', side_effect=AssertionError('rear laying admitted')):
+                    self.assertEqual((-.2, -1., False), self.aim(bearing, mode, limits=(-.1, .1), rear_turn=1.))
+                self.assertEqual((-.2, -1., False), driver._reference_combat_hull_aim(
+                    0., bearing, -.1, .1, -.2, -1., 'drive', True,
+                    mode, True, rear_turn=1.))
+        turn, throttle, active = driver.combat_hull_aim(0., 2.9, -.1, .1,
+            0., 0., 'arrived', True, combat_mode='artillery_hold', movement_intent=False)
+        self.assertTrue(active)
+        self.assertEqual((1., 0.), (turn, throttle))
+
     def test_same_rear_target_keeps_side_across_pi_seam(self):
         turn, throttle, active = self.aim(math.pi - .001)
         self.assertEqual((1., 0., True), (turn, throttle, active))
@@ -171,6 +185,7 @@ class RearTraverseRuntimeTests(unittest.TestCase):
         tick = None
         if native:
             weapons = mock.Mock()
+            weapons.actors = {int(self.state['id']): types.SimpleNamespace(aim=(math.pi / 2, 0.))}
             weapons.configure_aim_from_descriptor.return_value = False
             def after_motion(*unused):
                 self.state['gun_aligned'] = True
@@ -228,6 +243,23 @@ class RearTraverseRuntimeTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             runtime.update(.05, .5, players=[])
         self.assertNotIn('_rear_hull_aim', state)
+
+    def test_artillery_departure_releases_old_episode_without_restarting_hold(self):
+        target = dict(id=2, kind='human', position=(0., 0., -100.), alive=True)
+        for mode in ('artillery_deploy', 'artillery_relocate'):
+            state = self.state
+            state.update(fire_seq=0, _rear_hull_aim=(('human', 2), 1.),
+                _rear_aim_episode=dict(target_id=2, identity=('human', 2), fire_seq=0, start=0.))
+            order = dict(target_id=2, combat_mode=mode, move_position=(100., 0., 0.), fire_allowed=True)
+            result = self.runtime._rear_laying_order(state, order, {2: target}, 2.)
+            self.assertIs(order, result)
+            self.assertNotIn('_rear_aim_episode', state)
+            self.assertNotIn('_rear_hull_aim', state)
+            for frame in range(10):
+                self.assertIs(order, self.runtime._rear_laying_order(state, order, {2: target}, 2.+frame*.1))
+                self.assertEqual((-.2, 1., False), driver.combat_hull_aim(
+                    0., 2.9, -.1, .1, -.2, 1., 'drive', True,
+                    combat_mode=mode, movement_intent=True))
 
     def test_rear_episode_holds_route_until_shot_or_absolute_deadline(self):
         state = self.state

@@ -129,3 +129,15 @@ for unused in range(1000):
     b.destr_box_geometry(2, (boxes, point, start, end, epsilon, normal))
 witness_native_ms = (time.clock() - stamp) * 1000.
 print('Complete 16-box witness batch: reference %.3f ms, native %.3f ms; excludes engine/adapter work' % (witness_reference_ms, witness_native_ms))
+
+# Exercise the shipping adapter as well as the raw extension: bookkeeping
+# must never discard a successful operation or turn it into Python fallback.
+dispatch = imp.load_source('box_geometry_dispatch_check', os.path.join(root,
+    'src', 'res', 'scripts', 'client', 'gui', 'mods', 'offline_lan_0922', 'native_math.py'))
+dispatch._backend = b
+for op, payload in ((0, ((unit,), None, (-2.,0.,0.), (2.,0.,0.), 0., 2)),
+                    (1, (unit,)),
+                    (2, ((unit,), (0.,0.,0.), (-2.,0.,0.), (2.,0.,0.), epsilon, None))):
+    close(dispatch.call('destr_box_geometry', op, payload), b.destr_box_geometry(op, payload))
+assert dispatch._calls['destr_box_geometry'] == 3 and dispatch._fallbacks == 0
+print('Actual adapter passed opcodes 0/1/2 without fallback')

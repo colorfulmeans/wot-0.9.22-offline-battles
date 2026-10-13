@@ -18,7 +18,7 @@ except ImportError:
 MODULE_NAME = 'offline_math_batch_native'
 _backend = None
 _attempted = sys.platform != 'win32'
-_calls = {'destr_required_chunks': 0, 'driver_aim': 0, 'driver_geometry': 0, 'projectile_math': 0, 'projectile_spatial': 0, 'translation_fraction': 0, 'translation_contacts': 0, 'slide_translation': 0,
+_calls = {'destr_box_geometry': 0, 'destr_required_chunks': 0, 'driver_aim': 0, 'driver_geometry': 0, 'projectile_math': 0, 'projectile_spatial': 0, 'translation_fraction': 0, 'translation_contacts': 0, 'slide_translation': 0,
           'rotation_fraction': 0, 'contact_roster': 0, 'world_run': 0, 'world_run_native': 0, 'rotation_current': 0, 'rotation_envelope': 0, 'rotation_departure': 0, 'release_suspension_step': 0}
 _fallbacks = 0
 _reported_failure = False
@@ -127,10 +127,11 @@ def call(method, *args):
     try:
         result = getattr(backend, method)(*args)
         if result is not None:
-            if not _calls[method]:
+            calls = _calls.get(method, 0)
+            if not calls:
                 sys.stdout.write('[Offline LAN 0.9.22] native geometry '
                                  'active: %s\n' % method)
-            _calls[method] += 1
+            _calls[method] = calls + 1
             return result
         _report_failure('unsupported geometry input')
         _record_projectile_fallback(method, args, 'unsupported_input')

@@ -80,7 +80,7 @@ class NativeMathDispatchTests(unittest.TestCase):
             self.assertIsNone(self.native.call('translation_fraction', {}, (), []))
         loader.assert_not_called()
         self.assertEqual(self.native.snapshot(), dict(
-            destr_required_chunks=0, driver_aim=0, driver_geometry=0,
+            destr_box_geometry=0, destr_required_chunks=0, driver_aim=0, driver_geometry=0,
             projectile_math=0, projectile_spatial=0,
             translation_fraction=0, translation_contacts=0,
             slide_translation=0, rotation_fraction=0,
@@ -88,6 +88,25 @@ class NativeMathDispatchTests(unittest.TestCase):
             world_run_native=0, rotation_current=0, rotation_envelope=0,
             rotation_departure=0, release_suspension_step=0,
             loaded=False, fallbacks=0))
+
+    def test_new_box_operations_keep_native_results_and_account_once(self):
+        native = self.native
+        for op, result in ((0, ((0, (.25, .75), None),)), (1, (None,)),
+                           (2, ((1, (.2, .8), None, 0, 1),))):
+            native._backend = types.SimpleNamespace(destr_box_geometry=mock.Mock(return_value=result))
+            self.assertIs(result, native.call('destr_box_geometry', op, ()))
+        self.assertEqual(3, native.snapshot()['destr_box_geometry'])
+        self.assertEqual(0, native.snapshot()['fallbacks'])
+        self.assertEqual(1, self.output.getvalue().count('active: destr_box_geometry'))
+
+    def test_statistics_cannot_discard_a_valid_new_backend_method(self):
+        native = self.native
+        result = ()
+        native._backend = types.SimpleNamespace(new_numeric_frontier=mock.Mock(side_effect=[None, result]))
+        self.assertIsNone(native.call('new_numeric_frontier'))
+        self.assertIs(result, native.call('new_numeric_frontier'))
+        self.assertEqual(1, native.snapshot()['new_numeric_frontier'])
+        self.assertEqual(1, native.snapshot()['fallbacks'])
 
     def test_windows_loads_once_from_the_client_executable_directory(self):
         backend = types.SimpleNamespace(translation_fraction=mock.Mock(return_value=0.0))
@@ -139,7 +158,7 @@ class NativeMathDispatchTests(unittest.TestCase):
         self.assertIsNone(self.native.call('slide_translation'))
         self.assertEqual(self.native.call('translation_fraction'), 0.75)
         self.assertEqual(self.native.snapshot(), dict(
-            destr_required_chunks=0, driver_aim=0, driver_geometry=0,
+            destr_box_geometry=0, destr_required_chunks=0, driver_aim=0, driver_geometry=0,
             projectile_math=0, projectile_spatial=0,
             translation_fraction=1, translation_contacts=0,
             slide_translation=0, rotation_fraction=1,

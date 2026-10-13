@@ -12738,7 +12738,8 @@ class BotRuntime(object):
         changed = (order.get('target_id') != episode['target_id'] or
                    target is None or not target.get('alive', True) or
                    order.get('parking_phase') or
-                   order.get('combat_mode') == 'base_defense')
+                   order.get('combat_mode') in
+                   ('base_defense', 'artillery_deploy', 'artillery_relocate'))
         fired = int(state.get('fire_seq', 0)) != episode['fire_seq']
         expired = now - episode['start'] >= 8.0
         blocked = any(now < failed[3] and

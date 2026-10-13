@@ -111,6 +111,10 @@ def _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		combat_mode=None, movement_intent=False, withdrawal_aim=False,
 		rear_turn=0.0, allow_rear_start=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
+	if movement_intent and combat_mode in ('artillery_deploy', 'artillery_relocate'):
+		# Deployment keeps the current travel steering even for a rear threat.
+		# A stationary firing area may lay the hull after physical arrival.
+		return float(turn), float(throttle), False
 	if not has_target or recovery_mode in ('avoid', 'blocked', 'reverse_turn',
 			'pivot_recovery', 'forward_escape', 'short_forward_escape', 'short_reverse_escape',
 			'contact_escape', 'wreck_push', 'friendly_yield',
@@ -208,6 +212,8 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
         turn, throttle, recovery_mode, has_target=True,
         combat_mode=None, movement_intent=False, withdrawal_aim=False,
         rear_turn=0.0, allow_rear_start=True):
+    if movement_intent and combat_mode in ('artillery_deploy', 'artillery_relocate'):
+        return float(turn), float(throttle), False
     held = recovery_mode in ('avoid', 'blocked', 'reverse_turn',
         'pivot_recovery', 'forward_escape', 'short_forward_escape',
         'short_reverse_escape', 'contact_escape', 'wreck_push', 'friendly_yield',

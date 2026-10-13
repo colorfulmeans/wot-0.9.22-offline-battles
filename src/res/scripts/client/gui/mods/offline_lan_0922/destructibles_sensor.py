@@ -8144,7 +8144,7 @@ def _native_contact_slot_evidence_1513(space_id, surface):
 	"""Inspect a diagnostic key without registering, isolating or destroying it."""
 	if (len(surface) != 4 or
 			not all(type(value) in _INTEGER_TYPES for value in surface) or
-			not 71 <= surface[0] <= 86 or surface[1] != 0):
+			(surface[0] < 71 or 87 <= surface[0] <= 100) or surface[1] != 0):
 		return None
 	identity = (surface[3], surface[2])
 	catalog = _destructible_catalog or {}
@@ -8167,6 +8167,9 @@ def _native_contact_slot_evidence_1513(space_id, surface):
 	proved = globals().get('g_offh_destr_proved_layouts', {}).get(
 		(int(space_id), identity[0]))
 	result['proved_filename'] = None if proved is None else proved[1].get(identity[1])
+	result['cached_native_category'] = globals().get(
+		'g_offh_destr_native_slot_types', {}).get(
+		(int(space_id), identity[0]), {}).get(identity[1])
 	if result['quarantined']:
 		return result
 	try:
@@ -8720,6 +8723,12 @@ def _recover_shot_material_1513(measured, bigworld, spaceID, start, end,
 			continue
 		chunk_id, item_index = key[3], key[2]
 		if _destructible_isolated_1513(chunk_id, item_index):
+			if diagnostic is not None:
+				diagnostic.append({'stage': 'native.projectile.identity_resource',
+					'chunk': chunk_id, 'item': item_index, 'material': key[0],
+					'status': 'isolated', 'filename': '',
+					'slot': _native_contact_slot_evidence_1513(spaceID, key),
+					'hit': (hit[0].x, hit[0].y, hit[0].z)})
 			continue
 		instance = globals().get('g_offh_destr_instances', {}).get((chunk_id, item_index))
 		if instance is None and _destructible_catalog is not None:
@@ -8732,9 +8741,11 @@ def _recover_shot_material_1513(measured, bigworld, spaceID, start, end,
 			diagnostic.append({'stage': 'native.projectile.identity_resource',
 				'chunk': chunk_id, 'item': item_index, 'material': key[0],
 				'status': status, 'filename': filename or '',
+				'slot': (_native_contact_slot_evidence_1513(spaceID, key)
+					if not filename else None),
 				'hit': (hit[0].x, hit[0].y, hit[0].z)})
 		if status != 'catalog_exact':
-			if status != 'exact':
+			if status != 'exact' or not _normalized_filename(filename):
 				continue
 		matches.append((True, hit[0], hit[1], key[0], filename, item_index, chunk_id))
 	# Coincident different identities remain unresolved; never destroy a prop
