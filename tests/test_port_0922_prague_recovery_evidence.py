@@ -2,6 +2,8 @@
 import unittest
 import types
 import json
+import io
+import contextlib
 from pathlib import Path
 from unittest import mock
 from gui.mods.offline_lan_0922.ai.driver import LocalDriver
@@ -104,6 +106,31 @@ class ProjectileEvidenceTests(unittest.TestCase):
         self.assertEqual('missing_resource', row['identity_status'])
         self.assertEqual((32127, 96, 111), (row['chunk'], row['item'], row['material']))
         self.assertEqual('', row['filename'])
+
+    def test_distinct_world_contacts_are_retained_and_duplicates_are_bounded(self):
+        battle = BattleRuntime.__new__(BattleRuntime)
+        battle._start_message = dict(round_id=1)
+        meta = dict(projectile_id='1:b:8:1')
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            for key in ([32127, 35], [32127, 96], [32127, 35]):
+                battle._report_projectile_interface(meta, 'world_contact', dict(contact_key=key))
+        rows = [json.loads(line.split('PROJECTILE INTERFACE ', 1)[1])
+                for line in output.getvalue().splitlines()]
+        self.assertEqual(2, len(rows))
+        self.assertEqual([32127, 96], rows[1]['contact_key'])
+        self.assertTrue(all(row['projectile']=='1:b:8:1' for row in rows))
+
+    def test_exhausted_diagnostic_budget_is_explicit_and_reported_once(self):
+        battle = BattleRuntime.__new__(BattleRuntime)
+        battle._start_message = dict(round_id=1)
+        battle._projectile_interface_budget = [1, 512]
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            for unused in range(2):
+                battle._report_projectile_interface(dict(projectile_id='1:b:8:1'), 'world_contact', {})
+        rows = [json.loads(line.split('PROJECTILE INTERFACE ', 1)[1])
+                for line in output.getvalue().splitlines()]
+        self.assertEqual(1, len(rows))
+        self.assertEqual('diagnostic_budget_exhausted', rows[0]['phase'])
 
     def test_canonical_bot_terminal_is_logged(self):
         event = dict(kind='projectile_impact', shooter_kind='bot', shooter_id=8,

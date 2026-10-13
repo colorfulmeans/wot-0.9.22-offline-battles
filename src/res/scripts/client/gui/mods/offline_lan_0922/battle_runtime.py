@@ -2363,6 +2363,8 @@ class BattleRuntime(object):
         self._local_effective_params = None
         self._offframe_seconds = 0.0
         self._effect_reports = 0
+        self._projectile_interface_budget = None
+        self._projectile_interface_capped_round = None
         self._decal_probe = None
         self._spotted_signature = None
         self._local_spotting_cache = None
@@ -2728,6 +2730,8 @@ class BattleRuntime(object):
         self._local_effective_params = None
         self._offframe_seconds = 0.0
         self._effect_reports = 0
+        self._projectile_interface_budget = None
+        self._projectile_interface_capped_round = None
         self._spotted_signature = None
         self._local_spotting_cache = None
         self._local_factors_cache = None
@@ -16535,7 +16539,8 @@ class BattleRuntime(object):
         """Join real sender calls to BSP evidence and server HP commits."""
         try:
             reports = meta.setdefault('interface_reports', {})
-            if reports.get(phase):
+            report_key = (phase, json.dumps(payload['contact_key'], sort_keys=True)) if 'contact_key' in payload else phase
+            if reports.get(report_key):
                 return
             round_id = (self._start_message or {}).get('round_id')
             budget = getattr(self, '_projectile_interface_budget', None)
@@ -16543,11 +16548,15 @@ class BattleRuntime(object):
                 budget = [round_id, 0]
                 self._projectile_interface_budget = budget
             if budget[1] >= 512:
+                if getattr(self, '_projectile_interface_capped_round', None) != round_id:
+                    native_input_diagnostics.write_json_record('PROJECTILE INTERFACE',
+                        dict(round=round_id, phase='diagnostic_budget_exhausted', limit=512))
+                    self._projectile_interface_capped_round = round_id
                 return
             row = dict(payload)
             row.update(projectile=meta.get('projectile_id'), phase=phase, round=round_id)
             native_input_diagnostics.write_json_record('PROJECTILE INTERFACE', row)
-            reports[phase] = True
+            reports[report_key] = True
             budget[1] += 1
         except Exception:
             pass
@@ -18283,6 +18292,8 @@ class BattleRuntime(object):
         offframe = self._offframe_seconds
         self._offframe_seconds = 0.0
         self._effect_reports = 0
+        self._projectile_interface_budget = None
+        self._projectile_interface_capped_round = None
         self._spotted_signature = None
         try:
             lan_poll_getter = (getattr(
@@ -29451,6 +29462,11 @@ class BattleRuntime(object):
                 self._report_projectile_interface(interface_meta, phase, {
                     'interface': 'destructibles_sensor.shot_world_distance',
                     'shell_kind': _field(_field(shot, 'shell', {}), 'kind', None),
+                    'contact_key': [(row.get('stage'), row.get('chunk'), row.get('item'),
+                                     row.get('material'), row.get('identity'), row.get('hit'))
+                                    for row in result.get('collision_evidence', ())
+                                    if row.get('stage') in ('native.projectile.world',
+                                        'native.projectile.material', 'native.projectile.prop_material')],
                     'result': result, 'start': tuple(start), 'end': tuple(end)})
             added_loss = max(0.0, _number(
                 result.get('piercing_loss'), 0.0))
@@ -30203,6 +30219,8 @@ class BattleRuntime(object):
         self._local_effective_params = None
         self._offframe_seconds = 0.0
         self._effect_reports = 0
+        self._projectile_interface_budget = None
+        self._projectile_interface_capped_round = None
         self._spotted_signature = None
         self._local_spotting_cache = None
         self._local_factors_cache = None
