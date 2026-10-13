@@ -29,8 +29,10 @@ TIMED_DELAY_DECAY_RATIO = 0.005
 # Normal 30 Hz jitter still needs its existing high-water decay. Accelerate
 # only the excess left by a stalled producer; keep the ordinary 60-99 ms
 # cushion intact so recurring short gaps do not cause playback holds.
-TIMED_STALL_RECOVERY_RATIO = 0.05
+TIMED_STALL_RECOVERY_RATIO = 0.06
 TIMED_CONFIRMED_CATCHUP_RATE = 0.10
+# Render callbacks must catch the packet-wise target decay within one frame.
+TIMED_STALL_PRESENTATION_RECOVERY_RATE = 0.10
 # A paused consumer can retain half a second of obsolete display history.
 # On normal callbacks again, replay confirmed history at at most 1.5x while
 # returning to the actually observed producer cushion. Never skip that cursor.
@@ -763,12 +765,12 @@ class SnapshotSync(object):
                     # The stock quadratic curve becomes effectively static
                     # for small errors.  Match the jitter high-water decay so
                     # the startup cushion actually returns to its 60 ms
-                    # floor, using 1.05x playback for an ordinary stall tail.
+                    # floor, using at most 1.10x confirmed catch-up for a stall tail.
                     # A 100 ms excess formerly survived for 20 seconds and
                     # kept muzzle/impact playback late after the worker recovered.
                     latency_rate = max(
                         latency_rate,
-                        TIMED_STALL_RECOVERY_RATIO if
+                        TIMED_STALL_PRESENTATION_RECOVERY_RATE if
                         delay_us > TIMED_STALL_RECOVERY_FLOOR_US else
                         TIMED_DELAY_DECAY_RATIO)
                     # Spend confirmed history to shed a stall tail sooner.

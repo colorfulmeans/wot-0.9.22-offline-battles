@@ -6850,6 +6850,7 @@ class BotRuntime(object):
             'alignment_target', 'heading_progress_yaw', 'best_heading_error')}
         driver_trace['objective_progress'] = dict(driver_state.get('objective_progress') or {})
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
+        driver_trace['recovery_pocket'] = dict(driver_state.get('recovery_pocket') or {})
         driver_trace['navigation_wait'] = dict(
             driver_state.get('navigation_wait') or {})
         # Finish this rare diagnostic after every authority gate has run.
@@ -13924,6 +13925,8 @@ class BotRuntime(object):
                     'speed': state['speed'],
                     'dt': decision_step, 'now': now,
                     'pose_clear': sample_pose_clear,
+                    'native_rotation_refused': now < state.get(
+                        '_native_rotation_refused_until', 0.0),
                     'push_pose_clear': lambda sample_yaw: sample_pose_clear(
                         sample_yaw, True),
                     'health': state['health'],
@@ -14703,6 +14706,7 @@ class BotRuntime(object):
                         descriptor, step, now, params['rotSpd']))
                     if rotation_blocked:
                         rotation_block_reason = 'native_world'
+                        state['_native_rotation_refused_until'] = now + 2.0
                 if rotation_blocked:
                     # Pure hull laying also needs a fresh decision after a
                     # realised refusal; a cached zero-throttle pivot otherwise

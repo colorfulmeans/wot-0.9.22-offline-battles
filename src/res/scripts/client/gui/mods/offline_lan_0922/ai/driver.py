@@ -973,7 +973,8 @@ class LocalDriver(object):
 			half_length=3.5, half_width=1.7,
 			movement_intent=True, stopping_distance=None,
 			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
-			progress_target=None, turn_speed_limit=None, arrival_radius=None):
+			progress_target=None, turn_speed_limit=None, arrival_radius=None,
+			rotation_refused=False):
 		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -1008,6 +1009,7 @@ class LocalDriver(object):
 			state['translation_progress_at'] = state['clock']
 			state.pop('objective_progress', None)
 			state.pop('recovery_replan_episode', None)
+			state.pop('recovery_pocket', None)
 			# Cover/engagement orders intentionally stop within a tolerance. Do not
 			# reinterpret that commanded hold as a stuck tank 1.8 seconds later.
 			state['stuck_time'] = 0.0
@@ -1024,6 +1026,14 @@ class LocalDriver(object):
 			}
 		own_half_length = max(0.5, float(half_length))
 		own_half_width = max(0.3, float(half_width))
+		pocket = state.get('recovery_pocket')
+		if pocket is not None and (
+				_distance(position, pocket['origin']) >= 2.0 * own_half_length + arrival or
+				_distance(pocket['goal'], progress_target or target) > 2.0):
+			state.pop('recovery_pocket', None)
+			pocket = None
+		pocket_stalled = bool(pocket is not None and
+			state['clock'] - pocket['at'] >= 8.0 and state['recovery_count'] >= 2)
 		displacement = _distance((position[0], 0.0, position[2]),
 		                         (state['last_position'][0], 0.0,
 		                          state['last_position'][1]))
@@ -1138,6 +1148,9 @@ class LocalDriver(object):
 			if state['stuck_time'] >= threshold:
 				if progress_target is not None:
 					state['objective_progress']['at'] = state['clock']
+				if rotation_refused and state.get('recovery_pocket') is None:
+					state['recovery_pocket'] = dict(origin=tuple(position),
+						at=state['clock'], goal=tuple(progress_target or target))
 				if state.get('last_clear_yaw') is not None:
 					state['failed_yaws'][self._yaw_key(state['last_clear_yaw'])] = (
 						state['clock'] + self.failure_ttl)
@@ -1174,7 +1187,7 @@ class LocalDriver(object):
 					position, yaw, neighbours,
 					own_half_length, own_half_width)
 			if not reverse_clear or reverse_blocker is not None:
-				if objective_stalled or translation_stalled:
+				if objective_stalled or translation_stalled or pocket_stalled:
 					# A slope may permit a short straight exit while rejecting
 					# the full backing sweep. Prefer proved translation after
 					# eight seconds without progress, even if a pivot still fits.

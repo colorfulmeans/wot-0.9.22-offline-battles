@@ -86,6 +86,37 @@ class SnapshotSyncTests(unittest.TestCase):
                 late_delay=record['presentation_delay_us']
         self.assertLess(late_delay,250000.)
 
+    def test_producer_stall_tail_sheds_more_latency_without_unconfirmed_pose(self):
+        delays = []
+        for previous in (True, False):
+            module = _load()
+            if previous:
+                module.TIMED_STALL_RECOVERY_RATIO = .05
+                module.TIMED_STALL_PRESENTATION_RECOVERY_RATE = .05
+            clock = [0.0]
+            sync = module.SnapshotSync(1, clock=lambda: clock[0])
+            source = set((0, 130, 260)) | set(range(760, 3001, 130))
+            revision = 0
+            cursor = None
+            for tick in sorted(source | set(range(0, 3001, 10))):
+                clock[0] = tick / 1000.0
+                if tick in source:
+                    revision += 1
+                    sync.snapshot(dict(round_id=1, server_tick=tick,
+                        bot_state_revision=revision, motion_time_us=tick*1000,
+                        bot_state_time_us=tick*1000,
+                        bots=[player(7, tick/100.0)]))
+                sync.advance(clock[0])
+                record = sync._entities['bot:7']
+                current = record.get('presentation_time_us')
+                if current is not None:
+                    self.assertLessEqual(current, record['target_sample_time_us'])
+                    if cursor is not None:
+                        self.assertGreaterEqual(current, cursor)
+                    cursor = current
+            delays.append(record['presentation_delay_us'])
+        self.assertLess(delays[1], delays[0] - 15000.0)
+
     def test_confirmed_stall_tail_recovers_faster_than_the_previous_policy(self):
         policies = []
         for previous in (True, False):
