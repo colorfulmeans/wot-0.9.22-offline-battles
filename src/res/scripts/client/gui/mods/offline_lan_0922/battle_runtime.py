@@ -16539,7 +16539,7 @@ class BattleRuntime(object):
         """Join real sender calls to BSP evidence and server HP commits."""
         try:
             reports = meta.setdefault('interface_reports', {})
-            report_key = (phase, json.dumps(payload['contact_key'], sort_keys=True)) if 'contact_key' in payload else phase
+            report_key = (phase, repr(payload['contact_key'])) if 'contact_key' in payload else phase
             if reports.get(report_key):
                 return
             round_id = (self._start_message or {}).get('round_id')

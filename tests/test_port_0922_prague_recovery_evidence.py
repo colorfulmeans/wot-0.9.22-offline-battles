@@ -51,6 +51,33 @@ class RecoveryEvidenceTests(unittest.TestCase):
             requests.append(driver.recovery_replan(6, row['position'], 3.5))
         self.assertEqual(1, sum(requests))
 
+    def test_adapter_requires_vehicle_evidence_and_does_not_interrupt_navigation_wait(self):
+        from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+        for named, waiting in ((True, False), (False, False), (True, True)):
+            with self.subTest(named=named, waiting=waiting):
+                adapter = BotAdapter('test', 1)
+                state = dict(id=6, slot=5, team=1, position=(0., 0., 0.),
+                             yaw=0., speed=0., dt=.1, neighbours=[])
+                order = dict(throttle=0., turn=1., target_yaw=.85,
+                             recovery_mode='pivot_recovery')
+                if named: order['reverse_blocked_by'] = 4
+                if waiting:
+                    state['navigation_status'] = 'pending'
+                    adapter.navigation_target = lambda *args: (0., 0., 0.)
+                with mock.patch.object(adapter, '_hull_contact', return_value=None), \
+                     mock.patch.object(adapter, '_wreck_push_plan', return_value=None), \
+                     mock.patch.object(adapter.driver, 'drive', side_effect=lambda *a, **kw: dict(order)), \
+                     mock.patch.object(adapter.driver, 'wait_for_navigation', side_effect=lambda *a, **kw: dict(order)), \
+                     mock.patch.object(adapter.driver, 'recovery_replan', return_value=True) as replan:
+                    result = adapter._drive_order_controls(6, state, state['position'],
+                        dict(combat_mode='route', move_position=(0., 0., 40.)), lambda *a: True)
+                if named and not waiting:
+                    self.assertTrue(result.get('navigation_replan'))
+                    replan.assert_called_once()
+                else:
+                    self.assertFalse(result.get('navigation_replan', False))
+                    replan.assert_not_called()
+
     def test_progressing_recovery_does_not_replan_each_small_step(self):
         driver = LocalDriver()
         state = driver._state(6, 5, (0., 0., 0.))
