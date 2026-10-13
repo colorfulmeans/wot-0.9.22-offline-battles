@@ -1861,6 +1861,41 @@ class OfflineCompatibilityTests(unittest.TestCase):
             else:
                 sys.modules[name] = value
 
+    def test_stock_effect_receipt_pairs_inputs_from_the_completed_update(self):
+        module = _load_port_source('compat')
+        vehicle = types.SimpleNamespace(speedInfo=types.SimpleNamespace(
+            value=(3.0, 0.2, -3.0, 0.0)))
+        manager = types.SimpleNamespace(_CustomEffectManager__vehicle=vehicle,
+            _CustomEffectManager__variableArgs={'speed': 0.0})
+        def original(value):
+            value._CustomEffectManager__variableArgs['speed'] = -3.0
+            vehicle.speedInfo.value = (5.0, 0.0, 5.0, 0.0)
+            return 'stock result'
+        wrapped = module._track_effect_update_with_receipt(original, lambda: 10.0)
+        vehicle._offlineTrackEffectDiagnostic = True
+        self.assertEqual('stock result', wrapped(manager))
+        receipt = vehicle._offlineTrackEffectReceipt
+        self.assertEqual(-3.0, receipt['speed_info'][2])
+        self.assertEqual(-3.0, receipt['effect_inputs']['speed'])
+        self.assertEqual(5.0, vehicle.speedInfo.value[2])
+        self.assertEqual(10.0, receipt['at'])
+
+    def test_stock_effect_receipt_is_opt_in_and_preserves_stock_failure(self):
+        module = _load_port_source('compat')
+        vehicle = types.SimpleNamespace()
+        manager = types.SimpleNamespace(_CustomEffectManager__vehicle=vehicle)
+        clock = mock.Mock()
+        original = mock.Mock(return_value=42)
+        wrapped = module._track_effect_update_with_receipt(original, clock)
+        self.assertEqual(42, wrapped(manager))
+        clock.assert_not_called()
+        self.assertNotIn('_offlineTrackEffectReceipt', vehicle.__dict__)
+        vehicle._offlineTrackEffectDiagnostic = True
+        self.assertEqual(42, wrapped(manager))  # Missing evidence cannot abort stock.
+        original.side_effect = RuntimeError('stock update failed')
+        with self.assertRaisesRegex(RuntimeError, 'stock update failed'):
+            wrapped(manager)
+
     def test_the_garage_survives_the_account_rebuild_after_a_battle(self):
         compatibility_module = _load_port_source('compat')
         runtime, unused_operations = self._runtime()

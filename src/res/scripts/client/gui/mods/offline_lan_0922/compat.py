@@ -25,6 +25,33 @@ _dossier_cache_pinned = False
 _SETTINGS_KEYS = ('settings', 'filters', 'counters', 'notifications')
 
 
+def _track_effect_update_with_receipt(original, clock):
+    """Observe one completed stock update without changing its effect inputs."""
+    def update(manager, *args, **kwargs):
+        vehicle = getattr(manager, '_CustomEffectManager__vehicle', None)
+        enabled = bool(vehicle is not None and vehicle.__dict__.get(
+            '_offlineTrackEffectDiagnostic', False))
+        receipt = None
+        if enabled:
+            try:
+                receipt = {'at': clock(),
+                           'speed_info': list(vehicle.speedInfo.value)[:4]}
+            except Exception:
+                receipt = None
+        result = original(manager, *args, **kwargs)
+        if receipt is not None:
+            try:
+                args = manager._CustomEffectManager__variableArgs
+                receipt['effect_inputs'] = dict((key, args.get(key)) for key in (
+                    'speed', 'rotSpeed', 'direction', 'matkindL', 'matkindR',
+                    'deltaL', 'deltaR', 'directionL', 'directionR', 'hullAngle'))
+                vehicle.__dict__['_offlineTrackEffectReceipt'] = receipt
+            except Exception:
+                pass  # Diagnostics must never retire stock presentation.
+        return result
+    return update
+
+
 def _show_lan_death_message(panel, original, own_id, color_format,
                             key, args=None, extra=None, postfix=None):
     """Preserve personal messages and color only LAN squad name fields."""
@@ -1092,6 +1119,12 @@ class OfflineCompatibility(object):
         effect_update = getattr(effect_type, 'update', None)
         self._custom_effect_update_code = getattr(
             effect_update, 'func_code', getattr(effect_update, '__code__', None))
+        self._original_effect_update = effect_update
+        self._effect_update_wrapper = None
+        if callable(effect_update):
+            self._effect_update_wrapper = _track_effect_update_with_receipt(
+                effect_update, runtime.bigworld.time)
+            effect_type.update = self._effect_update_wrapper
         if crashed_tracks_controller_type is None:
             raise RuntimeError('#1513 crashed-track controller is unavailable')
         crashed_track_setup_assembler = getattr(
@@ -3172,6 +3205,12 @@ class OfflineCompatibility(object):
             if owner.__dict__.get(name) is patched:
                 setattr(owner, name, original)
         self._team_command_readers = []
+        effect_type = getattr(runtime, 'custom_effect_manager_type', None)
+        effect_wrapper = getattr(self, '_effect_update_wrapper', None)
+        if (effect_type is not None and effect_wrapper is not None and
+                effect_type.__dict__.get('update') is effect_wrapper):
+            effect_type.update = self._original_effect_update
+        self._effect_update_wrapper = None
         if runtime.bigworld.serverTime is self._server_time_wrapper:
             runtime.bigworld.serverTime = self._original_server_time
         if (debug_panel_type is not None and

@@ -7868,6 +7868,8 @@ class BattleRuntime(object):
                 except Exception as error:
                     errors[key] = self._bounded_failure_reason(error)
                     return default
+            entity.__dict__['_offlineTrackEffectDiagnostic'] = True
+            effect_receipt = entity.__dict__.get('_offlineTrackEffectReceipt')
             appearance = getattr(entity, 'appearance', None)
             sensor = getattr(appearance, 'terrainMatKindSensor', None)
             manager = getattr(appearance, 'customEffectManager', None)
@@ -7904,6 +7906,12 @@ class BattleRuntime(object):
                 'effect_inputs': dict((key, args.get(key)) for key in (
                     'matkindL', 'matkindR', 'deltaL', 'deltaR',
                     'directionL', 'directionR', 'speed', 'isUnderWater')),
+                # Current pose and cached effect parameters are asynchronous.
+                # Only the completed stock receipt pairs one update's inputs.
+                'effect_sample_phase': 'cached_before_next_stock_update',
+                'completed_effect_update': effect_receipt,
+                'effect_update_age_ms': (max(0.0, now - effect_receipt['at']) *
+                                         1000.0 if effect_receipt else None),
                 'effect_materials': effect_names,
                 'scroll': dict((key, read_value(scroll, key)) for key in (
                     'leftScroll', 'rightScroll', 'leftContact', 'rightContact')),

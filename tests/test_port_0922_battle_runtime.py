@@ -34221,12 +34221,23 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertTrue(battle._report_track_surface(entity, 'player', receipt, now=10))
             self.assertFalse(battle._report_track_surface(entity, 'player', receipt, now=11))
             appearance.terrainMatKindSensor.matKinds = [2, 3]
+            entity._offlineTrackEffectReceipt = {
+                'at': 14.5, 'speed_info': [3.0, 0.0, 3.0, 0.0],
+                'effect_inputs': {'speed': 3.0}}
             self.assertTrue(battle._report_track_surface(entity, 'player', receipt, now=15))
         rows = [json.loads(line.split('TRACK SURFACE ', 1)[1]) for line in log.getvalue().splitlines()]
         self.assertEqual([7, 12], rows[0]['sensor_materials'])
         self.assertEqual([2, 3], rows[1]['sensor_materials'])
         self.assertEqual(-1, rows[0]['effect_inputs']['matkindR'])
         self.assertEqual([7, 12], appearance.terrainMatKind)
+        self.assertEqual('cached_before_next_stock_update',
+                         rows[0]['effect_sample_phase'])
+        self.assertIsNone(rows[0]['completed_effect_update'])
+        self.assertTrue(entity._offlineTrackEffectDiagnostic)
+        self.assertEqual(500.0, rows[1]['effect_update_age_ms'])
+        self.assertEqual(3.0, rows[1]['completed_effect_update'][
+            'effect_inputs']['speed'])
+
 
     def test_track_surface_calls_native_readers_and_resolves_effect_names(self):
         battle = BattleRuntime(_runtime())
