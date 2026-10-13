@@ -7858,6 +7858,16 @@ class BattleRuntime(object):
             return False
         receipt['_surface_report_at'] = now + 5.0
         try:
+            errors = {}
+            def read_value(obj, key, default=None):
+                try:
+                    value = getattr(obj, key, default)
+                    # Exact #1513 PyTrackScroll exposes four zero-argument
+                    # readers, not numeric attributes. Never serialize methods.
+                    return value() if callable(value) else value
+                except Exception as error:
+                    errors[key] = self._bounded_failure_reason(error)
+                    return default
             appearance = getattr(entity, 'appearance', None)
             sensor = getattr(appearance, 'terrainMatKindSensor', None)
             manager = getattr(appearance, 'customEffectManager', None)
@@ -7877,17 +7887,25 @@ class BattleRuntime(object):
                 'entity': getattr(entity, 'bw_entity_id',
                                   getattr(entity, 'id', None)),
                 'position': str(getattr(entity, 'position', None))[:160],
+                'alive': bool(read_value(entity, 'isAlive', False)),
+                'visible': bool(getattr(entity, '_offlineNativeDrawVisible', True)),
+                'damaged_model': bool(read_value(
+                    getattr(appearance, 'damageState', None),
+                    'isCurrentModelDamaged', False)),
                 'sensor_present': sensor is not None,
-                'sensor_materials': list(getattr(sensor, 'matKinds', ()) or ())[:4],
-                'appearance_materials': list(getattr(
+                'manager_present': manager is not None,
+                'scroll_present': scroll is not None,
+                'sensor_materials': list(read_value(sensor, 'matKinds', ()) or ())[:4],
+                'appearance_materials': list(read_value(
                     appearance, 'terrainMatKind', ()) or ())[:4],
                 'in_water': bool(getattr(appearance, 'isInWater', False)),
                 'effect_inputs': dict((key, args.get(key)) for key in (
                     'matkindL', 'matkindR', 'deltaL', 'deltaR',
                     'directionL', 'directionR', 'speed', 'isUnderWater')),
                 'effect_materials': effect_names,
-                'scroll': dict((key, getattr(scroll, key, None)) for key in (
+                'scroll': dict((key, read_value(scroll, key)) for key in (
                     'leftScroll', 'rightScroll', 'leftContact', 'rightContact')),
+                'read_errors': errors,
             }
             sys.stdout.write('[Offline LAN 0.9.22] TRACK SURFACE %s\n' %
                              json.dumps(row, separators=(',', ':')))

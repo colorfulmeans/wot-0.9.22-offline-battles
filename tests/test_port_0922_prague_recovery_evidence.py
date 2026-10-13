@@ -25,21 +25,25 @@ class RecoveryEvidenceTests(unittest.TestCase):
         self.assertEqual(4, order.get('reverse_blocked_by'))
         self.assertEqual(0., order['throttle'])
 
-    def test_repeated_recovery_requests_one_replan_until_actual_escape(self):
+    def test_repeated_recovery_retries_after_a_new_recovery_and_deadline(self):
         driver = LocalDriver()
         state = driver._state(6, 5, (0., 0., 0.))
         state.update(clock=10., recovery_count=2)
         self.assertFalse(driver.recovery_replan(6, (0., 0., 0.), 3.5))
         state.update(clock=19., recovery_count=5)
         self.assertTrue(driver.recovery_replan(6, (.2, 0., -.2), 3.5))
-        for clock in (30., 60., 100.):
+        state.update(clock=26., recovery_count=10)
+        self.assertFalse(driver.recovery_replan(6, (.1, 0., .1), 3.5))
+        state.update(clock=30., recovery_count=10)
+        self.assertTrue(driver.recovery_replan(6, (.1, 0., .1), 3.5))
+        for clock in (60., 100.):
             state.update(clock=clock, recovery_count=10)
             self.assertFalse(driver.recovery_replan(6, (.1, 0., .1), 3.5))
         self.assertFalse(driver.recovery_replan(6, (0., 0., 10.), 3.5))
         state.update(clock=109., recovery_count=12)
         self.assertTrue(driver.recovery_replan(6, (0., 0., 10.), 3.5))
 
-    def test_reported_430_pocket_emits_a_single_fresh_follower_request(self):
+    def test_reported_430_pocket_requests_are_bounded_by_recovery_and_time(self):
         rows = json.loads((Path(__file__).parent / 'fixtures' /
                            'object430_203324_recovery.json').read_text())
         self.assertGreaterEqual(len(rows), 3)
@@ -49,7 +53,40 @@ class RecoveryEvidenceTests(unittest.TestCase):
         for row in rows:
             state.update(clock=row['clock'], recovery_count=row['recovery_count'])
             requests.append(driver.recovery_replan(6, row['position'], 3.5))
-        self.assertEqual(1, sum(requests))
+        issued = [row for row, requested in zip(rows, requests) if requested]
+        self.assertTrue(issued)
+        for previous, current in zip(issued, issued[1:]):
+            self.assertGreaterEqual(current['clock'] - previous['clock'], 8.)
+            self.assertGreater(current['recovery_count'], previous['recovery_count'])
+
+    def test_252u_logged_pocket_retries_instead_of_latching_first_request(self):
+        driver = LocalDriver()
+        state = driver._state(17, 0, (-72.232603355, 13., -56.584238809))
+        state.update(clock=133.491210938, recovery_count=1)
+        self.assertFalse(driver.recovery_replan(17, (-72.232603355, 13., -56.584238809), 3.5))
+        # Windows 231147, 23:05:02 and 23:05:26: hull remains in the same
+        # pocket while the completed recovery count advances from 2 to 4.
+        state.update(clock=173.259155273, recovery_count=2)
+        self.assertTrue(driver.recovery_replan(17, (-73.6572376756, 13., -56.4854850002), 3.5))
+        state.update(clock=196.514160156, recovery_count=4)
+        self.assertTrue(driver.recovery_replan(17, (-73.4781987861, 13., -56.8242426368), 3.5))
+
+    def test_admitted_pocket_retries_when_instantaneous_contact_is_gone(self):
+        from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+        adapter = BotAdapter('test', 1)
+        state = dict(id=17, slot=0, team=1, position=(0., 0., 0.),
+                     yaw=0., speed=0., dt=.1, neighbours=[])
+        driver_state = adapter.driver._state(17, 0, state['position'])
+        driver_state['recovery_replan_episode'] = {'issued': True}
+        order = dict(throttle=0., turn=1., target_yaw=.85, recovery_mode='pivot_recovery')
+        with mock.patch.object(adapter, '_hull_contact', return_value=None), \
+             mock.patch.object(adapter, '_wreck_push_plan', return_value=None), \
+             mock.patch.object(adapter.driver, 'drive', return_value=order), \
+             mock.patch.object(adapter.driver, 'recovery_replan', return_value=True) as replan:
+            result = adapter._drive_order_controls(17, state, state['position'],
+                dict(combat_mode='route', move_position=(0., 0., 40.)), lambda *a: True)
+        self.assertTrue(result.get('navigation_replan'))
+        replan.assert_called_once()
 
     def test_adapter_requires_vehicle_evidence_and_does_not_interrupt_navigation_wait(self):
         from gui.mods.offline_lan_0922.ai.adapter import BotAdapter

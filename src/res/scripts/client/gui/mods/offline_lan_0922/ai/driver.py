@@ -412,7 +412,7 @@ class LocalDriver(object):
 		return result
 
 	def recovery_replan(self, bot_id, position, half_length):
-		"""Request one fresh follower after repeated recovery in the same pocket."""
+		"""Bound follower retries by elapsed time and a new completed recovery."""
 		state = self.states.get(bot_id)
 		if state is None or state['recovery_count'] == 0:
 			return False
@@ -421,10 +421,14 @@ class LocalDriver(object):
 			episode = dict(origin=tuple(position), at=state['clock'],
 				count=state['recovery_count'], issued=False)
 			state['recovery_replan_episode'] = episode
-		if (episode['issued'] or state['clock'] - episode['at'] < 8.0 or
-				state['recovery_count'] <= episode['count']):
+		issued_at = episode.get('issued_at', episode['at'])
+		issued_count = episode.get('issued_count', episode['count'])
+		if (state['clock'] - issued_at < 8.0 or
+				state['recovery_count'] <= issued_count):
 			return False
 		episode['issued'] = True
+		episode['issued_at'] = state['clock']
+		episode['issued_count'] = state['recovery_count']
 		return True
 
 	def _state(self, bot_id, team_slot, position):

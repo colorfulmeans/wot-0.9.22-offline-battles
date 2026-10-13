@@ -34228,6 +34228,50 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual(-1, rows[0]['effect_inputs']['matkindR'])
         self.assertEqual([7, 12], appearance.terrainMatKind)
 
+    def test_track_surface_calls_native_readers_and_resolves_effect_names(self):
+        battle = BattleRuntime(_runtime())
+        battle._frame_diagnostics.enabled = True
+        battle._runtime.material_kinds = types.SimpleNamespace(
+            EFFECT_MATERIAL_INDEXES_BY_IDS={101: 0, 107: 1},
+            EFFECT_MATERIALS=('ground', 'metal'))
+        scroll = types.SimpleNamespace(leftScroll=lambda: 1.25,
+            rightScroll=lambda: -0.5, leftContact=lambda: True,
+            rightContact=lambda: False)
+        entity = types.SimpleNamespace(id=10, isAlive=lambda: True,
+            appearance=types.SimpleNamespace(
+                trackScrollController=scroll,
+                terrainMatKindSensor=types.SimpleNamespace(matKinds=[101, 107]),
+                terrainMatKind=[101, 107],
+                customEffectManager=types.SimpleNamespace(
+                    _CustomEffectManager__variableArgs={'matkindL': 101, 'matkindR': 107})))
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertTrue(battle._report_track_surface(entity, 'player', {}, now=10))
+        row = json.loads(log.getvalue().split('TRACK SURFACE ', 1)[1])
+        self.assertEqual({'leftScroll': 1.25, 'rightScroll': -0.5,
+                          'leftContact': True, 'rightContact': False}, row['scroll'])
+        self.assertEqual({'L': 'ground', 'R': 'metal'}, row['effect_materials'])
+        self.assertTrue(row['alive'])
+        self.assertEqual({}, row['read_errors'])
+
+    def test_one_track_reader_failure_preserves_other_surface_evidence(self):
+        battle = BattleRuntime(_runtime())
+        battle._frame_diagnostics.enabled = True
+        def failed():
+            raise RuntimeError('retired native scroll')
+        entity = types.SimpleNamespace(id=10, isAlive=lambda: False,
+            appearance=types.SimpleNamespace(
+                trackScrollController=types.SimpleNamespace(
+                    leftScroll=failed, rightScroll=lambda: 0.0),
+                terrainMatKind=[101, 107]))
+        with contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertTrue(battle._report_track_surface(entity, 'remote', {}, now=10))
+        row = json.loads(log.getvalue().split('TRACK SURFACE ', 1)[1])
+        self.assertIsNone(row['scroll']['leftScroll'])
+        self.assertEqual(0.0, row['scroll']['rightScroll'])
+        self.assertEqual([101, 107], row['appearance_materials'])
+        self.assertIn('retired native scroll', row['read_errors']['leftScroll'])
+        self.assertFalse(row['alive'])
+
     def test_far_bots_sample_the_suspension_less_than_near_bots(self):
         near = {'id': 1, 'x': 10.0, 'y': 2.0, 'z': 0.0, 'yaw': 0.0,
                 'pitch': 0.0, 'roll': 0.0, 'half_length': 3.5,
