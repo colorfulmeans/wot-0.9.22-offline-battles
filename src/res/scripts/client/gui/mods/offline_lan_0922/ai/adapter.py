@@ -46,6 +46,7 @@ class BotAdapter(object):
         self.navigation_target = navigation_target
         self._contact_peers = {}
         self._contact_attempts = {}
+        self._contact_escapes = {}
         self._wreck_attempts = {}
         self._withdrawal_attempts = {}
 
@@ -57,6 +58,7 @@ class BotAdapter(object):
         self.director.agents.pop(int(bot_id), None)
         self._contact_peers.pop(int(bot_id), None)
         self._contact_attempts.pop(int(bot_id), None)
+        self._contact_escapes.pop(int(bot_id), None)
         self._wreck_attempts.pop(int(bot_id), None)
         self._withdrawal_attempts.pop(int(bot_id), None)
 
@@ -87,8 +89,86 @@ class BotAdapter(object):
                     'peer_position': where,
                 }
         self._contact_peers.pop(bot_id, None)
-        self._contact_attempts.pop(bot_id, None)
+        # A small contact gap does not complete a longitudinal escape or
+        # erase failed directions for the same local jam.
         return None
+
+    def _contact_escape_memory(self, bot_id, position, contact, half_length, yaw):
+        memory = self._contact_attempts.get(bot_id)
+        peer_position = contact.get('peer_position') or position
+        if (memory is None or memory['peer'] != contact.get('peer_id') or
+                memory['peer_alive'] != contact.get('peer_alive', True) or
+                abs((yaw-memory['yaw']+math.pi) % (2.0*math.pi)-math.pi) > 0.30 or
+                math.hypot(position[0]-memory['position'][0],
+                           position[2]-memory['position'][2]) >=
+                2.0*half_length + WAYPOINT_ARRIVAL_RADIUS or
+                math.hypot(peer_position[0]-memory['peer_position'][0],
+                           peer_position[2]-memory['peer_position'][2]) >= 1.0):
+            memory = dict(peer=contact.get('peer_id'), position=tuple(position),
+                          peer_alive=contact.get('peer_alive', True), yaw=yaw,
+                          peer_position=tuple(peer_position), failed=set())
+            self._contact_attempts[bot_id] = memory
+        return memory
+
+    @staticmethod
+    def _contact_escape_evidence(state, escape, phase, progress=0.0):
+        state['_contact_escape_evidence'] = dict(
+            peer=escape['peer'], sign=escape['sign'], origin=escape['origin'],
+            target=escape['target'], elapsed=escape['elapsed'],
+            stalled=escape['stalled'], progress=progress,
+            remaining=max(0.0, escape['distance']-progress), phase=phase)
+
+    def _retained_contact_escape(self, state, position, direction_clear):
+        bot_id = int(state.get('id', 0))
+        escape = self._contact_escapes.get(bot_id)
+        if escape is None:
+            return None
+        heading = escape['yaw'] + (math.pi if escape['sign'] < 0.0 else 0.0)
+        progress = ((position[0]-escape['origin'][0])*math.sin(heading) +
+                    (position[2]-escape['origin'][2])*math.cos(heading))
+        remaining = max(0.0, escape['distance']-progress)
+        step = max(0.0, float(state.get('dt', 0.0)))
+        escape['elapsed'] += step
+        if progress >= escape['best_progress'] + 0.25:
+            escape['best_progress'] = progress
+            escape['stalled'] = 0.0
+        else:
+            escape['stalled'] += step
+        peer = next((row for row in state.get('neighbours', ())
+                     if row.get('id') == escape['peer']), None)
+        reason = None
+        if remaining <= 0.05:
+            reason = 'completed'
+        elif peer is None or peer.get('alive', True) != escape['peer_alive']:
+            reason = 'peer_changed'
+        elif abs((float(state.get('yaw', 0.0))-escape['yaw']+math.pi) %
+                 (2.0*math.pi)-math.pi) > 0.30:
+            reason = 'heading_changed'
+        elif (escape['elapsed'] >= 20.0 or
+              escape['stalled'] >= max(2.0*self.driver.stuck_seconds,
+                                       self.driver.recovery_seconds)):
+            reason = 'no_progress'
+        else:
+            current_heading = float(state.get('yaw', 0.0)) + (math.pi if escape['sign'] < 0.0 else 0.0)
+            horizon = min(remaining, recovery_probe_distance(escape['half_length']))
+            if not self.driver._clear(direction_clear, current_heading, horizon):
+                reason = 'terrain_withdrawn'
+            elif self.driver._reverse_blocked_by_vehicle(
+                    position, current_heading+math.pi, state.get('neighbours', ()),
+                    escape['half_length'], escape['half_width']) is not None:
+                reason = 'vehicle_withdrawn'
+        if reason is not None:
+            self._contact_escapes.pop(bot_id, None)
+            if reason not in ('completed', 'peer_changed', 'heading_changed'):
+                memory = self._contact_attempts.get(bot_id)
+                if memory is not None and memory['peer'] == escape['peer']:
+                    memory['failed'].add(escape['sign'])
+            self._contact_escape_evidence(state, escape, reason, progress)
+            return None
+        self._contact_escape_evidence(state, escape, 'active', progress)
+        return escape['target'], dict(throttle=escape['sign'], brake=False,
+            turn=0.0, target_yaw=escape['yaw'], recovery_mode='contact_escape',
+            recovery_probe_distance=min(remaining, recovery_probe_distance(escape['half_length'])))
 
     def _contact_escape_plan(self, state, position, direction_clear,
                              contact):
@@ -100,8 +180,12 @@ class BotAdapter(object):
         ``contact_escape`` intent but zero throttle.  Only choose a direct
         escape when SAT geometry identifies a separating end, and retain the
         same terrain and complete-vehicle-sweep checks as ordinary recovery.
-        A centred side contact tries both checked ends in bounded episodes.
+        A selected direction survives small contact gaps and tactical changes.
+        Failed directions stay failed until the bodies make meaningful progress.
         """
+        bot_id = int(state.get('id', 0))
+        if bot_id in self._contact_escapes:
+            return self._retained_contact_escape(state, position, direction_clear)
         if not isinstance(contact, dict):
             return None
         yaw = float(state.get('yaw', 0.0))
@@ -123,23 +207,17 @@ class BotAdapter(object):
             # longitudinal end instead of compressing the overlap along it.
             preferred = 1.0 if longitudinal_offset > 0.0 else -1.0
         else:
-            bot_id = int(state.get('id', 0))
-            attempt = self._contact_attempts.get(bot_id)
-            if (attempt is None or attempt['peer'] != contact.get('peer_id') or
-                    math.hypot(position[0]-attempt['position'][0],
-                               position[2]-attempt['position'][2]) >= 0.5):
-                attempt = dict(peer=contact.get('peer_id'), position=position,
-                               elapsed=0.0)
-                self._contact_attempts[bot_id] = attempt
-            attempt['elapsed'] += max(0.0, float(state.get('dt', 0.0)))
-            preferred = -1.0 if int(attempt['elapsed']/1.5) % 2 == 0 else 1.0
+            preferred = -1.0
         shape = state.get('collision_shape') or (
             state.get('half_width', 1.7), state.get('half_length', 3.5),
             tank_collision.DEFAULT_SHAPE[2], tank_collision.DEFAULT_SHAPE[3])
         half_width = float(state.get('half_width', shape[0]))
         half_length = float(state.get('half_length', shape[1]))
         neighbours = state.get('neighbours', ())
+        memory = self._contact_escape_memory(bot_id, position, contact, half_length, yaw)
         for sign in (preferred, -preferred):
+            if sign in memory['failed']:
+                continue
             heading = yaw + (math.pi if sign < 0.0 else 0.0)
             if not self.driver._clear(
                     direction_clear, heading,
@@ -158,13 +236,15 @@ class BotAdapter(object):
                 position[0] + math.sin(heading) * distance,
                 position[1],
                 position[2] + math.cos(heading) * distance)
-            return target, {
-                'throttle': 1.0 * sign,
-                'brake': False,
-                'turn': 0.0,
-                'target_yaw': yaw,
-                'recovery_mode': 'contact_escape',
-            }
+            escape = dict(peer=contact.get('peer_id'), peer_alive=contact.get('peer_alive', True),
+                origin=tuple(position), target=target, yaw=yaw, sign=sign,
+                distance=distance, half_length=half_length, half_width=half_width,
+                elapsed=0.0, stalled=0.0, best_progress=0.0)
+            self._contact_escapes[bot_id] = escape
+            self._contact_escape_evidence(state, escape, 'started')
+            return target, dict(throttle=sign, brake=False, turn=0.0,
+                target_yaw=yaw, recovery_mode='contact_escape',
+                recovery_probe_distance=recovery_probe_distance(half_length))
         return None
 
     def _wreck_push_plan(self, bot_id, state, position, strategic,
@@ -412,6 +492,7 @@ class BotAdapter(object):
 
     def _drive_order_controls(self, bot_id, state, position, strategic,
                               direction_clear):
+        state.pop('_contact_escape_evidence', None)
         aim_position = strategic.get('aim_position')
         move_position = strategic.get('move_position')
         face_position = strategic.get('face_position')
@@ -439,8 +520,15 @@ class BotAdapter(object):
             target = _position(self.navigation_target(
                 bot_id, position, target, strategic, state), target)
         contact = self._hull_contact(bot_id, state, position)
-        contact_plan = (None if parked else self._wreck_push_plan(
-            bot_id, state, position, strategic, direction_clear, contact))
+        if parked:
+            escape = self._contact_escapes.pop(bot_id, None)
+            if escape is not None:
+                self._contact_escape_evidence(state, escape, 'parking_cancelled')
+        contact_plan = (None if parked else self._retained_contact_escape(
+            state, position, direction_clear))
+        if not parked and contact_plan is None:
+            contact_plan = self._wreck_push_plan(
+                bot_id, state, position, strategic, direction_clear, contact)
         side_contact = bool(contact is not None and abs(
             math.sin(state.get('yaw', 0.0))*contact['normal'][0] +
             math.cos(state.get('yaw', 0.0))*contact['normal'][1]) < 0.35)
@@ -564,6 +652,8 @@ class BotAdapter(object):
                      'navigation_recovery', 'navigation_replan'):
             if name in local:
                 result[name] = local[name]
+        if state.get('_contact_escape_evidence') is not None:
+            result['contact_escape'] = dict(state['_contact_escape_evidence'])
         difference = target_yaw - float(state.get('yaw', 0.0))
         while difference > math.pi:
             difference -= 2.0 * math.pi
