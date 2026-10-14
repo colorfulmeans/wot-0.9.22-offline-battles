@@ -45,7 +45,7 @@ def reference_drive(module):
         raise RuntimeError('Physical reference boundary is missing')
     end = start + tail.start()
     body = textwrap.dedent(source[start:end])
-    prefix = '''def drive(self,state,step,now,command,motion_probe,throttle,turn,path_clear,pose_frozen,travel_sign,neighbours,descriptor,siege_motion_locked):
+    prefix = '''def drive(self,state,step,now,command,motion_probe,throttle,turn,path_clear,pose_frozen,travel_sign,neighbours,descriptor,siege_motion_locked,maximum_probe_distance=None):
     position = _position(state)
     travel_yaw = state['yaw'] + (math.pi if travel_sign < 0. else 0.)
     steer_dir = 1 if turn > .01 else -1 if turn < -.01 else 0
