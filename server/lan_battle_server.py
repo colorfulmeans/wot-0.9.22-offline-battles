@@ -2513,6 +2513,9 @@ class BattleState:
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
         self.player_drowning_seconds = {}
+        self.environment_pushes = {}
+        self.environment_push_sequences = {}
+        self.environment_fall_totals = {}
         self.player_overturn_state = {}
         self.rules_state = {"bases": {
             "1": {"points": 0, "time_left": 0.0,
@@ -2892,6 +2895,9 @@ class BattleState:
             self.player_environment_seq = -1
             self.player_environment_authority_epoch = -1
             self.player_drowning_seconds = {}
+            self.environment_pushes = {}
+            self.environment_push_sequences = {}
+            self.environment_fall_totals = {}
             self.player_mission_view_ranges = {}
             self.player_mission_view_ranges_tick = -1
         if old != self.bot_authority_id:
@@ -3713,6 +3719,9 @@ class BattleState:
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
         self.player_drowning_seconds = {}
+        self.environment_pushes = {}
+        self.environment_push_sequences = {}
+        self.environment_fall_totals = {}
         self.player_overturn_state = {}
         self.rules_state = {"bases": {
             "1": {"points": 0, "time_left": 0.0,
@@ -7381,16 +7390,71 @@ class BattleState:
                     "bot_state", "batch_members",
                     "missing=%s" % sorted(set(identities) - set(next_states)))
             self._commit_human_ram_armors(human_ram_armors)
+            progress = message.get('push_contacts', {})
+            if not isinstance(progress, dict):
+                progress = {}
+            push_rows = progress.get('contacts', ())
+            if isinstance(push_rows, (list, tuple)) and len(push_rows) <= 30:
+                for proof in push_rows:
+                    try:
+                        if not isinstance(proof, dict) or set(proof) != {
+                                'seq', 'attacker_kind', 'attacker_id', 'target_kind', 'target_id'}:
+                            continue
+                        if proof['attacker_kind'] not in ('player', 'bot') or proof['target_kind'] not in ('player', 'bot'):
+                            continue
+                        attacker = (proof['attacker_kind'], _exact_int(proof['attacker_id'], 1, 2147483647))
+                        victim = (proof['target_kind'], _exact_int(proof['target_id'], 1, 2147483647))
+                        self._remember_environment_push(attacker, victim,
+                            _exact_int(proof['seq'], 1, 2147483647))
+                    except (ValueError, TypeError, OverflowError):
+                        continue
+            fall_deltas = {}
+            fall_rows = progress.get('falls', ())
+            if isinstance(fall_rows, (list, tuple)) and len(fall_rows) <= 30:
+                for row in fall_rows:
+                    try:
+                        bot_id, total = row
+                        bot_id = _exact_int(bot_id, 1, 2147483647)
+                        total = _exact_int(total, 0, 2147483647)
+                        old = self.environment_fall_totals.get(bot_id, 0)
+                        if bot_id in next_states and total >= old:
+                            fall_deltas[bot_id] = total - old
+                            self.environment_fall_totals[bot_id] = total
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+            hazards = progress.get('hazards', ())
+            if isinstance(hazards, (list, tuple)) and len(hazards) <= 30:
+                hazards = set(value for value in hazards if isinstance(value, int) and not isinstance(value, bool) and value in next_states)
+            else:
+                hazards = set()
+            environment_records = []
             for bot_id, current in next_states.items():
                 previous = self.bot_states.get(bot_id)
                 if previous is not None and previous.get("alive"):
+                    victim = ('bot', bot_id)
+                    reason = int(current.get('death_reason', 0))
+                    lost = max(0, int(previous['health']) - int(current['health']))
+                    if bot_id in hazards:
+                        self._environment_pusher(victim, hazard=True)
+                    fall_loss = min(lost, fall_deltas.get(bot_id, 0))
+                    environment_loss = lost if reason == 5 else fall_loss
+                    if environment_loss:
+                        reason = 5 if reason == 5 else 3
+                        if not current['alive']:
+                            current['death_reason'] = reason
+                            fire_deaths = [entry for entry in fire_deaths if entry[2]['id'] != bot_id]
+                        environment_records.append((victim, previous, current, environment_loss, reason))
+                    receipt = self.environment_pushes.get(victim)
+                    if (bot_id not in hazards and not environment_loss and
+                            receipt is not None and receipt['hazard_tick'] is not None):
+                        self.environment_pushes.pop(victim, None)
                     if ((previous.get("critical") or {}).get("fire") and
                             current.get("fire_attacker_kind") in ("player", "bot") and
                             int(current.get("fire_attacker_id", 0)) > 0):
                         fire_damage_records.append((
                             (current["fire_attacker_kind"], int(current["fire_attacker_id"])),
                             ("bot", bot_id),
-                            max(0, int(previous["health"]) - int(current["health"])),
+                            max(0, lost - environment_loss),
                             previous.get("critical"), current.get("critical")))
                     if not current.get("alive"):
                         self._record_vehicle_end("bot", bot_id)
@@ -7401,6 +7465,17 @@ class BattleState:
                             tuple(previous[name] for name in ("x", "y", "z")),
                             tuple(current[name] for name in ("x", "y", "z")))
             self.bot_states = next_states
+            for victim, previous, current, lost, reason in environment_records:
+                event = dict(kind='bot_health', target_bot=victim[1], damage=lost,
+                    health=current['health'], dead=not current['alive'],
+                    display_health=current.get('display_health', current['health']),
+                    attack_reason=reason, death_reason=reason if not current['alive'] else 0,
+                    source='environment', critical=current.get('critical'))
+                self._attribute_environment_event(event, victim, previous.get('critical'))
+                if event.get('push_attributed'):
+                    self.pending_events.append(event)
+                if victim[1] not in hazards and reason == 3:
+                    self.environment_pushes.pop(victim, None)
             for attacker, victim, damage, before, after in fire_damage_records:
                 self._record_damage(attacker, victim, damage, before)
                 self._record_critical_damage(attacker, victim, before, after)
@@ -7599,6 +7674,92 @@ class BattleState:
             self.player_environment_authority_epoch = authority_epoch
             return True
 
+    def _remember_environment_push(self, attacker, victim, sequence=None):
+        if attacker == victim or self._vehicle_team(*attacker) not in (1, 2) or self._vehicle_team(*victim) not in (1, 2):
+            return False
+        if sequence is not None:
+            key = (self.authority_epoch, victim)
+            if sequence <= self.environment_push_sequences.get(key, 0):
+                return False
+            self.environment_push_sequences[key] = sequence
+        previous = self.environment_pushes.get(victim)
+        if previous is not None and previous['hazard_tick'] is not None:
+            if self.tick - previous['hazard_tick'] <= 30 * TICK_HZ:
+                return False
+            self.environment_pushes.pop(victim, None)
+        self.environment_pushes[victim] = dict(
+            attacker=attacker, contact_tick=self.tick, hazard_tick=None)
+        return True
+
+    def _remember_push_pair(self, first, second, velocities, normal):
+        from gui.mods.offline_lan_0922 import environment_push
+        owner = environment_push.initiator(velocities[0], velocities[1], normal)
+        if owner is not None:
+            attacker, victim = (first, second) if owner == 0 else (second, first)
+            self._remember_environment_push(attacker, victim)
+
+    def _environment_pusher(self, victim, hazard=False):
+        receipt = self.environment_pushes.get(victim)
+        if receipt is None:
+            return None
+        age = self.tick - receipt['contact_tick']
+        if receipt['hazard_tick'] is None and age > 3 * TICK_HZ:
+            self.environment_pushes.pop(victim, None)
+            return None
+        if hazard and receipt['hazard_tick'] is None:
+            receipt['hazard_tick'] = self.tick
+        if receipt['hazard_tick'] is not None and self.tick - receipt['hazard_tick'] > 30 * TICK_HZ:
+            self.environment_pushes.pop(victim, None)
+            return None
+        return receipt['attacker']
+
+    def _attribute_environment_event(self, event, victim, critical_before, attacker=None):
+        if attacker is None:
+            attacker = self._environment_pusher(victim)
+        if attacker is not None:
+            event['attacker_bot' if attacker[0] == 'bot' else 'attacker'] = attacker[1]
+            event['push_attributed'] = True
+            if victim[0] == 'bot':
+                event['kind'] = 'bot_bot_hit' if attacker[0] == 'bot' else 'bot_hit'
+            else:
+                event['kind'] = 'bot_human_hit' if attacker[0] == 'bot' else 'hit'
+            if (bool((event.get('critical') or {}).get('fire')) and
+                    not bool((critical_before or {}).get('fire'))):
+                target = self.bot_states.get(victim[1]) if victim[0] == 'bot' else self.players.get(victim[1])
+                if target is not None:
+                    if victim[0] == 'bot':
+                        target['fire_attacker_kind'], target['fire_attacker_id'] = attacker
+                    else:
+                        target.fire_attacker_kind, target.fire_attacker_id = attacker
+        self._record_damage(attacker, victim, event['damage'], critical_before)
+        if (attacker is not None and event['damage'] > 0 and
+                self._vehicle_team(*attacker) == self._vehicle_team(*victim)):
+            actor = self.players.get(attacker[1]) if attacker[0] == 'player' else self.bot_states.get(attacker[1])
+            if actor is not None:
+                if attacker[0] == 'player':
+                    actor.team_killer = True
+                    frags = actor.frags
+                else:
+                    actor['team_killer'] = True
+                    frags = int(actor.get('frags', 0))
+                self.pending_events.append(dict(kind='vehicle_statistics',
+                    actor_kind=attacker[0], actor_id=attacker[1],
+                    frags=frags, team_killer=True))
+        if event.get('dead'):
+            target = self.bot_states.get(victim[1]) if victim[0] == 'bot' else self.players.get(victim[1])
+            if attacker is not None and target is not None:
+                if victim[0] == 'bot':
+                    target['death_attacker_kind'], target['death_attacker_id'] = attacker
+                else:
+                    target.death_attacker_kind, target.death_attacker_id = attacker
+                self._record_frag(attacker[0], attacker[1], self._vehicle_team(*victim), *victim)
+            self.environment_pushes.pop(victim, None)
+        if attacker is not None:
+            _server_log('ENV PUSH DAMAGE ' + json.dumps(dict(
+                round=self.round_id, attacker=attacker, victim=victim,
+                damage=event['damage'], dead=event.get('dead', False),
+                reason=event['attack_reason']), sort_keys=True))
+
     def _tick_player_drowning(self, dt):
         """Own the continuous ten-second law and terminal HP transition."""
         if not self._combat_accepting() or self.battle_result is not None:
@@ -7621,8 +7782,12 @@ class BattleState:
             if not fresh:
                 continue
             if int(observation["level"]) != 2:
+                receipt = self.environment_pushes.get(('player', player.player_id))
+                if receipt is not None and receipt['hazard_tick'] is not None:
+                    self.environment_pushes.pop(('player', player.player_id), None)
                 self.player_drowning_seconds.pop(player.player_id, None)
                 continue
+            self._environment_pusher(('player', player.player_id), hazard=True)
             elapsed = self.player_drowning_seconds.get(
                 player.player_id, 0.0) + max(0.0, float(dt))
             self.player_drowning_seconds[player.player_id] = elapsed
@@ -7653,9 +7818,6 @@ class BattleState:
             player.speed = 0.0
             critical_commit = self._commit_external_player_critical(
                 player, critical)
-            self._record_damage(
-                None, ("player", player.player_id), damage,
-                critical_before)
             self._drop_capture_for_vehicle("player", player.player_id)
             event = {
                 "kind": "health",
@@ -7670,6 +7832,7 @@ class BattleState:
                 "critical": critical,
             }
             event.update(critical_commit)
+            self._attribute_environment_event(event, ('player', player.player_id), critical_before)
             self.pending_events.append(event)
             self.player_environment.pop(player.player_id, None)
             self.player_drowning_seconds.pop(player.player_id, None)
@@ -7705,8 +7868,6 @@ class BattleState:
             player.speed = 0.0
         else:
             player.display_health = int(player.health)
-        self._record_damage(
-            None, ("player", player.player_id), damage, critical_before)
         self._drop_capture_for_vehicle("player", player.player_id)
         self.pending_events.append({
             "kind": "health",
@@ -7724,6 +7885,15 @@ class BattleState:
             self.pending_events[-1]['critical'] = critical
             self.pending_events[-1].update(critical_commit or {})
             self._record_critical_damage(None, ('player', player.player_id), critical_before, player.critical)
+        if reason == 3:
+            self._attribute_environment_event(self.pending_events[-1], ('player', player.player_id), critical_before)
+            observation = self.player_environment.get(player.player_id) or {}
+            if observation.get('level') == 2:
+                self._environment_pusher(('player', player.player_id), hazard=True)
+            else:
+                self.environment_pushes.pop(('player', player.player_id), None)
+        else:
+            self._record_damage(None, ('player', player.player_id), damage, critical_before)
         return True
 
     def _player_overturn_danger(self, player_id):
@@ -9986,6 +10156,11 @@ class BattleState:
             bot_team = int(bot.get("team", 0))
             target_team = (int(target.get("team", 0))
                            if target_kind == "bot" else int(target.team))
+            if ram_contact is not None:
+                self._remember_push_pair(('player', target_id), ('bot', bot_id),
+                    ((ram_contact['vx'], ram_contact['vz']),
+                     (ram_contact['bot_vx'], ram_contact['bot_vz'])),
+                    (ram_contact['contact_normal_x'], ram_contact['contact_normal_z']))
             if bot_team in (1, 2) and bot_team == target_team:
                 # Friendly hulls still collide in the vehicle physics paths,
                 # but team contact is never an HP-producing operation.  Treat
@@ -11705,6 +11880,12 @@ class BattleState:
                             continue
                         previous = player.tank_pushes.get(bot_id)
                         if previous is None or row[1] > previous[1]:
+                            mx, mz = tank_contact_ledger.unseen(row, previous)
+                            drive_x = math.sin(player.yaw) * player.forward
+                            drive_z = math.cos(player.yaw) * player.forward
+                            if mx * drive_x + mz * drive_z > 0.05:
+                                self._remember_environment_push(
+                                    ('player', player.player_id), ('bot', bot_id))
                             player.tank_pushes[bot_id] = row
                 if "turret_pushes" in message:
                     try:
@@ -13768,9 +13949,7 @@ class BattleState:
             delta = -1 if actor_team == int(victim_team) else 1
             actor["frags"] = int(actor.get("frags", 0)) + delta
             frags = actor["frags"]
-            # Bots adjust frags, but only the human player path publishes the
-            # blue/team-killer state.
-            team_killer = False
+            team_killer = bool(actor.get('team_killer', False))
         else:
             return False
         if delta < 0:
@@ -14022,6 +14201,18 @@ class BattleState:
             self, pair, first_body, second_body, frontier_time_us,
             active_contacts):
         probe_state = {"resolved": False}
+        contact = tank_collision.obb_contact(
+            first_body['x'], first_body['z'], first_body['yaw'], first_body['shape'],
+            second_body['x'], second_body['z'], second_body['yaw'], second_body['shape'])
+        if contact is not None and tank_collision.vertical_overlap(
+                first_body.get('y'), first_body['shape'], second_body.get('y'), second_body['shape'],
+                pitch_a=first_body.get('pitch', 0.0), roll_a=first_body.get('roll', 0.0),
+                pitch_b=second_body.get('pitch', 0.0), roll_b=second_body.get('roll', 0.0)):
+            contact = tank_collision._owner_oriented_contact(contact,
+                first_body['x']-second_body['x'], first_body['z']-second_body['z'],
+                first_body['id'], second_body['id'])
+            self._remember_push_pair(('player', first_body['id']), ('player', second_body['id']),
+                ((first_body['vx'], first_body['vz']), (second_body['vx'], second_body['vz'])), contact)
 
         def contact_armor_probe(probe_first, probe_second, contact):
             armors, resolved = self._human_ram_contact_armors(

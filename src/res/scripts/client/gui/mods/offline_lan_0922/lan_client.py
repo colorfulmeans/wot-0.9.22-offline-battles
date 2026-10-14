@@ -3340,7 +3340,8 @@ class LANClient(object):
 
     def send_bot_state(self, rows, sample_time_us=None,
                        source_batch_horizon_us=None,
-                       human_ram_armors=None, detached_turrets=None):
+                       human_ram_armors=None, detached_turrets=None,
+                       push_contacts=None):
         if not self.is_bot_authority():
             return False
         rows = list(rows or ())[:30]
@@ -3348,6 +3349,8 @@ class LANClient(object):
             return False
         message = {'type': 'bot_state', 'round_id': self.round_id,
                    'rows': rows}
+        if push_contacts is not None:
+            message['push_contacts'] = dict(push_contacts)
         if sample_time_us is not None:
             sample_time_us = _exact_int(sample_time_us)
             if (sample_time_us is None or
@@ -3377,7 +3380,7 @@ class LANClient(object):
                                  human_ram_armors=None,
                                  edge_sample_time_us=None,
                                  edge_revision=None,
-                                 detached_turrets=None):
+                                 detached_turrets=None, push_contacts=None):
         """Send BotRuntime's already-projected canonical publication once."""
         del edge_sample_time_us, edge_revision
         if not self.is_bot_authority():
@@ -3387,6 +3390,8 @@ class LANClient(object):
             return False
         message = {'type': 'bot_state', 'round_id': self.round_id,
                    'rows': rows}
+        if push_contacts is not None:
+            message['push_contacts'] = dict(push_contacts)
         if sample_time_us is not None:
             sample_time_us = _exact_int(sample_time_us)
             if (sample_time_us is None or

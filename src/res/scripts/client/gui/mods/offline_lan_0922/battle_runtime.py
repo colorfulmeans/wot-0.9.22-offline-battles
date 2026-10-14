@@ -11768,7 +11768,8 @@ class BattleRuntime(object):
             'ram': ('hit', 'bot_hit', 'bot_human_hit', 'bot_bot_hit'),
             'client_simulation': ('health',),
             'player_left': ('health',),
-            'environment': ('health',),
+            'environment': (('health', 'hit', 'bot_hit', 'bot_human_hit', 'bot_bot_hit')
+                            if event.get('push_attributed') is True else ('health',)),
         }
         if kind not in valid_kinds[source]:
             raise RuntimeError(
@@ -11801,10 +11802,12 @@ class BattleRuntime(object):
         if source in ('shot', 'fire', 'ram') and not unowned_fire and attacker_key is None:
             raise RuntimeError(
                 'ordered %s combat event has no attacker' % source)
-        if source in ('client_simulation', 'player_left', 'environment') and \
+        if source in ('client_simulation', 'player_left') and \
                 attacker_key is not None:
             raise RuntimeError(
                 'ordered %s combat event must not have an attacker' % source)
+        if source == 'environment' and attacker_key is not None and event.get('push_attributed') is not True:
+            raise RuntimeError('environment attacker has no push attribution')
         return source, attack_reason
 
     def _present_combat_feedback(self, event, target_record,
@@ -11855,7 +11858,7 @@ class BattleRuntime(object):
             assert_damage_type(
                 self._avatar, int(attacker_record['engine_id']))
         output = []
-        if attacker_record.get('local') and enemy:
+        if attacker_record.get('local') and (enemy or event.get('push_attributed') is True):
             target_id = int(target_record['engine_id'])
             if damage > 0:
                 output.append({
@@ -11975,7 +11978,7 @@ class BattleRuntime(object):
                                            [(flags << 32) | target_id])
                 else:
                     callback([(flags << 32) | target_id])
-        if target_record.get('local') and enemy:
+        if target_record.get('local') and (enemy or event.get('push_attributed') is True):
             attacker_id = int(attacker_record['engine_id'])
             blocked_damage = max(
                 0, int(event.get('blocked_damage', 0) or 0))
@@ -12129,6 +12132,9 @@ class BattleRuntime(object):
                     self._advance_local_gun_to(entity, gun_edge[1])
                 state['critical'] = canonical
                 record['critical_state'] = canonical
+                for item in events:
+                    if item.get('kind') == 'ammo_rack' and item.get('state') == 'destroyed':
+                        record['ammo_death_cause'] = item.get('cause')
                 self._present_critical(record, events, attacker_id)
         if 'display_health' in event:
             state['display_health'] = max(
@@ -12433,7 +12439,11 @@ class BattleRuntime(object):
                 if extra_index <= 0:
                     raise RuntimeError(
                         '#1513 device critical extra is invalid')
-                if cause == 'repair':
+                if (cause == 'repair' or
+                        event.get('old_state') == 'destroyed' and
+                        state in ('critical', 'normal') or
+                        event.get('old_state') == 'critical' and
+                        state == 'normal'):
                     code = ('DEVICE_REPAIRED' if state == 'normal' else
                             'DEVICE_REPAIRED_TO_CRITICAL')
                 else:
@@ -26388,6 +26398,8 @@ class BattleRuntime(object):
             if human_ram_armors is None and self._worker_mode:
                 human_ram_armors = self._human_ram_armor_results()
             state_kwargs = {}
+            if 'push_contacts' in message:
+                state_kwargs['push_contacts'] = message['push_contacts']
             if self._worker_mode:
                 turrets = dict(self._detached_turret_rows)
                 turrets.update(self._detached_turret_proposals)
@@ -29192,6 +29204,10 @@ class BattleRuntime(object):
         critical = state.get('critical') or {}
         ammo_rack_death = bool(
             health <= 0 and critical.get('ammo_rack_death', False))
+        if ammo_rack_death and reason_id == 0:
+            cause = record.get('ammo_death_cause')
+            if cause in ('fire', 'world_collision'):
+                reason_id = 1 if cause == 'fire' else 3
         native_health = display_health if dead and display_health > 0 else health
         if ammo_rack_death:
             # #1513's marker and damage-state consumers require raw special

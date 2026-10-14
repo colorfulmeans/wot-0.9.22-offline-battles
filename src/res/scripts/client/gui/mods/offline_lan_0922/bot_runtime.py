@@ -2214,6 +2214,9 @@ class BotRuntime(object):
         self._human_ram_cooldowns = {}
         self._ram_contacts = frozenset()
         self._ram_seq = 0
+        self._environment_push_seq = 0
+        self._environment_push_proofs = {}
+        self._environment_fall_totals = {}
         self._human_ram_receipt_seq = {}
         self._ram_wait_log_key = None
         self._ram_wait_log_next = 0.0
@@ -3425,6 +3428,9 @@ class BotRuntime(object):
             self._human_ram_cooldowns = {}
             self._ram_contacts = frozenset()
             self._ram_seq = 0
+            self._environment_push_seq = 0
+            self._environment_push_proofs = {}
+            self._environment_fall_totals = {}
             self._human_ram_receipt_seq = {}
             self._ram_wait_log_key = None
             self._ram_wait_log_next = 0.0
@@ -7421,7 +7427,11 @@ class BotRuntime(object):
             damage = max(damage, terminal_damage)
             if payload is not None:
                 state['critical'] = _canonical_critical(payload)
-        health = max(0, int(state.get('health', maximum)) - damage)
+        before_health = int(state.get('health', maximum))
+        health = max(0, before_health - damage)
+        totals = getattr(self, '_environment_fall_totals', {})
+        self._environment_fall_totals = totals
+        totals[state['id']] = totals.get(state['id'], 0) + before_health - health
         state['health'] = health
         state['display_health'] = health
         state['alive'] = health > 0
@@ -10211,6 +10221,12 @@ class BotRuntime(object):
             })
 
         by_id = dict((tank['id'], tank) for tank in tanks)
+        from gui.mods.offline_lan_0922 import environment_push
+        proofs = getattr(self, '_environment_push_proofs', {})
+        self._environment_push_proofs = proofs
+        # Frozen contact bodies precede impulse integration. Record even slow
+        # friendly shoves, which deliberately produce no ram HP event.
+        contact_seen = set()
         # Preserve CPython 2 dictionary bucket order for ram peer traversal.
         contact_rows = tank_collision.contact_roster(
             list(by_id.values()), [int(state['id']) for state in self._ordered_states()],
@@ -10353,6 +10369,48 @@ class BotRuntime(object):
                 result = tank_collision.finalize_contact_row(
                     own, by_id, contact_row, **resolve_kwargs)
             result.update(physical_results[own['id']])
+            nearby_push_ids = (tank_collision.nearby_ids(
+                collision_index, own['x'], own['z']) if contact_row is not None
+                else [other['id'] for other in others])
+            for other_id in nearby_push_ids:
+                if other_id == own['id']:
+                    continue
+                pair = tuple(sorted((own['id'], other_id)))
+                if pair in contact_seen:
+                    continue
+                contact_seen.add(pair)
+                first, second = by_id.get(pair[0]), by_id.get(pair[1])
+                if (first is None or second is None or
+                        not first.get('alive', True) or not second.get('alive', True)):
+                    continue
+                if (first['vx'] == second['vx'] and
+                        first['vz'] == second['vz']):
+                    continue
+                if not tank_collision.vertical_overlap(
+                        first.get('y'), first['shape'], second.get('y'), second['shape'],
+                        pitch_a=first.get('pitch', 0.0), roll_a=first.get('roll', 0.0),
+                        pitch_b=second.get('pitch', 0.0), roll_b=second.get('roll', 0.0)):
+                    continue
+                contact = tank_collision.obb_contact(
+                    first['x'], first['z'], first['yaw'], first['shape'],
+                    second['x'], second['z'], second['yaw'], second['shape'])
+                if contact is None:
+                    continue
+                contact = tank_collision._owner_oriented_contact(
+                    contact, first['x']-second['x'], first['z']-second['z'],
+                    first['id'], second['id'])
+                owner = environment_push.initiator(
+                    (first['vx'], first['vz']), (second['vx'], second['vz']), contact)
+                if owner is None:
+                    continue
+                attacker, victim = (first, second) if owner == 0 else (second, first)
+                self._environment_push_seq = getattr(self, '_environment_push_seq', 0) + 1
+                key = (victim['kind'], int(victim.get('network_id', victim['id'])))
+                proofs[key] = dict(
+                    seq=self._environment_push_seq,
+                    attacker_kind=attacker['kind'],
+                    attacker_id=int(attacker.get('network_id', attacker['id'])),
+                    target_kind=key[0], target_id=key[1])
             if state_alive:
                 self._ram_cooldowns = result['cooldowns']
                 current_ram_contacts.update(result['contacts'])
@@ -15638,6 +15696,12 @@ class BotRuntime(object):
             'edge_sample_time_us': edge_sample_time_us,
             'edge_revision': edge_revision,
         }
+        publication['push_contacts'] = dict(
+            contacts=list(getattr(self, '_environment_push_proofs', {}).values()),
+            hazards=[int(state['id']) for state in ordered_states
+                     if state.get('airborne') or state.get('_drowning')],
+            falls=[[int(key), int(value)] for key, value in
+                   getattr(self, '_environment_fall_totals', {}).items()])
         if launches:
             # Never put these local-only SPG proof receipts on the LAN wire.
             # BattleRuntime retries an unaccepted launch from this compact list.

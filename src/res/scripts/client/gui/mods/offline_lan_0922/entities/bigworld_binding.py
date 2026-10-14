@@ -351,8 +351,14 @@ class BigWorldVehicleBinding(object):
                     # Negative canonical health encodes ammunition detonation.
                     death_extra = death_entity.typeDescriptor.extrasDict.get(
                         'ammoBayHealth')
-                    death_code = ('DEATH_FROM_DEVICE_EXPLOSION_AT_FIRE' if fire
-                                  else 'DEATH_FROM_DEVICE_EXPLOSION_AT_SHOT')
+                    death_code = (
+                        'DEATH_FROM_DEVICE_EXPLOSION_AT_FIRE' if fire else
+                        'DEATH_FROM_DEVICE_EXPLOSION_AT_WORLD_COLLISION'
+                        if int(reason) == reasons.get('world_collision', 3)
+                        else 'DEATH_FROM_DEVICE_EXPLOSION_AT_SHOT')
+                    print('[Offline LAN 0.9.22] AMMO DEATH PRESENT actor=%s '
+                          'attacker=%s reason=%s code=%s' % (
+                              entity_id, attacker_id, reason, death_code))
                 elif not attacker_id and code == 'DEATH_FROM_SHOT' and not fire:
                     death_code = 'DEATH_UNKNOWN'
                 if not attacker_id and death_code in (

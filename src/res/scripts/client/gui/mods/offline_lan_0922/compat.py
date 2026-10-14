@@ -425,6 +425,7 @@ def _load_runtime():
     from gui.Scaleform.daapi.view.battle.shared.messages.player_messages import \
         PlayerMessages
     from gui.Scaleform.daapi.view.battle.shared.messages import fading_messages
+    from gui.Scaleform.daapi.view.battle.shared.postmortem_panel import _BasePostmortemPanel
     from helpers import dependency
     from predefined_hosts import g_preDefinedHosts
     from skeletons.connection_mgr import IConnectionManager
@@ -443,6 +444,7 @@ def _load_runtime():
     runtime.ammo_controller_type = AmmoController
     runtime.arena_info_settings = ArenaInfoSettings
     runtime.player_messages_type = PlayerMessages
+    runtime.postmortem_panel_type = _BasePostmortemPanel
     runtime.battle_message_color_format = fading_messages._EXTRA_COLOR_FORMAT
     runtime.control_modes = ControlModes
     runtime.avatar_position_control = AvatarPositionControl
@@ -836,6 +838,8 @@ class OfflineCompatibility(object):
         self._original_player_message_show = None
         self._player_message_show = None
         self._player_message_show_owned = False
+        self._postmortem_populate = None
+        self._original_postmortem_populate = None
 
     def install(self):
         if self._installed:
@@ -2797,6 +2801,13 @@ class OfflineCompatibility(object):
 
                 self._player_message_show = show_player_message
                 player_messages.showMessage = show_player_message
+            postmortem = getattr(runtime, 'postmortem_panel_type', None)
+            if postmortem is not None:
+                from gui.mods.offline_lan_0922 import postmortem_causes
+                self._original_postmortem_populate = postmortem._populate
+                self._postmortem_populate = postmortem_causes.wrap_populate(
+                    postmortem._populate)
+                postmortem._populate = self._postmortem_populate
             squad_settings = getattr(runtime, 'arena_info_settings', None)
             if squad_settings is not None:
                 self._original_squad_range = squad_settings.SQUAD_RANGE_TO_SHOW
@@ -2916,6 +2927,12 @@ class OfflineCompatibility(object):
 
     def _rollback_install(self):
         runtime = self._runtime
+        postmortem = getattr(runtime, 'postmortem_panel_type', None)
+        if (postmortem is not None and self._postmortem_populate is not None
+                and postmortem._populate is self._postmortem_populate):
+            postmortem._populate = self._original_postmortem_populate
+        self._postmortem_populate = None
+        self._original_postmortem_populate = None
         player_messages = getattr(runtime, 'player_messages_type', None)
         if (player_messages is not None and self._player_message_show is not None
                 and player_messages.__dict__.get('showMessage') is

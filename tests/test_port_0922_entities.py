@@ -310,6 +310,7 @@ class BigWorldBindingTests(unittest.TestCase):
                 (1, 0, 23, 'DEATH_FROM_FIRE'),
                 (0, -1, 23, 'DEATH_FROM_DEVICE_EXPLOSION_AT_SHOT'),
                 (1, -1, 23, 'DEATH_FROM_DEVICE_EXPLOSION_AT_FIRE'),
+                (3, -1, 0, 'DEATH_FROM_DEVICE_EXPLOSION_AT_WORLD_COLLISION'),
                 (0, 0, 0, 'DEATH_UNKNOWN')):
             with self.subTest(reason=reason, health=health, attacker=attacker):
                 avatar, bigworld = _Avatar(), _BigWorld()

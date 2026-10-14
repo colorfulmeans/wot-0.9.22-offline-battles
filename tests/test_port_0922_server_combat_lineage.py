@@ -309,6 +309,29 @@ class ServerCombatLineageIntegrationTests(unittest.TestCase):
                 server.bot_state_time_us - first_mapped_time_us),
         })
 
+    def test_friendly_push_fall_publication_attributes_once_without_ram_damage(self):
+        runtime, server, unused_roster = self._runtime_and_server()
+        publication = runtime.update(0.1, 1.0)[0]
+        self.assertTrue(server.update_bot_states(1, dict(publication, round_id=server.round_id)))
+        victim = runtime.states[11]
+        before = int(server.bot_states[11]['health'])
+        runtime._environment_push_proofs = {('bot', 11): dict(
+            seq=1, attacker_kind='player', attacker_id=1, target_kind='bot', target_id=11)}
+        runtime._apply_bot_fall_damage(victim, 15.0)
+        publication = runtime.update(0.1, 1.1)[0]
+        self.assertTrue(server.update_bot_states(1, dict(publication, round_id=server.round_id)), server.last_bot_state_reject)
+        applied = before - int(server.bot_states[11]['health'])
+        self.assertGreater(applied, 0)
+        self.assertEqual(applied, server._statistics_row('player', 1)['team_damage'])
+        self.assertTrue(server.players[1].team_killer)
+        events = [event for event in server.pending_events if event.get('push_attributed')]
+        self.assertEqual(1, len(events))
+        self.assertEqual((1, 11, 3), (events[0]['attacker'], events[0]['target_bot'], events[0]['attack_reason']))
+        # The publication clock can reject a repeated frame; neither that
+        # rejection nor repeated cumulative totals may replay its damage.
+        server.update_bot_states(1, dict(publication, round_id=server.round_id))
+        self.assertEqual(applied, server._statistics_row('player', 1)['team_damage'])
+
     def test_combat_wire_roundtrip_keeps_lineage_and_real_change_guards(self):
         server = BattleState.__new__(BattleState)
         for roster in (['gunner1', 'driver'],
