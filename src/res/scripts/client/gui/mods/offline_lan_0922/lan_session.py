@@ -520,6 +520,7 @@ class LANSession(object):
         self._receipt_callback_id = None
         self._receipt_callback_token = 0
         self._training_mode = False
+        self._queue_background_active = False
         self._training_bots = False
         self._room_preferences = port_config.load_waiting_room_state()
         self._restored_team_generation = None
@@ -1766,7 +1767,17 @@ class LANSession(object):
             self._queue_screen = screen
         return self._queue_screen
 
+    def _ensure_queue_background(self):
+        if self._queue_background_active:
+            return True
+        screen = self._ensure_queue_screen()
+        if screen is None:
+            return True
+        self._queue_background_active = bool(screen.open())
+        return self._queue_background_active
+
     def _leave_queue_screen(self):
+        self._queue_background_active = False
         if self._queue_screen is None:
             return False
         return bool(self._queue_screen.leave())
@@ -1958,6 +1969,12 @@ class LANSession(object):
         Every other caller reached this while the player was in the garage,
         which is how the room kept appearing over an open maintenance dialog.
         """
+        if (not self._stopped and not self._picker_cleanup_pending and not self._picker_dismissed and
+                self._picker_open and self.state == 'waiting' and self._picker_requested):
+            # A connection form can already be open when welcome arrives.
+            opened = self._ensure_queue_background()
+            if not opened:self._schedule_picker_when_lobby_ready()
+            return opened
         if (self._stopped or self._picker_open or
                 self._picker_cleanup_pending or self._picker_dismissed):
             return False
@@ -1972,11 +1989,10 @@ class LANSession(object):
             # The stock map window can only present the elected room host.
             return False
         # As in 0.8.2, the stock queue screen loads under the room.
-        screen = None if self._training_mode else self._ensure_queue_screen()
-        if screen is not None:
-            screen.open()
-        elif self._training_mode and self._queue_screen is not None:
-            self._leave_queue_screen()
+        # Training changes LAN rules, not the visible pre-queue background.
+        if not self._ensure_queue_background():
+            self._schedule_picker_when_lobby_ready()
+            return False
         self._picker_open = bool(self._open_surface(surface))
         if self._picker_open:
             sys.stdout.write(

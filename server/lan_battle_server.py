@@ -9888,10 +9888,16 @@ class BattleState:
                         for value in positions)
                 except (TypeError, ValueError, OverflowError):
                     return False
+            from gui.mods.offline_lan_0922 import ram_tracks
+            try:
+                track_bot = ram_tracks.names(message.get('track_contacts_bot', ()))
+                track_target = ram_tracks.names(message.get('track_contacts_target', ()))
+                impact_speed = _bounded_float(message.get('track_impact_speed', 0.), 0., 200.)
+            except (ValueError, TypeError):return False
             fingerprint = (
                 bot_id, target_kind, target_id, damage_to_bot,
                 damage_to_target, contact_player_id, contact_seq,
-                contact_positions)
+                contact_positions, tuple(track_bot), tuple(track_target), impact_speed)
             previous_fingerprint = (
                 self.bot_reported_ram_fingerprints.get(key))
             if previous_fingerprint is not None:
@@ -10013,6 +10019,7 @@ class BattleState:
             reason = 2
 
             bot_combat_before = self._bot_combat_signature(bot)
+            bot_tracks, unused_commit = self._apply_ram_track_loss('bot', bot, track_bot, impact_speed)
             applied_bot = min(damage_to_bot, int(bot.get("health", 0)))
             bot["health"] -= applied_bot
             bot["alive"] = bot["health"] > 0
@@ -10034,6 +10041,7 @@ class BattleState:
                 "attack_reason": reason,
                 "death_reason": bot["death_reason"], "source": "ram",
             }
+            bot_terminal = bot_terminal or bot_tracks
             if bot_terminal is not None:
                 bot_event.update({
                     "critical": bot_terminal,
@@ -10053,6 +10061,7 @@ class BattleState:
             if target_kind == "bot":
                 target_combat_before = self._bot_combat_signature(target)
                 target_critical_before = target_combat_before[2]
+                target_tracks, unused_commit = self._apply_ram_track_loss('bot', target, track_target, impact_speed)
                 applied_target = min(
                     damage_to_target, int(target.get("health", 0)))
                 target["health"] -= applied_target
@@ -10076,6 +10085,7 @@ class BattleState:
                     "attack_reason": reason,
                     "death_reason": target["death_reason"], "source": "ram",
                 }
+                target_terminal = target_terminal or target_tracks
                 if target_terminal is not None:
                     target_event.update({
                         "critical": target_terminal,
@@ -10087,6 +10097,7 @@ class BattleState:
                 target_team = int(target.get("team", 0))
             else:
                 target_critical_before = target.critical
+                target_tracks, track_commit = self._apply_ram_track_loss('player', target, track_target, impact_speed)
                 applied_target = min(damage_to_target, target.health)
                 target.health -= applied_target
                 target.alive = target.health > 0
@@ -10102,6 +10113,9 @@ class BattleState:
                     "attack_reason": reason,
                     "death_reason": target.death_reason, "source": "ram",
                 }
+                if target_tracks is not None:
+                    target_event['critical'] = target_tracks
+                    target_event.update(track_commit or {})
                 target_team = target.team
             self.pending_events.append(target_event)
             self._record_damage(
@@ -10876,7 +10890,7 @@ class BattleState:
     def _normalize_ram_contact_envelope(self, player, raw_ram):
         """Validate one receipt without consulting mutable Bot progress."""
         if (not isinstance(raw_ram, dict) or
-                set(raw_ram) - {'bot_history_bracket', 'bot_ram_motion_seq'} != HUMAN_RAM_CONTACT_FIELDS):
+                set(raw_ram) - {'bot_history_bracket', 'bot_ram_motion_seq', 'track_contacts_player', 'track_contacts_bot'} != HUMAN_RAM_CONTACT_FIELDS):
             return None, "malformed_contact"
         try:
             seq = _exact_int(raw_ram.get("seq"), 1, 2147483647)
@@ -10996,6 +11010,11 @@ class BattleState:
                     raw_ram['bot_ram_motion_seq'], 1, 2147483647)
             except (ValueError, TypeError, OverflowError):
                 return None, 'invalid_ram_motion_identity'
+        from gui.mods.offline_lan_0922 import ram_tracks
+        try:
+            for key in ('track_contacts_player','track_contacts_bot'):
+                if key in raw_ram:normalized[key] = ram_tracks.names(raw_ram[key])
+        except ValueError:return None, 'invalid_track_contact'
         return normalized, None
 
     def _validate_ram_contact(self, player, raw_ram):
@@ -13888,7 +13907,7 @@ class BattleState:
             allowed = {"seq", "first_id", "second_id", "available"}
             if available is True:
                 allowed.update(("armor_first", "armor_second"))
-            if set(raw) != allowed or not isinstance(available, bool):
+            if set(raw) - {'tracks_first','tracks_second'} != allowed or not isinstance(available, bool):
                 return None
             try:
                 sequence = _exact_int(
@@ -13921,6 +13940,11 @@ class BattleState:
                     return None
                 result["armor_first"] = round(armor_first, 4)
                 result["armor_second"] = round(armor_second, 4)
+            from gui.mods.offline_lan_0922 import ram_tracks
+            try:
+                for key in ('tracks_first','tracks_second'):
+                    if key in raw:result[key] = ram_tracks.names(raw[key])
+            except ValueError:return None
             fingerprint = json.dumps(
                 result, sort_keys=True, separators=(",", ":"),
                 ensure_ascii=True)
@@ -13985,8 +14009,9 @@ class BattleState:
         self.human_ram_probe_requests.pop(pair, None)
         if not result["available"]:
             return None, True
-        return (float(result["armor_first"]),
-                float(result["armor_second"])), True
+        from gui.mods.offline_lan_0922.ram_tracks import ContactArmors
+        return ContactArmors((float(result['armor_first']), float(result['armor_second'])),
+            (result.get('tracks_first', ()), result.get('tracks_second', ()))), True
 
     def _resolve_human_ram_substep(
             self, pair, first_body, second_body, frontier_time_us,
@@ -13997,6 +14022,7 @@ class BattleState:
             armors, resolved = self._human_ram_contact_armors(
                 pair, probe_first, probe_second, frontier_time_us, contact)
             probe_state["resolved"] = resolved
+            probe_state['tracks'] = getattr(armors, 'tracks', ((), ()))
             return armors
 
         result = tank_collision.resolve_tank(
@@ -14011,6 +14037,10 @@ class BattleState:
             not probe_state["resolved"] and any(
                 diagnostic.get("reason") == "contact_armor_unavailable"
                 for diagnostic in result.get("ram_diagnostics", ())))
+        tracks = probe_state.get('tracks', ((), ()))
+        if tracks[0] or tracks[1]:
+            result['ram_events'] = tuple(dict(event, tracks_first=list(tracks[0]), tracks_second=list(tracks[1]))
+                for event in result['ram_events'])
         return result, armor_pending
 
     def _apply_human_ram_substep(
@@ -14074,6 +14104,25 @@ class BattleState:
                   (float(right["vz"]) - float(left["vz"])) * ratio,
         }
 
+    def _apply_ram_track_loss(self, kind, target, contacts, speed):
+        from gui.mods.offline_lan_0922 import ram_tracks
+        if kind == 'player':
+            current = target.critical
+            profile = (target.effective_params or {}).get('critical')
+        else:
+            current = target.get('critical')
+            profile = self.bot_terminal_criticals.get(int(target['id']))
+        payload = ram_tracks.damage(current, profile, contacts, speed)
+        if payload is None:return None, None
+        if kind == 'player':
+            commit = self._commit_external_player_critical(target, _critical_payload(payload))
+        else:
+            target['critical'] = _critical_state(_critical_payload(payload))
+            commit = None
+        _server_log('RAM TRACK DAMAGE kind=%s actor=%s speed=%.3f contacts=%s' % (
+            kind, target.player_id if kind=='player' else target['id'], speed, contacts))
+        return payload, commit
+
     def _apply_human_ram_damage(self, first, second, event, pair,
                                 frontier_time_us):
         """Commit both halves of one server-owned ram in one state lock."""
@@ -14085,6 +14134,9 @@ class BattleState:
             return False
         first_critical_before = first.critical
         second_critical_before = second.critical
+        proof = event
+        first_tracks, first_commit = self._apply_ram_track_loss('player', first, proof.get('tracks_first', ()), event.get('closing_speed', 0.))
+        second_tracks, second_commit = self._apply_ram_track_loss('player', second, proof.get('tracks_second', ()), event.get('closing_speed', 0.))
         first.health -= damage_first
         second.health -= damage_second
         first.alive = first.health > 0
@@ -14123,6 +14175,10 @@ class BattleState:
             "ram_operation_id": operation_id,
             "ram_frontier_time_us": int(frontier_time_us),
         }))
+        for row, payload, commit in zip(self.pending_events[-2:], (first_tracks, second_tracks), (first_commit, second_commit)):
+            if payload is not None:
+                row['critical'] = payload
+                row.update(commit or {})
         self._record_damage(
             ("player", second.player_id),
             ("player", first.player_id), damage_first,

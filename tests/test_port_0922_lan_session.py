@@ -1441,6 +1441,16 @@ class LANSessionTests(unittest.TestCase):
         self.assertIn('PLAYERS (2): Host, Guest', queue.endpoint())
         self.assertEqual([True], self.opens)
 
+    def test_connection_form_promotes_to_stock_waiting_background_on_welcome(self):
+        self.session.join()
+        self.assertTrue(self.session._picker_open)
+        self.emit('welcome', {'phase':'waiting','map_pool':['01_karelia']})
+        self.assertEqual(1,len(self.queue_screens))
+        self.assertEqual(1,self.queue_screens[0].open_calls)
+        self.assertTrue(self.session._queue_background_active)
+        self.session._open_waiting_picker('repeat')
+        self.assertEqual(1,self.queue_screens[0].open_calls)
+
     def test_waiting_room_opens_over_the_stock_queue_screen(self):
         self.emit('welcome', {'phase': 'waiting', 'map_pool': ['01_karelia']})
 
@@ -1450,10 +1460,11 @@ class LANSessionTests(unittest.TestCase):
         self.assertEqual(1, screen.open_calls)
         self.assertTrue(self.session._picker_open)
 
-    def test_training_opens_a_room_without_queue_and_sends_host_options(self):
+    def test_training_opens_room_over_queue_and_sends_host_options(self):
         self.session.join(None, 'training')
         self.emit('welcome', {'phase': 'waiting', 'map_pool': ['01_karelia']})
-        self.assertEqual([], self.queue_screens)
+        self.assertEqual(1, len(self.queue_screens))
+        self.assertEqual(1, self.queue_screens[0].open_calls)
         self.assertTrue(self.session._picker_open)
         calls = []
         self.client.request_start = lambda *args, **kwargs: calls.append((args, kwargs)) or True

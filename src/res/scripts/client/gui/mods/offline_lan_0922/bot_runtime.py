@@ -6855,6 +6855,8 @@ class BotRuntime(object):
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
         driver_trace['recovery_pocket'] = dict(driver_state.get('recovery_pocket') or {})
         driver_trace['short_escape_probes'] = list(driver_state.get('short_escape_probes') or ())
+        driver_trace['short_escape_probe_deferred'] = bool(driver_state.get('short_escape_probe_deferred'))
+        driver_trace['short_escape_retry_at'] = driver_state.get('short_escape_retry_at')
         driver_trace['navigation_wait'] = dict(
             driver_state.get('navigation_wait') or {})
         # Finish this rare diagnostic after every authority gate has run.
@@ -9246,6 +9248,17 @@ class BotRuntime(object):
                 'damage_to_bot': event['damage_to_self'],
                 'damage_to_target': event['damage_to_other'],
             }
+            tracks = getattr(self, '_frame_ram_track_contacts', {}).get(
+                tuple(sorted((int(state['id']), int(event['other_id'])))), ((), ()))
+            if int(state['id']) > int(event['other_id']):
+                tracks = tuple(reversed(tracks))
+            if isinstance(human_ram_receipt, dict):
+                tracks = (human_ram_receipt.get('track_contacts_bot', ()),
+                          human_ram_receipt.get('track_contacts_player', ()))
+            if tracks[0] or tracks[1]:
+                report['track_contacts_bot'] = list(tracks[0])
+                report['track_contacts_target'] = list(tracks[1])
+                report['track_impact_speed'] = max(0., float(event.get('closing_speed', 0.)))
             if target_kind == 'bot':
                 report['contact_positions'] = list(event['contact_positions'])
             if (target_kind == 'human' and
@@ -9944,6 +9957,8 @@ class BotRuntime(object):
                                               (damage_bot or damage_player)
                                               else ()), {
                                         'player_id': player_id, 'seq': seq,
+                                        'track_contacts_bot': receipt.get('track_contacts_bot', ()),
+                                        'track_contacts_player': receipt.get('track_contacts_player', ()),
                                     }) or [self._terminal_human_ram_report(
                                         bot_id, player_id, seq)]
                 frozen = [dict(report) for report in receipt_reports]
@@ -10158,6 +10173,7 @@ class BotRuntime(object):
         previous_ram_contacts = self._ram_contacts
         current_ram_contacts = set()
         frame_ram_armors = {}
+        self._frame_ram_track_contacts = {}
 
         def contact_armor_probe(first, second, contact):
             first_id = int(first['id'])
@@ -10165,6 +10181,8 @@ class BotRuntime(object):
             pair = (min(first_id, second_id), max(first_id, second_id))
             if pair not in frame_ram_armors:
                 armors = self.ram_contact_probe(first, second, contact)
+                tracks = getattr(armors, 'tracks', ((), ()))
+                self._frame_ram_track_contacts[pair] = tracks if first_id <= second_id else tuple(reversed(tracks))
                 if armors is None:
                     frame_ram_armors[pair] = None
                 elif (isinstance(armors, (list, tuple)) and

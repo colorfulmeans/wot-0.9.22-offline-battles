@@ -21753,6 +21753,15 @@ class BattleRuntime(object):
             chassis_matrix=chassis_matrix)
         if not collisions:
             return None
+        contact_tracks = set()
+        ordered_contacts = sorted(collisions, key=lambda item: float(item.dist))
+        first_contact = ordered_contacts[0]
+        material = getattr(first_contact, 'matInfo', None)
+        name = getattr(getattr(material, 'extra', None), 'name', '')
+        # Only the first contacted skin, at the actual witness, can nominate a track.
+        # A chassis hit behind a nearer hull/gun is not a track contact.
+        if name in ('leftTrackHealth', 'rightTrackHealth') and abs(float(first_contact.dist)-reach) <= 0.15:
+            contact_tracks.add(name)
         for collision in sorted(
                 collisions, key=lambda item: float(item.dist)):
             material = getattr(collision, 'matInfo', None)
@@ -21767,7 +21776,9 @@ class BattleRuntime(object):
                 continue
             if damage_factor <= 0.0:
                 continue
-            return {'armor': armor, 'screened': False}
+            result = {'armor': armor, 'screened': False}
+            if contact_tracks:result['contact_tracks'] = sorted(contact_tracks)
+            return result
         return None
 
     def _native_ram_contact_plate_pair(self, proof):
@@ -21963,13 +21974,25 @@ class BattleRuntime(object):
             proof, worker_armor)
         if matched is None:
             return 'unavailable', None
-        return 'available', (float(matched[0]['armor']),
-                             float(matched[1]['armor']))
+        from gui.mods.offline_lan_0922.ram_tracks import ContactArmors
+        return 'available', ContactArmors((float(matched[0]['armor']),
+                             float(matched[1]['armor'])),
+            (matched[0].get('contact_tracks', ()), matched[1].get('contact_tracks', ())))
 
     def _bot_ram_contact_armor(self, first, second, contact):
         """Probe both real #1513 hit testers at one worker-owned contact."""
         status, armors = self._ram_contact_armor_status(
             first, second, contact)
+        epoch = getattr(self.client, 'round_id', None)
+        previous_epoch, count = getattr(self, '_ram_track_log_budget', (None, 0))
+        count = count if epoch == previous_epoch else 0
+        if count < 64:
+            from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
+            write_json_record('RAM TRACK CONTACT', dict(first=first.get('id'),
+                second=second.get('id'), status=status, tracks=getattr(armors, 'tracks', ((), ())),
+                normal=contact, source='native.first_skin_at_contact'))
+            count += 1
+        self._ram_track_log_budget = (epoch, count)
         return armors if status == 'available' else None
 
     @staticmethod
@@ -22075,6 +22098,10 @@ class BattleRuntime(object):
             if status == 'available':
                 result['armor_first'] = float(armors[0])
                 result['armor_second'] = float(armors[1])
+                tracks = getattr(armors, 'tracks', ((), ()))
+                if tracks[0] or tracks[1]:
+                    result['tracks_first'] = list(tracks[0])
+                    result['tracks_second'] = list(tracks[1])
             results.append(result)
         return results
 
@@ -22309,6 +22336,8 @@ class BattleRuntime(object):
             'contact_z': float(hit[2]),
             'contact_normal_x': float(contact_normal[0]),
             'contact_normal_z': float(contact_normal[1]),
+            'track_contacts_player': list(player_plate.get('contact_tracks', ())),
+            'track_contacts_bot': list(bot_plate.get('contact_tracks', ())),
             'contact_armor_player': float(player_armor),
             'contact_armor_bot': float(bot_armor),
             'contact_screened_player': bool(player_plate['screened']),

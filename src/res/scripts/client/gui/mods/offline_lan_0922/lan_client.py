@@ -665,7 +665,7 @@ def _project_human_ram_armors(raw_results):
         allowed = set(('seq', 'first_id', 'second_id', 'available'))
         if available is True:
             allowed.update(('armor_first', 'armor_second'))
-        if set(raw) != allowed or not isinstance(available, bool):
+        if set(raw) - set(('tracks_first','tracks_second')) != allowed or not isinstance(available, bool):
             return None
         sequence = _exact_int(raw.get('seq'))
         first_id = _exact_int(raw.get('first_id'))
@@ -688,6 +688,11 @@ def _project_human_ram_armors(raw_results):
                 return None
             result['armor_first'] = armor_first
             result['armor_second'] = armor_second
+            from gui.mods.offline_lan_0922 import ram_tracks
+            try:
+                for key in ('tracks_first','tracks_second'):
+                    if key in raw:result[key] = ram_tracks.names(raw[key])
+            except ValueError:return None
         projected.append(result)
     return projected
 
