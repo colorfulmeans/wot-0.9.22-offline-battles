@@ -2001,6 +2001,7 @@ class BotRuntime(object):
                  artillery_launch_cancel=None,
                  spawn_resolver=None, ground_probe=None,
                  physics_ground_probe=None,
+                 physics_ground_limit_probe=None,
                  suspension_ground_probe=None,
                  obstacle_probe=None, bounds=None, arena_bounds=None,
                  cover_probe=None,
@@ -2086,6 +2087,7 @@ class BotRuntime(object):
         self._navigation_error = None
         self._ground_probe = ground_probe
         self._physics_ground_probe = physics_ground_probe
+        self._physics_ground_limit_probe = physics_ground_limit_probe
         self._suspension_ground_probe = (
             suspension_ground_probe
             if callable(suspension_ground_probe) else None)
@@ -6661,12 +6663,19 @@ class BotRuntime(object):
         return self._suspension_path_supports_plane(
             previous_plane, motion_pose, position)
 
-    def _ground_probe_at(self, x, z, hint):
+    def _ground_probe_at(self, x, z, hint, maximum_y=None):
         """Run one accounted physics ground column."""
         self._probe_totals[3] += 1
         probe_started = self._probe_started()
         try:
-            return self._physics_ground_probe(x, z, hint)
+            if maximum_y is not None and callable(self._physics_ground_limit_probe):
+                return self._physics_ground_limit_probe(x, z, hint, maximum_y)
+            value = self._physics_ground_probe(x, z, hint)
+            # Narrow test/custom probes may not expose layered queries. They
+            # cannot turn an overhead return into a physical landing either.
+            if maximum_y is not None and value is not None and float(value) > maximum_y:
+                return None
+            return value
         finally:
             self._probe_finished(3, probe_started)
 
@@ -6682,13 +6691,14 @@ class BotRuntime(object):
         yaw = _number(state.get('yaw'))
         half_length = max(1.5, _number(state.get('half_length'), 3.5))
         half_width = max(0.3, _number(state.get('half_width'), 1.7))
+        maximum_y = (position[1] + vehicle_physics.CONTACT_PENETRATION if state.get('airborne', False) else None)
         axis_samples = []
         for pair in tank_collision.chassis_span_offsets(
                 yaw, half_width, half_length):
             axis_samples.append(tuple(
                 self._ground_probe_at(
                     position[0] + offset[0], position[2] + offset[1],
-                    position[1])
+                    position[1], maximum_y)
                 for offset in pair))
         return tank_collision.straddled_support(
             position[1], follow_gap, axis_samples, interpolate=True)
@@ -6696,8 +6706,12 @@ class BotRuntime(object):
     def _terrain_support(self, state, follow_gap=None):
         """Probe centre first, allowing only straddled support over a hole."""
         position = _position(state)
+        # A falling body's centre cannot be supported by a deck above it.
+        # Ask the actual layered query to continue below that skin, rather
+        # than converting the old bridge into a raised-support rollback.
+        maximum_y = (position[1] + vehicle_physics.CONTACT_PENETRATION if state.get('airborne', False) else None)
         centre = self._ground_probe_at(
-            position[0], position[2], position[1])
+            position[0], position[2], position[1], maximum_y)
         if centre is not None:
             centre = float(centre)
             # Speed and a forward corridor grade can enlarge follow_gap

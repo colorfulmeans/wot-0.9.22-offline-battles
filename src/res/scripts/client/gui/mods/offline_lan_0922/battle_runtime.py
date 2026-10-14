@@ -4085,6 +4085,7 @@ class BattleRuntime(object):
                 # and attitude. The wider placement query can acquire an
                 # overhead bridge and turn every clear step into a rollback.
                 physics_ground_probe=self._support_column,
+                physics_ground_limit_probe=self._support_column,
                 obstacle_probe=self._navigation_obstacle,
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,

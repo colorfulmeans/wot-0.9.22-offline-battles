@@ -8241,3 +8241,25 @@ or synthetic completion is introduced. Regression coverage reproduces both
 the direct pending consumer and public next_target failure, then exercises
 pending streaming columns and completed publication using actual C++ jobs and
 the Python 2 C API. Those checks do not replace exact-client play acceptance.
+
+
+### Passive Bot bridge fall and support-layer ownership (2026-10-14)
+
+The active Bot build uses Test8L basic support (BOT_FULL_SUPPORT_ENABLED=False);
+the retained ten-spring branch is not the current production owner. Player
+suspension remains under the sampled ten-spring adapter. Do not infer active
+Bot behavior from detailed-support tests which override that build switch.
+
+An already airborne Bot's basic centre/straddle query previously selected an
+upward-facing bridge deck up to two metres above its model origin. The raised
+support guard then restored its pose and cleared downward momentum. Bind the
+existing layered _support_column maximum_y argument for airborne Bot queries,
+using the current origin plus the existing 0.1 m contact penetration skin. Skip
+overhead faces and continue to the true lower support. Grounded placement,
+spawn streaming, autonomous navigation hazard/grade rules, physical wall and
+arena-boundary sweeps, landing damage and the low-compute build remain unchanged.
+
+A regression executes the real BattleRuntime startup callback against finite
+upper/lower planes: the prior source rewinds a body 0.7 m beneath the bridge;
+the repaired path preserves downward momentum, lands on the lower floor and
+emits one landing. This is source/adapter evidence, not native mesh acceptance.

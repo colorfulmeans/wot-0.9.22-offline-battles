@@ -63,6 +63,28 @@ class BotSupportLayerTests(unittest.TestCase):
                     grounded_once=True, last_drive_pitch=0.0,
                     terrain_pitch=0.0, pitch=0.0, roll=0.0)
 
+    def test_falling_bot_below_bridge_never_reacquires_overhead_deck(self):
+        for alive in (True, False):
+            with self.subTest(alive=alive):
+                self.collision_planes(lambda x, z: self.FLOOR, self.DECK)
+                state = self.state(y=self.DECK - 0.7)
+                state.update(alive=alive, health=1000 if alive else 0, max_health=1000,
+                    airborne=True, vertical_speed=-3., speed=0.,
+                    terrain_pitch=0., pitch=0., roll=0., last_drive_pitch=0.)
+                old = (state['x'], state['y'], state['z'])
+                self.assertFalse(self.bots._integrate_vertical_motion(state, .1, tick_pose=old))
+                self.assertLess(state['y'], old[1])
+                self.assertLess(state['vertical_speed'], -3.)
+                self.assertTrue(state['airborne'])
+                land = mock.Mock(return_value=0)
+                with mock.patch.object(self.bots, '_apply_bot_landing_impact', land):
+                    for unused in range(30):
+                        before = (state['x'], state['y'], state['z'])
+                        self.assertFalse(self.bots._integrate_vertical_motion(state, .1, tick_pose=before))
+                self.assertAlmostEqual(self.FLOOR, state['y'])
+                self.assertFalse(state['airborne'])
+                land.assert_called_once()
+
     def test_live_bot_support_ignores_bridge_above_its_drivable_road(self):
         self.collision_planes(lambda x, z: self.FLOOR, self.DECK)
         state = self.state()
