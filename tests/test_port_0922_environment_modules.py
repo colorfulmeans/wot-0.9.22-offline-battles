@@ -66,7 +66,7 @@ class EnvironmentalModulesTests(unittest.TestCase):
                 dict(name='leftTrackHealth',weight=1.),dict(name='engineHealth',weight=.25),
                 dict(name='driverHealth',weight=1.)])
         self.assertEqual(0.,v.devices_hp['leftTrackHealth'])
-        self.assertEqual(100.,v.devices_hp['engineHealth'])
+        self.assertEqual(50.,v.devices_hp['engineHealth'])
         self.assertEqual({'driver'},v._crew_ko)
         self.assertNotIn('ammoBayHealth',v.devices_hp)
         self.assertNotIn('rightTrackHealth',v.devices_hp)
@@ -85,7 +85,7 @@ class EnvironmentalModulesTests(unittest.TestCase):
         v=self.target()
         contacts=[dict(name='engineHealth',weight=.25),dict(name='engineHealth',weight=.5)]
         with contextlib.redirect_stdout(io.StringIO()):em.apply_impact(v,12.,contacts)
-        self.assertEqual(130.,v.devices_hp['engineHealth'])
+        self.assertEqual(110.,v.devices_hp['engineHealth'])
 
     def test_known_contact_position_drives_native_and_interior_queries(self):
         v=self.target();v.matrix=object()
@@ -130,7 +130,7 @@ class EnvironmentalModulesTests(unittest.TestCase):
         self.assertEqual(5,len(ends))
         self.assertAlmostEqual(4.049298103509049,ends[0][1])
         self.assertEqual({'engineHealth','radioHealth','driverHealth'},{r['name'] for r in contacts})
-        self.assertAlmostEqual(150.-134.97660345030164/1.75,v.devices_hp['engineHealth'])
+        self.assertEqual(0.,v.devices_hp['engineHealth'])
         self.assertNotIn('ammoBayHealth',v.devices_hp)
         self.assertNotIn('leftTrackHealth',v.devices_hp)
         self.assertEqual({'driver'},v._crew_ko)
@@ -153,6 +153,28 @@ class EnvironmentalModulesTests(unittest.TestCase):
                 contacts=em.collect_contacts(v,[(0.,0.,0.)],(0.,-1.,0.),16.75,
                     types.SimpleNamespace(Vector3=fixtures._Point))
             self.assertEqual([],contacts)
+
+    def test_recorded_landings_cross_yellow_threshold_with_40_coefficient(self):
+        v=self.target()
+        # Use the actual installed pools and contact weights from report 151604.
+        component=fixtures._Strict1513Component
+        v.typeDescriptor.hull=component(ammoBayHealth=component(maxHealth=203.,maxRegenHealth=101.5))
+        v.typeDescriptor.fuelTank=component(maxHealth=175.,maxRegenHealth=87.5)
+        v.typeDescriptor.chassis=component(maxHealth=200.,maxRegenHealth=100.)
+        v.typeDescriptor.turret=component(turretRotatorHealth=component(maxHealth=140.,maxRegenHealth=70.))
+        with contextlib.redirect_stdout(io.StringIO()):
+            em.apply_impact(v,13.995103890736372,[
+                dict(name='leftTrackHealth',weight=.9073306165998628),
+                dict(name='turretRotatorHealth',weight=.6616425053204138)])
+            em.apply_impact(v,13.240236440622468,[
+                dict(name='ammoBayHealth',weight=.8159129621855199),
+                dict(name='fuelTankHealth',weight=.8079084413649028),
+                dict(name='rightTrackHealth',weight=.9891207988092617)])
+        self.assertTrue({'leftTrackHealth','turretRotatorHealth','ammoBayHealth',
+                         'fuelTankHealth','rightTrackHealth'} <= v._critical_devices)
+        # Serialized report inputs/receipts differ at roughly 1e-5 HP.
+        self.assertAlmostEqual(203.-2*52.87501105880318,v.devices_hp['ammoBayHealth'],places=3)
+        self.assertFalse(v._ammo_rack_death)
 
     def test_ground_witnesses_choose_sampled_contact_and_void_has_none(self):
         params=dict(springs=[dict(x=-1.,y=0.,z=0.),dict(x=1.,y=0.,z=0.)],pseudo_contacts=[])

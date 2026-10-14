@@ -24,7 +24,7 @@ Each module is damaged once per event using the nearest reached contact.
 
 Trial shock depth is clamp((impact_speed - 10) * 0.6, 0.25, 6.0) metres.
 The central contact-normal ray and four rays at 25 degrees spread inward.
-Module HP loss is max(0, impact_speed - 10) * 20 / (1 + 0.25 * contact_distance).
+Module HP loss is max(0, impact_speed - 10) * 40 / (1 + 0.25 * contact_distance).
 A reached crew member is injured when this trial shock amount reaches 100.
 There is no projectile saving throw, Deadeye bonus, ammo-rack immunity or
 forced global track destruction. Fuel/engine impact loss does not add a new
@@ -86,3 +86,13 @@ empty. Pass the native victim descriptor ammoBayHealth extra for both shot
 and fire detonation. Ordinary deaths retain no module extra; no translated
 text or font replacement is invented. The exact bytecode consumer was read,
 and shot/fire/ordinary cause fixtures verify object identity at the call.
+
+## Coefficient calibration (report 20261014-151604)
+
+The five-ray propagation now reaches real track, turret ring, ammunition and
+fuel contacts, but recorded module HP remained above the 50% yellow threshold.
+At the user's request the impact coefficient increases from 20 to 40 HP per
+excess m/s. Reach, attenuation, contact nomination, deduplication, body HP and
+fire are unchanged. Recorded contact weights/pools exercise the yellow-state
+transition without forcing a state or adding an ammo exemption. Earlier
+bridge replay shock amounts above describe the previous coefficient.
