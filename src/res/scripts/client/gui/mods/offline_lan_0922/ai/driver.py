@@ -974,7 +974,7 @@ class LocalDriver(object):
 			movement_intent=True, stopping_distance=None,
 			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
 			progress_target=None, turn_speed_limit=None, arrival_radius=None,
-			rotation_refused=False):
+			rotation_refused=False, recovery_goal=None):
 		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -1026,10 +1026,13 @@ class LocalDriver(object):
 			}
 		own_half_length = max(0.5, float(half_length))
 		own_half_width = max(0.3, float(half_width))
+		# A proved steering waypoint is not the recovery task's identity.
+		# Switching nearby bypass legs must not erase the native-refusal lease.
+		pocket_goal = recovery_goal if recovery_goal is not None else (progress_target or target)
 		pocket = state.get('recovery_pocket')
 		if pocket is not None and (
 				_distance(position, pocket['origin']) >= 2.0 * own_half_length + arrival or
-				_distance(pocket['goal'], progress_target or target) > 2.0):
+				_distance(pocket['goal'], pocket_goal) > 2.0):
 			state.pop('recovery_pocket', None)
 			pocket = None
 		pocket_stalled = bool(pocket is not None and
@@ -1150,7 +1153,7 @@ class LocalDriver(object):
 					state['objective_progress']['at'] = state['clock']
 				if rotation_refused and state.get('recovery_pocket') is None:
 					state['recovery_pocket'] = dict(origin=tuple(position),
-						at=state['clock'], goal=tuple(progress_target or target))
+						at=state['clock'], goal=tuple(pocket_goal))
 				if state.get('last_clear_yaw') is not None:
 					state['failed_yaws'][self._yaw_key(state['last_clear_yaw'])] = (
 						state['clock'] + self.failure_ttl)

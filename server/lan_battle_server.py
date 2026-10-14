@@ -7146,6 +7146,7 @@ class BattleState:
                     "bot_state", "human_ram_armors",
                     "worker human ram armor results are invalid")
             pending_projectile_launches = {}
+            suppressed_projectile_launches = []
             fire_deaths = []
             fire_damage_records = []
             fire_lineage_clears = set()
@@ -7273,6 +7274,30 @@ class BattleState:
                                 bot_id, error))
                         burst_edges = ()
                 previous_fire = int((previous or {}).get("fire_seq", 0))
+                # Preserve an explicit receipt for a published fire edge that
+                # the canonical liveness/clock gates cannot admit. Publication
+                # is not launch acceptance, especially at a fatal-hit boundary.
+                if int(current.get("fire_seq", 0)) > previous_fire and (
+                        source_clock_rebase or not current["alive"] or
+                        (previous is not None and not previous.get("alive")) or
+                        not burst_edges):
+                    reason = ("source_clock_rebase" if source_clock_rebase else
+                              "canonical_vehicle_dead" if not current["alive"] else
+                              "previous_vehicle_dead" if previous is not None and not previous.get("alive") else
+                              "burst_inventory_rebase")
+                    suppressed_projectile_launches.append({
+                        "round": self.round_id, "bot": bot_id,
+                        "first_seq": previous_fire + 1,
+                        "last_seq": int(current["fire_seq"]), "reason": reason,
+                        "raw_alive": bool(raw.get("alive")),
+                        "raw_health": int(raw.get("health", 0)),
+                        "canonical_alive": bool(current["alive"]),
+                        "canonical_health": int(current.get("health", 0)),
+                        "source_sample_time_us": source_time_us,
+                        "previous_source_time_us": previous_source_time_us,
+                        "receipt_motion_time_us": received_motion_time_us,
+                    })
+
                 if (previous is not None and
                         int(previous.get("stun_end_server_time_ms", 0)) > 0 and
                         int(current.get("stun_end_server_time_ms", 0)) == 0):
@@ -7386,6 +7411,8 @@ class BattleState:
                 pending_projectile_launches)
             self.bot_pending_projectile_metadata.update(
                 pending_projectile_launches)
+            for receipt in suppressed_projectile_launches:
+                _server_log("BOT SHOT SUPPRESSED " + json.dumps(receipt, sort_keys=True))
             for victim_identity in fire_lineage_clears:
                 self.last_shell_fire_sources.pop(victim_identity, None)
             for bot_id in capture_resets:

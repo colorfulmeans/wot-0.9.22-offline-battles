@@ -2243,6 +2243,64 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertEqual(143.0,
                          state._projectile_snapshot()[0]['gravity'])
 
+    def test_fatal_boundary_suppression_has_an_explicit_canonical_receipt(self):
+        state = _state()
+        # The room existed for 200 seconds before this worker source clock.
+        state._motion_clock_origin -= 200.0
+        state.bot_manifest_authority_id = SIMULATION_WORKER_AUTHORITY_ID
+        state.bot_roster = [{
+            'id': 16, 'team': 2, 'slot': 0, 'name': 'Bot',
+        }]
+        manifest = [{
+            'id': 16, 'team': 2, 'slot': 0, 'name': 'Bot',
+            'vehicle': 'ussr:R11_MS-1', 'health': 1000,
+            'max_health': 1000, 'x': 20.0, 'y': 0.0, 'z': 0.0,
+            'yaw': 0.0, 'world_pose': True, 'profile': {},
+            'reload_time': 0.0, 'reload_duration': 1.5,
+            'route': {'id': 'test', 'waypoints': []},
+        }]
+        self.assertTrue(state.update_bot_manifest(
+            SIMULATION_WORKER_AUTHORITY_ID, {
+            'round_id': 1, 'bots': manifest,
+            'player_collision_profiles': [
+                {
+                    'id': player.player_id, 'vehicle': player.vehicle,
+                    'mass': player.effective_params['physics']['mass'],
+                    'shape': [3.0, 6.0, -1.0, 2.0],
+                    'ram_profile': {
+                        'spall_coefficient': player.effective_params[
+                            'ramming']['spall_coefficient'],
+                        'ramming_bonus': player.effective_params[
+                            'ramming']['ramming_bonus'],
+                    },
+                }
+                for player in state.players.values()
+            ]}))
+        state.pending_events[:] = []
+        first = dict(id=16,x=20.,y=0.,z=0.,yaw=0.,health=1000,alive=True,
+                     fire_seq=0,reload_time=0.,reload_duration=1.5,critical={},
+                     combat_base_revision=0,combat_seq=0,
+                     combat_fire_elapsed=0.,combat_fire_timer=0.,stun_end_server_time_ms=0)
+        self.assertTrue(state.update_bot_states(SIMULATION_WORKER_AUTHORITY_ID,
+            bot_state_rows.publication(dict(round_id=1,sample_time_us=100000,
+                source_batch_horizon_us=200000,bots=[first]))))
+        # A canonical fatal hit overtakes this worker's still-alive publication.
+        state.bot_states[16].update(health=0,alive=False,display_health=0)
+        with mock.patch.object(lan_server_module,'_server_log') as log:
+            self.assertTrue(state.update_bot_states(SIMULATION_WORKER_AUTHORITY_ID,
+                bot_state_rows.publication(dict(round_id=1,sample_time_us=200000,
+                    source_batch_horizon_us=200000,bots=[dict(first,fire_seq=1)]))))
+        receipts=[json.loads(call.args[0].split('BOT SHOT SUPPRESSED ',1)[1])
+                  for call in log.call_args_list if call.args[0].startswith('BOT SHOT SUPPRESSED ')]
+        self.assertEqual(1,len(receipts))
+        self.assertEqual('canonical_vehicle_dead',receipts[0]['reason'])
+        self.assertTrue(receipts[0]['raw_alive'])
+        self.assertFalse(receipts[0]['canonical_alive'])
+        self.assertEqual(200000,receipts[0]['source_sample_time_us'])
+        self.assertEqual(1,receipts[0]['first_seq'])
+        self.assertNotIn((16,1),state.bot_pending_projectile_launches)
+        self.assertFalse(any(event.get('kind')=='bot_shot' for event in state.pending_events))
+
     def test_bot_state_edge_waits_for_authorized_launch(self):
         state = _state()
         # The room existed for 200 seconds before this worker source clock.

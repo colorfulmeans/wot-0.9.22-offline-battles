@@ -673,6 +673,7 @@ class BotAdapter(object):
                     turn_speed_limit=state.get('turn_speed_limit'),
                     pose_clear=state.get('pose_clear'),
                     rotation_refused=bool(state.get('native_rotation_refused')),
+                    recovery_goal=move_position,
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
