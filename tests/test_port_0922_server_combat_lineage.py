@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest import mock
 
 import bot_state_rows
 
@@ -331,6 +332,13 @@ class ServerCombatLineageIntegrationTests(unittest.TestCase):
         # rejection nor repeated cumulative totals may replay its damage.
         server.update_bot_states(1, dict(publication, round_id=server.round_id))
         self.assertEqual(applied, server._statistics_row('player', 1)['team_damage'])
+        server.players[1].offer_reliable = mock.Mock(return_value=True)
+        server.players[1].offer_snapshot = mock.Mock(return_value=True)
+        server.battle_duration_seconds = server.tick / 30. + 900.
+        server.tick_once(1. / 30.)
+        self.assertIsNone(server.battle_result)
+        self.assertEqual([], server.pending_events)
+
 
     def test_combat_wire_roundtrip_keeps_lineage_and_real_change_guards(self):
         server = BattleState.__new__(BattleState)

@@ -7,6 +7,25 @@ from gui.mods.offline_lan_0922 import environment_push, postmortem_causes
 
 
 class EnvironmentAttributionTests(unittest.TestCase):
+    def test_push_damage_wire_contract_covers_all_actor_pairs_and_causes(self):
+        state = _state()
+        for kind, attacker_key in (('hit', 'attacker'), ('bot_hit', 'attacker'),
+                ('bot_human_hit', 'attacker_bot'), ('bot_bot_hit', 'attacker_bot')):
+            for reason, dead in ((3, False), (3, True), (5, True)):
+                event = dict(kind=kind, source='environment', push_attributed=True,
+                    attack_reason=reason, death_reason=reason if dead else 0,
+                    dead=dead, damage=360, **{attacker_key: 1})
+                with self.subTest(kind=kind, reason=reason, dead=dead):
+                    self.assertTrue(state._validate_combat_event_for_wire(event))
+                    for bad in (dict(push_attributed=False), dict(push_attributed=1),
+                            dict(attack_reason=0), dict(death_reason=1)):
+                        with self.assertRaises(RuntimeError):
+                            state._validate_combat_event_for_wire(dict(event, **bad))
+                    missing = dict(event)
+                    missing.pop(attacker_key)
+                    with self.assertRaises(RuntimeError):
+                        state._validate_combat_event_for_wire(missing)
+
     def test_stationary_victim_and_head_on_ambiguity(self):
         self.assertEqual(0, environment_push.initiator((2, 0), (0, 0), (-1, 0)))
         self.assertEqual(1, environment_push.initiator((0, 0), (-2, 0), (-1, 0)))

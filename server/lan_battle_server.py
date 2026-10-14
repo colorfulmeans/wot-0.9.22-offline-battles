@@ -2794,7 +2794,10 @@ class BattleState:
         source = event["source"]
         if source not in COMBAT_SOURCE_KINDS:
             raise RuntimeError("combat event has invalid source: %s" % source)
-        if kind not in COMBAT_SOURCE_KINDS[source]:
+        push_attributed = source == "environment" and event.get("push_attributed") is True
+        allowed_kinds = (frozenset(("hit", "bot_hit", "bot_human_hit", "bot_bot_hit"))
+                         if push_attributed else COMBAT_SOURCE_KINDS[source])
+        if kind not in allowed_kinds:
             raise RuntimeError(
                 "combat source %s does not allow kind %s" % (source, kind))
         if "death_reason" not in event:
@@ -2846,7 +2849,7 @@ class BattleState:
                  death_reason == (3 if dead else 0)) or
                 (attack_reason in (5, 7) and dead and
                  death_reason == attack_reason))
-            if has_attacker or not valid_reason:
+            if has_attacker != push_attributed or not valid_reason:
                 raise RuntimeError(
                     "environment event has invalid attacker or cause")
         elif has_attacker:
