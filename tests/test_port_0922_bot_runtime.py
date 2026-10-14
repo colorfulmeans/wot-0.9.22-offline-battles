@@ -14836,6 +14836,29 @@ class BotRuntimeTests(unittest.TestCase):
         runtime.battle_start(self.start)
         return runtime
 
+    def test_short_escape_commit_does_not_probe_past_its_admitted_exit(self):
+        for sign in (-1., 1.):
+            with self.subTest(sign=sign):
+                runtime = self._ford_runtime(self._ford_graph(size=9))
+                command = self._stationary_command()
+                command.update(throttle=sign, turn=0., brake=False,
+                    movement_intent=True, target_yaw=0.,
+                    recovery_probe_distance=2.,
+                    recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
+                runtime.adapter.decide = lambda *unused: dict(command)
+                grid = runtime.navigator.grid
+                # A fatal patch is beyond the admitted 2 m escape, within the
+                # old four-metre execution lookahead. The actual short step
+                # remains dry and keeps the real pose/collision guards.
+                with mock.patch.object(grid, 'segment_has_motion_hazard',
+                        side_effect=lambda start, end, mask:
+                            math.hypot(end[0]-start[0], end[2]-start[2]) > 2.1):
+                    state = runtime.states[11]
+                    state.update(x=16., y=0., z=16., yaw=0., speed=0., grounded_once=True)
+                    before = state['z']
+                    runtime.update(.1, 1.1)
+                self.assertGreater(sign * (state['z'] - before), 0.)
+
     def test_motion_admits_dry_edges_but_keeps_water_and_shore_veto(self):
         for hazard, nearby_water, blocked in (
                 (2, 0, False), (1, 0, True), (3, 0, True),

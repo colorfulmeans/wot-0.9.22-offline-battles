@@ -286,6 +286,15 @@ class AuthorityWorkerClientTests(unittest.TestCase):
         self.assertTrue(battle._send_bot_message(message))
         self.assertEqual(2, len(client._outbound_queue))
         self.assertEqual(75, _queued_wire(client._outbound_queue[-1][1])['push_contacts']['falls'][0][1])
+        receipt['critical_totals'] = [[11, 'world_collision', 8192, 1]]
+        self.assertTrue(battle._send_bot_message(message))
+        self.assertEqual(3, len(client._outbound_queue))
+        receipt['critical_totals'][0][3] = 2
+        self.assertTrue(battle._send_bot_message(message))
+        self.assertEqual(4, len(client._outbound_queue))
+        self.assertEqual(1, _queued_wire(client._outbound_queue[-2][1])['push_contacts']['critical_totals'][0][3])
+        self.assertTrue(battle._send_bot_message(message))
+        self.assertEqual(4, len(client._outbound_queue))
 
     @staticmethod
     def _active_client():

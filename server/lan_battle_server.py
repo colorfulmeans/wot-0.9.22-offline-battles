@@ -61,6 +61,7 @@ from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import effective_params as effective_params_wire
 from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import device_damage
+from gui.mods.offline_lan_0922 import critical_statistics
 from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import player_critical_mechanics
@@ -437,15 +438,8 @@ CRITICAL_CREW_NAMES = equipment_mechanics.ACTIVATION_CREW_NAMES
 # ``VEHICLE_TANKMAN_TYPE_NAMES`` positions, which the client's crits mask
 # parser indexes.  Both server track devices map onto the single "track" slot
 # and every numbered crew role onto its base type, exactly as retail packs it.
-CRIT_DEVICE_INDICES = {
-    "engineHealth": 0, "ammoBayHealth": 1, "fuelTankHealth": 2,
-    "radioHealth": 3, "leftTrackHealth": 4, "rightTrackHealth": 4,
-    "gunHealth": 5, "turretRotatorHealth": 6, "surveyingDeviceHealth": 7,
-}
-CRIT_TANKMAN_INDICES = {
-    "commander": 0, "driver": 1, "radioman1": 2, "radioman2": 2,
-    "gunner1": 3, "gunner2": 3, "loader1": 4, "loader2": 4,
-}
+CRIT_DEVICE_INDICES = critical_statistics.CRIT_DEVICE_INDICES
+CRIT_TANKMAN_INDICES = critical_statistics.CRIT_TANKMAN_INDICES
 # The #1513 vehicle-class tags several historical medals restrict on.
 VEHICLE_CLASS_TAGS = frozenset((
     "lightTank", "mediumTank", "heavyTank", "AT-SPG", "SPG"))
@@ -1528,43 +1522,7 @@ def _popcount(mask):
 
 
 def _crits_mask(previous, current):
-    """Return the #1513 ``crits`` bits this transition newly set.
-
-    ``scripts/client/gui/shared/crits_mask_parser.py`` of build #1513 reads
-    bits 0-7 as critically damaged devices, bits 12-23 as destroyed devices
-    and bits 24-31 as destroyed crew, indexed by ``VEHICLE_DEVICE_TYPE_NAMES``
-    and ``VEHICLE_TANKMAN_TYPE_NAMES`` from ``battle_results_shared``.
-    """
-    if not isinstance(current, dict):
-        return 0
-    previous = previous if isinstance(previous, dict) else {}
-    mask = 0
-
-    def device_states(value):
-        return dict(
-            (str(record.get("name", "")), str(record.get("state", "")))
-            for record in value.get("devices") or ()
-            if isinstance(record, dict))
-
-    old_devices = device_states(previous)
-    old_destroyed = set(str(name) for name in previous.get("destroyed") or ())
-    for name, state in device_states(current).items():
-        index = CRIT_DEVICE_INDICES.get(name)
-        if index is None:
-            continue
-        if state == "critical" and old_devices.get(name) != "critical":
-            mask |= 1 << index
-    for name in (set(str(name) for name in current.get("destroyed") or ()) -
-                 old_destroyed):
-        index = CRIT_DEVICE_INDICES.get(name)
-        if index is not None:
-            mask |= 1 << (12 + index)
-    for name in (set(str(name) for name in current.get("crew_ko") or ()) -
-                 set(str(name) for name in previous.get("crew_ko") or ())):
-        index = CRIT_TANKMAN_INDICES.get(name)
-        if index is not None:
-            mask |= 1 << (24 + index)
-    return mask
+    return critical_statistics.transition_mask(previous, current)
 
 
 def _capture_key_actor(key):
@@ -2516,6 +2474,7 @@ class BattleState:
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
+        self.environment_critical_totals = {}
         self.player_overturn_state = {}
         self.rules_state = {"bases": {
             "1": {"points": 0, "time_left": 0.0,
@@ -2901,6 +2860,7 @@ class BattleState:
             self.environment_pushes = {}
             self.environment_push_sequences = {}
             self.environment_fall_totals = {}
+            self.environment_critical_totals = {}
             self.player_mission_view_ranges = {}
             self.player_mission_view_ranges_tick = -1
         if old != self.bot_authority_id:
@@ -3725,6 +3685,7 @@ class BattleState:
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
+        self.environment_critical_totals = {}
         self.player_overturn_state = {}
         self.rules_state = {"bases": {
             "1": {"points": 0, "time_left": 0.0,
@@ -7467,21 +7428,33 @@ class BattleState:
                             "bot", bot_id,
                             tuple(previous[name] for name in ("x", "y", "z")),
                             tuple(current[name] for name in ("x", "y", "z")))
+            fire_owners = dict((identity, (
+                state.get('fire_attacker_kind'), state.get('fire_attacker_id', 0)))
+                for identity, state in self.bot_states.items())
+            for victim, previous, current, lost, reason in environment_records:
+                if (not (previous.get('critical') or {}).get('fire') and
+                        (current.get('critical') or {}).get('fire')):
+                    owner = self._environment_pusher(victim)
+                    if owner is not None:
+                        fire_owners[victim[1]] = owner
             self.bot_states = next_states
+            environment_fires = self._consume_environment_criticals(progress, fire_owners)
             for victim, previous, current, lost, reason in environment_records:
                 event = dict(kind='bot_health', target_bot=victim[1], damage=lost,
                     health=current['health'], dead=not current['alive'],
                     display_health=current.get('display_health', current['health']),
                     attack_reason=reason, death_reason=reason if not current['alive'] else 0,
                     source='environment', critical=current.get('critical'))
-                self._attribute_environment_event(event, victim, previous.get('critical'))
+                self._attribute_environment_event(event, victim, previous.get('critical'),
+                    record_criticals='critical_totals' not in progress)
                 if event.get('push_attributed'):
                     self.pending_events.append(event)
                 if victim[1] not in hazards and reason == 3:
                     self.environment_pushes.pop(victim, None)
             for attacker, victim, damage, before, after in fire_damage_records:
                 self._record_damage(attacker, victim, damage, before)
-                self._record_critical_damage(attacker, victim, before, after)
+                if victim[1] not in environment_fires:
+                    self._record_critical_damage(attacker, victim, before, after)
             self._admit_detached_turrets(message)
             self.bot_unavailable_checkpoints = next_unavailable_checkpoints
             for bot_id in stun_clears:
@@ -7716,7 +7689,56 @@ class BattleState:
             return None
         return receipt['attacker']
 
-    def _attribute_environment_event(self, event, victim, critical_before, attacker=None):
+    def _consume_environment_criticals(self, progress, fire_owners=None):
+        """Consume pre-cleanup worker transitions once per round checkpoint."""
+        fires = progress.get('environment_fires', ())
+        fires = set(value for value in fires
+                    if type(value) is int and value in self.bot_states) if isinstance(fires, (list, tuple)) else set()
+        rows = progress.get('critical_totals', ())
+        if not isinstance(rows, (list, tuple)) or len(rows) > 1920:
+            return set()
+        valid_bits = sum(1 << index for index in range(8)) | sum(
+            1 << (12 + index) for index in range(8)) | sum(
+            1 << (24 + index) for index in range(5))
+        for row in rows:
+            try:
+                actor, cause, bit, total = row
+                actor = _exact_int(actor, 1, 2147483647)
+                bit = _exact_int(bit, 1, 4294967295)
+                total = _exact_int(total, 0, 1000000)
+                if (actor not in self.bot_states or cause not in
+                        ('world_collision', 'drowning', 'fire') or
+                        bit & (bit - 1) or bit & ~valid_bits or
+                        cause == 'drowning' and not bit & 0xff000000):
+                    continue
+                key = (actor, cause, bit)
+                previous = self.environment_critical_totals.get(key, 0)
+                if total <= previous:
+                    continue
+                self.environment_critical_totals[key] = total
+                victim = ('bot', actor)
+                attacker = None
+                if cause == 'fire':
+                    target = self.bot_states[actor]
+                    kind, identity = target.get('fire_attacker_kind'), target.get('fire_attacker_id', 0)
+                    if kind not in ('player', 'bot') or identity <= 0:
+                        kind, identity = (fire_owners or {}).get(actor, (None, 0))
+                    if kind in ('player', 'bot') and identity > 0:
+                        attacker = (kind, int(identity))
+                if attacker is None and cause != 'fire':
+                    attacker = self._environment_pusher(victim)
+                self._record_critical_damage(attacker, victim, None, None,
+                    mask_override=bit, repetitions=total - previous)
+                if attacker is not None:
+                    _server_log('ENV CRITICAL CREDIT ' + json.dumps(dict(
+                        round=self.round_id, attacker=attacker, victim=victim,
+                        cause=cause, mask=bit, count=total-previous), sort_keys=True))
+            except (ValueError, TypeError, OverflowError):
+                continue
+        return fires
+
+    def _attribute_environment_event(self, event, victim, critical_before, attacker=None,
+                                     record_criticals=True):
         if attacker is None:
             attacker = self._environment_pusher(victim)
         if attacker is not None:
@@ -7735,6 +7757,11 @@ class BattleState:
                     else:
                         target.fire_attacker_kind, target.fire_attacker_id = attacker
         self._record_damage(attacker, victim, event['damage'], critical_before)
+        current = event.get('critical')
+        mask = (critical_statistics.transition_mask(critical_before, current,
+            crew_only=event.get('attack_reason') == 5) if record_criticals else 0)
+        self._record_critical_damage(attacker, victim, critical_before, current,
+                                     mask_override=mask)
         if (attacker is not None and event['damage'] > 0 and
                 self._vehicle_team(*attacker) == self._vehicle_team(*victim)):
             actor = self.players.get(attacker[1]) if attacker[0] == 'player' else self.bot_states.get(attacker[1])
@@ -7887,7 +7914,6 @@ class BattleState:
         if critical is not None:
             self.pending_events[-1]['critical'] = critical
             self.pending_events[-1].update(critical_commit or {})
-            self._record_critical_damage(None, ('player', player.player_id), critical_before, player.critical)
         if reason == 3:
             self._attribute_environment_event(self.pending_events[-1], ('player', player.player_id), critical_before)
             observation = self.player_environment.get(player.player_id) or {}
@@ -13743,7 +13769,8 @@ class BattleState:
             "victims": victims, "received_damage": received,
             "xp_penalty": int(xp_penalty)})
 
-    def _record_critical_damage(self, attacker, target, previous, current):
+    def _record_critical_damage(self, attacker, target, previous, current,
+                                mask_override=None, repetitions=1):
         """Attribute admitted critical transitions, including fire and zero HP hits."""
         if attacker is None or attacker == target:
             return
@@ -13753,19 +13780,21 @@ class BattleState:
             # Starting a fire is one event even when the igniting shell has
             # no hull damage; later burn ticks and repeated state are not.
             self._record_mission_event(attacker, target, "fire", 1)
-        mask = _crits_mask(previous, current)
+        mask = _crits_mask(previous, current) if mask_override is None else mask_override
         if not mask:
             return
         row = self._statistics_row(*attacker)
         if self._vehicle_team(*attacker) == self._vehicle_team(*target):
-            row["team_crits"] += _popcount(mask)
+            row["team_crits"] += _popcount(mask) * repetitions
             return
-        row["critical_hits"] += _popcount(mask)
+        row["critical_hits"] += _popcount(mask) * repetitions
         self._statistics_row(*target)["crits_received_mask"] |= mask
         self._or_interaction(attacker, target, "crits", mask)
-        self._record_mission_event(attacker, target, "critical", mask)
+        for unused in range(repetitions):
+            self._record_mission_event(attacker, target, "critical", mask)
         state = self._vehicle_stun_state(target)
-        if state is not None and not state['alive']:
+        if (state is not None and not state['alive'] and
+                (mask_override is None or previous is not None)):
             self._statistics_interaction(attacker, target)["_terminal_immobilized"] = bool(
                 _destroyed_tracks(previous))
 

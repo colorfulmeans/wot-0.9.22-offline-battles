@@ -19,6 +19,7 @@ from gui.mods.offline_lan_0922.ai import driver as ai_driver
 from gui.mods.offline_lan_0922.ai import planner as ai_planner
 from gui.mods.offline_lan_0922.ai.navigation import (
     BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, TerrainNavigator, STATIC_PLANNING_POLICY)
+from gui.mods.offline_lan_0922 import critical_statistics
 from gui.mods.offline_lan_0922 import critical_damage
 from gui.mods.offline_lan_0922 import ballistics
 from gui.mods.offline_lan_0922 import bot_gunnery
@@ -2243,6 +2244,7 @@ class BotRuntime(object):
         self._environment_push_seq = 0
         self._environment_push_proofs = {}
         self._environment_fall_totals = {}
+        self._environment_critical_totals = {}
         self._human_ram_receipt_seq = {}
         self._ram_wait_log_key = None
         self._ram_wait_log_next = 0.0
@@ -3457,6 +3459,7 @@ class BotRuntime(object):
             self._environment_push_seq = 0
             self._environment_push_proofs = {}
             self._environment_fall_totals = {}
+            self._environment_critical_totals = {}
             self._human_ram_receipt_seq = {}
             self._ram_wait_log_key = None
             self._ram_wait_log_next = 0.0
@@ -4423,6 +4426,11 @@ class BotRuntime(object):
         if advance_fire:
             fire_damage, fire_payload = critical_damage.tick_fire(
                 shadow, step, now=now)
+            if state.get('_environment_fire') and fire_payload is not None:
+                critical_statistics.accumulate(self._environment_critical_totals,
+                    state['id'], 'fire', repair_payload or state.get('critical'), fire_payload)
+        if not shadow.is_on_fire and fire_damage <= 0:
+            state.pop('_environment_fire', None)
         if was_on_fire and advance_fire and shadow.is_on_fire:
             state['combat_fire_elapsed'] = round(min(
                 FIRE_DURATION_SECONDS, fire_elapsed + float(step)), 6)
@@ -4495,6 +4503,8 @@ class BotRuntime(object):
         display_health = max(0, int(state.get('health', 0)))
         critical = _terminal_critical(state, descriptor, 'drowning')
         if critical is not None:
+            critical_statistics.accumulate(self._environment_critical_totals,
+                state['id'], 'drowning', state.get('critical'), critical, crew_only=True)
             state['critical'] = critical
         state['health'] = 0
         state['alive'] = False
@@ -7515,6 +7525,10 @@ class BotRuntime(object):
             terminal_damage, payload = environment_modules.apply_impact(shadow, impact_speed, contacts)
             damage = max(damage, terminal_damage)
             if payload is not None:
+                critical_statistics.accumulate(self._environment_critical_totals,
+                    state['id'], 'world_collision', state.get('critical'), payload)
+                if payload.get('fire') and not (state.get('critical') or {}).get('fire'):
+                    state['_environment_fire'] = True
                 state['critical'] = _canonical_critical(payload)
         before_health = int(state.get('health', maximum))
         health = max(0, before_health - damage)
@@ -15101,7 +15115,7 @@ class BotRuntime(object):
                     state.get('speed', 0.0),
                     wet_escape=committed_wet_escape,
                     allow_shallow=committed_shallow_admitted,
-                    hazard_only=True)
+                    hazard_only=True, maximum_distance=maximum_probe_distance)
                 if committed_corridor is False:
                     # Copied physics integrates the post-turn hull yaw, while
                     # the native motion receipt above proves the pre-turn
@@ -15807,7 +15821,11 @@ class BotRuntime(object):
             hazards=[int(state['id']) for state in ordered_states
                      if state.get('airborne') or state.get('_drowning')],
             falls=[[int(key), int(value)] for key, value in
-                   getattr(self, '_environment_fall_totals', {}).items()])
+                   getattr(self, '_environment_fall_totals', {}).items()],
+            critical_totals=[[key[0], key[1], key[2], int(value)] for key, value in
+                             sorted(self._environment_critical_totals.items())],
+            environment_fires=[int(state['id']) for state in ordered_states
+                               if state.get('_environment_fire')])
         if launches:
             # Never put these local-only SPG proof receipts on the LAN wire.
             # BattleRuntime retries an unaccepted launch from this compact list.

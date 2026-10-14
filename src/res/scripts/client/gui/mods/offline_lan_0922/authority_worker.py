@@ -298,7 +298,9 @@ class AuthorityWorkerLANClient(LANClient):
                     'seq', 'attacker_kind', 'attacker_id', 'target_kind', 'target_id'))
                     for row in push_contacts.get('contacts', ())),
                  tuple(push_contacts.get('hazards', ())),
-                 tuple(tuple(row) for row in push_contacts.get('falls', ())))
+                 tuple(tuple(row) for row in push_contacts.get('falls', ())),
+                 tuple(tuple(row) for row in push_contacts.get('critical_totals', ())),
+                 tuple(push_contacts.get('environment_fires', ())))
                 if push_contacts is not None else None)
         except Exception:
             return False
