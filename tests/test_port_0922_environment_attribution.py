@@ -121,7 +121,35 @@ class EnvironmentPresentationTests(unittest.TestCase):
                 state='critical', cause='fire')], 0)
         self.assertEqual([(10, 37, 7, 0, 0)], battle._avatar.damage_info)
 
-    def test_friendly_push_damage_reaches_the_native_damage_log(self):
+    def test_friendly_push_damage_is_blue_and_never_enemy_efficiency(self):
+        from test_port_0922_battle_runtime import _runtime, BattleRuntime, _pack_damage
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._avatar.playerVehicleID = 10
+        battle._synchronise_player_identity(10)
+        battle._friendly_damage_hud = mock.Mock()
+        battle._friendly_damage_hud.record.return_value = True
+        attacker = dict(engine_id=10, local=True, kind='player', network_id=1, state=dict(team=1))
+        victim = dict(engine_id=11, local=False, kind='bot', network_id=2, state=dict(team=1))
+        event = dict(kind='bot_hit', source='environment', attack_reason=3,
+            death_reason=0, damage=10, dead=False, attacker=1, push_attributed=True)
+        battle._validate_combat_event_contract(event)
+        self.assertTrue(battle._present_combat_feedback(event, victim, attacker))
+        battle._friendly_damage_hud.record.assert_called_once_with(10, '\u961f\u53cb', 3, False)
+        self.assertEqual([], battle._avatar.battle_events)
+        self.assertEqual([], battle._avatar.shot_results)
+
+        # Direct friendly shots have no push exception and must take the same
+        # blue path, without ordinary outgoing DAMAGE/CRIT/KILL credit.
+        battle._friendly_damage_hud.record.reset_mock()
+        with mock.patch.object(battle, '_feedback_shell_fields', return_value=(0, False)):
+            self.assertTrue(battle._present_combat_feedback(dict(event,
+                source='shot', attack_reason=0, push_attributed=False), victim, attacker))
+        battle._friendly_damage_hud.record.assert_called_once_with(10, '\u961f\u53cb', 0, False)
+        self.assertEqual([], battle._avatar.battle_events)
+
+    def test_attributed_enemy_fall_survives_lost_spot_without_revealing_a_shot(self):
         from test_port_0922_battle_runtime import _runtime, BattleRuntime, _pack_damage
         runtime = _runtime()
         battle = BattleRuntime(runtime)
@@ -129,10 +157,27 @@ class EnvironmentPresentationTests(unittest.TestCase):
         battle._avatar.playerVehicleID = 10
         battle._synchronise_player_identity(10)
         attacker = dict(engine_id=10, local=True, kind='player', network_id=1, state=dict(team=1))
-        victim = dict(engine_id=11, local=False, kind='bot', network_id=2, state=dict(team=1))
+        victim = dict(engine_id=11, local=False, kind='bot', network_id=27,
+                      spot_marker_visible=False, state=dict(team=2))
         event = dict(kind='bot_hit', source='environment', attack_reason=3,
-            death_reason=0, damage=10, dead=False, attacker=1, push_attributed=True)
-        battle._validate_combat_event_contract(event)
+            death_reason=0, damage=406, dead=False, attacker=1, push_attributed=True)
         self.assertTrue(battle._present_combat_feedback(event, victim, attacker))
-        self.assertEqual(_pack_damage(10, 3), battle._avatar.battle_events[0][0]['details'])
+        self.assertEqual(_pack_damage(406, 3), battle._avatar.battle_events[0][0]['details'])
         self.assertEqual([], battle._avatar.shot_results)
+        self.assertFalse(battle._present_combat_feedback(dict(event,
+            source='shot', attack_reason=0, push_attributed=False), victim, attacker))
+
+    def test_blue_hud_is_bounded_and_releases_native_roots(self):
+        from gui.mods.offline_lan_0922.friendly_damage_hud import FriendlyDamageHUD
+        gui = types.SimpleNamespace(Text=lambda unused: types.SimpleNamespace(),
+            addRoot=mock.Mock(), delRoot=mock.Mock())
+        hud = FriendlyDamageHUD(gui)
+        for i in range(6):
+            hud.record(10, 'Type 59', 3)
+        self.assertEqual(60, hud.total)
+        self.assertEqual(4, len(hud.rows))
+        self.assertEqual(5, gui.addRoot.call_count)
+        self.assertTrue(all(label.colour == (100,180,255,255) for label in hud.roots))
+        hud.close()
+        hud.close()
+        self.assertEqual(5, gui.delRoot.call_count)

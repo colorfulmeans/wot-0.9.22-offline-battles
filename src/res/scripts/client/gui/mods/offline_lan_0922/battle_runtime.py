@@ -2212,6 +2212,7 @@ class BattleRuntime(object):
         self._last_health = {}
         self._client_ready_received = False
         self._siege_hints = None
+        self._friendly_damage_hud = None
         self._local_descriptor = None
         self._local_hydraulic_motion_window = None
         self._local_hydraulic_motion_report_failed = False
@@ -11815,7 +11816,11 @@ class BattleRuntime(object):
         """Feed accepted server combat through stock #1513 feedback RPCs."""
         if self._worker_mode:
             return False
-        if self._is_blind_local_attack(target_record, attacker_record):
+        attributed_terrain = (event.get('source') == 'environment' and
+                              event.get('push_attributed') is True)
+        # A confirmed shove's terrain outcome remains credited after the target
+        # falls out of spotting. Do not expose blind projectile hit results.
+        if self._is_blind_local_attack(target_record, attacker_record) and not attributed_terrain:
             # showShotResults owns commander hit voices; onBattleEvents owns
             # damage/critical/kill ribbons and counters.  Neither may disclose
             # an enemy which this team has not spotted.
@@ -11858,7 +11863,13 @@ class BattleRuntime(object):
             assert_damage_type(
                 self._avatar, int(attacker_record['engine_id']))
         output = []
-        if attacker_record.get('local') and (enemy or event.get('push_attributed') is True):
+        friendly_output = False
+        if attacker_record.get('local') and not enemy and damage > 0:
+            friendly_output = bool(self._run_optional_feature(
+                'friendly damage HUD', self._present_friendly_damage,
+                (event, target_record, reason_id),
+                on_error=self._close_friendly_damage_hud))
+        if attacker_record.get('local') and enemy:
             target_id = int(target_record['engine_id'])
             if damage > 0:
                 output.append({
@@ -12009,7 +12020,30 @@ class BattleRuntime(object):
                 raise RuntimeError(
                     '#1513 battle-event feedback boundary is unavailable')
             callback(output)
-        return bool(output)
+        if attacker_record.get('local') and damage > 0:
+            from .native_input_diagnostics import write_json_record
+            write_json_record('DAMAGE FEEDBACK', dict(
+                event_id=event.get('event_id'), source=event.get('source'),
+                reason=reason_id, damage=damage, enemy=enemy,
+                target=target_record.get('network_id'),
+                spotted=self._combat_target_is_spotted(target_record),
+                native_types=[row['eventType'] for row in output],
+                friendly_hud=friendly_output))
+        return bool(output) or friendly_output
+
+    def _present_friendly_damage(self, event, target_record, reason):
+        from .friendly_damage_hud import FriendlyDamageHUD
+        if self._friendly_damage_hud is None:
+            self._friendly_damage_hud = FriendlyDamageHUD()
+        state = target_record.get('state') or {}
+        return self._friendly_damage_hud.record(
+            event.get('damage', 0), state.get('name') or state.get('vehicle') or u'\u961f\u53cb',
+            reason, bool(event.get('dead')))
+
+    def _close_friendly_damage_hud(self):
+        hud, self._friendly_damage_hud = self._friendly_damage_hud, None
+        if hud is not None:
+            hud.close()
 
     def _present_environment_feedback(self, event, target_record, reason_id):
         """Feed attacker-free fall or fire damage to the stock damage log."""
@@ -30161,6 +30195,7 @@ class BattleRuntime(object):
     def _quiesce_native_presentations(self):
         """Release battle-scoped native visuals before Hangar takes over."""
         cleanup_error = None
+        self._close_friendly_damage_hud()
         if self._siege_hints is not None:
             self._siege_hints.close()
             self._siege_hints = None
