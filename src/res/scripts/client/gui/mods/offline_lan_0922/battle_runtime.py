@@ -4079,6 +4079,7 @@ class BattleRuntime(object):
                 artillery_launch_cancel=self._bot_artillery_cancel,
                 artillery_status_probe=self._bot_artillery_status,
                 spawn_resolver=self._formation_pose,
+                impact_contacts_resolver=self._bot_impact_module_contacts,
                 ground_probe=self._navigation_ground,
                 # Use the player's near-body support layer for Bot height
                 # and attitude. The wider placement query can acquire an
@@ -6363,6 +6364,42 @@ class BattleRuntime(object):
             # Native model refreshes may temporarily withdraw a provider.
             # The existing copied pose remains valid; no new pose is guessed.
             return fallback
+
+    def _impact_ground_witnesses(self, position, yaw, descriptor):
+        """Probe the chassis footprint only at a damaging legacy landing."""
+        try:
+            half_width, half_length = tank_collision.chassis_shape(descriptor)[:2]
+        except (AttributeError, TypeError, ValueError, RuntimeError, IndexError):
+            sys.stdout.write('[Offline LAN 0.9.22] ENV MODULE CONTACT unavailable chassis shape\n')
+            return []
+        points = []
+        for x, z in ((0.,0.),(-.8*half_width,-.8*half_length),
+                     (-.8*half_width,.8*half_length),(.8*half_width,-.8*half_length),
+                     (.8*half_width,.8*half_length)):
+            wx = position[0]+math.cos(yaw)*x+math.sin(yaw)*z
+            wz = position[2]-math.sin(yaw)*x+math.cos(yaw)*z
+            height = self._support_column(wx,wz,position[1])
+            if height is not None and abs(float(height)-position[1]) <= .25:
+                points.append((wx,float(height),wz))
+        return points
+
+    def _bot_impact_module_contacts(self, state, witnesses, normal, speed):
+        from gui.mods.offline_lan_0922 import environment_modules
+        record = self._records.get('bot:%s' % state['id']) or {}
+        engine_id = record.get('engine_id')
+        entity = self._server_entity(engine_id) if engine_id is not None else None
+        if entity is None:
+            sys.stdout.write('[Offline LAN 0.9.22] ENV MODULE CONTACT unavailable bot=%s\n' % state['id'])
+            return []
+        target = self._projectile_frozen_target(entity, state)
+        if target is None:
+            return []
+        target.id = int(state['id'])
+        target.actor_kind = 'bot'
+        if not witnesses:
+            witnesses = self._impact_ground_witnesses((state['x'],state['y'],state['z']),
+                _number(state.get('yaw')), entity.typeDescriptor)
+        return environment_modules.collect_contacts(target, witnesses, normal, speed, self._runtime.math)
 
     def _bot_water_hull_pose(self, state):
         record = self._records.get('bot:%s' % state['id']) or {}
@@ -23718,6 +23755,11 @@ class BattleRuntime(object):
 
     def _apply_fall_damage(self, entity, impact_speed):
         """Queue a physical impact observation without mutating canonical HP."""
+        witnesses = getattr(self, '_landing_contact_witnesses', ())
+        normal = getattr(self, '_landing_contact_normal', (0., 1., 0.))
+        self._landing_contact_witnesses = ()
+        landing_pose = getattr(self, '_landing_contact_pose', None)
+        self._landing_contact_pose = None
         maximum = max(1, int(getattr(
             entity.typeDescriptor, 'maxHealth', getattr(entity, 'health', 1))))
         damage = vehicle_physics.fall_damage(maximum, impact_speed)
@@ -23729,7 +23771,26 @@ class BattleRuntime(object):
         if len(self._pending_landing_impacts) >= \
                 MAX_PENDING_LANDING_IMPACTS:
             raise RuntimeError('landing observation queue exceeded limit')
-        self._pending_landing_impacts.append(impact_speed)
+        contacts = []
+        if witnesses and self.client is not None and getattr(entity, 'matrix', None) is not None:
+            from gui.mods.offline_lan_0922 import environment_modules
+            record = dict(self._records.get('player:%s' % self.client.player_id) or {})
+            record['local'] = True
+            target = self._projectile_live_critical_target(record, entity)
+            target.id = int(self.client.player_id)
+            target.actor_kind = 'player'
+            if landing_pose is not None and target.matrix is not None:
+                matrix = self._runtime.math.Matrix
+                root = getattr(target, '_chassis_matrix', None) or target.matrix
+                delta = self._vector(landing_pose) - matrix(root).translation
+                target.matrix = matrix(target.matrix)
+                target.matrix.translation = target.matrix.translation + delta
+                if getattr(target, '_chassis_matrix', None) is not None:
+                    target._chassis_matrix = matrix(target._chassis_matrix)
+                    target._chassis_matrix.translation = target._chassis_matrix.translation + delta
+                target.position = self._vector(landing_pose)
+            contacts = environment_modules.collect_contacts(target, witnesses, normal, impact_speed, self._runtime.math)
+        self._pending_landing_impacts.append(dict(impact_speed=impact_speed, module_contacts=contacts) if contacts else impact_speed)
         return damage
 
     def _apply_world_contact_impact(self, entity, trace, speed, yaw):
@@ -23754,6 +23815,8 @@ class BattleRuntime(object):
         now = self._clock()
         if (impact > vehicle_physics.FALL_SAFE_SPEED and
                 now - getattr(self, '_last_world_impact_time', -1.0e30) >= 0.25):
+            self._landing_contact_witnesses = (tuple(trace['hit']),)
+            self._landing_contact_normal = trace.get('normal')
             if self._apply_fall_damage(entity, impact):
                 self._last_world_impact_time = now
                 sys.stdout.write(
@@ -23765,11 +23828,13 @@ class BattleRuntime(object):
         """Bind a queued landing to the next admitted local pose sample."""
         if not self._pending_landing_impacts or self._sender is None:
             return False
-        impact_speed = self._pending_landing_impacts[0]
+        observation = self._pending_landing_impacts[0]
+        impact_speed = observation.get('impact_speed') if isinstance(observation, dict) else observation
+        contacts = observation.get('module_contacts', []) if isinstance(observation, dict) else []
         sender = getattr(self._sender, 'send_current', None)
         publish = getattr(self.client, 'send_landing_observation', None)
         if (not callable(sender) or not callable(publish) or
-                not sender() or not publish(impact_speed)):
+                not sender() or not (publish(impact_speed, contacts) if contacts else publish(impact_speed))):
             return False
         del self._pending_landing_impacts[0]
         return True
@@ -23787,6 +23852,11 @@ class BattleRuntime(object):
         if not normal_impact:
             impact_speed = math.sqrt(
                 impact_speed * impact_speed + lateral_speed * lateral_speed)
+        if (impact_speed > vehicle_physics.FALL_SAFE_SPEED and not normal_impact and
+                self.client is not None and getattr(self, '_landing_contact_pose', None) is not None):
+            self._landing_contact_witnesses = self._impact_ground_witnesses(
+                self._landing_contact_pose, self._local_yaw, entity.typeDescriptor)
+            self._landing_contact_normal = (0.,1.,0.)
         return self._apply_fall_damage(entity, impact_speed)
 
     def _update_vertical_motion_legacy(self, entity, position, yaw, dt):
@@ -23854,6 +23924,7 @@ class BattleRuntime(object):
                              self._local_vertical_speed, dt))):
                     if (self._local_airborne and
                             self._local_vertical_speed < 0.0):
+                        self._landing_contact_pose = (position[0],land_y,position[2])
                         self._apply_landing_impact(
                             entity, abs(self._local_vertical_speed))
                     if position[1] < ground:
@@ -23893,6 +23964,7 @@ class BattleRuntime(object):
                         next_y += self._local_vertical_speed * sub_dt
                         if next_y <= land_y:
                             next_y = land_y
+                            self._landing_contact_pose = (position[0],land_y,position[2])
                             self._apply_landing_impact(
                                 entity, abs(self._local_vertical_speed))
                             self._local_vertical_speed = 0.0
@@ -24170,6 +24242,11 @@ class BattleRuntime(object):
                           if isinstance(current_plane, dict) else None)
                 impact_speed = vehicle_physics.landing_impact_speed(
                     velocity, normal)
+            from gui.mods.offline_lan_0922 import environment_modules
+            self._landing_contact_pose = tuple(position)
+            self._landing_contact_witnesses = environment_modules.ground_witnesses(
+                params, ground, pseudo_ground, position, yaw, self._local_pitch, self._local_roll)
+            self._landing_contact_normal = (current_plane or {}).get('normal', (0., 1., 0.))
             self._apply_landing_impact(
                 entity, impact_speed, normal_impact=True)
         elif not before_airborne and self._local_airborne:

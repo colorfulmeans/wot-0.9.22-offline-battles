@@ -1030,6 +1030,7 @@ class _BotCriticalVehicle(object):
             devices[str(record['name'])] = max(
                 0.0, float(record.get('hp', 0.0)))
         self.id = int(state['id'])
+        self.actor_kind = 'bot'
         self.health = max(0, int(_number(state.get('health'))))
         self.maxHealth = max(1, int(_number(
             state.get('max_health'), self.health or 1)))
@@ -2012,7 +2013,9 @@ class BotRuntime(object):
                  incoming_lane_probe=None, combat_diagnostics=None,
                  turret_motion_probe=None, turret_hulls_provider=None,
                  artillery_status_probe=None, wreck_rotation_probe=None,
-                 wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None):
+                 wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
+                 impact_contacts_resolver=None):
+        self.impact_contacts_resolver = impact_contacts_resolver
         self.local_player_id = local_player_id
         self.artillery_status_probe = artillery_status_probe
         self._wreck_rotation_probe = wreck_rotation_probe
@@ -7361,11 +7364,23 @@ class BotRuntime(object):
 
     def _apply_bot_fall_damage(self, state, impact_speed):
         """Apply the shared landing law to one hidden-worker Bot."""
+        witnesses = state.pop('_landing_contact_witnesses', ())
+        normal = state.pop('_landing_contact_normal', (0., 1., 0.))
+        ground_observed = state.pop('_landing_ground_observed', False)
         maximum = max(1, int(
             state.get('max_health', state.get('health', 1))))
         damage = vehicle_physics.fall_damage(maximum, impact_speed)
         if damage <= 0:
             return 0
+        if (witnesses or ground_observed) and callable(self.impact_contacts_resolver):
+            from gui.mods.offline_lan_0922 import environment_modules
+            contacts = self.impact_contacts_resolver(state, witnesses, normal, impact_speed)
+            shadow = _BotCriticalVehicle(state, self._descriptors.get(state['id'], {}),
+                None, _number(state.get('combat_fire_timer')))
+            terminal_damage, payload = environment_modules.apply_impact(shadow, impact_speed, contacts)
+            damage = max(damage, terminal_damage)
+            if payload is not None:
+                state['critical'] = _canonical_critical(payload)
         health = max(0, int(state.get('health', maximum)) - damage)
         state['health'] = health
         state['display_health'] = health
@@ -7397,7 +7412,10 @@ class BotRuntime(object):
             return 0
         pending = self._turret_pending_landing_impacts
         if pending is not None:
-            pending.append((impact_speed, normal_impact))
+            witnesses = state.pop('_landing_contact_witnesses', ())
+            normal = state.pop('_landing_contact_normal', (0., 1., 0.))
+            ground_observed = state.pop('_landing_ground_observed', False)
+            pending.append((impact_speed, normal_impact, witnesses, normal, ground_observed))
             return 0
         lateral_x = state.get('air_lateral_x', 0.0)
         lateral_z = state.get('air_lateral_z', 0.0)
@@ -7428,6 +7446,8 @@ class BotRuntime(object):
         if (impact <= vehicle_physics.FALL_SAFE_SPEED or
                 now - state.get('_last_world_impact_time', -1.0e30) < 0.25):
             return 0
+        state['_landing_contact_witnesses'] = (tuple(trace['hit']),)
+        state['_landing_contact_normal'] = trace.get('normal')
         damage = self._apply_bot_fall_damage(state, impact)
         if damage:
             state['_last_world_impact_time'] = now
@@ -7769,6 +7789,11 @@ class BotRuntime(object):
                           if isinstance(current_plane, dict) else None)
                 impact_speed = vehicle_physics.landing_impact_speed(
                     velocity, normal)
+            from gui.mods.offline_lan_0922 import environment_modules
+            state['_landing_contact_witnesses'] = environment_modules.ground_witnesses(
+                params, ground, pseudo_ground, (state['x'], state['y'], state['z']),
+                _number(state.get('yaw')), _number(state.get('pitch')), _number(state.get('roll')))
+            state['_landing_contact_normal'] = (current_plane or {}).get('normal', (0., 1., 0.))
             self._apply_bot_landing_impact(
                 state, impact_speed, normal_impact=True)
         elif not before_airborne and state['airborne']:
@@ -7834,7 +7859,10 @@ class BotRuntime(object):
                 int(state['id']), before['yaw'] if attempted_yaw is None
                 else attempted_yaw)
             return True
-        for impact_speed, normal_impact in pending:
+        for impact_speed, normal_impact, witnesses, normal, ground_observed in pending:
+            state['_landing_contact_witnesses'] = witnesses
+            state['_landing_contact_normal'] = normal
+            state['_landing_ground_observed'] = ground_observed
             self._apply_bot_landing_impact(state, impact_speed, normal_impact)
         return blocked
 
@@ -8031,6 +8059,7 @@ class BotRuntime(object):
                     if not state.get('airborne', False) else 0.0)
                 state['airborne'] = False
                 if impact_speed < 0.0:
+                    state['_landing_ground_observed'] = True
                     self._apply_bot_landing_impact(state, impact_speed)
             else:
                 # Retain only the physical tangent velocity on the support.
@@ -8050,6 +8079,7 @@ class BotRuntime(object):
                         state['y'] = land_y
                         state['vertical_speed'] = 0.0
                         state['airborne'] = False
+                        state['_landing_ground_observed'] = True
                         self._apply_bot_landing_impact(
                             state, impact_speed)
                         break

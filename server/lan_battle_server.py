@@ -457,7 +457,7 @@ LUCKY_DEVIL_RADIUS = ACHIEVEMENT_CONDITIONS["luckyDevil"]["radius"]
 ROCK_SOLID_MAX_SPEED = ACHIEVEMENT_CONDITIONS["monolith"]["maxSpeed_ms"]
 CRITICAL_STATES = frozenset(("normal", "critical", "destroyed"))
 CRITICAL_CAUSES = frozenset((
-    "shot", "explosion", "repair", "fire", "drowning", "ramming"))
+    "shot", "explosion", "repair", "fire", "drowning", "ramming", "world_collision"))
 TRACK_DEVICE_NAMES = frozenset(("leftTrackHealth", "rightTrackHealth"))
 OUTFIT_SEASONS = frozenset((1, 2, 4))
 MAX_OUTFIT_BYTES = 64 * 1024
@@ -7319,8 +7319,10 @@ class BattleState:
                 if (previous is not None and previous.get("alive") and
                         not current.get("alive") and
                         previous_fire_active and
-                        current_health == max(
-                            0, previous_health - fire_tick_damage) and
+                        (current_health == max(
+                            0, previous_health - fire_tick_damage) or
+                         (int(raw.get("death_reason", 0)) == 1 and
+                          bool((current.get("critical") or {}).get("ammo_rack_death")))) and
                         current.get("fire_attacker_kind") in (
                             "player", "bot") and
                         int(current.get("fire_attacker_id", 0)) > 0):
@@ -7675,7 +7677,7 @@ class BattleState:
         return deaths
 
     def _commit_player_environment_damage(
-            self, player, damage, reason, display_health=None):
+            self, player, damage, reason, display_health=None, critical=None):
         """Apply one server-decided fall or overturn HP delta atomically."""
         if player is None or not player.alive or player.health <= 0:
             return False
@@ -7684,6 +7686,7 @@ class BattleState:
             return False
         reason = int(reason)
         critical_before = player.critical
+        critical_commit = self._commit_external_player_critical(player, critical) if critical else None
         health = max(0, int(player.health) - damage)
         dead = health <= 0
         player.health = health
@@ -7714,6 +7717,10 @@ class BattleState:
             "death_reason": reason if dead else 0,
             "source": "environment",
         })
+        if critical is not None:
+            self.pending_events[-1]['critical'] = critical
+            self.pending_events[-1].update(critical_commit or {})
+            self._record_critical_damage(None, ('player', player.player_id), critical_before, player.critical)
         return True
 
     def _player_overturn_danger(self, player_id):
@@ -7796,7 +7803,7 @@ class BattleState:
                     PLAYER_ENVIRONMENT_CAPABILITY not in
                     player.capabilities or
                     not isinstance(message, dict) or
-                    set(message) != {
+                    set(message) - {'module_contacts'} != {
                         "type", "round_id", "authority_epoch",
                         "observation_seq", "input_seq", "impact_speed"} or
                     message.get("type") != "landing_observation" or
@@ -7819,11 +7826,17 @@ class BattleState:
                     PLAYER_LANDING_MAX_IMPACT_SPEED):
                 return False
             impact_speed = round(float(raw_impact_speed), 6)
+            from gui.mods.offline_lan_0922 import environment_modules
+            try:
+                module_contacts = environment_modules.normalize_contacts(message.get('module_contacts', []))
+            except (ValueError, TypeError):
+                return False
             normalized = {
                 "authority_epoch": authority_epoch,
                 "observation_seq": observation_seq,
                 "input_seq": input_seq,
                 "impact_speed": impact_speed,
+                "module_contacts": module_contacts,
             }
             fingerprint = _message_fingerprint(normalized)
             previous = player.landing_observation_fingerprints.get(
@@ -7880,8 +7893,11 @@ class BattleState:
                 return False
             damage = vehicle_physics.fall_damage(
                 int(player.max_health), impact_speed)
+            terminal, module_payload = player_critical_mechanics.advance_impact(
+                player, impact_speed, module_contacts, float(self.tick)/TICK_HZ)
             self._commit_player_environment_damage(
-                player, damage, 3, display_health=0)
+                player, max(damage, terminal), 3, display_health=0,
+                critical=_critical_payload(module_payload) if module_payload else None)
             player.landing_observation_seq = observation_seq
             player.landing_observation_input_seq = input_seq
             player.landing_observation_fingerprints[

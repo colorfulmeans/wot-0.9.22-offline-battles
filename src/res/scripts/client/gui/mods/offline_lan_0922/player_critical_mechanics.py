@@ -134,6 +134,8 @@ def descriptor_from_profile(profile):
     descriptor.turret = _Projection(
         turretRotatorHealth=values.get('turretRotatorHealth'),
         surveyingDeviceHealth=values.get('surveyingDeviceHealth'))
+    descriptor.type = _Projection(crewRoles=[(str(role).rstrip('0123456789'),)
+        for role in profile.get('crew_roster', ())])
     return descriptor
 
 
@@ -147,6 +149,7 @@ class _CriticalTarget(object):
 
     def __init__(self, player, descriptor, now):
         self.id = int(player.player_id)
+        self.actor_kind = 'player'
         self.health = int(player.health)
         self.maxHealth = int(player.max_health)
         self.typeDescriptor = descriptor
@@ -310,3 +313,13 @@ def advance_fire(player, dt, now):
         'fire_timer': max(0.0, float(target._fire_timer)) if burning else 0.0,
         'burning': burning,
     }
+
+
+def advance_impact(player, impact_speed, contacts, now):
+    """Server applies losses only to donated contacts in installed HP pools."""
+    from gui.mods.offline_lan_0922 import environment_modules
+    descriptor = _descriptor(player)
+    if descriptor is None or not player.alive:
+        return 0, None
+    target = _CriticalTarget(player, descriptor, now)
+    return environment_modules.apply_impact(target, impact_speed, contacts)

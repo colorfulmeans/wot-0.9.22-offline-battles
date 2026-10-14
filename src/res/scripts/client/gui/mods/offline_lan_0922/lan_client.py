@@ -2468,6 +2468,8 @@ class LANClient(object):
                 'input_seq': int(pending['input_seq']),
                 'impact_speed': float(pending['impact_speed']),
             }
+            if pending.get('module_contacts'):
+                wire['module_contacts'] = list(pending['module_contacts'])
             pending['wire'] = wire
         sent = bool(self._send(dict(wire)))
         pending['sent'] = sent
@@ -2476,7 +2478,7 @@ class LANClient(object):
             pending.pop('refresh_input_on_retry', None)
         return sent
 
-    def send_landing_observation(self, impact_speed):
+    def send_landing_observation(self, impact_speed, module_contacts=None):
         """Publish one physical landing observation, never a damage verdict."""
         if (isinstance(impact_speed, bool) or
                 not isinstance(impact_speed, integer_types + (float,))):
@@ -2490,6 +2492,11 @@ class LANClient(object):
                 PLAYER_ENVIRONMENT_CAPABILITY not in self.capabilities or
                 PLAYER_ENVIRONMENT_CAPABILITY not in
                 self.server_capabilities):
+            return False
+        from gui.mods.offline_lan_0922 import environment_modules
+        try:
+            module_contacts = environment_modules.normalize_contacts(module_contacts or [])
+        except (TypeError, ValueError):
             return False
         if self._landing_observation_round != self.round_id:
             self._landing_observation_round = self.round_id
@@ -2513,6 +2520,7 @@ class LANClient(object):
             self._landing_observation_queue.append({
                 'input_seq': int(self._input_seq),
                 'impact_speed': round(impact_speed, 6),
+                'module_contacts': module_contacts,
             })
             if (not pending.get('sent', False) and
                     pending.get('retry_on_input', False)):
@@ -2525,6 +2533,7 @@ class LANClient(object):
             'observation_seq': self._landing_observation_seq + 1,
             'input_seq': int(self._input_seq),
             'impact_speed': round(impact_speed, 6),
+                'module_contacts': module_contacts,
             'sent': False,
             'reported': False,
         }
@@ -2542,6 +2551,7 @@ class LANClient(object):
             'observation_seq': self._landing_observation_seq + 1,
             'input_seq': int(queued['input_seq']),
             'impact_speed': float(queued['impact_speed']),
+            'module_contacts': list(queued.get('module_contacts', ())),
             'sent': False,
             'reported': True,
         }

@@ -1824,11 +1824,22 @@ def tick_fire(vehicle, dt, now=None, module_test_mode=False):
     completed_ticks = int(math.floor(timer + 1e-9))
     if completed_ticks > 0:
         timer = max(0.0, timer - float(completed_ticks))
-        if not module_test_mode:
-            damage_per_tick = max(1, int(
-                float(getattr(vehicle, 'maxHealth', 0.0) or 0.0) *
-                _device_damage.FIRE_DAMAGE_FRACTION_PER_SEC))
-            damage = damage_per_tick * completed_ticks
+        damage_per_tick = max(1, int(
+            float(getattr(vehicle, 'maxHealth', 0.0) or 0.0) *
+            _device_damage.FIRE_DAMAGE_FRACTION_PER_SEC))
+        from gui.mods.offline_lan_0922 import environment_modules
+        for unused_tick in range(completed_ticks):
+            if not module_test_mode:
+                damage += damage_per_tick
+                if damage >= int(vehicle.health):
+                    break
+            module_terminal, unused_payload = environment_modules.apply_losses(vehicle,
+                [(name, environment_modules.FIRE_MODULE_HP_PER_SECOND)
+                 for name in sorted(environment_modules.FIRE_DEVICES)], 'fire',
+                allow_terminal=not module_test_mode)
+            if module_terminal and not module_test_mode:
+                damage = max(damage, module_terminal)
+                break
     vehicle._fire_timer = timer
     if burnt_out:
         # The interval may complete the final burn tick before the fire-out
@@ -1839,7 +1850,7 @@ def tick_fire(vehicle, dt, now=None, module_test_mode=False):
         _restore_fuel_regen_cap(vehicle)
     after = _state(vehicle)
     return damage, _payload(
-        before, after, _device_td(vehicle), 'repair')
+        before, after, _device_td(vehicle), 'fire')
 
 
 def apply_drowning(vehicle):
