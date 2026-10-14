@@ -269,14 +269,15 @@ def advance_critical(player, dt, now):
         if name not in destroyed:
             continue
         cap = device_damage.device_regen_hp(descriptor, name)
-        if cap is None or devices[name] >= cap:
+        if cap is None:
             continue
         if (name in device_damage.NO_REPAIR_PROGRESS_DEVICES and
                 bool(getattr(target, 'is_on_fire', False))):
             continue
-        devices[name] = device_damage.repair_step_hp(
-            devices[name], name, descriptor, float(dt),
-            repair_factor=repair_factor)
+        if devices[name] < cap:
+            devices[name] = device_damage.repair_step_hp(
+                devices[name], name, descriptor, float(dt),
+                repair_factor=repair_factor)
         if name in destroyed and devices[name] >= cap:
             destroyed.discard(name)
             critical.add(name)

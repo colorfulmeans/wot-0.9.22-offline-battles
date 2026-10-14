@@ -1698,14 +1698,15 @@ def tick_repair(vehicle, dt, repair_skill=100.0, repair_factor=None):
         if name not in destroyed:
             continue
         cap = _device_damage.device_regen_hp(descriptor, name)
-        if cap is None or devices[name] >= cap:
+        if cap is None:
             continue
         if (name in _device_damage.NO_REPAIR_PROGRESS_DEVICES and
                 bool(getattr(vehicle, 'is_on_fire', False))):
             continue
-        devices[name] = _device_damage.repair_step_hp(
-            devices[name], name, descriptor, dt, repair_skill,
-            repair_factor)
+        if devices[name] < cap:
+            devices[name] = _device_damage.repair_step_hp(
+                devices[name], name, descriptor, dt, repair_skill,
+                repair_factor)
         was_destroyed = name in destroyed
         if was_destroyed and devices[name] >= cap:
             destroyed.discard(name)

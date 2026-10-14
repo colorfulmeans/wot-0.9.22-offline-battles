@@ -12137,7 +12137,14 @@ class BattleRuntime(object):
                 gun_edge = None
                 if record.get('local') and self._gun_state is not None:
                     gun_edge = self._advance_local_gun_edge(self._gun_state)
-                events = critical_damage.apply_payload(entity, critical)
+                presentation = dict(critical, devices=canonical['devices'],
+                                    destroyed=canonical['destroyed'])
+                if (record.get('local') and self._local_critical_owned and
+                        int(record.get('critical_base_revision', -1)) ==
+                        self._local_critical_base_revision):
+                    presentation['events'] = [item for item in critical.get('events', ())
+                        if item.get('name') not in ('leftTrackHealth', 'rightTrackHealth')]
+                events = critical_damage.apply_payload(entity, presentation)
                 if gun_edge is not None:
                     # Apply loader/ammo-rack factors at their canonical event
                     # edge instead of retroactively over the callback gap.
@@ -12251,7 +12258,17 @@ class BattleRuntime(object):
                     self._local_critical_owned = False
             if (self._local_critical_owned and
                     base_revision == self._local_critical_base_revision):
-                return False
+                # The owning client advances only tracks. A track CAS barrier
+                # must not hide server-owned gun/engine repair or fire/crew.
+                if isinstance(canonical, dict):
+                    names = frozenset(('leftTrackHealth', 'rightTrackHealth'))
+                    local = record.get('critical_state') or {}
+                    canonical['devices'] = [dict(row) for row in canonical.get('devices', ())
+                        if row.get('name') not in names] + [dict(row)
+                        for row in local.get('devices', ()) if row.get('name') in names]
+                    canonical['destroyed'] = sorted(set(name
+                        for name in canonical.get('destroyed', ()) if name not in names) |
+                        set(name for name in local.get('destroyed', ()) if name in names))
         return revision > previous_revision
 
     def _apply_critical_state(self, record, payload, authority=None):

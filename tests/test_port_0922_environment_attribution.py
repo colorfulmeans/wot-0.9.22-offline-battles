@@ -107,6 +107,50 @@ class EnvironmentAttributionTests(unittest.TestCase):
 
 
 class EnvironmentPresentationTests(unittest.TestCase):
+    def test_local_track_owner_does_not_hide_server_gun_repair(self):
+        from test_port_0922_battle_runtime import _runtime, BattleRuntime, _Vehicle, _Descriptor, _Vector
+        from gui.mods.offline_lan_0922 import critical_damage
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        entity = _Vehicle(10, _Descriptor(), _Vector(), (0, 0, 0), {'health': 500})
+        runtime.bigworld.entities[10] = entity
+        initial = dict(devices=[dict(name='gunHealth', hp=0., max_hp=210., state='destroyed'),
+            dict(name='leftTrackHealth', hp=20., max_hp=170., state='destroyed')],
+            destroyed=['gunHealth','leftTrackHealth'], crew_ko=[], fire=False)
+        critical_damage.apply_payload(entity, initial)
+        record = dict(engine_id=10, kind='player', local=True,
+            critical_state=battle._critical_state(initial), critical_revision=1,
+            state=dict(health=500, critical=initial))
+        battle._local_critical_owned = True
+        battle._local_critical_base_revision = 7
+        repaired = dict(initial, devices=[dict(name='gunHealth', hp=105., max_hp=210., state='critical'),
+            dict(name='leftTrackHealth', hp=0., max_hp=170., state='destroyed')],
+            destroyed=['leftTrackHealth'])
+        runtime.constants.DAMAGE_INFO_INDICES['DEVICE_REPAIRED_TO_CRITICAL'] = 37
+        with mock.patch.object(battle, '_critical_extra_index', return_value=7):
+            self.assertTrue(battle._apply_critical_state(record, repaired,
+                dict(critical_revision=2, critical_base_revision=7, critical_ack_seq=0)))
+        self.assertEqual(105., entity.devices_hp['gunHealth'])
+        self.assertNotIn('gunHealth', entity._destroyed_devices)
+        self.assertEqual(20., entity.devices_hp['leftTrackHealth'])
+        self.assertIn('leftTrackHealth', entity._destroyed_devices)
+        self.assertTrue(battle._local_critical_owned)
+        self.assertIn((10,37,7,0,0), battle._avatar.damage_info)
+
+    def test_destroyed_nontrack_device_at_rounded_cap_finishes_repair(self):
+        from test_port_0922_critical_damage import _repair_player, _RepairDescriptor
+        from gui.mods.offline_lan_0922 import player_critical_mechanics, critical_damage
+        player = _repair_player(130., 'destroyed', ('engineHealth',))
+        payload = player_critical_mechanics.advance_critical(player, 1./30., 1.)
+        self.assertEqual([], payload['destroyed'])
+        self.assertEqual('critical', payload['devices'][0]['state'])
+        bot = types.SimpleNamespace(typeDescriptor=_RepairDescriptor(), health=500,
+            devices_hp={'engineHealth':130.}, _destroyed_devices={'engineHealth'},
+            _critical_devices=set(), _crew_ko=set(), is_on_fire=False)
+        payload = critical_damage.tick_repair(bot, 1./30., repair_skill=0.)
+        self.assertEqual([], payload['destroyed'])
+
     def test_fuel_recovery_uses_repair_notice_and_not_a_new_damage_voice(self):
         from test_port_0922_battle_runtime import _runtime, BattleRuntime, _Vehicle, _Descriptor, _Vector
         runtime = _runtime()

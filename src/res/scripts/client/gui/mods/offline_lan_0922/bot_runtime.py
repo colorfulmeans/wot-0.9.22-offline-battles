@@ -239,6 +239,8 @@ _BOT_SUSPENSION_STATE_FIELDS = (
     '_suspension_ground_plane', '_suspension_support_vertical_speed',
     '_suspension_support_gradient', 'slide_speed', 'air_lateral_x', 'air_lateral_z',
     'pose_sample', '_slope_pose_target', '_basic_slope_basis_yaw',
+    '_basic_fall_origin_y', '_basic_continuous_support',
+    '_legacy_straddle_reference_y',
 )
 
 # Route groups lease these lateral lanes without moving an existing member.
@@ -7605,11 +7607,12 @@ class BotRuntime(object):
         """Confirm a suspicious raised support through bounded interior rays.
 
         Flat grounding still spends only its centre ray. This helper also
-        distinguishes continuous downhill support from a real ledge drop.  At
-        most four interior samples split a legal 0.2-second hull sweep into
-        segments no longer than 1.5 metres; every segment must remain inside
-        the same 0.55 grade accepted by the native direction probe.  A longer
-        sweep fails closed instead of making this exceptional check unbounded.
+        distinguishes continuous downhill support from a real ledge drop.
+        Interior samples split the realised sweep into segments no longer
+        than 1.5 metres; every segment must remain inside the same 0.55 grade
+        accepted by the native direction probe. External momentum can move a
+        light hull farther than powered driving in one worker slice. Keep
+        those sweeps verifiable too, within a bounded 64-segment budget.
         """
         if (centre is None or
                 not isinstance(tick_pose, (list, tuple)) or
@@ -7626,7 +7629,7 @@ class BotRuntime(object):
                 abs(rise) > distance * 0.55 + 0.02):
             return False
         segment_count = max(2, int(math.ceil(distance / 1.5)))
-        if segment_count > 5:
+        if segment_count > 64:
             return False
         maximum_segment_rise = (
             distance / float(segment_count) * 0.55 + 0.02)
@@ -7986,7 +7989,8 @@ class BotRuntime(object):
                 self._descriptors.get(int(state['id']))):
             self._restore_bot_suspension_state(state, snapshot)
             state['x'], state['y'], state['z'] = (
-                before['x'], before['y'], before['z'])
+                tick_pose if tick_pose is not None else
+                (before['x'], before['y'], before['z']))
             state['yaw'] = before['yaw']
             state['speed'] = 0.0
             state['movement_dir'] = 0
@@ -7997,6 +8001,16 @@ class BotRuntime(object):
             self._invalidate_realised_motion(
                 int(state['id']), before['yaw'] if attempted_yaw is None
                 else attempted_yaw)
+            moment = float(getattr(self, '_contact_now', None) or 0.)
+            if moment >= state.get('_vertical_rejection_log_at', -1.e30):
+                from .native_input_diagnostics import write_json_record
+                write_json_record('BOT VERTICAL SUPPORT', dict(
+                    actor=int(state['id']), round=self.round_id,
+                    phase='pose_rejected', attempted_position=(
+                        before['x'], before['y'], before['z']),
+                    restored_position=_position(state), tick_pose=tick_pose,
+                    previous_interval_y=state.get('_basic_fall_origin_y')))
+                state['_vertical_rejection_log_at'] = moment + 1.
             return True
         for impact_speed, normal_impact, witnesses, normal, ground_observed in pending:
             state['_landing_contact_witnesses'] = witnesses
@@ -8261,6 +8275,8 @@ class BotRuntime(object):
             from .native_input_diagnostics import write_json_record
             write_json_record('BOT VERTICAL SUPPORT', dict(actor=int(state['id']), round=self.round_id,
                 continuity_recovered=bool(state.get('_basic_continuous_support')),
+                tick_pose=tick_pose,
+                horizontal_travel=self._tick_horizontal_travel(state, tick_pose),
                 queries=list(getattr(self,'_basic_support_queries',()) or ()),
                 x=state['x'], z=state['z'], y_before=fall_origin_y, y_after=state['y'],
                 previous_interval_y=previous_fall_origin, centre=centre, highest=highest,

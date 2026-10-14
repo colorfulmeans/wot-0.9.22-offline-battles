@@ -119,6 +119,60 @@ class BotSupportLayerTests(unittest.TestCase):
         self.assertTrue(state['_basic_continuous_support'])
         land.assert_not_called()
 
+    def test_long_external_sweep_rejoins_continuous_ground(self):
+        # The report's NC31 travelled farther than the former 7.5 m proof
+        # budget. Missing that proof must not discard a real hillside floor.
+        self.collision_planes(lambda x, z: self.FLOOR + x * .13)
+        state = self.state(self.FLOOR + .05)
+        state.update(x=12., z=0., airborne=True, vertical_speed=-7.,
+                     speed=60., _basic_fall_origin_y=self.FLOOR + .05)
+        land = mock.Mock(return_value=0)
+        with mock.patch.object(self.bots, '_apply_bot_landing_impact', land):
+            self.assertFalse(self.bots._integrate_vertical_motion(
+                state, .2, tick_pose=(0., self.FLOOR, 0.)))
+        self.assertAlmostEqual(self.FLOOR + 12. * .13, state['y'])
+        self.assertFalse(state['airborne'])
+        self.assertTrue(state['_basic_continuous_support'])
+        land.assert_not_called()
+
+    def test_long_external_sweep_cannot_prove_an_abrupt_raised_deck(self):
+        self.collision_planes(lambda x, z: self.FLOOR if x < 6. else self.FLOOR + 1.56)
+        state = self.state(self.FLOOR + .05)
+        state.update(x=12., z=0., airborne=True, vertical_speed=-7.,
+                     speed=60., _basic_fall_origin_y=self.FLOOR + .05)
+        self.bots._integrate_vertical_motion(
+            state, .2, tick_pose=(0., self.FLOOR, 0.))
+        self.assertFalse(state['_basic_continuous_support'])
+        self.assertTrue(state['airborne'])
+        self.assertLess(state['y'], self.FLOOR)
+
+    def test_rejected_uphill_settle_restores_pre_horizontal_pose(self):
+        self.collision_planes(lambda x, z: self.FLOOR + x * .25)
+        state = self.state()
+        state.update(x=1., z=0.)
+        old = (0., self.FLOOR, 0.)
+        with mock.patch.object(self.bots, '_turret_motion_probe', return_value=False):
+            self.assertTrue(self.bots._update_vertical_motion(state, .1, tick_pose=old))
+        self.assertEqual(old, (state['x'], state['y'], state['z']))
+        self.assertFalse(state['airborne'])
+        self.assertNotIn('_basic_fall_origin_y', state)
+
+    def test_rejected_landing_restores_crossed_floor_interval(self):
+        self.collision_planes(lambda x, z: self.FLOOR, self.DECK)
+        state = self.state(self.FLOOR - .15)
+        state.update(airborne=True, vertical_speed=-2., speed=0.,
+                     _basic_fall_origin_y=self.FLOOR + .2)
+        old = (state['x'], state['y'], state['z'])
+        with mock.patch.object(self.bots, '_turret_motion_probe', return_value=False):
+            self.assertTrue(self.bots._update_vertical_motion(state, .1, tick_pose=old))
+        self.assertEqual(self.FLOOR + .2, state['_basic_fall_origin_y'])
+        self.assertTrue(state['airborne'])
+        with mock.patch.object(self.bots, '_turret_motion_probe', return_value=True), \
+                mock.patch.object(self.bots, '_apply_bot_landing_impact'):
+            self.assertFalse(self.bots._update_vertical_motion(state, .1, tick_pose=old))
+        self.assertAlmostEqual(self.FLOOR, state['y'])
+        self.assertFalse(state['airborne'])
+
     def test_continuous_downhill_stays_supported_without_repeated_landings(self):
         self.collision_planes(lambda x,z:self.FLOOR-x*.25)
         state=self.state();state.update(x=0.,z=0.,speed=5.,yaw=math.pi*.5)
