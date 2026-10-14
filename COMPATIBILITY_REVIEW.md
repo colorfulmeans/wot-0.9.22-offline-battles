@@ -8392,8 +8392,11 @@ first missed; raw layered hit/miss diagnostics are included for that boundary.
 
 A captured near-upward world normal was projected to X/Z before impact damage,
 turning ordinary floor contact into a wall hit. Both player and Bot damage now
-use the full observed normal; movement constraints retain their horizontal
-normal. Regressions cover the captured slope normal and real wall/roof impacts.
+use the full observed normal with the horizontal sweep velocity. The vertical
+support owner separately settles gravity-driven impacts; an upper bridge
+lookahead must not spend falling speed. Movement constraints retain their
+horizontal normal. Regressions cover the captured slope normal, real walls,
+sideways airborne contacts and repeated bridge lookahead without gravity reset.
 Fall and ram module coefficients remain 30.
 
 Fragment BOT MOTION JSON instead of losing large records to engine line limits.

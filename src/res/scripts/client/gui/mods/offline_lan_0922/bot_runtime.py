@@ -7478,9 +7478,9 @@ class BotRuntime(object):
                 not isinstance(trace, dict) or 'hit' not in trace):
             return 0
         yaw = _number(state.get('yaw'))
-        velocity = (math.sin(yaw) * speed,
-                    state.get('vertical_speed', 0.0),
-                    math.cos(yaw) * speed)
+        # This witness comes from the horizontal hull sweep. Vertical support
+        # owns fall/roof impulses; a lookahead bridge hit must not spend gravity.
+        velocity = (math.sin(yaw) * speed, 0.0, math.cos(yaw) * speed)
         normal = trace.get('normal')
         impact = vehicle_physics.world_impact_speed(velocity, normal)
         if (impact <= vehicle_physics.FALL_SAFE_SPEED or

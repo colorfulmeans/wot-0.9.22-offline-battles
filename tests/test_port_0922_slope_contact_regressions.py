@@ -20,13 +20,21 @@ class SlopeImpactTests(unittest.TestCase):
         self.assertLess(battle._apply_world_contact_impact(object(),dict(hit=(0.,0.,0.),normal=normal),12.69718764873187,2.56),10.)
         battle._apply_fall_damage.assert_not_called()
 
-    def test_actual_wall_and_roof_impacts_keep_their_normal_closing_speed(self):
-        for yaw,vertical,normal,speed in ((0.,0.,(0.,0.,-1.),20.),(0.,20.,(0.,-1.,0.),0.)):
+    def test_horizontal_wall_impacts_keep_their_normal_closing_speed(self):
+        for yaw,vertical,normal,speed in ((0.,0.,(0.,0.,-1.),20.),):
             runtime=object.__new__(BotRuntime)
             runtime._apply_bot_fall_damage=mock.Mock(return_value=10)
             state=dict(id=5,yaw=yaw,vertical_speed=vertical,airborne=True,
                 _world_contact_trace=dict(hit=(0.,0.,0.),normal=normal))
             self.assertEqual(10,runtime._apply_world_contact_impact(state,speed,100.))
             runtime._apply_bot_fall_damage.assert_called_once_with(state,20.)
+
+    def test_horizontal_roof_query_does_not_spend_vertical_impulse(self):
+        runtime=object.__new__(BotRuntime)
+        runtime._apply_bot_fall_damage=mock.Mock(return_value=10)
+        state=dict(id=5,yaw=0.,vertical_speed=20.,airborne=True,
+            _world_contact_trace=dict(hit=(0.,0.,0.),normal=(0.,-1.,0.)))
+        self.assertEqual(0,runtime._apply_world_contact_impact(state,0.,100.))
+        runtime._apply_bot_fall_damage.assert_not_called()
 
 if __name__=='__main__':unittest.main()

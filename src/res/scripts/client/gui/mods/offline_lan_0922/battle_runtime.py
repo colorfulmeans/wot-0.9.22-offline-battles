@@ -23931,8 +23931,9 @@ class BattleRuntime(object):
         # airborne/falling impacts, including side and roof contacts.
         if not self._local_airborne:
             return 0.0
-        velocity = (math.sin(yaw) * speed, self._local_vertical_speed,
-                    math.cos(yaw) * speed)
+        # Only the horizontal sweep produced this witness. The vertical
+        # support solver separately owns gravity-driven landing impulses.
+        velocity = (math.sin(yaw) * speed, 0.0, math.cos(yaw) * speed)
         impact = vehicle_physics.world_impact_speed(
             velocity, trace.get('normal'))
         now = self._clock()
