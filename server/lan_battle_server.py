@@ -7682,7 +7682,7 @@ class BattleState:
         if player is None or not player.alive or player.health <= 0:
             return False
         damage = min(max(0, int(damage)), int(player.health))
-        if damage <= 0:
+        if damage <= 0 and not critical:
             return False
         reason = int(reason)
         critical_before = player.critical
@@ -12679,8 +12679,9 @@ class BattleState:
                         if attacker_kind in ("player", "bot") and
                         attacker_id > 0 else None)
             if attacker is None:
+                # A destroyed fuel tank can ignite from an environmental impact.
+                # Lack of an attacker changes attribution, never the fire clock.
                 self.last_shell_fire_sources.pop(victim, None)
-                continue
             result = player_critical_mechanics.advance_fire(
                 player, max(0.0, float(dt)), now)
             if not isinstance(result, dict):
@@ -12711,7 +12712,8 @@ class BattleState:
             self._record_critical_damage(
                 attacker, victim, critical_before, player.critical)
             event = {
-                "kind": ("hit" if attacker_kind == "player" else
+                "kind": ("health" if attacker is None else
+                         "hit" if attacker_kind == "player" else
                          "bot_human_hit"),
                 "target": player.player_id,
                 "damage": damage,

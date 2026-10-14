@@ -8333,3 +8333,23 @@ Add bounded BOT VERTICAL SUPPORT transition/fall records and the matching reader
 label, including previous/current interval heights, query ceiling, observed floor
 and vertical velocity. Windows playtesting must confirm the original map fall.
 The subsequent package includes the prior partial recovery/contact diagnostics.
+
+
+### Report 201006: environmental fuel destruction must ignite
+
+Windows260 report: at 20:09:27 the player's bridge fall reduced fuelTankHealth
+from 200 to 0 and displayed it destroyed, without ignition. Environmental loss
+processing omitted the projectile path's fuel-zero ignition consequence. Invoke
+the existing ignition owner only on an actual fuel HP loss to zero, preserving
+one atomic critical payload and not restarting an existing fire or igniting a
+scratch. The common path covers player and Bot impacts. ENV MODULE DAMAGE now
+includes fire-before/fire-after and ignition flags for evidence.
+
+Server fire ticking also skipped every burn with no attacker. Environmental
+self-ignition now advances the same HP/module/fire-duration law, with an unowned
+health event and no fabricated attacker or kill credit. A valid module-only impact
+must publish its critical change even if rounded vehicle HP damage is zero.
+Existing extinguish/expiry fuel-regen handling owns destroyed-to-yellow recovery;
+no additional time-repair rule or burn coefficient is invented. Regression covers
+recorded contact weights, player receipt replay, Bot landing, unowned fire damage,
+fuel restoration on fire-out and zero-body-HP impact publication.

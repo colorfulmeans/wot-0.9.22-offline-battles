@@ -61,6 +61,11 @@ def apply_losses(vehicle, losses, cause, allow_terminal=True):
         new = float(vehicle.devices_hp.get(name, old))
         if new < old:
             applied.append(dict(name=name, before=old, after=new, loss=old-new))
+            # Fuel destruction has the same consequence for a physical impact
+            # as a projectile. Publish ignition in this operation's payload.
+            if (name == 'fuelTankHealth' and new <= 0.0 and
+                    not getattr(vehicle, 'is_on_fire', False)):
+                cd._offh_ignite(vehicle, False, name + ' destroyed by ' + cause)
             if allow_terminal and name == 'ammoBayHealth' and new <= 0.0:
                 vehicle._ammo_rack_death = True
                 vehicle._is_killed = True
@@ -74,7 +79,8 @@ def apply_losses(vehicle, losses, cause, allow_terminal=True):
     if applied:
         print('[Offline LAN 0.9.22] ENV MODULE DAMAGE ' + json.dumps(dict(
             actor=getattr(vehicle, 'id', None), actor_kind=getattr(vehicle, 'actor_kind', 'unknown'), cause=cause, trial_rates=True, applied=applied,
-            terminal=terminal), sort_keys=True))
+            terminal=terminal, fire_before=before['fire'], fire_after=bool(getattr(vehicle,'is_on_fire',False)),
+            ignited=bool(not before['fire'] and getattr(vehicle,'is_on_fire',False))), sort_keys=True))
     return int(vehicle.health) if terminal else 0, payload
 
 

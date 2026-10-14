@@ -21,6 +21,74 @@ class EnvironmentalModulesTests(unittest.TestCase):
             _crew_ko=set(),is_on_fire=True,_fire_started=0.,_fire_timer=0.,
             _offline_proposal_only=True,_ammo_rack_death=False)
 
+    def test_recorded_fall_destroyed_fuel_ignites_and_fire_out_restores_pool(self):
+        v=self.target();v.is_on_fire=False
+        component=fixtures._Strict1513Component
+        v.typeDescriptor.fuelTank=component(maxHealth=200.,maxRegenHealth=100.)
+        with contextlib.redirect_stdout(io.StringIO()):
+            damage,payload=em.apply_impact(v,19.434962301916816,
+                [dict(name='fuelTankHealth',weight=.7358890755241722)])
+        self.assertEqual(0,damage)
+        self.assertEqual(0.,v.devices_hp['fuelTankHealth'])
+        self.assertTrue(v.is_on_fire)
+        self.assertTrue(payload['fire'])
+        with mock.patch.object(cd,'_offh_ignite') as ignite, contextlib.redirect_stdout(io.StringIO()):
+            em.apply_impact(v,20.,[dict(name='fuelTankHealth',weight=1.)])
+        ignite.assert_not_called()
+        cd._offh_extinguish(v,False,'test extinguisher')
+        self.assertFalse(v.is_on_fire)
+        self.assertEqual(100.,v.devices_hp['fuelTankHealth'])
+        self.assertNotIn('fuelTankHealth',v._destroyed_devices)
+        self.assertIn('fuelTankHealth',v._critical_devices)
+
+    def test_module_only_impact_still_publishes_ignition(self):
+        state=server_fixture._state();player=state.players[1]
+        player.effective_params['critical']=pcm.project_profile(fixtures._strict_1513_descriptor())
+        player.critical=dict(fire=False,devices=[dict(name='fuelTankHealth',hp=.001,state='critical')],
+            destroyed=[],crew_ko=[],ammo_rack_death=False)
+        self.assertTrue(server_fixture._update_player_input(state,1,up_cosine=1.))
+        hp=player.health
+        message=dict(type='landing_observation',round_id=1,authority_epoch=state.authority_epoch,
+            observation_seq=1,input_seq=player.input_seq,impact_speed=10.001,
+            module_contacts=[dict(name='fuelTankHealth',weight=1.)])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(state.submit_landing_observation(1,message))
+        self.assertEqual(hp,player.health)
+        self.assertTrue(player.critical['fire'])
+        self.assertIn('fuelTankHealth',player.critical['destroyed'])
+
+    def test_fuel_scratch_does_not_ignite_and_existing_fire_is_not_restarted(self):
+        for burning in (False,True):
+            v=self.target();v.is_on_fire=burning;v._fire_started=42.
+            with mock.patch.object(cd,'_offh_ignite') as ignite, contextlib.redirect_stdout(io.StringIO()):
+                em.apply_impact(v,11.,[dict(name='fuelTankHealth',weight=.1)])
+            ignite.assert_not_called()
+            self.assertEqual(burning,v.is_on_fire)
+            self.assertEqual(42.,v._fire_started)
+
+    def test_server_fuel_landing_commits_fire_once_and_fire_tick_loses_hp(self):
+        state=server_fixture._state();player=state.players[1]
+        player.effective_params['critical']=pcm.project_profile(fixtures._strict_1513_descriptor())
+        self.assertTrue(server_fixture._update_player_input(state,1,up_cosine=1.))
+        message=dict(type='landing_observation',round_id=1,authority_epoch=state.authority_epoch,
+            observation_seq=1,input_seq=player.input_seq,impact_speed=20.,
+            module_contacts=[dict(name='fuelTankHealth',weight=1.)])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(state.submit_landing_observation(1,message))
+            revision=player.critical_revision;hp=player.health
+            self.assertTrue(state.submit_landing_observation(1,message))
+            self.assertEqual(revision,player.critical_revision)
+            self.assertEqual(hp,player.health)
+            self.assertTrue(player.critical['fire'])
+            state._tick_player_fire(1.)
+        self.assertLess(player.health,hp)
+        event=state.pending_events[-1]
+        self.assertEqual('health',event['kind'])
+        self.assertEqual('fire',event['source'])
+        self.assertNotIn('attacker',event)
+        self.assertNotIn('attacker_bot',event)
+        self.assertTrue(any(e.get('critical',{}).get('fire') for e in state.pending_events))
+
     def test_fire_reduces_only_internal_module_pools_and_never_crew(self):
         v=self.target()
         with contextlib.redirect_stdout(io.StringIO()):
@@ -299,6 +367,21 @@ class EnvironmentalModulesTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):runtime._update_vertical_motion(state,.1)
             self.assertTrue(runtime.impact_contacts_resolver.called)
             self.assertTrue(any(r['name']=='leftTrackHealth' for r in state['critical']['devices']))
+        finally:fixture.tearDown()
+
+    def test_bot_landing_publishes_destroyed_fuel_and_ignition_together(self):
+        import test_port_0922_bot_runtime as harness
+        fixture=harness.BotRuntimeTests();fixture.setUp()
+        try:
+            runtime=fixture.runtime;runtime.battle_start(fixture.start)
+            state=runtime.states[11]
+            state.update(health=1000,max_health=1000,alive=True,_landing_ground_observed=True)
+            runtime._descriptors[11]=fixtures._strict_1513_descriptor()
+            runtime.impact_contacts_resolver=mock.Mock(return_value=[dict(name='fuelTankHealth',weight=1.)])
+            with contextlib.redirect_stdout(io.StringIO()):runtime._apply_bot_fall_damage(state,20.)
+            self.assertTrue(state['alive'])
+            self.assertTrue(state['critical']['fire'])
+            self.assertIn('fuelTankHealth',state['critical']['destroyed'])
         finally:fixture.tearDown()
 
     def test_rejected_turret_pose_discards_landing_contacts_before_damage(self):
