@@ -180,6 +180,30 @@ class ProjectileWireTests(unittest.TestCase):
             client._outbound_accepting = True
         return client
 
+    def test_worker_ram_wire_preserves_track_contacts_and_speed(self):
+        client = self.active_worker_client()
+        tracks = ['rightTrackHealth']
+        self.assertTrue(client.send_bot_ram(9, 'bot', 29, 1, 436, 441,
+            contact_positions=[0., 0., 1., 0.], track_contacts_bot=[],
+            track_contacts_target=tracks, track_impact_speed=12.))
+        tracks.clear()
+        frame = wire_copy(client._outbound_queue[-1][1])
+        self.assertEqual([], frame['track_contacts_bot'])
+        self.assertEqual(['rightTrackHealth'], frame['track_contacts_target'])
+        self.assertEqual(12., frame['track_impact_speed'])
+
+    def test_receipt_owned_player_ram_wire_preserves_contact_identity(self):
+        client = self.active_worker_client()
+        self.assertTrue(client.send_bot_ram(13, 'human', 1, 7, 43, 4,
+            ram_contact_player_id=1, ram_contact_seq=8,
+            track_contacts_bot=[], track_contacts_target=['rightTrackHealth'],
+            track_impact_speed=8.))
+        frame = wire_copy(client._outbound_queue[-1][1])
+        self.assertEqual(1, frame['ram_contact_player_id'])
+        self.assertEqual(8, frame['ram_contact_seq'])
+        self.assertEqual(['rightTrackHealth'], frame['track_contacts_target'])
+        self.assertEqual(8., frame['track_impact_speed'])
+
     @staticmethod
     def launch(client, shooter_kind='player', shooter_id=7,
                shot_seq=None, authority_epoch=None, fire_intent_seq=None,

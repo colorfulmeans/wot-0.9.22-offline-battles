@@ -26329,6 +26329,9 @@ class BattleRuntime(object):
             if 'contact_positions' in message:
                 contact_kwargs['contact_positions'] = message[
                     'contact_positions']
+            for key in ('track_contacts_bot', 'track_contacts_target', 'track_impact_speed'):
+                if key in message:
+                    contact_kwargs[key] = message[key]
             return self.client.send_bot_ram(
                 message.get('bot_id'), message.get('target_kind'),
                 message.get('target_id'), message.get('ram_seq'),

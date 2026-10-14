@@ -3489,7 +3489,8 @@ class LANClient(object):
     def send_bot_ram(self, bot_id, target_kind, target_id, ram_seq,
                      damage_to_bot, damage_to_target,
                      ram_contact_player_id=None, ram_contact_seq=None,
-                     contact_positions=None):
+                     contact_positions=None, track_contacts_bot=None,
+                     track_contacts_target=None, track_impact_speed=None):
         """Report one receipt-owned tank collision as authority."""
         if not self.is_bot_authority():
             return False
@@ -3509,6 +3510,11 @@ class LANClient(object):
             message['ram_contact_seq'] = int(ram_contact_seq)
         if contact_positions is not None:
             message['contact_positions'] = list(contact_positions)
+        if track_impact_speed is not None:
+            from gui.mods.offline_lan_0922 import ram_tracks
+            message['track_contacts_bot'] = ram_tracks.names(track_contacts_bot or ())
+            message['track_contacts_target'] = ram_tracks.names(track_contacts_target or ())
+            message['track_impact_speed'] = float(track_impact_speed)
         return self._send(message)
 
     def send_rules_state(self, bases):

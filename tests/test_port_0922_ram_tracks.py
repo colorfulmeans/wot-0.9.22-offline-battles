@@ -8,7 +8,7 @@ class RamTrackTests(unittest.TestCase):
                  'crew_ko':['driver'],'fire':False,'ammo_rack_death':False}
         result=ram_tracks.damage(current,profile,['leftTrackHealth','leftTrackHealth'],6.)
         rows={r['name']:r for r in result['devices']}
-        self.assertEqual(100.,rows['leftTrackHealth']['hp'])
+        self.assertEqual(80.,rows['leftTrackHealth']['hp'])
         self.assertEqual('critical',rows['leftTrackHealth']['state'])
         self.assertNotIn('rightTrackHealth',rows)
         self.assertEqual(120.,rows['engineHealth']['hp'])

@@ -9910,10 +9910,10 @@ class BattleState:
             _server_log(
                 'RAM_TRACE server_report sender=%d ram_seq=%d bot=%d '
                 'target=%s:%d damage_bot=%d damage_target=%d '
-                'contact_player=%s contact_seq=%s key=%s' % (
+                'contact_player=%s contact_seq=%s key=%s tracks_bot=%s tracks_target=%s track_speed=%.3f' % (
                     int(player_id), int(ram_seq), int(bot_id), target_kind,
                     int(target_id), int(damage_to_bot), int(damage_to_target),
-                    contact_player_id, contact_seq, key))
+                    contact_player_id, contact_seq, key, track_bot, track_target, impact_speed))
             if (bot is None or target is None or
                     (target_kind == "bot" and target_id == bot_id)):
                 return False

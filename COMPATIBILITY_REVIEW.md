@@ -8263,3 +8263,24 @@ A regression executes the real BattleRuntime startup callback against finite
 upper/lower planes: the prior source rewinds a body 0.7 m beneath the bridge;
 the repaired path preserves downward momentum, lands on the lower floor and
 emits one landing. This is source/adapter evidence, not native mesh acceptance.
+
+
+### Report 184752: impact coefficients and lost ram contact fields
+
+Both offline module-impact coefficients are now 30 HP per excess m/s, as
+requested (landing safe speed 10 m/s; ram safe speed 2 m/s). Body HP damage,
+contact geometry, distance attenuation and internal-only fire remain unchanged.
+Recorded player falls already reduced the 183 fuel tank to 105.82/200 and the
+WT left track to 161.29/300 at coefficient 25, just above the yellow threshold.
+At 30 those same witnesses yield 86.99/200 and 133.54/300. No compartment or
+crew is selected without contact geometry; there is no ammo-rack exemption.
+
+The ram resolver nominated contact tracks, but BattleRuntime and LANClient
+both omitted the optional track fields during report transmission. Preserve
+both actor-side track lists and the frozen closing speed through both boundaries.
+This applies to Bot/Bot and receipt-owned player/Bot reports; the player receipt
+still owns historical contact identity. Server RAM_TRACE now records received
+track sides and speed, beside operation identity, so an empty nomination can be
+distinguished from a low-speed or missing-profile no-op. Existing server replay
+and contact-identity tests remain the authority checks. Windows acceptance is
+still required for the actual native contact geometry and resulting HUD states.
