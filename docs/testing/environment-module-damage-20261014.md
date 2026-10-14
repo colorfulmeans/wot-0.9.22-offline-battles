@@ -24,7 +24,7 @@ Each module is damaged once per event using the nearest reached contact.
 
 Trial shock depth is clamp((impact_speed - 10) * 0.6, 0.25, 6.0) metres.
 The central contact-normal ray and four rays at 25 degrees spread inward.
-Module HP loss is max(0, impact_speed - 10) * 40 / (1 + 0.25 * contact_distance).
+Module HP loss is max(0, impact_speed - 10) * 25 / (1 + 0.25 * contact_distance).
 A reached crew member is injured when this trial shock amount reaches 100.
 There is no projectile saving throw, Deadeye bonus, ammo-rack immunity or
 forced global track destruction. Fuel/engine impact loss does not add a new
@@ -96,3 +96,21 @@ excess m/s. Reach, attenuation, contact nomination, deduplication, body HP and
 fire are unchanged. Recorded contact weights/pools exercise the yellow-state
 transition without forcing a state or adding an ammo exemption. Earlier
 bridge replay shock amounts above describe the previous coefficient.
+
+## Requested coefficient 30 trial (report 20261014-153046)
+
+At the user's request reduce the impact coefficient from 40 to 30. Contact
+reach, attenuation, module/crew nomination and terminal ownership remain
+unchanged. The two recorded heavy impacts compute approximately 215.81 and
+202.58 ammo HP loss against a full 203 HP pool; the first still detonates,
+and the second narrowly survives if the rack is full. This is calibration,
+not ammunition immunity. The 151604 replay now yields yellow left track and
+turret ring with hidden damage to the other reached devices. Fire is unchanged.
+
+## Requested coefficient 25 trial
+
+The user selected 25 for the next gameplay test. Contact fan, distance
+attenuation, crew threshold, authority and fire remain unchanged. The heavy
+153046 impacts would leave a full 203 HP ammunition rack at about 23.15 and
+34.19 HP; stronger impacts or pre-existing damage can still detonate it.
+The lower-speed 151604 contacts remain hidden damage at this coefficient.
