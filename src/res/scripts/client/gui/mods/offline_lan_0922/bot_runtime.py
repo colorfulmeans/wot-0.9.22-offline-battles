@@ -6854,6 +6854,7 @@ class BotRuntime(object):
         driver_trace['objective_progress'] = dict(driver_state.get('objective_progress') or {})
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
         driver_trace['recovery_pocket'] = dict(driver_state.get('recovery_pocket') or {})
+        driver_trace['short_escape_probes'] = list(driver_state.get('short_escape_probes') or ())
         driver_trace['navigation_wait'] = dict(
             driver_state.get('navigation_wait') or {})
         # Finish this rare diagnostic after every authority gate has run.

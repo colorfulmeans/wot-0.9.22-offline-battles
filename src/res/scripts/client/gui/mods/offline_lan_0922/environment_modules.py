@@ -189,8 +189,9 @@ def collect_contacts(vehicle, witnesses, normal, impact_speed, math_module):
         if row['name'] in known:
             merged[row['name']] = max(merged.get(row['name'], 0.), row['weight'])
     contacts = normalize_contacts([dict(name=name, weight=merged[name]) for name in sorted(merged)])
-    print('[Offline LAN 0.9.22] ENV MODULE CONTACT ' + json.dumps(dict(
+    from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
+    write_json_record('ENV MODULE CONTACT', dict(
         actor=vehicle.id, actor_kind=getattr(vehicle, 'actor_kind', 'unknown'), witnesses=list(witnesses), normal=normal, depth=depth,
         speed=impact_speed, contacts=contacts, evidence=evidence, errors=errors,
-        fan_half_angle_degrees=25., distance_decay=IMPACT_DISTANCE_DECAY, trial_reach=True), sort_keys=True))
+        fan_half_angle_degrees=25., distance_decay=IMPACT_DISTANCE_DECAY, trial_reach=True))
     return contacts

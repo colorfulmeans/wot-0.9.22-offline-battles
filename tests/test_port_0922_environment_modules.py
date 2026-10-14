@@ -187,6 +187,19 @@ class EnvironmentalModulesTests(unittest.TestCase):
             self.assertGreater(v.devices_hp['ammoBayHealth'],0.)
             self.assertIn('ammoBayHealth',v._critical_devices)
 
+    def test_fire_publication_preserves_module_event_cause(self):
+        state=server_fixture._state();player=state.players[1]
+        player.effective_params['critical']=pcm.project_profile(fixtures._strict_1513_descriptor())
+        player.critical=dict(fire=True,devices=[dict(name='radioHealth',hp=55.,state='normal')],
+            destroyed=[],crew_ko=[],ammo_rack_death=False)
+        player.fire_attacker_kind='bot';player.fire_attacker_id=11
+        with contextlib.redirect_stdout(io.StringIO()):state._tick_player_fire(1.)
+        event=state.pending_events[-1]
+        self.assertEqual('fire',event['source'])
+        self.assertTrue(event['critical']['events'])
+        self.assertTrue(all(r['cause']=='fire' for r in event['critical']['events']))
+        self.assertEqual([],player.critical.get('events'))
+
     def test_ground_witnesses_choose_sampled_contact_and_void_has_none(self):
         params=dict(springs=[dict(x=-1.,y=0.,z=0.),dict(x=1.,y=0.,z=0.)],pseudo_contacts=[])
         self.assertEqual([(-1.,1.,0.)],em.ground_witnesses(params,[1.,0.],[],(0.,1.,0.),0.,0.,0.))

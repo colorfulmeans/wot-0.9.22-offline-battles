@@ -27,6 +27,18 @@ class EvidenceReaderTests(unittest.TestCase):
             self.writer.write_json_record('RICOCHET SURFACE EVIDENCE',{'damage':448})
         return output.getvalue().splitlines()
 
+    def test_large_environment_contact_roundtrips_below_engine_line_limit(self):
+        payload={'actor':1,'evidence':[{'name':'ammoBayHealth','witness':[1.,2.,3.],
+            'direction':[0.,1.,0.],'distance':i/10.} for i in range(300)]}
+        output=io.StringIO()
+        with mock.patch('sys.stdout',output):
+            self.writer.write_json_record('ENV MODULE CONTACT',payload)
+        lines=output.getvalue().splitlines()
+        self.assertTrue(all(len(line)<8000 for line in lines))
+        result=self.reader.parse_lines(lines)
+        self.assertEqual([],result['issues'])
+        self.assertEqual(payload,result['records'][0]['data'])
+
     def test_writer_reader_roundtrip_and_interleaved_labels(self):
         result=self.reader.parse_lines(self.lines())
         self.assertEqual([],result['issues'])

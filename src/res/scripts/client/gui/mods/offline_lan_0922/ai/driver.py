@@ -488,6 +488,7 @@ class LocalDriver(object):
 			ttl = self.failure_ttl
 		ttl = max(0.1, float(ttl))
 		state['failed_yaws'][self._yaw_key(yaw)] = state['clock'] + ttl
+		state.setdefault('real_failed_yaws', {})[self._yaw_key(yaw)] = state['clock'] + ttl
 		desired = state.get('last_desired_yaw')
 		offset = _angle_delta(yaw, desired) if desired is not None else 0.0
 		if abs(offset) >= 0.10:
@@ -909,14 +910,19 @@ class LocalDriver(object):
 		"""Choose a fresh straight escape independently of available pivot arcs."""
 		minimum = max(0.5, float(stopping_distance or 0.0) +
 			abs(float(speed)) * max(step, float(horizon)))
+		probes = []
+		state['short_escape_probes'] = probes
 		for distance in (max(2.0, minimum), max(1.0, minimum), minimum):
 			for sign in (-1.0, 1.0):
 				heading = float(yaw) + (math.pi if sign < 0 else 0.0)
-				if (self._failure_penalty(state, heading) <= 0.0 and
-						self._clear(direction_clear, heading, distance) and
-						self._reverse_blocked_by_vehicle(
-							position, float(yaw) if sign < 0 else float(yaw) + math.pi,
-							neighbours, half_length, half_width, maximum_distance=distance) is None):
+				# Long-ray/candidate failures cannot veto a fresh shorter proof.
+				real_failure = state.get('real_failed_yaws', {}).get(self._yaw_key(heading), 0.) > state['clock']
+				clear = not real_failure and self._clear(direction_clear, heading, distance)
+				blocker = self._reverse_blocked_by_vehicle(
+					position, float(yaw) if sign < 0 else float(yaw) + math.pi,
+					neighbours, half_length, half_width, maximum_distance=distance) if clear else None
+				probes.append(dict(sign=sign, distance=distance, clear=clear, blocker=blocker, real_failure=real_failure))
+				if clear and blocker is None:
 					state['short_translation_escape'] = dict(start=tuple(position),
 						yaw=float(yaw), sign=sign, distance=distance,
 						until=state['clock'] + 4.0)
@@ -935,9 +941,9 @@ class LocalDriver(object):
 		travelled = ((position[0]-escape['start'][0])*math.sin(heading) +
 			(position[2]-escape['start'][2])*math.cos(heading))
 		remaining = max(0.0, escape['distance'] - travelled)
-		if (remaining <= 0.05 or state['clock'] >= escape['until'] or
+		if (state.get('real_failed_yaws', {}).get(self._yaw_key(heading), 0.) > state['clock'] or
+				remaining <= 0.05 or state['clock'] >= escape['until'] or
 				abs(_angle_delta(yaw, escape['yaw'])) > 0.30 or
-				self._failure_penalty(state, heading) > 0.0 or
 				not self._clear(direction_clear, heading, remaining) or
 				self._reverse_blocked_by_vehicle(position,
 					yaw if sign < 0 else yaw + math.pi, neighbours,
@@ -1010,6 +1016,7 @@ class LocalDriver(object):
 			state.pop('objective_progress', None)
 			state.pop('recovery_replan_episode', None)
 			state.pop('recovery_pocket', None)
+			state.pop('short_escape_probes', None)
 			# Cover/engagement orders intentionally stop within a tolerance. Do not
 			# reinterpret that commanded hold as a stuck tank 1.8 seconds later.
 			state['stuck_time'] = 0.0
@@ -1034,6 +1041,7 @@ class LocalDriver(object):
 				_distance(position, pocket['origin']) >= 2.0 * own_half_length + arrival or
 				_distance(pocket['goal'], pocket_goal) > 2.0):
 			state.pop('recovery_pocket', None)
+			state.pop('short_escape_probes', None)
 			pocket = None
 		pocket_stalled = bool(pocket is not None and
 			state['clock'] - pocket['at'] >= 8.0 and state['recovery_count'] >= 2)

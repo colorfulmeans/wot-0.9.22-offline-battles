@@ -12707,7 +12707,9 @@ class BattleState:
             elif attacker_kind == "bot":
                 event["attacker_bot"] = attacker_id
             if critical is not None:
-                event["critical"] = player.critical
+                event["critical"] = dict(player.critical)
+                event["critical"]["events"] = list(
+                    (_critical_payload(critical) or {}).get("events") or ())
                 if critical_commit:
                     event.update(critical_commit)
             self.pending_events.append(event)
