@@ -18,12 +18,13 @@ can detonate. The existing module-test bench still suppresses lethal results.
 Landing uses only physical world-contact witnesses or confirmed ground
 samples. Severe legacy landings probe the chassis footprint at that event,
 not every driving frame. Suspension landings use their deepest sampled points.
-A bounded inward shock segment nominates native external materials and the
+A bounded inward five-segment shock fan nominates native external materials and the
 adopted interior/crew layout. Unknown geometry nominates no fictional module.
 Each module is damaged once per event using the nearest reached contact.
 
-Trial shock depth is clamp((impact_speed - 10) * 0.2, 0.25, 3.0) metres.
-Module HP loss is max(0, impact_speed - 10) * 20 / (1 + contact_distance).
+Trial shock depth is clamp((impact_speed - 10) * 0.6, 0.25, 6.0) metres.
+The central contact-normal ray and four rays at 25 degrees spread inward.
+Module HP loss is max(0, impact_speed - 10) * 20 / (1 + 0.25 * contact_distance).
 A reached crew member is injured when this trial shock amount reaches 100.
 There is no projectile saving throw, Deadeye bonus, ammo-rack immunity or
 forced global track destruction. Fuel/engine impact loss does not add a new
@@ -60,3 +61,18 @@ calibration and must not be described as official figures.
 Final engine-free reference validation: 2,022 tests across 12 suites passed;
 181 client source files compiled under CPython 2.7. Runtime acceptance still
 requires the supported Windows game client.
+
+## Bridge-impact calibration (report 20261014-145051)
+
+The T-34-2 landing at 14:49:40 had 16.7488301725 m/s impact speed and
+263 canonical vehicle HP loss. Only the driver was nominated at 0.833336 m;
+the previous 1.349766 m single segment and 1/(1+d) attenuation produced 73.62,
+below the 100 crew threshold. No device contacts were recorded.
+
+The revised bounded fan reaches 4.049298 m at that speed. The same driver
+contact receives approximately 111.70 shock; additional devices are damaged
+only if their actual native/adopted shapes intersect a fan segment. All
+contacts are deduplicated to their strongest witness before one HP debit.
+External query failures no longer suppress interior queries. Missing layout
+and per-ray direction/distance are logged. Fire coefficients are unchanged.
+This is a gameplay trial, not a reconstruction of official physics constants.

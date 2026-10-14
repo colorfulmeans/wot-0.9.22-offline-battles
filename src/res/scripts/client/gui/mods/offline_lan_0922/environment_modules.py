@@ -13,6 +13,9 @@ FIRE_DEVICES = frozenset(('engineHealth', 'fuelTankHealth', 'ammoBayHealth',
 FIRE_MODULE_HP_PER_SECOND = 10.0
 IMPACT_MODULE_HP_PER_EXCESS_MS = 20.0
 IMPACT_CREW_INJURY_HP = 100.0
+IMPACT_REACH_PER_EXCESS_MS = 0.6
+IMPACT_DISTANCE_DECAY = 0.25
+IMPACT_FAN_TANGENT = math.tan(math.radians(25.0))
 MAX_CONTACTS = 32
 
 
@@ -110,10 +113,30 @@ def ground_witnesses(params, ground, pseudo_ground, position, yaw, pitch, roll):
     return selected
 
 
+def _shock_directions(normal):
+    # Stable orthogonal tangent basis, including wall and roof landings.
+    axis = (0., 1., 0.) if abs(normal[1]) < 0.9 else (1., 0., 0.)
+    tangent = (normal[1]*axis[2]-normal[2]*axis[1],
+               normal[2]*axis[0]-normal[0]*axis[2],
+               normal[0]*axis[1]-normal[1]*axis[0])
+    length = math.sqrt(sum(v*v for v in tangent))
+    tangent = tuple(v/length for v in tangent)
+    other = (normal[1]*tangent[2]-normal[2]*tangent[1],
+             normal[2]*tangent[0]-normal[0]*tangent[2],
+             normal[0]*tangent[1]-normal[1]*tangent[0])
+    directions = [normal]
+    for lateral in (tangent, other):
+        for sign in (-1., 1.):
+            direction = tuple(normal[i]+sign*IMPACT_FAN_TANGENT*lateral[i] for i in range(3))
+            length = math.sqrt(sum(v*v for v in direction))
+            directions.append(tuple(v/length for v in direction))
+    return directions
+
+
 def collect_contacts(vehicle, witnesses, normal, impact_speed, math_module):
     """Use native external materials and adopted internal/crew geometry.
 
-    Shock is a bounded inward segment from each physical witness. Its reach is
+    Shock is a bounded inward five-segment fan from each witness. Its reach is
     reconstructed and recorded, unlike the existing projectile saving throw.
     """
     from gui.mods.offline_lan_0922 import critical_damage as cd
@@ -126,27 +149,39 @@ def collect_contacts(vehicle, witnesses, normal, impact_speed, math_module):
     if math.isnan(length) or math.isinf(length) or length <= 0.0001:
         return contacts
     normal = tuple(float(v)/length for v in normal)
-    depth = min(3.0, max(0.25, (abs(float(impact_speed))-10.0)*0.2))
+    depth = min(6.0, max(0.25, (abs(float(impact_speed))-10.0)*IMPACT_REACH_PER_EXCESS_MS))
     errors = []
     evidence = []
+    directions = _shock_directions(normal)
     for point in witnesses[:8]:
         start = math_module.Vector3(*(point[i]-normal[i]*0.03 for i in range(3)))
-        end = math_module.Vector3(*(point[i]+normal[i]*depth for i in range(3)))
-        try:
-            hits = collide_vehicle_at_matrix(vehicle, vehicle.matrix, start, end, math_module,
-                chassis_matrix=getattr(vehicle, '_chassis_matrix', None))
-            for hit in hits:
-                extra = getattr(hit[2], 'extra', None)
-                name = str(getattr(extra, 'name', '') or '')
-                if name:
-                    contacts.append(dict(name=name, weight=1.0/(1.0+max(0.0, hit[0]))))
-                    evidence.append(dict(name=name, distance=hit[0], source='native.material', witness=point))
-            internal = cd._offh_internal_ray_hits(vehicle, cd._device_td(vehicle), start, end)
-            for distance, name in internal or ():
-                contacts.append(dict(name=name, weight=1.0/(1.0+max(0.0, distance))))
-                evidence.append(dict(name=name, distance=distance, source='adopted.internal_layout', witness=point))
-        except Exception as error:
-            errors.append(str(error))
+        for ray_index, direction in enumerate(directions):
+            end = math_module.Vector3(*(point[i]+direction[i]*depth for i in range(3)))
+            # A failed external probe cannot suppress a valid interior query.
+            queries = (
+                ('native.material', lambda: [(hit[0], str(getattr(
+                    getattr(hit[2], 'extra', None), 'name', '') or ''))
+                    for hit in collide_vehicle_at_matrix(vehicle, vehicle.matrix,
+                        start, end, math_module,
+                        chassis_matrix=getattr(vehicle, '_chassis_matrix', None))]),
+                ('adopted.internal_layout', lambda: cd._offh_internal_ray_hits(
+                    vehicle, cd._device_td(vehicle), start, end)))
+            for source, query in queries:
+                try:
+                    hits = query()
+                    if hits is None:
+                        errors.append(dict(source=source, ray=ray_index, error='geometry_unavailable'))
+                    for distance, name in hits or ():
+                        distance = float(distance)
+                        if (not name or math.isnan(distance) or math.isinf(distance) or
+                                distance < 0.0 or distance > depth+0.031):
+                            continue
+                        weight = 1.0/(1.0+IMPACT_DISTANCE_DECAY*distance)
+                        contacts.append(dict(name=name, weight=weight))
+                        evidence.append(dict(name=name, distance=distance, source=source,
+                            witness=point, ray=ray_index, direction=direction))
+                except Exception as error:
+                    errors.append(dict(source=source, ray=ray_index, error=str(error)))
     from gui.mods.offline_lan_0922 import device_damage
     known = set(device_damage._DEVICE_HP_SPEC) | set(device_damage.CREW_HEALTH_NAMES)
     merged = {}
@@ -156,5 +191,6 @@ def collect_contacts(vehicle, witnesses, normal, impact_speed, math_module):
     contacts = normalize_contacts([dict(name=name, weight=merged[name]) for name in sorted(merged)])
     print('[Offline LAN 0.9.22] ENV MODULE CONTACT ' + json.dumps(dict(
         actor=vehicle.id, actor_kind=getattr(vehicle, 'actor_kind', 'unknown'), witnesses=list(witnesses), normal=normal, depth=depth,
-        speed=impact_speed, contacts=contacts, evidence=evidence, errors=errors, trial_reach=True), sort_keys=True))
+        speed=impact_speed, contacts=contacts, evidence=evidence, errors=errors,
+        fan_half_angle_degrees=25., distance_decay=IMPACT_DISTANCE_DECAY, trial_reach=True), sort_keys=True))
     return contacts

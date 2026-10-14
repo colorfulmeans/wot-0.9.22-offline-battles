@@ -102,6 +102,58 @@ class EnvironmentalModulesTests(unittest.TestCase):
         self.assertEqual({'leftTrackHealth','engineHealth'},{r['name'] for r in left})
         self.assertEqual({'rightTrackHealth','driverHealth'},{r['name'] for r in right})
 
+    def test_recorded_bridge_driver_contact_now_exceeds_injury_threshold(self):
+        v=self.target();v.matrix=object()
+        with mock.patch('gui.mods.offline_lan_0922.entities.remote_vehicle.collide_vehicle_at_matrix',return_value=[]), \
+             mock.patch.object(cd,'_offh_internal_ray_hits',return_value=[(.833336323389437,'driverHealth')]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            contacts=em.collect_contacts(v,[(32.54449438730874,-14.857442855834961,74.96820962987717)],
+                (0.,1.,0.),16.74883017251508,types.SimpleNamespace(Vector3=fixtures._Point))
+            em.apply_impact(v,16.74883017251508,contacts)
+        self.assertEqual({'driver'},v._crew_ko)
+        self.assertEqual(1,len(contacts))
+
+    def test_shock_reaches_deep_and_lateral_modules_without_global_damage(self):
+        v=self.target();v.matrix=object();ends=[]
+        def internal(vehicle,td,start,end):
+            ends.append((end.x,end.y,end.z))
+            hits=[(.833336323389437,'driverHealth')]
+            if end.y>3.:hits.append((3.,'engineHealth'))
+            if end.x>1.:hits.append((2.5,'radioHealth'))
+            return hits
+        with mock.patch('gui.mods.offline_lan_0922.entities.remote_vehicle.collide_vehicle_at_matrix',return_value=[]), \
+             mock.patch.object(cd,'_offh_internal_ray_hits',side_effect=internal), \
+             contextlib.redirect_stdout(io.StringIO()):
+            contacts=em.collect_contacts(v,[(0.,0.,0.)],(0.,1.,0.),16.74883017251508,
+                types.SimpleNamespace(Vector3=fixtures._Point))
+            em.apply_impact(v,16.74883017251508,contacts)
+        self.assertEqual(5,len(ends))
+        self.assertAlmostEqual(4.049298103509049,ends[0][1])
+        self.assertEqual({'engineHealth','radioHealth','driverHealth'},{r['name'] for r in contacts})
+        self.assertAlmostEqual(150.-134.97660345030164/1.75,v.devices_hp['engineHealth'])
+        self.assertNotIn('ammoBayHealth',v.devices_hp)
+        self.assertNotIn('leftTrackHealth',v.devices_hp)
+        self.assertEqual({'driver'},v._crew_ko)
+
+    def test_external_query_failure_preserves_interior_shock(self):
+        v=self.target();v.matrix=object()
+        with mock.patch('gui.mods.offline_lan_0922.entities.remote_vehicle.collide_vehicle_at_matrix',side_effect=RuntimeError('external withdrawn')), \
+             mock.patch.object(cd,'_offh_internal_ray_hits',return_value=[(2.,'engineHealth')]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            contacts=em.collect_contacts(v,[(0.,0.,0.)],(1.,0.,0.),16.75,
+                types.SimpleNamespace(Vector3=fixtures._Point))
+        self.assertEqual(['engineHealth'],[r['name'] for r in contacts])
+
+    def test_missing_or_out_of_segment_geometry_does_not_nominate_modules(self):
+        v=self.target();v.matrix=object()
+        for hits in (None,[],[(8.,'engineHealth'),(-1.,'radioHealth'),(float('nan'),'ammoBayHealth')]):
+            with mock.patch('gui.mods.offline_lan_0922.entities.remote_vehicle.collide_vehicle_at_matrix',return_value=[]), \
+                 mock.patch.object(cd,'_offh_internal_ray_hits',return_value=hits), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                contacts=em.collect_contacts(v,[(0.,0.,0.)],(0.,-1.,0.),16.75,
+                    types.SimpleNamespace(Vector3=fixtures._Point))
+            self.assertEqual([],contacts)
+
     def test_ground_witnesses_choose_sampled_contact_and_void_has_none(self):
         params=dict(springs=[dict(x=-1.,y=0.,z=0.),dict(x=1.,y=0.,z=0.)],pseudo_contacts=[])
         self.assertEqual([(-1.,1.,0.)],em.ground_witnesses(params,[1.,0.],[],(0.,1.,0.),0.,0.,0.))
