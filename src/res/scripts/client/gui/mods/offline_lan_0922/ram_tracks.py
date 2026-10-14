@@ -3,7 +3,7 @@ import copy
 import math
 TRACKS = frozenset(('leftTrackHealth','rightTrackHealth'))
 SAFE_SPEED = 2.0
-HP_PER_EXCESS_MS = 30.0  # Offline trial coefficient, not a retail constant.
+HP_PER_EXCESS_MS = 25.0  # Offline trial coefficient, not a retail constant.
 
 class ContactArmors(tuple):
     def __new__(cls, values, tracks):

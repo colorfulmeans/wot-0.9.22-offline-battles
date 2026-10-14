@@ -132,7 +132,7 @@ class BotSupportLayerTests(unittest.TestCase):
                 self.assertFalse(state['airborne'])
                 self.bots._update_slope_pose(state)
         land.assert_not_called()
-        self.assertAlmostEqual(math.atan(.25)*.9,state['terrain_pitch'],places=2)
+        self.assertAlmostEqual(math.atan(.25),state['terrain_pitch'],places=2)
 
     def test_live_bot_support_ignores_bridge_above_its_drivable_road(self):
         self.collision_planes(lambda x, z: self.FLOOR, self.DECK)

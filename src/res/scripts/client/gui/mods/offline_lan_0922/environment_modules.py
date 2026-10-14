@@ -11,7 +11,7 @@ import json
 FIRE_DEVICES = frozenset(('engineHealth', 'fuelTankHealth', 'ammoBayHealth',
                           'radioHealth', 'turretRotatorHealth'))
 FIRE_MODULE_HP_PER_SECOND = 10.0
-IMPACT_MODULE_HP_PER_EXCESS_MS = 30.0
+IMPACT_MODULE_HP_PER_EXCESS_MS = 25.0
 IMPACT_CREW_INJURY_HP = 100.0
 IMPACT_REACH_PER_EXCESS_MS = 0.6
 IMPACT_DISTANCE_DECAY = 0.25

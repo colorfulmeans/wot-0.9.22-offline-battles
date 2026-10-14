@@ -238,7 +238,7 @@ _BOT_SUSPENSION_STATE_FIELDS = (
     'ground_height', '_spring_ground_memory', '_pseudo_ground_memory',
     '_suspension_ground_plane', '_suspension_support_vertical_speed',
     '_suspension_support_gradient', 'slide_speed', 'air_lateral_x', 'air_lateral_z',
-    'pose_sample', '_slope_pose_target',
+    'pose_sample', '_slope_pose_target', '_basic_slope_basis_yaw',
 )
 
 # Route groups lease these lateral lanes without moving an existing member.
@@ -737,7 +737,7 @@ def _motion_drive_pitch(probe, travel_sign, state):
 
 
 def slope_pose(probe, position, yaw, half_length, half_width,
-               last_pitch=0.0, last_roll=0.0):
+               last_pitch=0.0, last_roll=0.0, exact=False, receipt=None):
     """One step of the copied 0.8.2 four-point suspension hull pose."""
     length = max(3.0, 2.0 * float(half_length))
     width = max(2.0, 2.0 * float(half_width))
@@ -750,8 +750,22 @@ def slope_pose(probe, position, yaw, half_length, half_width,
                   position[2] - sine * width * 0.5, position[1])
     left = probe(position[0] - cosine * width * 0.5,
                  position[2] + sine * width * 0.5, position[1])
+    if receipt is not None:
+        receipt.update(front=front, rear=rear, right=right, left=left,
+                       length=length, width=width, sample_yaw=yaw)
     if None in (front, rear, right, left):
-        return float(last_pitch), float(last_roll)
+        return None if exact else (float(last_pitch), float(last_roll))
+    if exact:
+        forward_grade = (float(front) - float(rear)) / length
+        lateral_grade = (float(right) - float(left)) / width
+        # YPR rotation applies roll before pitch. Independent atan values
+        # over-tilt a diagonal grade; fit one plane normal in that order.
+        pitch = -math.atan(forward_grade)
+        roll = math.atan2(lateral_grade, math.sqrt(1.0 + forward_grade**2))
+        tilt = math.hypot(pitch, roll)
+        if tilt > 0.61:
+            pitch, roll = pitch * 0.61/tilt, roll * 0.61/tilt
+        return pitch, roll
     pitch = -math.atan2(float(front) - float(rear), length) * 0.9
     roll = math.atan2(float(right) - float(left), width) * 0.9
     tilt = math.sqrt(pitch * pitch + roll * roll)
@@ -761,6 +775,16 @@ def slope_pose(probe, position, yaw, half_length, half_width,
         roll *= scale
     return (float(last_pitch) + (pitch - float(last_pitch)) * 0.5,
             float(last_roll) + (roll - float(last_roll)) * 0.5)
+
+
+def ground_pose_for_yaw(pitch, roll, old_yaw, new_yaw):
+    """Preserve the sampled world-space plane under a hull yaw change."""
+    nx, ny, nz = vehicle_physics.suspension_point_offset(
+        dict(x=0.0, y=1.0, z=0.0), pitch, roll)
+    delta = _angle_delta(new_yaw, old_yaw)
+    local_x = math.cos(delta)*nx - math.sin(delta)*nz
+    local_z = math.sin(delta)*nx + math.cos(delta)*nz
+    return math.atan2(local_z, ny), math.atan2(-local_x, math.hypot(ny, local_z))
 
 
 def _gun_pitch_limits(descriptor, turret_yaw=0.0):
@@ -7282,6 +7306,8 @@ class BotRuntime(object):
         travel = SLOPE_SAMPLE_METRES[tier]
         turn = SLOPE_SAMPLE_RADIANS[tier]
         marker = state.get('pose_sample')
+        exact = not bool(_value(self._descriptors.get(int(state['id']), {}),
+                                'isPitchHullAimingAvailable', False))
         new_target = None
         if (isinstance(marker, (list, tuple)) and len(marker) == 3 and
                 abs(x - marker[0]) < travel and
@@ -7295,17 +7321,24 @@ class BotRuntime(object):
                    abs(target[1] - state.get('roll', 0.0))) < 0.001:
                 return False
             state['_slope_pose_attempt'] = state.get('_slope_pose_attempt', 0) + 1
-            pitch = terrain_pitch + (target[0] - terrain_pitch) * 0.5
-            roll = state.get('roll', 0.0) + (target[1] - state.get('roll', 0.0)) * 0.5
+            pitch = target[0] if exact else terrain_pitch + (target[0] - terrain_pitch) * 0.5
+            roll = target[1] if exact else state.get('roll', 0.0) + (target[1] - state.get('roll', 0.0)) * 0.5
         else:
             state['_slope_pose_attempt'] = state.get('_slope_pose_attempt', 0) + 1
-            pitch, roll = slope_pose(
+            slope_receipt = {}
+            sampled = slope_pose(
                 self._ground_probe_at, (x, state['y'], z), yaw,
                 state.get('half_length', 3.5), state.get('half_width', 1.7),
-                self._terrain_pitch(state), state.get('roll', 0.0))
+                self._terrain_pitch(state), state.get('roll', 0.0),
+                exact=exact, receipt=slope_receipt)
+            if sampled is None:
+                return False
+            pitch, roll = sampled
+            state['_basic_slope_samples'] = slope_receipt
             new_target = (
-                pitch * 2.0 - self._terrain_pitch(state),
-                roll * 2.0 - state.get('roll', 0.0))
+                (pitch, roll) if exact else
+                (pitch * 2.0 - self._terrain_pitch(state),
+                 roll * 2.0 - state.get('roll', 0.0)))
 
         suspension_pitch = state.get('suspension_pitch', 0.0)
         if self._turret_motion_probe is not None:
@@ -7315,14 +7348,68 @@ class BotRuntime(object):
             after['chassis'] = dict(before['chassis'], pitch=pitch, roll=roll)
             if not self._turret_motion_probe(
                     before, after, self._descriptors.get(int(state['id']))):
+                self._report_basic_slope_pose(state, before, after, False, 'sample')
                 return False
+            self._report_basic_slope_pose(state, before, after, True, 'sample')
         state['terrain_pitch'] = pitch
         state['pitch'] = pitch + suspension_pitch
         state['roll'] = roll
+        state['_basic_slope_basis_yaw'] = yaw
         if new_target is not None:
             state['_slope_pose_target'] = new_target
             state['pose_sample'] = (x, z, yaw)
         return True
+
+    def _reorient_basic_ground_pose(self, state):
+        if (state.get('airborne') or not state.get('grounded_once') or
+                getattr(self, '_suspension_params', {}).get(int(state['id'])) is not None):
+            return False
+        old_yaw = state.get('_basic_slope_basis_yaw')
+        if old_yaw is None or abs(_angle_delta(state['yaw'], old_yaw)) < 1.e-9:
+            return False
+        before = self._turret_state_pose(state, yaw=old_yaw)
+        pitch, roll = ground_pose_for_yaw(self._terrain_pitch(state),
+            state.get('roll', 0.0), old_yaw, state['yaw'])
+        after = self._turret_state_pose(state)
+        after.update(pitch=pitch+state.get('suspension_pitch', 0.0), roll=roll)
+        after['chassis'] = dict(after['chassis'], pitch=pitch, roll=roll)
+        clear = self._turret_motion_probe is None or self._turret_motion_probe(
+            before, after, self._descriptors.get(int(state['id'])))
+        self._report_basic_slope_pose(state, before, after, clear, 'yaw_rebase')
+        if not clear:
+            rejected_yaw = state['yaw']
+            state['yaw'] = old_yaw
+            state['rotation_dir'] = 0
+            self._turn_speeds[int(state['id'])] = 0.0
+            self._invalidate_realised_motion(int(state['id']), rejected_yaw)
+            return False
+        target = state.get('_slope_pose_target')
+        if target is not None:
+            state['_slope_pose_target'] = ground_pose_for_yaw(target[0], target[1], old_yaw, state['yaw'])
+        marker = state.get('pose_sample')
+        if isinstance(marker, (list, tuple)) and len(marker) == 3:
+            state['pose_sample'] = (marker[0], marker[1], state['yaw'])
+        state['terrain_pitch'] = pitch
+        state['pitch'] = after['pitch']
+        state['roll'] = roll
+        support_pitch = max(-vehicle_physics.GROUND_PITCH_LIMIT,
+            min(vehicle_physics.GROUND_PITCH_LIMIT, pitch))
+        state['vertical_speed'] = -state.get('speed', 0.0) * math.tan(support_pitch)
+        state['_basic_slope_basis_yaw'] = state['yaw']
+        return True
+
+    def _report_basic_slope_pose(self, state, before, after, accepted, phase):
+        now = getattr(self, '_contact_now', None)
+        if now is None or now < state.get('_basic_slope_pose_log_at', -1.e30):
+            return
+        state['_basic_slope_pose_log_at'] = now + 2.0
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT SLOPE POSE', dict(
+            actor=int(state['id']), round=self.round_id, phase=phase,
+            accepted=bool(accepted), position=list(_position(state)),
+            before=dict((key, before.get(key)) for key in ('yaw', 'pitch', 'roll')),
+            after=dict((key, after.get(key)) for key in ('yaw', 'pitch', 'roll')),
+            samples=state.get('_basic_slope_samples'), airborne=bool(state.get('airborne'))))
 
     def _passive_motion_status(self, state, position, yaw, speed,
                                descriptor, step, now, commit_enabled=False):
@@ -7600,8 +7687,10 @@ class BotRuntime(object):
                 abs((values[0] + values[1]) * 0.5 - centre) > 0.1 or
                 abs((values[2] + values[3]) * 0.5 - centre) > 0.1):
             return False
-        pitch = -math.atan2(values[0] - values[1], 2.0 * length) * 0.9
-        roll = math.atan2(values[2] - values[3], 2.0 * width) * 0.9
+        forward_grade = (values[0] - values[1]) / (2.0 * length)
+        lateral_grade = (values[2] - values[3]) / (2.0 * width)
+        pitch = -math.atan(forward_grade)
+        roll = math.atan2(lateral_grade, math.sqrt(1.0 + forward_grade**2))
         tilt = math.hypot(pitch, roll)
         if tilt > 0.61:
             pitch, roll = pitch * 0.61 / tilt, roll * 0.61 / tilt
@@ -8163,6 +8252,7 @@ class BotRuntime(object):
             state['_basic_fall_origin_y'] = fall_origin_y
         else:
             state.pop('_basic_fall_origin_y', None)
+        self._reorient_basic_ground_pose(state)
         moment = getattr(self, '_contact_now', None)
         transition = was_basic_airborne != bool(state.get('airborne', False))
         if ((transition or ground is None or was_basic_airborne) and

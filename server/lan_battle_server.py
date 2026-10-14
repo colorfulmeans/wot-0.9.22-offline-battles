@@ -10156,7 +10156,8 @@ class BattleState:
             bot_team = int(bot.get("team", 0))
             target_team = (int(target.get("team", 0))
                            if target_kind == "bot" else int(target.team))
-            if ram_contact is not None:
+            if ram_contact is not None and all(name in ram_contact for name in (
+                    'vx', 'vz', 'bot_vx', 'bot_vz', 'contact_normal_x', 'contact_normal_z')):
                 self._remember_push_pair(('player', target_id), ('bot', bot_id),
                     ((ram_contact['vx'], ram_contact['vz']),
                      (ram_contact['bot_vx'], ram_contact['bot_vz'])),

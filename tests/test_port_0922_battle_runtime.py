@@ -34353,6 +34353,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         counts = {}
         for name, state in (('near', near), ('far', far)):
             bots = bot_runtime.BotRuntime.__new__(bot_runtime.BotRuntime)
+            bots._descriptors = {}
             bots._load_level = 0
             bots._probe_totals = [0, 0, 0, 0, 0]
             bots._probe_started = lambda: None
