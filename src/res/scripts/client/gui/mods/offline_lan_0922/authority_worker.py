@@ -256,7 +256,7 @@ class AuthorityWorkerLANClient(LANClient):
                                  human_ram_armors=None,
                                  edge_sample_time_us=None,
                                  edge_revision=None,
-                                 detached_turrets=None):
+                                 detached_turrets=None, push_contacts=None):
         """Queue BotRuntime's canonical publication as one frozen wire blob."""
         if not self.is_bot_authority():
             return False
@@ -284,6 +284,8 @@ class AuthorityWorkerLANClient(LANClient):
             return False
         if human_ram_armors is not None:
             message['human_ram_armors'] = human_ram_armors
+        if push_contacts is not None:
+            message['push_contacts'] = dict(push_contacts)
         if detached_turrets is not None:
             self._attach_detached_turret_proposals(message, detached_turrets)
         try:
@@ -291,7 +293,13 @@ class AuthorityWorkerLANClient(LANClient):
                 self.round_id, self.authority_epoch,
                 edge_sample_time_us, edge_revision,
                 _trusted_human_ram_edge(human_ram_armors),
-                message.get('detached_turrets'))
+                message.get('detached_turrets'),
+                (tuple(tuple(row.get(key) for key in (
+                    'seq', 'attacker_kind', 'attacker_id', 'target_kind', 'target_id'))
+                    for row in push_contacts.get('contacts', ())),
+                 tuple(push_contacts.get('hazards', ())),
+                 tuple(tuple(row) for row in push_contacts.get('falls', ())))
+                if push_contacts is not None else None)
         except Exception:
             return False
         return self._send_preencoded_trusted(

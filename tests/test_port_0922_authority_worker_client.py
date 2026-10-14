@@ -262,6 +262,31 @@ def _queued_wire(value):
 
 
 class AuthorityWorkerClientTests(unittest.TestCase):
+    def test_battle_publication_reaches_real_worker_with_push_receipts(self):
+        from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime
+        client = self._active_client()
+        battle = BattleRuntime.__new__(BattleRuntime)
+        battle.client = client
+        battle._worker_mode = True
+        battle._human_ram_armor_results = lambda: []
+        battle._detached_turret_rows = {}
+        battle._detached_turret_proposals = {}
+        receipt = dict(contacts=[dict(seq=1, attacker_kind='player', attacker_id=1,
+            target_kind='bot', target_id=11)], hazards=[11], falls=[[11, 50]])
+        message = dict(type='bot_state', rows=bot_state_rows.rows([_projected_bot_state()]),
+            edge_sample_time_us=1, edge_revision=1, push_contacts=receipt)
+        self.assertTrue(battle._send_bot_message(message))
+        wire = _queued_wire(client._outbound_queue[-1][1])
+        self.assertEqual(receipt, wire['push_contacts'])
+        receipt['contacts'][0]['seq'] = 2
+        receipt['falls'][0][1] = 75
+        self.assertEqual(1, wire['push_contacts']['contacts'][0]['seq'])
+        self.assertTrue(battle._send_bot_message(message))
+        self.assertEqual(2, len(client._outbound_queue))
+        self.assertTrue(battle._send_bot_message(message))
+        self.assertEqual(2, len(client._outbound_queue))
+        self.assertEqual(75, _queued_wire(client._outbound_queue[-1][1])['push_contacts']['falls'][0][1])
+
     @staticmethod
     def _active_client():
         client = AuthorityWorkerLANClient('127.0.0.1', 28782)
