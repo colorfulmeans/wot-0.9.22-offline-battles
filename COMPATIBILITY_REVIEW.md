@@ -8284,3 +8284,32 @@ track sides and speed, beside operation identity, so an empty nomination can be
 distinguished from a low-speed or missing-profile no-op. Existing server replay
 and contact-identity tests remain the authority checks. Windows acceptance is
 still required for the actual native contact geometry and resulting HUD states.
+
+
+### Report 193109: bounded partial recovery and contact/slope evidence
+
+The live report proves admitted ram track losses, including Bot 20 left track
+at 12.516 m/s and later destroyed-state/self-repair publication. Empty player
+track nominations do not prove a hull-only impact: the old logs omit native
+surface distance and sample selection. Keep the 0.15 m nomination law unchanged
+until exact geometry is available. RAM CONTACT GEOMETRY now distinguishes native
+callback, player motion-overlap, worker OBB-overlap and sampled contact planes;
+it includes query endpoints, native materials/distances, contact span and selected
+sample/plates. Limit to 64 searches per round and 48 ray records per search, with
+fragment-safe output and a matching report reader. No extra native query is made.
+
+A full 0.85 rad recovery arc could fail even when a smaller arc is safe. After
+both straight escape and full pivot fail, test shorter arcs on both sides and
+bound turn magnitude using installed turn rate and decision horizon. Keep all
+final native translation/rotation guards. Do not change the 22.5/25 degree policy,
+retry cadence, terrain grip, passive pushes, or ram damage rates.
+
+Bot 25 remains stationary in the captured report for 104 s and 51 s with repeated
+blocked decisions and zero controls. That report lacks individual planning probe
+verdicts, so neither terrain contact nor slope grip is a proven root cause.
+Stalled-driver motion diagnostics now include bounded direction/rotation verdicts,
+baked-hazard/rotation rejection reasons and native slope/collision trace inputs.
+The partial-arc unit regression proves the newly covered escape, not Windows
+acceptance or resolution of every recorded stationary pose. Broader validation
+still has the existing wedged-hull expected-pivot assertion; do not report full CI
+as green merely because these focused cases pass.

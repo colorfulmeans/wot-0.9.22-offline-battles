@@ -2734,6 +2734,24 @@ class BotAiPortTests(unittest.TestCase):
                             order['throttle'] == 0.0 and order['turn'] == 0.0
                             for order in blocked))
 
+    def test_recovery_can_use_proven_short_arc_when_full_turn_and_translation_fail(self):
+        driver = LocalDriver()
+        orders = []
+        for unused in range(150):
+            orders.append(driver.drive(9, 0, (0.,0.,0.), 0., 0., 1./30.,
+                (0.,4.,50.), (), lambda *unused: False,
+                pose_clear=lambda yaw: 0. <= yaw <= 0.12,
+                turn_speed_limit=2., decision_horizon=0.15))
+        partial = [o for o in orders if o['recovery_mode']=='partial_pivot_recovery']
+        self.assertTrue(partial)
+        for order in partial:
+            self.assertEqual(0., order['throttle'])
+            self.assertGreater(order['turn'], 0.)
+            self.assertLessEqual(order['turn']*2.*0.15, 0.12)
+            self.assertLessEqual(order['target_yaw'], 0.12)
+        self.assertIsNone(driver._partial_pivot(lambda yaw: False, 0., 1., 2., .15))
+        self.assertIsNone(driver._partial_pivot(lambda yaw: True, 0., 1., None, .15))
+
     def test_wedged_hull_tries_the_pivot_side_that_fits(self):
         driver = LocalDriver()
         pivots = []

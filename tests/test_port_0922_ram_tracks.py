@@ -42,9 +42,14 @@ class RamTrackTests(unittest.TestCase):
         for contacts,expected in (([hit(reach,'leftTrackHealth',0.),hit(reach+.2,'hull',1.)],['leftTrackHealth']),
                                   ([hit(reach,'hull',1.),hit(reach+.1,'rightTrackHealth',0.)],[]),
                                   ([hit(reach-1.,'rightTrackHealth',0.),hit(reach+.1,'hull',1.)],[])):
+            battle._ram_contact_ray_trace=[]
             with mock.patch.object(f.battle_runtime_module,'collide_vehicle_at_matrix',return_value=contacts):
                 result=battle._native_ram_vehicle_armor(vehicle,matrix,(1.,0.,0.),(-1.,0.))
             self.assertEqual(expected,result.get('contact_tracks',[]))
+            ray=battle._ram_contact_ray_trace[0]
+            self.assertEqual('sampled_contact_plane',ray['witness_source'])
+            self.assertEqual(contacts[0].matInfo.extra.name,ray['surfaces'][0]['material'])
+            self.assertAlmostEqual(abs(contacts[0].dist-reach),ray['first_surface_distance_to_witness'])
 
     def test_server_ram_tracks_commit_once_and_reject_conflicting_contact_identity(self):
         import test_port_0922_server_projectiles as f

@@ -6880,6 +6880,7 @@ class BotRuntime(object):
             'id': int(state['id']), 'vehicle': state.get('vehicle'),
             'native_motion': bool(self.native_motion),
             'navigation': navigation, 'driver': driver_trace,
+            'planning_verdicts': list(state.get('_planning_verdicts') or ()),
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
             'withdrawal': command.get('withdrawal'),
@@ -13841,6 +13842,11 @@ class BotRuntime(object):
             decision_deadline = None
             raw_command = None
             planner_probe_samples = {}
+            planning_verdicts = []
+            planner_state = getattr(getattr(self.adapter, 'driver', None), 'states', {}).get(int(state['id']), {})
+            collect_planning = (planner_state.get('stuck_time', 0.) >= 1.0 or
+                                planner_state.get('recovery_time', 0.) > 0.)
+            planning_reason = [None]
 
             def planner_sample_direction(sample_yaw, maximum_distance=None):
                 # Invalid or unavailable baked data retains the mature native
@@ -13868,7 +13874,7 @@ class BotRuntime(object):
             controlled_shallow_commit = getattr(
                 self.navigator, 'controlled_shallow_committed', None)
 
-            def sample_pose_clear(sample_yaw, allow_wreck_push=False):
+            def sample_pose_clear_impl(sample_yaw, allow_wreck_push=False):
                 # Whether this hull may rotate where it stands is a question
                 # about a rectangle, not about a heading. Answer it from the
                 # shipped graph the navigator already owns.
@@ -13879,10 +13885,12 @@ class BotRuntime(object):
                             abs(_angle_delta(state['yaw'], old_yaw)) > 0.02):
                         del state['_blocked_rotations'][side]
                     elif delta * side > 0.0 and abs(delta) >= abs(rejected_delta):
+                        planning_reason[0] = 'realized_rotation_rejection'
                         return False
                 if self._planning_rotation_fraction_for(
                         state, position, state['yaw'], sample_yaw,
                         neighbours, allow_wreck_push) < 1.0:
+                    planning_reason[0] = 'friendly_or_wreck_rotation'
                     return False
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
@@ -13898,6 +13906,7 @@ class BotRuntime(object):
                 if not callable(pose_probe):
                     return True
                 try:
+                    planning_reason[0] = 'baked_hull_pose'
                     return bool(pose_probe(
                         position, sample_yaw,
                         state.get('half_length', 3.5),
@@ -13905,7 +13914,27 @@ class BotRuntime(object):
                 except Exception:
                     return True
 
+            def sample_pose_clear(sample_yaw, allow_wreck_push=False):
+                planning_reason[0] = None
+                result = sample_pose_clear_impl(sample_yaw, allow_wreck_push)
+                if collect_planning and len(planning_verdicts) < 48:
+                    planning_verdicts.append(dict(kind='rotation', yaw=sample_yaw, clear=result, reason=planning_reason[0]))
+                return result
+
             def sample_clear(sample_yaw, maximum_distance=None, drive_direction=1.0):
+                planning_reason[0] = None
+                result = sample_clear_impl(sample_yaw, maximum_distance, drive_direction)
+                if collect_planning and len(planning_verdicts) < 48:
+                    normalised = (float(sample_yaw)+math.pi) % (2.0*math.pi)-math.pi
+                    distance = maximum_distance
+                    if distance is None and decision_state is not None:
+                        distance = decision_state.get('navigation_probe_distance')
+                    key = (round(normalised,4), None if distance is None else round(float(distance),2))
+                    planning_verdicts.append(dict(kind='direction', yaw=sample_yaw,
+                        distance=distance, clear=result, reason=planning_reason[0], native_probe=planner_probe_samples.get(key)))
+                return result
+
+            def sample_clear_impl(sample_yaw, maximum_distance=None, drive_direction=1.0):
                 bounded_recovery = maximum_distance is not None
                 if maximum_distance is None:
                     maximum_distance = decision_state.get(
@@ -13925,6 +13954,7 @@ class BotRuntime(object):
                                    controlled_shallow(
                                        state['id'], position, sample_yaw)))
                 if advisory is False:
+                    planning_reason[0] = 'baked_motion_hazard'
                     return False
                 if advisory is True and not bounded_recovery:
                     return True
@@ -13937,7 +13967,10 @@ class BotRuntime(object):
                         (isinstance(sample, dict) and
                          sample.get('deferred', False))):
                     return not bounded_recovery
+                planning_reason[0] = sample.get('reason') if isinstance(sample, dict) else 'native_direction'
                 return self._probe_is_clear(sample)
+
+            state['_planning_verdicts'] = planning_verdicts
 
             if decision_cache_valid and not decision_due:
                 command = dict(decision_cache[3])

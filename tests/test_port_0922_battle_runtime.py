@@ -9172,6 +9172,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([mock.call(1)],
                          battle._retry_native_ram_contact_proof.call_args_list)
         self.assertEqual(1, len(battle._native_ram_contact_proofs))
+        self.assertEqual('player_native_callback',next(iter(battle._native_ram_contact_proofs.values()))['witness_source'])
 
     def test_native_ram_plate_fails_closed_after_external_only(self):
         runtime = _runtime()

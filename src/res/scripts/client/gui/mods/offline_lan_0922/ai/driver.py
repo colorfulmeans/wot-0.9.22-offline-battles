@@ -833,6 +833,20 @@ class LocalDriver(object):
 				return False
 		return True
 
+	def _partial_pivot(self, pose_clear, yaw, direction, rate, horizon):
+		"""Prove a shorter arc and limit the command to its admitted angle."""
+		if pose_clear is None or rate is None or float(rate) <= 0.0:
+			return None
+		for fraction in (0.5, 0.25, 0.125):
+			extent = RECOVERY_YAW_OFFSET * fraction
+			for side in (direction, -direction):
+				if all(self._pose_fits(pose_clear, float(yaw) + side * extent * f)
+						for f in RECOVERY_SWEEP_FRACTIONS):
+					turn = side * min(1.0, extent / (float(rate) * max(0.001, float(horizon))))
+					return dict(throttle=0.0, turn=turn, target_yaw=float(yaw) + side * extent,
+						recovery_mode='partial_pivot_recovery', recovery_pivot_extent=extent)
+		return None
+
 	# Pin the current law without executing descriptors during admission.
 	_candidate_rank_failure_law = _failure_penalty
 	_candidate_rank_yaw_law = _yaw_key
@@ -1239,6 +1253,10 @@ class LocalDriver(object):
 							own_half_length, own_half_width)
 						if escape is not None:
 							return escape
+						partial = self._partial_pivot(pose_clear, yaw, direction,
+							turn_speed_limit, max(step, float(decision_horizon)))
+						if partial is not None:
+							return partial
 						# Neither translation nor rotation fits. Hold the
 						# pose instead of grinding the corners, and publish the
 						# hull that owns the escape so the queue can clear it.

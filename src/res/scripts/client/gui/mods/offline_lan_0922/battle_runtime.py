@@ -21755,6 +21755,20 @@ class BattleRuntime(object):
         collisions = collide_vehicle_at_matrix(
             vehicle, matrix, start, end, self._runtime.math,
             chassis_matrix=chassis_matrix)
+        trace = getattr(self, '_ram_contact_ray_trace', None)
+        if trace is not None:
+            row = dict(vehicle_id=getattr(vehicle, 'id', None), witness=list(hit),
+                ray_start=list(_xyz(start)), ray_end=list(_xyz(end)), reach=reach,
+                inward_normal=list(inward_normal), witness_source='sampled_contact_plane',
+                matrix_position=list(_xyz(matrix.translation)), surface_count=len(collisions or ()),
+                surfaces=[dict(distance=float(c.dist),
+                    material=str(getattr(getattr(getattr(c, 'matInfo', None), 'extra', None), 'name', '') or ''),
+                    armor=float(getattr(getattr(c, 'matInfo', None), 'armor', 0.) or 0.),
+                    damage_factor=float(getattr(getattr(c, 'matInfo', None), 'vehicleDamageFactor', 0.) or 0.))
+                    for c in sorted(collisions or (), key=lambda c: float(c.dist))[:8]])
+            row['first_surface_distance_to_witness'] = abs(row['surfaces'][0]['distance']-reach) if row['surfaces'] else None
+            row['track_contact_tolerance'] = 0.15
+            if len(trace) < 48: trace.append(row)
         if not collisions:
             return None
         contact_tracks = set()
@@ -21796,6 +21810,31 @@ class BattleRuntime(object):
             proof, self._native_ram_vehicle_armor)
 
     def _ram_plate_pair_from_probe(self, proof, armor_probe):
+        """Bounded evidence, without changing the contact-selection law."""
+        epoch = getattr(getattr(self, 'client', None), 'round_id', None)
+        old_epoch, count = getattr(self, '_ram_geometry_log_budget', (None, 0))
+        count = count if old_epoch == epoch else 0
+        previous = getattr(self, '_ram_contact_ray_trace', None)
+        trace = [] if count < 64 else None
+        self._ram_contact_ray_trace = trace
+        try:
+            result = self._ram_plate_pair_from_probe_impl(proof, armor_probe)
+        finally:
+            self._ram_contact_ray_trace = previous
+        if trace is not None:
+            from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
+            matched = result[0]
+            write_json_record('RAM CONTACT GEOMETRY', dict(round=epoch, bot_id=proof.get('bot_id'),
+                native_contact_time_us=proof.get('native_contact_time_us'), attempts=proof.get('attempts'),
+                witness_source=proof.get('witness_source', 'unspecified'), witness=list(_xyz(proof['hit_point'])) if proof.get('hit_point') is not None else None,
+                normal=proof.get('contact_normal'), y_span=proof.get('contact_y_span'),
+                candidate_xz=proof.get('contact_xz_candidates'), rays=trace,
+                matched_sample=list(matched[2:]) if matched is not None else None,
+                selected_plates=list(matched[:2]) if matched is not None else None))
+            self._ram_geometry_log_budget = (epoch, count+1)
+        return result
+
+    def _ram_plate_pair_from_probe_impl(self, proof, armor_probe):
         contact_normal = proof.get('contact_normal')
         if contact_normal is None:
             return None, None, None
@@ -21959,6 +21998,7 @@ class BattleRuntime(object):
                 record, vehicle, ground_matrix=ground_matrix)
             matrices.append((matrix, chassis_matrix))
         proof = {
+            'witness_source': 'worker_obb_overlap',
             'hit_point': hit_point,
             'contact_normal': contact_normal,
             'contact_y_span': (low, high),
@@ -22135,6 +22175,7 @@ class BattleRuntime(object):
         if len(self._native_ram_contact_proofs) >= 16:
             return False
         bot_id = int(record['network_id'])
+        witness_source = 'player_native_callback' if own_pose is None else 'player_motion_overlap'
         if own_pose is None:
             own_pose = (
                 self._local_position[0], self._local_position[1],
@@ -22188,6 +22229,7 @@ class BattleRuntime(object):
         player_spall = float(player_ram_profile['spall_coefficient'])
         player_bonus = float(player_ram_profile['ramming_bonus'])
         proof = {
+            'witness_source': witness_source,
             'bot_id': bot_id,
             'bot_ram_motion_seq': bot_ram_motion_seq,
             'record': record,

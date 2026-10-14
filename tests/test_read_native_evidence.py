@@ -45,6 +45,18 @@ class EvidenceReaderTests(unittest.TestCase):
         self.assertEqual('"\\'*10000,result['records'][0]['data']['text'])
         self.assertEqual({'damage':448},result['records'][1]['data'])
 
+    def test_ram_geometry_fragments_preserve_all_surface_inputs(self):
+        payload={'witness_source':'worker_obb_overlap', 'rays':[
+            {'witness':[1.,2.,3.], 'surfaces':[{'distance':4.,'material':'leftTrackHealth'}],
+             'details':'x'*1000} for unused in range(48)]}
+        output=io.StringIO()
+        with mock.patch('sys.stdout',output):
+            self.writer.write_json_record('RAM CONTACT GEOMETRY',payload)
+        result=self.reader.parse_lines(output.getvalue().splitlines())
+        self.assertEqual([],result['issues'])
+        self.assertEqual(payload,result['records'][0]['data'])
+        self.assertTrue(all(len(line)<8192 for line in output.getvalue().splitlines()))
+
     def test_missing_or_conflicting_parts_are_not_accepted(self):
         lines=self.lines()
         missing=self.reader.parse_lines(lines[1:])
