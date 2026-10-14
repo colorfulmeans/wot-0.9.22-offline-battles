@@ -125,6 +125,8 @@ class _Runtime(object):
         self.prb_action_type = _PrbAction
         self._dispatcher = dispatcher
         self._account = account
+        self.view_ready = False
+        self.queue_view_ready = lambda: self.view_ready
 
         class _Loader(object):
             @staticmethod
@@ -166,6 +168,32 @@ class QueueScreenTests(unittest.TestCase):
         self.assertTrue(self.account.isInRandomQueue)
         self.assertTrue(self.screen.open())
         self.assertEqual(1, self.entity.queue_calls)
+
+    def test_pending_open_is_idempotent_and_requires_populated_view(self):
+        self.assertTrue(self.screen.open())
+        self.assertTrue(self.screen.open())
+        self.assertEqual(1, self.entity.queue_calls)
+        self.assertFalse(self.screen.is_ready())
+        self.pump()
+        self.assertFalse(self.screen.is_ready())
+        self.runtime.view_ready = True
+        self.assertTrue(self.screen.is_ready())
+
+    def test_replaced_account_reenters_queue_instead_of_using_old_engagement(self):
+        self.screen.open()
+        self.pump()
+        self.runtime.view_ready = True
+        self.assertTrue(self.screen.is_ready())
+        replacement = _Account()
+        self.runtime._account = replacement
+        self.entity._account = replacement
+        self.runtime.view_ready = False
+        self.assertTrue(self.screen.open())
+        self.assertEqual(2, self.entity.queue_calls)
+        self.assertFalse(self.screen.is_ready())
+        self.pump()
+        self.runtime.view_ready = True
+        self.assertTrue(self.screen.is_ready())
 
     def test_open_fails_closed_without_a_dispatcher(self):
         self.runtime._dispatcher = None

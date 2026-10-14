@@ -46,3 +46,29 @@ Validation: 1,433 focused tests across 12 suites pass against frozen source;
 left/right isolation, internal-module refusal, player-pair and Bot/player
 canonical commits, duplicate/conflicting packets, queue promotion and finite
 proof retry are exercised. Full Bot-runtime sweep and Windows packaging follow.
+
+
+## Windows254 follow-up (17:34 report)
+
+The user reports visible Bot motion discontinuities and a second room visit over
+Hangar. Worker probe cost is not proof of the visual defect. Withdraw the failed
+short-escape fan throttle entirely and restore per-decision live probes.
+
+The queue adapter was uninstalled on session stop but retained for reuse;
+its subsequent open returns false. Discard it after successful uninstall.
+Remove the session-wide acquisition latch, which survives Account/view changes.
+Require the current Account queue flag AND a populated #1513 BattleQueue view
+in the LOBBY_SUB container before opening LAN options. Dispatcher acceptance is
+only an asynchronous request, not completed view loading. Coalesce the pending
+request by Account identity and retain the explicit join intent during connection
+form promotion. No opaque replacement screen is introduced.
+
+Add bounded nearby Bot presentation observations: confirmed source age/revision,
+presentation cursor hold counts, render gaps, interpolated pose and final native
+model translation. These observations do not modify motion/planning laws or the
+jitter buffer. Actual visible stutter remains unverified until client evidence.
+
+The report has no new Python exception. Worker live callback rates fall to
+7.60-10.20 Hz with mean execution 93-128 ms. Bot fire presentation delay across
+185 samples has a median of 285 ms and maximum of 582 ms; that is shot playback
+latency, not a measurement of per-frame vehicle smoothness.

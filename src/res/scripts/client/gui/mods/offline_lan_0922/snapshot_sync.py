@@ -715,6 +715,25 @@ class SnapshotSync(object):
                     'interpolated': True, 'snap': snapped}, output)
         return True
 
+    def take_motion_probes(self, now):
+        """Drain bounded frame counters without modifying playback state."""
+        rows = {}
+        for key, record in self._entities.items():
+            probe = record.pop('motion_probe', None)
+            if not probe:
+                continue
+            row = dict(probe)
+            row.update(source_time_us=record.get('target_sample_time_us'),
+                source_revision=record.get('target_sample_revision'),
+                presentation_time_us=record.get('presentation_time_us'),
+                source_age_ms=max(0., float(now)-record['target_time'])*1000.,
+                ideal_delay_us=record.get('interpolation_delay_us'),
+                actual_delay_us=record.get('presentation_delay_us'),
+                source_pose=dict(record['target']),
+                presented_pose=dict(record['current']))
+            rows[key] = row
+        return rows
+
     def advance(self, now=None):
         """Return interpolated/predicted remote poses for one render frame."""
         now = self._now() if now is None else float(now)
@@ -822,6 +841,18 @@ class SnapshotSync(object):
                     max(authority_now_us - delay_us,
                         previous_presentation_time_us))
                 record['presentation_time_us'] = presentation_time_us
+                if record['kind'] == 'bot':
+                    probe = record.setdefault('motion_probe', {
+                        'frames': 0, 'held_frames': 0, 'moving_held_frames': 0,
+                        'max_render_gap_ms': 0.0})
+                    held = presentation_time_us <= previous_presentation_time_us
+                    source_moving = any(abs(samples[-1]['pose'][axis] -
+                        samples[0]['pose'][axis]) > 0.01 for axis in ('x', 'y', 'z'))
+                    probe['frames'] += 1
+                    probe['held_frames'] += int(held)
+                    probe['moving_held_frames'] += int(held and source_moving)
+                    probe['max_render_gap_ms'] = max(probe['max_render_gap_ms'],
+                        render_delta * 1000.0)
                 while (len(samples) > 2 and
                        presentation_time_us >= samples[1]['time_us']):
                     samples.pop(0)

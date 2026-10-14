@@ -185,6 +185,9 @@ class _QueueScreen(object):
         self.open_calls += 1
         return True
 
+    def is_ready(self):
+        return getattr(self, 'ready', True)
+
     def leave(self):
         self.leave_calls += 1
         return True
@@ -1447,9 +1450,41 @@ class LANSessionTests(unittest.TestCase):
         self.emit('welcome', {'phase':'waiting','map_pool':['01_karelia']})
         self.assertEqual(1,len(self.queue_screens))
         self.assertEqual(1,self.queue_screens[0].open_calls)
-        self.assertTrue(self.session._queue_background_active)
         self.session._open_waiting_picker('repeat')
-        self.assertEqual(1,self.queue_screens[0].open_calls)
+        self.assertEqual(2,self.queue_screens[0].open_calls)
+
+    def test_connection_form_promotion_waits_for_stock_view_without_dismissing_request(self):
+        self.session.join()
+        screen = self.session._ensure_queue_screen()
+        screen.ready = False
+        queue = self.queues[0]
+        queue.close = lambda: self.session._on_picker_closed() or True
+        self.emit('welcome', {'phase':'waiting','map_pool':['01_karelia']})
+        self.assertFalse(self.session._picker_open)
+        self.assertTrue(self.session._picker_requested)
+        self.assertFalse(self.session._picker_dismissed)
+        screen.ready = True
+        self.assertTrue(self.session._open_waiting_picker('view populated'))
+
+    def test_room_waits_for_populated_stock_view_after_battle(self):
+        self.emit('welcome', {'phase':'waiting','map_pool':['01_karelia']})
+        old_screen = self.queue_screens[0]
+        self.session.stop()
+        self.assertIsNone(self.session._queue_screen)
+        self.session._join_ui = _JoinUI(self.session.join)
+        self.session.revive()
+        self.session.start()
+        self.client = self.clients[-1]
+        self.session._picker_requested = True
+        screen = self.session._ensure_queue_screen()
+        screen.ready = False
+        self.emit('welcome', {'phase':'waiting','map_pool':['01_karelia']})
+        self.assertIsNot(old_screen, screen)
+        self.assertEqual(1, old_screen.uninstall_calls)
+        self.assertFalse(self.session._picker_open)
+        screen.ready = True
+        self.session._open_waiting_picker('stock view completed')
+        self.assertTrue(self.session._picker_open)
 
     def test_waiting_room_opens_over_the_stock_queue_screen(self):
         self.emit('welcome', {'phase': 'waiting', 'map_pool': ['01_karelia']})
@@ -1628,7 +1663,7 @@ class LANSessionTests(unittest.TestCase):
 
         self.assertEqual(1, self.queue_screens[0].uninstall_calls)
 
-    def test_unavailable_queue_screen_keeps_the_room_over_the_hangar(self):
+    def test_unavailable_queue_screen_does_not_open_room_over_hangar(self):
         def broken_factory(on_exit):
             raise RuntimeError('no prb runtime')
 
@@ -1654,7 +1689,7 @@ class LANSessionTests(unittest.TestCase):
         clients[0].on_event('welcome', {
             'phase': 'waiting', 'map_pool': ['01_karelia']})
 
-        self.assertTrue(session._picker_open)
+        self.assertFalse(session._picker_open)
         self.assertIsNone(session._queue_screen)
         self.assertIsNone(session._queue_screen_factory)
 
@@ -3212,6 +3247,7 @@ class LANSessionRoomTests(unittest.TestCase):
              'vehicle': 'ussr:MS-1', 'startupTimeoutSeconds': 12.0},
             client_factory=client_factory, queue_factory=queue_factory,
             room_factory=room_factory,
+            queue_screen_factory=lambda on_exit: _QueueScreen(on_exit),
             picker_opener=lambda: self.opens.append(True) or True,
             battle_runtime=_BattleRuntime(),
             vehicle_provider=lambda: ('ussr:R11_MS-1', 90),
@@ -3385,6 +3421,7 @@ class LANSessionMapWindowTests(unittest.TestCase):
              'vehicle': 'ussr:MS-1'},
             client_factory=client_factory, queue_factory=queue_factory,
             room_factory=room_factory,
+            queue_screen_factory=lambda on_exit: _QueueScreen(on_exit),
             picker_opener=lambda: self.opens.append(True) or self.open_result,
             callback=schedule,
             cancel_callback=lambda handle: self.scheduled.pop(handle, None),

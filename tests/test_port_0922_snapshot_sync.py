@@ -33,6 +33,26 @@ def player(identifier, x=0, alive=True):
 
 
 class SnapshotSyncTests(unittest.TestCase):
+    def test_motion_probe_detects_confirmed_cursor_hold_and_drains_without_changing_pose(self):
+        sync = _load().SnapshotSync(1, clock=lambda: 0.)
+        for tick in (0,100,200):
+            sync.snapshot(dict(round_id=1, server_tick=tick,
+                bot_state_revision=tick+1, motion_time_us=tick*1000,
+                bot_state_time_us=tick*1000, bots=[player(7,tick/100.)]))
+            sync.advance(tick/1000.)
+        for tick in range(210,701,10):
+            sync.advance(tick/1000.)
+        record = sync._entities['bot:7']
+        before = dict(record['current'])
+        cursor = record['presentation_time_us']
+        rows = sync.take_motion_probes(.7)
+        self.assertGreater(rows['bot:7']['moving_held_frames'], 0)
+        self.assertEqual(cursor, record['presentation_time_us'])
+        self.assertEqual(before, record['current'])
+        self.assertEqual({}, sync.take_motion_probes(.7))
+        sync.manifest({'round_id':2})
+        self.assertEqual({}, sync.take_motion_probes(.8))
+
     def test_consumer_resume_does_not_remove_a_real_slow_producer_cushion(self):
         clock = [0.]
         sync = _load().SnapshotSync(1,clock=lambda: clock[0])

@@ -18505,6 +18505,9 @@ class BattleRuntime(object):
                 boundary = next_boundary
             if self._sync is not None:
                 self._sync.advance(now)
+                if not self._worker_mode and self._battle_live:
+                    self._run_optional_feature('Bot motion diagnostics',
+                        self._log_bot_motion_probes, (now,))
             if self._battle_live and self._worker_mode:
                 self._publish_player_environment(rule_dt, now)
             if profiling:
@@ -27284,6 +27287,46 @@ class BattleRuntime(object):
             self._report_local_siege_edge(
                 'state', siege_state, time_left_ms, state.get('input_seq'))
         return True
+
+    def _log_bot_motion_probes(self, now):
+        """Compare nearby replicas' confirmed cursor and final model provider."""
+        round_id = (self._start_message or {}).get('round_id')
+        epoch = (self._generation, round_id)
+        if epoch != getattr(self, '_motion_probe_epoch', None):
+            self._motion_probe_epoch = epoch
+            self._motion_probe_next = 0.0
+            self._motion_probe_count = 0
+        if now < self._motion_probe_next or self._motion_probe_count >= 900:
+            return False
+        self._motion_probe_next = now + 1.0
+        rows = self._sync.take_motion_probes(now)
+        candidates = []
+        origin = getattr(self._avatar, 'position', None)
+        for key, row in rows.items():
+            record = self._records.get(key)
+            if not record or not record.get('ready') or not record.get('spot_visible'):
+                continue
+            pose = row['presented_pose']
+            distance = ((pose['x']-float(origin.x))**2 +
+                (pose['z']-float(origin.z))**2) if origin is not None else 0.0
+            candidates.append((distance, key, record, row))
+        output = []
+        for distance, key, record, row in sorted(candidates, key=lambda item:item[:2])[:4]:
+            row.update(entity=key, engine_id=record['engine_id'], distance_m=math.sqrt(distance))
+            vehicle = self._remote_factory.get(record['engine_id'])
+            model = getattr(vehicle, 'model', None)
+            if model is not None:
+                matrix = self._runtime.math.Matrix(model.matrix)
+                translation = matrix.translation
+                row['model_position'] = [float(translation.x), float(translation.y), float(translation.z)]
+                row['provider_type'] = type(model.matrix).__name__
+            output.append(row)
+        if output:
+            from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
+            write_json_record('BOT MOTION PRESENT', dict(round=round_id,
+                time=now, bots=output))
+            self._motion_probe_count += 1
+        return bool(output)
 
     def _apply_record_pose(self, record, pose):
         state = record.get('state') or {}

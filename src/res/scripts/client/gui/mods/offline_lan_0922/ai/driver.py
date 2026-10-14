@@ -910,11 +910,6 @@ class LocalDriver(object):
 		"""Choose a fresh straight escape independently of available pivot arcs."""
 		minimum = max(0.5, float(stopping_distance or 0.0) +
 			abs(float(speed)) * max(step, float(horizon)))
-		# A failed fan is not a cached physics result; defer only new work.
-		if state['clock'] < state.get('short_escape_retry_at', 0.):
-			state['short_escape_probe_deferred'] = True
-			return None
-		state['short_escape_probe_deferred'] = False
 		probes = []
 		state['short_escape_probes'] = probes
 		for distance in (max(2.0, minimum), max(1.0, minimum), minimum):
@@ -934,7 +929,6 @@ class LocalDriver(object):
 					return dict(throttle=sign * 1.0, turn=0.0, target_yaw=float(yaw),
 						recovery_probe_distance=distance,
 						recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
-		state['short_escape_retry_at'] = state['clock'] + .25
 		return None
 
 	def _retained_short_escape(self, state, position, yaw, neighbours,
@@ -1023,7 +1017,6 @@ class LocalDriver(object):
 			state.pop('recovery_replan_episode', None)
 			state.pop('recovery_pocket', None)
 			state.pop('short_escape_probes', None)
-			state.pop('short_escape_retry_at', None)
 			# Cover/engagement orders intentionally stop within a tolerance. Do not
 			# reinterpret that commanded hold as a stuck tank 1.8 seconds later.
 			state['stuck_time'] = 0.0
@@ -1049,7 +1042,6 @@ class LocalDriver(object):
 				_distance(pocket['goal'], pocket_goal) > 2.0):
 			state.pop('recovery_pocket', None)
 			state.pop('short_escape_probes', None)
-			state.pop('short_escape_retry_at', None)
 			pocket = None
 		pocket_stalled = bool(pocket is not None and
 			state['clock'] - pocket['at'] >= 8.0 and state['recovery_count'] >= 2)

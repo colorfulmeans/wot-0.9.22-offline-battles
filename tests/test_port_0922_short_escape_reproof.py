@@ -31,15 +31,10 @@ class ShortEscapeReproofTests(unittest.TestCase):
         self.assertEqual(6,len(s['short_escape_probes']))
         self.assertFalse(any(r['clear'] for r in s['short_escape_probes']))
 
-    def test_failed_fans_have_bounded_retry_work_and_success_keeps_live_proof(self):
+    def test_failed_fan_is_reproved_on_next_decision(self):
         d,s=self.setup_state();calls=[]
         def probe(yaw,distance):calls.append((yaw,distance));return False
         d._short_escape(s,(0.,0.,0.),0.,0.,.1,.1,0.,[],probe,3.,1.6)
         self.assertEqual(6,len(calls))
-        for time in (12.01,12.1,12.2):
-            s['clock']=time
-            self.assertIsNone(d._short_escape(s,(0.,0.,0.),0.,0.,.1,.1,0.,[],probe,3.,1.6))
-        self.assertEqual(6,len(calls))
-        s['clock']=12.25
+        s['clock'] += .01
         self.assertIsNotNone(d._short_escape(s,(0.,0.,0.),0.,0.,.1,.1,0.,[],lambda y,r:True,3.,1.6))
-        self.assertIsNone(d._retained_short_escape(s,(0.,0.,0.),0.,[],lambda y,r:False,3.,1.6))

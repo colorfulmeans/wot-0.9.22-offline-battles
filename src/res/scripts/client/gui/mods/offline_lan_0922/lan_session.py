@@ -520,7 +520,6 @@ class LANSession(object):
         self._receipt_callback_id = None
         self._receipt_callback_token = 0
         self._training_mode = False
-        self._queue_background_active = False
         self._training_bots = False
         self._room_preferences = port_config.load_waiting_room_state()
         self._restored_team_generation = None
@@ -1760,7 +1759,7 @@ class LANSession(object):
             except Exception as error:
                 sys.stdout.write(
                     '[Offline LAN 0.9.22] the stock queue screen is '
-                    'unavailable, keeping the room over the hangar: %s\n' %
+                    'unavailable; room opening deferred: %s\n' %
                     error)
                 self._queue_screen_factory = None
                 return None
@@ -1768,16 +1767,14 @@ class LANSession(object):
         return self._queue_screen
 
     def _ensure_queue_background(self):
-        if self._queue_background_active:
-            return True
+        # Account and Scaleform views are recreated across every battle.
+        # An earlier successful action is not proof of the current room.
         screen = self._ensure_queue_screen()
-        if screen is None:
-            return True
-        self._queue_background_active = bool(screen.open())
-        return self._queue_background_active
+        if screen is None or not screen.open():
+            return False
+        return bool(screen.is_ready())
 
     def _leave_queue_screen(self):
-        self._queue_background_active = False
         if self._queue_screen is None:
             return False
         return bool(self._queue_screen.leave())
@@ -1973,7 +1970,12 @@ class LANSession(object):
                 self._picker_open and self.state == 'waiting' and self._picker_requested):
             # A connection form can already be open when welcome arrives.
             opened = self._ensure_queue_background()
-            if not opened:self._schedule_picker_when_lobby_ready()
+            if not opened:
+                self._close_picker()
+                # A programmatic promotion is not the player's Leave action.
+                self._picker_requested = True
+                self._picker_dismissed = False
+                self._schedule_picker_when_lobby_ready()
             return opened
         if (self._stopped or self._picker_open or
                 self._picker_cleanup_pending or self._picker_dismissed):
@@ -3063,6 +3065,8 @@ class LANSession(object):
                         'queue-screen uninstall remains pending')
             except Exception as error:
                 errors.append(error)
+            else:
+                self._queue_screen = None
         if self._join_ui is not None and release_join:
             try:
                 self._join_ui.uninstall()

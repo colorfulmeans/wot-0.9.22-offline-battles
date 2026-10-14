@@ -30748,6 +30748,32 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual((0.0, 0.0, 3.0), pose_call[0][2])
         self.assertEqual(runtime.bigworld.now, pose_call[1]['now'])
 
+    def test_bot_motion_diagnostic_reads_model_and_is_bounded_per_round(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        battle._start_message = {'round_id': 2}
+        position = types.SimpleNamespace(x=4., y=5., z=6.)
+        matrix = types.SimpleNamespace(translation=position)
+        runtime.math.Matrix = lambda value: value
+        battle._remote_factory = types.SimpleNamespace(get=lambda unused:
+            types.SimpleNamespace(model=types.SimpleNamespace(matrix=matrix)))
+        battle._records = {'bot:7': {'engine_id':11, 'ready':True, 'spot_visible':True}}
+        row = {'presented_pose':{'x':4.,'y':5.,'z':6.}, 'frames':100, 'moving_held_frames':20}
+        battle._sync = types.SimpleNamespace(take_motion_probes=mock.Mock(return_value={'bot:7':row}))
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        with mock.patch.object(native_input_diagnostics, 'write_json_record') as write:
+            self.assertTrue(battle._log_bot_motion_probes(10.))
+            payload = write.call_args[0][1]
+            self.assertEqual(2, payload['round'])
+            self.assertEqual([4.,5.,6.], payload['bots'][0]['model_position'])
+            self.assertFalse(battle._log_bot_motion_probes(10.1))
+            self.assertEqual(1, battle._sync.take_motion_probes.call_count)
+            battle._motion_probe_count = 900
+            self.assertFalse(battle._log_bot_motion_probes(11.1))
+            battle._generation += 1
+            self.assertTrue(battle._log_bot_motion_probes(11.2))
+
     def test_render_pose_fast_path_skips_materialization_and_bounds_tracks(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
