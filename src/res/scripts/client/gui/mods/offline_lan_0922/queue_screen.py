@@ -47,7 +47,7 @@ def _load_runtime():
     runtime.prb_action_type = PrbAction
     from gui.app_loader import g_appLoader
     from gui.Scaleform.framework import ViewTypes
-    from gui.Scaleform.genConsts.VIEW_ALIAS import VIEW_ALIAS
+    from gui.Scaleform.daapi.settings.views import VIEW_ALIAS
     from gui.Scaleform.framework.managers.containers import VIEW_SEARCH_CRITERIA
 
     def queue_view_ready():
