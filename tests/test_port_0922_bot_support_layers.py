@@ -71,6 +71,7 @@ class BotSupportLayerTests(unittest.TestCase):
                 state.update(alive=alive, health=1000 if alive else 0, max_health=1000,
                     airborne=True, vertical_speed=-3., speed=0.,
                     terrain_pitch=0., pitch=0., roll=0., last_drive_pitch=0.)
+                state['_basic_fall_origin_y'] = state['y']+.2
                 old = (state['x'], state['y'], state['z'])
                 self.assertFalse(self.bots._integrate_vertical_motion(state, .1, tick_pose=old))
                 self.assertLess(state['y'], old[1])
@@ -84,6 +85,25 @@ class BotSupportLayerTests(unittest.TestCase):
                 self.assertAlmostEqual(self.FLOOR, state['y'])
                 self.assertFalse(state['airborne'])
                 land.assert_called_once()
+
+    def test_transient_missing_floor_is_caught_after_crossing_its_height(self):
+        for alive in (True,False):
+            with self.subTest(alive=alive):
+                self.collision_planes(lambda x,z:self.FLOOR, self.DECK)
+                state=self.state(self.FLOOR+.2)
+                state.update(alive=alive,airborne=True,vertical_speed=-20.,speed=0.)
+                with mock.patch.object(self.bots,'_physics_ground_limit_probe',return_value=None), \
+                     mock.patch.object(self.bots,'_physics_ground_probe',return_value=None):
+                    self.bots._integrate_vertical_motion(state,.1)
+                self.assertLess(state['y'],self.FLOOR-.1)
+                land=mock.Mock(return_value=0)
+                with mock.patch.object(self.bots,'_apply_bot_landing_impact',land):
+                    for unused in range(5):
+                        self.bots._integrate_vertical_motion(state,.1)
+                self.assertAlmostEqual(self.FLOOR,state['y'])
+                self.assertFalse(state['airborne'])
+                land.assert_called_once()
+                self.assertNotIn('_basic_fall_origin_y',state)
 
     def test_live_bot_support_ignores_bridge_above_its_drivable_road(self):
         self.collision_planes(lambda x, z: self.FLOOR, self.DECK)

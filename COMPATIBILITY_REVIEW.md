@@ -8313,3 +8313,23 @@ The partial-arc unit regression proves the newly covered escape, not Windows
 acceptance or resolution of every recorded stationary pose. Broader validation
 still has the existing wedged-hull expected-pivot assertion; do not report full CI
 as green merely because these focused cases pass.
+
+
+### Report 194939: crossed-floor recovery after a missing ground column
+
+Windows258 presentation evidence shows Bot 2's authoritative and rendered Y
+both reaching -1000. This is physical state corruption, not merely a spectator
+camera offset. The current-height airborne ceiling can permanently exclude a
+floor after a missed ground column lets gravity advance below it. A deterministic
+regression now reproduces this boundary: one absent floor query, then the real
+floor above the new position. Retain the previous basic vertical interval's start
+height for the next bounded layered query, allowing the crossed floor to land
+through the existing impact law. Clear that history on landing; preserve the
+under-bridge fall and live/wreck parity tests. No map-height teleport or guessed
+replacement floor is introduced. This fixes a reproducible failure mechanism;
+the exact first missing native query in Bot 2's report remains unrecorded.
+
+Add bounded BOT VERTICAL SUPPORT transition/fall records and the matching reader
+label, including previous/current interval heights, query ceiling, observed floor
+and vertical velocity. Windows playtesting must confirm the original map fall.
+The subsequent package includes the prior partial recovery/contact diagnostics.

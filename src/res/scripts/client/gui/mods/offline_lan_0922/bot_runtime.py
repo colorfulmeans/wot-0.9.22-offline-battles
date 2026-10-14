@@ -6691,14 +6691,14 @@ class BotRuntime(object):
         yaw = _number(state.get('yaw'))
         half_length = max(1.5, _number(state.get('half_length'), 3.5))
         half_width = max(0.3, _number(state.get('half_width'), 1.7))
-        maximum_y = (position[1] + vehicle_physics.CONTACT_PENETRATION if state.get('airborne', False) else None)
+        maximum_y = (max(position[1], _number(state.get('_basic_fall_origin_y'), position[1])) + vehicle_physics.CONTACT_PENETRATION if state.get('airborne', False) else None)
         axis_samples = []
         for pair in tank_collision.chassis_span_offsets(
                 yaw, half_width, half_length):
             axis_samples.append(tuple(
                 self._ground_probe_at(
                     position[0] + offset[0], position[2] + offset[1],
-                    position[1], maximum_y)
+                    maximum_y if maximum_y is not None else position[1], maximum_y)
                 for offset in pair))
         return tank_collision.straddled_support(
             position[1], follow_gap, axis_samples, interpolate=True)
@@ -6709,9 +6709,9 @@ class BotRuntime(object):
         # A falling body's centre cannot be supported by a deck above it.
         # Ask the actual layered query to continue below that skin, rather
         # than converting the old bridge into a raised-support rollback.
-        maximum_y = (position[1] + vehicle_physics.CONTACT_PENETRATION if state.get('airborne', False) else None)
+        maximum_y = (max(position[1], _number(state.get('_basic_fall_origin_y'), position[1])) + vehicle_physics.CONTACT_PENETRATION if state.get('airborne', False) else None)
         centre = self._ground_probe_at(
-            position[0], position[2], position[1], maximum_y)
+            position[0], position[2], maximum_y if maximum_y is not None else position[1], maximum_y)
         if centre is not None:
             centre = float(centre)
             # Speed and a forward corridor grade can enlarge follow_gap
@@ -7984,6 +7984,9 @@ class BotRuntime(object):
             state['vertical_speed'] = support_vertical_speed
         snap_gap = vehicle_physics.ground_follow_gap(
             state['speed'], state.get('last_drive_pitch', 0.0), step)
+        fall_origin_y = state['y']
+        was_basic_airborne = bool(state.get('airborne', False))
+        previous_fall_origin = state.get('_basic_fall_origin_y')
         highest, centre = self._terrain_support(state, snap_gap)
         # Front/rear hits keep a bot supported across a narrow ditch, but use
         # their real CoM distance below so a remote valley floor cannot pull
@@ -7995,8 +7998,11 @@ class BotRuntime(object):
         if ground is not None:
             speed = abs(state['speed'])
             max_climb = max(0.6, speed * step * 2.5)
+            crossed_floor = bool(was_basic_airborne and previous_fall_origin is not None and
+                state.get('vertical_speed',0.) <= 0. and state['y'] <= ground <=
+                float(previous_fall_origin)+vehicle_physics.CONTACT_PENETRATION)
             support_rise_obstacle = bool(
-                state.get('grounded_once', False) and
+                state.get('grounded_once', False) and not crossed_floor and
                 tank_collision.support_rise_is_obstacle(
                     state.get('y'), centre, max_climb))
             support_rise_continuous = False
@@ -8065,7 +8071,9 @@ class BotRuntime(object):
                        state.get('vertical_speed', 0.0), step))):
                 impact_speed = (state.get('vertical_speed', 0.0)
                                 if state.get('airborne', False) else 0.0)
-                if state['y'] < ground:
+                if crossed_floor:
+                    state['y'] = land_y
+                elif state['y'] < ground:
                     rise = ground - state['y']
                     state['y'] += min(rise, max_climb)
                 else:
@@ -8109,6 +8117,28 @@ class BotRuntime(object):
             # must not turn map loading into a fictitious fall from altitude.
             state['vertical_speed'] = 0.0
             state['airborne'] = False
+        # A surface may disappear for one streamed query. Retain the start of
+        # the last downward interval so the next query can see a crossed floor,
+        # rather than rejecting that floor as an overhead bridge forever.
+        if state.get('airborne', False):
+            state['_basic_fall_origin_y'] = fall_origin_y
+        else:
+            state.pop('_basic_fall_origin_y', None)
+        moment = getattr(self, '_contact_now', None)
+        transition = was_basic_airborne != bool(state.get('airborne', False))
+        if ((transition or ground is None or was_basic_airborne) and
+                int(state.get('_basic_vertical_reports', 0)) < 24 and
+                (transition or moment is not None and moment >= state.get('_basic_vertical_log_at', -1.e30))):
+            from .native_input_diagnostics import write_json_record
+            write_json_record('BOT VERTICAL SUPPORT', dict(actor=int(state['id']),
+                x=state['x'], z=state['z'], y_before=fall_origin_y, y_after=state['y'],
+                previous_interval_y=previous_fall_origin, centre=centre, highest=highest,
+                was_airborne=was_basic_airborne, airborne=bool(state.get('airborne',False)),
+                vertical_speed=state.get('vertical_speed'),
+                ceiling=max(fall_origin_y,_number(previous_fall_origin,fall_origin_y))+
+                    vehicle_physics.CONTACT_PENETRATION if was_basic_airborne else None))
+            state['_basic_vertical_reports'] = int(state.get('_basic_vertical_reports',0))+1
+            state['_basic_vertical_log_at'] = float(moment or 0.)+1.
         return False
 
     @timed('bot.pose_guard')
