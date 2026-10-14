@@ -1997,6 +1997,7 @@ class TerrainNavigator(object):
 				_distance_2d(planned, goal) >= self.grid.cell_size * 2.0):
 			state.pop('local_fallback_target', None)
 			state.pop('local_retry_progress', None)
+			state.pop('reached_path_corner', None)
 			return None
 		target = state.get('local_fallback_target')
 		if target is not None and yaw is not None:
@@ -2430,6 +2431,7 @@ class TerrainNavigator(object):
 		path_identity = tuple(path_key)
 		if not movement_intent or _distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS:
 			self.bot_states.get(bot_id, {}).pop('local_retry_progress', None)
+			self.bot_states.get(bot_id, {}).pop('reached_path_corner', None)
 		state = self.bot_direct_progress.get(bot_id)
 		if state is None:
 			state = {'path_key': path_identity, 'target': tuple(goal),
@@ -2671,6 +2673,8 @@ class TerrainNavigator(object):
 				state.get('local_retry_progress', {}).get('at', now))) * 1000.0),
 			'local_retry_failures': state.get('local_retry_progress', {}).get('failures', 0),
 			'local_retry_replans': state.get('local_retry_progress', {}).get('replans', 0),
+			'reached_path_corner': state.get('reached_path_corner'),
+			'reached_corner_replans': state.get('reached_corner_replans', 0),
 			'local_target_progress_age_ms': int(max(0.0, float(now) - float(state.get('local_target_progress_at', now))) * 1000.0),
 			'current_cell': cell,
 			'current_cell_height': self.grid._baked_cell_height(cell),
@@ -3052,6 +3056,7 @@ class TerrainNavigator(object):
 			return False
 		self._clear_temporary_progress(state)
 		state.pop('local_completed_target', None)
+		state.pop('reached_path_corner', None)
 		state.pop('local_target_retired', None)
 		for name in ('last_target', 'local_fallback_target', 'controlled_shallow_target',
 				'macro_escape_target', 'macro_escape_until', 'pending_since'):
@@ -3408,6 +3413,32 @@ class TerrainNavigator(object):
 				break
 		return lookahead
 
+	def _resume_reached_corner(self, bot_id, state, current, path, key, index, now):
+		"""Do not steer back to a reached corner after its local detour."""
+		receipt = state.get('reached_path_corner')
+		if (receipt is None or receipt['key'] != key or
+				receipt['request'] != state.get('request_key') or
+				receipt['index'] != index or receipt['point'] != tuple(path[index]) or
+				index + 1 >= len(path) or
+				_distance_2d(current, path[index]) <= WAYPOINT_ARRIVAL_RADIUS):
+			return index
+		# Arrival consumed this exact path vertex, but did not prove its outgoing
+		# edge. A local detour must not renew the same incoming leg. Either prove
+		# the forward connector from the realised pose or plan a private route.
+		revision = self.grid._native_proof_revision
+		self.grid._proof_deferred = False
+		clear = self._planned_next_segment_clear(current, path, index, now, bot_id)
+		if revision != self.grid._native_proof_revision or self.grid._proof_deferred:
+			state['navigation_status'] = 'pending'
+			state['target_is_terminal'] = False
+			return None
+		if clear:
+			state.pop('reached_path_corner', None)
+			return index + 1
+		state['reached_corner_replans'] = int(state.get('reached_corner_replans', 0)) + 1
+		self.request_replan(bot_id, current, now)
+		return None
+
 	@observed('nav.next_target')
 	def next_target(self, bot_id, current, goal, path_key, now,
 			anchor=None, avoid_points=None, lookahead_distance=None,
@@ -3482,6 +3513,7 @@ class TerrainNavigator(object):
 			state.pop('local_fallback_target', None)
 			state.pop('local_target_retired', None)
 			state.pop('local_completed_target', None)
+			state.pop('reached_path_corner', None)
 			combat_count('nav_request_changed' if had_request else
 			             'nav_request_first')
 			# A new route segment or combat target is not evidence that the previous
@@ -3518,6 +3550,7 @@ class TerrainNavigator(object):
 			self.request_replan(bot_id, current, now)
 		if not movement_intent:
 			state.pop('local_fallback_target', None)
+			state.pop('reached_path_corner', None)
 		elif not request_changed:
 			issued = state.get('last_target')
 			if issued is not None and self.paths.get(state.get('path_key')):
@@ -3640,6 +3673,10 @@ class TerrainNavigator(object):
 			state['index'] = self._path_entry_index(bot_id, current, path, now)
 			self._clear_temporary_progress(state)
 		index = min(int(state.get('index', 0)), len(path) - 1)
+		if movement_intent:
+			index = self._resume_reached_corner(bot_id, state, current, path, key, index, now)
+			if index is None:
+				return tuple(current)
 		following_selected_target = bool(
 			active_key == key and previous_path is path and
 			state.get('last_target') == path[index])
@@ -3750,6 +3787,11 @@ class TerrainNavigator(object):
 		selected = tuple(path[lookahead])
 		if (_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS and
 				_distance_2d(current, goal) > 15.0):
+			state['index'] = lookahead
+			if movement_intent and lookahead + 1 < len(path):
+				state['reached_path_corner'] = {
+					'key': key, 'index': lookahead, 'point': selected,
+					'request': state.get('request_key')}
 			# A cached path whose first usable edge has become blocked must not park
 			# the hull on its own position until the four-second stall timer fires.
 			return self._fallback_target(
