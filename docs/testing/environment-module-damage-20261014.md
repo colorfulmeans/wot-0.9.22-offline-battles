@@ -76,3 +76,13 @@ contacts are deduplicated to their strongest witness before one HP debit.
 External query failures no longer suppress interior queries. Missing layout
 and per-ray direction/distance are logged. Fire coefficients are unchanged.
 This is a gameplay trial, not a reconstruction of official physics constants.
+
+## Ammunition death-label repair
+
+The pinned PostmortemPanel.__onShowVehicleMessageByCode reads
+extra.deviceUserString. The own-death adapter previously sent None even
+for negative-health ammunition detonation, leaving the module-name field
+empty. Pass the native victim descriptor ammoBayHealth extra for both shot
+and fire detonation. Ordinary deaths retain no module extra; no translated
+text or font replacement is invented. The exact bytecode consumer was read,
+and shot/fire/ordinary cause fixtures verify object identity at the call.

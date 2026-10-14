@@ -340,11 +340,17 @@ class BigWorldVehicleBinding(object):
                 # PostmortemPanel. Its separate server damage-info event
                 # supplies the native cause/killer text (without extra voice).
                 death_code = code
+                death_extra = None
                 reasons = self._need(self._constants, 'ATTACK_REASON_INDICES')
                 fire = int(reason) == reasons['fire']
                 if fire:
                     death_code = 'DEATH_FROM_FIRE'
-                if self._authority_entity_or_fail(entity_id).health < 0:
+                death_entity = self._authority_entity_or_fail(entity_id)
+                if death_entity.health < 0:
+                    # Stock PostmortemPanel reads extra.deviceUserString.
+                    # Negative canonical health encodes ammunition detonation.
+                    death_extra = death_entity.typeDescriptor.extrasDict.get(
+                        'ammoBayHealth')
                     death_code = ('DEATH_FROM_DEVICE_EXPLOSION_AT_FIRE' if fire
                                   else 'DEATH_FROM_DEVICE_EXPLOSION_AT_SHOT')
                 elif not attacker_id and code == 'DEATH_FROM_SHOT' and not fire:
@@ -358,7 +364,7 @@ class BigWorldVehicleBinding(object):
                     # template without inventing an attacker or kill credit.
                     postfix = 'SELF_SUICIDE'
                 self._need(messages, 'onShowVehicleMessageByCode')(
-                    death_code, postfix, int(attacker_id), None, 0)
+                    death_code, postfix, int(attacker_id), death_extra, 0)
             else:
                 self._need(messages, 'onShowPlayerMessageByCode')(
                     code, postfix, int(entity_id), int(attacker_id), 0)
